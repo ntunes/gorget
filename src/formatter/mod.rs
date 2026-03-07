@@ -1690,6 +1690,10 @@ impl Formatter {
                 self.emitter.write("spawn ");
                 self.format_expr(expr);
             }
+            Expr::SpawnBlocking { expr } => {
+                self.emitter.write("spawn blocking ");
+                self.format_expr(expr);
+            }
             Expr::TryCapture { expr } => {
                 self.emitter.write("try ");
                 self.format_expr(expr);

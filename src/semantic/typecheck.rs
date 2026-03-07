@@ -1347,6 +1347,24 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
+            Expr::SpawnBlocking { expr: inner } => {
+                let inner_type = self.infer_expr(inner);
+                // spawn blocking works with ANY function call — not required to be async.
+                // If it's a Future[T], unwrap to T; otherwise use the return type directly.
+                let resolved = self.resolve_type(inner_type);
+                let result_type = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
+                    if self.scopes.get_def(def_id).name == "Future" && args.len() == 1 {
+                        args[0]
+                    } else {
+                        inner_type
+                    }
+                } else {
+                    inner_type
+                };
+                let task_def_id = self.scopes.lookup("Task").expect("Task not registered");
+                self.types.insert(ResolvedType::Generic(task_def_id, vec![result_type]))
+            }
+
             Expr::TryCapture { expr: inner } => {
                 self.infer_expr(inner);
                 self.types.error_id // Result[T, E]

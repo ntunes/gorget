@@ -18,7 +18,7 @@
 
 - **IR: Continue `generics/` split**: Phase 1 done (substitute.rs extracted, 331 lines). `mod.rs` still 1,236 lines. Remaining: monomorphization helpers (~188 lines) could move to `monomorphize.rs`, but they're tightly coupled to GenericCollector::emit(). Consider done unless mod.rs grows. [updated: 2026-03-07, from: IR code review]
 
-- **Async `.lock()` / `.read()` / `.write()` for explicit Mutex/RwLock**: Currently these are synchronous (`pthread_mutex_lock`/`pthread_rwlock_rdlock`), blocking the OS thread. In async code on the M:N scheduler, this ties up a worker thread under contention. Should use trylock + waker-queue protocol: try to acquire, if contended register task's waker on the sync primitive's wait queue and return Pending, wake one waiter on guard drop. The `shared` keyword path manages this internally, but explicit `Mutex[T]` in async functions needs it for correct M:N behavior. Requires: waker queue field on `gorget_mutex_t`/`gorget_rwlock_t`, async-aware lock methods that return `Future[Guard[T]]`, integration with executor's poll loop. [added: 2026-03-06]
+- **Async lock cleanup: RwLock free + waker queue dealloc**: `GorgetRWLock` has no `gorget_rwlock_free()` — waker queue memory leaks. Add destructor parallel to `gorget_mutex_free()`. [added: 2026-03-07]
 
 
 - **`gg sim` aliasing model — Tree Borrows tracking**: sim.md identifies this as the "core differentiator from naive interpreters." Implement borrow-level tracking to catch aliasing violations. Add `--tree-borrows` (default) and `--strict-aliasing` flags (stricter stacked-borrows model). Currently sim detects UB (bounds, uninit, etc.) but does not track borrow validity. [added: 2026-03-05]
@@ -38,7 +38,7 @@
 
 - **Inline bounds follow-up — find new syntax for `outlives` to fully remove `where`**: The `where` keyword is now only used for `where a outlives b`. Options: (1) inline on the lifetime param `live(a outlives b)`, (2) a dedicated `outlives` section, (3) lifetime annotations on the param itself. Survey and decide before removing `where` entirely. [added: 2026-03-02]
 
-- **M:N Scheduler Phase 7 (`spawn_blocking` language construct)**: Phase 6 DONE (async sleep, Go-style blocking I/O, token release). Remaining: explicit `spawn_blocking` keyword for user-defined blocking FFI calls. Needs lexer token, parser AST node, typecheck, IR lowering, codegen. Also: standalone expandable blocking pool (`BLOCKING_POOL_RUNTIME` emitted but not yet wired to `spawn_blocking`). [added: 2026-03-07]
+- **`spawn_blocking` — multiple concurrent tasks test**: Basic single-task `spawn blocking` works end-to-end. Add a test with multiple concurrent blocking tasks to stress the blocking pool. [added: 2026-03-07]
 
 - **Selective token hold across await (optimization)**: CFA could prove that an awaited task doesn't touch a given shared variable, allowing the token to be held across await instead of released. This would eliminate stale-condition warnings for disjoint shared state. Requires transitive closure over spawn chains; must conservatively release for opaque callables/indirection. Deadlock risk on false negatives makes this a "nice to have" — current release-on-await + stale warning is safe and the user fix is one line (re-read after await). Implement only if stale warnings become noisy in practice. [added: 2026-03-06]
 

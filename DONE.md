@@ -1,5 +1,11 @@
 # DONE
 
+- [2026-03-07] **feat: `spawn blocking` language construct**: Full pipeline — parser (`spawn blocking expr`), AST (`SpawnBlocking`), type checker (returns `Task[T]`), borrow checker, IR lowering (tracks `blocking_fn_names`), C backend (`GORGET_BLOCKING_SUBMIT` macro routes to expandable blocking pool instead of M:N executor). Fixed NULL waker crash in blocking pool worker. Test: `spawn_blocking_basic`.
+
+- [2026-03-07] **feat: async-aware RwLock[T].read()/.write() — coroutine yield via poll-lock**: Same pattern as Mutex — tryrdlock/trywrlock + waker protocol. Added waker queue to GorgetRWLock, forward-declared GorgetWaker in SYNC_RUNTIME for emission order safety. Test: async_rwlock.
+
+- [2026-03-07] **feat: async-aware Mutex[T].lock() — coroutine yield point via poll-lock**: `Mutex__*__lock` calls in spawned async functions become YieldKind::MutexLock — trylock + waker protocol instead of blocking pthread_mutex_lock. Self-managed state transition (retry-on-same-case). Shared-token functions excluded from coroutine candidacy.
+
 - [2026-03-07] **feat: M:N Scheduler Phase 6 — blocking thread pool + async sleep + I/O integration**: Async sleep via reactor (`gorget_reactor_sleep_async` + waker callback → true coroutine yield). Go-style blocking I/O (`__gorget_blocking_enter/exit` wraps known blocking stdlib calls). Token release at blocking points in `shared_async.rs`. Poll function type coercion (Str→const char*, GorgetString→Str). Three test fixtures: `async_sleep_yield`, `async_blocking_io`, `async_blocking_coroutine`. 880 unit + 567 integration tests pass.
 
 - [2026-03-07] **feat: LIR ParamRef instruction + C keyword escaping → 43 A/B fixtures**: Added `Inst::ParamRef` to connect function parameters to local slots in the LIR. Added C keyword escaping (`c_func_name`) to avoid conflicts with `double`, `float`, etc. Expands A/B coverage from 36→43 fixtures (+7: functions, generics, generic_trait_equip, test_coexist, trace_test, trait_inherit_defaults, type_alias_fn_sig).

@@ -38,7 +38,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         Expr::UnaryOp { operand, .. } => contains_it(operand),
         Expr::Try { expr } | Expr::Move { expr } | Expr::MutableBorrow { expr }
         | Expr::Deref { expr } | Expr::Await { expr } | Expr::Spawn { expr }
-        | Expr::TryCapture { expr } => contains_it(expr),
+        | Expr::SpawnBlocking { expr } | Expr::TryCapture { expr } => contains_it(expr),
 
         // Binary
         Expr::BinaryOp { left, right, .. } => contains_it(left) || contains_it(right),
@@ -411,14 +411,28 @@ impl Parser {
             // Spawn
             Token::Keyword(Keyword::Spawn) => {
                 self.advance();
+                // Check for `spawn blocking <expr>`
+                let is_blocking = matches!(self.peek(), Token::Identifier(s) if s == "blocking");
+                if is_blocking {
+                    self.advance(); // consume "blocking"
+                }
                 let operand = self.parse_expr_bp(2)?;
                 let end = operand.span;
-                Ok(Spanned::new(
-                    Expr::Spawn {
-                        expr: Box::new(operand),
-                    },
-                    start.merge(end),
-                ))
+                if is_blocking {
+                    Ok(Spanned::new(
+                        Expr::SpawnBlocking {
+                            expr: Box::new(operand),
+                        },
+                        start.merge(end),
+                    ))
+                } else {
+                    Ok(Spanned::new(
+                        Expr::Spawn {
+                            expr: Box::new(operand),
+                        },
+                        start.merge(end),
+                    ))
+                }
             }
 
             // Prefix await

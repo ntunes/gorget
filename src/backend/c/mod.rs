@@ -2665,7 +2665,12 @@ fn emit_coroutine(
             let _ = writeln!(out, "    f->_{local_idx} = {param_name};");
         }
     }
-    let _ = writeln!(out, "    GORGET_SCHEDULER_SUBMIT(&f->base);");
+    let submit_macro = if module.runtime.blocking_fn_names.contains(fn_name) {
+        "GORGET_BLOCKING_SUBMIT"
+    } else {
+        "GORGET_SCHEDULER_SUBMIT"
+    };
+    let _ = writeln!(out, "    {submit_macro}(&f->base);");
     let _ = writeln!(out, "    return ({task_name}){{.__task = f, .__drop = __spawn_drop_{fn_name}}};");
     out.push_str("}\n");
 
@@ -2808,7 +2813,12 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
                 let _ = writeln!(out, "    __ctx->__{param_name} = {param_name};");
             }
         }
-        let _ = writeln!(out, "    GORGET_SCHEDULER_SUBMIT(&__ctx->base);");
+        let submit_macro = if module.runtime.blocking_fn_names.contains(fn_name) {
+            "GORGET_BLOCKING_SUBMIT"
+        } else {
+            "GORGET_SCHEDULER_SUBMIT"
+        };
+        let _ = writeln!(out, "    {submit_macro}(&__ctx->base);");
         let _ = writeln!(out, "    return ({task_name}){{.__task = __ctx, .__drop = __spawn_drop_{fn_name}}};");
         out.push_str("}\n");
 

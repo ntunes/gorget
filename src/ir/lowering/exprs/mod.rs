@@ -813,6 +813,60 @@ fn lower_expr_inner(
             lower_expr(ctx, builder, expr)
         }
 
+        // spawn blocking fn(args) — runs on the expandable blocking pool
+        Expr::SpawnBlocking { expr } => {
+            if let Expr::Call { callee, args: call_args, .. } = &expr.node {
+                if let Expr::Identifier(fn_name) = &callee.node {
+                    let c_name = ctx.extern_bindings.get(fn_name.as_str())
+                        .cloned()
+                        .unwrap_or_else(|| fn_name.clone());
+
+                    let fn_ret_type = ctx.fn_sigs.get(fn_name.as_str())
+                        .map(|(_, r)| *r)
+                        .unwrap_or(I64_TYPE);
+
+                    let ret_c = ctx.type_name_for_id(fn_ret_type)
+                        .unwrap_or("int64_t")
+                        .to_string();
+                    let task_name = if fn_ret_type == UNIT_TYPE {
+                        "Task__void".to_string()
+                    } else {
+                        format!("Task__{ret_c}")
+                    };
+                    let task_type = if let Some(tid) = ctx.type_mapper.lookup_named(&task_name) {
+                        tid
+                    } else {
+                        ctx.type_registry.add_type_def(TypeDef {
+                            name: task_name.clone(),
+                            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                            metadata: TypeMetadata {
+                                size: None,
+                                align: None,
+                                drop_strategy: DropStrategy::Trivial(format!("{task_name}__drop")),
+                                copy_semantics: CopySemantics::Move,
+                            },
+                        });
+                        let tid = ctx.type_registry.insert(GirType::Named(task_name.clone()));
+                        ctx.type_mapper.register_named(task_name.clone(), tid);
+                        tid
+                    };
+
+                    ctx.spawn.pending_fn = Some(c_name.clone());
+                    ctx.spawn.fn_names.insert(c_name.clone(), true);
+                    ctx.spawn.blocking_fn_names.insert(c_name.clone());
+                    ctx.spawn.register_task_type_fn(task_type, c_name.clone());
+
+                    let lowered_args: Vec<Operand> = call_args.iter()
+                        .map(|arg| lower_expr(ctx, builder, &arg.node.value))
+                        .collect();
+                    let spawn_fn = format!("__gorget_spawn_{c_name}");
+                    let dst = builder.call(&spawn_fn, lowered_args, task_type);
+                    return FunctionBuilder::copy(dst);
+                }
+            }
+            lower_expr(ctx, builder, expr)
+        }
+
         // Dot-shorthand variant: .Red() or .Blue(42)
         // Resolves to the enum variant using the expected type from context.
         Expr::DotShorthand { variant, args } => {

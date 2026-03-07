@@ -624,6 +624,7 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
         | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner }
         | Expr::Spawn { expr: inner }
+        | Expr::SpawnBlocking { expr: inner }
         | Expr::TryCapture { expr: inner } => qualify_expr(inner, vm),
         Expr::NilCoalescing { lhs, rhs } => {
             qualify_expr(lhs, vm);

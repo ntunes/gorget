@@ -1186,6 +1186,8 @@ fn collect_runtime_metadata(ctx: &LoweringContext, module: &mut Module) {
         }
     }
     module.runtime.has_spawn = !ctx.spawn.fn_names.is_empty();
+    module.runtime.blocking_fn_names = ctx.spawn.blocking_fn_names.clone();
+    module.runtime.has_blocking_pool = !ctx.spawn.blocking_fn_names.is_empty();
 }
 
 /// Lower a module-level static declaration into a Global IR node.

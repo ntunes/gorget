@@ -6617,6 +6617,7 @@ fn format_expr_canonical(expr: &Expr) -> String {
             )
         }
         Expr::MetaOpToken(op) => format!("meta {:?}", op),
+        Expr::SpawnBlocking { expr } => format!("spawn blocking {}", format_expr_canonical(&expr.node)),
     }
 }
 
@@ -7146,6 +7147,11 @@ fn async_sleep_yield() {
 #[test]
 fn async_blocking_io() {
     run_gg("async_blocking_io.gg", "hello from blocking io");
+}
+
+#[test]
+fn spawn_blocking_basic() {
+    run_gg("spawn_blocking_basic.gg", "spawn_blocking works");
 }
 
 #[test]

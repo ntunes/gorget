@@ -635,6 +635,10 @@ pub enum Expr {
     Spawn {
         expr: Box<Spanned<Expr>>,
     },
+    /// `spawn blocking <call_expr>` — run on the expandable blocking pool.
+    SpawnBlocking {
+        expr: Box<Spanned<Expr>>,
+    },
 
     // ── Try capture ──
     TryCapture {

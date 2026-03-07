@@ -732,7 +732,7 @@ impl<'a> BorrowChecker<'a> {
             Expr::MutableBorrow { expr: inner } => self.compute_expr_origin(inner),
 
             // Await/spawn propagate from inner expression
-            Expr::Await { expr: inner } | Expr::Spawn { expr: inner } => {
+            Expr::Await { expr: inner } | Expr::Spawn { expr: inner } | Expr::SpawnBlocking { expr: inner } => {
                 self.compute_expr_origin(inner)
             }
 
@@ -1233,6 +1233,7 @@ impl<'a> BorrowChecker<'a> {
             | Expr::Try { expr: inner }
             | Expr::TryCapture { expr: inner }
             | Expr::Spawn { expr: inner }
+            | Expr::SpawnBlocking { expr: inner }
             | Expr::Is { expr: inner, .. }
             | Expr::ImplicitClosure { body: inner } => self.find_shared_ref_in_expr_spanned(inner),
             Expr::ListComprehension { expr, iterable, condition, .. } => {
@@ -1660,6 +1661,19 @@ impl<'a> BorrowChecker<'a> {
                         self.error(SemanticErrorKind::SpawnWithBorrowedRef { name: recv_name }, receiver.span);
                     }
                     self.check_spawn_args(args);
+                } else {
+                    self.error(SemanticErrorKind::SpawnRequiresDirectCall, inner.span);
+                }
+            }
+
+            Expr::SpawnBlocking { expr: inner } => {
+                self.check_expr(inner);
+                if let Expr::Call { callee, args, .. } = &inner.node {
+                    if matches!(&callee.node, Expr::Identifier(_)) {
+                        self.check_spawn_args(args);
+                    } else {
+                        self.error(SemanticErrorKind::SpawnRequiresDirectCall, inner.span);
+                    }
                 } else {
                     self.error(SemanticErrorKind::SpawnRequiresDirectCall, inner.span);
                 }

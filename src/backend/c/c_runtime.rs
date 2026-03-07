@@ -3710,8 +3710,8 @@ static void* __gorget_blocking_worker(void* arg) {
 
         /* Execute blocking work */
         work.fn_ptr(work.arg);
-        /* Wake the parent coroutine */
-        work.waker.wake(&work.waker);
+        /* Wake the parent coroutine (if any) */
+        if (work.waker.wake) work.waker.wake(&work.waker);
     }
     return NULL;
 }
@@ -3731,6 +3731,30 @@ static void __gorget_blocking_pool_shutdown(void) {
     pthread_cond_destroy(&__gorget_bpool.cond);
     __gorget_bpool_init_done = 0;
 }
+
+// Task-level adapter: submit a GorgetTask to the blocking pool.
+// The task's run() is called on a blocking pool thread, then task.done is signaled.
+// Parent waker (if any) is fired on completion for coroutine integration.
+static void __gorget_blocking_task_run(void* arg) {
+    GorgetTask* task = (GorgetTask*)arg;
+    task->run(task);
+    pthread_mutex_lock(&task->mtx);
+    task->done = 1;
+    pthread_cond_broadcast(&task->cond);
+    GorgetWaker pw = task->parent_waker;
+    pthread_mutex_unlock(&task->mtx);
+    if (pw.wake) pw.wake(&pw);
+}
+
+static void __gorget_blocking_submit_task(GorgetTask* task) {
+    __gorget_blocking_submit(
+        __gorget_blocking_task_run,
+        task,
+        (GorgetWaker){NULL, NULL}
+    );
+}
+
+#define GORGET_BLOCKING_SUBMIT(task) __gorget_blocking_submit_task(task)
 "#;
 
 /// TaskGroup — structured concurrency: all spawned children complete before join() returns.

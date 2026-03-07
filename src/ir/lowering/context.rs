@@ -76,6 +76,8 @@ pub struct SpawnState {
     pub pending_fn: Option<String>,
     /// Accumulated set of all spawned fn names (NOT cleared between functions).
     pub fn_names: FxHashMap<String, bool>,
+    /// Subset of fn_names that should run on the blocking pool instead of M:N executor.
+    pub blocking_fn_names: rustc_hash::FxHashSet<String>,
     /// Accumulated set of thread-spawned fn names: fn_name → return TypeId.
     /// NOT cleared between functions. Used to emit thread spawn/join helpers.
     pub thread_fns: FxHashMap<String, TypeId>,

@@ -1294,6 +1294,7 @@ fn resolve_expr(
         | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner }
         | Expr::Spawn { expr: inner }
+        | Expr::SpawnBlocking { expr: inner }
         | Expr::TryCapture { expr: inner } => {
             resolve_expr(inner, scopes, errors, resolution_map);
         }

@@ -83,6 +83,8 @@ pub struct RuntimeFeatures {
     pub rwlock_types: Vec<String>,
     /// Spawned functions: (fn_name, [(param_name, param_type)], return_type).
     pub spawned_fns: Vec<(String, Vec<(String, TypeId)>, TypeId)>,
+    /// Functions that should run on the blocking pool instead of the M:N executor.
+    pub blocking_fn_names: rustc_hash::FxHashSet<String>,
 
     // ── Threads / processes ────────────────────────────────────────
     /// Whether std.thread is used.

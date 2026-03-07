@@ -134,6 +134,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
         | Expr::Deref { expr }
         | Expr::Await { expr }
         | Expr::Spawn { expr }
+        | Expr::SpawnBlocking { expr }
         | Expr::TryCapture { expr }
         | Expr::As { expr, .. } => {
             v.visit_expr(expr);
