@@ -424,12 +424,12 @@ impl Parser {
                 Ok(Spanned::new(Item::Import(stmt), span))
             }
             Token::Keyword(Keyword::Type) => {
-                let alias = self.parse_type_alias()?;
+                let alias = self.parse_type_alias(visibility)?;
                 let span = start.merge(alias.span);
                 Ok(Spanned::new(Item::TypeAlias(alias), span))
             }
             Token::Keyword(Keyword::Newtype) => {
-                let nt = self.parse_newtype()?;
+                let nt = self.parse_newtype(visibility)?;
                 let span = start.merge(nt.span);
                 Ok(Spanned::new(Item::Newtype(nt), span))
             }
@@ -1186,7 +1186,7 @@ impl Parser {
 
     // ── Type Alias ────────────────────────────────────────────
 
-    fn parse_type_alias(&mut self) -> Result<TypeAlias, ParseError> {
+    fn parse_type_alias(&mut self, visibility: Visibility) -> Result<TypeAlias, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Type)?;
         let name = self.expect_identifier()?;
@@ -1202,13 +1202,14 @@ impl Parser {
             name,
             generic_params,
             type_,
+            visibility,
             span: start.merge(end),
         })
     }
 
     // ── Newtype ───────────────────────────────────────────────
 
-    fn parse_newtype(&mut self) -> Result<NewtypeDef, ParseError> {
+    fn parse_newtype(&mut self, visibility: Visibility) -> Result<NewtypeDef, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Newtype)?;
         let name = self.expect_identifier()?;
@@ -1221,6 +1222,7 @@ impl Parser {
         Ok(NewtypeDef {
             name,
             inner_type,
+            visibility,
             span: start.merge(end),
         })
     }

@@ -291,6 +291,9 @@ pub enum SemanticErrorKind {
 
     /// Variable written while mutably captured by a live closure.
     WriteWhileMutCaptured { var_name: String, closure_name: String },
+
+    /// Attempt to import a private item from a module.
+    PrivateImport { name: String, module: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -561,6 +564,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::WriteWhileMutCaptured { var_name, closure_name } => {
                 write!(f, "cannot write to `{var_name}` while it is mutably captured by closure `{closure_name}`")
+            }
+            SemanticErrorKind::PrivateImport { name, module } => {
+                write!(f, "cannot import private item `{name}` from module `{module}`")
             }
         }
     }

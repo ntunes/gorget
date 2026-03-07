@@ -73,6 +73,9 @@ pub struct ResolveContext {
     /// Maps (function_name, span_start) → body scope id (for ALL functions including equip methods).
     /// Composite key avoids span collisions between different source files.
     pub function_body_scopes: FxHashMap<(String, usize), super::ids::ScopeId>,
+    /// Private name sets per module path — for detecting imports of private items.
+    /// Populated during FileModule collection, validated after all modules are processed.
+    pub module_private_names: Vec<(Vec<String>, FxHashSet<String>)>,
 }
 
 impl ResolveContext {
@@ -83,6 +86,7 @@ impl ResolveContext {
             function_info: FxHashMap::default(),
             resolution_map: FxHashMap::default(),
             function_body_scopes: FxHashMap::default(),
+            module_private_names: Vec::new(),
         }
     }
 }
@@ -129,6 +133,30 @@ pub fn collect_top_level(
         }
     }
     collect_top_level_inner(module, scopes, types, errors, &mut ctx);
+
+    // Validate: detect imports of private items.
+    // After all FileModules have exported their public names, any remaining Import
+    // placeholder whose name matches a module's private_names set is an error.
+    if !ctx.module_private_names.is_empty() {
+        let global_names = scopes.names_in_current_scope();
+        for (name, def_id) in &global_names {
+            let def = scopes.get_def(*def_id);
+            if def.kind != DefKind::Import || def.span == Span::dummy() {
+                continue; // not an unresolved user import
+            }
+            for (mod_path, priv_names) in &ctx.module_private_names {
+                if priv_names.contains(name.as_str()) {
+                    errors.push(SemanticError {
+                        kind: SemanticErrorKind::PrivateImport {
+                            name: name.clone(),
+                            module: mod_path.join("."),
+                        },
+                        span: def.span,
+                    });
+                }
+            }
+        }
+    }
 
     // Second pass: handle glob imports (`from X import EnumName.*`).
     // All enums are now defined in scope, so we can look them up and register
@@ -532,6 +560,8 @@ fn collect_item(
                         Item::Trait(t) => t.visibility,
                         Item::ConstDecl(c) => c.visibility,
                         Item::StaticDecl(s) => s.visibility,
+                        Item::TypeAlias(a) => a.visibility,
+                        Item::Newtype(n) => n.visibility,
                         _ => return None,
                     };
                     if vis == Visibility::Private {
@@ -542,6 +572,8 @@ fn collect_item(
                             Item::Trait(t) => t.name.node.clone(),
                             Item::ConstDecl(c) => c.name.node.clone(),
                             Item::StaticDecl(s) => s.name.node.clone(),
+                            Item::TypeAlias(a) => a.name.node.clone(),
+                            Item::Newtype(n) => n.name.node.clone(),
                             _ => unreachable!(),
                         })
                     } else {
@@ -559,6 +591,11 @@ fn collect_item(
 
             // Promote non-private names to the enclosing global scope.
             scopes.export_non_private(&private_names);
+
+            // Remember private names for post-collection import validation.
+            if !private_names.is_empty() {
+                ctx.module_private_names.push((path.clone(), private_names));
+            }
 
             scopes.pop_scope();
         }
@@ -1780,6 +1817,155 @@ struct Point:
         assert!(
             fi.return_type_id.is_some(),
             "return_type_id should be resolved after fixup pass"
+        );
+    }
+
+    /// Build a Module AST that simulates `from mymod import helper`
+    /// where `helper` is private in `mymod`.
+    fn make_private_import_module() -> Module {
+        use crate::span::Span;
+        let dummy = Span::new(0, 0);
+
+        // Parse the private function from source text.
+        let mut parser = Parser::new("private int helper() = 42\nint public_fn() = 1\n");
+        let inner_module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
+
+        // Build the merged module:
+        // 1. `from mymod import helper` (creates Import placeholder)
+        // 2. Module { path: ["mymod"], items: [private helper, public_fn] }
+        let import_item = Spanned {
+            node: Item::Import(ImportStmt::From {
+                path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
+                names: vec![Spanned { node: "helper".to_string(), span: Span::new(100, 106) }],
+                glob_types: vec![],
+                span: dummy,
+            }),
+            span: dummy,
+        };
+        let module_item = Spanned {
+            node: Item::Module {
+                path: vec!["mymod".to_string()],
+                items: inner_module.items,
+            },
+            span: dummy,
+        };
+
+        Module {
+            items: vec![import_item, module_item],
+            span: dummy,
+        }
+    }
+
+    #[test]
+    fn private_import_error() {
+        let module = make_private_import_module();
+        let mut scopes = ScopeTable::new();
+        let mut types = TypeTable::new();
+        let mut errors = Vec::new();
+        let _ctx = collect_top_level(&module, &mut scopes, &mut types, &mut errors);
+
+        // Should produce a PrivateImport error for `helper`
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                SemanticErrorKind::PrivateImport { name, module }
+                    if name == "helper" && module == "mymod"
+            )),
+            "expected PrivateImport error for 'helper', got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn public_import_no_error() {
+        use crate::span::Span;
+        let dummy = Span::new(0, 0);
+
+        let mut parser = Parser::new("int public_fn() = 1\n");
+        let inner_module = parser.parse_module();
+        assert!(parser.errors.is_empty());
+
+        let import_item = Spanned {
+            node: Item::Import(ImportStmt::From {
+                path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
+                names: vec![Spanned { node: "public_fn".to_string(), span: Span::new(100, 109) }],
+                glob_types: vec![],
+                span: dummy,
+            }),
+            span: dummy,
+        };
+        let module_item = Spanned {
+            node: Item::Module {
+                path: vec!["mymod".to_string()],
+                items: inner_module.items,
+            },
+            span: dummy,
+        };
+
+        let module = Module {
+            items: vec![import_item, module_item],
+            span: dummy,
+        };
+
+        let mut scopes = ScopeTable::new();
+        let mut types = TypeTable::new();
+        let mut errors = Vec::new();
+        let _ctx = collect_top_level(&module, &mut scopes, &mut types, &mut errors);
+
+        // No PrivateImport errors — public_fn is public
+        assert!(
+            !errors.iter().any(|e| matches!(&e.kind, SemanticErrorKind::PrivateImport { .. })),
+            "unexpected PrivateImport error: {:?}",
+            errors
+        );
+        // public_fn should be accessible
+        assert!(scopes.lookup("public_fn").is_some());
+    }
+
+    #[test]
+    fn private_struct_import_error() {
+        use crate::span::Span;
+        let dummy = Span::new(0, 0);
+
+        let mut parser = Parser::new("private struct Secret:\n    int value\n");
+        let inner_module = parser.parse_module();
+        assert!(parser.errors.is_empty());
+
+        let import_item = Spanned {
+            node: Item::Import(ImportStmt::From {
+                path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
+                names: vec![Spanned { node: "Secret".to_string(), span: Span::new(200, 206) }],
+                glob_types: vec![],
+                span: dummy,
+            }),
+            span: dummy,
+        };
+        let module_item = Spanned {
+            node: Item::Module {
+                path: vec!["mymod".to_string()],
+                items: inner_module.items,
+            },
+            span: dummy,
+        };
+
+        let module = Module {
+            items: vec![import_item, module_item],
+            span: dummy,
+        };
+
+        let mut scopes = ScopeTable::new();
+        let mut types = TypeTable::new();
+        let mut errors = Vec::new();
+        let _ctx = collect_top_level(&module, &mut scopes, &mut types, &mut errors);
+
+        assert!(
+            errors.iter().any(|e| matches!(
+                &e.kind,
+                SemanticErrorKind::PrivateImport { name, .. } if name == "Secret"
+            )),
+            "expected PrivateImport error for 'Secret', got: {:?}",
+            errors
         );
     }
 }

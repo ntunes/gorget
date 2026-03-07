@@ -315,6 +315,7 @@ pub struct TypeAlias {
     pub name: Spanned<String>,
     pub generic_params: Option<Spanned<GenericParams>>,
     pub type_: Spanned<Type>,
+    pub visibility: Visibility,
     pub span: Span,
 }
 
@@ -322,6 +323,7 @@ pub struct TypeAlias {
 pub struct NewtypeDef {
     pub name: Spanned<String>,
     pub inner_type: Spanned<Type>,
+    pub visibility: Visibility,
     pub span: Span,
 }
 
