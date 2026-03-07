@@ -15,6 +15,7 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         // Phase 1: simplify values
         propagate_constants(func);
         constant_fold(func);
+        simplify_algebraic(func);
         fold_constant_branches(func);
         // Phase 2: eliminate dead code
         elide_dead_drops(func);
@@ -286,6 +287,109 @@ fn cmp_ord(ord: std::cmp::Ordering, op: CmpOp) -> bool {
         CmpOp::Gt => ord == std::cmp::Ordering::Greater,
         CmpOp::Ge => ord != std::cmp::Ordering::Less,
     }
+}
+
+// ── Algebraic Simplification ──────────────────────────────────────────
+
+/// Simplify BinOp instructions with identity/absorbing elements:
+///   x + 0, x - 0, x | 0, x ^ 0, x << 0, x >> 0 → x
+///   x * 1, x / 1                                 → x
+///   0 + x, 0 | x, 0 ^ x                          → x  (commutative)
+///   1 * x                                         → x  (commutative)
+///   x * 0, 0 * x                                  → 0  (absorbing)
+///   x & 0, 0 & x                                  → 0  (absorbing)
+///   x - x                                         → 0
+///   x ^ x                                         → 0
+fn simplify_algebraic(func: &mut Function) {
+    for bb in &mut func.blocks {
+        for inst in &mut bb.instructions {
+            let simplified = match inst {
+                Instruction::BinOp { dst, op, lhs, rhs, .. } => {
+                    simplify_binop(*dst, *op, lhs, rhs)
+                }
+                _ => None,
+            };
+            if let Some(new_inst) = simplified {
+                *inst = new_inst;
+            }
+        }
+    }
+}
+
+fn simplify_binop(dst: LocalId, op: BinOp, lhs: &Operand, rhs: &Operand) -> Option<Instruction> {
+    let assign_op = |op: Operand| -> Instruction {
+        Instruction::Assign { dst: Place::local(dst), value: op }
+    };
+    let zero_i64 = || Operand::Constant(Constant::I64(0));
+
+    // Check for x op x patterns (same local, no projections)
+    if let (Operand::Copy(lp), Operand::Copy(rp)) = (lhs, rhs) {
+        if lp.local == rp.local && lp.projections.is_empty() && rp.projections.is_empty() {
+            match op {
+                BinOp::Sub | BinOp::SubWrap | BinOp::BitXor => {
+                    return Some(assign_op(zero_i64()));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Extract constant value from either side
+    let lhs_i64 = match lhs { Operand::Constant(Constant::I64(v)) => Some(*v), _ => None };
+    let rhs_i64 = match rhs { Operand::Constant(Constant::I64(v)) => Some(*v), _ => None };
+
+    match op {
+        // Additive identity: x + 0 → x, 0 + x → x
+        BinOp::Add | BinOp::AddWrap => {
+            if rhs_i64 == Some(0) { return Some(assign_op(lhs.clone())); }
+            if lhs_i64 == Some(0) { return Some(assign_op(rhs.clone())); }
+        }
+        // Subtractive identity: x - 0 → x
+        BinOp::Sub | BinOp::SubWrap => {
+            if rhs_i64 == Some(0) { return Some(assign_op(lhs.clone())); }
+        }
+        // Multiplicative identity/absorbing: x * 1 → x, 1 * x → x, x * 0 → 0, 0 * x → 0
+        BinOp::Mul | BinOp::MulWrap => {
+            if rhs_i64 == Some(1) { return Some(assign_op(lhs.clone())); }
+            if lhs_i64 == Some(1) { return Some(assign_op(rhs.clone())); }
+            if rhs_i64 == Some(0) { return Some(assign_op(zero_i64())); }
+            if lhs_i64 == Some(0) { return Some(assign_op(zero_i64())); }
+        }
+        // Division identity: x / 1 → x
+        BinOp::Div => {
+            if rhs_i64 == Some(1) { return Some(assign_op(lhs.clone())); }
+        }
+        // Remainder: x % 1 → 0
+        BinOp::Rem | BinOp::Mod => {
+            if rhs_i64 == Some(1) { return Some(assign_op(zero_i64())); }
+        }
+        // Bitwise AND absorbing: x & 0 → 0, 0 & x → 0
+        BinOp::BitAnd => {
+            if rhs_i64 == Some(0) { return Some(assign_op(zero_i64())); }
+            if lhs_i64 == Some(0) { return Some(assign_op(zero_i64())); }
+        }
+        // Bitwise OR identity: x | 0 → x, 0 | x → x
+        BinOp::BitOr => {
+            if rhs_i64 == Some(0) { return Some(assign_op(lhs.clone())); }
+            if lhs_i64 == Some(0) { return Some(assign_op(rhs.clone())); }
+        }
+        // Bitwise XOR identity: x ^ 0 → x, 0 ^ x → x
+        BinOp::BitXor => {
+            if rhs_i64 == Some(0) { return Some(assign_op(lhs.clone())); }
+            if lhs_i64 == Some(0) { return Some(assign_op(rhs.clone())); }
+        }
+        // Shift identity: x << 0 → x, x >> 0 → x
+        BinOp::Shl | BinOp::Shr => {
+            if rhs_i64 == Some(0) { return Some(assign_op(lhs.clone())); }
+        }
+        // Power: x ** 1 → x, x ** 0 → 1
+        BinOp::Pow => {
+            if rhs_i64 == Some(1) { return Some(assign_op(lhs.clone())); }
+            if rhs_i64 == Some(0) { return Some(assign_op(Operand::Constant(Constant::I64(1)))); }
+        }
+    }
+
+    None
 }
 
 /// Replace Branch terminators with constant conditions by Jump, and
@@ -1601,6 +1705,110 @@ mod tests {
     }
 
     // ── Block Merging Tests ──────────────────────────────────────────
+
+    // ── Algebraic Simplification Tests ──────────────────────────────
+
+    #[test]
+    fn simplify_add_zero_rhs() {
+        // _2 = BinOp(Add, Copy(_1), 0) → _2 = Copy(_1)
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::Add, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::I64(0)),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        simplify_algebraic(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Copy(p), .. } if p.local == LocalId(1) => {}
+            other => panic!("Expected Copy(_1), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn simplify_mul_zero() {
+        // _2 = BinOp(Mul, Copy(_1), 0) → _2 = 0
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::Mul, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::I64(0)),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        simplify_algebraic(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Constant(Constant::I64(0)), .. } => {}
+            other => panic!("Expected 0, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn simplify_mul_one() {
+        // _2 = BinOp(Mul, Copy(_1), 1) → _2 = Copy(_1)
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::Mul, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::I64(1)),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        simplify_algebraic(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Copy(p), .. } if p.local == LocalId(1) => {}
+            other => panic!("Expected Copy(_1), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn simplify_sub_self() {
+        // _2 = BinOp(Sub, Copy(_1), Copy(_1)) → _2 = 0
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::Sub, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Copy(Place::local(LocalId(1))),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        simplify_algebraic(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Constant(Constant::I64(0)), .. } => {}
+            other => panic!("Expected 0, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn simplify_xor_self() {
+        // _2 = BinOp(BitXor, Copy(_1), Copy(_1)) → _2 = 0
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::BitXor, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Copy(Place::local(LocalId(1))),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        simplify_algebraic(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Constant(Constant::I64(0)), .. } => {}
+            other => panic!("Expected 0, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn simplify_pow_zero() {
+        // _2 = BinOp(Pow, Copy(_1), 0) → _2 = 1
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::Pow, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::I64(0)),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        simplify_algebraic(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Constant(Constant::I64(1)), .. } => {}
+            other => panic!("Expected 1, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_simplify_non_identity() {
+        // _2 = BinOp(Add, Copy(_1), 5) → unchanged
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::Add, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::I64(5)),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        simplify_algebraic(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0], Instruction::BinOp { .. }));
+    }
 
     #[test]
     fn no_merge_self_loop() {
