@@ -199,7 +199,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule) {
 
         // Terminator
         write!(out, "    ").unwrap();
-        emit_term(out, &block.terminator);
+        emit_term(out, &block.terminator, func);
         writeln!(out).unwrap();
     }
 
@@ -346,7 +346,9 @@ fn emit_inst(out: &mut String, inst: &Inst, module: &LirModule) {
             write!(out, "{} = *({} *)({});", v(*dst), c_type(ty), v(*ptr)).unwrap();
         }
         Inst::Store { ptr, value } => {
-            write!(out, "*(void **)({}) = (void*){};", v(*ptr), v(*value)).unwrap();
+            // Generic store — type is determined by context.
+            // Use memcpy as a safe fallback that handles any type size.
+            write!(out, "memcpy({p}, &{val}, sizeof({val}));", p = v(*ptr), val = v(*value)).unwrap();
         }
         Inst::FieldPtr { dst, base, struct_id, field } => {
             let field_name = &module.structs[struct_id.0 as usize].fields[*field as usize].0;
@@ -474,7 +476,7 @@ fn emit_inst(out: &mut String, inst: &Inst, module: &LirModule) {
     }
 }
 
-fn emit_term(out: &mut String, term: &Term) {
+fn emit_term(out: &mut String, term: &Term, func: &LirFunction) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
 
     match term {
@@ -485,16 +487,7 @@ fn emit_term(out: &mut String, term: &Term) {
             write!(out, "return;").unwrap();
         }
         Term::Jump(target, args) => {
-            // Parallel move: store args into block param temporaries, then goto.
-            for (i, a) in args.iter().enumerate() {
-                // We need to know the target block's param value IDs.
-                // For now, emit as __bp{param_index} = arg.
-                // The actual param ValueId comes from the target block.
-                write!(out, "/* jmp arg {i} */ ").unwrap();
-                // This is a simplification — proper implementation needs the target block params.
-                let _ = a;
-            }
-            emit_jump_args(out, args);
+            emit_jump_args(out, *target, args, func);
             write!(out, "goto __bb{};", target.0).unwrap();
         }
         Term::Branch {
@@ -507,14 +500,14 @@ fn emit_term(out: &mut String, term: &Term) {
             writeln!(out, "if ({}) {{", v(*cond)).unwrap();
             if !then_args.is_empty() {
                 write!(out, "        ").unwrap();
-                emit_jump_args(out, then_args);
+                emit_jump_args(out, *then_block, then_args, func);
                 writeln!(out).unwrap();
             }
             writeln!(out, "        goto __bb{};", then_block.0).unwrap();
             writeln!(out, "    }} else {{").unwrap();
             if !else_args.is_empty() {
                 write!(out, "        ").unwrap();
-                emit_jump_args(out, else_args);
+                emit_jump_args(out, *else_block, else_args, func);
                 writeln!(out).unwrap();
             }
             writeln!(out, "        goto __bb{};", else_block.0).unwrap();
@@ -529,11 +522,11 @@ fn emit_term(out: &mut String, term: &Term) {
             writeln!(out, "switch ((int64_t){}) {{", v(*value)).unwrap();
             for (val, block, args) in cases {
                 write!(out, "        case {val}: ").unwrap();
-                emit_jump_args(out, args);
+                emit_jump_args(out, *block, args, func);
                 writeln!(out, "goto __bb{};", block.0).unwrap();
             }
             write!(out, "        default: ").unwrap();
-            emit_jump_args(out, default_args);
+            emit_jump_args(out, *default, default_args, func);
             writeln!(out, "goto __bb{};", default.0).unwrap();
             write!(out, "    }}").unwrap();
         }
@@ -543,11 +536,15 @@ fn emit_term(out: &mut String, term: &Term) {
     }
 }
 
-fn emit_jump_args(out: &mut String, args: &[ValueId]) {
-    // Parallel copy: store into block param temps.
-    // This is a placeholder — proper implementation needs target block param IDs.
-    for a in args {
-        write!(out, "/* arg {} */ ", a).unwrap();
+/// Emit parallel-copy assignments for block parameter passing.
+/// Stores args into the target block's param temporaries (__bp{vid}).
+fn emit_jump_args(out: &mut String, target: BlockId, args: &[ValueId], func: &LirFunction) {
+    if args.is_empty() {
+        return;
+    }
+    let target_block = &func.blocks[target.0 as usize];
+    for (arg, (param_vid, _)) in args.iter().zip(target_block.params.iter()) {
+        write!(out, "__bp{} = __v{}; ", param_vid.0, arg.0).unwrap();
     }
 }
 
@@ -570,28 +567,22 @@ fn emit_global_init(out: &mut String, init: &LirGlobalInit) {
 }
 
 /// Map LirType to C type string.
-fn c_type(ty: &LirType) -> &'static str {
+fn c_type(ty: &LirType) -> String {
     match ty {
-        LirType::I8 => "int8_t",
-        LirType::I16 => "int16_t",
-        LirType::I32 => "int32_t",
-        LirType::I64 => "int64_t",
-        LirType::U8 => "uint8_t",
-        LirType::U16 => "uint16_t",
-        LirType::U32 => "uint32_t",
-        LirType::U64 => "uint64_t",
-        LirType::F32 => "float",
-        LirType::F64 => "double",
-        LirType::Bool => "bool",
-        LirType::Ptr => "void*",
-        LirType::Struct(id) => {
-            // This is a limitation — we'd need to return a dynamic string.
-            // For now, use a static placeholder. In practice, structs are
-            // accessed via pointers (address-only), so this is rarely hit.
-            let _ = id;
-            "void*" // struct vars are address-only
-        }
-        LirType::Void => "void",
+        LirType::I8 => "int8_t".into(),
+        LirType::I16 => "int16_t".into(),
+        LirType::I32 => "int32_t".into(),
+        LirType::I64 => "int64_t".into(),
+        LirType::U8 => "uint8_t".into(),
+        LirType::U16 => "uint16_t".into(),
+        LirType::U32 => "uint32_t".into(),
+        LirType::U64 => "uint64_t".into(),
+        LirType::F32 => "float".into(),
+        LirType::F64 => "double".into(),
+        LirType::Bool => "bool".into(),
+        LirType::Ptr => "void*".into(),
+        LirType::Struct(id) => format!("__lir_s{}", id.0),
+        LirType::Void => "void".into(),
     }
 }
 
