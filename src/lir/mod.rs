@@ -6,6 +6,7 @@
 pub mod display;
 mod integration;
 pub mod lower;
+pub mod optimize;
 pub mod ssa;
 pub mod types;
 pub mod validate;
