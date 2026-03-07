@@ -150,14 +150,14 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule) {
     }
 
     // Declare all values as their inferred types.
-    // Build a type map from instructions.
+    // Build a type map from instructions (two passes for arithmetic type propagation).
     let mut val_types: Vec<Option<LirType>> = vec![None; max_val as usize];
     for block in &func.blocks {
         for (vid, ty) in &block.params {
             val_types[vid.0 as usize] = Some(ty.clone());
         }
         for inst in &block.insts {
-            if let Some(ty) = infer_inst_type(inst, module) {
+            if let Some(ty) = infer_inst_type(inst, module, &val_types) {
                 if let Some(dst) = inst.dst() {
                     val_types[dst.0 as usize] = Some(ty);
                 }
@@ -630,7 +630,8 @@ fn escape_c_string(s: &str) -> String {
 }
 
 /// Infer the result type of an instruction (for variable declarations).
-fn infer_inst_type(inst: &Inst, module: &LirModule) -> Option<LirType> {
+/// `val_types` provides already-resolved types for operands (used for arithmetic propagation).
+fn infer_inst_type(inst: &Inst, module: &LirModule, val_types: &[Option<LirType>]) -> Option<LirType> {
     match inst {
         Inst::SlotLoad { ty, .. } => Some(ty.clone()),
         Inst::SlotAddr { .. } => Some(LirType::Ptr),
@@ -642,12 +643,23 @@ fn infer_inst_type(inst: &Inst, module: &LirModule) -> Option<LirType> {
         Inst::GlobalAddr { .. } => Some(LirType::Ptr),
         Inst::StrLit { .. } => Some(LirType::Ptr), // simplified
 
-        Inst::Add { .. } | Inst::Sub { .. } | Inst::Mul { .. }
-        | Inst::Div { .. } | Inst::Rem { .. } | Inst::Mod { .. }
-        | Inst::Neg { .. } => Some(LirType::I64), // default; should infer from operands
+        // Arithmetic — propagate type from lhs operand.
+        Inst::Add { lhs, .. } | Inst::Sub { lhs, .. } | Inst::Mul { lhs, .. }
+        | Inst::Div { lhs, .. } | Inst::Rem { lhs, .. } | Inst::Mod { lhs, .. } => {
+            val_types.get(lhs.0 as usize).and_then(|t| t.clone()).or(Some(LirType::I64))
+        }
+        Inst::Neg { operand, .. } => {
+            val_types.get(operand.0 as usize).and_then(|t| t.clone()).or(Some(LirType::I64))
+        }
 
-        Inst::BitAnd { .. } | Inst::BitOr { .. } | Inst::BitXor { .. }
-        | Inst::BitNot { .. } | Inst::Shl { .. } | Inst::Shr { .. } => Some(LirType::I64),
+        // Bitwise — propagate type from lhs operand.
+        Inst::BitAnd { lhs, .. } | Inst::BitOr { lhs, .. } | Inst::BitXor { lhs, .. }
+        | Inst::Shl { lhs, .. } | Inst::Shr { lhs, .. } => {
+            val_types.get(lhs.0 as usize).and_then(|t| t.clone()).or(Some(LirType::I64))
+        }
+        Inst::BitNot { operand, .. } => {
+            val_types.get(operand.0 as usize).and_then(|t| t.clone()).or(Some(LirType::I64))
+        }
 
         Inst::Cmp { .. } | Inst::Not { .. } => Some(LirType::Bool),
 
@@ -662,7 +674,13 @@ fn infer_inst_type(inst: &Inst, module: &LirModule) -> Option<LirType> {
         Inst::Call { func, .. } => {
             Some(module.functions[func.0 as usize].return_type.clone())
         }
-        Inst::CallExtern { .. } | Inst::CallPtr { .. } => Some(LirType::I64), // default
+        Inst::CallExtern { name, .. } => {
+            module.externs.iter()
+                .find(|e| &e.name == name)
+                .map(|e| e.return_type.clone())
+                .or(Some(LirType::I64))
+        }
+        Inst::CallPtr { .. } => Some(LirType::I64), // default
 
         _ => None,
     }
