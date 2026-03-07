@@ -294,6 +294,7 @@ fn try_build_ir(
     options: gorget::ir::lowering::LoweringOptions,
     emit_gir: bool,
     emit_lir: bool,
+    emit_c_lir: bool,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -365,6 +366,22 @@ fn try_build_ir(
                 eprintln!(";   {e}");
             }
         }
+        let input_path = Path::new(filename);
+        let stem = input_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        return Ok(PathBuf::from(stem));
+    }
+
+    // Dump C code generated from LIR if requested
+    if emit_c_lir {
+        let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
+        for func in &mut lir_module.functions {
+            gorget::lir::ssa::construct_ssa(func);
+        }
+        let c_code = gorget::backend::c_lir::generate_c(&lir_module);
+        print!("{c_code}");
         let input_path = Path::new(filename);
         let stem = input_path
             .file_stem()
@@ -727,7 +744,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false) {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false) {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -763,7 +780,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false) {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false) {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1041,6 +1058,7 @@ fn main() {
         println!("  --sanitize              Enable AddressSanitizer + UBSan for runtime bug detection");
         println!("  --emit-gir              Dump GIR (intermediate representation) to stdout instead of compiling");
         println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
+        println!("  --emit-c-lir            Dump C code generated from LIR to stdout (for A/B testing)");
         return;
     }
 
@@ -1083,7 +1101,7 @@ fn main() {
             sanitize, scheduler_mode: parse_scheduler(&args),
             ..Default::default()
         };
-        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false)
+        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false)
             .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
         let status = Command::new(&exe_path)
             .status()
@@ -1200,6 +1218,7 @@ fn main() {
     let sanitize = args.iter().any(|a| a == "--sanitize");
     let emit_gir = args.iter().any(|a| a == "--emit-gir");
     let emit_lir = args.iter().any(|a| a == "--emit-lir");
+    let emit_c_lir = args.iter().any(|a| a == "--emit-c-lir");
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
     let features = parse_features(&args);
@@ -1358,7 +1377,7 @@ fn main() {
                     sanitize, scheduler_mode,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir);
+                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir);
                 match result {
                     Ok(p) => if !emit_gir { println!("Built shared library: {}", p.display()); }
                     Err(e) => {
@@ -1388,7 +1407,7 @@ fn main() {
                     sanitize,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir);
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir);
                 match result {
                     Ok(p) => if !emit_gir { println!("Built: {}", p.display()); }
                     Err(e) => {
@@ -1424,7 +1443,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false);
+            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false);
             match result {
                 Ok(exe_path) => {
                     let status = Command::new(&exe_path)
@@ -1503,7 +1522,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false)
+            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false)
                 .unwrap_or_else(|e| {
                     eprintln!("{e}");
                     process::exit(1);
