@@ -9302,13 +9302,7 @@ fn format_constant(constant: &Constant, _func: &Function, _registry: &TypeRegist
         Constant::I8(n) => format!("(int8_t){n}"),
         Constant::I16(n) => format!("(int16_t){n}"),
         Constant::I32(n) => format!("{n}"),
-        Constant::I64(n) => {
-            if *n > i32::MAX as i64 || *n < i32::MIN as i64 {
-                format!("{n}LL")
-            } else {
-                format!("{n}")
-            }
-        }
+        Constant::I64(n) => format!("{n}LL"),
         Constant::U8(n) => format!("(uint8_t){n}"),
         Constant::U16(n) => format!("(uint16_t){n}"),
         Constant::U32(n) => format!("{n}u"),

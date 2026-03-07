@@ -15,13 +15,12 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         // Phase 1: simplify values
         propagate_constants(func);
         constant_fold(func);
-        // Re-propagate into terminators only: constant_fold can turn
-        // computed instructions (e.g., UnOp(Not, false)) into Assign(true),
-        // creating new propagation opportunities for branch folding.
-        // Full re-propagation into instructions is unsafe because the C
-        // backend may emit untyped integer literals that break printf format
-        // specifiers. Terminator propagation is safe because branch/switch
-        // conditions are checked by value, not passed through C format strings.
+        // Re-propagate into terminators after folding: constant_fold can
+        // turn computed instructions (e.g., UnOp(Not, false)) into
+        // Assign(true), enabling branch folding. Full re-propagation into
+        // instruction operands is unsafe: cascading fold→propagate→fold
+        // can evaluate wrapping arithmetic at Rust precision instead of C,
+        // producing different results.
         propagate_into_terminators(func);
         simplify_algebraic(func);
         simplify_cmp(func);
