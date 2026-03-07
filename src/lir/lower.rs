@@ -46,6 +46,8 @@ struct FuncLowering<'a> {
     struct_reg: &'a StructRegistry,
     /// Function name → FuncId (for Call).
     func_index: &'a std::collections::HashMap<String, FuncId>,
+    /// Module struct definitions (for field-count checking).
+    module_structs: &'a [StructDef],
 }
 
 impl<'a> LoweringContext<'a> {
@@ -109,6 +111,7 @@ impl<'a> LoweringContext<'a> {
                     &self.gir.type_registry,
                     &self.struct_reg,
                     &self.func_index,
+                    &self.module.structs,
                 );
                 fl.lower();
                 fl.lir_func
@@ -208,6 +211,7 @@ impl<'a> FuncLowering<'a> {
         gir_types: &'a TypeRegistry,
         struct_reg: &'a StructRegistry,
         func_index: &'a std::collections::HashMap<String, FuncId>,
+        module_structs: &'a [StructDef],
     ) -> Self {
         let params: Vec<LirType> = gir_func
             .params
@@ -240,6 +244,7 @@ impl<'a> FuncLowering<'a> {
             block_map,
             struct_reg,
             func_index,
+            module_structs,
         }
     }
 
@@ -456,7 +461,7 @@ impl<'a> FuncLowering<'a> {
                 let base_val = self.lower_place_addr(base, bb);
                 // We need the struct type to emit FieldPtr. Determine from the GIR type.
                 let gir_type_id = self.gir_func.locals[base.local.0 as usize].type_id;
-                let struct_id = self.resolve_struct_id(gir_type_id);
+                let struct_id = self.resolve_struct_id_for_field(gir_type_id, *field, self.module_structs);
                 let fptr = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                     dst: fptr,
@@ -904,7 +909,7 @@ impl<'a> FuncLowering<'a> {
             match proj {
                 Projection::Field(field) => {
                     let gir_type_id = self.gir_func.locals[place.local.0 as usize].type_id;
-                    let struct_id = self.resolve_struct_id(gir_type_id);
+                    let struct_id = self.resolve_struct_id_for_field(gir_type_id, *field, self.module_structs);
                     let next = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                         dst: next,
@@ -1020,6 +1025,24 @@ impl<'a> FuncLowering<'a> {
             }
         }
         StructId(0) // fallback
+    }
+
+    /// Resolve struct ID with field-count safety: if the resolved struct has
+    /// fewer fields than the field index, try a wider compatible type.
+    /// Handles Str→GorgetString promotion (GIR uses GorgetString fields on Str locals).
+    fn resolve_struct_id_for_field(&self, gir_type_id: GirTypeId, field: u32, structs: &[StructDef]) -> StructId {
+        let sid = self.resolve_struct_id(gir_type_id);
+        let struct_def = &structs[sid.0 as usize];
+        if (field as usize) < struct_def.fields.len() {
+            return sid;
+        }
+        // Str (2 fields) with field >= 2 → GorgetString (3 fields).
+        if struct_def.name == "Str" {
+            if let Some(gs_sid) = self.struct_reg.lookup("GorgetString") {
+                return gs_sid;
+            }
+        }
+        sid
     }
 
     fn resolve_type_name(&self, gir_type_id: GirTypeId) -> String {
