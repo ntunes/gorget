@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-07] **feat: LIR Phase 4 — optimization passes**: `src/lir/optimize.rs` — 7 passes: dead function elimination (transitive closure from roots), dead global elimination, constant folding (int/float/bool arithmetic, casts, comparisons — cascading within blocks), constant branch folding (Branch/Switch with known conditions → Jump), dead block elimination (BFS reachability), block merging (coalesce linear chains), dead code elimination. Wired into `--emit-lir` and `--emit-c-lir` pipelines. Supersedes GIR dead fn/copy prop. 18 tests.
+
 - [2026-03-07] **feat: LIR Phase 3 — thin C backend from LIR (c_lir)**: `src/backend/c_lir/mod.rs` — 1:1 LIR→C translation. Struct defs, externs, globals, functions with goto-based control flow, block params, all instruction categories. `--emit-c-lir` flag for A/B comparison. 5 tests.
 
 - [2026-03-07] **feat: --emit-lir and --emit-c-lir CLI flags**: Inspect LIR and LIR-generated C output from `gg build`.

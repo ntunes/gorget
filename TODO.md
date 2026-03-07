@@ -2,7 +2,7 @@
 
 ## High
 
-- **LIR: Phase 3 cont'd — A/B test c_lir against current backend**: Phase 3 skeleton done (`src/backend/c_lir/`, `--emit-c-lir`). Next: run integration tests through LIR pipeline, close gaps until c_lir passes fixture parity. Then Phase 4: LIR optimizations (dead function elimination, copy propagation, inlining). [updated: 2026-03-07]
+- **LIR: Phase 5 — A/B test c_lir against current backend**: Phases 1-4 done (lower, SSA, c_lir, optimizer with 7 passes + fixpoint). 457/515 fixtures (89%) pass LIR validation. Remaining failures: GIR Str/GorgetString field index mismatches on complex string operations. Next: close validation gaps, then compare c_lir output against current backend. [updated: 2026-03-07]
 
 ## Medium
 
@@ -20,9 +20,6 @@
 
 - **Async `.lock()` / `.read()` / `.write()` for explicit Mutex/RwLock**: Currently these are synchronous (`pthread_mutex_lock`/`pthread_rwlock_rdlock`), blocking the OS thread. In async code on the M:N scheduler, this ties up a worker thread under contention. Should use trylock + waker-queue protocol: try to acquire, if contended register task's waker on the sync primitive's wait queue and return Pending, wake one waiter on guard drop. The `shared` keyword path manages this internally, but explicit `Mutex[T]` in async functions needs it for correct M:N behavior. Requires: waker queue field on `gorget_mutex_t`/`gorget_rwlock_t`, async-aware lock methods that return `Future[Guard[T]]`, integration with executor's poll loop. [added: 2026-03-06]
 
-- **GIR dead function elimination**: Disabled — C backend generates implicit function references not visible in GIR. **Superseded by LIR** where all references are explicit. [added: 2026-03-07, updated: 2026-03-07]
-
-- **GIR copy propagation**: Disabled — C backend relies on implicit type coercions between locals. **Superseded by LIR** where coercions are explicit Cast instructions. [added: 2026-03-05, updated: 2026-03-07]
 
 - **`gg sim` aliasing model — Tree Borrows tracking**: sim.md identifies this as the "core differentiator from naive interpreters." Implement borrow-level tracking to catch aliasing violations. Add `--tree-borrows` (default) and `--strict-aliasing` flags (stricter stacked-borrows model). Currently sim detects UB (bounds, uninit, etc.) but does not track borrow validity. [added: 2026-03-05]
 
