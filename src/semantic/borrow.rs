@@ -402,6 +402,10 @@ struct BorrowChecker<'a> {
     shared_out: FxHashMap<DefId, super::SharedStrategy>,
     /// Stale-condition warnings collected during analysis (§3.4).
     stale_warnings: Vec<super::errors::SemanticWarning>,
+    /// DefIds of `with` bindings that track shared variables (auto-refresh).
+    /// These are exempt from stale-condition warnings — the compiler guarantees
+    /// they are refreshed after every await point.
+    with_shared_tracked: FxHashSet<DefId>,
 }
 
 impl<'a> BorrowChecker<'a> {
@@ -456,6 +460,7 @@ impl<'a> BorrowChecker<'a> {
             shared_spawned: FxHashSet::default(),
             shared_out: FxHashMap::default(),
             stale_warnings: Vec::new(),
+            with_shared_tracked: FxHashSet::default(),
         }
     }
 
@@ -1595,12 +1600,19 @@ impl<'a> BorrowChecker<'a> {
                     for def_id in to_invalidate {
                         self.await_invalidated.insert(def_id);
                     }
-                    // §3.4 Stale-condition: move all shared_derived entries to stale
-                    // (token released at await → cached values are stale)
+                    // §3.4 Stale-condition: move shared_derived entries to stale
+                    // (token released at await → cached values are stale).
+                    // Skip with-tracked bindings — they are auto-refreshed.
                     let await_span = expr.span;
-                    for (def_id, mut info) in self.shared_derived.drain() {
-                        info.await_span = Some(await_span);
-                        self.stale_shared_derived.insert(def_id, info);
+                    let drained: Vec<_> = self.shared_derived.drain().collect();
+                    for (def_id, mut info) in drained {
+                        if self.with_shared_tracked.contains(&def_id) {
+                            // Re-insert: with-tracked bindings stay fresh
+                            self.shared_derived.insert(def_id, info);
+                        } else {
+                            info.await_span = Some(await_span);
+                            self.stale_shared_derived.insert(def_id, info);
+                        }
                     }
                 }
             }
@@ -2571,6 +2583,19 @@ impl<'a> BorrowChecker<'a> {
             Stmt::With { bindings, body } => {
                 for binding in bindings {
                     self.check_expr(&binding.expr);
+                }
+
+                // Detect if any binding tracks a shared variable (bare `with x:` form).
+                // These bindings are exempt from stale-condition warnings — the compiler
+                // guarantees they are auto-refreshed after every await point.
+                if self.current_function_is_async {
+                    for binding in bindings {
+                        if let Some(_shared_name) = self.find_shared_ref_in_expr_spanned(&binding.expr) {
+                            if let Some(def_id) = self.scopes.lookup_def_by_span(&binding.name.node, binding.name.span) {
+                                self.with_shared_tracked.insert(def_id);
+                            }
+                        }
+                    }
                 }
 
                 // Detect if any binding is an allocator type (Arena or TrackingAllocator)

@@ -934,8 +934,22 @@ fn lower_with(
     ctx.drops.push_scope(DropScopeKind::Block);
 
     let mut allocator_locals = Vec::new();
+    let mut shared_refresh_entries = Vec::new();
 
     for binding in bindings {
+        // Detect shared variable bindings before lowering (lowering consumes the name mapping)
+        let shared_facade = if let Expr::Identifier(ref name) = binding.expr.node {
+            ctx.lookup_local(name).and_then(|(local_id, _)| {
+                if ctx.shared.locals.contains_key(&local_id) {
+                    Some(local_id)
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
         let is_alloc = is_allocator_constructor(&binding.expr.node);
         let val = lower_expr(ctx, builder, &binding.expr);
         let type_id = super::exprs::infer_operand_type_full(ctx, &val, builder);
@@ -944,6 +958,11 @@ fn lower_with(
         ctx.drops.register_local(local_id, type_id, &ctx.type_registry);
         builder.assign(Place::local(local_id), val);
 
+        // If this binding mirrors a shared variable, register for auto-refresh after await
+        if let Some(facade_local) = shared_facade {
+            shared_refresh_entries.push((local_id, facade_local));
+        }
+
         // If this is an allocator, push it as the active thread-local allocator
         if is_alloc {
             builder.push_allocator(FunctionBuilder::copy(local_id));
@@ -951,7 +970,14 @@ fn lower_with(
         }
     }
 
+    // Push shared-refresh entries for the duration of the body
+    let prev_refresh_len = ctx.with_shared_refresh.len();
+    ctx.with_shared_refresh.extend(shared_refresh_entries);
+
     lower_block(ctx, builder, body);
+
+    // Pop shared-refresh entries
+    ctx.with_shared_refresh.truncate(prev_refresh_len);
 
     // Drop all non-allocator locals FIRST (while the allocator is still alive),
     // then pop + destroy allocators. This avoids use-after-free when collections

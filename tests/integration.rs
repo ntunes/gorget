@@ -7812,6 +7812,11 @@ fn shared_stale_tuple() {
 }
 
 #[test]
+fn shared_with_refresh() {
+    run_gg("shared_with_refresh.gg", "fresh\n1");
+}
+
+#[test]
 fn shared_closure_capture_error() {
     check_gg_fails("shared_closure_capture_error.gg", "cannot capture shared variable");
 }

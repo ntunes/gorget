@@ -423,7 +423,7 @@ impl Parser {
             let bind_start = self.peek_span();
             let full_expr = self.parse_expr()?;
             let bind_end = self.previous_span();
-            let binding = self.decompose_as_binding(full_expr, bind_start.merge(bind_end))?;
+            let binding = self.decompose_with_binding(full_expr, bind_start.merge(bind_end))?;
             bindings.push(binding);
 
             if !self.match_token(&Token::Comma) {
@@ -438,6 +438,38 @@ impl Parser {
             Stmt::With { bindings, body },
             start.merge(end),
         ))
+    }
+
+    /// Decompose a with-binding expression into a `WithBinding`.
+    /// Supports both `expr as name` and bare `name` forms.
+    /// The bare form (`with x:`) uses the identifier as both expression and name.
+    fn decompose_with_binding(
+        &self,
+        full_expr: Spanned<Expr>,
+        span: Span,
+    ) -> Result<WithBinding, ParseError> {
+        // `expr as name` form
+        if let Expr::As { expr, type_ } = &full_expr.node {
+            if let Type::Named { name, generic_args } = &type_.node {
+                if generic_args.is_empty() {
+                    return Ok(WithBinding {
+                        expr: *expr.clone(),
+                        name: name.clone(),
+                        span,
+                    });
+                }
+            }
+            return Err(self.error_at(span, "expected 'as <name>' in with-binding"));
+        }
+        // Bare `name` form — use identifier as both expr and name
+        if let Expr::Identifier(name) = &full_expr.node {
+            return Ok(WithBinding {
+                name: Spanned::new(name.clone(), full_expr.span),
+                expr: full_expr,
+                span,
+            });
+        }
+        Err(self.error_at(span, "expected '<expr> as <name>' or bare identifier in with-binding"))
     }
 
     fn parse_unsafe_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {

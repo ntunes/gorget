@@ -23,6 +23,21 @@ use crate::span::Spanned;
 
 use super::context::LoweringContext;
 
+/// Known blocking function names that should trigger `with shared_var:` auto-refresh.
+/// These are yield points where another task could modify a shared variable.
+const BLOCKING_CALL_NAMES: &[&str] = &[
+    "sleep", "read_file", "write_file", "append_file",
+    "readdir", "http_get", "http_post", "http_put", "http_delete",
+];
+
+/// Check if an expression is a call to a known blocking function.
+fn is_blocking_call_name(expr: &Expr) -> bool {
+    if let Expr::Identifier(name) = expr {
+        BLOCKING_CALL_NAMES.contains(&name.as_str())
+    } else {
+        false
+    }
+}
 
 /// Lower an expression to GIR instructions, returning the result `Operand`.
 pub fn lower_expr(
@@ -121,7 +136,13 @@ fn lower_expr_inner(
             if matches!(callee.node, Expr::NoneLiteral) {
                 return Operand::Constant(Constant::Null);
             }
-            lower_call(ctx, builder, callee, args, generic_args.as_deref())
+            // Check if this is a blocking call that should trigger with-shared refresh
+            let is_blocking = is_blocking_call_name(&callee.node);
+            let result = lower_call(ctx, builder, callee, args, generic_args.as_deref());
+            if is_blocking {
+                shared::emit_with_shared_refresh(ctx, builder);
+            }
+            result
         }
 
         // -- P2.1: Struct operations --
@@ -545,6 +566,10 @@ fn lower_expr_inner(
                     builder.move_zero(Place::local(local_id));
                     ctx.drops.mark_moved(local_id);
                 }
+
+                // Auto-refresh `with shared_var:` bindings after await
+                emit_with_shared_refresh(ctx, builder);
+
                 return result;
             }
             inner

@@ -257,3 +257,42 @@ pub(super) fn c_suffix_to_type_id(suffix: &str, ctx: &LoweringContext) -> TypeId
         other     => ctx.type_mapper.lookup_named(other).unwrap_or(I64_TYPE),
     }
 }
+
+/// Auto-refresh all active `with shared_var:` bindings after an await point.
+/// For each (binding_local, shared_facade_local) pair, re-reads the shared variable
+/// and assigns the fresh value to the binding local.
+pub fn emit_with_shared_refresh(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+) {
+    use super::super::context::SharedLocalKind;
+
+    if ctx.with_shared_refresh.is_empty() {
+        return;
+    }
+
+    // Snapshot to avoid borrow issues
+    let refresh_pairs: Vec<_> = ctx.with_shared_refresh.clone();
+    for (binding_local, facade_local) in refresh_pairs {
+        let info = match ctx.shared.locals.get(&facade_local) {
+            Some(info) => (info.hidden_local, info.inner_type, info.kind),
+            None => continue,
+        };
+        let (hidden_local, inner_type, kind) = info;
+
+        let fresh = match kind {
+            SharedLocalKind::SharedArc => emit_shared_get(ctx, builder, hidden_local, inner_type),
+            SharedLocalKind::Atomic => {
+                let atomic_name = atomic_type_name_for(inner_type);
+                emit_atomic_load(ctx, builder, hidden_local, inner_type, &atomic_name)
+            }
+            SharedLocalKind::Mutex => {
+                let inner_c = ctx.c_type_name_for_id(inner_type);
+                let mutex_type = ctx.type_mapper.lookup_named(&format!("Mutex__{inner_c}")).unwrap_or(inner_type);
+                emit_shared_mutex_lock_get(ctx, builder, hidden_local, mutex_type, inner_type)
+            }
+            SharedLocalKind::RwLock => emit_rwlock_read_get(ctx, builder, hidden_local, inner_type),
+        };
+        builder.assign(Place::local(binding_local), fresh);
+    }
+}

@@ -1,0 +1,15 @@
+# Test: `with x:` auto-refresh suppresses stale-condition warning.
+# Reading a shared variable via `with` means the binding is auto-refreshed
+# after every await — no stale warning should be emitted.
+
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        t.await()
+        if x > 0:
+            print("fresh")
+        print(x)

@@ -180,6 +180,10 @@ pub struct LoweringContext<'a> {
     /// Set of equip method names that are GIR-lowered (not extern/C-runtime).
     /// Used by lower_method_call to decide whether to auto-borrow Move-type args.
     pub gir_equip_methods: rustc_hash::FxHashSet<String>,
+    /// Active `with shared_var:` auto-refresh bindings.
+    /// Maps the with-binding local → the shared facade local it mirrors.
+    /// After each await, the shared var is re-read into the binding local.
+    pub with_shared_refresh: Vec<(LocalId, LocalId)>,
 }
 
 
@@ -214,6 +218,7 @@ impl<'a> LoweringContext<'a> {
             global_names: rustc_hash::FxHashSet::default(),
             global_type_names: FxHashMap::default(),
             gir_equip_methods: rustc_hash::FxHashSet::default(),
+            with_shared_refresh: Vec::new(),
         }
     }
 
@@ -287,6 +292,7 @@ impl<'a> LoweringContext<'a> {
         self.spawn.result_locals.clear();
         self.spawn.pending_fn = None;
         self.shared.locals.clear();
+        self.with_shared_refresh.clear();
     }
 
     /// Take the locals map, leaving it empty. Used for save/restore during async variant generation.
