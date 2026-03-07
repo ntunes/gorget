@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-07] **feat: M:N Scheduler Phase 6 — blocking thread pool + async sleep + I/O integration**: Async sleep via reactor (`gorget_reactor_sleep_async` + waker callback → true coroutine yield). Go-style blocking I/O (`__gorget_blocking_enter/exit` wraps known blocking stdlib calls). Token release at blocking points in `shared_async.rs`. Poll function type coercion (Str→const char*, GorgetString→Str). Three test fixtures: `async_sleep_yield`, `async_blocking_io`, `async_blocking_coroutine`. 880 unit + 567 integration tests pass.
+
 - [2026-03-07] **feat: LIR ParamRef instruction + C keyword escaping → 43 A/B fixtures**: Added `Inst::ParamRef` to connect function parameters to local slots in the LIR. Added C keyword escaping (`c_func_name`) to avoid conflicts with `double`, `float`, etc. Expands A/B coverage from 36→43 fixtures (+7: functions, generics, generic_trait_equip, test_coexist, trace_test, trait_inherit_defaults, type_alias_fn_sig).
 
 - [2026-03-07] **feat: LIR Named→Struct type resolution + aggregate SlotStore → memcpy**: `map_gir_type_with_structs` resolves `GirType::Named(name)` to `LirType::Struct(sid)` via struct registry instead of defaulting to `LirType::Ptr`. c_lir emitter handles aggregate `SlotStore` via `memcpy` instead of direct assignment. Expands A/B coverage to 36 fixtures (+4: enums, match_advanced, ownership, pattern_is).

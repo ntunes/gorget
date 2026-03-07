@@ -1,0 +1,23 @@
+# Test: async mutex lock becomes a coroutine yield point.
+# Multiple spawned tasks contend on a Mutex[int], incrementing it.
+# The mutex lock in async context uses trylock + waker (non-blocking).
+
+async void increment(Mutex[int] m, int n):
+    int i = 0
+    while i < n:
+        Guard[int] g = m.lock()
+        g.set(g.get() + 1)
+        i = i + 1
+
+async void main():
+    Mutex[int] counter = Mutex[int](0)
+    Task[void] t1 = spawn increment(counter, 500)
+    Task[void] t2 = spawn increment(counter, 500)
+    Task[void] t3 = spawn increment(counter, 500)
+    Task[void] t4 = spawn increment(counter, 500)
+    t1.await()
+    t2.await()
+    t3.await()
+    t4.await()
+    Guard[int] g = counter.lock()
+    print(g.get())
