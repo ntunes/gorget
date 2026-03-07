@@ -1,5 +1,15 @@
 # DONE
 
+- [2026-03-07] **feat: await on vector-indexed tasks + zero-on-move-out**: Type-based await dispatch fallback via `task_type_fns` map enables `tasks[j].await()`. Zero-on-move-out for Move-type Vector IndexLoad prevents double-free. New fixture: spawn_vector_await.
+
+- [2026-03-07] **feat: iterative optimization pipeline**: Runs passes until fixpoint (up to 3 iterations). After block merging, new constant propagation and dead code opportunities emerge.
+
+- [2026-03-07] **feat: boolean comparison simplification**: `x == true → x`, `x == false → Not(x)`, `x != true → Not(x)`, `x != false → x`.
+
+- [2026-03-07] **feat: double negation elimination + remainder strength reduction**: `Not(Not(x)) → x`, `Neg(Neg(x)) → x`, `BitNot(BitNot(x)) → x`. `x % 2^n → x & (2^n-1)` for unsigned types or known non-negative constants.
+
+- [2026-03-07] **feat: idempotent bitwise simplification**: `x & x → x`, `x | x → x`.
+
 - [2026-03-07] **feat: type-generic algebraic simplification**: All integer/float types now handled (not just I64). Uses type_id for correctly-typed zero/one. Fixes latent x-x→I64(0) bug for non-I64 types.
 
 - [2026-03-07] **feat: extended constant folding to I32, F32, and all integer types**: BinOp folding for I32/F32, Cmp folding for all integer+float types, UnOp folding for I32/F32/U8.
