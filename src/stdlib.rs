@@ -1893,9 +1893,9 @@ mod tests {
         let src = source.unwrap();
         assert!(src.contains("struct Canvas"));
         assert!(src.contains("struct Color"));
-        assert!(src.contains("gfx_open"));
-        assert!(src.contains("gfx_close"));
-        assert!(src.contains("gfx_fill_circle"));
+        assert!(src.contains("Result[Canvas, str] open("));
+        assert!(src.contains("void close("));
+        assert!(src.contains("void fill_circle("));
     }
 
     #[test]
@@ -1918,9 +1918,9 @@ mod tests {
 
         assert!(struct_names.contains(&"Canvas".to_string()));
         assert!(struct_names.contains(&"Color".to_string()));
-        assert!(fn_names.contains(&"gfx_open".to_string()));
-        assert!(fn_names.contains(&"gfx_draw_circle".to_string()));
-        assert!(fn_names.contains(&"gfx_fill_circle".to_string()));
+        assert!(fn_names.contains(&"open".to_string()));
+        assert!(fn_names.contains(&"draw_circle".to_string()));
+        assert!(fn_names.contains(&"fill_circle".to_string()));
     }
 
     #[test]

@@ -3,14 +3,14 @@
 # A bouncing ball with a trail, showcasing the high-level graphics API.
 # Run: gg run examples/gfx_demo.gg
 
-from gg.gfx import Canvas, Color, gfx_open, gfx_close
-from gg.gfx import gfx_clear, gfx_present, gfx_fill_rect
-from gg.gfx import gfx_draw_rect, gfx_draw_line, gfx_fill_circle
-from gg.gfx import gfx_delay, gfx_width, gfx_height
+from gg.gfx import Canvas, Color, open, close
+from gg.gfx import clear, present, fill_rect
+from gg.gfx import draw_rect, draw_line, fill_circle
+from gg.gfx import delay, width, height
 from gg.sdl import sdl_poll_event, SDL_QUIT, SDL_KEYDOWN, SDLK_ESCAPE
 
 void main():
-    Canvas canvas = gfx_open("Gorget GFX Demo", 800, 600).unwrap()
+    Canvas canvas = open("Gorget GFX Demo", 800, 600).unwrap()
 
     auto black = Color(0, 0, 0, 255)
     auto white = Color(255, 255, 255, 255)
@@ -41,8 +41,8 @@ void main():
         by = by + dy
 
         # Bounce off walls
-        int w = gfx_width(canvas)
-        int h = gfx_height(canvas)
+        int w = width(canvas)
+        int h = height(canvas)
         if bx - radius < 0:
             bx = radius
             dx = 0 - dx
@@ -57,23 +57,23 @@ void main():
             dy = 0 - dy
 
         # Draw
-        gfx_clear(canvas, black)
+        clear(canvas, black)
 
         # Border
-        gfx_draw_rect(canvas, 5, 5, w - 10, h - 10, gray)
+        draw_rect(canvas, 5, 5, w - 10, h - 10, gray)
 
         # Cross-hairs
-        gfx_draw_line(canvas, w / 2, 0, w / 2, h, gray)
-        gfx_draw_line(canvas, 0, h / 2, w, h / 2, gray)
+        draw_line(canvas, w / 2, 0, w / 2, h, gray)
+        draw_line(canvas, 0, h / 2, w, h / 2, gray)
 
         # Ball
-        gfx_fill_circle(canvas, bx, by, radius, red)
+        fill_circle(canvas, bx, by, radius, red)
 
         # HUD rectangles
-        gfx_fill_rect(canvas, 10, 10, 100, 30, green)
-        gfx_fill_rect(canvas, w - 110, 10, 100, 30, blue)
+        fill_rect(canvas, 10, 10, 100, 30, green)
+        fill_rect(canvas, w - 110, 10, 100, 30, blue)
 
-        gfx_present(canvas)
-        gfx_delay(16)
+        present(canvas)
+        delay(16)
 
-    gfx_close(canvas)
+    close(canvas)

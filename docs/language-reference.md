@@ -3405,10 +3405,10 @@ router.get("/static/:file", (req): http_serve_file("./public", req))
 |---|---|---|
 | `Canvas` | struct | Drawing canvas |
 | `Color` | struct | RGBA color |
-| `gfx_open` | `Canvas(int, int, str)` | Open a canvas (width, height, title) |
-| `gfx_close` | `void(Canvas)` | Close a canvas |
-| `gfx_fill_circle` | `void(Canvas, int, int, int, Color)` | Draw filled circle |
-| `gfx_draw_circle` | `void(Canvas, int, int, int, Color)` | Draw circle outline |
+| `open` | `Result[Canvas, str](str, int, int)` | Open a canvas (title, width, height) |
+| `close` | `void(Canvas)` | Close a canvas |
+| `fill_circle` | `void(Canvas, int, int, int, Color)` | Draw filled circle |
+| `draw_circle` | `void(Canvas, int, int, int, Color)` | Draw circle outline |
 
 **`gg.sdl`** — SDL2 bindings
 

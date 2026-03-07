@@ -1,6 +1,6 @@
 from std.collections import Vector
 from gg.ecs import Entity, EntityPool, SparseSet
-from gg.gfx import Canvas, Color, gfx_fill_rect
+from gg.gfx import Canvas, Color, fill_rect
 from components import Position, Size, Velocity
 
 struct BreakoutWorld:
@@ -149,17 +149,17 @@ equip BreakoutWorld:
                 Position pos = self.positions.get(eid)
                 Size size = self.sizes.get(eid)
                 Color color = self.colors.get(eid)
-                gfx_fill_rect(canvas, pos.x, pos.y, size.w, size.h, color)
+                fill_rect(canvas, pos.x, pos.y, size.w, size.h, color)
         # Draw paddle
         Position ppos = self.positions.get(self.paddle_id)
         Size psize = self.sizes.get(self.paddle_id)
         Color pcol = self.colors.get(self.paddle_id)
-        gfx_fill_rect(canvas, ppos.x, ppos.y, psize.w, psize.h, pcol)
+        fill_rect(canvas, ppos.x, ppos.y, psize.w, psize.h, pcol)
         # Draw ball
         Position bpos = self.positions.get(self.ball_id)
         Size bsize = self.sizes.get(self.ball_id)
         Color bcol = self.colors.get(self.ball_id)
-        gfx_fill_rect(canvas, bpos.x, bpos.y, bsize.w, bsize.h, bcol)
+        fill_rect(canvas, bpos.x, bpos.y, bsize.w, bsize.h, bcol)
 
     int alive_count(self):
         int n = 0

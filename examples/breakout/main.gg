@@ -1,10 +1,10 @@
-from gg.gfx import Canvas, Color, gfx_open, gfx_close, gfx_clear, gfx_present, gfx_delay
+from gg.gfx import Canvas, Color, open, close, clear, present, delay
 from gg.sdl import sdl_poll_event, sdl_has_event, SDL_QUIT, SDL_KEYDOWN, SDL_KEYUP
 from gg.sdl import SDLK_LEFT, SDLK_RIGHT, SDLK_ESCAPE
 from world import BreakoutWorld, new_world
 
 void main():
-    Canvas canvas = gfx_open("Gorget Breakout", 800, 600).unwrap()
+    Canvas canvas = open("Gorget Breakout", 800, 600).unwrap()
     auto world = new_world()
     world.spawn_paddle()
     world.spawn_ball()
@@ -42,10 +42,10 @@ void main():
         world.collision_system()
         world.check_win()
 
-        gfx_clear(canvas, black)
+        clear(canvas, black)
         world.render_system(canvas)
-        gfx_present(canvas)
-        gfx_delay(16)
+        present(canvas)
+        delay(16)
 
     int score = world.get_score()
     if world.won():
@@ -53,4 +53,4 @@ void main():
     else:
         print(f"Game over! Score: {score}")
 
-    gfx_close(canvas)
+    close(canvas)

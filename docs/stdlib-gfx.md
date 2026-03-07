@@ -19,9 +19,9 @@ apt install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
 ## Import
 
 ```gorget
-from gg.gfx import Canvas, Color, gfx_open, gfx_close
-from gg.gfx import gfx_clear, gfx_present, gfx_fill_rect, gfx_fill_circle
-from gg.gfx import gfx_delay
+from gg.gfx import Canvas, Color, open, close
+from gg.gfx import clear, present, fill_rect, fill_circle
+from gg.gfx import delay
 from gg.sdl import sdl_poll_event, SDL_QUIT  # events come from gg.sdl
 ```
 
@@ -56,17 +56,17 @@ struct Canvas:
     SDLRenderer ren
 ```
 
-Created via `gfx_open()`, destroyed via `gfx_close()`.
+Created via `open()`, destroyed via `close()`.
 
 ## Functions
 
 ### Window management
 
 ```gorget
-Canvas gfx_open(str title, int w, int h)  # Open a window and return a Canvas
-void gfx_close(Canvas c)                   # Close the window and shut down SDL
-int gfx_width(Canvas c)                    # Get window width in pixels
-int gfx_height(Canvas c)                   # Get window height in pixels
+Canvas open(str title, int w, int h)  # Open a window and return a Canvas
+void close(Canvas c)                   # Close the window and shut down SDL
+int width(Canvas c)                    # Get window width in pixels
+int height(Canvas c)                   # Get window height in pixels
 ```
 
 ### Drawing
@@ -74,21 +74,21 @@ int gfx_height(Canvas c)                   # Get window height in pixels
 All drawing functions take a `Color` parameter — no need to set draw color separately.
 
 ```gorget
-void gfx_clear(Canvas c, Color color)                                        # Fill entire canvas
-void gfx_present(Canvas c)                                                    # Display the frame
-void gfx_fill_rect(Canvas c, int x, int y, int w, int h, Color color)        # Filled rectangle
-void gfx_draw_rect(Canvas c, int x, int y, int w, int h, Color color)        # Rectangle outline
-void gfx_draw_line(Canvas c, int x1, int y1, int x2, int y2, Color color)    # Line segment
-void gfx_draw_point(Canvas c, int x, int y, Color color)                      # Single pixel
-void gfx_draw_circle(Canvas c, int cx, int cy, int radius, Color color)       # Circle outline
-void gfx_fill_circle(Canvas c, int cx, int cy, int radius, Color color)       # Filled circle
+void clear(Canvas c, Color color)                                        # Fill entire canvas
+void present(Canvas c)                                                    # Display the frame
+void fill_rect(Canvas c, int x, int y, int w, int h, Color color)        # Filled rectangle
+void draw_rect(Canvas c, int x, int y, int w, int h, Color color)        # Rectangle outline
+void draw_line(Canvas c, int x1, int y1, int x2, int y2, Color color)    # Line segment
+void draw_point(Canvas c, int x, int y, Color color)                      # Single pixel
+void draw_circle(Canvas c, int cx, int cy, int radius, Color color)       # Circle outline
+void fill_circle(Canvas c, int cx, int cy, int radius, Color color)       # Filled circle
 ```
 
 ### Timing
 
 ```gorget
-void gfx_delay(int ms)   # Sleep for ms milliseconds
-int gfx_ticks()           # Milliseconds since SDL was initialized
+void delay(int ms)   # Sleep for ms milliseconds
+int ticks()           # Milliseconds since SDL was initialized
 ```
 
 ## Example
@@ -96,13 +96,13 @@ int gfx_ticks()           # Milliseconds since SDL was initialized
 A bouncing ball with a trail:
 
 ```gorget
-from gg.gfx import Canvas, Color, gfx_open, gfx_close
-from gg.gfx import gfx_clear, gfx_present, gfx_fill_circle, gfx_delay
-from gg.gfx import gfx_width, gfx_height
+from gg.gfx import Canvas, Color, open, close
+from gg.gfx import clear, present, fill_circle, delay
+from gg.gfx import width, height
 from gg.sdl import sdl_poll_event, SDL_QUIT
 
 void main():
-    auto canvas = gfx_open("Bouncing Ball", 800, 600)
+    auto canvas = open("Bouncing Ball", 800, 600)
     auto black = Color(0, 0, 0, 255)
     auto red = Color(220, 50, 50, 255)
 
@@ -119,8 +119,8 @@ void main():
 
         bx = bx + dx
         by = by + dy
-        int w = gfx_width(canvas)
-        int h = gfx_height(canvas)
+        int w = width(canvas)
+        int h = height(canvas)
         if bx < 20:
             dx = 0 - dx
         if bx > w - 20:
@@ -130,12 +130,12 @@ void main():
         if by > h - 20:
             dy = 0 - dy
 
-        gfx_clear(canvas, black)
-        gfx_fill_circle(canvas, bx, by, 20, red)
-        gfx_present(canvas)
-        gfx_delay(16)
+        clear(canvas, black)
+        fill_circle(canvas, bx, by, 20, red)
+        present(canvas)
+        delay(16)
 
-    gfx_close(canvas)
+    close(canvas)
 ```
 
 See `examples/gfx_demo.gg` for a more complete demo.

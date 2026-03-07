@@ -28,7 +28,7 @@ struct Canvas:
 
 # ── Window management ─────────────────────────────────────────
 
-Result[Canvas, str] gfx_open(str title, int w, int h):
+Result[Canvas, str] open(str title, int w, int h):
     sdl_init(SDL_INIT_VIDEO)
     SDLWindow win = sdl_create_window_try(title, w, h, SDL_WINDOW_SHOWN)
     if sdl_window_is_null(win):
@@ -39,45 +39,45 @@ Result[Canvas, str] gfx_open(str title, int w, int h):
         return Error("failed to create renderer: " + sdl_get_error())
     return Ok(Canvas(win, ren))
 
-void gfx_close(Canvas c):
+void close(Canvas c):
     sdl_destroy_renderer(c.ren)
     sdl_destroy_window(c.win)
     sdl_quit()
 
-int gfx_width(Canvas c):
+int width(Canvas c):
     return sdl_get_window_width(c.win)
 
-int gfx_height(Canvas c):
+int height(Canvas c):
     return sdl_get_window_height(c.win)
 
 # ── Drawing ───────────────────────────────────────────────────
 
-void gfx_clear(Canvas c, Color color):
+void clear(Canvas c, Color color):
     sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
     sdl_clear(c.ren)
 
-void gfx_present(Canvas c):
+void present(Canvas c):
     sdl_present(c.ren)
 
-void gfx_fill_rect(Canvas c, int x, int y, int w, int h, Color color):
+void fill_rect(Canvas c, int x, int y, int w, int h, Color color):
     sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
     sdl_fill_rect(c.ren, x, y, w, h)
 
-void gfx_draw_rect(Canvas c, int x, int y, int w, int h, Color color):
+void draw_rect(Canvas c, int x, int y, int w, int h, Color color):
     sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
     sdl_draw_rect(c.ren, x, y, w, h)
 
-void gfx_draw_line(Canvas c, int x1, int y1, int x2, int y2, Color color):
+void draw_line(Canvas c, int x1, int y1, int x2, int y2, Color color):
     sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
     sdl_draw_line(c.ren, x1, y1, x2, y2)
 
-void gfx_draw_point(Canvas c, int x, int y, Color color):
+void draw_point(Canvas c, int x, int y, Color color):
     sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
     sdl_draw_point(c.ren, x, y)
 
 # ── Circles (midpoint algorithm, implemented in pure Gorget) ──
 
-void gfx_draw_circle(Canvas c, int cx, int cy, int radius, Color color):
+void draw_circle(Canvas c, int cx, int cy, int radius, Color color):
     sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
     int x = radius
     int y = 0
@@ -98,7 +98,7 @@ void gfx_draw_circle(Canvas c, int cx, int cy, int radius, Color color):
             x = x - 1
             d = d + 2 * (y - x) + 1
 
-void gfx_fill_circle(Canvas c, int cx, int cy, int radius, Color color):
+void fill_circle(Canvas c, int cx, int cy, int radius, Color color):
     sdl_set_draw_color(c.ren, color.r, color.g, color.b, color.a)
     int x = radius
     int y = 0
@@ -117,8 +117,8 @@ void gfx_fill_circle(Canvas c, int cx, int cy, int radius, Color color):
 
 # ── Timing ────────────────────────────────────────────────────
 
-void gfx_delay(int ms):
+void delay(int ms):
     sdl_delay(ms)
 
-int gfx_ticks():
+int ticks():
     return sdl_get_ticks()
