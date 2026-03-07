@@ -11,6 +11,21 @@ use super::types::TypeMapper;
 
 use crate::ir::types::BlockId;
 
+/// Metadata for a shared variable's hidden local and wrapper.
+#[derive(Debug, Clone, Copy)]
+pub struct SharedLocalInfo {
+    /// The hidden local that holds the actual wrapper (Mutex/Shared/Atomic/RwLock).
+    pub hidden_local: LocalId,
+    /// The inner value type (T in Mutex[T], Shared[T], etc.).
+    pub inner_type: TypeId,
+    /// The wrapper type (e.g., Mutex__int64_t, Shared__Str).
+    pub wrapper_type: TypeId,
+    /// Which locking/access protocol to use.
+    pub kind: SharedLocalKind,
+    /// The original `shared` annotation from the AST (`Auto`, `Atomic`, etc.).
+    pub ast_shared: crate::parser::ast::SharedKind,
+}
+
 /// The kind of wrapper used for a shared variable's hidden local.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SharedLocalKind {
@@ -71,12 +86,11 @@ pub struct SpawnState {
 /// State for `shared` variable tracking during lowering.
 #[derive(Default)]
 pub struct SharedVarState {
-    /// Shared variable facade locals → (hidden_local, inner_type, wrapper_type, kind, ast_shared).
+    /// Shared variable facade locals → SharedLocalInfo.
     /// The facade local has the user-visible inner type T; the hidden local holds the
     /// actual Mutex[T], Shared[T], or AtomicInt/AtomicBool. The `kind` determines which
-    /// ops to emit for transparent read/write access. `ast_shared` is the original
-    /// `SharedKind` from the AST — `Auto` means CFA decided, others are user overrides.
-    pub locals: FxHashMap<LocalId, (LocalId, TypeId, TypeId, SharedLocalKind, crate::parser::ast::SharedKind)>,
+    /// ops to emit for transparent read/write access.
+    pub locals: FxHashMap<LocalId, SharedLocalInfo>,
     /// When true, shared variable reads return the raw wrapper local instead of auto-locking/getting.
     /// Set during spawn arg lowering so shared vars are passed as Mutex/Shared pointers to spawned tasks.
     pub pass_raw: bool,

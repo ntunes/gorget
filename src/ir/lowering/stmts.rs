@@ -4,7 +4,7 @@ use crate::ir::types::*;
 use crate::parser::ast::{self, BinaryOp, Block, Expr, Pattern, SelectOp, Stmt};
 use crate::span::Spanned;
 
-use super::context::LoweringContext;
+use super::context::{LoweringContext, SharedLocalInfo, SharedLocalKind};
 use super::drops::DropScopeKind;
 use super::exprs::{lower_expr, infer_operand_type_full, guard_inner_suffix, emit_guard_get_ptr};
 
@@ -243,7 +243,6 @@ fn lower_shared_var_decl(
     shared: &ast::SharedKind,
 ) {
     use crate::ir::types::GirType;
-    use super::context::SharedLocalKind;
     use super::exprs::{ensure_mutex_type_def, ensure_shared_type_def};
     use crate::semantic::SharedStrategy;
 
@@ -311,7 +310,7 @@ fn lower_shared_var_decl(
             ctx.register_local(name, facade_local, inner_type);
             ctx.drops.register_local(facade_local, inner_type, &ctx.type_registry);
 
-            ctx.shared.locals.insert(facade_local, (hidden_local, inner_type, wrapper_type, SharedLocalKind::Atomic, *shared));
+            ctx.shared.locals.insert(facade_local, SharedLocalInfo { hidden_local, inner_type, wrapper_type, kind: SharedLocalKind::Atomic, ast_shared: *shared });
 
             // Initialize facade with atomic load
             let init_val = super::exprs::emit_atomic_load(ctx, builder, hidden_local, inner_type, &atomic_name);
@@ -343,7 +342,7 @@ fn lower_shared_var_decl(
             ctx.register_local(name, facade_local, inner_type);
             ctx.drops.register_local(facade_local, inner_type, &ctx.type_registry);
 
-            ctx.shared.locals.insert(facade_local, (hidden_local, inner_type, shared_type, SharedLocalKind::SharedArc, *shared));
+            ctx.shared.locals.insert(facade_local, SharedLocalInfo { hidden_local, inner_type, wrapper_type: shared_type, kind: SharedLocalKind::SharedArc, ast_shared: *shared });
 
             let init_val = super::exprs::emit_shared_get(ctx, builder, hidden_local, inner_type);
             builder.assign(Place::local(facade_local), init_val);
@@ -386,7 +385,7 @@ fn lower_shared_var_decl(
             ctx.register_local(name, facade_local, inner_type);
             ctx.drops.register_local(facade_local, inner_type, &ctx.type_registry);
 
-            ctx.shared.locals.insert(facade_local, (rwlock_local, inner_type, rwlock_type, SharedLocalKind::RwLock, *shared));
+            ctx.shared.locals.insert(facade_local, SharedLocalInfo { hidden_local: rwlock_local, inner_type, wrapper_type: rwlock_type, kind: SharedLocalKind::RwLock, ast_shared: *shared });
 
             let init_val = super::exprs::emit_rwlock_read_get(ctx, builder, rwlock_local, inner_type);
             builder.assign(Place::local(facade_local), init_val);
@@ -438,7 +437,7 @@ fn lower_shared_var_decl(
             ctx.register_local(name, facade_local, inner_type);
             ctx.drops.register_local(facade_local, inner_type, &ctx.type_registry);
 
-            ctx.shared.locals.insert(facade_local, (hidden_local, inner_type, shared_mutex_type, SharedLocalKind::Mutex, *shared));
+            ctx.shared.locals.insert(facade_local, SharedLocalInfo { hidden_local, inner_type, wrapper_type: shared_mutex_type, kind: SharedLocalKind::Mutex, ast_shared: *shared });
 
             // Init facade: Shared.get() → Mutex, then lock → get → release
             let init_val = super::exprs::emit_shared_mutex_lock_get(ctx, builder, hidden_local, mutex_type, inner_type);
@@ -458,8 +457,8 @@ fn lower_assign(
         Expr::Identifier(name) => {
             if let Some((local_id, _type_id)) = ctx.lookup_local(name) {
                 // Shared variable: dispatch based on wrapper kind
-                if let Some(&(hidden_local, inner_type, _, kind, _)) = ctx.shared.locals.get(&local_id) {
-                    use super::context::SharedLocalKind;
+                if let Some(info) = ctx.shared.locals.get(&local_id) {
+                    let (hidden_local, inner_type, kind) = (info.hidden_local, info.inner_type, info.kind);
                     match kind {
                         SharedLocalKind::Mutex => {
                             let operand = lower_expr(ctx, builder, value);
@@ -749,8 +748,8 @@ fn lower_compound_assign(
     if let Expr::Identifier(name) = &target.node {
         if let Some((local_id, type_id)) = ctx.lookup_local(name) {
             // Shared variable: dispatch based on wrapper kind
-            if let Some(&(hidden_local, inner_type, _, kind, _)) = ctx.shared.locals.get(&local_id) {
-                use super::context::SharedLocalKind;
+            if let Some(info) = ctx.shared.locals.get(&local_id) {
+                let (hidden_local, inner_type, kind) = (info.hidden_local, info.inner_type, info.kind);
                 match kind {
                     SharedLocalKind::Mutex => {
                         let inner_c = ctx.c_type_name_for_id(inner_type);

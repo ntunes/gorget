@@ -58,7 +58,8 @@ fn lower_expr_inner(
                 // If this is a shared variable:
                 // - In spawn arg context (shared_pass_raw), return the raw Mutex local
                 // - Otherwise, auto-emit lock+get for transparent access
-                if let Some(&(hidden_local, inner_type, _wrapper_type, kind, _)) = ctx.shared.locals.get(&local_id) {
+                if let Some(info) = ctx.shared.locals.get(&local_id) {
+                    let (hidden_local, inner_type, kind) = (info.hidden_local, info.inner_type, info.kind);
                     use super::context::SharedLocalKind;
                     if ctx.shared.pass_raw {
                         return Operand::Copy(Place::local(hidden_local));
@@ -626,7 +627,8 @@ fn lower_expr_inner(
                     for (i, arg) in call_args.iter().enumerate() {
                         if let Expr::Identifier(arg_name) = &arg.node.value.node {
                             if let Some((local_id, _)) = ctx.lookup_local(arg_name) {
-                                if let Some(&(_, inner_type, wrapper_type, kind, ast_shared)) = ctx.shared.locals.get(&local_id) {
+                                if let Some(info) = ctx.shared.locals.get(&local_id) {
+                                    let (inner_type, wrapper_type, kind, ast_shared) = (info.inner_type, info.wrapper_type, info.kind, info.ast_shared);
                                     has_any_shared = true;
                                     // Only auto-decided shared vars get token wrappers.
                                     // User overrides (shared(atomic), shared(rwlock)) pass

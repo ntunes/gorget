@@ -4,7 +4,7 @@
 
 - **IR refactor: Continue `exprs/` split — Phase 3**: Phases 1-2 done (6 files: mod.rs 3,371, methods.rs 2,027, calls.rs 915, spawn.rs 671, shared.rs 314, type_reg.rs 228). `mod.rs` is still 3,371 lines. Remaining extraction candidates: `lower_field_access` (~100 lines), `lower_string_interpolation` (~250 lines), `lower_comprehension` functions, `lower_expr_inner` match arm clusters (e.g., binary ops, unary ops, closures). [updated: 2026-03-07, from: IR code review]
 
-- **IR refactor: Continue `LoweringContext` decomposition**: Phase 1 done (GenericState, SpawnState, SharedVarState extracted, 34→24 fields + 3 sub-structs). Remaining candidates: closure tracking (closure_info, mut_capture_locals → ClosureState), function metadata (fn_sigs, fn_defaults, fn_param_names, fn_param_ownerships → FnMetadata), globals (global_names, global_type_names → GlobalState). Also: `shared_locals` 5-tuple value should become a named struct. [updated: 2026-03-07, from: IR code review]
+- **IR refactor: Continue `LoweringContext` decomposition (Phase 3)**: Phases 1-2 done (GenericState, SpawnState, SharedVarState extracted; SharedLocalInfo named struct replaces 5-tuple). 24 fields remain. Remaining candidates: closure tracking (closure_info, mut_capture_locals → ClosureState), function metadata (fn_sigs [116 uses], fn_defaults, fn_param_names, fn_param_ownerships → FnMetadata), globals (global_names, global_type_names → GlobalState). fn_sigs has 116 uses — consider whether the churn is justified vs readability gain. [updated: 2026-03-07, from: IR code review]
 
 
 ## Medium
