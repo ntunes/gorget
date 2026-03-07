@@ -1808,6 +1808,42 @@ mod tests {
     }
 
     #[test]
+    fn fold_mod_vs_rem() {
+        // -7 % 3 = -1 (remainder), -7 mod 3 = 2 (modulo)
+        let mut f_rem = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(1), op: BinOp::Rem, type_id: I64_TYPE,
+            lhs: Operand::Constant(Constant::I64(-7)), rhs: Operand::Constant(Constant::I64(3)),
+        }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        constant_fold(&mut f_rem);
+        assert!(matches!(&f_rem.blocks[0].instructions[0],
+            Instruction::Assign { value: Operand::Constant(Constant::I64(-1)), .. }));
+
+        let mut f_mod = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(1), op: BinOp::Mod, type_id: I64_TYPE,
+            lhs: Operand::Constant(Constant::I64(-7)), rhs: Operand::Constant(Constant::I64(3)),
+        }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        constant_fold(&mut f_mod);
+        assert!(matches!(&f_mod.blocks[0].instructions[0],
+            Instruction::Assign { value: Operand::Constant(Constant::I64(2)), .. }));
+    }
+
+    #[test]
+    fn fold_f64_mod_vs_rem() {
+        // -7.0 mod 3.0 = 2.0 (modulo), -7.0 % 3.0 = -1.0 (remainder)
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(1), op: BinOp::Mod, type_id: F64_TYPE,
+            lhs: Operand::Constant(Constant::F64(-7.0)), rhs: Operand::Constant(Constant::F64(3.0)),
+        }], ret_local(1))], vec![local(F64_TYPE), local(F64_TYPE)], vec![]);
+        constant_fold(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Constant(Constant::F64(v)), .. } => {
+                assert!((v - 2.0).abs() < 1e-10, "Expected 2.0, got {v}");
+            }
+            other => panic!("Expected folded f64 mod, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn fold_f64_mul() {
         let mut f = make_func(vec![bb(vec![Instruction::BinOp {
             dst: LocalId(1), op: BinOp::Mul, type_id: F64_TYPE,
