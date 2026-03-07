@@ -41,9 +41,7 @@
 
 - **Selective token hold across await (optimization)**: CFA could prove that an awaited task doesn't touch a given shared variable, allowing the token to be held across await instead of released. `with x:` auto-refresh now mitigates the ergonomic impact (§3.4 stale warnings suggest `with` pattern). True selective hold remains an optimization — eliminates unnecessary release/reacquire overhead. Requires transitive closure over spawn chains; conservative for opaque callables. [updated: 2026-03-07]
 
-- **`with shared_var:` in spawned functions**: Auto-refresh currently only works in the declaring function (AST→GIR lowering). For spawned functions that receive shared params, the auto-refresh would need to be emitted by the `shared_async` GIR-to-GIR transform after reacquire sequences. [added: 2026-03-07]
-
-- **Stale tracking for sleep/blocking calls in borrow checker**: The borrow checker currently only marks shared-derived locals as stale at `Expr::Await` points. Sleep and blocking I/O calls should also trigger stale draining in the semantic pass for full warning coverage. IR auto-refresh already handles these at the codegen level. [added: 2026-03-07]
+- **Nested shared spawns**: Spawning a shared-param function from within another shared-param function doesn't propagate the `Shared[Mutex[T]]` wrapper — inner spawn passes the facade value, not the shared reference. Requires spawn-site detection of shared-param-derived arguments in spawned function contexts. [added: 2026-03-07]
 
 - **Coroutine codegen — collection method calls**: Collection method calls (Vector push/get, Dict put/get, etc.) in coroutine poll functions would be emitted as raw `fn_name(args)` without collection method rewriting. Currently no fixtures hit this — async functions with collection calls don't have internal `__gorget_await_*` calls (GIR lowers `expr.await()` as a direct call when the callee is known). Would only trigger if a function both uses collections AND has a genuinely async internal await. Theoretical concern; no current bug. [updated: 2026-03-07]
 

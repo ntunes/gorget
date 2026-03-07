@@ -13,6 +13,8 @@ pub struct FunctionBuilder {
     pub current_block: BlockId,
     /// Current source span — attached to every emitted instruction until changed.
     pub current_span: Option<Span>,
+    /// `with` refresh pairs for spawned functions: `(binding_local, param_local)`.
+    pub with_refresh_pairs: Vec<(LocalId, LocalId)>,
 }
 
 impl FunctionBuilder {
@@ -53,6 +55,7 @@ impl FunctionBuilder {
             blocks,
             current_block: BlockId(0),
             current_span: None,
+            with_refresh_pairs: Vec::new(),
         }
     }
 
@@ -93,6 +96,7 @@ impl FunctionBuilder {
             is_test_fn: false,
             display_name: None,
             def_span: None,
+            with_refresh_pairs: self.with_refresh_pairs,
         }
     }
 

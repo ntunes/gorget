@@ -2295,6 +2295,7 @@ mod tests {
             is_test_fn: false,
             display_name: None,
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         }
     }
 

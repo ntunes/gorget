@@ -168,6 +168,25 @@ struct BranchState {
     diverges: bool,
 }
 
+// ─── Blocking Call Detection ───────────────────────────────
+// These AST-level names correspond to functions that release the shared-variable
+// token (blocking I/O, sleep).  Must stay in sync with
+// `src/ir/lowering/exprs/mod.rs::BLOCKING_CALL_NAMES` and the broader list in
+// `src/ir/transforms/shared_async.rs::BLOCKING_STDLIB_CALLS`.
+
+const BLOCKING_CALL_NAMES: &[&str] = &[
+    "sleep", "read_file", "write_file", "append_file",
+    "readdir", "http_get", "http_post", "http_put", "http_delete",
+];
+
+fn is_blocking_call_name(expr: &Expr) -> bool {
+    if let Expr::Identifier(name) = expr {
+        BLOCKING_CALL_NAMES.contains(&name.as_str())
+    } else {
+        false
+    }
+}
+
 // ─── Copy Type Detection ───────────────────────────────────
 
 /// Returns true if a type is Copy (trivially copyable, no `!` needed).
@@ -1485,6 +1504,22 @@ impl<'a> BorrowChecker<'a> {
 
                 // Phase 5: Record outlives constraints from this call site
                 self.record_call_outlives(callee, args, expr.span);
+
+                // §3.4 Stale-condition: blocking calls release the token just like await.
+                if self.current_function_is_async {
+                    if is_blocking_call_name(&callee.node) {
+                        let call_span = expr.span;
+                        let drained: Vec<_> = self.shared_derived.drain().collect();
+                        for (def_id, mut info) in drained {
+                            if self.with_shared_tracked.contains(&def_id) {
+                                self.shared_derived.insert(def_id, info);
+                            } else {
+                                info.await_span = Some(call_span);
+                                self.stale_shared_derived.insert(def_id, info);
+                            }
+                        }
+                    }
+                }
             }
 
             Expr::MethodCall {

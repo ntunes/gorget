@@ -7,7 +7,7 @@ pub mod transforms;
 pub mod validate;
 
 use instructions::{Instruction, Terminator};
-use types::{TypeId, TypeRegistry};
+use types::{LocalId, TypeId, TypeRegistry};
 use crate::span::Span;
 
 /// Compile-time selectable scheduler backend for `spawn`.
@@ -187,6 +187,11 @@ pub struct Function {
     pub display_name: Option<String>,
     /// Byte-span of the function definition in source (for backtrace display).
     pub def_span: Option<Span>,
+    /// `with` auto-refresh pairs: `(binding_local, param_local)`.
+    /// After yield points in spawned functions, the binding local should be
+    /// re-read from the (re-derived) param facade. Populated by AST lowering
+    /// when `with shared_param:` is used on a shared parameter.
+    pub with_refresh_pairs: Vec<(LocalId, LocalId)>,
 }
 
 /// A local variable slot.
@@ -278,6 +283,7 @@ mod tests {
             is_test_fn: false,
             display_name: None,
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         });
         assert_eq!(module.functions.len(), 1);
         let f = module.find_function("main").unwrap();

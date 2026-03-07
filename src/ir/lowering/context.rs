@@ -574,12 +574,26 @@ impl<'a> LoweringContext<'a> {
     }
 }
 
-/// Scan an AST expression for any `.await()` calls. Returns true if found.
+/// Known blocking call names at AST level — these are yield points where the
+/// shared-variable token is released. Must stay in sync with
+/// `src/ir/lowering/exprs/mod.rs::BLOCKING_CALL_NAMES`.
+const BLOCKING_AST_CALLS: &[&str] = &[
+    "sleep", "read_file", "write_file", "append_file",
+    "readdir", "http_get", "http_post", "http_put", "http_delete",
+];
+
+/// Scan an AST expression for any yield points (`.await()` or blocking calls).
 pub fn expr_has_await(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::Expr;
     match expr {
         Expr::Await { .. } => true,
         Expr::Call { callee, args, .. } => {
+            // Check if callee is a known blocking function
+            if let Expr::Identifier(name) = &callee.node {
+                if BLOCKING_AST_CALLS.contains(&name.as_str()) {
+                    return true;
+                }
+            }
             expr_has_await(&callee.node) || args.iter().any(|a| expr_has_await(&a.node.value.node))
         }
         Expr::MethodCall { receiver, args, .. } => {
@@ -637,6 +651,9 @@ pub fn stmt_has_await(stmt: &crate::parser::ast::Stmt) -> bool {
                     false
                 }
             })
+        }
+        Stmt::With { body, .. } => {
+            body.stmts.iter().any(|s| stmt_has_await(&s.node))
         }
         _ => false,
     }

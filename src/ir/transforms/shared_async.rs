@@ -202,8 +202,32 @@ pub fn inject_shared_token_management(
 
     // -- Step 4: Splice release/reacquire around await points --
 
+    // Build with-refresh assignments: after reacquire, re-read facade into binding locals.
+    // with_refresh_pairs contains (binding_local, param_local) from AST lowering.
+    // param_local was remapped to facade. For mutable params, facade is a pointer (*mut T)
+    // so we dereference; for immutable, it's the value directly.
+    let with_refresh_instrs: Vec<Instruction> = func.with_refresh_pairs.iter()
+        .filter_map(|&(binding, param)| {
+            let facade = *local_remap.get(&param)?;
+            // Find the shared arg spec for this param to check mutability
+            let param_idx = param.0 as usize; // locals index (1-based for params)
+            let is_mutable = shared_args.iter()
+                .any(|sa| sa.arg_index + 1 == param_idx && sa.is_mutable);
+            let source_place = if is_mutable {
+                // Facade is *mut T — deref to get T
+                Place { local: facade, projections: vec![Projection::Deref] }
+            } else {
+                Place::local(facade)
+            };
+            Some(Instruction::Assign {
+                dst: Place::local(binding),
+                value: Operand::Copy(source_place),
+            })
+        })
+        .collect();
+
     for block in &mut func.blocks {
-        splice_around_awaits(block, &shared_locals, shared_args, type_registry);
+        splice_around_awaits(block, &shared_locals, shared_args, type_registry, &with_refresh_instrs);
     }
 
     // -- Step 5: Insert guard cleanup before Return terminators --
@@ -348,6 +372,7 @@ fn splice_around_awaits(
     shared_locals: &[SharedParamLocals],
     shared_args: &[SharedArgSpec],
     type_registry: &mut TypeRegistry,
+    with_refresh_instrs: &[Instruction],
 ) {
     // Find indices of yield points (process in reverse to avoid invalidation)
     let await_indices: Vec<usize> = block.instructions.iter().enumerate()
@@ -359,7 +384,9 @@ fn splice_around_awaits(
     // Process in reverse order
     for &idx in await_indices.iter().rev() {
         let release = build_release_sequence(shared_locals, shared_args);
-        let reacquire = build_reacquire_sequence(shared_locals, shared_args, type_registry);
+        let mut reacquire = build_reacquire_sequence(shared_locals, shared_args, type_registry);
+        // Append with-refresh assignments after reacquire (re-read facade into binding locals)
+        reacquire.extend_from_slice(with_refresh_instrs);
         let release_len = release.len();
         let reacquire_len = reacquire.len();
 
@@ -625,6 +652,7 @@ mod tests {
             is_test_fn: false,
             display_name: Some("process".into()),
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         }
     }
 

@@ -1407,6 +1407,7 @@ mod tests {
             is_test_fn: false,
             display_name: Some("main".into()),
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         };
         module.functions.push(func);
         module
@@ -1479,6 +1480,7 @@ mod tests {
             is_test_fn: false,
             display_name: None,
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         };
         module.functions.push(func);
 
@@ -1509,6 +1511,7 @@ mod tests {
             is_test_fn: false,
             display_name: None,
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         });
         module.functions.push(Function {
             name: "caller".into(),
@@ -1531,6 +1534,7 @@ mod tests {
             is_test_fn: false,
             display_name: None,
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         });
 
         let lir = lower_module(&module);
@@ -1574,6 +1578,7 @@ mod tests {
             is_test_fn: false,
             display_name: None,
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         });
 
         let lir = lower_module(&module);
@@ -1620,6 +1625,7 @@ mod tests {
             is_test_fn: false,
             display_name: None,
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         });
 
         let lir = lower_module(&module);

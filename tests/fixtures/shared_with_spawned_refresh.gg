@@ -1,0 +1,17 @@
+# Test: `with counter:` inside a spawned function auto-refreshes after await.
+# The worker reads a shared variable via `with`, sleeps (which releases the
+# token), and the `with` binding should have the updated value after sleep.
+
+from std.async import sleep
+
+async void worker(int &counter):
+    with counter:
+        sleep(50)
+        print(counter)
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    sleep(10)
+    x = 42
+    t.await()

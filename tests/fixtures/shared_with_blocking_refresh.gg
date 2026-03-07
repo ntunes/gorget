@@ -1,0 +1,18 @@
+# Test: `with x:` auto-refresh suppresses stale-condition warning across blocking calls.
+# Reading a shared variable via `with` means the binding is auto-refreshed
+# after every blocking call — no stale warning should be emitted.
+
+from std.async import sleep
+
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        sleep(50)
+        t.await()
+        if x > 0:
+            print("fresh after blocking")
+        print(x)

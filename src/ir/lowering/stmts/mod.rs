@@ -950,6 +950,27 @@ fn lower_with(
             None
         };
 
+        // Also detect param-based with bindings for spawned function refresh.
+        // If the target is a param (not a declared shared), record it so the
+        // shared_async GIR transform can emit refresh assignments after reacquire.
+        let param_source = if shared_facade.is_none() {
+            if let Expr::Identifier(ref name) = binding.expr.node {
+                ctx.lookup_local(name).and_then(|(local_id, _)| {
+                    // Params are locals _1.._N (local 0 is the return place)
+                    let idx = local_id.0 as usize;
+                    if idx >= 1 && idx <= builder.params.len() {
+                        Some(local_id)
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let is_alloc = is_allocator_constructor(&binding.expr.node);
         let val = lower_expr(ctx, builder, &binding.expr);
         let type_id = super::exprs::infer_operand_type_full(ctx, &val, builder);
@@ -961,6 +982,11 @@ fn lower_with(
         // If this binding mirrors a shared variable, register for auto-refresh after await
         if let Some(facade_local) = shared_facade {
             shared_refresh_entries.push((local_id, facade_local));
+        }
+
+        // Record param-based with binding for shared_async transform
+        if let Some(param_local) = param_source {
+            builder.with_refresh_pairs.push((local_id, param_local));
         }
 
         // If this is an allocator, push it as the active thread-local allocator

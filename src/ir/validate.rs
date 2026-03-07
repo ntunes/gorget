@@ -893,6 +893,7 @@ mod tests {
             is_test_fn: false,
             display_name: None,
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         });
 
         let errors = validate(&module);
@@ -1125,6 +1126,7 @@ mod tests {
             is_test_fn: false,
             display_name: None,
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         };
         module.functions.push(func);
 
@@ -1267,6 +1269,7 @@ mod tests {
             is_test_fn: false,
             display_name: None,
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         };
         module.functions.push(f);
         let errors = validate(&module);
@@ -1290,6 +1293,7 @@ mod tests {
             is_test_fn: false,
             display_name: None,
             def_span: None,
+            with_refresh_pairs: Vec::new(),
         };
         module.functions.push(f);
         let errors = validate(&module);

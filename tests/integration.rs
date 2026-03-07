@@ -7817,6 +7817,21 @@ fn shared_with_refresh() {
 }
 
 #[test]
+fn shared_stale_blocking() {
+    run_gg("shared_stale_blocking.gg", "was zero before sleep\n1");
+}
+
+#[test]
+fn shared_with_blocking_refresh() {
+    run_gg("shared_with_blocking_refresh.gg", "fresh after blocking\n1");
+}
+
+#[test]
+fn shared_with_spawned_refresh() {
+    run_gg("shared_with_spawned_refresh.gg", "42");
+}
+
+#[test]
 fn shared_closure_capture_error() {
     check_gg_fails("shared_closure_capture_error.gg", "cannot capture shared variable");
 }

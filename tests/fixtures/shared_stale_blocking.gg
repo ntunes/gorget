@@ -1,0 +1,19 @@
+# Test: stale-condition warning for blocking calls (§3.4).
+# Reading a shared variable into a local before a blocking call (sleep),
+# then using the local in a branch condition after the call, should warn.
+# The warning is non-fatal — program still compiles and runs.
+
+from std.async import sleep
+
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    int val = x
+    sleep(50)
+    t.await()
+    if val == 0:
+        print("was zero before sleep")
+    print(x)
