@@ -11,8 +11,10 @@ pub struct OptStats {
     pub dead_functions_eliminated: usize,
     pub dead_globals_eliminated: usize,
     pub dead_instructions_eliminated: usize,
+    pub dead_blocks_eliminated: usize,
     pub copies_propagated: usize,
     pub constants_folded: usize,
+    pub branches_folded: usize,
 }
 
 /// Run all optimization passes on an LIR module.
@@ -21,8 +23,10 @@ pub fn optimize_module(module: &mut LirModule) -> OptStats {
     stats.dead_functions_eliminated = eliminate_dead_functions(module);
     stats.dead_globals_eliminated = eliminate_dead_globals(module);
     for func in &mut module.functions {
-        // Fold constants first, then DCE cleans up dead operands.
+        // Fold constants, then fold constant branches, then DCE + dead block removal.
         stats.constants_folded += fold_constants(func);
+        stats.branches_folded += fold_constant_branches(func);
+        stats.dead_blocks_eliminated += eliminate_dead_blocks(func);
         stats.dead_instructions_eliminated += eliminate_dead_code(func);
         stats.copies_propagated += propagate_copies(func);
     }
@@ -522,6 +526,142 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
     }
 }
 
+// ── Constant Branch Folding ──────────────────────────────────────────────────
+
+/// Replace Branch terminators with known-constant conditions with unconditional
+/// Jumps. Replace Switch terminators with known-constant discriminants with
+/// unconditional Jumps. Returns count of branches folded.
+pub fn fold_constant_branches(func: &mut LirFunction) -> usize {
+    // Collect known bool/int constants from all blocks.
+    let val_count = func.value_count() as usize;
+    let mut known_bool: Vec<Option<bool>> = vec![None; val_count];
+    let mut known_int: Vec<Option<i64>> = vec![None; val_count];
+
+    for block in &func.blocks {
+        for inst in &block.insts {
+            match inst {
+                Inst::BoolConst { dst, value } => {
+                    known_bool[dst.0 as usize] = Some(*value);
+                }
+                Inst::IConst { dst, value, .. } => {
+                    known_int[dst.0 as usize] = Some(*value);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut folded = 0;
+    for block in &mut func.blocks {
+        let replacement = match &block.terminator {
+            Term::Branch { cond, then_block, then_args, else_block, else_args, .. } => {
+                known_bool.get(cond.0 as usize).and_then(|v| *v).map(|val| {
+                    if val {
+                        Term::Jump(*then_block, then_args.clone())
+                    } else {
+                        Term::Jump(*else_block, else_args.clone())
+                    }
+                })
+            }
+            Term::Switch { value, cases, default, default_args, .. } => {
+                known_int.get(value.0 as usize).and_then(|v| *v).map(|val| {
+                    for (case_val, target, args) in cases {
+                        if *case_val == val {
+                            return Term::Jump(*target, args.clone());
+                        }
+                    }
+                    Term::Jump(*default, default_args.clone())
+                })
+            }
+            _ => None,
+        };
+        if let Some(new_term) = replacement {
+            block.terminator = new_term;
+            folded += 1;
+        }
+    }
+
+    folded
+}
+
+// ── Dead Block Elimination ──────────────────────────────────────────────────
+
+/// Remove blocks that are unreachable from bb0. Returns count eliminated.
+pub fn eliminate_dead_blocks(func: &mut LirFunction) -> usize {
+    if func.blocks.is_empty() {
+        return 0;
+    }
+
+    // BFS from bb0 to find reachable blocks.
+    let num_blocks = func.blocks.len();
+    let mut reachable = vec![false; num_blocks];
+    let mut queue = std::collections::VecDeque::new();
+    reachable[0] = true;
+    queue.push_back(0usize);
+
+    while let Some(idx) = queue.pop_front() {
+        for target in func.blocks[idx].terminator.successors() {
+            let t = target.0 as usize;
+            if t < num_blocks && !reachable[t] {
+                reachable[t] = true;
+                queue.push_back(t);
+            }
+        }
+    }
+
+    let dead_count = reachable.iter().filter(|&&r| !r).count();
+    if dead_count == 0 {
+        return 0;
+    }
+
+    // Build old→new block ID mapping.
+    let mut new_id = vec![BlockId(0); num_blocks];
+    let mut next = 0u32;
+    for (old, &is_reachable) in reachable.iter().enumerate() {
+        if is_reachable {
+            new_id[old] = BlockId(next);
+            next += 1;
+        }
+    }
+
+    // Remove dead blocks and remap block IDs.
+    let mut kept = Vec::with_capacity(num_blocks - dead_count);
+    for (i, block) in func.blocks.drain(..).enumerate() {
+        if reachable[i] {
+            kept.push(block);
+        }
+    }
+
+    // Update block IDs and terminator targets.
+    for (new_idx, block) in kept.iter_mut().enumerate() {
+        block.id = BlockId(new_idx as u32);
+        remap_term_targets(&mut block.terminator, &new_id);
+    }
+
+    func.blocks = kept;
+    dead_count
+}
+
+/// Remap block IDs in a terminator.
+fn remap_term_targets(term: &mut Term, map: &[BlockId]) {
+    match term {
+        Term::Jump(target, _) => {
+            *target = map[target.0 as usize];
+        }
+        Term::Branch { then_block, else_block, .. } => {
+            *then_block = map[then_block.0 as usize];
+            *else_block = map[else_block.0 as usize];
+        }
+        Term::Switch { cases, default, .. } => {
+            for (_, target, _) in cases.iter_mut() {
+                *target = map[target.0 as usize];
+            }
+            *default = map[default.0 as usize];
+        }
+        Term::Ret(_) | Term::RetVoid | Term::Unreachable => {}
+    }
+}
+
 // ── Copy Propagation ────────────────────────────────────────────────────────
 
 /// Propagate trivial copies. Returns count of copies propagated.
@@ -804,6 +944,104 @@ mod tests {
         assert_eq!(stats.dead_functions_eliminated, 0);
         assert_eq!(stats.dead_globals_eliminated, 0);
         assert_eq!(stats.dead_instructions_eliminated, 0);
+    }
+
+    #[test]
+    fn fold_constant_branch_true() {
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I32);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block();
+
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        let v2 = func.next_value();
+
+        func.block_mut(bb0).insts.push(Inst::BoolConst { dst: v0, value: true });
+        func.block_mut(bb0).terminator = Term::Branch {
+            cond: v0,
+            then_block: bb1, then_args: vec![],
+            else_block: bb2, else_args: vec![],
+        };
+        func.block_mut(bb1).insts.push(Inst::IConst { dst: v1, ty: LirType::I32, value: 1 });
+        func.block_mut(bb1).terminator = Term::Ret(v1);
+        func.block_mut(bb2).insts.push(Inst::IConst { dst: v2, ty: LirType::I32, value: 2 });
+        func.block_mut(bb2).terminator = Term::Ret(v2);
+
+        let folded = fold_constant_branches(&mut func);
+        assert_eq!(folded, 1);
+        // bb0 should now jump to bb1
+        assert!(matches!(func.blocks[0].terminator, Term::Jump(BlockId(1), _)));
+    }
+
+    #[test]
+    fn dead_block_elimination_after_branch_fold() {
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I32);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block(); // will become dead
+
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        let v2 = func.next_value();
+
+        func.block_mut(bb0).insts.push(Inst::BoolConst { dst: v0, value: false });
+        func.block_mut(bb0).terminator = Term::Branch {
+            cond: v0,
+            then_block: bb1, then_args: vec![],
+            else_block: bb2, else_args: vec![],
+        };
+        func.block_mut(bb1).insts.push(Inst::IConst { dst: v1, ty: LirType::I32, value: 1 });
+        func.block_mut(bb1).terminator = Term::Ret(v1);
+        func.block_mut(bb2).insts.push(Inst::IConst { dst: v2, ty: LirType::I32, value: 2 });
+        func.block_mut(bb2).terminator = Term::Ret(v2);
+
+        // First fold the branch (condition=false → jump to bb2)
+        fold_constant_branches(&mut func);
+        assert!(matches!(func.blocks[0].terminator, Term::Jump(BlockId(2), _)));
+
+        // Now eliminate dead blocks — bb1 should be removed
+        let eliminated = eliminate_dead_blocks(&mut func);
+        assert_eq!(eliminated, 1, "bb1 should be dead");
+        assert_eq!(func.blocks.len(), 2);
+    }
+
+    #[test]
+    fn fold_constant_switch() {
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I32);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block();
+        let bb3 = func.add_block(); // default
+
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        let v2 = func.next_value();
+        let v3 = func.next_value();
+
+        func.block_mut(bb0).insts.push(Inst::IConst { dst: v0, ty: LirType::I64, value: 2 });
+        func.block_mut(bb0).terminator = Term::Switch {
+            value: v0,
+            cases: vec![(1, bb1, vec![]), (2, bb2, vec![])],
+            default: bb3,
+            default_args: vec![],
+        };
+        func.block_mut(bb1).insts.push(Inst::IConst { dst: v1, ty: LirType::I32, value: 10 });
+        func.block_mut(bb1).terminator = Term::Ret(v1);
+        func.block_mut(bb2).insts.push(Inst::IConst { dst: v2, ty: LirType::I32, value: 20 });
+        func.block_mut(bb2).terminator = Term::Ret(v2);
+        func.block_mut(bb3).insts.push(Inst::IConst { dst: v3, ty: LirType::I32, value: 99 });
+        func.block_mut(bb3).terminator = Term::Ret(v3);
+
+        let folded = fold_constant_branches(&mut func);
+        assert_eq!(folded, 1);
+        // Should jump to bb2 (case 2)
+        assert!(matches!(func.blocks[0].terminator, Term::Jump(BlockId(2), _)));
+
+        // Dead block elimination should remove bb1 and bb3
+        let eliminated = eliminate_dead_blocks(&mut func);
+        assert_eq!(eliminated, 2);
+        assert_eq!(func.blocks.len(), 2);
     }
 
     #[test]
