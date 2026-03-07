@@ -87,6 +87,405 @@ enum MetaControlFlow {
 // Public entry point
 // ═══════════════════════════════════════════════════════════════
 
+/// Expand `type` alias declarations in the module AST.
+///
+/// Collects all `Item::TypeAlias` definitions, then uses the existing meta substitution
+/// infrastructure to rewrite every type annotation and constructor expression. Handles
+/// simple aliases (`type Count = int`) and pass-through aliases (`type Pair = Vector`
+/// where `Pair[int]` → `Vector[int]`). Generic aliases with type params
+/// (`type StringMap[V] = Dict[str, V]`) are expanded via a dedicated type-level rewrite.
+///
+/// Must run **after** meta evaluation and derive expansion, but **before** name resolution.
+pub fn expand_type_aliases(module: &mut Module) {
+    // Phase 1: Collect alias definitions
+    let mut type_env: FxHashMap<String, Type> = FxHashMap::default();
+    let mut generic_aliases: FxHashMap<String, (Vec<String>, Type)> = FxHashMap::default();
+
+    for item in &module.items {
+        if let Item::TypeAlias(ta) = &item.node {
+            let param_names: Vec<String> = ta.generic_params.as_ref().map_or_else(Vec::new, |gp| {
+                gp.node.params.iter().filter_map(|p| match &p.node {
+                    GenericParam::Type { name, .. } => Some(name.node.clone()),
+                    _ => None,
+                }).collect()
+            });
+            if param_names.is_empty() {
+                type_env.insert(ta.name.node.clone(), ta.type_.node.clone());
+            } else {
+                generic_aliases.insert(ta.name.node.clone(), (param_names, ta.type_.node.clone()));
+            }
+        }
+    }
+
+    if type_env.is_empty() && generic_aliases.is_empty() {
+        return;
+    }
+
+    // Phase 2a: Fix up constructor calls for aliases whose underlying type has generic args.
+    // `IntList()` where `type IntList = Vector[int]` → `Vector[int]()`.
+    // Must run BEFORE substitute_item (which only renames identifiers without adding args).
+    {
+        let mut constructor_fixups: FxHashMap<String, (String, Vec<Spanned<Type>>)> = FxHashMap::default();
+        for (alias_name, underlying) in &type_env {
+            if let Type::Named { name, generic_args } = underlying {
+                if !generic_args.is_empty() {
+                    constructor_fixups.insert(
+                        alias_name.clone(),
+                        (name.node.clone(), generic_args.clone()),
+                    );
+                }
+            }
+        }
+        if !constructor_fixups.is_empty() {
+            for item in &mut module.items {
+                fixup_constructor_calls_in_item(&mut item.node, &constructor_fixups);
+            }
+        }
+    }
+
+    // Phase 2b: Substitute simple aliases using the existing meta substitution machinery.
+    // This handles type annotations (substitute_type) and remaining constructor identifiers.
+    if !type_env.is_empty() {
+        let empty_env = FxHashMap::default();
+        for item in &mut module.items {
+            substitute_item(&mut item.node, &empty_env, &type_env);
+        }
+    }
+
+    // Phase 2b: Expand generic aliases (requires param substitution)
+    if !generic_aliases.is_empty() {
+        for item in &mut module.items {
+            expand_generic_aliases_in_item(&mut item.node, &generic_aliases);
+        }
+    }
+
+    // Phase 3: Remove TypeAlias items (they've been fully expanded)
+    module.items.retain(|item| !matches!(&item.node, Item::TypeAlias(_)));
+}
+
+/// Fix up constructor calls where an alias maps to a generic type.
+/// E.g., `IntList()` where `type IntList = Vector[int]` → `Vector[int]()`.
+/// Uses the *original* alias name (before substitution) to identify calls to rewrite.
+fn fixup_constructor_calls_in_item(
+    item: &mut Item,
+    fixups: &FxHashMap<String, (String, Vec<Spanned<Type>>)>,
+) {
+    match item {
+        Item::Function(f) => {
+            if let FunctionBody::Block(block) = &mut f.body {
+                fixup_calls_in_block(&mut block.stmts, fixups);
+            }
+        }
+        Item::Equip(eq) => {
+            for method in &mut eq.items {
+                if let FunctionBody::Block(block) = &mut method.node.body {
+                    fixup_calls_in_block(&mut block.stmts, fixups);
+                }
+            }
+        }
+        Item::Test(t) => fixup_calls_in_block(&mut t.body.stmts, fixups),
+        Item::Module { items, .. } => {
+            for si in items {
+                fixup_constructor_calls_in_item(&mut si.node, fixups);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn fixup_calls_in_block(
+    stmts: &mut [Spanned<Stmt>],
+    fixups: &FxHashMap<String, (String, Vec<Spanned<Type>>)>,
+) {
+    for stmt in stmts {
+        match &mut stmt.node {
+            Stmt::VarDecl { value, .. } => fixup_calls_in_expr(value, fixups),
+            Stmt::Expr(e) => fixup_calls_in_expr(e, fixups),
+            Stmt::Assign { value, .. } => fixup_calls_in_expr(value, fixups),
+            Stmt::CompoundAssign { value, .. } => fixup_calls_in_expr(value, fixups),
+            Stmt::For { iterable, body, else_body, .. } => {
+                fixup_calls_in_expr(iterable, fixups);
+                fixup_calls_in_block(&mut body.stmts, fixups);
+                if let Some(eb) = else_body {
+                    fixup_calls_in_block(&mut eb.stmts, fixups);
+                }
+            }
+            Stmt::While { condition, body, .. } => {
+                fixup_calls_in_expr(condition, fixups);
+                fixup_calls_in_block(&mut body.stmts, fixups);
+            }
+            Stmt::If { condition, then_body, elif_branches, else_body, .. } => {
+                fixup_calls_in_expr(condition, fixups);
+                fixup_calls_in_block(&mut then_body.stmts, fixups);
+                for (cond, body) in elif_branches {
+                    fixup_calls_in_expr(cond, fixups);
+                    fixup_calls_in_block(&mut body.stmts, fixups);
+                }
+                if let Some(eb) = else_body {
+                    fixup_calls_in_block(&mut eb.stmts, fixups);
+                }
+            }
+            Stmt::Return(Some(e)) => fixup_calls_in_expr(e, fixups),
+            Stmt::Match { scrutinee, arms, else_arm, .. } => {
+                fixup_calls_in_expr(scrutinee, fixups);
+                for arm in arms {
+                    if let MatchItem::Arm(a) = arm {
+                        fixup_calls_in_expr(&mut a.body, fixups);
+                    }
+                }
+                if let Some(ea) = else_arm {
+                    fixup_calls_in_block(&mut ea.stmts, fixups);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn fixup_calls_in_expr(
+    expr: &mut Spanned<Expr>,
+    fixups: &FxHashMap<String, (String, Vec<Spanned<Type>>)>,
+) {
+    match &mut expr.node {
+        Expr::Call { callee, generic_args, args } => {
+            // If callee is an alias name and no generic args yet, inject them
+            if let Expr::Identifier(name) = &callee.node {
+                if generic_args.is_none() {
+                    if let Some((real_name, gen_args)) = fixups.get(name.as_str()) {
+                        callee.node = Expr::Identifier(real_name.clone());
+                        *generic_args = Some(gen_args.clone());
+                    }
+                }
+            }
+            fixup_calls_in_expr(callee, fixups);
+            for arg in args {
+                fixup_calls_in_expr(&mut arg.node.value, fixups);
+            }
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            fixup_calls_in_expr(left, fixups);
+            fixup_calls_in_expr(right, fixups);
+        }
+        Expr::UnaryOp { operand, .. } => fixup_calls_in_expr(operand, fixups),
+        Expr::MethodCall { receiver, args, .. } => {
+            fixup_calls_in_expr(receiver, fixups);
+            for arg in args {
+                fixup_calls_in_expr(&mut arg.node.value, fixups);
+            }
+        }
+        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+            fixup_calls_in_expr(object, fixups);
+        }
+        Expr::Index { object, index } => {
+            fixup_calls_in_expr(object, fixups);
+            fixup_calls_in_expr(index, fixups);
+        }
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
+            fixup_calls_in_expr(condition, fixups);
+            fixup_calls_in_expr(then_branch, fixups);
+            for (cond, body) in elif_branches {
+                fixup_calls_in_expr(cond, fixups);
+                fixup_calls_in_expr(body, fixups);
+            }
+            if let Some(eb) = else_branch {
+                fixup_calls_in_expr(eb, fixups);
+            }
+        }
+        Expr::Match { scrutinee, arms, else_arm } => {
+            fixup_calls_in_expr(scrutinee, fixups);
+            for arm in arms {
+                fixup_calls_in_expr(&mut arm.body, fixups);
+            }
+            if let Some(ea) = else_arm {
+                fixup_calls_in_expr(ea, fixups);
+            }
+        }
+        Expr::Block(block) => fixup_calls_in_block(&mut block.stmts, fixups),
+        Expr::TupleLiteral(elems) => {
+            for e in elems {
+                fixup_calls_in_expr(e, fixups);
+            }
+        }
+        Expr::Try { expr: inner } | Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
+        | Expr::Deref { expr: inner } | Expr::Await { expr: inner, .. } | Expr::Spawn { expr: inner, .. } => {
+            fixup_calls_in_expr(inner, fixups);
+        }
+        Expr::Closure { body, .. } | Expr::ImplicitClosure { body, .. } => {
+            fixup_calls_in_expr(body, fixups);
+        }
+        _ => {}
+    }
+}
+
+/// Expand generic type aliases in all type annotations within an item.
+fn expand_generic_aliases_in_item(
+    item: &mut Item,
+    generic: &FxHashMap<String, (Vec<String>, Type)>,
+) {
+    match item {
+        Item::Function(f) => expand_generic_aliases_in_function(f, generic),
+        Item::Equip(eq) => {
+            expand_generic_alias_in_type(&mut eq.type_, generic);
+            if let Some(trait_) = &mut eq.trait_ {
+                expand_generic_alias_in_type(&mut trait_.trait_name, generic);
+            }
+            for method in &mut eq.items {
+                expand_generic_aliases_in_function(&mut method.node, generic);
+            }
+        }
+        Item::Struct(s) => {
+            for field in &mut s.fields {
+                expand_generic_alias_in_type(&mut field.node.type_, generic);
+            }
+        }
+        Item::Enum(e) => {
+            for variant in &mut e.variants {
+                if let VariantFields::Tuple(types) = &mut variant.node.fields {
+                    for ty in types {
+                        expand_generic_alias_in_type(ty, generic);
+                    }
+                }
+            }
+        }
+        Item::ConstDecl(c) => expand_generic_alias_in_type(&mut c.type_, generic),
+        Item::StaticDecl(s) => expand_generic_alias_in_type(&mut s.type_, generic),
+        Item::Trait(t) => {
+            for ti in &mut t.items {
+                if let TraitItem::Method(f) = &mut ti.node {
+                    expand_generic_aliases_in_function(f, generic);
+                }
+            }
+        }
+        Item::ExternBlock(eb) => {
+            for f in &mut eb.items {
+                expand_generic_aliases_in_function(&mut f.node, generic);
+            }
+        }
+        Item::Module { items, .. } => {
+            for si in items {
+                expand_generic_aliases_in_item(&mut si.node, generic);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn expand_generic_aliases_in_function(
+    f: &mut FunctionDef,
+    generic: &FxHashMap<String, (Vec<String>, Type)>,
+) {
+    expand_generic_alias_in_type(&mut f.return_type, generic);
+    for param in &mut f.params {
+        expand_generic_alias_in_type(&mut param.node.type_, generic);
+    }
+    if let Some(throws_type) = &mut f.throws {
+        expand_generic_alias_in_type(throws_type, generic);
+    }
+    // Walk the body for VarDecl type annotations
+    if let FunctionBody::Block(block) = &mut f.body {
+        for stmt in &mut block.stmts {
+            if let Stmt::VarDecl { ref mut type_, .. } = stmt.node {
+                expand_generic_alias_in_type(type_, generic);
+            }
+        }
+    }
+}
+
+fn expand_generic_alias_in_type(
+    ty: &mut Spanned<Type>,
+    generic: &FxHashMap<String, (Vec<String>, Type)>,
+) {
+    match &mut ty.node {
+        Type::Named { name, generic_args } => {
+            // First, recurse into generic args
+            for arg in generic_args.iter_mut() {
+                expand_generic_alias_in_type(arg, generic);
+            }
+            // Check if this is a generic alias usage
+            if let Some((param_names, underlying)) = generic.get(&name.node) {
+                if generic_args.len() == param_names.len() {
+                    let substituted = substitute_alias_params(underlying, param_names, generic_args);
+                    ty.node = substituted;
+                    // Recurse in case substitution introduced more aliases
+                    expand_generic_alias_in_type(ty, generic);
+                }
+            }
+        }
+        Type::Array { element, .. } => expand_generic_alias_in_type(element, generic),
+        Type::Slice { element } => expand_generic_alias_in_type(element, generic),
+        Type::Tuple(elems) => {
+            for e in elems {
+                expand_generic_alias_in_type(e, generic);
+            }
+        }
+        Type::Function { return_type, params, .. } => {
+            expand_generic_alias_in_type(return_type, generic);
+            for p in params {
+                expand_generic_alias_in_type(p, generic);
+            }
+        }
+        Type::Primitive(_) | Type::SelfType | Type::Inferred => {}
+    }
+}
+
+/// Substitute generic param names in a type with the provided args.
+fn substitute_alias_params(
+    ty: &Type,
+    param_names: &[String],
+    args: &[Spanned<Type>],
+) -> Type {
+    match ty {
+        Type::Named { name, generic_args } => {
+            if generic_args.is_empty() {
+                if let Some(idx) = param_names.iter().position(|p| p == &name.node) {
+                    if idx < args.len() {
+                        return args[idx].node.clone();
+                    }
+                }
+            }
+            let new_args: Vec<Spanned<Type>> = generic_args
+                .iter()
+                .map(|arg| Spanned {
+                    node: substitute_alias_params(&arg.node, param_names, args),
+                    span: arg.span,
+                })
+                .collect();
+            Type::Named { name: name.clone(), generic_args: new_args }
+        }
+        Type::Tuple(elems) => Type::Tuple(
+            elems.iter().map(|e| Spanned {
+                node: substitute_alias_params(&e.node, param_names, args),
+                span: e.span,
+            }).collect(),
+        ),
+        Type::Function { return_type, params, param_ownerships } => Type::Function {
+            return_type: Box::new(Spanned {
+                node: substitute_alias_params(&return_type.node, param_names, args),
+                span: return_type.span,
+            }),
+            params: params.iter().map(|p| Spanned {
+                node: substitute_alias_params(&p.node, param_names, args),
+                span: p.span,
+            }).collect(),
+            param_ownerships: param_ownerships.clone(),
+        },
+        Type::Array { element, size } => Type::Array {
+            element: Box::new(Spanned {
+                node: substitute_alias_params(&element.node, param_names, args),
+                span: element.span,
+            }),
+            size: size.clone(),
+        },
+        Type::Slice { element } => Type::Slice {
+            element: Box::new(Spanned {
+                node: substitute_alias_params(&element.node, param_names, args),
+                span: element.span,
+            }),
+        },
+        _ => ty.clone(),
+    }
+}
+
 /// Evaluate, substitute, and remove all meta constructs from a module.
 /// `features` is the list of enabled build-time feature flags (from `--feature` CLI args).
 pub fn evaluate_meta_consts(module: &mut Module, features: &[String]) -> Vec<SemanticError> {

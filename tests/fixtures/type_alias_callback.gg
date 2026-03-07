@@ -1,5 +1,14 @@
-# Type alias with generic params (generic alias).
-type Pair[T] = Vector[T]
+type Op = int(int, int)
+
+int add(int a, int b):
+    return a + b
+
+int mul(int a, int b):
+    return a * b
+
+int apply(Op f, int x, int y):
+    return f(x, y)
 
 void main():
-    print("generic alias parsed")
+    print(apply(add, 3, 4))
+    print(apply(mul, 3, 4))

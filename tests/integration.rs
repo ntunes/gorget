@@ -269,7 +269,7 @@ fn type_alias_usage() {
         "type_alias_usage.gg",
         "\
 42
-type alias parsed",
+50",
     );
 }
 
@@ -278,19 +278,25 @@ fn type_alias_complex() {
     run_gg(
         "type_alias_complex.gg",
         "\
-2
-complex alias parsed",
+3
+1
+3",
     );
 }
 
 #[test]
 fn type_alias_fn_sig() {
-    run_gg("type_alias_fn_sig.gg", "fn type alias parsed");
+    run_gg("type_alias_fn_sig.gg", "10");
 }
 
 #[test]
 fn type_alias_callback() {
-    run_gg("type_alias_callback.gg", "generic alias parsed");
+    run_gg(
+        "type_alias_callback.gg",
+        "\
+7
+12",
+    );
 }
 
 #[test]

@@ -1,6 +1,9 @@
-# Type alias for function types.
-type BinOp = int(int, int)
+type Count = int
+
+Count double(Count x):
+    return x * 2
 
 void main():
-    # Verify parsing of function-type aliases
-    print("fn type alias parsed")
+    Count val = 5
+    Count result = double(val)
+    print(result)
