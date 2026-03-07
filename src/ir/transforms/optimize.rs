@@ -7,7 +7,7 @@ use std::collections::{HashSet, VecDeque};
 
 use crate::ir::{BasicBlock, Function};
 use crate::ir::instructions::{BinOp, CmpOp, Constant, Instruction, Operand, Place, Projection, Terminator, UnOp};
-use crate::ir::types::{BlockId, LocalId};
+use crate::ir::types::{BlockId, LocalId, TypeId};
 
 /// Run all optimization passes on every function in the module.
 pub fn optimize_module(module: &mut crate::ir::Module) {
@@ -16,6 +16,7 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         propagate_constants(func);
         constant_fold(func);
         simplify_algebraic(func);
+        reduce_strength(func);
         fold_constant_branches(func);
         // Phase 2: eliminate dead code
         elide_dead_drops(func);
@@ -389,6 +390,86 @@ fn simplify_binop(dst: LocalId, op: BinOp, lhs: &Operand, rhs: &Operand) -> Opti
         }
     }
 
+    None
+}
+
+// ── Strength Reduction ────────────────────────────────────────────────
+
+/// Replace expensive operations with cheaper equivalents:
+///   x * 2^n → x << n   (multiplication by power of 2)
+///   x / 2^n → x >> n   (unsigned division by power of 2, only for positive constants)
+fn reduce_strength(func: &mut Function) {
+    for bb in &mut func.blocks {
+        for inst in &mut bb.instructions {
+            let reduced = match inst {
+                // Only reduce MulWrap → Shl. Regular Mul has overflow checking
+                // that shift doesn't provide (shift wraps silently).
+                Instruction::BinOp { dst, op: BinOp::MulWrap, type_id, lhs, rhs } => {
+                    reduce_mul_pow2(*dst, *type_id, lhs, rhs)
+                }
+                Instruction::BinOp { dst, op: BinOp::Div, type_id, lhs, rhs } => {
+                    reduce_div_pow2(*dst, *type_id, lhs, rhs)
+                }
+                _ => None,
+            };
+            if let Some(new_inst) = reduced {
+                *inst = new_inst;
+            }
+        }
+    }
+}
+
+/// x * 2^n → x << n (commutative: check both sides)
+fn reduce_mul_pow2(dst: LocalId, type_id: TypeId, lhs: &Operand, rhs: &Operand) -> Option<Instruction> {
+    // Don't reduce x*0 or x*1 — algebraic simplification handles those
+    if let Some(shift) = pow2_shift(rhs) {
+        return Some(Instruction::BinOp {
+            dst, op: BinOp::Shl, type_id,
+            lhs: lhs.clone(),
+            rhs: Operand::Constant(Constant::I64(shift)),
+        });
+    }
+    if let Some(shift) = pow2_shift(lhs) {
+        return Some(Instruction::BinOp {
+            dst, op: BinOp::Shl, type_id,
+            lhs: rhs.clone(),
+            rhs: Operand::Constant(Constant::I64(shift)),
+        });
+    }
+    None
+}
+
+/// x / 2^n → x >> n (only when divisor is positive power of 2)
+/// Note: this is only correct for non-negative x. For signed integers,
+/// `(-7) / 4 = -1` but `(-7) >> 2 = -2` (arithmetic shift rounds toward
+/// negative infinity). We only apply this when the shift amount is safe
+/// and both operands are i64 (Gorget's default integer type).
+fn reduce_div_pow2(dst: LocalId, type_id: TypeId, lhs: &Operand, rhs: &Operand) -> Option<Instruction> {
+    // Only reduce for constant divisors that are powers of 2 ≥ 2
+    // Skip: division semantics differ for negative dividends, so only
+    // apply when we can prove the dividend is non-negative (constant ≥ 0).
+    if let Some(shift) = pow2_shift(rhs) {
+        if let Operand::Constant(Constant::I64(v)) = lhs {
+            if *v >= 0 {
+                return Some(Instruction::BinOp {
+                    dst, op: BinOp::Shr, type_id,
+                    lhs: lhs.clone(),
+                    rhs: Operand::Constant(Constant::I64(shift)),
+                });
+            }
+        }
+    }
+    None
+}
+
+/// If the operand is a constant power of 2 (≥ 2), return the shift amount.
+fn pow2_shift(op: &Operand) -> Option<i64> {
+    if let Operand::Constant(Constant::I64(v)) = op {
+        let v = *v;
+        if v >= 2 && v.count_ones() == 1 {
+            return Some(v.trailing_zeros() as i64);
+        }
+    }
     None
 }
 
@@ -1801,6 +1882,99 @@ mod tests {
         match &f.blocks[0].instructions[0] {
             Instruction::Assign { value: Operand::Constant(Constant::I64(1)), .. } => {}
             other => panic!("Expected 1, got {:?}", other),
+        }
+    }
+
+    // ── Strength Reduction Tests ──────────────────────────────────
+
+    #[test]
+    fn reduce_mulwrap_by_4() {
+        // _2 = MulWrap(Copy(_1), 4) → _2 = Shl(Copy(_1), 2)
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::MulWrap, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::I64(4)),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        reduce_strength(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::BinOp { op: BinOp::Shl, rhs: Operand::Constant(Constant::I64(2)), .. } => {}
+            other => panic!("Expected Shl by 2, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reduce_mulwrap_by_2_commutative() {
+        // _2 = MulWrap(2, Copy(_1)) → _2 = Shl(Copy(_1), 1)
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::MulWrap, type_id: I64_TYPE,
+            lhs: Operand::Constant(Constant::I64(2)),
+            rhs: Operand::Copy(Place::local(LocalId(1))),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        reduce_strength(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::BinOp { op: BinOp::Shl, lhs: Operand::Copy(p), rhs: Operand::Constant(Constant::I64(1)), .. }
+                if p.local == LocalId(1) => {}
+            other => panic!("Expected Shl(Copy(_1), 1), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_reduce_mul_checked() {
+        // _2 = Mul(Copy(_1), 4) → unchanged (checked mul must not become shift)
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::Mul, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::I64(4)),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        reduce_strength(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::BinOp { op: BinOp::Mul, .. } => {}
+            other => panic!("Expected unchanged Mul, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_reduce_mulwrap_non_power_of_2() {
+        // _2 = MulWrap(Copy(_1), 3) → unchanged (3 is not a power of 2)
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::MulWrap, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::I64(3)),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        reduce_strength(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::BinOp { op: BinOp::MulWrap, .. } => {}
+            other => panic!("Expected unchanged MulWrap, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reduce_div_by_8_positive() {
+        // _1 = Div(16, 8) → Shr(16, 3) — positive constant dividend
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(1), op: BinOp::Div, type_id: I64_TYPE,
+            lhs: Operand::Constant(Constant::I64(16)),
+            rhs: Operand::Constant(Constant::I64(8)),
+        }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        reduce_strength(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::BinOp { op: BinOp::Shr, rhs: Operand::Constant(Constant::I64(3)), .. } => {}
+            other => panic!("Expected Shr by 3, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_reduce_div_negative_dividend() {
+        // _2 = Div(Copy(_1), 4) → unchanged (dividend sign unknown)
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::Div, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))),
+            rhs: Operand::Constant(Constant::I64(4)),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        reduce_strength(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::BinOp { op: BinOp::Div, .. } => {}
+            other => panic!("Expected unchanged Div, got {:?}", other),
         }
     }
 
