@@ -20,6 +20,7 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         reduce_strength(func);
         fold_constant_branches(func);
         // Phase 2: eliminate dead code
+        eliminate_nops(func);
         elide_dead_drops(func);
         eliminate_dead_stores(func);
         // Phase 3: simplify CFG
@@ -547,6 +548,34 @@ fn fold_constant_branches(func: &mut Function) {
         if let Some(new_term) = folded {
             bb.terminator = Some(new_term);
         }
+    }
+}
+
+// ── Nop Elimination ──────────────────────────────────────────────────
+
+/// Remove `Instruction::Nop` entries from all basic blocks.
+fn eliminate_nops(func: &mut Function) {
+    for bb in &mut func.blocks {
+        if !bb.instructions.iter().any(|inst| matches!(inst, Instruction::Nop)) {
+            continue;
+        }
+        // Build keep mask, then filter both instructions and span_map in sync
+        let keep: Vec<bool> = bb.instructions.iter()
+            .map(|inst| !matches!(inst, Instruction::Nop))
+            .collect();
+
+        let mut new_insts = Vec::with_capacity(bb.instructions.len());
+        let mut new_spans = Vec::with_capacity(bb.span_map.len());
+        for (i, (inst, k)) in bb.instructions.drain(..).zip(keep.iter()).enumerate() {
+            if *k {
+                new_insts.push(inst);
+                if i < bb.span_map.len() {
+                    new_spans.push(bb.span_map[i]);
+                }
+            }
+        }
+        bb.instructions = new_insts;
+        bb.span_map = new_spans;
     }
 }
 
