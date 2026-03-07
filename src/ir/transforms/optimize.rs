@@ -12,14 +12,142 @@ use crate::ir::types::{BlockId, LocalId};
 /// Run all optimization passes on every function in the module.
 pub fn optimize_module(module: &mut crate::ir::Module) {
     for func in &mut module.functions {
+        // Phase 1: simplify values
+        propagate_constants(func);
         constant_fold(func);
         fold_constant_branches(func);
+        // Phase 2: eliminate dead code
         elide_dead_drops(func);
         eliminate_dead_stores(func);
+        // Phase 3: simplify CFG
         thread_jumps(func);
         merge_blocks(func);
         eliminate_dead_blocks(func);
         eliminate_unused_locals(func);
+    }
+}
+
+// ── Constant Propagation ─────────────────────────────────────────────
+
+/// Within each basic block, substitute `Copy(local)` operands with known
+/// constant values when the local was previously assigned a constant and
+/// not reassigned.  This enables constant folding to fire on patterns like:
+///
+///     _1 = 42
+///     _2 = BinOp(Add, Copy(_1), Copy(_1))  →  _2 = BinOp(Add, 42, 42)
+///
+/// Only propagates through simple `Assign { dst: local, value: Constant }`.
+/// Invalidates on any reassignment to the local.
+fn propagate_constants(func: &mut Function) {
+    for bb in &mut func.blocks {
+        let mut known: std::collections::HashMap<u32, Constant> = std::collections::HashMap::new();
+
+        for inst in &mut bb.instructions {
+            // First: substitute known constants into operands
+            substitute_operands(inst, &known);
+
+            // Then: track/invalidate based on this instruction's writes
+            match inst {
+                Instruction::Assign { dst, value } if dst.projections.is_empty() => {
+                    if let Operand::Constant(c) = value {
+                        // Only propagate simple scalar constants — strings, function
+                        // refs, and other complex values have ABI implications that
+                        // break when substituted into instruction operands.
+                        if is_propagatable_constant(c) {
+                            known.insert(dst.local.0, c.clone());
+                        } else {
+                            known.remove(&dst.local.0);
+                        }
+                    } else {
+                        known.remove(&dst.local.0);
+                    }
+                }
+                // Calls can modify any local through borrows/pointers —
+                // invalidate all tracked constants conservatively.
+                Instruction::Call { dst, .. }
+                | Instruction::CallExtern { dst, .. } => {
+                    known.clear();
+                    // Re-track the dst if it's a constant (it's a fresh write)
+                    // — but Call results are never constants, so just clear.
+                    let _ = dst;
+                }
+                Instruction::CallIndirect { .. } => {
+                    known.clear();
+                }
+                _ => {
+                    // Any other write to a local invalidates it
+                    if let Some(written) = instruction_dst(inst) {
+                        known.remove(&written);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Check if a constant is safe to propagate into operand positions.
+/// Strings, function refs, and global refs have complex ABI (e.g., Str struct
+/// vs const char*) and must not be substituted.
+fn is_propagatable_constant(c: &Constant) -> bool {
+    matches!(c,
+        Constant::Bool(_) |
+        Constant::I8(_) | Constant::I16(_) | Constant::I32(_) | Constant::I64(_) |
+        Constant::U8(_) | Constant::U16(_) | Constant::U32(_) | Constant::U64(_) |
+        Constant::F32(_) | Constant::F64(_)
+    )
+}
+
+/// Replace `Copy(local)` operands with known constant values.
+fn substitute_operands(inst: &mut Instruction, known: &std::collections::HashMap<u32, Constant>) {
+    let sub = |op: &mut Operand| {
+        if let Operand::Copy(p) = &*op {
+            if p.projections.is_empty() {
+                if let Some(c) = known.get(&p.local.0) {
+                    *op = Operand::Constant(c.clone());
+                }
+            }
+        }
+    };
+
+    match inst {
+        Instruction::Assign { value, .. } => sub(value),
+        Instruction::BinOp { lhs, rhs, .. } | Instruction::Cmp { lhs, rhs, .. } => {
+            sub(lhs);
+            sub(rhs);
+        }
+        Instruction::UnOp { operand, .. }
+        | Instruction::Cast { value: operand, .. }
+        | Instruction::BitCast { value: operand, .. }
+        | Instruction::PtrCast { value: operand, .. }
+        | Instruction::TagOf { operand, .. } => {
+            sub(operand);
+        }
+        Instruction::IndexLoad { index, .. } => sub(index),
+        Instruction::Call { args, .. } | Instruction::CallExtern { args, .. } => {
+            for a in args { sub(a); }
+        }
+        Instruction::CallIndirect { callee, args, .. } => {
+            sub(callee);
+            for a in args { sub(a); }
+        }
+        Instruction::StructInit { fields, .. } | Instruction::EnumInit { fields, .. } => {
+            for f in fields { sub(f); }
+        }
+        Instruction::TupleInit { elements, .. } => {
+            for e in elements { sub(e); }
+        }
+        Instruction::HeapAlloc { allocator, .. } => sub(allocator),
+        Instruction::HeapAllocArray { count, allocator, .. } => {
+            sub(count);
+            sub(allocator);
+        }
+        Instruction::Dealloc { ptr, allocator } => {
+            sub(ptr);
+            sub(allocator);
+        }
+        Instruction::PushAllocator { allocator } => sub(allocator),
+        // Instructions without operands that can be substituted
+        _ => {}
     }
 }
 
@@ -1349,6 +1477,70 @@ mod tests {
         merge_blocks(&mut f);
         // bb0 should keep its Branch (bb1 has 2 predecessors from the Branch)
         assert_eq!(format!("{:?}", f.blocks[0].terminator), format!("{:?}", orig_term));
+    }
+
+    // ── Constant Propagation Tests ─────────────────────────────────
+
+    #[test]
+    fn propagate_constant_into_binop() {
+        // _1 = 10; _2 = BinOp(Add, Copy(_1), Copy(_1))
+        // → after propagation: _2 = BinOp(Add, 10, 10)
+        // → after folding: _2 = 20
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(10)),
+            },
+            Instruction::BinOp {
+                dst: LocalId(2),
+                op: BinOp::Add,
+                type_id: I64_TYPE,
+                lhs: Operand::Copy(Place::local(LocalId(1))),
+                rhs: Operand::Copy(Place::local(LocalId(1))),
+            },
+        ], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![]);
+        propagate_constants(&mut f);
+        // After propagation, the BinOp should have constant operands
+        match &f.blocks[0].instructions[1] {
+            Instruction::BinOp { lhs: Operand::Constant(Constant::I64(10)),
+                                 rhs: Operand::Constant(Constant::I64(10)), .. } => {}
+            other => panic!("Expected constant operands, got {:?}", other),
+        }
+        // After folding, it should become an Assign
+        constant_fold(&mut f);
+        match &f.blocks[0].instructions[1] {
+            Instruction::Assign { value: Operand::Constant(Constant::I64(20)), .. } => {}
+            other => panic!("Expected folded to 20, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn propagate_invalidated_by_reassign() {
+        // _1 = 10; _1 = Copy(_2); _3 = BinOp(Add, Copy(_1), 1)
+        // → _1's constant should NOT propagate into the BinOp
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(10)),
+            },
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Copy(Place::local(LocalId(2))),
+            },
+            Instruction::BinOp {
+                dst: LocalId(3),
+                op: BinOp::Add,
+                type_id: I64_TYPE,
+                lhs: Operand::Copy(Place::local(LocalId(1))),
+                rhs: Operand::Constant(Constant::I64(1)),
+            },
+        ], ret_local(3))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![]);
+        propagate_constants(&mut f);
+        // _1 was reassigned from _2 (not constant), so BinOp's lhs should stay Copy(_1)
+        match &f.blocks[0].instructions[2] {
+            Instruction::BinOp { lhs: Operand::Copy(p), .. } if p.local == LocalId(1) => {}
+            other => panic!("Expected Copy(_1), got {:?}", other),
+        }
     }
 
     // ── Dead Store Elimination Tests ────────────────────────────────
