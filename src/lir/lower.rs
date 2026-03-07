@@ -127,6 +127,16 @@ impl<'a> LoweringContext<'a> {
             if self.struct_reg.lookup(&def.name).is_some() {
                 continue; // Already registered (builtin).
             }
+
+            // Map collection instantiations to their runtime struct.
+            // e.g., Vector__Str → GorgetArray, Dict__Str__int64_t → GorgetMap
+            if let Some(runtime_name) = collection_runtime_type(&def.name) {
+                if let Some(runtime_sid) = self.struct_reg.lookup(runtime_name) {
+                    self.struct_reg.register(&def.name, runtime_sid);
+                    continue;
+                }
+            }
+
             match &def.kind {
                 gir_types::TypeDefKind::Struct(sdef) => {
                     let fields: Vec<(String, LirType)> = sdef
@@ -168,6 +178,28 @@ impl<'a> LoweringContext<'a> {
             }
         }
     }
+}
+
+/// Map generic collection type names to their runtime struct name.
+/// Returns None for non-collection types.
+fn collection_runtime_type(name: &str) -> Option<&'static str> {
+    if name.starts_with("Vector__") || name.starts_with("Shared__Vector__") {
+        return Some("GorgetArray");
+    }
+    if name.starts_with("Dict__") || name.starts_with("GorgetDict__") {
+        return Some("GorgetMap");
+    }
+    if name.starts_with("HashMap__") || name.starts_with("GorgetMap__") {
+        return Some("GorgetMap");
+    }
+    if name.starts_with("Set__") || name.starts_with("GorgetSet__") {
+        return Some("GorgetSet");
+    }
+    if name.starts_with("Result__") || name.starts_with("Option__") {
+        // Result/Option are real structs with fields — don't alias.
+        return None;
+    }
+    None
 }
 
 impl<'a> FuncLowering<'a> {
