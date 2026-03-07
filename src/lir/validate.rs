@@ -440,6 +440,7 @@ mod tests {
         // Use v99 which is never defined
         func.block_mut(bb).insts.push(Inst::Neg {
             dst: ValueId(0),
+            ty: LirType::I64,
             operand: ValueId(99),
         });
         func.block_mut(bb).terminator = Term::Ret(ValueId(0));
@@ -462,6 +463,7 @@ mod tests {
         });
         func.block_mut(bb).insts.push(Inst::Neg {
             dst: v1,
+            ty: LirType::I64,
             operand: v0,
         });
         func.block_mut(bb).terminator = Term::Ret(v1);

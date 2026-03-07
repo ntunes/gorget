@@ -403,7 +403,7 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
             }
             None
         }
-        Inst::Div { dst, lhs, rhs } => {
+        Inst::Div { dst, lhs, rhs, .. } => {
             if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
                 if b != 0 {
                     return Some(Inst::IConst { dst: *dst, value: a.wrapping_div(b), ty });
@@ -414,7 +414,7 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
             }
             None
         }
-        Inst::Rem { dst, lhs, rhs } => {
+        Inst::Rem { dst, lhs, rhs, .. } => {
             if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
                 if b != 0 {
                     return Some(Inst::IConst { dst: *dst, value: a.wrapping_rem(b), ty });
@@ -422,7 +422,7 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
             }
             None
         }
-        Inst::Mod { dst, lhs, rhs } => {
+        Inst::Mod { dst, lhs, rhs, .. } => {
             if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
                 if b != 0 {
                     let r = a.wrapping_rem(b);
@@ -432,7 +432,7 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
             }
             None
         }
-        Inst::Neg { dst, operand } => {
+        Inst::Neg { dst, operand, .. } => {
             if let Some((a, ty)) = get_int(*operand) {
                 return Some(Inst::IConst { dst: *dst, value: a.wrapping_neg(), ty });
             }
@@ -443,26 +443,26 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
         }
 
         // Bitwise
-        Inst::BitAnd { dst, lhs, rhs } => {
+        Inst::BitAnd { dst, lhs, rhs, .. } => {
             let (a, ty) = get_int(*lhs)?;
             let (b, _) = get_int(*rhs)?;
             Some(Inst::IConst { dst: *dst, value: a & b, ty })
         }
-        Inst::BitOr { dst, lhs, rhs } => {
+        Inst::BitOr { dst, lhs, rhs, .. } => {
             let (a, ty) = get_int(*lhs)?;
             let (b, _) = get_int(*rhs)?;
             Some(Inst::IConst { dst: *dst, value: a | b, ty })
         }
-        Inst::BitXor { dst, lhs, rhs } => {
+        Inst::BitXor { dst, lhs, rhs, .. } => {
             let (a, ty) = get_int(*lhs)?;
             let (b, _) = get_int(*rhs)?;
             Some(Inst::IConst { dst: *dst, value: a ^ b, ty })
         }
-        Inst::BitNot { dst, operand } => {
+        Inst::BitNot { dst, operand, .. } => {
             let (a, ty) = get_int(*operand)?;
             Some(Inst::IConst { dst: *dst, value: !a, ty })
         }
-        Inst::Shl { dst, lhs, rhs } => {
+        Inst::Shl { dst, lhs, rhs, .. } => {
             let (a, ty) = get_int(*lhs)?;
             let (b, _) = get_int(*rhs)?;
             if b >= 0 && b < 64 {
@@ -471,7 +471,7 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
                 None
             }
         }
-        Inst::Shr { dst, lhs, rhs } => {
+        Inst::Shr { dst, lhs, rhs, .. } => {
             let (a, ty) = get_int(*lhs)?;
             let (b, _) = get_int(*rhs)?;
             if b >= 0 && b < 64 {
@@ -1414,7 +1414,7 @@ mod tests {
         func.block_mut(bb).insts = vec![
             Inst::IConst { dst: v0, ty: LirType::I64, value: 10 },
             Inst::IConst { dst: v1, ty: LirType::I64, value: 32 },
-            Inst::Add { dst: v2, lhs: v0, rhs: v1, overflow: Overflow::Wrap },
+            Inst::Add { dst: v2, ty: LirType::I64, lhs: v0, rhs: v1, overflow: Overflow::Wrap },
         ];
         func.block_mut(bb).terminator = Term::Ret(v2);
 
@@ -1441,9 +1441,9 @@ mod tests {
         func.block_mut(bb).insts = vec![
             Inst::IConst { dst: v0, ty: LirType::I64, value: 3 },
             Inst::IConst { dst: v1, ty: LirType::I64, value: 4 },
-            Inst::Mul { dst: v2, lhs: v0, rhs: v1, overflow: Overflow::Wrap },
+            Inst::Mul { dst: v2, ty: LirType::I64, lhs: v0, rhs: v1, overflow: Overflow::Wrap },
             Inst::IConst { dst: v3, ty: LirType::I64, value: 8 },
-            Inst::Add { dst: v4, lhs: v2, rhs: v3, overflow: Overflow::Wrap },
+            Inst::Add { dst: v4, ty: LirType::I64, lhs: v2, rhs: v3, overflow: Overflow::Wrap },
         ];
         func.block_mut(bb).terminator = Term::Ret(v4);
 
@@ -1489,7 +1489,7 @@ mod tests {
         func.block_mut(bb).insts = vec![
             Inst::IConst { dst: v0, ty: LirType::I64, value: 0xFF },
             Inst::IConst { dst: v1, ty: LirType::I64, value: 0x0F },
-            Inst::BitAnd { dst: v2, lhs: v0, rhs: v1 },
+            Inst::BitAnd { dst: v2, ty: LirType::I64, lhs: v0, rhs: v1 },
         ];
         func.block_mut(bb).terminator = Term::Ret(v2);
 
@@ -1512,7 +1512,7 @@ mod tests {
         func.block_mut(bb).insts = vec![
             Inst::FConst { dst: v0, ty: LirType::F64, bits: 2.5_f64.to_bits() },
             Inst::FConst { dst: v1, ty: LirType::F64, bits: 3.0_f64.to_bits() },
-            Inst::Mul { dst: v2, lhs: v0, rhs: v1, overflow: Overflow::Wrap },
+            Inst::Mul { dst: v2, ty: LirType::F64, lhs: v0, rhs: v1, overflow: Overflow::Wrap },
         ];
         func.block_mut(bb).terminator = Term::Ret(v2);
 
@@ -1537,7 +1537,7 @@ mod tests {
         func.block_mut(bb).insts = vec![
             Inst::IConst { dst: v0, ty: LirType::I64, value: 42 },
             Inst::IConst { dst: v1, ty: LirType::I64, value: 0 },
-            Inst::Div { dst: v2, lhs: v0, rhs: v1 },
+            Inst::Div { dst: v2, ty: LirType::I64, lhs: v0, rhs: v1 },
         ];
         func.block_mut(bb).terminator = Term::Ret(v2);
 

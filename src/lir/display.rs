@@ -158,39 +158,39 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
         Inst::StrLit { dst, value } => write!(f, "{dst}: struct.Str = str_lit {value:?}"),
 
         // Arithmetic
-        Inst::Add { dst, lhs, rhs, overflow } => {
+        Inst::Add { dst, ty, lhs, rhs, overflow } => {
             let op = match overflow {
                 Overflow::Trap => "add",
                 Overflow::Wrap => "add.wrap",
             };
-            write!(f, "{dst} = {op} {lhs}, {rhs}")
+            write!(f, "{dst}: {ty} = {op} {lhs}, {rhs}")
         }
-        Inst::Sub { dst, lhs, rhs, overflow } => {
+        Inst::Sub { dst, ty, lhs, rhs, overflow } => {
             let op = match overflow {
                 Overflow::Trap => "sub",
                 Overflow::Wrap => "sub.wrap",
             };
-            write!(f, "{dst} = {op} {lhs}, {rhs}")
+            write!(f, "{dst}: {ty} = {op} {lhs}, {rhs}")
         }
-        Inst::Mul { dst, lhs, rhs, overflow } => {
+        Inst::Mul { dst, ty, lhs, rhs, overflow } => {
             let op = match overflow {
                 Overflow::Trap => "mul",
                 Overflow::Wrap => "mul.wrap",
             };
-            write!(f, "{dst} = {op} {lhs}, {rhs}")
+            write!(f, "{dst}: {ty} = {op} {lhs}, {rhs}")
         }
-        Inst::Div { dst, lhs, rhs } => write!(f, "{dst} = div {lhs}, {rhs}"),
-        Inst::Rem { dst, lhs, rhs } => write!(f, "{dst} = rem {lhs}, {rhs}"),
-        Inst::Mod { dst, lhs, rhs } => write!(f, "{dst} = mod {lhs}, {rhs}"),
-        Inst::Neg { dst, operand } => write!(f, "{dst} = neg {operand}"),
+        Inst::Div { dst, ty, lhs, rhs } => write!(f, "{dst}: {ty} = div {lhs}, {rhs}"),
+        Inst::Rem { dst, ty, lhs, rhs } => write!(f, "{dst}: {ty} = rem {lhs}, {rhs}"),
+        Inst::Mod { dst, ty, lhs, rhs } => write!(f, "{dst}: {ty} = mod {lhs}, {rhs}"),
+        Inst::Neg { dst, ty, operand } => write!(f, "{dst}: {ty} = neg {operand}"),
 
         // Bitwise
-        Inst::BitAnd { dst, lhs, rhs } => write!(f, "{dst} = band {lhs}, {rhs}"),
-        Inst::BitOr { dst, lhs, rhs } => write!(f, "{dst} = bor {lhs}, {rhs}"),
-        Inst::BitXor { dst, lhs, rhs } => write!(f, "{dst} = bxor {lhs}, {rhs}"),
-        Inst::BitNot { dst, operand } => write!(f, "{dst} = bnot {operand}"),
-        Inst::Shl { dst, lhs, rhs } => write!(f, "{dst} = shl {lhs}, {rhs}"),
-        Inst::Shr { dst, lhs, rhs } => write!(f, "{dst} = shr {lhs}, {rhs}"),
+        Inst::BitAnd { dst, ty, lhs, rhs } => write!(f, "{dst}: {ty} = band {lhs}, {rhs}"),
+        Inst::BitOr { dst, ty, lhs, rhs } => write!(f, "{dst}: {ty} = bor {lhs}, {rhs}"),
+        Inst::BitXor { dst, ty, lhs, rhs } => write!(f, "{dst}: {ty} = bxor {lhs}, {rhs}"),
+        Inst::BitNot { dst, ty, operand } => write!(f, "{dst}: {ty} = bnot {operand}"),
+        Inst::Shl { dst, ty, lhs, rhs } => write!(f, "{dst}: {ty} = shl {lhs}, {rhs}"),
+        Inst::Shr { dst, ty, lhs, rhs } => write!(f, "{dst}: {ty} = shr {lhs}, {rhs}"),
 
         // Comparison & logic
         Inst::Cmp { dst, op, lhs, rhs } => write!(f, "{dst}: bool = cmp.{op} {lhs}, {rhs}"),

@@ -258,13 +258,13 @@ fn emit_inst(out: &mut String, inst: &Inst, module: &LirModule) {
         Inst::Mul { dst, lhs, rhs, .. } => {
             write!(out, "{} = {} * {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
         }
-        Inst::Div { dst, lhs, rhs } => {
+        Inst::Div { dst, lhs, rhs, .. } => {
             write!(out, "{} = {} / {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
         }
-        Inst::Rem { dst, lhs, rhs } => {
+        Inst::Rem { dst, lhs, rhs, .. } => {
             write!(out, "{} = {} % {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
         }
-        Inst::Mod { dst, lhs, rhs } => {
+        Inst::Mod { dst, lhs, rhs, .. } => {
             // Python-style modulo: ((a % b) + b) % b
             write!(
                 out,
@@ -274,27 +274,27 @@ fn emit_inst(out: &mut String, inst: &Inst, module: &LirModule) {
                 r = v(*rhs)
             ).unwrap();
         }
-        Inst::Neg { dst, operand } => {
+        Inst::Neg { dst, operand, .. } => {
             write!(out, "{} = -{};", v(*dst), v(*operand)).unwrap();
         }
 
         // Bitwise
-        Inst::BitAnd { dst, lhs, rhs } => {
+        Inst::BitAnd { dst, lhs, rhs, .. } => {
             write!(out, "{} = {} & {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
         }
-        Inst::BitOr { dst, lhs, rhs } => {
+        Inst::BitOr { dst, lhs, rhs, .. } => {
             write!(out, "{} = {} | {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
         }
-        Inst::BitXor { dst, lhs, rhs } => {
+        Inst::BitXor { dst, lhs, rhs, .. } => {
             write!(out, "{} = {} ^ {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
         }
-        Inst::BitNot { dst, operand } => {
+        Inst::BitNot { dst, operand, .. } => {
             write!(out, "{} = ~{};", v(*dst), v(*operand)).unwrap();
         }
-        Inst::Shl { dst, lhs, rhs } => {
+        Inst::Shl { dst, lhs, rhs, .. } => {
             write!(out, "{} = {} << {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
         }
-        Inst::Shr { dst, lhs, rhs } => {
+        Inst::Shr { dst, lhs, rhs, .. } => {
             write!(out, "{} = {} >> {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
         }
 
@@ -631,7 +631,7 @@ fn escape_c_string(s: &str) -> String {
 
 /// Infer the result type of an instruction (for variable declarations).
 /// `val_types` provides already-resolved types for operands (used for arithmetic propagation).
-fn infer_inst_type(inst: &Inst, module: &LirModule, val_types: &[Option<LirType>]) -> Option<LirType> {
+fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType>]) -> Option<LirType> {
     match inst {
         Inst::SlotLoad { ty, .. } => Some(ty.clone()),
         Inst::SlotAddr { .. } => Some(LirType::Ptr),
@@ -643,23 +643,15 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, val_types: &[Option<LirType>
         Inst::GlobalAddr { .. } => Some(LirType::Ptr),
         Inst::StrLit { .. } => Some(LirType::Ptr), // simplified
 
-        // Arithmetic — propagate type from lhs operand.
-        Inst::Add { lhs, .. } | Inst::Sub { lhs, .. } | Inst::Mul { lhs, .. }
-        | Inst::Div { lhs, .. } | Inst::Rem { lhs, .. } | Inst::Mod { lhs, .. } => {
-            val_types.get(lhs.0 as usize).and_then(|t| t.clone()).or(Some(LirType::I64))
-        }
-        Inst::Neg { operand, .. } => {
-            val_types.get(operand.0 as usize).and_then(|t| t.clone()).or(Some(LirType::I64))
-        }
+        // Arithmetic — use the explicit type field.
+        Inst::Add { ty, .. } | Inst::Sub { ty, .. } | Inst::Mul { ty, .. }
+        | Inst::Div { ty, .. } | Inst::Rem { ty, .. } | Inst::Mod { ty, .. }
+        | Inst::Neg { ty, .. } => Some(ty.clone()),
 
-        // Bitwise — propagate type from lhs operand.
-        Inst::BitAnd { lhs, .. } | Inst::BitOr { lhs, .. } | Inst::BitXor { lhs, .. }
-        | Inst::Shl { lhs, .. } | Inst::Shr { lhs, .. } => {
-            val_types.get(lhs.0 as usize).and_then(|t| t.clone()).or(Some(LirType::I64))
-        }
-        Inst::BitNot { operand, .. } => {
-            val_types.get(operand.0 as usize).and_then(|t| t.clone()).or(Some(LirType::I64))
-        }
+        // Bitwise — use the explicit type field.
+        Inst::BitAnd { ty, .. } | Inst::BitOr { ty, .. } | Inst::BitXor { ty, .. }
+        | Inst::Shl { ty, .. } | Inst::Shr { ty, .. }
+        | Inst::BitNot { ty, .. } => Some(ty.clone()),
 
         Inst::Cmp { .. } | Inst::Not { .. } => Some(LirType::Bool),
 
@@ -726,7 +718,7 @@ mod tests {
         func.block_mut(bb0).insts = vec![
             Inst::SlotLoad { dst: v0, slot: s0, ty: LirType::I64 },
             Inst::SlotLoad { dst: v1, slot: s1, ty: LirType::I64 },
-            Inst::Add { dst: v2, lhs: v0, rhs: v1, overflow: Overflow::Trap },
+            Inst::Add { dst: v2, ty: LirType::I64, lhs: v0, rhs: v1, overflow: Overflow::Trap },
         ];
         func.block_mut(bb0).terminator = Term::Ret(v2);
         module.add_function(func);

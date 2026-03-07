@@ -214,21 +214,21 @@ pub enum Inst {
     StrLit { dst: ValueId, value: String },
 
     // ── Arithmetic ──────────────────────────────────────────────────
-    Add { dst: ValueId, lhs: ValueId, rhs: ValueId, overflow: Overflow },
-    Sub { dst: ValueId, lhs: ValueId, rhs: ValueId, overflow: Overflow },
-    Mul { dst: ValueId, lhs: ValueId, rhs: ValueId, overflow: Overflow },
-    Div { dst: ValueId, lhs: ValueId, rhs: ValueId },
-    Rem { dst: ValueId, lhs: ValueId, rhs: ValueId },
-    Mod { dst: ValueId, lhs: ValueId, rhs: ValueId },
-    Neg { dst: ValueId, operand: ValueId },
+    Add { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId, overflow: Overflow },
+    Sub { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId, overflow: Overflow },
+    Mul { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId, overflow: Overflow },
+    Div { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId },
+    Rem { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId },
+    Mod { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId },
+    Neg { dst: ValueId, ty: LirType, operand: ValueId },
 
     // ── Bitwise ─────────────────────────────────────────────────────
-    BitAnd { dst: ValueId, lhs: ValueId, rhs: ValueId },
-    BitOr { dst: ValueId, lhs: ValueId, rhs: ValueId },
-    BitXor { dst: ValueId, lhs: ValueId, rhs: ValueId },
-    BitNot { dst: ValueId, operand: ValueId },
-    Shl { dst: ValueId, lhs: ValueId, rhs: ValueId },
-    Shr { dst: ValueId, lhs: ValueId, rhs: ValueId },
+    BitAnd { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId },
+    BitOr { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId },
+    BitXor { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId },
+    BitNot { dst: ValueId, ty: LirType, operand: ValueId },
+    Shl { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId },
+    Shr { dst: ValueId, ty: LirType, lhs: ValueId, rhs: ValueId },
 
     // ── Comparison & Logic ──────────────────────────────────────────
     Cmp { dst: ValueId, op: CmpOp, lhs: ValueId, rhs: ValueId },
@@ -844,6 +844,7 @@ mod tests {
 
         let add = Inst::Add {
             dst: v2,
+            ty: LirType::I64,
             lhs: v0,
             rhs: v1,
             overflow: Overflow::Trap,

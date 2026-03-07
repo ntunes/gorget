@@ -277,14 +277,15 @@ impl<'a> FuncLowering<'a> {
             Instruction::BinOp {
                 dst,
                 op,
-                type_id: _,
+                type_id,
                 lhs,
                 rhs,
             } => {
                 let l = self.lower_operand(lhs, bb);
                 let r = self.lower_operand(rhs, bb);
                 let result = self.lir_func.next_value();
-                let inst = lower_binop(result, *op, l, r);
+                let ty = map_gir_type(type_id, self.gir_types);
+                let inst = lower_binop(result, *op, l, r, ty);
                 self.lir_func.block_mut(bb).insts.push(inst);
                 self.store_to_local(*dst, result, bb);
             }
@@ -292,12 +293,13 @@ impl<'a> FuncLowering<'a> {
             Instruction::UnOp {
                 dst,
                 op,
-                type_id: _,
+                type_id,
                 operand,
             } => {
                 let val = self.lower_operand(operand, bb);
                 let result = self.lir_func.next_value();
-                let inst = lower_unop(result, *op, val);
+                let ty = map_gir_type(type_id, self.gir_types);
+                let inst = lower_unop(result, *op, val, ty);
                 self.lir_func.block_mut(bb).insts.push(inst);
                 self.store_to_local(*dst, result, bb);
             }
@@ -1257,35 +1259,35 @@ pub fn map_gir_type(type_id: &GirTypeId, registry: &TypeRegistry) -> LirType {
     }
 }
 
-fn lower_binop(dst: ValueId, op: GirBinOp, lhs: ValueId, rhs: ValueId) -> Inst {
+fn lower_binop(dst: ValueId, op: GirBinOp, lhs: ValueId, rhs: ValueId, ty: LirType) -> Inst {
     match op {
-        GirBinOp::Add => Inst::Add { dst, lhs, rhs, overflow: Overflow::Trap },
-        GirBinOp::Sub => Inst::Sub { dst, lhs, rhs, overflow: Overflow::Trap },
-        GirBinOp::Mul => Inst::Mul { dst, lhs, rhs, overflow: Overflow::Trap },
-        GirBinOp::Div => Inst::Div { dst, lhs, rhs },
-        GirBinOp::Rem => Inst::Rem { dst, lhs, rhs },
-        GirBinOp::Mod => Inst::Mod { dst, lhs, rhs },
+        GirBinOp::Add => Inst::Add { dst, ty, lhs, rhs, overflow: Overflow::Trap },
+        GirBinOp::Sub => Inst::Sub { dst, ty, lhs, rhs, overflow: Overflow::Trap },
+        GirBinOp::Mul => Inst::Mul { dst, ty, lhs, rhs, overflow: Overflow::Trap },
+        GirBinOp::Div => Inst::Div { dst, ty, lhs, rhs },
+        GirBinOp::Rem => Inst::Rem { dst, ty, lhs, rhs },
+        GirBinOp::Mod => Inst::Mod { dst, ty, lhs, rhs },
         GirBinOp::Pow => {
             // Pow doesn't have a direct LIR instruction. Emit as CallExtern to pow().
             // For now, emit as Mul (placeholder).
-            Inst::Mul { dst, lhs, rhs, overflow: Overflow::Trap }
+            Inst::Mul { dst, ty, lhs, rhs, overflow: Overflow::Trap }
         }
-        GirBinOp::BitAnd => Inst::BitAnd { dst, lhs, rhs },
-        GirBinOp::BitOr => Inst::BitOr { dst, lhs, rhs },
-        GirBinOp::BitXor => Inst::BitXor { dst, lhs, rhs },
-        GirBinOp::Shl => Inst::Shl { dst, lhs, rhs },
-        GirBinOp::Shr => Inst::Shr { dst, lhs, rhs },
-        GirBinOp::AddWrap => Inst::Add { dst, lhs, rhs, overflow: Overflow::Wrap },
-        GirBinOp::SubWrap => Inst::Sub { dst, lhs, rhs, overflow: Overflow::Wrap },
-        GirBinOp::MulWrap => Inst::Mul { dst, lhs, rhs, overflow: Overflow::Wrap },
+        GirBinOp::BitAnd => Inst::BitAnd { dst, ty, lhs, rhs },
+        GirBinOp::BitOr => Inst::BitOr { dst, ty, lhs, rhs },
+        GirBinOp::BitXor => Inst::BitXor { dst, ty, lhs, rhs },
+        GirBinOp::Shl => Inst::Shl { dst, ty, lhs, rhs },
+        GirBinOp::Shr => Inst::Shr { dst, ty, lhs, rhs },
+        GirBinOp::AddWrap => Inst::Add { dst, ty, lhs, rhs, overflow: Overflow::Wrap },
+        GirBinOp::SubWrap => Inst::Sub { dst, ty, lhs, rhs, overflow: Overflow::Wrap },
+        GirBinOp::MulWrap => Inst::Mul { dst, ty, lhs, rhs, overflow: Overflow::Wrap },
     }
 }
 
-fn lower_unop(dst: ValueId, op: GirUnOp, operand: ValueId) -> Inst {
+fn lower_unop(dst: ValueId, op: GirUnOp, operand: ValueId, ty: LirType) -> Inst {
     match op {
-        GirUnOp::Neg => Inst::Neg { dst, operand },
+        GirUnOp::Neg => Inst::Neg { dst, ty, operand },
         GirUnOp::Not => Inst::Not { dst, operand },
-        GirUnOp::BitNot => Inst::BitNot { dst, operand },
+        GirUnOp::BitNot => Inst::BitNot { dst, ty, operand },
     }
 }
 
