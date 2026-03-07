@@ -11,7 +11,7 @@
 
 - **IR: Add error propagation to type mapping**: `map_ast_type()` silently returns `UNIT_TYPE` for unknown types instead of reporting errors. This masks lowering bugs. Change to `Result<TypeId, TypeError>` or at minimum emit diagnostics. [added: 2026-03-07, from: IR code review]
 
-- **IR: Enhance `validate.rs` with semantic checks**: Current validation is structural only (duplicate names, missing locals). No type consistency checks, no call target validation, no use-after-drop detection. Backend must blindly trust GIR correctness. [added: 2026-03-07, from: IR code review]
+- **IR: Enhance `validate.rs` further**: Phase 1 done (StructInit/EnumInit field counts, Drop on non-droppable, local TypeId validity, drop metadata consistency). Remaining: use-after-drop detection (requires dataflow analysis), return type _0 consistency check, unreachable block detection (overlap with dead block elimination pass). [updated: 2026-03-07]
 
 - **IR: Fix `DropStrategy`/`DropElaborator` coordination**: `DropElaborator` in `drops.rs` doesn't reference `DropStrategy` from the type metadata in `types.rs`. No clear contract for when field-level vs type-level drop triggers. [added: 2026-03-07, from: IR code review]
 

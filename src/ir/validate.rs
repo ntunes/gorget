@@ -2,7 +2,7 @@ use rustc_hash::FxHashSet;
 
 use super::instructions::*;
 use super::types::*;
-use super::Module;
+use super::{Function, Module};
 
 /// A validation error found in a GIR module.
 #[derive(Debug)]
@@ -29,6 +29,19 @@ pub enum ValidationErrorKind {
     DuplicateFunctionName(String),
     DuplicateTypeName(String),
     DuplicateGlobalName(String),
+    /// StructInit field count doesn't match the TypeDef.
+    StructFieldCountMismatch { type_name: String, expected: usize, got: usize },
+    /// EnumInit field count doesn't match the variant's definition.
+    EnumFieldCountMismatch { type_name: String, variant: String, expected: usize, got: usize },
+    /// EnumInit references a variant that doesn't exist in the TypeDef.
+    EnumVariantNotFound { type_name: String, variant: String },
+    /// Drop/DropIfAlive on a local whose type doesn't need dropping.
+    DropOnNonDroppable { local: LocalId, type_id: TypeId },
+    /// Local references a TypeId beyond the registry's range.
+    InvalidTypeId { local: LocalId, type_id: TypeId },
+    /// Type metadata inconsistency: Copy semantics with a non-None drop strategy
+    /// (except for ref-counted types which are intentionally Copy+Drop).
+    InconsistentDropMetadata { type_name: String, copy_semantics: CopySemantics, drop_strategy: String },
 }
 
 impl std::fmt::Display for ValidationErrorKind {
@@ -54,17 +67,36 @@ impl std::fmt::Display for ValidationErrorKind {
             Self::DuplicateGlobalName(name) => {
                 write!(f, "duplicate global name @{}", name)
             }
+            Self::StructFieldCountMismatch { type_name, expected, got } => {
+                write!(f, "StructInit '{}' has {} fields, TypeDef has {}", type_name, got, expected)
+            }
+            Self::EnumFieldCountMismatch { type_name, variant, expected, got } => {
+                write!(f, "EnumInit '{}::{}' has {} fields, variant has {}", type_name, variant, got, expected)
+            }
+            Self::EnumVariantNotFound { type_name, variant } => {
+                write!(f, "EnumInit '{}::{}' variant not found in TypeDef", type_name, variant)
+            }
+            Self::DropOnNonDroppable { local, type_id } => {
+                write!(f, "Drop on _{} (type {}) which doesn't need dropping", local.0, type_id)
+            }
+            Self::InvalidTypeId { local, type_id } => {
+                write!(f, "local _{} has invalid type {}", local.0, type_id)
+            }
+            Self::InconsistentDropMetadata { type_name, copy_semantics, drop_strategy } => {
+                write!(f, "type '{}' has {:?} semantics but {} drop strategy", type_name, copy_semantics, drop_strategy)
+            }
         }
     }
 }
 
-/// Validate a GIR module for structural well-formedness.
+/// Validate a GIR module for structural well-formedness and semantic consistency.
 pub fn validate(module: &Module) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     check_duplicate_functions(module, &mut errors);
     check_duplicate_type_names(module, &mut errors);
     check_duplicate_globals(module, &mut errors);
+    check_drop_metadata_consistency(module, &mut errors);
 
     // Collect all known callable names for call target validation.
     let mut callables: FxHashSet<&str> = FxHashSet::default();
@@ -145,6 +177,10 @@ fn check_function(
         });
         return;
     }
+
+    // Semantic checks on function-level properties
+    check_local_type_ids(func, ctx, type_registry, errors);
+    check_drop_targets(func, ctx, type_registry, errors);
 
     for (i, block) in func.blocks.iter().enumerate() {
         let block_ctx = format!("{}, bb{}", ctx, i);
@@ -365,8 +401,53 @@ fn check_instruction_types(
     errors: &mut Vec<ValidationError>,
 ) {
     match inst {
-        Instruction::StructInit { type_name, .. } | Instruction::EnumInit { type_name, .. } => {
-            if !type_registry.has_type_def(type_name) {
+        Instruction::StructInit { type_name, fields, .. } => {
+            if let Some(type_def) = type_registry.get_type_def(type_name) {
+                if let TypeDefKind::Struct(ref sdef) = type_def.kind {
+                    if sdef.fields.len() != fields.len() {
+                        errors.push(ValidationError {
+                            kind: ValidationErrorKind::StructFieldCountMismatch {
+                                type_name: type_name.clone(),
+                                expected: sdef.fields.len(),
+                                got: fields.len(),
+                            },
+                            context: ctx.into(),
+                        });
+                    }
+                }
+            } else {
+                errors.push(ValidationError {
+                    kind: ValidationErrorKind::UndefinedType(type_name.clone()),
+                    context: ctx.into(),
+                });
+            }
+        }
+        Instruction::EnumInit { type_name, variant, fields, .. } => {
+            if let Some(type_def) = type_registry.get_type_def(type_name) {
+                if let TypeDefKind::Enum(ref edef) = type_def.kind {
+                    if let Some(vdef) = edef.variants.iter().find(|v| v.name == *variant) {
+                        if vdef.fields.len() != fields.len() {
+                            errors.push(ValidationError {
+                                kind: ValidationErrorKind::EnumFieldCountMismatch {
+                                    type_name: type_name.clone(),
+                                    variant: variant.clone(),
+                                    expected: vdef.fields.len(),
+                                    got: fields.len(),
+                                },
+                                context: ctx.into(),
+                            });
+                        }
+                    } else {
+                        errors.push(ValidationError {
+                            kind: ValidationErrorKind::EnumVariantNotFound {
+                                type_name: type_name.clone(),
+                                variant: variant.clone(),
+                            },
+                            context: ctx.into(),
+                        });
+                    }
+                }
+            } else {
                 errors.push(ValidationError {
                     kind: ValidationErrorKind::UndefinedType(type_name.clone()),
                     context: ctx.into(),
@@ -375,6 +456,111 @@ fn check_instruction_types(
         }
         _ => {}
     }
+}
+
+/// Check that Drop/DropIfAlive instructions target locals whose types actually need dropping.
+fn check_drop_targets(
+    func: &Function,
+    ctx: &str,
+    registry: &TypeRegistry,
+    errors: &mut Vec<ValidationError>,
+) {
+    for block in &func.blocks {
+        for inst in &block.instructions {
+            let place = match inst {
+                Instruction::Drop { place } | Instruction::DropIfAlive { place } => place,
+                _ => continue,
+            };
+            // Only check simple locals (no projections — field drops are structural)
+            if !place.projections.is_empty() {
+                continue;
+            }
+            let local_idx = place.local.0 as usize;
+            if local_idx >= func.locals.len() {
+                continue; // Already caught by local-out-of-range check
+            }
+            let type_id = func.locals[local_idx].type_id;
+            if !type_needs_drop(type_id, registry) {
+                errors.push(ValidationError {
+                    kind: ValidationErrorKind::DropOnNonDroppable {
+                        local: place.local,
+                        type_id,
+                    },
+                    context: ctx.into(),
+                });
+            }
+        }
+    }
+}
+
+/// Check that all local type IDs reference valid types in the registry.
+fn check_local_type_ids(
+    func: &Function,
+    ctx: &str,
+    registry: &TypeRegistry,
+    errors: &mut Vec<ValidationError>,
+) {
+    for (i, local) in func.locals.iter().enumerate() {
+        if registry.get(local.type_id).is_none() {
+            errors.push(ValidationError {
+                kind: ValidationErrorKind::InvalidTypeId {
+                    local: LocalId(i as u32),
+                    type_id: local.type_id,
+                },
+                context: ctx.into(),
+            });
+        }
+    }
+}
+
+/// Check that type metadata is internally consistent.
+///
+/// Flags types where CopySemantics and DropStrategy conflict in unexpected ways.
+/// Known valid combinations:
+/// - Copy + None: plain value types (primitives, simple structs)
+/// - Copy + Trivial: ref-counted types (Shared, Weak, Channel) — Copy at GIR level
+///   but need ref-count decrement at drop
+/// - Move + None: ownership-tracking only (no heap to free, e.g. Thread)
+/// - Move + Trivial/Custom/Recursive: standard owned types with cleanup
+///
+/// The only flagged case: Copy + Recursive or Copy + Custom, which would mean
+/// the type can be freely copied but also runs complex cleanup — a likely bug.
+fn check_drop_metadata_consistency(module: &Module, errors: &mut Vec<ValidationError>) {
+    for type_def in module.type_registry.type_defs() {
+        let is_suspicious = match (&type_def.metadata.copy_semantics, &type_def.metadata.drop_strategy) {
+            // Copy + None: fine (plain value types)
+            (CopySemantics::Copy, DropStrategy::None) => false,
+            // Copy + Trivial: fine (ref-counted types)
+            (CopySemantics::Copy, DropStrategy::Trivial(_)) => false,
+            // Copy + Recursive or Copy + Custom: suspicious
+            (CopySemantics::Copy, DropStrategy::Recursive) => true,
+            (CopySemantics::Copy, DropStrategy::Custom(_)) => true,
+            // Move + anything: fine
+            (CopySemantics::Move, _) => false,
+        };
+        if is_suspicious {
+            errors.push(ValidationError {
+                kind: ValidationErrorKind::InconsistentDropMetadata {
+                    type_name: type_def.name.clone(),
+                    copy_semantics: type_def.metadata.copy_semantics,
+                    drop_strategy: format!("{:?}", type_def.metadata.drop_strategy),
+                },
+                context: "module".into(),
+            });
+        }
+    }
+}
+
+/// Check whether a type needs dropping (mirrors logic in drops.rs).
+fn type_needs_drop(type_id: TypeId, registry: &TypeRegistry) -> bool {
+    if type_id.0 < 12 { return false; }
+    if let Some(GirType::Named(name)) = registry.get(type_id) {
+        if let Some(type_def) = registry.get_type_def(name) {
+            return type_def.metadata.copy_semantics == CopySemantics::Move
+                || type_def.metadata.drop_strategy != DropStrategy::None;
+        }
+    }
+    false
 }
 
 fn check_terminator_blocks(
@@ -555,5 +741,170 @@ mod tests {
             &e.kind,
             ValidationErrorKind::DuplicateFunctionName(name) if name == "dup"
         )));
+    }
+
+    #[test]
+    fn struct_init_field_count_mismatch() {
+        let mut module = Module::new();
+        module.type_registry.add_type_def(TypeDef {
+            name: "Point".into(),
+            kind: TypeDefKind::Struct(StructDef {
+                fields: vec![
+                    StructField { name: "x".into(), type_id: F64_TYPE },
+                    StructField { name: "y".into(), type_id: F64_TYPE },
+                ],
+            }),
+            metadata: TypeMetadata::default(),
+        });
+        module.type_registry.insert(GirType::Named("Point".into()));
+
+        let point_id = module.type_registry.insert(GirType::Named("Point".into()));
+
+        let mut b = FunctionBuilder::new("f", UNIT_TYPE, &[]);
+        // StructInit with wrong field count (1 instead of 2)
+        b.struct_init("Point", point_id, vec![Operand::Constant(Constant::F64(1.0))]);
+        b.ret(Operand::Constant(Constant::Unit));
+        module.functions.push(b.build());
+
+        let errors = validate(&module);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            ValidationErrorKind::StructFieldCountMismatch { expected: 2, got: 1, .. }
+        )));
+    }
+
+    #[test]
+    fn enum_variant_not_found() {
+        let mut module = Module::new();
+        module.type_registry.add_type_def(TypeDef {
+            name: "Color".into(),
+            kind: TypeDefKind::Enum(EnumDef {
+                variants: vec![
+                    EnumVariant { name: "Red".into(), fields: vec![] },
+                    EnumVariant { name: "Blue".into(), fields: vec![] },
+                ],
+            }),
+            metadata: TypeMetadata::default(),
+        });
+        module.type_registry.insert(GirType::Named("Color".into()));
+
+        let color_id = module.type_registry.insert(GirType::Named("Color".into()));
+
+        let mut b = FunctionBuilder::new("f", UNIT_TYPE, &[]);
+        b.enum_init("Color", "Green", color_id, vec![]);
+        b.ret(Operand::Constant(Constant::Unit));
+        module.functions.push(b.build());
+
+        let errors = validate(&module);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            ValidationErrorKind::EnumVariantNotFound { type_name, variant }
+                if type_name == "Color" && variant == "Green"
+        )));
+    }
+
+    #[test]
+    fn drop_on_non_droppable_type() {
+        let mut module = Module::new();
+        // I64_TYPE is a primitive — doesn't need dropping
+        let mut b = FunctionBuilder::new("f", UNIT_TYPE, &[]);
+        let x = b.add_local(I64_TYPE, Some("x"));
+        b.drop(Place::local(x));
+        b.ret(Operand::Constant(Constant::Unit));
+        module.functions.push(b.build());
+
+        let errors = validate(&module);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            ValidationErrorKind::DropOnNonDroppable { .. }
+        )));
+    }
+
+    #[test]
+    fn drop_on_droppable_type_ok() {
+        let mut module = Module::new();
+        module.type_registry.add_type_def(TypeDef {
+            name: "OwnedBuf".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                size: None,
+                align: None,
+                drop_strategy: DropStrategy::Trivial("buf_free".into()),
+                copy_semantics: CopySemantics::Move,
+            },
+        });
+        let buf_id = module.type_registry.insert(GirType::Named("OwnedBuf".into()));
+
+        let mut b = FunctionBuilder::new("f", UNIT_TYPE, &[]);
+        let x = b.add_local(buf_id, Some("x"));
+        b.drop(Place::local(x));
+        b.ret(Operand::Constant(Constant::Unit));
+        module.functions.push(b.build());
+
+        let errors = validate(&module);
+        assert!(
+            !errors.iter().any(|e| matches!(e.kind, ValidationErrorKind::DropOnNonDroppable { .. })),
+            "Should not flag Drop on a Move type with Trivial drop"
+        );
+    }
+
+    #[test]
+    fn invalid_local_type_id() {
+        let mut module = Module::new();
+        let mut b = FunctionBuilder::new("f", UNIT_TYPE, &[]);
+        // Add a local with a TypeId that doesn't exist in the registry
+        b.add_local(TypeId(9999), Some("bad"));
+        b.ret(Operand::Constant(Constant::Unit));
+        module.functions.push(b.build());
+
+        let errors = validate(&module);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            ValidationErrorKind::InvalidTypeId { type_id: TypeId(9999), .. }
+        )));
+    }
+
+    #[test]
+    fn copy_recursive_drop_flagged() {
+        let mut module = Module::new();
+        module.type_registry.add_type_def(TypeDef {
+            name: "BadType".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                size: None,
+                align: None,
+                drop_strategy: DropStrategy::Recursive,
+                copy_semantics: CopySemantics::Copy,
+            },
+        });
+
+        let errors = validate(&module);
+        assert!(errors.iter().any(|e| matches!(
+            &e.kind,
+            ValidationErrorKind::InconsistentDropMetadata { type_name, .. }
+                if type_name == "BadType"
+        )));
+    }
+
+    #[test]
+    fn copy_trivial_drop_ok() {
+        let mut module = Module::new();
+        // Ref-counted types are Copy + Trivial — this is intentional, not a bug
+        module.type_registry.add_type_def(TypeDef {
+            name: "SharedRef".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                size: None,
+                align: None,
+                drop_strategy: DropStrategy::Trivial("shared_decref".into()),
+                copy_semantics: CopySemantics::Copy,
+            },
+        });
+
+        let errors = validate(&module);
+        assert!(
+            !errors.iter().any(|e| matches!(e.kind, ValidationErrorKind::InconsistentDropMetadata { .. })),
+            "Copy + Trivial should be allowed for ref-counted types"
+        );
     }
 }

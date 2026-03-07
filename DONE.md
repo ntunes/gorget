@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-07] **IR: Enhance `validate.rs` with semantic checks**: Added 6 new validation checks beyond structural well-formedness: (1) StructInit field count vs TypeDef, (2) EnumInit variant existence + field count, (3) Drop/DropIfAlive on non-droppable types, (4) Local TypeId validity, (5) Drop metadata consistency (flags Copy+Recursive and Copy+Custom as suspicious), (6) checks wired into `validate()` which panics during lowering. Added 7 new unit tests (12 total). 737 unit + 557 integration tests pass — zero false positives on real programs.
+
 - [2026-03-07] **IR refactor: Split `generics.rs` into module directory**: Extracted `generics/substitute.rs` (331 lines — AST type substitution, function body substitution, builtin Option/Result enum injection) from `generics.rs` (1,566 → 1,236 lines). 730 unit + 557 integration tests pass.
 
 - [2026-03-07] **IR refactor: Split `exprs/` Phase 3 — extract `operators.rs` and `collections.rs`**: Extracted 2 more submodules from `exprs/mod.rs` (3,371 → 2,515 lines): `operators.rs` (374 lines — binary/unary ops, short-circuit, operator overloads, `in` operator) and `collections.rs` (506 lines — array/dict/set literals, list/dict/set comprehensions, optional chaining, range expressions). Module now has 8 files. 730 unit + 557 integration tests pass.
