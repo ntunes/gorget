@@ -3,16 +3,224 @@
 //! These run after lowering and before backend emission. All passes
 //! operate on `Function` in-place and preserve GIR semantics.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use crate::ir::{BasicBlock, Function};
-use crate::ir::instructions::{Instruction, Operand, Place, Terminator};
+use crate::ir::instructions::{BinOp, CmpOp, Constant, Instruction, Operand, Place, Terminator, UnOp};
+use crate::ir::types::LocalId;
 
 /// Run all optimization passes on every function in the module.
 pub fn optimize_module(module: &mut crate::ir::Module) {
     for func in &mut module.functions {
+        constant_fold(func);
+        fold_constant_branches(func);
+        elide_dead_drops(func);
         eliminate_dead_blocks(func);
         eliminate_unused_locals(func);
+    }
+}
+
+// ── Constant Folding ──────────────────────────────────────────────────
+
+/// Evaluate BinOp, UnOp, and Cmp instructions with constant operands
+/// at compile time, replacing them with simple Assign of the result.
+fn constant_fold(func: &mut Function) {
+    for bb in &mut func.blocks {
+        for inst in &mut bb.instructions {
+            let folded = match inst {
+                Instruction::BinOp { dst, op, lhs, rhs, .. } => {
+                    fold_binop(*dst, *op, lhs, rhs)
+                }
+                Instruction::UnOp { dst, op, operand, .. } => {
+                    fold_unop(*dst, *op, operand)
+                }
+                Instruction::Cmp { dst, op, lhs, rhs, .. } => {
+                    fold_cmp(*dst, *op, lhs, rhs)
+                }
+                _ => None,
+            };
+            if let Some(new_inst) = folded {
+                *inst = new_inst;
+            }
+        }
+    }
+}
+
+fn fold_binop(dst: LocalId, op: BinOp, lhs: &Operand, rhs: &Operand) -> Option<Instruction> {
+    let (l, r) = match (lhs, rhs) {
+        (Operand::Constant(l), Operand::Constant(r)) => (l, r),
+        _ => return None,
+    };
+    let result = match (l, r) {
+        (Constant::I64(a), Constant::I64(b)) => fold_binop_i64(*a, op, *b)?,
+        (Constant::F64(a), Constant::F64(b)) => fold_binop_f64(*a, op, *b)?,
+        (Constant::Bool(a), Constant::Bool(b)) => fold_binop_bool(*a, op, *b)?,
+        _ => return None,
+    };
+    Some(Instruction::Assign {
+        dst: Place::local(dst),
+        value: Operand::Constant(result),
+    })
+}
+
+fn fold_binop_i64(a: i64, op: BinOp, b: i64) -> Option<Constant> {
+    Some(Constant::I64(match op {
+        BinOp::Add => a.checked_add(b)?,
+        BinOp::Sub => a.checked_sub(b)?,
+        BinOp::Mul => a.checked_mul(b)?,
+        BinOp::Div => { if b == 0 { return None; } a.checked_div(b)? }
+        BinOp::Rem | BinOp::Mod => { if b == 0 { return None; } a.checked_rem(b)? }
+        BinOp::BitAnd => a & b,
+        BinOp::BitOr => a | b,
+        BinOp::BitXor => a ^ b,
+        BinOp::Shl => { if b < 0 || b >= 64 { return None; } a << b }
+        BinOp::Shr => { if b < 0 || b >= 64 { return None; } a >> b }
+        BinOp::AddWrap => a.wrapping_add(b),
+        BinOp::SubWrap => a.wrapping_sub(b),
+        BinOp::MulWrap => a.wrapping_mul(b),
+        BinOp::Pow => {
+            if b < 0 || b > 63 { return None; }
+            i64::checked_pow(a, b as u32)?
+        }
+    }))
+}
+
+fn fold_binop_f64(a: f64, op: BinOp, b: f64) -> Option<Constant> {
+    Some(Constant::F64(match op {
+        BinOp::Add => a + b,
+        BinOp::Sub => a - b,
+        BinOp::Mul => a * b,
+        BinOp::Div => { if b == 0.0 { return None; } a / b }
+        BinOp::Rem | BinOp::Mod => { if b == 0.0 { return None; } a % b }
+        BinOp::Pow => a.powf(b),
+        _ => return None, // bitwise ops don't apply to floats
+    }))
+}
+
+fn fold_binop_bool(a: bool, op: BinOp, b: bool) -> Option<Constant> {
+    Some(Constant::Bool(match op {
+        BinOp::BitAnd => a & b,
+        BinOp::BitOr => a | b,
+        BinOp::BitXor => a ^ b,
+        _ => return None,
+    }))
+}
+
+fn fold_unop(dst: LocalId, op: UnOp, operand: &Operand) -> Option<Instruction> {
+    let c = match operand {
+        Operand::Constant(c) => c,
+        _ => return None,
+    };
+    let result = match (op, c) {
+        (UnOp::Neg, Constant::I64(a)) => Constant::I64(a.checked_neg()?),
+        (UnOp::Neg, Constant::F64(a)) => Constant::F64(-a),
+        (UnOp::Not, Constant::Bool(a)) => Constant::Bool(!a),
+        (UnOp::BitNot, Constant::I64(a)) => Constant::I64(!a),
+        _ => return None,
+    };
+    Some(Instruction::Assign {
+        dst: Place::local(dst),
+        value: Operand::Constant(result),
+    })
+}
+
+fn fold_cmp(dst: LocalId, op: CmpOp, lhs: &Operand, rhs: &Operand) -> Option<Instruction> {
+    let (l, r) = match (lhs, rhs) {
+        (Operand::Constant(l), Operand::Constant(r)) => (l, r),
+        _ => return None,
+    };
+    let result = match (l, r) {
+        (Constant::I64(a), Constant::I64(b)) => cmp_ord(a.cmp(b), op),
+        (Constant::F64(a), Constant::F64(b)) => cmp_ord(a.partial_cmp(b)?, op),
+        (Constant::Bool(a), Constant::Bool(b)) => match op {
+            CmpOp::Eq => a == b,
+            CmpOp::Ne => a != b,
+            _ => return None,
+        },
+        (Constant::Str(a), Constant::Str(b)) => cmp_ord(a.cmp(b), op),
+        _ => return None,
+    };
+    Some(Instruction::Assign {
+        dst: Place::local(dst),
+        value: Operand::Constant(Constant::Bool(result)),
+    })
+}
+
+fn cmp_ord(ord: std::cmp::Ordering, op: CmpOp) -> bool {
+    match op {
+        CmpOp::Eq => ord == std::cmp::Ordering::Equal,
+        CmpOp::Ne => ord != std::cmp::Ordering::Equal,
+        CmpOp::Lt => ord == std::cmp::Ordering::Less,
+        CmpOp::Le => ord != std::cmp::Ordering::Greater,
+        CmpOp::Gt => ord == std::cmp::Ordering::Greater,
+        CmpOp::Ge => ord != std::cmp::Ordering::Less,
+    }
+}
+
+/// Replace Branch terminators with constant conditions by Jump.
+fn fold_constant_branches(func: &mut Function) {
+    for bb in &mut func.blocks {
+        let folded = match &bb.terminator {
+            Some(Terminator::Branch { cond: Operand::Constant(Constant::Bool(true)), then_block, .. }) => {
+                Some(Terminator::Jump(*then_block))
+            }
+            Some(Terminator::Branch { cond: Operand::Constant(Constant::Bool(false)), else_block, .. }) => {
+                Some(Terminator::Jump(*else_block))
+            }
+            Some(Terminator::Switch { value: Operand::Constant(Constant::I64(v)), cases, default, .. }) => {
+                let target = cases.iter()
+                    .find(|(cv, _)| *cv == *v)
+                    .map(|(_, b)| *b)
+                    .unwrap_or(*default);
+                Some(Terminator::Jump(target))
+            }
+            _ => None,
+        };
+        if let Some(new_term) = folded {
+            bb.terminator = Some(new_term);
+        }
+    }
+}
+
+// ── Drop Elision ──────────────────────────────────────────────────────
+
+/// Remove DropIfAlive when a MoveZero for the same local appears earlier
+/// in the SAME basic block and no intervening assignment re-initializes it.
+/// This is safe because within a single BB, instructions execute sequentially.
+fn elide_dead_drops(func: &mut Function) {
+    for bb in &mut func.blocks {
+        // Track locals that have been MoveZero'd in this block (and not re-assigned)
+        let mut moved_in_block: HashSet<u32> = HashSet::new();
+        let mut elide_indices: Vec<usize> = Vec::new();
+
+        for (i, inst) in bb.instructions.iter().enumerate() {
+            match inst {
+                Instruction::MoveZero { place } if place.projections.is_empty() => {
+                    moved_in_block.insert(place.local.0);
+                }
+                // Any write to a local un-marks it (re-initialization)
+                Instruction::Assign { dst, .. } if dst.projections.is_empty() => {
+                    moved_in_block.remove(&dst.local.0);
+                }
+                Instruction::DropIfAlive { place }
+                    if place.projections.is_empty()
+                        && moved_in_block.contains(&place.local.0) =>
+                {
+                    elide_indices.push(i);
+                }
+                _ => {}
+            }
+        }
+
+        if !elide_indices.is_empty() {
+            let elide_set: HashSet<usize> = elide_indices.into_iter().collect();
+            let mut idx = 0;
+            bb.instructions.retain(|_| {
+                let keep = !elide_set.contains(&idx);
+                idx += 1;
+                keep
+            });
+        }
     }
 }
 
@@ -460,5 +668,203 @@ fn remap_terminator_locals(term: &mut Terminator, remap: &[u32]) {
             for a in args { remap_operand(a, remap); }
         }
         Terminator::Jump(_) | Terminator::Unreachable => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::{Function, BasicBlock, Local};
+    use crate::ir::instructions::*;
+    use crate::ir::types::*;
+
+    fn make_func(blocks: Vec<BasicBlock>, locals: Vec<Local>, params: Vec<TypeId>) -> Function {
+        Function {
+            name: "test".into(),
+            params,
+            return_type: I64_TYPE,
+            locals,
+            blocks,
+            is_test_fn: false,
+            display_name: None,
+            def_span: None,
+        }
+    }
+
+    fn local(ty: TypeId) -> Local {
+        Local { type_id: ty, name_hint: None }
+    }
+
+    fn bb(instructions: Vec<Instruction>, terminator: Terminator) -> BasicBlock {
+        let span_map = vec![None; instructions.len()];
+        BasicBlock { instructions, terminator: Some(terminator), span_map, terminator_span: None }
+    }
+
+    // ── Constant Folding Tests ──────────────────────────────────────
+
+    fn ret(op: Operand) -> Terminator { Terminator::Return(op) }
+    fn ret_local(id: u32) -> Terminator { ret(Operand::Copy(Place::local(LocalId(id)))) }
+    fn ret_i64(v: i64) -> Terminator { ret(Operand::Constant(Constant::I64(v))) }
+
+    #[test]
+    fn fold_add_i64() {
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(1), op: BinOp::Add, type_id: I64_TYPE,
+            lhs: Operand::Constant(Constant::I64(3)), rhs: Operand::Constant(Constant::I64(4)),
+        }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        constant_fold(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0],
+            Instruction::Assign { value: Operand::Constant(Constant::I64(7)), .. }));
+    }
+
+    #[test]
+    fn fold_div_by_zero_unchanged() {
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(1), op: BinOp::Div, type_id: I64_TYPE,
+            lhs: Operand::Constant(Constant::I64(10)), rhs: Operand::Constant(Constant::I64(0)),
+        }], ret_i64(0))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        constant_fold(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0], Instruction::BinOp { .. }));
+    }
+
+    #[test]
+    fn fold_f64_mul() {
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(1), op: BinOp::Mul, type_id: F64_TYPE,
+            lhs: Operand::Constant(Constant::F64(2.5)), rhs: Operand::Constant(Constant::F64(4.0)),
+        }], ret_local(1))], vec![local(F64_TYPE), local(F64_TYPE)], vec![]);
+        constant_fold(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Constant(Constant::F64(v)), .. } => {
+                assert!((v - 10.0).abs() < 1e-10);
+            }
+            other => panic!("Expected folded f64, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn fold_unop_neg() {
+        let mut f = make_func(vec![bb(vec![Instruction::UnOp {
+            dst: LocalId(1), op: UnOp::Neg, type_id: I64_TYPE,
+            operand: Operand::Constant(Constant::I64(42)),
+        }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        constant_fold(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0],
+            Instruction::Assign { value: Operand::Constant(Constant::I64(-42)), .. }));
+    }
+
+    #[test]
+    fn fold_cmp_lt() {
+        let mut f = make_func(vec![bb(vec![Instruction::Cmp {
+            dst: LocalId(1), op: CmpOp::Lt, type_id: I64_TYPE,
+            lhs: Operand::Constant(Constant::I64(3)), rhs: Operand::Constant(Constant::I64(5)),
+        }], ret_local(1))], vec![local(BOOL_TYPE), local(BOOL_TYPE)], vec![]);
+        constant_fold(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0],
+            Instruction::Assign { value: Operand::Constant(Constant::Bool(true)), .. }));
+    }
+
+    #[test]
+    fn fold_non_constant_unchanged() {
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(2), op: BinOp::Add, type_id: I64_TYPE,
+            lhs: Operand::Copy(Place::local(LocalId(1))), rhs: Operand::Constant(Constant::I64(1)),
+        }], ret_local(2))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![I64_TYPE]);
+        constant_fold(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0], Instruction::BinOp { .. }));
+    }
+
+    // ── Constant Branch Folding Tests ───────────────────────────────
+
+    #[test]
+    fn fold_true_branch() {
+        let mut f = make_func(vec![
+            bb(vec![], Terminator::Branch {
+                cond: Operand::Constant(Constant::Bool(true)),
+                then_block: BlockId(1), else_block: BlockId(2),
+            }),
+            bb(vec![], ret_i64(1)),
+            bb(vec![], ret_i64(2)),
+        ], vec![local(I64_TYPE)], vec![]);
+        fold_constant_branches(&mut f);
+        assert!(matches!(f.blocks[0].terminator, Some(Terminator::Jump(BlockId(1)))));
+    }
+
+    #[test]
+    fn fold_switch_constant() {
+        let mut f = make_func(vec![
+            bb(vec![], Terminator::Switch {
+                value: Operand::Constant(Constant::I64(2)),
+                cases: vec![(1, BlockId(1)), (2, BlockId(2)), (3, BlockId(3))],
+                default: BlockId(4),
+            }),
+            bb(vec![], ret_i64(0)),
+            bb(vec![], ret_i64(0)),
+            bb(vec![], ret_i64(0)),
+            bb(vec![], ret_i64(0)),
+        ], vec![local(I64_TYPE)], vec![]);
+        fold_constant_branches(&mut f);
+        assert!(matches!(f.blocks[0].terminator, Some(Terminator::Jump(BlockId(2)))));
+    }
+
+    // ── Drop Elision Tests ──────────────────────────────────────────
+
+    #[test]
+    fn elide_drop_after_move_zero() {
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign { dst: Place::local(LocalId(1)), value: Operand::Constant(Constant::I64(42)) },
+            Instruction::MoveZero { place: Place::local(LocalId(1)) },
+            Instruction::DropIfAlive { place: Place::local(LocalId(1)) },
+        ], ret_i64(0))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        elide_dead_drops(&mut f);
+        assert_eq!(f.blocks[0].instructions.len(), 2);
+    }
+
+    #[test]
+    fn no_elide_drop_after_reassign() {
+        let mut f = make_func(vec![bb(vec![
+            Instruction::MoveZero { place: Place::local(LocalId(1)) },
+            Instruction::Assign { dst: Place::local(LocalId(1)), value: Operand::Constant(Constant::I64(99)) },
+            Instruction::DropIfAlive { place: Place::local(LocalId(1)) },
+        ], ret_i64(0))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        elide_dead_drops(&mut f);
+        assert_eq!(f.blocks[0].instructions.len(), 3);
+    }
+
+    #[test]
+    fn no_elide_cross_block_drop() {
+        let mut f = make_func(vec![
+            bb(vec![Instruction::MoveZero { place: Place::local(LocalId(1)) }],
+               Terminator::Jump(BlockId(1))),
+            bb(vec![Instruction::DropIfAlive { place: Place::local(LocalId(1)) }],
+               ret_i64(0)),
+        ], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        elide_dead_drops(&mut f);
+        assert_eq!(f.blocks[1].instructions.len(), 1);
+    }
+
+    #[test]
+    fn fold_wrapping_ops() {
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(1), op: BinOp::AddWrap, type_id: I64_TYPE,
+            lhs: Operand::Constant(Constant::I64(i64::MAX)), rhs: Operand::Constant(Constant::I64(1)),
+        }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        constant_fold(&mut f);
+        match &f.blocks[0].instructions[0] {
+            Instruction::Assign { value: Operand::Constant(Constant::I64(v)), .. } => {
+                assert_eq!(*v, i64::MIN);
+            }
+            other => panic!("Expected folded wrapping add, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn fold_overflow_unchanged() {
+        let mut f = make_func(vec![bb(vec![Instruction::BinOp {
+            dst: LocalId(1), op: BinOp::Add, type_id: I64_TYPE,
+            lhs: Operand::Constant(Constant::I64(i64::MAX)), rhs: Operand::Constant(Constant::I64(1)),
+        }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        constant_fold(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0], Instruction::BinOp { .. }));
     }
 }
