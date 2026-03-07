@@ -39,32 +39,12 @@ fn count_module(module: &crate::ir::Module) -> (usize, usize, usize) {
 }
 
 /// Run all optimization passes on every function in the module.
+/// The pipeline runs iteratively (up to 3 passes) — after CFG simplification
+/// merges blocks, new constant propagation and dead code opportunities emerge.
 pub fn optimize_module(module: &mut crate::ir::Module) -> OptStats {
     let (b0, i0, l0) = count_module(module);
     for func in &mut module.functions {
-        // Phase 1: simplify values
-        propagate_constants(func);
-        constant_fold(func);
-        // Re-propagate after folding: constant_fold can turn computed
-        // instructions (e.g., UnOp(Not, false)) into Assign(true),
-        // creating new propagation opportunities.
-        propagate_constants(func);
-        constant_fold(func);
-        simplify_algebraic(func);
-        simplify_cmp(func);
-        eliminate_common_subexpressions(func);
-        reduce_strength(func);
-        fold_constant_branches(func);
-        eliminate_self_assigns(func);
-        // Phase 2: eliminate dead code
-        eliminate_nops(func);
-        elide_dead_drops(func);
-        eliminate_dead_stores(func);
-        // Phase 3: simplify CFG
-        thread_jumps(func);
-        merge_blocks(func);
-        eliminate_dead_blocks(func);
-        eliminate_unused_locals(func);
+        optimize_function(func);
     }
     let (b1, i1, l1) = count_module(module);
     OptStats {
@@ -72,6 +52,54 @@ pub fn optimize_module(module: &mut crate::ir::Module) -> OptStats {
         insts_before: i0, insts_after: i1,
         locals_before: l0, locals_after: l1,
     }
+}
+
+/// Run the optimization pipeline on a single function, iterating until
+/// no further improvements are found (fixpoint) or up to MAX_PASSES.
+fn optimize_function(func: &mut Function) {
+    const MAX_PASSES: usize = 3;
+    for _ in 0..MAX_PASSES {
+        let snapshot = count_function(func);
+        optimize_function_once(func);
+        let after = count_function(func);
+        // Stop if nothing changed (fixpoint reached)
+        if after == snapshot {
+            break;
+        }
+    }
+}
+
+fn count_function(func: &Function) -> (usize, usize, usize) {
+    let blocks = func.blocks.len();
+    let insts: usize = func.blocks.iter().map(|b| b.instructions.len()).sum();
+    let locals = func.locals.len();
+    (blocks, insts, locals)
+}
+
+fn optimize_function_once(func: &mut Function) {
+    // Phase 1: simplify values
+    propagate_constants(func);
+    constant_fold(func);
+    // Re-propagate after folding: constant_fold can turn computed
+    // instructions (e.g., UnOp(Not, false)) into Assign(true),
+    // creating new propagation opportunities.
+    propagate_constants(func);
+    constant_fold(func);
+    simplify_algebraic(func);
+    simplify_cmp(func);
+    eliminate_common_subexpressions(func);
+    reduce_strength(func);
+    fold_constant_branches(func);
+    eliminate_self_assigns(func);
+    // Phase 2: eliminate dead code
+    eliminate_nops(func);
+    elide_dead_drops(func);
+    eliminate_dead_stores(func);
+    // Phase 3: simplify CFG
+    thread_jumps(func);
+    merge_blocks(func);
+    eliminate_dead_blocks(func);
+    eliminate_unused_locals(func);
 }
 
 // ── Constant Propagation ─────────────────────────────────────────────
