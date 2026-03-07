@@ -17,6 +17,7 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         constant_fold(func);
         simplify_algebraic(func);
         simplify_cmp(func);
+        eliminate_common_subexpressions(func);
         reduce_strength(func);
         fold_constant_branches(func);
         // Phase 2: eliminate dead code
@@ -429,6 +430,131 @@ fn simplify_binop(dst: LocalId, op: BinOp, lhs: &Operand, rhs: &Operand) -> Opti
     }
 
     None
+}
+
+// ── Common Subexpression Elimination ─────────────────────────────────
+
+/// Within each basic block, if the same pure computation appears twice with
+/// the same operands, replace the second with a copy of the first's result.
+///
+/// Currently handles BinOp and Cmp instructions (the most common patterns).
+/// Invalidates all tracked expressions on Call/CallExtern/CallIndirect
+/// (which may modify state through borrows) and on assignment to any operand
+/// local (which changes the expression's meaning).
+fn eliminate_common_subexpressions(func: &mut Function) {
+    for bb in &mut func.blocks {
+        // Map from (op_kind, operand1, operand2) → destination local
+        let mut known: std::collections::HashMap<CseKey, LocalId> = std::collections::HashMap::new();
+
+        for inst in &mut bb.instructions {
+            // Check if this instruction matches a known CSE key
+            if let Some(key) = cse_key(inst) {
+                if let Some(&prev_dst) = known.get(&key) {
+                    // Replace with Copy of previous result
+                    let dst = cse_dst(inst).unwrap();
+                    *inst = Instruction::Assign {
+                        dst: Place::local(dst),
+                        value: Operand::Copy(Place::local(prev_dst)),
+                    };
+                    continue;
+                } else {
+                    // Record this expression
+                    if let Some(dst) = cse_dst(inst) {
+                        known.insert(key, dst);
+                    }
+                }
+            }
+
+            // Invalidate on calls (may modify locals through borrows)
+            match inst {
+                Instruction::Call { .. } | Instruction::CallExtern { .. }
+                | Instruction::CallIndirect { .. } => {
+                    known.clear();
+                }
+                Instruction::Assign { dst, .. } if dst.projections.is_empty() => {
+                    known.retain(|k, _| !k.reads_local(dst.local.0));
+                }
+                _ => {
+                    // If this instruction writes to a local, invalidate any expression
+                    // that reads that local
+                    if let Some(written) = instruction_dst(inst) {
+                        known.retain(|k, _| !k.reads_local(written));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A key identifying a pure computation for CSE purposes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum CseKey {
+    BinOp { op: BinOp, lhs: CseOperand, rhs: CseOperand },
+    Cmp { op: CmpOp, lhs: CseOperand, rhs: CseOperand },
+}
+
+impl CseKey {
+    fn reads_local(&self, local: u32) -> bool {
+        match self {
+            CseKey::BinOp { lhs, rhs, .. } | CseKey::Cmp { lhs, rhs, .. } => {
+                lhs.is_local(local) || rhs.is_local(local)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum CseOperand {
+    Local(u32),
+    Constant(ConstantKey),
+}
+
+impl CseOperand {
+    fn is_local(&self, id: u32) -> bool {
+        matches!(self, CseOperand::Local(l) if *l == id)
+    }
+}
+
+/// Hashable representation of a Constant for CSE.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ConstantKey {
+    Bool(bool),
+    I64(i64),
+    U64(u64),
+    // F64 is not Eq/Hash — skip float CSE
+}
+
+fn operand_to_cse(op: &Operand) -> Option<CseOperand> {
+    match op {
+        Operand::Copy(p) if p.projections.is_empty() => Some(CseOperand::Local(p.local.0)),
+        Operand::Constant(Constant::Bool(b)) => Some(CseOperand::Constant(ConstantKey::Bool(*b))),
+        Operand::Constant(Constant::I64(v)) => Some(CseOperand::Constant(ConstantKey::I64(*v))),
+        Operand::Constant(Constant::U64(v)) => Some(CseOperand::Constant(ConstantKey::U64(*v))),
+        _ => None,
+    }
+}
+
+fn cse_key(inst: &Instruction) -> Option<CseKey> {
+    match inst {
+        Instruction::BinOp { op, lhs, rhs, .. } => {
+            let l = operand_to_cse(lhs)?;
+            let r = operand_to_cse(rhs)?;
+            Some(CseKey::BinOp { op: *op, lhs: l, rhs: r })
+        }
+        Instruction::Cmp { op, lhs, rhs, .. } => {
+            let l = operand_to_cse(lhs)?;
+            let r = operand_to_cse(rhs)?;
+            Some(CseKey::Cmp { op: *op, lhs: l, rhs: r })
+        }
+        _ => None,
+    }
+}
+
+fn cse_dst(inst: &Instruction) -> Option<LocalId> {
+    match inst {
+        Instruction::BinOp { dst, .. } | Instruction::Cmp { dst, .. } => Some(*dst),
+        _ => None,
+    }
 }
 
 // ── Strength Reduction ────────────────────────────────────────────────
@@ -2034,6 +2160,77 @@ mod tests {
         }], ret_local(3))], vec![local(BOOL_TYPE), local(I64_TYPE), local(I64_TYPE), local(BOOL_TYPE)], vec![I64_TYPE, I64_TYPE]);
         simplify_cmp(&mut f);
         assert!(matches!(&f.blocks[0].instructions[0], Instruction::Cmp { .. }));
+    }
+
+    // ── Common Subexpression Elimination Tests ──────────────────────
+
+    #[test]
+    fn cse_duplicate_binop() {
+        // _2 = BinOp(Add, Copy(_1), 10)
+        // _3 = BinOp(Add, Copy(_1), 10)  → _3 = Copy(_2)
+        let mut f = make_func(vec![bb(vec![
+            Instruction::BinOp {
+                dst: LocalId(2), op: BinOp::Add, type_id: I64_TYPE,
+                lhs: Operand::Copy(Place::local(LocalId(1))),
+                rhs: Operand::Constant(Constant::I64(10)),
+            },
+            Instruction::BinOp {
+                dst: LocalId(3), op: BinOp::Add, type_id: I64_TYPE,
+                lhs: Operand::Copy(Place::local(LocalId(1))),
+                rhs: Operand::Constant(Constant::I64(10)),
+            },
+        ], ret_local(3))], vec![local(I64_TYPE); 4], vec![I64_TYPE]);
+        eliminate_common_subexpressions(&mut f);
+        match &f.blocks[0].instructions[1] {
+            Instruction::Assign { value: Operand::Copy(p), .. } if p.local == LocalId(2) => {}
+            other => panic!("Expected Copy(_2), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cse_invalidated_by_reassign() {
+        // _2 = BinOp(Add, Copy(_1), 10)
+        // _1 = 99  ← invalidates the expression
+        // _3 = BinOp(Add, Copy(_1), 10)  → NOT eliminated
+        let mut f = make_func(vec![bb(vec![
+            Instruction::BinOp {
+                dst: LocalId(2), op: BinOp::Add, type_id: I64_TYPE,
+                lhs: Operand::Copy(Place::local(LocalId(1))),
+                rhs: Operand::Constant(Constant::I64(10)),
+            },
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(99)),
+            },
+            Instruction::BinOp {
+                dst: LocalId(3), op: BinOp::Add, type_id: I64_TYPE,
+                lhs: Operand::Copy(Place::local(LocalId(1))),
+                rhs: Operand::Constant(Constant::I64(10)),
+            },
+        ], ret_local(3))], vec![local(I64_TYPE); 4], vec![I64_TYPE]);
+        eliminate_common_subexpressions(&mut f);
+        // Should remain as BinOp (not eliminated)
+        assert!(matches!(&f.blocks[0].instructions[2], Instruction::BinOp { .. }));
+    }
+
+    #[test]
+    fn cse_different_ops_not_eliminated() {
+        // _2 = BinOp(Add, Copy(_1), 10)
+        // _3 = BinOp(Mul, Copy(_1), 10)  → different op, not eliminated
+        let mut f = make_func(vec![bb(vec![
+            Instruction::BinOp {
+                dst: LocalId(2), op: BinOp::Add, type_id: I64_TYPE,
+                lhs: Operand::Copy(Place::local(LocalId(1))),
+                rhs: Operand::Constant(Constant::I64(10)),
+            },
+            Instruction::BinOp {
+                dst: LocalId(3), op: BinOp::Mul, type_id: I64_TYPE,
+                lhs: Operand::Copy(Place::local(LocalId(1))),
+                rhs: Operand::Constant(Constant::I64(10)),
+            },
+        ], ret_local(3))], vec![local(I64_TYPE); 4], vec![I64_TYPE]);
+        eliminate_common_subexpressions(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[1], Instruction::BinOp { op: BinOp::Mul, .. }));
     }
 
     // ── Strength Reduction Tests ──────────────────────────────────
