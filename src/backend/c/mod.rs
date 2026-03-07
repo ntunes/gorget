@@ -2004,6 +2004,10 @@ fn emit_poll_inst(
                         "int64_t".to_string()
                     };
                     let _ = writeln!(out, "        {dst_str} = *({elem_c_type}*)gorget_array_get(&{base_str}, {idx_str});");
+                    // For Move types, zero the element after copying to prevent double-free
+                    if dst.0 < func.locals.len() as u32 && registry.is_move_type(func.locals[dst.0 as usize].type_id) {
+                        let _ = writeln!(out, "        memset(({elem_c_type}*)gorget_array_get(&{base_str}, {idx_str}), 0, sizeof({elem_c_type}));");
+                    }
                 }
             } else if base_type.starts_with("GorgetDict") || base_type.starts_with("Dict__")
                 || base_type.starts_with("GorgetMap") || base_type.starts_with("HashMap__") {
