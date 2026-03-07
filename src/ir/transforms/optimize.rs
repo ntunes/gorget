@@ -20,6 +20,7 @@ pub fn optimize_module(module: &mut crate::ir::Module) {
         eliminate_common_subexpressions(func);
         reduce_strength(func);
         fold_constant_branches(func);
+        eliminate_self_assigns(func);
         // Phase 2: eliminate dead code
         eliminate_nops(func);
         elide_dead_drops(func);
@@ -158,7 +159,7 @@ fn substitute_operands(inst: &mut Instruction, known: &std::collections::HashMap
 
 // ── Constant Folding ──────────────────────────────────────────────────
 
-/// Evaluate BinOp, UnOp, and Cmp instructions with constant operands
+/// Evaluate BinOp, UnOp, Cmp, and Cast instructions with constant operands
 /// at compile time, replacing them with simple Assign of the result.
 fn constant_fold(func: &mut Function) {
     for bb in &mut func.blocks {
@@ -172,6 +173,9 @@ fn constant_fold(func: &mut Function) {
                 }
                 Instruction::Cmp { dst, op, lhs, rhs, .. } => {
                     fold_cmp(*dst, *op, lhs, rhs)
+                }
+                Instruction::Cast { dst, target_type, value } => {
+                    fold_cast(*dst, *target_type, value)
                 }
                 _ => None,
             };
@@ -290,6 +294,159 @@ fn cmp_ord(ord: std::cmp::Ordering, op: CmpOp) -> bool {
         CmpOp::Le => ord != std::cmp::Ordering::Greater,
         CmpOp::Gt => ord == std::cmp::Ordering::Greater,
         CmpOp::Ge => ord != std::cmp::Ordering::Less,
+    }
+}
+
+fn fold_cast(dst: LocalId, target: TypeId, value: &Operand) -> Option<Instruction> {
+    use crate::ir::types::*;
+    let c = match value {
+        Operand::Constant(c) => c,
+        _ => return None,
+    };
+    // Extract source as i64 or f64 for numeric casting.
+    let result = match target {
+        I64_TYPE => match c {
+            Constant::I8(v) => Constant::I64(*v as i64),
+            Constant::I16(v) => Constant::I64(*v as i64),
+            Constant::I32(v) => Constant::I64(*v as i64),
+            Constant::U8(v) => Constant::I64(*v as i64),
+            Constant::U16(v) => Constant::I64(*v as i64),
+            Constant::U32(v) => Constant::I64(*v as i64),
+            Constant::U64(v) => Constant::I64(*v as i64),
+            Constant::F32(v) => Constant::I64(*v as i64),
+            Constant::F64(v) => Constant::I64(*v as i64),
+            Constant::Bool(v) => Constant::I64(if *v { 1 } else { 0 }),
+            Constant::I64(_) => return None, // identity cast
+            _ => return None,
+        },
+        I32_TYPE => match c {
+            Constant::I8(v) => Constant::I32(*v as i32),
+            Constant::I16(v) => Constant::I32(*v as i32),
+            Constant::I64(v) => Constant::I32(*v as i32),
+            Constant::U8(v) => Constant::I32(*v as i32),
+            Constant::U16(v) => Constant::I32(*v as i32),
+            Constant::U32(v) => Constant::I32(*v as i32),
+            Constant::F32(v) => Constant::I32(*v as i32),
+            Constant::F64(v) => Constant::I32(*v as i32),
+            Constant::Bool(v) => Constant::I32(if *v { 1 } else { 0 }),
+            Constant::I32(_) => return None,
+            _ => return None,
+        },
+        I16_TYPE => match c {
+            Constant::I8(v) => Constant::I16(*v as i16),
+            Constant::I32(v) => Constant::I16(*v as i16),
+            Constant::I64(v) => Constant::I16(*v as i16),
+            Constant::U8(v) => Constant::I16(*v as i16),
+            Constant::I16(_) => return None,
+            _ => return None,
+        },
+        I8_TYPE => match c {
+            Constant::I16(v) => Constant::I8(*v as i8),
+            Constant::I32(v) => Constant::I8(*v as i8),
+            Constant::I64(v) => Constant::I8(*v as i8),
+            Constant::U8(v) => Constant::I8(*v as u8 as i8),
+            Constant::I8(_) => return None,
+            _ => return None,
+        },
+        U8_TYPE => match c {
+            Constant::I8(v) => Constant::U8(*v as u8),
+            Constant::I16(v) => Constant::U8(*v as u8),
+            Constant::I32(v) => Constant::U8(*v as u8),
+            Constant::I64(v) => Constant::U8(*v as u8),
+            Constant::U16(v) => Constant::U8(*v as u8),
+            Constant::U32(v) => Constant::U8(*v as u8),
+            Constant::U64(v) => Constant::U8(*v as u8),
+            Constant::U8(_) => return None,
+            _ => return None,
+        },
+        U16_TYPE => match c {
+            Constant::U8(v) => Constant::U16(*v as u16),
+            Constant::I8(v) => Constant::U16(*v as u16),
+            Constant::I16(v) => Constant::U16(*v as u16),
+            Constant::I32(v) => Constant::U16(*v as u16),
+            Constant::I64(v) => Constant::U16(*v as u16),
+            Constant::U16(_) => return None,
+            _ => return None,
+        },
+        U32_TYPE => match c {
+            Constant::U8(v) => Constant::U32(*v as u32),
+            Constant::U16(v) => Constant::U32(*v as u32),
+            Constant::I8(v) => Constant::U32(*v as u32),
+            Constant::I16(v) => Constant::U32(*v as u32),
+            Constant::I32(v) => Constant::U32(*v as u32),
+            Constant::I64(v) => Constant::U32(*v as u32),
+            Constant::U32(_) => return None,
+            _ => return None,
+        },
+        U64_TYPE => match c {
+            Constant::U8(v) => Constant::U64(*v as u64),
+            Constant::U16(v) => Constant::U64(*v as u64),
+            Constant::U32(v) => Constant::U64(*v as u64),
+            Constant::I8(v) => Constant::U64(*v as u64),
+            Constant::I16(v) => Constant::U64(*v as u64),
+            Constant::I32(v) => Constant::U64(*v as u64),
+            Constant::I64(v) => Constant::U64(*v as u64),
+            Constant::U64(_) => return None,
+            _ => return None,
+        },
+        F64_TYPE => match c {
+            Constant::I8(v) => Constant::F64(*v as f64),
+            Constant::I16(v) => Constant::F64(*v as f64),
+            Constant::I32(v) => Constant::F64(*v as f64),
+            Constant::I64(v) => Constant::F64(*v as f64),
+            Constant::U8(v) => Constant::F64(*v as f64),
+            Constant::U16(v) => Constant::F64(*v as f64),
+            Constant::U32(v) => Constant::F64(*v as f64),
+            Constant::U64(v) => Constant::F64(*v as f64),
+            Constant::F32(v) => Constant::F64(*v as f64),
+            Constant::F64(_) => return None,
+            _ => return None,
+        },
+        F32_TYPE => match c {
+            Constant::I8(v) => Constant::F32(*v as f32),
+            Constant::I16(v) => Constant::F32(*v as f32),
+            Constant::I32(v) => Constant::F32(*v as f32),
+            Constant::I64(v) => Constant::F32(*v as f32),
+            Constant::U8(v) => Constant::F32(*v as f32),
+            Constant::U16(v) => Constant::F32(*v as f32),
+            Constant::U32(v) => Constant::F32(*v as f32),
+            Constant::U64(v) => Constant::F32(*v as f32),
+            Constant::F64(v) => Constant::F32(*v as f32),
+            Constant::F32(_) => return None,
+            _ => return None,
+        },
+        BOOL_TYPE => match c {
+            Constant::I64(v) => Constant::Bool(*v != 0),
+            Constant::I32(v) => Constant::Bool(*v != 0),
+            Constant::U8(v) => Constant::Bool(*v != 0),
+            Constant::Bool(_) => return None,
+            _ => return None,
+        },
+        _ => return None, // non-primitive target type
+    };
+    Some(Instruction::Assign {
+        dst: Place::local(dst),
+        value: Operand::Constant(result),
+    })
+}
+
+// ── Self-assign Elimination ──────────────────────────────────────────
+
+/// Eliminate `_N = Copy(_N)` instructions (assign a local to itself).
+/// These can arise from lowering or after other optimizations.
+fn eliminate_self_assigns(func: &mut Function) {
+    for bb in &mut func.blocks {
+        for inst in &mut bb.instructions {
+            let is_self = matches!(inst,
+                Instruction::Assign { dst, value: Operand::Copy(src) }
+                    if dst.projections.is_empty()
+                    && src.projections.is_empty()
+                    && dst.local == src.local
+            );
+            if is_self {
+                *inst = Instruction::Nop;
+            }
+        }
     }
 }
 
@@ -2353,5 +2510,112 @@ mod tests {
         ], vec![local(I64_TYPE)], vec![]);
         merge_blocks(&mut f);
         assert!(matches!(f.blocks[0].terminator, Some(Terminator::Jump(BlockId(0)))));
+    }
+
+    // ── Cast Folding Tests ────────────────────────────────────────────
+
+    #[test]
+    fn fold_cast_i32_to_i64() {
+        let mut f = make_func(vec![bb(vec![Instruction::Cast {
+            dst: LocalId(1), target_type: I64_TYPE,
+            value: Operand::Constant(Constant::I32(42)),
+        }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        constant_fold(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0],
+            Instruction::Assign { value: Operand::Constant(Constant::I64(42)), .. }));
+    }
+
+    #[test]
+    fn fold_cast_i64_to_f64() {
+        let mut f = make_func(vec![bb(vec![Instruction::Cast {
+            dst: LocalId(1), target_type: F64_TYPE,
+            value: Operand::Constant(Constant::I64(7)),
+        }], ret_local(1))], vec![local(F64_TYPE), local(F64_TYPE)], vec![]);
+        constant_fold(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0],
+            Instruction::Assign { value: Operand::Constant(Constant::F64(v)), .. } if *v == 7.0));
+    }
+
+    #[test]
+    fn fold_cast_f64_to_i32() {
+        let mut f = make_func(vec![bb(vec![Instruction::Cast {
+            dst: LocalId(1), target_type: I32_TYPE,
+            value: Operand::Constant(Constant::F64(3.9)),
+        }], ret_local(1))], vec![local(I32_TYPE), local(I32_TYPE)], vec![]);
+        constant_fold(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0],
+            Instruction::Assign { value: Operand::Constant(Constant::I32(3)), .. }));
+    }
+
+    #[test]
+    fn fold_cast_bool_to_i64() {
+        let mut f = make_func(vec![bb(vec![Instruction::Cast {
+            dst: LocalId(1), target_type: I64_TYPE,
+            value: Operand::Constant(Constant::Bool(true)),
+        }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        constant_fold(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0],
+            Instruction::Assign { value: Operand::Constant(Constant::I64(1)), .. }));
+    }
+
+    #[test]
+    fn fold_cast_identity_unchanged() {
+        // Cast i64 → i64 should NOT fire (identity cast)
+        let mut f = make_func(vec![bb(vec![Instruction::Cast {
+            dst: LocalId(1), target_type: I64_TYPE,
+            value: Operand::Constant(Constant::I64(99)),
+        }], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        constant_fold(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0], Instruction::Cast { .. }));
+    }
+
+    #[test]
+    fn fold_cast_u8_to_u32() {
+        let mut f = make_func(vec![bb(vec![Instruction::Cast {
+            dst: LocalId(1), target_type: U32_TYPE,
+            value: Operand::Constant(Constant::U8(255)),
+        }], ret_local(1))], vec![local(U32_TYPE), local(U32_TYPE)], vec![]);
+        constant_fold(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0],
+            Instruction::Assign { value: Operand::Constant(Constant::U32(255)), .. }));
+    }
+
+    // ── Self-assign Elimination Tests ─────────────────────────────────
+
+    #[test]
+    fn self_assign_eliminated() {
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Copy(Place::local(LocalId(1))),
+            },
+        ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        eliminate_self_assigns(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0], Instruction::Nop));
+    }
+
+    #[test]
+    fn non_self_assign_preserved() {
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Copy(Place::local(LocalId(2))),
+            },
+        ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![]);
+        eliminate_self_assigns(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0], Instruction::Assign { .. }));
+    }
+
+    #[test]
+    fn self_assign_with_projection_preserved() {
+        // _1.0 = Copy(_1) is NOT a self-assign (different place)
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::field(LocalId(1), 0),
+                value: Operand::Copy(Place::local(LocalId(1))),
+            },
+        ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
+        eliminate_self_assigns(&mut f);
+        assert!(matches!(&f.blocks[0].instructions[0], Instruction::Assign { .. }));
     }
 }
