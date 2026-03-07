@@ -1689,6 +1689,9 @@ fn gen_channel_module() -> Module {
             Spanned::dummy(decl_method("send", Ownership::Borrow, &[("value", ty_t())], ty_void())),
             Spanned::dummy(decl_method("recv", Ownership::Borrow, &[], ty_t())),
             Spanned::dummy(decl_method("close", Ownership::Borrow, &[], ty_void())),
+            Spanned::dummy(decl_method("len", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("capacity", Ownership::Borrow, &[], ty_int())),
+            Spanned::dummy(decl_method("is_closed", Ownership::Borrow, &[], ty_bool())),
         ],
         span: Span::dummy(),
     }));

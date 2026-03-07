@@ -7175,6 +7175,11 @@ fn async_channel_poll() {
 }
 
 #[test]
+fn async_channel_multi() {
+    run_gg("async_channel_multi.gg", "4\n45");
+}
+
+#[test]
 fn async_condition_await() {
     run_gg("async_condition_await.gg", "20\nyes");
 }

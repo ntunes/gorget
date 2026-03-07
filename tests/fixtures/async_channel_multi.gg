@@ -1,0 +1,34 @@
+from std.sync import Channel
+
+# Two producers, one consumer. Tests async channel poll with contention.
+async void producer(Channel[int] ch, int start, int count):
+    for i in start..start + count:
+        ch.send(i)
+
+async int consumer(Channel[int] ch, int total_items):
+    int sum = 0
+    for i in 0..total_items:
+        int val = ch.recv()
+        sum = sum + val
+    return sum
+
+async void main():
+    Channel[int] ch = Channel[int](4)
+
+    # Channel introspection
+    int cap = ch.capacity()
+    print(cap)
+
+    # Two producers each sending 5 items
+    Task[void] p1 = spawn producer(ch, 0, 5)
+    Task[void] p2 = spawn producer(ch, 5, 5)
+
+    # One consumer receiving all 10
+    Task[int] c = spawn consumer(ch, 10)
+
+    p1.await()
+    p2.await()
+    int result = c.await()
+
+    # Sum of 0..10 = 45
+    print(result)

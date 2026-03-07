@@ -3051,6 +3051,21 @@ static int gorget_channel_poll_recv(GorgetChannel* ch, void* out, GorgetWaker* w
     return 0;
 }
 
+static int64_t gorget_channel_len(GorgetChannel* ch) {
+    pthread_mutex_lock(&ch->mtx);
+    int64_t n = (int64_t)ch->count;
+    pthread_mutex_unlock(&ch->mtx);
+    return n;
+}
+
+static int64_t gorget_channel_capacity(GorgetChannel* ch) {
+    return (int64_t)ch->capacity;
+}
+
+static bool gorget_channel_is_closed(GorgetChannel* ch) {
+    return ch->closed != 0;
+}
+
 static void gorget_channel_close(GorgetChannel* ch) {
     pthread_mutex_lock(&ch->mtx);
     ch->closed = 1;

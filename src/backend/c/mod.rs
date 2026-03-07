@@ -1518,6 +1518,18 @@ fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
         let _ = writeln!(out,
             "static inline void {chan_name}__close({chan_name}* self) {{ \
              gorget_channel_close(*self); }}");
+        // len(&self) → int
+        let _ = writeln!(out,
+            "static inline int64_t {chan_name}__len({chan_name}* self) {{ \
+             return gorget_channel_len(*self); }}");
+        // capacity(&self) → int
+        let _ = writeln!(out,
+            "static inline int64_t {chan_name}__capacity({chan_name}* self) {{ \
+             return gorget_channel_capacity(*self); }}");
+        // is_closed(&self) → bool
+        let _ = writeln!(out,
+            "static inline bool {chan_name}__is_closed({chan_name}* self) {{ \
+             return gorget_channel_is_closed(*self); }}");
         // poll_send(&self, val, waker) → bool
         let _ = writeln!(out,
             "static inline bool {chan_name}__poll_send({chan_name}* self, {elem_c} val, GorgetWaker* waker) {{ \
