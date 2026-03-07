@@ -2272,10 +2272,13 @@ pub const ASYNC_RUNTIME: &str = r#"
 #define GORGET_POLL_READY 0
 #define GORGET_POLL_PENDING 1
 
+#ifndef GORGET_WAKER_DEFINED
+#define GORGET_WAKER_DEFINED
 typedef struct GorgetWaker {
     void (*wake)(struct GorgetWaker*);
     void* data;
 } GorgetWaker;
+#endif
 
 static void __gorget_noop_wake(GorgetWaker* w) { (void)w; }
 static GorgetWaker __gorget_noop_waker = { __gorget_noop_wake, NULL };
@@ -7886,10 +7889,26 @@ static inline void gorget_barrier_wait(GorgetBarrier* b) {
 }
 
 // ── RWLock[T] + ReadGuard[T] + WriteGuard[T] ──
+// Forward-declare GorgetWaker and poll constants for async poll-lock support.
+// Full definitions are in ASYNC_RUNTIME; these allow compilation regardless of emission order.
+#ifndef GORGET_WAKER_DEFINED
+#define GORGET_WAKER_DEFINED
+typedef struct GorgetWaker { void (*wake)(struct GorgetWaker*); void* data; } GorgetWaker;
+#endif
+#ifndef GORGET_POLL_READY
+#define GORGET_POLL_READY   0
+#define GORGET_POLL_PENDING 1
+#endif
+
 typedef struct GorgetRWLock {
     pthread_rwlock_t lock;
     void*            data;
     size_t           data_size;
+    // Waiter queue for async poll-lock (waker-based notification)
+    pthread_mutex_t  wait_mtx;
+    GorgetWaker*     waiters;
+    int              waiter_count;
+    int              waiter_cap;
 } GorgetRWLock;
 
 typedef struct { GorgetRWLock* rwlock; void* ptr; } gorget_read_guard_t;
@@ -7901,7 +7920,39 @@ static inline GorgetRWLock* gorget_rwlock_new(size_t size, void* init_data) {
     rw->data = GORGET_ALLOC(size);
     rw->data_size = size;
     memcpy(rw->data, init_data, size);
+    pthread_mutex_init(&rw->wait_mtx, NULL);
+    rw->waiters = NULL;
+    rw->waiter_count = 0;
+    rw->waiter_cap = 0;
     return rw;
+}
+// Register a waker on the rwlock's wait queue.
+static inline void gorget_rwlock_register_waiter(GorgetRWLock* rw, GorgetWaker* waker) {
+    if (!waker) return;
+    pthread_mutex_lock(&rw->wait_mtx);
+    if (rw->waiter_count == rw->waiter_cap) {
+        int old_cap = rw->waiter_cap;
+        rw->waiter_cap = old_cap ? old_cap * 2 : 4;
+        rw->waiters = (GorgetWaker*)GORGET_REALLOC(rw->waiters,
+            (size_t)old_cap * sizeof(GorgetWaker),
+            (size_t)rw->waiter_cap * sizeof(GorgetWaker));
+    }
+    rw->waiters[rw->waiter_count++] = *waker;
+    pthread_mutex_unlock(&rw->wait_mtx);
+}
+// Wake all waiters (both readers and writers may become unblocked).
+static inline void gorget_rwlock_wake_waiters(GorgetRWLock* rw) {
+    pthread_mutex_lock(&rw->wait_mtx);
+    int n = rw->waiter_count;
+    GorgetWaker* ws = NULL;
+    if (n > 0) {
+        ws = (GorgetWaker*)GORGET_ALLOC((size_t)n * sizeof(GorgetWaker));
+        memcpy(ws, rw->waiters, (size_t)n * sizeof(GorgetWaker));
+        rw->waiter_count = 0;
+    }
+    pthread_mutex_unlock(&rw->wait_mtx);
+    for (int i = 0; i < n; i++) ws[i].wake(&ws[i]);
+    if (ws) GORGET_FREE(ws, (size_t)n * sizeof(GorgetWaker));
 }
 static inline gorget_read_guard_t gorget_rwlock_read(GorgetRWLock* rw) {
     pthread_rwlock_rdlock(&rw->lock);
@@ -7917,15 +7968,41 @@ static inline gorget_write_guard_t gorget_rwlock_write(GorgetRWLock* rw) {
     g.ptr    = rw->data;
     return g;
 }
+// Poll-based read lock for async contexts.
+static inline int gorget_rwlock_poll_read(GorgetRWLock* rw, gorget_read_guard_t* out, GorgetWaker* waker) {
+    int r = pthread_rwlock_tryrdlock(&rw->lock);
+    if (r == 0) {
+        out->rwlock = rw;
+        out->ptr    = rw->data;
+        return GORGET_POLL_READY;
+    }
+    gorget_rwlock_register_waiter(rw, waker);
+    return GORGET_POLL_PENDING;
+}
+// Poll-based write lock for async contexts.
+static inline int gorget_rwlock_poll_write(GorgetRWLock* rw, gorget_write_guard_t* out, GorgetWaker* waker) {
+    int r = pthread_rwlock_trywrlock(&rw->lock);
+    if (r == 0) {
+        out->rwlock = rw;
+        out->ptr    = rw->data;
+        return GORGET_POLL_READY;
+    }
+    gorget_rwlock_register_waiter(rw, waker);
+    return GORGET_POLL_PENDING;
+}
 static inline void gorget_read_guard_release(gorget_read_guard_t* g) {
     if (!g->rwlock) return;
-    pthread_rwlock_unlock(&g->rwlock->lock);
+    GorgetRWLock* rw = g->rwlock;
+    pthread_rwlock_unlock(&rw->lock);
     g->rwlock = NULL; g->ptr = NULL;
+    gorget_rwlock_wake_waiters(rw);
 }
 static inline void gorget_write_guard_release(gorget_write_guard_t* g) {
     if (!g->rwlock) return;
-    pthread_rwlock_unlock(&g->rwlock->lock);
+    GorgetRWLock* rw = g->rwlock;
+    pthread_rwlock_unlock(&rw->lock);
     g->rwlock = NULL; g->ptr = NULL;
+    gorget_rwlock_wake_waiters(rw);
 }
 
 // ── CondVar ──

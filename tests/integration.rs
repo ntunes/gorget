@@ -7159,6 +7159,11 @@ fn async_mutex_lock() {
 }
 
 #[test]
+fn async_rwlock() {
+    run_gg("async_rwlock.gg", "42\n42\n42");
+}
+
+#[test]
 fn async_condition_await() {
     run_gg("async_condition_await.gg", "20\nyes");
 }

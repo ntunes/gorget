@@ -1579,6 +1579,10 @@ enum YieldKind {
     Blocking,
     /// `Mutex__*__lock` — async-aware trylock + waker yield.
     MutexLock,
+    /// `RwLock__*__read` — async-aware tryrdlock + waker yield.
+    RwLockRead,
+    /// `RwLock__*__write` — async-aware trywrlock + waker yield.
+    RwLockWrite,
 }
 
 /// Known blocking function names that should be auto-offloaded in coroutines.
@@ -1648,8 +1652,18 @@ fn is_mutex_lock_call(func_name: &str) -> bool {
     func_name.starts_with("Mutex__") && func_name.ends_with("__lock")
 }
 
+/// True if a GIR call is a RwLock read call (pattern: `RWLock__*__read`).
+fn is_rwlock_read_call(func_name: &str) -> bool {
+    func_name.starts_with("RWLock__") && func_name.ends_with("__read")
+}
+
+/// True if a GIR call is a RwLock write call (pattern: `RWLock__*__write`).
+fn is_rwlock_write_call(func_name: &str) -> bool {
+    func_name.starts_with("RWLock__") && func_name.ends_with("__write")
+}
+
 /// Extract (dst_local_id, mutex_operand_str) from a Mutex lock instruction in poll context.
-fn extract_mutex_lock_info(inst: &Instruction, func: &Function, registry: &TypeRegistry) -> (u32, String) {
+fn extract_lock_call_info(inst: &Instruction, func: &Function, registry: &TypeRegistry) -> (u32, String) {
     match inst {
         Instruction::Call { dst, args, .. } => {
             let d = dst.map(|id| id.0).unwrap_or(0);
@@ -1676,6 +1690,10 @@ fn classify_yield(inst: &Instruction, func: &Function) -> Option<YieldKind> {
                 Some(YieldKind::Sleep)
             } else if is_mutex_lock_call(fname) {
                 Some(YieldKind::MutexLock)
+            } else if is_rwlock_read_call(fname) {
+                Some(YieldKind::RwLockRead)
+            } else if is_rwlock_write_call(fname) {
+                Some(YieldKind::RwLockWrite)
             } else if is_blocking_call(fname) {
                 Some(YieldKind::Blocking)
             } else {
@@ -1687,6 +1705,10 @@ fn classify_yield(inst: &Instruction, func: &Function) -> Option<YieldKind> {
                 Some(YieldKind::Sleep)
             } else if is_mutex_lock_call(fname) {
                 Some(YieldKind::MutexLock)
+            } else if is_rwlock_read_call(fname) {
+                Some(YieldKind::RwLockRead)
+            } else if is_rwlock_write_call(fname) {
+                Some(YieldKind::RwLockWrite)
             } else if is_blocking_call(fname) {
                 Some(YieldKind::Blocking)
             } else {
@@ -1703,7 +1725,7 @@ fn fn_has_internal_await(fn_name: &str, module: &Module) -> bool {
     let Some(func) = module.find_function(fn_name) else { return false };
     func.blocks.iter().any(|bb| {
         bb.instructions.iter().any(|inst| {
-            matches!(classify_yield(inst, func), Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock))
+            matches!(classify_yield(inst, func), Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite))
         })
     })
 }
@@ -2337,9 +2359,12 @@ fn coroutine_state_ids(func: &Function) -> Vec<u32> {
     let mut next = 0u32;
     for bb in &func.blocks {
         ids.push(next);
-        // Count true yield points (await, sleep, mutex lock); blocking calls are inline.
+        // Count true yield points (await, sleep, lock); blocking calls are inline.
         let yield_count = bb.instructions.iter()
-            .filter(|i| matches!(classify_yield(i, func), Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock)))
+            .filter(|i| {
+                let kind = classify_yield(i, func);
+                matches!(kind, Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite))
+            })
             .count() as u32;
         next += 1 + yield_count;
     }
@@ -2487,9 +2512,8 @@ fn emit_coroutine(
                         YieldKind::Sleep | YieldKind::Blocking => {
                             // Sleep/blocking: no result to extract on resume — work is done
                         }
-                        YieldKind::MutexLock => {
-                            // Guard already filled by gorget_mutex_poll_lock in the previous state.
-                            // No resume action needed.
+                        YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite => {
+                            // Guard already filled by poll_lock/poll_read/poll_write in the previous state.
                         }
                     }
                 }
@@ -2501,8 +2525,8 @@ fn emit_coroutine(
                 }
 
                 let resume_state = current_state + 1;
-                // MutexLock manages its own state transition (only advances on success).
-                if yield_kind != YieldKind::MutexLock {
+                // Lock yield kinds manage their own state transition (only advance on success).
+                if !matches!(yield_kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite) {
                     let _ = writeln!(out, "        f->__state = {resume_state};");
                 }
 
@@ -2550,13 +2574,19 @@ fn emit_coroutine(
                         };
                         let _ = writeln!(out, "        gorget_reactor_sleep_async({sleep_arg}, (GorgetWaker){{__gorget_fiber_waker_wake, (void*)f}});");
                     }
-                    YieldKind::MutexLock => {
+                    YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite => {
                         // Trylock: on success advance state and continue, on fail stay and yield.
                         // Waker re-enters this same case to retry.
-                        let (dst_local, mutex_arg) = extract_mutex_lock_info(&bb.instructions[yield_pos], func, registry);
+                        let poll_fn = match yield_kind {
+                            YieldKind::MutexLock => "gorget_mutex_poll_lock",
+                            YieldKind::RwLockRead => "gorget_rwlock_poll_read",
+                            YieldKind::RwLockWrite => "gorget_rwlock_poll_write",
+                            _ => unreachable!(),
+                        };
+                        let (dst_local, lock_arg) = extract_lock_call_info(&bb.instructions[yield_pos], func, registry);
                         let _ = writeln!(out, "        {{");
                         let _ = writeln!(out, "            GorgetWaker __w = (GorgetWaker){{__gorget_fiber_waker_wake, (void*)f}};");
-                        let _ = writeln!(out, "            int __r = gorget_mutex_poll_lock({mutex_arg}, &f->_{dst_local}, &__w);");
+                        let _ = writeln!(out, "            int __r = {poll_fn}({lock_arg}, &f->_{dst_local}, &__w);");
                         let _ = writeln!(out, "            if (__r == GORGET_POLL_READY) {{ f->__state = {resume_state}; continue; }}");
                         out.push_str("        }\n");
                     }
@@ -2577,8 +2607,8 @@ fn emit_coroutine(
                     emit_await_result_call(out, &bb.instructions[last_pos], func, registry);
                 }
                 YieldKind::Sleep | YieldKind::Blocking => {}
-                YieldKind::MutexLock => {
-                    // Guard already filled by gorget_mutex_poll_lock in the previous state.
+                YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite => {
+                    // Guard already filled by poll_lock/poll_read/poll_write in the previous state.
                 }
             }
             for inst in &bb.instructions[last_pos + 1..] {

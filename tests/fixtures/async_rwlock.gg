@@ -1,0 +1,26 @@
+# Test: async RwLock — multiple readers concurrent, writer exclusive.
+# Spawned tasks contend on a RWLock[int] with reads and writes.
+# The rwlock read/write in async context uses trylock + waker (non-blocking).
+
+async void writer(RWLock[int] rw, int val):
+    WriteGuard[int] g = rw.write()
+    g.set(val)
+
+async void reader(RWLock[int] rw):
+    ReadGuard[int] g = rw.read()
+    print(g.get())
+
+async void main():
+    shared(rwlock) int x = 0
+
+    # Write 42
+    Task[void] tw = spawn writer(x, 42)
+    tw.await()
+
+    # Read concurrently from 3 tasks
+    Task[void] t1 = spawn reader(x)
+    Task[void] t2 = spawn reader(x)
+    Task[void] t3 = spawn reader(x)
+    t1.await()
+    t2.await()
+    t3.await()
