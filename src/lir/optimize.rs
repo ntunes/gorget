@@ -23,10 +23,11 @@ pub fn optimize_module(module: &mut LirModule) -> OptStats {
     stats.dead_functions_eliminated = eliminate_dead_functions(module);
     stats.dead_globals_eliminated = eliminate_dead_globals(module);
     for func in &mut module.functions {
-        // Fold constants, then fold constant branches, then DCE + dead block removal.
+        // Fold constants, then fold constant branches, then simplify CFG.
         stats.constants_folded += fold_constants(func);
         stats.branches_folded += fold_constant_branches(func);
         stats.dead_blocks_eliminated += eliminate_dead_blocks(func);
+        merge_linear_blocks(func);
         stats.dead_instructions_eliminated += eliminate_dead_code(func);
         stats.copies_propagated += propagate_copies(func);
     }
@@ -662,6 +663,100 @@ fn remap_term_targets(term: &mut Term, map: &[BlockId]) {
     }
 }
 
+// ── Block Merging ───────────────────────────────────────────────────────────
+
+/// Merge a block into its sole predecessor when the predecessor unconditionally
+/// jumps to it (with no block args) and it has exactly one predecessor.
+pub fn merge_linear_blocks(func: &mut LirFunction) {
+    if func.blocks.len() <= 1 {
+        return;
+    }
+
+    // Count predecessors for each block.
+    let num_blocks = func.blocks.len();
+    let mut pred_count = vec![0u32; num_blocks];
+    for block in &func.blocks {
+        for succ in block.terminator.successors() {
+            let s = succ.0 as usize;
+            if s < num_blocks {
+                pred_count[s] += 1;
+            }
+        }
+    }
+
+    // Greedily merge: find blocks where predecessor jumps unconditionally
+    // to a single-predecessor block (no block params needed).
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for i in 0..func.blocks.len() {
+            let target = match &func.blocks[i].terminator {
+                Term::Jump(target, args) if args.is_empty() => {
+                    let t = target.0 as usize;
+                    if t < func.blocks.len() && t != i && pred_count[t] == 1
+                        && func.blocks[t].params.is_empty()
+                    {
+                        Some(t)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(t) = target {
+                // Merge: append target's instructions and take its terminator.
+                let target_insts = std::mem::take(&mut func.blocks[t].insts);
+                let target_term = std::mem::replace(&mut func.blocks[t].terminator, Term::Unreachable);
+                func.blocks[i].insts.extend(target_insts);
+                func.blocks[i].terminator = target_term;
+                pred_count[t] = 0; // mark as dead
+                changed = true;
+            }
+        }
+    }
+
+    // Remove dead blocks (those with 0 predecessors except entry).
+    let mut reachable = vec![false; func.blocks.len()];
+    let mut queue = std::collections::VecDeque::new();
+    reachable[0] = true;
+    queue.push_back(0usize);
+    while let Some(idx) = queue.pop_front() {
+        for succ in func.blocks[idx].terminator.successors() {
+            let s = succ.0 as usize;
+            if s < func.blocks.len() && !reachable[s] {
+                reachable[s] = true;
+                queue.push_back(s);
+            }
+        }
+    }
+
+    if reachable.iter().all(|&r| r) {
+        return;
+    }
+
+    // Remap and compact.
+    let mut new_id = vec![BlockId(0); func.blocks.len()];
+    let mut next = 0u32;
+    for (old, &is_r) in reachable.iter().enumerate() {
+        if is_r {
+            new_id[old] = BlockId(next);
+            next += 1;
+        }
+    }
+
+    let mut kept = Vec::new();
+    for (i, block) in func.blocks.drain(..).enumerate() {
+        if reachable[i] {
+            kept.push(block);
+        }
+    }
+    for (new_idx, block) in kept.iter_mut().enumerate() {
+        block.id = BlockId(new_idx as u32);
+        remap_term_targets(&mut block.terminator, &new_id);
+    }
+    func.blocks = kept;
+}
+
 // ── Copy Propagation ────────────────────────────────────────────────────────
 
 /// Propagate trivial copies. Returns count of copies propagated.
@@ -1004,6 +1099,35 @@ mod tests {
         let eliminated = eliminate_dead_blocks(&mut func);
         assert_eq!(eliminated, 1, "bb1 should be dead");
         assert_eq!(func.blocks.len(), 2);
+    }
+
+    #[test]
+    fn merge_linear_chain() {
+        // bb0 → bb1 → bb2 (all unconditional, no params)
+        // Should merge into a single block.
+        let mut func = LirFunction::new("test".into(), vec![], LirType::I32);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block();
+
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        let v2 = func.next_value();
+
+        func.block_mut(bb0).insts.push(Inst::IConst { dst: v0, ty: LirType::I32, value: 1 });
+        func.block_mut(bb0).terminator = Term::Jump(bb1, vec![]);
+
+        func.block_mut(bb1).insts.push(Inst::IConst { dst: v1, ty: LirType::I32, value: 2 });
+        func.block_mut(bb1).terminator = Term::Jump(bb2, vec![]);
+
+        func.block_mut(bb2).insts.push(Inst::IConst { dst: v2, ty: LirType::I32, value: 3 });
+        func.block_mut(bb2).terminator = Term::Ret(v2);
+
+        merge_linear_blocks(&mut func);
+        // All three blocks should be merged into one.
+        assert_eq!(func.blocks.len(), 1, "should merge 3 blocks into 1");
+        assert_eq!(func.blocks[0].insts.len(), 3, "merged block has all 3 insts");
+        assert!(matches!(func.blocks[0].terminator, Term::Ret(_)));
     }
 
     #[test]
