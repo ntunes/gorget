@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-07] **IR refactor: Split `generics.rs` into module directory**: Extracted `generics/substitute.rs` (331 lines — AST type substitution, function body substitution, builtin Option/Result enum injection) from `generics.rs` (1,566 → 1,236 lines). 730 unit + 557 integration tests pass.
+
 - [2026-03-07] **IR refactor: Split `exprs/` Phase 3 — extract `operators.rs` and `collections.rs`**: Extracted 2 more submodules from `exprs/mod.rs` (3,371 → 2,515 lines): `operators.rs` (374 lines — binary/unary ops, short-circuit, operator overloads, `in` operator) and `collections.rs` (506 lines — array/dict/set literals, list/dict/set comprehensions, optional chaining, range expressions). Module now has 8 files. 730 unit + 557 integration tests pass.
 
 - [2026-03-07] **IR refactor: `SharedLocalInfo` named struct**: Replaced 5-tuple `(LocalId, TypeId, TypeId, SharedLocalKind, SharedKind)` in `SharedVarState.locals` with named struct `SharedLocalInfo` with fields: `hidden_local`, `inner_type`, `wrapper_type`, `kind`, `ast_shared`. Updated 9 use sites across context.rs, stmts.rs, exprs/mod.rs. 730 unit + 557 integration tests pass.
