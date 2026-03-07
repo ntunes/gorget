@@ -266,7 +266,9 @@ fn fold_binop(dst: LocalId, op: BinOp, lhs: &Operand, rhs: &Operand) -> Option<I
     };
     let result = match (l, r) {
         (Constant::I64(a), Constant::I64(b)) => fold_binop_i64(*a, op, *b)?,
+        (Constant::I32(a), Constant::I32(b)) => fold_binop_i32(*a, op, *b)?,
         (Constant::F64(a), Constant::F64(b)) => fold_binop_f64(*a, op, *b)?,
+        (Constant::F32(a), Constant::F32(b)) => fold_binop_f32(*a, op, *b)?,
         (Constant::Bool(a), Constant::Bool(b)) => fold_binop_bool(*a, op, *b)?,
         _ => return None,
     };
@@ -305,6 +307,46 @@ fn fold_binop_i64(a: i64, op: BinOp, b: i64) -> Option<Constant> {
     }))
 }
 
+fn fold_binop_i32(a: i32, op: BinOp, b: i32) -> Option<Constant> {
+    Some(Constant::I32(match op {
+        BinOp::Add => a.checked_add(b)?,
+        BinOp::Sub => a.checked_sub(b)?,
+        BinOp::Mul => a.checked_mul(b)?,
+        BinOp::Div => { if b == 0 { return None; } a.checked_div(b)? }
+        BinOp::Rem => { if b == 0 { return None; } a.checked_rem(b)? }
+        BinOp::Mod => {
+            if b == 0 { return None; }
+            let r = a.checked_rem(b)?;
+            ((r.wrapping_add(b)).checked_rem(b))?
+        }
+        BinOp::BitAnd => a & b,
+        BinOp::BitOr => a | b,
+        BinOp::BitXor => a ^ b,
+        BinOp::Shl => { if b < 0 || b >= 32 { return None; } a << b }
+        BinOp::Shr => { if b < 0 || b >= 32 { return None; } a >> b }
+        BinOp::AddWrap => a.wrapping_add(b),
+        BinOp::SubWrap => a.wrapping_sub(b),
+        BinOp::MulWrap => a.wrapping_mul(b),
+        BinOp::Pow => {
+            if b < 0 || b > 31 { return None; }
+            i32::checked_pow(a, b as u32)?
+        }
+    }))
+}
+
+fn fold_binop_f32(a: f32, op: BinOp, b: f32) -> Option<Constant> {
+    Some(Constant::F32(match op {
+        BinOp::Add => a + b,
+        BinOp::Sub => a - b,
+        BinOp::Mul => a * b,
+        BinOp::Div => { if b == 0.0 { return None; } a / b }
+        BinOp::Rem => { if b == 0.0 { return None; } a % b }
+        BinOp::Mod => { if b == 0.0 { return None; } ((a % b) + b) % b }
+        BinOp::Pow => a.powf(b),
+        _ => return None,
+    }))
+}
+
 fn fold_binop_f64(a: f64, op: BinOp, b: f64) -> Option<Constant> {
     Some(Constant::F64(match op {
         BinOp::Add => a + b,
@@ -334,9 +376,13 @@ fn fold_unop(dst: LocalId, op: UnOp, operand: &Operand) -> Option<Instruction> {
     };
     let result = match (op, c) {
         (UnOp::Neg, Constant::I64(a)) => Constant::I64(a.checked_neg()?),
+        (UnOp::Neg, Constant::I32(a)) => Constant::I32(a.checked_neg()?),
         (UnOp::Neg, Constant::F64(a)) => Constant::F64(-a),
+        (UnOp::Neg, Constant::F32(a)) => Constant::F32(-a),
         (UnOp::Not, Constant::Bool(a)) => Constant::Bool(!a),
         (UnOp::BitNot, Constant::I64(a)) => Constant::I64(!a),
+        (UnOp::BitNot, Constant::I32(a)) => Constant::I32(!a),
+        (UnOp::BitNot, Constant::U8(a)) => Constant::U8(!a),
         _ => return None,
     };
     Some(Instruction::Assign {
@@ -352,7 +398,15 @@ fn fold_cmp(dst: LocalId, op: CmpOp, lhs: &Operand, rhs: &Operand) -> Option<Ins
     };
     let result = match (l, r) {
         (Constant::I64(a), Constant::I64(b)) => cmp_ord(a.cmp(b), op),
+        (Constant::I32(a), Constant::I32(b)) => cmp_ord(a.cmp(b), op),
+        (Constant::I16(a), Constant::I16(b)) => cmp_ord(a.cmp(b), op),
+        (Constant::I8(a), Constant::I8(b)) => cmp_ord(a.cmp(b), op),
+        (Constant::U64(a), Constant::U64(b)) => cmp_ord(a.cmp(b), op),
+        (Constant::U32(a), Constant::U32(b)) => cmp_ord(a.cmp(b), op),
+        (Constant::U16(a), Constant::U16(b)) => cmp_ord(a.cmp(b), op),
+        (Constant::U8(a), Constant::U8(b)) => cmp_ord(a.cmp(b), op),
         (Constant::F64(a), Constant::F64(b)) => cmp_ord(a.partial_cmp(b)?, op),
+        (Constant::F32(a), Constant::F32(b)) => cmp_ord(a.partial_cmp(b)?, op),
         (Constant::Bool(a), Constant::Bool(b)) => match op {
             CmpOp::Eq => a == b,
             CmpOp::Ne => a != b,
