@@ -23,15 +23,31 @@ pub fn optimize_module(module: &mut LirModule) -> OptStats {
     stats.dead_functions_eliminated = eliminate_dead_functions(module);
     stats.dead_globals_eliminated = eliminate_dead_globals(module);
     for func in &mut module.functions {
-        // Fold constants, then fold constant branches, then simplify CFG.
+        optimize_function(func, &mut stats);
+    }
+    stats
+}
+
+/// Run optimization passes on a single function, iterating until fixpoint.
+fn optimize_function(func: &mut LirFunction, stats: &mut OptStats) {
+    const MAX_ITERS: usize = 3;
+    for _ in 0..MAX_ITERS {
+        let snapshot = (func.blocks.len(), inst_count(func));
         stats.constants_folded += fold_constants(func);
         stats.branches_folded += fold_constant_branches(func);
         stats.dead_blocks_eliminated += eliminate_dead_blocks(func);
         merge_linear_blocks(func);
         stats.dead_instructions_eliminated += eliminate_dead_code(func);
         stats.copies_propagated += propagate_copies(func);
+        let after = (func.blocks.len(), inst_count(func));
+        if after == snapshot {
+            break; // fixpoint
+        }
     }
-    stats
+}
+
+fn inst_count(func: &LirFunction) -> usize {
+    func.blocks.iter().map(|b| b.insts.len()).sum()
 }
 
 // ── Dead Function Elimination ───────────────────────────────────────────────
