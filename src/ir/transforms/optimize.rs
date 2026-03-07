@@ -1079,7 +1079,10 @@ fn mark_instruction_locals(inst: &Instruction, referenced: &mut [bool]) {
             mark_operand(count, referenced);
             mark_operand(allocator, referenced);
         }
-        Instruction::Dealloc { ptr, .. } => mark_operand(ptr, referenced),
+        Instruction::Dealloc { ptr, allocator } => {
+            mark_operand(ptr, referenced);
+            mark_operand(allocator, referenced);
+        }
         Instruction::Drop { place } | Instruction::DropIfAlive { place } => {
             mark_place(place, referenced);
         }
@@ -1218,7 +1221,10 @@ fn remap_instruction_locals(inst: &mut Instruction, remap: &[u32]) {
             remap_operand(count, remap);
             remap_operand(allocator, remap);
         }
-        Instruction::Dealloc { ptr, .. } => remap_operand(ptr, remap),
+        Instruction::Dealloc { ptr, allocator } => {
+            remap_operand(ptr, remap);
+            remap_operand(allocator, remap);
+        }
         Instruction::Drop { place } | Instruction::DropIfAlive { place } => {
             remap_place(place, remap);
         }
