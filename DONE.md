@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-07] **feat: `--emit-gir` flag for IR inspection**: `gg build --emit-gir <file>` dumps optimized GIR text to stdout. Module summary shows function/block/instruction/local counts. Useful for inspecting optimization pass output.
+
 - [2026-03-07] **GIR optimization: Nop elimination**: Removes `Instruction::Nop` entries from basic blocks with synchronized span_map adjustment. Runs at start of Phase 2.
 
 - [2026-03-07] **GIR validator: intra-block use-after-move detection**: Forward dataflow analysis within each BB tracks MoveZero'd locals. Reads of moved locals before reassignment are flagged. Standard MoveZero + DropIfAlive pattern correctly excluded. 3 new tests (18 total validator). 775 unit + 557 integration pass — zero false positives.
