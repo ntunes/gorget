@@ -352,7 +352,7 @@ fn try_build_ir(
     };
 
     // Build hot-reload options if needed
-    let hr_opts = if gir_module.hot_reload {
+    let hr_opts = if gir_module.runtime.hot_reload {
         let abs_filename = std::path::absolute(Path::new(filename))
             .unwrap_or_else(|_| PathBuf::from(filename));
         let guest_lib_name = format!("{stem}_guest");
@@ -401,7 +401,7 @@ fn try_build_ir(
             .arg(shared_path)
             .arg(&shared_c_path)
             .arg("-lm");
-        if options.overflow_wrap || gir_module.overflow_wrap { cc_cmd.arg("-fwrapv"); }
+        if options.overflow_wrap || gir_module.runtime.overflow_wrap { cc_cmd.arg("-fwrapv"); }
         if options.sanitize {
             cc_cmd.arg("-fsanitize=address,undefined");
             cc_cmd.arg("-fno-omit-frame-pointer");
@@ -421,7 +421,7 @@ fn try_build_ir(
     }
 
     // Hot-reload: two-phase build (host binary + guest shared library).
-    if gir_module.hot_reload {
+    if gir_module.runtime.hot_reload {
         let host_code = gir_output.host_code.as_deref().unwrap_or(&gir_output.c_code);
         let guest_code = gir_output.guest_code.as_deref().unwrap_or(&gir_output.c_code);
 
@@ -470,7 +470,7 @@ fn try_build_ir(
             .arg("-Wno-unused-parameter").arg("-Wno-unused-variable").arg("-Wno-unused-function")
             .arg("-o").arg(&exe_path)
             .arg(&host_c_path).arg("-lm").arg("-ldl");
-        if options.overflow_wrap || gir_module.overflow_wrap { host_cmd.arg("-fwrapv"); }
+        if options.overflow_wrap || gir_module.runtime.overflow_wrap { host_cmd.arg("-fwrapv"); }
         if options.sanitize {
             host_cmd.arg("-fsanitize=address,undefined");
             host_cmd.arg("-fno-omit-frame-pointer");
@@ -505,7 +505,7 @@ fn try_build_ir(
         .arg(&c_path)
         .arg("-lm");
 
-    if options.overflow_wrap || gir_module.overflow_wrap {
+    if options.overflow_wrap || gir_module.runtime.overflow_wrap {
         cc_cmd.arg("-fwrapv");
     }
 

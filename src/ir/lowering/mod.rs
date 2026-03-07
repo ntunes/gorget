@@ -983,7 +983,7 @@ pub fn lower_module(
         lower_test_items(&mut ctx, &mut module, ast_module, options);
         // Mark module as a test module so the C backend always emits a test runner,
         // even when all tests were filtered out (e.g., --tag X --exclude-tag X → 0 tests).
-        module.is_test_module = true;
+        module.runtime.is_test_module = true;
     }
 
     // P2.5: Lower trait equip methods and emit vtable globals
@@ -1043,11 +1043,11 @@ pub fn lower_module(
     }
 
     // Propagate directive flags to module
-    module.overflow_wrap = ctx.overflow_wrap;
-    module.scheduler_mode = ctx.scheduler_mode;
+    module.runtime.overflow_wrap = ctx.overflow_wrap;
+    module.runtime.scheduler_mode = ctx.scheduler_mode;
 
     // Trace: filename provided by options (derived from source path in main.rs)
-    module.trace_filename = options.trace_filename.clone();
+    module.runtime.trace_filename = options.trace_filename.clone();
 
     // Hot-reload: scan for directive + find state type from init() + compute state hash
     let mut has_hot_reload_directive = false;
@@ -1056,21 +1056,21 @@ pub fn lower_module(
             if d.name == "hot-reload" { has_hot_reload_directive = true; }
         }
     }
-    module.hot_reload = has_hot_reload_directive || options.hot_reload;
-    if module.hot_reload {
+    module.runtime.hot_reload = has_hot_reload_directive || options.hot_reload;
+    if module.runtime.hot_reload {
         // Find state type from init() return type
         for item in &ast_module.items {
             if let Item::Function(f) = &item.node {
                 if f.name.node == "init" {
                     if let crate::parser::ast::Type::Named { name, .. } = &f.return_type.node {
-                        module.hot_reload_state_type = Some(name.node.clone());
+                        module.runtime.hot_reload_state_type = Some(name.node.clone());
                     }
                     break;
                 }
             }
         }
         // Compute state hash from the State struct field layout
-        if let Some(ref state_type) = module.hot_reload_state_type.clone() {
+        if let Some(ref state_type) = module.runtime.hot_reload_state_type.clone() {
             for item in &ast_module.items {
                 if let Item::Struct(s) = &item.node {
                     if &s.name.node == state_type {
@@ -1080,14 +1080,14 @@ pub fn lower_module(
                             let field_name = &field.node.name.node;
                             layout.push_str(&format!("{field_type} {field_name};"));
                         }
-                        module.hot_reload_state_hash = fnv1a_hash(&layout);
+                        module.runtime.hot_reload_state_hash = fnv1a_hash(&layout);
                         break;
                     }
                 }
             }
         }
         // Check if reload() function exists
-        module.hot_reload_has_reload_fn = ast_module.items.iter().any(|item| {
+        module.runtime.hot_reload_has_reload_fn = ast_module.items.iter().any(|item| {
             if let Item::Function(f) = &item.node {
                 f.name.node == "reload"
             } else { false }
@@ -1104,33 +1104,33 @@ pub fn lower_module(
             elem.split("__").any(|part| !part.is_empty() && part.chars().all(|c| c.is_uppercase()))
         };
         if let Some(elem) = name.strip_prefix("Channel__") {
-            if !is_template(elem) && !module.channel_types.contains(&elem.to_string()) {
-                module.channel_types.push(elem.to_string());
+            if !is_template(elem) && !module.runtime.channel_types.contains(&elem.to_string()) {
+                module.runtime.channel_types.push(elem.to_string());
             }
         }
         if let Some(elem) = name.strip_prefix("Shared__") {
-            if !is_template(elem) && !module.shared_types.contains(&elem.to_string()) {
-                module.shared_types.push(elem.to_string());
+            if !is_template(elem) && !module.runtime.shared_types.contains(&elem.to_string()) {
+                module.runtime.shared_types.push(elem.to_string());
             }
         }
         if let Some(elem) = name.strip_prefix("Weak__") {
-            if !is_template(elem) && !module.weak_types.contains(&elem.to_string()) {
-                module.weak_types.push(elem.to_string());
+            if !is_template(elem) && !module.runtime.weak_types.contains(&elem.to_string()) {
+                module.runtime.weak_types.push(elem.to_string());
             }
         }
         if let Some(elem) = name.strip_prefix("Mutex__") {
-            if !is_template(elem) && !module.mutex_types.contains(&elem.to_string()) {
-                module.mutex_types.push(elem.to_string());
+            if !is_template(elem) && !module.runtime.mutex_types.contains(&elem.to_string()) {
+                module.runtime.mutex_types.push(elem.to_string());
             }
         }
         if name == "TaskGroup" {
-            module.has_task_group = true;
+            module.runtime.has_task_group = true;
         }
         // std.sync: collect RWLock element types for wrapper emission
         if let Some(elem) = name.strip_prefix("RWLock__") {
             // Skip template placeholders (single uppercase letter = generic param e.g. "T")
-            if !elem.chars().all(|c| c.is_uppercase()) && !module.rwlock_types.contains(&elem.to_string()) {
-                module.rwlock_types.push(elem.to_string());
+            if !elem.chars().all(|c| c.is_uppercase()) && !module.runtime.rwlock_types.contains(&elem.to_string()) {
+                module.runtime.rwlock_types.push(elem.to_string());
             }
         }
         // Any sync type signals has_sync
@@ -1139,27 +1139,27 @@ pub fn lower_module(
             || name.starts_with("ReadGuard__")
             || name.starts_with("WriteGuard__")
         {
-            module.has_sync = true;
+            module.runtime.has_sync = true;
         }
         // std.thread: collect Thread types (skip template placeholders like "T")
         if let Some(elem) = name.strip_prefix("Thread__") {
             if !elem.chars().all(|c| c.is_uppercase()) {
-                if !module.thread_types.contains(&elem.to_string()) {
-                    module.thread_types.push(elem.to_string());
+                if !module.runtime.thread_types.contains(&elem.to_string()) {
+                    module.runtime.thread_types.push(elem.to_string());
                 }
-                module.has_thread = true;
+                module.runtime.has_thread = true;
             }
         }
         // std.process: Process type
         if name == "Process" {
-            module.has_process = true;
+            module.runtime.has_process = true;
         }
     }
 
     // Collect thread-spawned function metadata for C backend helper emission
     for (fn_name, ret_type) in &ctx.thread_spawned_fns {
-        if !module.thread_spawned_fns.iter().any(|(n, _)| n == fn_name) {
-            module.thread_spawned_fns.push((fn_name.clone(), *ret_type));
+        if !module.runtime.thread_spawned_fns.iter().any(|(n, _)| n == fn_name) {
+            module.runtime.thread_spawned_fns.push((fn_name.clone(), *ret_type));
         }
     }
 
@@ -1175,10 +1175,10 @@ pub fn lower_module(
                 .zip(param_types.iter())
                 .map(|(n, &t)| (n.clone(), t))
                 .collect();
-            module.spawned_fns.push((fn_name.clone(), params, *ret_type));
+            module.runtime.spawned_fns.push((fn_name.clone(), params, *ret_type));
         }
     }
-    module.has_spawn = !ctx.spawned_fn_names.is_empty();
+    module.runtime.has_spawn = !ctx.spawned_fn_names.is_empty();
 
     module
 }
@@ -1369,7 +1369,7 @@ fn lower_test_items(
                 ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
             }
             module.functions.push(builder.build());
-            module.has_suite_setup = true;
+            module.runtime.has_suite_setup = true;
         }
     }
 
@@ -1388,7 +1388,7 @@ fn lower_test_items(
                 ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
             }
             module.functions.push(builder.build());
-            module.has_suite_teardown = true;
+            module.runtime.has_suite_teardown = true;
         }
     }
 
@@ -1510,7 +1510,7 @@ fn lower_test_items(
             let mut test_fn = builder.build();
             test_fn.is_test_fn = true;
             module.functions.push(test_fn);
-            module.test_fns.push(TestFnInfo {
+            module.runtime.test_fns.push(TestFnInfo {
                 fn_name,
                 display_name: test_name,
                 should_panic,

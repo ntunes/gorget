@@ -283,7 +283,7 @@ impl<'m> Interpreter<'m> {
             globals: HashMap::new(),
             stdout: Vec::new(),
             stderr: Vec::new(),
-            overflow_wrap: module.overflow_wrap,
+            overflow_wrap: module.runtime.overflow_wrap,
             ub_checks: config.ub_checks,
             current_fn_name: String::new(),
             call_stack: Vec::new(),

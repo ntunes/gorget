@@ -51,6 +51,74 @@ pub struct TestFnInfo {
     pub with_bindings: Vec<TestWithBinding>,
 }
 
+/// Backend-specific runtime feature flags and type lists.
+///
+/// Separated from `Module` to keep the core IR struct focused on
+/// types, functions, globals, and externs.  Everything here is
+/// populated during lowering and consumed by the C backend / sim.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeFeatures {
+    // ── Concurrency ────────────────────────────────────────────────
+    /// True if any async function was detected; causes the C backend to emit async runtime.
+    pub has_async: bool,
+    /// True if any `spawn` expression was found; emits executor runtime.
+    pub has_spawn: bool,
+    /// Scheduler backend for `spawn` (pool, thread, inline, single).
+    pub scheduler_mode: SchedulerMode,
+    /// Whether any TaskGroup was used (triggers TaskGroup runtime emission).
+    pub has_task_group: bool,
+    /// Whether any std.sync types are used (AtomicInt, AtomicBool, Barrier, RWLock).
+    pub has_sync: bool,
+    /// Channel element C type names (e.g., ["int64_t"] for Channel[int]).
+    pub channel_types: Vec<String>,
+    /// Shared[T] inner C type names (e.g., ["int64_t"] for Shared[int]).
+    pub shared_types: Vec<String>,
+    /// Weak[T] inner C type names (e.g., ["int64_t"] for Weak[int]).
+    pub weak_types: Vec<String>,
+    /// Mutex[T] inner C type names (e.g., ["int64_t"] for Mutex[int]).
+    pub mutex_types: Vec<String>,
+    /// RWLock[T] inner C type names (e.g., ["int64_t"] for RWLock[int]).
+    pub rwlock_types: Vec<String>,
+    /// Spawned functions: (fn_name, [(param_name, param_type)], return_type).
+    pub spawned_fns: Vec<(String, Vec<(String, TypeId)>, TypeId)>,
+
+    // ── Threads / processes ────────────────────────────────────────
+    /// Whether std.thread is used.
+    pub has_thread: bool,
+    /// Whether std.process Process type (fork+exec) is used.
+    pub has_process: bool,
+    /// Thread[T] return C type names (e.g., ["int64_t"] for Thread[int]).
+    pub thread_types: Vec<String>,
+    /// Thread-spawned functions: (fn_name, return_type).
+    pub thread_spawned_fns: Vec<(String, TypeId)>,
+
+    // ── Test runner ────────────────────────────────────────────────
+    /// Test functions registered for the test runner.
+    pub test_fns: Vec<TestFnInfo>,
+    /// True when lowered in test mode (gg test).
+    pub is_test_module: bool,
+    /// True when a `suite setup:` block was lowered.
+    pub has_suite_setup: bool,
+    /// True when a `suite teardown:` block was lowered.
+    pub has_suite_teardown: bool,
+
+    // ── Codegen hints ──────────────────────────────────────────────
+    /// When true, arithmetic wraps on overflow instead of aborting.
+    pub overflow_wrap: bool,
+    /// When set, emit trace instrumentation and write events to this file path.
+    pub trace_filename: Option<String>,
+
+    // ── Hot reload ─────────────────────────────────────────────────
+    /// When true, this module uses `directive hot-reload`.
+    pub hot_reload: bool,
+    /// Name of the hot-reload State struct (derived from `init()` return type).
+    pub hot_reload_state_type: Option<String>,
+    /// FNV-1a hash of the State struct's field layout (for change detection).
+    pub hot_reload_state_hash: u64,
+    /// True when a `reload()` function exists in the module.
+    pub hot_reload_has_reload_fn: bool,
+}
+
 /// A complete GIR module.
 #[derive(Debug, Clone)]
 pub struct Module {
@@ -62,70 +130,8 @@ pub struct Module {
     pub source_filename: Option<String>,
     /// Concatenated source text (for source-line display in errors).
     pub source_code: Option<String>,
-    /// Test functions registered for the test runner.
-    pub test_fns: Vec<TestFnInfo>,
-    /// When true, arithmetic wraps on overflow instead of aborting.
-    pub overflow_wrap: bool,
-    /// Pre-generated C code for async functions (state structs, poll fns, constructors).
-    /// Emitted verbatim by the C backend before any GIR-derived functions.
-    pub global_inline_c: Vec<String>,
-    /// True if any async function was detected; causes the C backend to emit async runtime.
-    pub has_async: bool,
-    /// True if any `spawn` expression was found; emits executor runtime.
-    pub has_spawn: bool,
-    /// True if any `sleep()` call was found; emits sleep runtime.
-    pub has_sleep: bool,
-    /// Channel element C type names found (e.g., ["int64_t"] for Channel[int]).
-    /// Used by the C backend to emit Channel__T wrapper structs and functions.
-    pub channel_types: Vec<String>,
-    /// Shared[T] inner C type names found (e.g., ["int64_t"] for Shared[int]).
-    /// Used by the C backend to emit Shared__T wrapper structs and functions.
-    pub shared_types: Vec<String>,
-    /// Weak[T] inner C type names found (e.g., ["int64_t"] for Weak[int]).
-    /// Used by the C backend to emit Weak__T wrapper structs and functions.
-    pub weak_types: Vec<String>,
-    /// Mutex[T] inner C type names found (e.g., ["int64_t"] for Mutex[int]).
-    /// Used by the C backend to emit Mutex__T and Guard__T wrapper structs and functions.
-    pub mutex_types: Vec<String>,
-    /// Whether any TaskGroup was used (triggers TaskGroup runtime emission).
-    pub has_task_group: bool,
-    /// Spawned functions: (fn_name, [(param_name, param_type)], return_type).
-    /// Used by the C backend to emit __SpawnCtx_fn, __gorget_spawn_fn, __gorget_await_fn.
-    pub spawned_fns: Vec<(String, Vec<(String, TypeId)>, TypeId)>,
-    /// RWLock[T] inner C type names (e.g., ["int64_t"] for RWLock[int]).
-    /// Used by the C backend to emit RWLock__T, ReadGuard__T, WriteGuard__T wrappers.
-    pub rwlock_types: Vec<String>,
-    /// Whether any std.sync types are used (AtomicInt, AtomicBool, Barrier, RWLock).
-    pub has_sync: bool,
-    /// Thread[T] return C type names (e.g., ["int64_t"] for Thread[int]).
-    /// Used by the C backend to emit Thread__T wrappers + per-function spawn helpers.
-    pub thread_types: Vec<String>,
-    /// Whether std.thread (Thread, thread_spawn, current_thread_id) is used.
-    pub has_thread: bool,
-    /// Whether std.process Process type (fork+exec) is used.
-    pub has_process: bool,
-    /// Thread-spawned functions: (fn_name, return_type_c_name).
-    /// Used by the C backend to emit __gorget_thread_spawn_fn helpers.
-    pub thread_spawned_fns: Vec<(String, TypeId)>,
-    /// True when a `suite setup:` block was lowered as `__suite_setup()`.
-    pub has_suite_setup: bool,
-    /// True when a `suite teardown:` block was lowered as `__suite_teardown()`.
-    pub has_suite_teardown: bool,
-    /// True when the module was lowered in test mode (gg test).
-    /// Forces emission of a test runner main() even when test_fns is empty (all filtered).
-    pub is_test_module: bool,
-    /// When set, emit trace instrumentation and write events to this file path.
-    pub trace_filename: Option<String>,
-    /// When true, this module uses `directive hot-reload`.
-    pub hot_reload: bool,
-    /// Name of the hot-reload State struct (derived from `init()` return type).
-    pub hot_reload_state_type: Option<String>,
-    /// FNV-1a hash of the State struct's field layout (for change detection).
-    pub hot_reload_state_hash: u64,
-    /// True when a `reload()` function exists in the module.
-    pub hot_reload_has_reload_fn: bool,
-    /// Scheduler backend for `spawn` (pool, thread, inline, single).
-    pub scheduler_mode: SchedulerMode,
+    /// Backend-specific runtime feature flags and type lists.
+    pub runtime: RuntimeFeatures,
 }
 
 impl Module {
@@ -138,33 +144,7 @@ impl Module {
             externs: Vec::new(),
             source_filename: None,
             source_code: None,
-            test_fns: Vec::new(),
-            overflow_wrap: false,
-            global_inline_c: Vec::new(),
-            has_async: false,
-            has_spawn: false,
-            has_sleep: false,
-            channel_types: Vec::new(),
-            shared_types: Vec::new(),
-            weak_types: Vec::new(),
-            mutex_types: Vec::new(),
-            has_task_group: false,
-            spawned_fns: Vec::new(),
-            rwlock_types: Vec::new(),
-            has_sync: false,
-            thread_types: Vec::new(),
-            has_thread: false,
-            has_process: false,
-            thread_spawned_fns: Vec::new(),
-            has_suite_setup: false,
-            has_suite_teardown: false,
-            is_test_module: false,
-            trace_filename: None,
-            hot_reload: false,
-            hot_reload_state_type: None,
-            hot_reload_state_hash: 0,
-            hot_reload_has_reload_fn: false,
-            scheduler_mode: SchedulerMode::default(),
+            runtime: RuntimeFeatures::default(),
         }
     }
 

@@ -189,7 +189,7 @@ impl Default for TypeRegistry {
 }
 
 impl TypeRegistry {
-    /// Create a new registry with pre-allocated primitive types at indices 0–12.
+    /// Create a new registry with pre-allocated primitive types at indices 0–11.
     pub fn new() -> Self {
         let types = vec![
             GirType::Bool, // 0

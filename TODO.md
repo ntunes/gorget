@@ -2,8 +2,21 @@
 
 ## High
 
+- **IR refactor: Continue `exprs/` split — extract `methods.rs` and `calls.rs`**: Phase 1 done (shared.rs, type_reg.rs, spawn.rs extracted). `exprs/mod.rs` is still 6,281 lines. `lower_method_call` (1,220 lines) and `lower_call` (566 lines) are the biggest remaining extraction targets but have heavy coupling to `lower_expr_inner`. Consider extracting method dispatch + iterator adapters into `methods.rs`, and call lowering into `calls.rs`. [updated: 2026-03-07, from: IR code review]
+
+- **IR refactor: Factor `LoweringContext` god object**: `LoweringContext` (`src/ir/lowering/context.rs`) has 34 fields mixing name resolution, type mapping, closure tracking, shared variable handling, spawn/thread tracking. The `shared_locals` map uses a 5-tuple value type. Factor into domain-specific sub-contexts: `SharedVarState`, `GenericContext`, `ClosureContext`. [added: 2026-03-07, from: IR code review]
+
+- **IR refactor: Consolidate type registration**: Generic type auto-registration (Option, Result, collections, Channel, Shared, etc.) is duplicated across `TypeMapper::map_ast_type_mut()` (types.rs), collection pre-registration in `mod.rs`, and per-instance `ensure_*_type_def()` in `exprs.rs`. Should be a single idempotent `get_or_register_generic()` method. [added: 2026-03-07, from: IR code review]
 
 ## Medium
+
+- **IR: Add error propagation to type mapping**: `map_ast_type()` silently returns `UNIT_TYPE` for unknown types instead of reporting errors. This masks lowering bugs. Change to `Result<TypeId, TypeError>` or at minimum emit diagnostics. [added: 2026-03-07, from: IR code review]
+
+- **IR: Enhance `validate.rs` with semantic checks**: Current validation is structural only (duplicate names, missing locals). No type consistency checks, no call target validation, no use-after-drop detection. Backend must blindly trust GIR correctness. [added: 2026-03-07, from: IR code review]
+
+- **IR: Fix `DropStrategy`/`DropElaborator` coordination**: `DropElaborator` in `drops.rs` doesn't reference `DropStrategy` from the type metadata in `types.rs`. No clear contract for when field-level vs type-level drop triggers. [added: 2026-03-07, from: IR code review]
+
+- **IR: Split `generics.rs` (1,566 lines)**: Template collection, usage discovery, monomorphization, and meta op handling all in one file. Split into `generics/collector.rs`, `generics/monomorphize.rs`, `generics/meta_ops.rs`. [added: 2026-03-07, from: IR code review]
 
 - **Async `.lock()` / `.read()` / `.write()` for explicit Mutex/RwLock**: Currently these are synchronous (`pthread_mutex_lock`/`pthread_rwlock_rdlock`), blocking the OS thread. In async code on the M:N scheduler, this ties up a worker thread under contention. Should use trylock + waker-queue protocol: try to acquire, if contended register task's waker on the sync primitive's wait queue and return Pending, wake one waiter on guard drop. The `shared` keyword path manages this internally, but explicit `Mutex[T]` in async functions needs it for correct M:N behavior. Requires: waker queue field on `gorget_mutex_t`/`gorget_rwlock_t`, async-aware lock methods that return `Future[Guard[T]]`, integration with executor's poll loop. [added: 2026-03-06]
 

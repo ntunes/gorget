@@ -10,9 +10,9 @@ use rustc_hash::FxHashSet;
 pub struct GirCodegenOutput {
     /// Full C code (used when not splitting host/guest).
     pub c_code: String,
-    /// Host binary C code (only `Some` when `module.hot_reload == true`).
+    /// Host binary C code (only `Some` when `module.runtime.hot_reload == true`).
     pub host_code: Option<String>,
-    /// Guest shared library C code (only `Some` when `module.hot_reload == true`).
+    /// Guest shared library C code (only `Some` when `module.runtime.hot_reload == true`).
     pub guest_code: Option<String>,
     /// True when the generated C code uses TLS (requires -lssl -lcrypto at link time).
     /// Set when TLS_SOCKET_RUNTIME or TLS_SERVER_RUNTIME is emitted.
@@ -462,7 +462,7 @@ fn generate_c_impl(module: &Module, hr_opts: Option<&HotReloadOpts>) -> GirCodeg
     // Full runtime preamble (provides Str, GorgetString, GorgetArray, etc.)
     out.push_str(c_runtime::RUNTIME_PREAMBLE);
     // Use test panic handler if module has test functions (or is in test mode).
-    if module.test_fns.is_empty() && !module.is_test_module {
+    if module.runtime.test_fns.is_empty() && !module.runtime.is_test_module {
         out.push_str(c_runtime::PANIC_NORMAL);
     } else {
         out.push_str(c_runtime::PANIC_TEST);
@@ -531,20 +531,20 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     if all_call_names.iter().any(|n| n == "gorget_exec" || n == "gorget_exec_output" || n == "exec" || n == "exec_output") {
         out.push_str(c_runtime::PROCESS_RUNTIME);
     }
-    if module.has_process
+    if module.runtime.has_process
         || all_call_names.iter().any(|n| n.starts_with("gorget_process_") || n == "process_spawn" || n == "getpid" || n == "gorget_getpid" || n.starts_with("Process__")) {
         out.push_str(c_runtime::PROCESS_SPAWN_RUNTIME);
     }
-    if module.has_sync
+    if module.runtime.has_sync
         || all_call_names.iter().any(|n| n.starts_with("gorget_atomic_") || n.starts_with("gorget_barrier_") || n.starts_with("gorget_condvar_") || n.starts_with("gorget_rwlock_") || n.starts_with("AtomicInt__") || n.starts_with("AtomicBool__") || n.starts_with("Barrier__") || n.starts_with("CondVar__") || n.starts_with("RWLock__") || n.starts_with("ReadGuard__") || n.starts_with("WriteGuard__")) {
         out.push_str(c_runtime::SYNC_RUNTIME);
     }
-    if module.has_thread
-        || !module.thread_spawned_fns.is_empty()
+    if module.runtime.has_thread
+        || !module.runtime.thread_spawned_fns.is_empty()
         || all_call_names.iter().any(|n| n == "gorget_current_thread_id" || n == "current_thread_id" || n.starts_with("__gorget_thread_spawn_") || n.starts_with("Thread__")) {
         out.push_str(c_runtime::THREAD_RUNTIME);
     }
-    let needs_async_runtime = module.has_async || module.has_spawn
+    let needs_async_runtime = module.runtime.has_async || module.runtime.has_spawn
         || all_call_names.iter().any(|n| n.contains("channel_") || n.contains("Channel")
             || n.contains("gorget_executor_") || n == "gorget_spawn" || n.contains("GorgetTask"));
     if needs_async_runtime {
@@ -552,30 +552,30 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         out.push_str(c_runtime::ASYNC_RUNTIME);
     }
     if all_call_names.iter().any(|n| n.contains("gorget_executor_") || n == "gorget_spawn" || n.contains("GorgetTask"))
-        || module.has_spawn {
+        || module.runtime.has_spawn {
         out.push_str(c_runtime::TASK_COMMON);
-        match module.scheduler_mode {
+        match module.runtime.scheduler_mode {
             crate::ir::SchedulerMode::Pool => out.push_str(c_runtime::SCHEDULER_POOL_RUNTIME),
             crate::ir::SchedulerMode::Thread => out.push_str(c_runtime::SCHEDULER_THREAD_RUNTIME),
             crate::ir::SchedulerMode::Inline => out.push_str(c_runtime::SCHEDULER_INLINE_RUNTIME),
             crate::ir::SchedulerMode::Single => out.push_str(c_runtime::SCHEDULER_SINGLE_RUNTIME),
         }
     }
-    let needs_channel = !module.channel_types.is_empty()
+    let needs_channel = !module.runtime.channel_types.is_empty()
         || all_call_names.iter().any(|n| n.contains("channel_") || n.contains("Channel"));
     if needs_channel {
         out.push_str(c_runtime::CHANNEL_RUNTIME);
     }
-    if needs_channel || module.has_spawn {
+    if needs_channel || module.runtime.has_spawn {
         // Emit Channel__T typedefs and wrapper functions (if any), plus Task__T structs.
         emit_channel_and_task_defs(&mut out, module);
     }
-    let needs_shared = !module.shared_types.is_empty() || !module.weak_types.is_empty();
+    let needs_shared = !module.runtime.shared_types.is_empty() || !module.runtime.weak_types.is_empty();
     if needs_shared {
         out.push_str(c_runtime::SHARED_RUNTIME);
         // Wrapper functions (emit_shared_defs, emit_weak_defs) emitted after user type definitions below.
     }
-    let needs_mutex = !module.mutex_types.is_empty();
+    let needs_mutex = !module.runtime.mutex_types.is_empty();
     if needs_mutex {
         // ASYNC_RUNTIME must be emitted before this (gorget_mutex may use GorgetWaker).
         if !needs_async_runtime {
@@ -584,7 +584,7 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         out.push_str(c_runtime::MUTEX_RUNTIME);
         // Wrapper functions (emit_mutex_defs) emitted after user type definitions below.
     }
-    if module.has_task_group {
+    if module.runtime.has_task_group {
         if !needs_async_runtime && !needs_mutex {
             out.push_str(c_runtime::ASYNC_RUNTIME);
         }
@@ -619,16 +619,16 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         if !needs_async_runtime {
             out.push_str(c_runtime::ASYNC_RUNTIME);
         }
-        if !all_call_names.iter().any(|n| n.contains("gorget_executor_") || n == "gorget_spawn") && !module.has_spawn {
+        if !all_call_names.iter().any(|n| n.contains("gorget_executor_") || n == "gorget_spawn") && !module.runtime.has_spawn {
             out.push_str(c_runtime::TASK_COMMON);
             out.push_str(c_runtime::SCHEDULER_POOL_RUNTIME);
         }
         out.push_str(c_runtime::REACTOR_RUNTIME);
     }
-    if module.hot_reload || all_call_names.iter().any(|n| n.contains("hot_reload") || n.contains("plugin")) {
+    if module.runtime.hot_reload || all_call_names.iter().any(|n| n.contains("hot_reload") || n.contains("plugin")) {
         out.push_str(c_runtime::HOT_RELOAD_RUNTIME);
     }
-    if module.trace_filename.is_some() {
+    if module.runtime.trace_filename.is_some() {
         out.push_str(c_runtime::TRACE_RUNTIME);
     }
     if all_call_names.iter().any(|n| n.starts_with("sdl_") || n.starts_with("gorget_sdl_")) {
@@ -688,7 +688,7 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     if needs_mutex {
         emit_mutex_defs(&mut out, module);
     }
-    if !module.rwlock_types.is_empty() {
+    if !module.runtime.rwlock_types.is_empty() {
         emit_rwlock_defs(&mut out, module);
     }
     // Emit Shared[T] and Weak[T] wrapper functions AFTER mutex/rwlock typedefs
@@ -698,7 +698,7 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         emit_shared_defs(&mut out, module);
         emit_weak_defs(&mut out, module);
     }
-    if !module.thread_types.is_empty() || !module.thread_spawned_fns.is_empty() {
+    if !module.runtime.thread_types.is_empty() || !module.runtime.thread_spawned_fns.is_empty() {
         emit_thread_defs(&mut out, module);
     }
 
@@ -713,7 +713,7 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     out.push('\n');
 
     // Emit spawn/await helper functions (reference forward-declared GIR functions)
-    if !module.spawned_fns.is_empty() {
+    if !module.runtime.spawned_fns.is_empty() {
         emit_spawn_helpers(&mut out, module);
     }
 
@@ -728,7 +728,7 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
 
     // ── Function Definitions ──
     out.push_str("// ── Function Definitions ──\n");
-    let has_test_runner = !module.test_fns.is_empty() || module.is_test_module;
+    let has_test_runner = !module.runtime.test_fns.is_empty() || module.runtime.is_test_module;
     for func in &module.functions {
         if is_template_function(&func.name, &skip_names) {
             continue;
@@ -742,12 +742,12 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     }
 
     // Test runner main (if test functions were registered, or forced by test_mode).
-    if !module.test_fns.is_empty() || module.is_test_module {
+    if !module.runtime.test_fns.is_empty() || module.runtime.is_test_module {
         emit_test_runner_main(&mut out, module);
     }
 
     // Hot-reload: generate split host/guest sources.
-    if module.hot_reload {
+    if module.runtime.hot_reload {
         let (host, guest) = generate_hot_reload_split(module, &out, hr_opts);
         return GirCodegenOutput { c_code: out, host_code: Some(host), guest_code: Some(guest), needs_tls };
     }
@@ -760,9 +760,9 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
 /// - Guest: full code minus main(), plus state hash constant + exported wrappers.
 /// - Host: runtime/type section only + HOT_RELOAD_RUNTIME + a dlopen-based main().
 fn generate_hot_reload_split(module: &Module, full_c: &str, hr_opts: Option<&HotReloadOpts>) -> (String, String) {
-    let state_type = module.hot_reload_state_type.as_deref().unwrap_or("State");
-    let state_hash = module.hot_reload_state_hash;
-    let has_reload = module.hot_reload_has_reload_fn;
+    let state_type = module.runtime.hot_reload_state_type.as_deref().unwrap_or("State");
+    let state_hash = module.runtime.hot_reload_state_hash;
+    let has_reload = module.runtime.hot_reload_has_reload_fn;
 
     // ── Guest code ──
     let mut guest = String::with_capacity(full_c.len() + 1024);
@@ -888,12 +888,12 @@ fn generate_hot_reload_split(module: &Module, full_c: &str, hr_opts: Option<&Hot
 
 /// Emit a test runner main() with timing, @should_panic support, and suite setup/teardown.
 fn emit_test_runner_main(out: &mut String, module: &Module) {
-    let test_fns = &module.test_fns;
+    let test_fns = &module.runtime.test_fns;
     let registry = &module.type_registry;
-    let tracing = module.trace_filename.is_some();
+    let tracing = module.runtime.trace_filename.is_some();
     let _ = writeln!(out, "int main(int argc, char** argv) {{");
     let _ = writeln!(out, "    gorget_init_args(argc, argv);");
-    if let Some(ref trace_path) = module.trace_filename {
+    if let Some(ref trace_path) = module.runtime.trace_filename {
         let escaped = trace_path.replace('\\', "\\\\").replace('"', "\\\"");
         let _ = writeln!(out, "    __gorget_trace_init(\"{escaped}\");");
     }
@@ -902,7 +902,7 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
     let _ = writeln!(out, "    clock_gettime(CLOCK_MONOTONIC, &__total_start);");
     let _ = writeln!(out, "    printf(\"Running {} tests...\\n\");", test_fns.len());
 
-    if module.has_suite_setup {
+    if module.runtime.has_suite_setup {
         let _ = writeln!(out, "    __suite_setup();");
     }
 
@@ -1012,7 +1012,7 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
         let _ = writeln!(out, "    }}");
     }
 
-    if module.has_suite_teardown {
+    if module.runtime.has_suite_teardown {
         let _ = writeln!(out, "    __suite_teardown();");
     }
 
@@ -1170,24 +1170,24 @@ fn topo_sorted_body_order(
 /// Emit Shared__T and Weak__T typedefs BEFORE type definitions.
 /// These typedefs are needed early so Option__Shared__T structs can reference Shared__T.
 fn emit_shared_weak_typedefs(out: &mut String, module: &Module) {
-    if module.shared_types.is_empty() && module.weak_types.is_empty() {
+    if module.runtime.shared_types.is_empty() && module.runtime.weak_types.is_empty() {
         return;
     }
     out.push_str("\n/* ── Shared[T] / Weak[T] forward typedefs ── */\n");
     // Collect all element types that need a Shared__ typedef
-    for elem_c in &module.shared_types {
+    for elem_c in &module.runtime.shared_types {
         let _ = writeln!(out, "typedef GorgetShared* Shared__{elem_c};");
     }
     // Collect all element types that need a Weak__ typedef
     // (either from explicit Weak vars OR as companion for downgrade() return type)
     let mut weak_emitted: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for elem_c in &module.shared_types {
+    for elem_c in &module.runtime.shared_types {
         // Always emit Weak__T companion for every Shared__T (needed for downgrade() return type)
         if weak_emitted.insert(elem_c.as_str()) {
             let _ = writeln!(out, "typedef GorgetShared* Weak__{elem_c};");
         }
     }
-    for elem_c in &module.weak_types {
+    for elem_c in &module.runtime.weak_types {
         if weak_emitted.insert(elem_c.as_str()) {
             let _ = writeln!(out, "typedef GorgetShared* Weak__{elem_c};");
         }
@@ -1197,11 +1197,11 @@ fn emit_shared_weak_typedefs(out: &mut String, module: &Module) {
 /// Emit Shared__T wrapper functions (new, clone, drop, get, strong_count, downgrade).
 /// Typedefs were already emitted by emit_shared_weak_typedefs.
 fn emit_shared_defs(out: &mut String, module: &Module) {
-    if module.shared_types.is_empty() {
+    if module.runtime.shared_types.is_empty() {
         return;
     }
     out.push_str("\n/* ── Shared[T] wrappers ── */\n");
-    for elem_c in &module.shared_types {
+    for elem_c in &module.runtime.shared_types {
         let shared_name = format!("Shared__{elem_c}");
         // Typedef already emitted by emit_shared_weak_typedefs — skip here.
         // Constructor: Shared__T__new(val) → allocates control block, copies val in
@@ -1252,11 +1252,11 @@ fn emit_shared_defs(out: &mut String, module: &Module) {
 /// Emit Weak__T wrapper functions (clone, drop, upgrade).
 /// Typedefs were already emitted by emit_shared_weak_typedefs.
 fn emit_weak_defs(out: &mut String, module: &Module) {
-    if module.weak_types.is_empty() {
+    if module.runtime.weak_types.is_empty() {
         return;
     }
     out.push_str("\n/* ── Weak[T] wrappers ── */\n");
-    for elem_c in &module.weak_types {
+    for elem_c in &module.runtime.weak_types {
         let weak_name = format!("Weak__{elem_c}");
         let shared_name = format!("Shared__{elem_c}");
         // Typedef already emitted by emit_shared_weak_typedefs — skip here.
@@ -1287,11 +1287,11 @@ fn emit_weak_defs(out: &mut String, module: &Module) {
 
 /// Emit Mutex__T and Guard__T typedef + wrapper functions.
 fn emit_mutex_defs(out: &mut String, module: &Module) {
-    if module.mutex_types.is_empty() {
+    if module.runtime.mutex_types.is_empty() {
         return;
     }
     out.push_str("\n/* ── Mutex[T] + Guard[T] wrappers ── */\n");
-    for elem_c in &module.mutex_types {
+    for elem_c in &module.runtime.mutex_types {
         let mutex_name = format!("Mutex__{elem_c}");
         let guard_name = format!("Guard__{elem_c}");
         // Mutex__T typedef (Copy pointer)
@@ -1328,11 +1328,11 @@ fn emit_mutex_defs(out: &mut String, module: &Module) {
 
 /// Emit RWLock__T + ReadGuard__T + WriteGuard__T typedef + wrapper functions.
 fn emit_rwlock_defs(out: &mut String, module: &Module) {
-    if module.rwlock_types.is_empty() {
+    if module.runtime.rwlock_types.is_empty() {
         return;
     }
     out.push_str("\n/* ── RWLock[T] + ReadGuard[T] + WriteGuard[T] wrappers ── */\n");
-    for elem_c in &module.rwlock_types {
+    for elem_c in &module.runtime.rwlock_types {
         let rwlock_name = format!("RWLock__{elem_c}");
         let read_guard  = format!("ReadGuard__{elem_c}");
         let write_guard = format!("WriteGuard__{elem_c}");
@@ -1388,11 +1388,11 @@ fn emit_rwlock_defs(out: &mut String, module: &Module) {
 /// The internal `__GorgetThread__T` context struct is also emitted here.
 /// Per-function spawn helpers (which reference GIR functions) are in emit_thread_helpers.
 fn emit_thread_defs(out: &mut String, module: &Module) {
-    if module.thread_types.is_empty() {
+    if module.runtime.thread_types.is_empty() {
         return;
     }
     out.push_str("\n/* ── Thread[T] wrappers ── */\n");
-    for elem_c in &module.thread_types {
+    for elem_c in &module.runtime.thread_types {
         let thread_name = format!("Thread__{elem_c}");
         let is_void = elem_c == "void";
         // Internal context struct — use _thr/_result (not __thread: reserved GCC keyword)
@@ -1431,11 +1431,11 @@ fn emit_thread_defs(out: &mut String, module: &Module) {
 /// Emit per-function Thread entry and spawn helpers.
 /// Called AFTER GIR function forward declarations (entry functions call GIR functions).
 fn emit_thread_helpers(out: &mut String, module: &Module) {
-    if module.thread_spawned_fns.is_empty() {
+    if module.runtime.thread_spawned_fns.is_empty() {
         return;
     }
     out.push_str("\n/* ── Thread spawn helpers ── */\n");
-    for (fn_name, ret_type) in &module.thread_spawned_fns {
+    for (fn_name, ret_type) in &module.runtime.thread_spawned_fns {
         let ret_c = format_type(*ret_type, &module.type_registry);
         let is_void = ret_c == "void";
         let thread_name = format!("Thread__{ret_c}");
@@ -1466,7 +1466,7 @@ fn emit_thread_helpers(out: &mut String, module: &Module) {
 /// Emit Channel__T typedef + wrapper functions and Task__T structs.
 /// Called after CHANNEL_RUNTIME (which defines GorgetChannel and GorgetWaker).
 fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
-    if module.channel_types.is_empty() && module.spawned_fns.is_empty() {
+    if module.runtime.channel_types.is_empty() && module.runtime.spawned_fns.is_empty() {
         return;
     }
 
@@ -1475,7 +1475,7 @@ fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
     // Collect all unique Task return types for Task__T structs
     let mut task_ret_c_types: Vec<String> = Vec::new();
 
-    for elem_c in &module.channel_types {
+    for elem_c in &module.runtime.channel_types {
         let chan_name = format!("Channel__{elem_c}");
         // Typedef: Channel__T = GorgetChannel* (opaque pointer wrapper)
         let _ = writeln!(out, "typedef GorgetChannel* {chan_name};");
@@ -1511,7 +1511,7 @@ fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
     }
 
     // Collect return types of spawned fns for Task__T emission
-    for (_, _, ret_type) in &module.spawned_fns {
+    for (_, _, ret_type) in &module.runtime.spawned_fns {
         let ret_c = format_type(*ret_type, &module.type_registry);
         let task_name = if ret_c == "void" {
             "Task__void".to_string()
@@ -2233,7 +2233,7 @@ fn emit_coroutine(
             // ── No-await state: emit all instructions + terminator ────────────
             let _ = writeln!(out, "    case {base_state}: {{");
             for inst in &bb.instructions {
-                emit_poll_inst(out, inst, func, registry, module.overflow_wrap);
+                emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap);
             }
             if let Some(term) = &bb.terminator {
                 emit_poll_terminator(out, term, func, registry, &state_ids);
@@ -2261,7 +2261,7 @@ fn emit_coroutine(
                 // Emit instructions from after the previous await (or BB start) to this await
                 let inst_start = if await_idx == 0 { 0 } else { await_positions[await_idx - 1] + 1 };
                 for inst in &bb.instructions[inst_start..await_pos] {
-                    emit_poll_inst(out, inst, func, registry, module.overflow_wrap);
+                    emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap);
                 }
 
                 // Extract task local from this await call
@@ -2296,7 +2296,7 @@ fn emit_coroutine(
             let _ = writeln!(out, "    case {current_state}: {{");
             emit_await_result_call(out, &bb.instructions[last_await_pos], func, registry);
             for inst in &bb.instructions[last_await_pos + 1..] {
-                emit_poll_inst(out, inst, func, registry, module.overflow_wrap);
+                emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap);
             }
             if let Some(term) = &bb.terminator {
                 emit_poll_terminator(out, term, func, registry, &state_ids);
@@ -2384,7 +2384,7 @@ fn emit_coroutine(
 ///
 /// Called after GIR function forward declarations (so spawned functions are visible).
 fn emit_spawn_helpers(out: &mut String, module: &Module) {
-    if module.spawned_fns.is_empty() {
+    if module.runtime.spawned_fns.is_empty() {
         return;
     }
 
@@ -2392,7 +2392,7 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
 
     // Emit non-coroutine (blocking) helpers first so their spawn/await functions are
     // declared before any coroutine poll functions that call them.
-    for (fn_name, params, ret_type) in &module.spawned_fns {
+    for (fn_name, params, ret_type) in &module.runtime.spawned_fns {
         if fn_is_coroutine_candidate(fn_name, module) { continue; }
 
         let ret_c = format_type(*ret_type, &module.type_registry);
@@ -2521,7 +2521,7 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
     // Called by the RAII drop elaborator; dispatches to the per-fn drop via __drop pointer.
     // Must be emitted before coroutine helpers since poll functions may drop Task locals.
     let mut emitted_task_drops: Vec<String> = Vec::new();
-    for (_, _, ret_type) in &module.spawned_fns {
+    for (_, _, ret_type) in &module.runtime.spawned_fns {
         let ret_c = format_type(*ret_type, &module.type_registry);
         let task_name = if ret_c == "void" {
             "Task__void".to_string()
@@ -2543,7 +2543,7 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
 
     // Second pass: emit coroutine (stackless state machine) helpers.
     // Done after blocking helpers + Task__T__drop so all referenced functions are declared.
-    for (fn_name, params, ret_type) in &module.spawned_fns {
+    for (fn_name, params, ret_type) in &module.runtime.spawned_fns {
         if !fn_is_coroutine_candidate(fn_name, module) { continue; }
         if let Some(func) = module.find_function(fn_name) {
             emit_coroutine(out, fn_name, func, params, *ret_type, module);
@@ -3930,13 +3930,13 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
     if is_main {
         out.push_str("    gorget_init_args(argc, argv);\n");
         // Trace init: open trace file at program start.
-        if let Some(ref trace_path) = module.trace_filename {
+        if let Some(ref trace_path) = module.runtime.trace_filename {
             let escaped = trace_path.replace('\\', "\\\\").replace('"', "\\\"");
             let _ = writeln!(out, "    __gorget_trace_init(\"{escaped}\");");
         }
     } else if let Some(ref display_name) = func.display_name {
         // Trace entry: emit call event with function name, parameter values, and depth.
-        if module.trace_filename.is_some() {
+        if module.runtime.trace_filename.is_some() {
             let escaped = display_name.replace('\\', "\\\\").replace('"', "\\\"");
             out.push_str("    if (__gorget_trace_fp) {\n");
             let _ = writeln!(out, "        fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"call\\\",\\\"fn\\\":\\\"{escaped}\\\",\\\"args\\\":{{\");");
@@ -3961,7 +3961,7 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
 
     // Pre-scan: collect which blocks are the "then" target of Branch terminators.
     // Branch events are emitted at the start of those blocks (only when actually entered).
-    let trace_then_blocks: std::collections::HashSet<u32> = if module.trace_filename.is_some() {
+    let trace_then_blocks: std::collections::HashSet<u32> = if module.runtime.trace_filename.is_some() {
         func.blocks.iter().filter_map(|b| {
             if let Some(crate::ir::instructions::Terminator::Branch { then_block, .. }) = &b.terminator {
                 Some(then_block.0)
@@ -3979,7 +3979,7 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
     // Track which test-function locals have been registered on the cleanup stack.
     // Only the FIRST assignment to each local triggers a cleanup push.
     let mut test_cleanup_pushed: FxHashSet<u32> = FxHashSet::default();
-    let tracing = module.trace_filename.is_some();
+    let tracing = module.runtime.trace_filename.is_some();
     for (i, block) in func.blocks.iter().enumerate() {
         let _ = writeln!(out, "    bb{i}: ;");
 
@@ -4320,7 +4320,7 @@ fn emit_instruction(
                 // Float operand with integer destination: cast to int first, then integer remainder
                 let _ = writeln!(out, "        if ({rhs_str} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }}");
                 let _ = writeln!(out, "        _{id} = (int64_t){lhs_str} % (int64_t){rhs_str};", id = dst.0);
-            } else if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) && c_type == "int64_t" && !module.overflow_wrap {
+            } else if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) && c_type == "int64_t" && !module.runtime.overflow_wrap {
                 // Checked arithmetic: abort on overflow (only for integral types)
                 // Check if either operand is a float — if so, cast and skip overflow check
                 let lhs_is_float = lhs_effective == "double" || lhs_effective == "float";

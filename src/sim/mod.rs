@@ -48,12 +48,12 @@ pub fn interpret(module: &Module, source_path: &str, config: &SimConfig) -> i32 
     interp.init_globals();
 
     // If the module has test functions, run them as the test runner would.
-    if !module.test_fns.is_empty() || module.is_test_module {
+    if !module.runtime.test_fns.is_empty() || module.runtime.is_test_module {
         return run_test_suite(&mut interp);
     }
 
     // Hot-reload modules have init/tick/reload instead of main.
-    if module.hot_reload {
+    if module.runtime.hot_reload {
         return run_hot_reload(&mut interp);
     }
 
@@ -94,7 +94,7 @@ fn run_many_seeds(module: &Module, source_path: &str, config: &SimConfig, from: 
         interp.init_globals();
 
         let has_main = interp.module.find_function("main").is_some();
-        let result = if !module.test_fns.is_empty() || module.is_test_module {
+        let result = if !module.runtime.test_fns.is_empty() || module.runtime.is_test_module {
             // For test modules, just check if __suite_setup (if any) panics.
             Ok(Value::Unit)
         } else if !has_main {
@@ -134,7 +134,7 @@ fn run_many_seeds(module: &Module, source_path: &str, config: &SimConfig, from: 
 
 /// Run a test suite: call each test function and report results.
 fn run_test_suite(interp: &mut Interpreter) -> i32 {
-    let test_fns = interp.module.test_fns.clone();
+    let test_fns = interp.module.runtime.test_fns.clone();
     let n = test_fns.len();
     let header = format!("Running {n} tests...\n");
     interp.stdout.extend_from_slice(header.as_bytes());
@@ -143,7 +143,7 @@ fn run_test_suite(interp: &mut Interpreter) -> i32 {
     let mut failed = 0i32;
 
     // Suite setup (if present)
-    if interp.module.has_suite_setup {
+    if interp.module.runtime.has_suite_setup {
         let _ = interp.call_function("__suite_setup", vec![], 0);
         flush_output(&interp.stdout, &interp.stderr);
         interp.stdout.clear();
@@ -300,7 +300,7 @@ fn run_test_suite(interp: &mut Interpreter) -> i32 {
     }
 
     // Suite teardown (if present) — runs BEFORE the final summary line.
-    if interp.module.has_suite_teardown {
+    if interp.module.runtime.has_suite_teardown {
         // Flush test result lines first, then let teardown print its output, then print summary.
         flush_output(&interp.stdout, &interp.stderr);
         interp.stdout.clear();
