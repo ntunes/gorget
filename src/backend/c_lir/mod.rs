@@ -5,38 +5,76 @@
 //! explicit in LIR instructions.
 
 use crate::lir::*;
+use std::collections::HashMap;
 use std::fmt::Write;
+
+/// Names of structs provided by the Gorget C runtime — these should NOT
+/// be re-defined by the LIR backend.
+const RUNTIME_STRUCTS: &[&str] = &[
+    "Str", "GorgetString", "GorgetArray", "GorgetClosure",
+    "TraitObj", "TaskHandle", "GorgetRange",
+];
+
+/// Build a mapping from StructId → C type name.
+/// Runtime-provided structs use their real names; user structs use `__lir_s{id}`.
+fn build_struct_names(module: &LirModule) -> HashMap<u32, String> {
+    let mut map = HashMap::new();
+    for (i, def) in module.structs.iter().enumerate() {
+        if RUNTIME_STRUCTS.contains(&def.name.as_str()) {
+            map.insert(i as u32, def.name.clone());
+        } else {
+            map.insert(i as u32, format!("__lir_s{i}"));
+        }
+    }
+    map
+}
 
 /// Generate C code from an LIR module.
 pub fn generate_c(module: &LirModule) -> String {
-    let mut out = String::with_capacity(4096);
+    generate_c_inner(module, true)
+}
 
-    // Preamble
-    writeln!(out, "#include <stdint.h>").unwrap();
-    writeln!(out, "#include <stdbool.h>").unwrap();
-    writeln!(out, "#include <stdio.h>").unwrap();
-    writeln!(out, "#include <string.h>").unwrap();
-    writeln!(out, "#include <stdlib.h>").unwrap();
-    writeln!(out).unwrap();
+/// Generate C code from an LIR module, optionally including the Gorget runtime.
+pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
+    let struct_names = build_struct_names(module);
+    let mut out = String::with_capacity(if include_runtime { 256 * 1024 } else { 4096 });
 
-    // Struct forward declarations
+    if include_runtime {
+        // Include the full Gorget runtime (provides Str, GorgetString, collections, etc.)
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_PREAMBLE);
+        out.push_str(crate::backend::c::c_runtime::PANIC_NORMAL);
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_CORE);
+        writeln!(out).unwrap();
+    } else {
+        // Minimal headers for standalone mode
+        writeln!(out, "#include <stdint.h>").unwrap();
+        writeln!(out, "#include <stdbool.h>").unwrap();
+        writeln!(out, "#include <stdio.h>").unwrap();
+        writeln!(out, "#include <string.h>").unwrap();
+        writeln!(out, "#include <stdlib.h>").unwrap();
+        writeln!(out).unwrap();
+    }
+
+    // Struct forward declarations (skip runtime-provided structs)
     for (i, def) in module.structs.iter().enumerate() {
-        if def.fields.is_empty() {
-            continue; // skip empty placeholder structs
+        if def.fields.is_empty() || RUNTIME_STRUCTS.contains(&def.name.as_str()) {
+            continue;
         }
-        writeln!(out, "typedef struct __lir_s{i} __lir_s{i};").unwrap();
+        let cname = &struct_names[&(i as u32)];
+        writeln!(out, "typedef struct {cname} {cname};").unwrap();
     }
     writeln!(out).unwrap();
 
-    // Struct definitions
+    // Struct definitions (skip runtime-provided structs)
     for (i, def) in module.structs.iter().enumerate() {
-        if def.fields.is_empty() {
+        if def.fields.is_empty() || RUNTIME_STRUCTS.contains(&def.name.as_str()) {
             continue;
         }
+        let cname = &struct_names[&(i as u32)];
         writeln!(out, "// {}", def.name).unwrap();
-        writeln!(out, "struct __lir_s{i} {{").unwrap();
+        writeln!(out, "struct {cname} {{").unwrap();
         for (fname, fty) in &def.fields {
-            writeln!(out, "    {} {};", c_type(fty), c_field_name(fname)).unwrap();
+            writeln!(out, "    {} {};", c_type_named(fty, &struct_names), c_field_name(fname)).unwrap();
         }
         writeln!(out, "}};").unwrap();
         writeln!(out).unwrap();
@@ -54,7 +92,7 @@ pub fn generate_c(module: &LirModule) -> String {
         if ext.is_variadic && ext.params.is_empty() {
             continue;
         }
-        write!(out, "{} {}(", c_type(&ext.return_type), ext.name).unwrap();
+        write!(out, "{} {}(", c_type_named(&ext.return_type, &struct_names), ext.name).unwrap();
         if ext.params.is_empty() && !ext.is_variadic {
             write!(out, "void").unwrap();
         } else {
@@ -62,7 +100,7 @@ pub fn generate_c(module: &LirModule) -> String {
                 if i > 0 {
                     write!(out, ", ").unwrap();
                 }
-                write!(out, "{}", c_type(p)).unwrap();
+                write!(out, "{}", c_type_named(p, &struct_names)).unwrap();
             }
             if ext.is_variadic {
                 if !ext.params.is_empty() {
@@ -80,7 +118,7 @@ pub fn generate_c(module: &LirModule) -> String {
     // Global declarations
     for (i, g) in module.globals.iter().enumerate() {
         let kw = if g.is_const { "const " } else { "" };
-        write!(out, "{kw}{} __lir_g{i}", c_type(&g.ty)).unwrap();
+        write!(out, "{kw}{} __lir_g{i}", c_type_named(&g.ty, &struct_names)).unwrap();
         emit_global_init(&mut out, &g.init);
         writeln!(out, "; // {}", g.name).unwrap();
     }
@@ -90,7 +128,7 @@ pub fn generate_c(module: &LirModule) -> String {
 
     // Function forward declarations
     for func in &module.functions {
-        write!(out, "{} {}(", c_type(&func.return_type), func.name).unwrap();
+        write!(out, "{} {}(", c_type_named(&func.return_type, &struct_names), func.name).unwrap();
         if func.params.is_empty() {
             write!(out, "void").unwrap();
         } else {
@@ -98,7 +136,7 @@ pub fn generate_c(module: &LirModule) -> String {
                 if i > 0 {
                     write!(out, ", ").unwrap();
                 }
-                write!(out, "{} __p{i}", c_type(p)).unwrap();
+                write!(out, "{} __p{i}", c_type_named(p, &struct_names)).unwrap();
             }
         }
         writeln!(out, ");").unwrap();
@@ -107,16 +145,16 @@ pub fn generate_c(module: &LirModule) -> String {
 
     // Function definitions
     for func in &module.functions {
-        emit_function(&mut out, func, module);
+        emit_function(&mut out, func, module, &struct_names);
         writeln!(out).unwrap();
     }
 
     out
 }
 
-fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule) {
+fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>) {
     // Signature
-    write!(out, "{} {}(", c_type(&func.return_type), func.name).unwrap();
+    write!(out, "{} {}(", c_type_named(&func.return_type, sn), func.name).unwrap();
     if func.params.is_empty() {
         write!(out, "void").unwrap();
     } else {
@@ -124,14 +162,14 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule) {
             if i > 0 {
                 write!(out, ", ").unwrap();
             }
-            write!(out, "{} __p{i}", c_type(p)).unwrap();
+            write!(out, "{} __p{i}", c_type_named(p, sn)).unwrap();
         }
     }
     writeln!(out, ") {{").unwrap();
 
     // Slot declarations
     for (i, slot) in func.slots.iter().enumerate() {
-        let ty_str = c_type(&slot.ty);
+        let ty_str = c_type_named(&slot.ty, sn);
         if ty_str == "void" {
             // Type couldn't be resolved — skip (will cause errors if used)
             writeln!(out, "    // __s{i}: void (unresolved type)").unwrap();
@@ -182,7 +220,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule) {
 
     for (i, ty) in val_types.iter().enumerate() {
         if let Some(ty) = ty {
-            let ts = c_type(ty);
+            let ts = c_type_named(ty, sn);
             if ts == "void" {
                 writeln!(out, "    // __v{i}: void (unresolved type)").unwrap();
             } else {
@@ -195,7 +233,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule) {
     // Each block param needs a temporary for parallel moves.
     for block in &func.blocks {
         for (vid, ty) in &block.params {
-            writeln!(out, "    {} __bp{};", c_type(ty), vid.0).unwrap();
+            writeln!(out, "    {} __bp{};", c_type_named(ty, sn), vid.0).unwrap();
         }
     }
 
@@ -213,7 +251,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule) {
         // Instructions
         for inst in &block.insts {
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, module);
+            emit_inst(out, inst, module, sn);
             writeln!(out).unwrap();
         }
 
@@ -226,7 +264,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule) {
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, module: &LirModule) {
+fn emit_inst(out: &mut String, inst: &Inst, module: &LirModule, sn: &HashMap<u32, String>) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -244,11 +282,11 @@ fn emit_inst(out: &mut String, inst: &Inst, module: &LirModule) {
 
         // Constants
         Inst::IConst { dst, value, ty } => {
-            write!(out, "{} = ({}){}LL;", v(*dst), c_type(ty), value).unwrap();
+            write!(out, "{} = ({}){}LL;", v(*dst), c_type_named(ty, sn), value).unwrap();
         }
         Inst::FConst { dst, bits, ty } => {
             let val = f64::from_bits(*bits);
-            write!(out, "{} = ({})({});", v(*dst), c_type(ty), format_float(val)).unwrap();
+            write!(out, "{} = ({})({});", v(*dst), c_type_named(ty, sn), format_float(val)).unwrap();
         }
         Inst::BoolConst { dst, value } => {
             write!(out, "{} = {};", v(*dst), if *value { "true" } else { "false" }).unwrap();
@@ -336,16 +374,16 @@ fn emit_inst(out: &mut String, inst: &Inst, module: &LirModule) {
 
         // Type conversions
         Inst::IntCast { dst, value, to } => {
-            write!(out, "{} = ({})({});", v(*dst), c_type(to), v(*value)).unwrap();
+            write!(out, "{} = ({})({});", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
         }
         Inst::FloatCast { dst, value, to } => {
-            write!(out, "{} = ({})({});", v(*dst), c_type(to), v(*value)).unwrap();
+            write!(out, "{} = ({})({});", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
         }
         Inst::IntToFloat { dst, value, to } => {
-            write!(out, "{} = ({})({});", v(*dst), c_type(to), v(*value)).unwrap();
+            write!(out, "{} = ({})({});", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
         }
         Inst::FloatToInt { dst, value, to } => {
-            write!(out, "{} = ({})({});", v(*dst), c_type(to), v(*value)).unwrap();
+            write!(out, "{} = ({})({});", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
         }
         Inst::PtrCast { dst, value } => {
             write!(out, "{} = (void*)({});", v(*dst), v(*value)).unwrap();
@@ -357,13 +395,13 @@ fn emit_inst(out: &mut String, inst: &Inst, module: &LirModule) {
                 "memcpy(&{d}, &{s}, sizeof({t}));",
                 d = v(*dst),
                 s = v(*value),
-                t = c_type(to)
+                t = c_type_named(to, sn)
             ).unwrap();
         }
 
         // Memory
         Inst::Load { dst, ptr, ty } => {
-            write!(out, "{} = *({} *)({});", v(*dst), c_type(ty), v(*ptr)).unwrap();
+            write!(out, "{} = *({} *)({});", v(*dst), c_type_named(ty, sn), v(*ptr)).unwrap();
         }
         Inst::Store { ptr, value } => {
             // Generic store — type is determined by context.
@@ -374,9 +412,9 @@ fn emit_inst(out: &mut String, inst: &Inst, module: &LirModule) {
             let field_name = &module.structs[struct_id.0 as usize].fields[*field as usize].0;
             write!(
                 out,
-                "{} = (void*)&((__lir_s{} *)({}))->{};",
+                "{} = (void*)&(({} *)({}))->{};",
                 v(*dst),
-                struct_id.0,
+                sn.get(&struct_id.0).map(|s| s.as_str()).unwrap_or("void"),
                 v(*base),
                 c_field_name(field_name)
             ).unwrap();
@@ -603,7 +641,7 @@ fn is_std_header_fn(name: &str) -> bool {
     )
 }
 
-fn c_type(ty: &LirType) -> String {
+fn c_type_named(ty: &LirType, struct_names: &HashMap<u32, String>) -> String {
     match ty {
         LirType::I8 => "int8_t".into(),
         LirType::I16 => "int16_t".into(),
@@ -617,7 +655,10 @@ fn c_type(ty: &LirType) -> String {
         LirType::F64 => "double".into(),
         LirType::Bool => "bool".into(),
         LirType::Ptr => "void*".into(),
-        LirType::Struct(id) => format!("__lir_s{}", id.0),
+        LirType::Struct(id) => struct_names
+            .get(&id.0)
+            .cloned()
+            .unwrap_or_else(|| format!("__lir_s{}", id.0)),
         LirType::Void => "void".into(),
     }
 }
