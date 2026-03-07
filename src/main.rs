@@ -358,6 +358,9 @@ fn try_build_ir(
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
         }
+        let stats = gorget::lir::optimize::optimize_module(&mut lir_module);
+        eprintln!("; LIR opt: {} dead fns, {} dead globals, {} dead insts",
+            stats.dead_functions_eliminated, stats.dead_globals_eliminated, stats.dead_instructions_eliminated);
         print!("{}", gorget::lir::display::dump_module(&lir_module));
         let errors = gorget::lir::validate::validate_module(&lir_module);
         if !errors.is_empty() {
@@ -380,6 +383,7 @@ fn try_build_ir(
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
         }
+        gorget::lir::optimize::optimize_module(&mut lir_module);
         let c_code = gorget::backend::c_lir::generate_c(&lir_module);
         print!("{c_code}");
         let input_path = Path::new(filename);
