@@ -99,6 +99,19 @@ impl ScopeTable {
         }
     }
 
+    /// Temporarily enter an existing scope (e.g. a FileModule scope for body resolution).
+    /// Returns the previous scope ID so it can be restored via `restore_scope`.
+    pub fn enter_scope(&mut self, scope_id: ScopeId) -> ScopeId {
+        let prev = self.current;
+        self.current = scope_id;
+        prev
+    }
+
+    /// Restore the current scope to a previously saved scope ID.
+    pub fn restore_scope(&mut self, scope_id: ScopeId) {
+        self.current = scope_id;
+    }
+
     /// Add a definition to the current scope. Returns error on duplicate.
     /// An actual definition (function, struct, etc.) may replace a prior `Import` placeholder.
     pub fn define(

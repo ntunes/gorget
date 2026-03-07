@@ -1077,7 +1077,7 @@ mod tests {
         let mut types = TypeTable::new();
         let mut errors = Vec::new();
         let mut ctx = resolve::collect_top_level(&module, &mut scopes, &mut types, &mut errors);
-        let resolution_map = resolve::resolve_bodies(&module, &mut scopes, &mut types, &mut errors, &mut ctx.function_info, &mut ctx.function_body_scopes);
+        let resolution_map = resolve::resolve_bodies(&module, &mut scopes, &mut types, &mut errors, &mut ctx.function_info, &mut ctx.function_body_scopes, &ctx.file_module_scopes);
         let registry = build_registry(&module, &scopes, &mut types, &resolution_map, &mut errors);
         (registry, errors)
     }

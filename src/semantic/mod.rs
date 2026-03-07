@@ -211,7 +211,7 @@ pub fn analyze_with_source_dir(
     let mut resolve_ctx = resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors);
 
     // Pass 2: Resolve names in all bodies
-    let mut resolution_map = resolve::resolve_bodies(module, &mut scopes, &mut types, &mut errors, &mut resolve_ctx.function_info, &mut resolve_ctx.function_body_scopes);
+    let mut resolution_map = resolve::resolve_bodies(module, &mut scopes, &mut types, &mut errors, &mut resolve_ctx.function_info, &mut resolve_ctx.function_body_scopes, &resolve_ctx.file_module_scopes);
     // Merge any resolutions collected during pass 1
     resolution_map.extend(resolve_ctx.resolution_map);
 

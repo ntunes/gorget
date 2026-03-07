@@ -76,6 +76,9 @@ pub struct ResolveContext {
     /// Private name sets per module path — for detecting imports of private items.
     /// Populated during FileModule collection, validated after all modules are processed.
     pub module_private_names: Vec<(Vec<String>, FxHashSet<String>)>,
+    /// Scope IDs for FileModule scopes — keyed by joined module path.
+    /// Used during body resolution so that private names are visible within the module.
+    pub file_module_scopes: FxHashMap<String, super::ids::ScopeId>,
 }
 
 impl ResolveContext {
@@ -87,6 +90,7 @@ impl ResolveContext {
             resolution_map: FxHashMap::default(),
             function_body_scopes: FxHashMap::default(),
             module_private_names: Vec::new(),
+            file_module_scopes: FxHashMap::default(),
         }
     }
 }
@@ -584,7 +588,8 @@ fn collect_item(
                 .collect();
 
             // Push a file-module scope and collect all items (public + private) into it.
-            scopes.push_scope(ScopeKind::FileModule { path: path.clone() });
+            let file_scope_id = scopes.push_scope(ScopeKind::FileModule { path: path.clone() });
+            ctx.file_module_scopes.insert(path.join("."), file_scope_id);
 
             for si in items {
                 collect_item(&si.node, si.span, scopes, types, errors, ctx);
@@ -648,11 +653,12 @@ pub fn resolve_bodies(
     errors: &mut Vec<SemanticError>,
     function_info: &mut FxHashMap<DefId, FunctionInfo>,
     function_body_scopes: &mut FxHashMap<(String, usize), super::ids::ScopeId>,
+    file_module_scopes: &FxHashMap<String, super::ids::ScopeId>,
 ) -> ResolutionMap {
     let mut resolution_map = ResolutionMap::default();
 
     for item in &module.items {
-        resolve_item_body(&item.node, scopes, types, errors, &mut resolution_map, function_info, function_body_scopes);
+        resolve_item_body(&item.node, scopes, types, errors, &mut resolution_map, function_info, function_body_scopes, file_module_scopes);
     }
 
     resolution_map
@@ -666,6 +672,7 @@ fn resolve_item_body(
     resolution_map: &mut ResolutionMap,
     function_info: &mut FxHashMap<DefId, FunctionInfo>,
     function_body_scopes: &mut FxHashMap<(String, usize), super::ids::ScopeId>,
+    file_module_scopes: &FxHashMap<String, super::ids::ScopeId>,
 ) {
     match item {
         Item::Function(f) => {
@@ -706,11 +713,19 @@ fn resolve_item_body(
             resolve_block(&s.body, scopes, types, errors, resolution_map);
             scopes.pop_scope();
         }
-        // Nested module: recurse into its items so function bodies are resolved
-        // with the global scope (which already has all exported names from collect_top_level).
-        Item::Module { items, .. } => {
+        // Nested module: enter the FileModule scope so private names are visible.
+        Item::Module { path, items } => {
+            let mod_key = path.join(".");
+            let prev = if let Some(&scope_id) = file_module_scopes.get(&mod_key) {
+                Some(scopes.enter_scope(scope_id))
+            } else {
+                None
+            };
             for si in items {
-                resolve_item_body(&si.node, scopes, types, errors, resolution_map, function_info, function_body_scopes);
+                resolve_item_body(&si.node, scopes, types, errors, resolution_map, function_info, function_body_scopes, file_module_scopes);
+            }
+            if let Some(prev_scope) = prev {
+                scopes.restore_scope(prev_scope);
             }
         }
         // Other items don't have bodies to resolve
@@ -1069,7 +1084,7 @@ fn resolve_stmt(
             // Nested item definitions
             let mut ctx = ResolveContext::new();
             collect_item(item, Span::dummy(), scopes, types, errors, &mut ctx);
-            resolve_item_body(item, scopes, types, errors, resolution_map, &mut ctx.function_info, &mut ctx.function_body_scopes);
+            resolve_item_body(item, scopes, types, errors, resolution_map, &mut ctx.function_info, &mut ctx.function_body_scopes, &ctx.file_module_scopes);
         }
 
         Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
@@ -1659,7 +1674,7 @@ mod tests {
         let mut types = TypeTable::new();
         let mut errors = Vec::new();
         let mut ctx = collect_top_level(&module, &mut scopes, &mut types, &mut errors);
-        let resolution_map = resolve_bodies(&module, &mut scopes, &mut types, &mut errors, &mut ctx.function_info, &mut ctx.function_body_scopes);
+        let resolution_map = resolve_bodies(&module, &mut scopes, &mut types, &mut errors, &mut ctx.function_info, &mut ctx.function_body_scopes, &ctx.file_module_scopes);
         (scopes, types, resolution_map, errors)
     }
 

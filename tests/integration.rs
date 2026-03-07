@@ -9060,6 +9060,7 @@ fn resolver_comparison() {
             &mut errors,
             &mut resolve_ctx.function_info,
             &mut resolve_ctx.function_body_scopes,
+            &resolve_ctx.file_module_scopes,
         );
         resolution_map.extend(resolve_ctx.resolution_map);
         let rust_output = format_resolution_canonical(&scopes, &resolution_map);

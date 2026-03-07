@@ -1,4 +1,4 @@
-from gg.uuid import UUID, uuid_hex_val
+from gg.uuid import UUID
 
 void main():
     # Parse a known UUID and round-trip through to_string

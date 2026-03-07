@@ -2794,7 +2794,7 @@ mod tests {
             Item::Function(f) => Some(f.name.node.clone()),
             _ => None,
         }).collect();
-        assert!(fn_names.contains(&"uuid_hex_val".to_string()));
+        assert!(fn_names.contains(&"hex_val".to_string()));
     }
 
     // ─── gg.log ───────────────────────────────────────────────

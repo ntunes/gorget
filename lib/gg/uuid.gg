@@ -10,14 +10,14 @@ from std.conv import ord
 
 # ── Hex helpers ──────────────────────────────────────────────
 
-int uuid_hex_val(str uuid_c):
-    int uuid_code = ord(uuid_c)
-    if uuid_code >= 48 and uuid_code <= 57:
-        return uuid_code - 48
-    if uuid_code >= 97 and uuid_code <= 102:
-        return uuid_code - 87
-    if uuid_code >= 65 and uuid_code <= 70:
-        return uuid_code - 55
+private int hex_val(str c):
+    int code = ord(c)
+    if code >= 48 and code <= 57:
+        return code - 48
+    if code >= 97 and code <= 102:
+        return code - 87
+    if code >= 65 and code <= 70:
+        return code - 55
     return -1
 
 # ── UUID type ────────────────────────────────────────────────
@@ -47,8 +47,8 @@ equip UUID:
                     return Error("expected '-' at position in UUID")
                 uuid_i = uuid_i + 1
             else:
-                int uuid_hi = uuid_hex_val(uuid_s.char_at(uuid_i))
-                int uuid_lo = uuid_hex_val(uuid_s.char_at(uuid_i + 1))
+                int uuid_hi = hex_val(uuid_s.char_at(uuid_i))
+                int uuid_lo = hex_val(uuid_s.char_at(uuid_i + 1))
                 if uuid_hi < 0 or uuid_lo < 0:
                     return Error("invalid hex character in UUID")
                 uuid_out.push((uuid_hi * 16 + uuid_lo) as uint8)
