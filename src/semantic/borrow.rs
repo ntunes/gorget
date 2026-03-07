@@ -46,11 +46,6 @@ struct CaptureSet {
     captures: Vec<CaptureEntry>,
 }
 
-impl CaptureSet {
-    fn has_any_borrowed(&self) -> bool {
-        self.captures.iter().any(|c| c.has_borrowed_origin)
-    }
-}
 
 // ─── Borrow Origin ────────────────────────────────────────
 

@@ -67,7 +67,7 @@ impl GenericCollector {
     pub fn gir_equip_method_names(&self) -> Vec<String> {
         use crate::parser::ast::FunctionBody;
         let mut names = Vec::new();
-        for (base_name, type_args, mangled_type_name, kind) in &self.instances {
+        for (base_name, _type_args, mangled_type_name, kind) in &self.instances {
             if !matches!(kind, TemplateKind::Struct | TemplateKind::Enum) { continue; }
             if let Some(equip_blocks) = self.equip_templates.get(base_name) {
                 for equip in equip_blocks {

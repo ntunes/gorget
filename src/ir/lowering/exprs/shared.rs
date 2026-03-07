@@ -6,35 +6,6 @@ use crate::ir::types::*;
 
 use super::super::context::LoweringContext;
 
-/// Emit lock+get+release on a shared variable's hidden mutex local.
-/// Returns an operand holding the inner value. The lock is released immediately.
-pub fn emit_shared_lock_get(
-    ctx: &mut LoweringContext,
-    builder: &mut FunctionBuilder,
-    mutex_local: LocalId,
-    inner_type: TypeId,
-) -> Operand {
-    let inner_c = ctx.type_name_for_id(inner_type)
-        .unwrap_or("int64_t")
-        .to_string();
-    let guard_mangled = format!("Guard__{inner_c}");
-    let guard_type = ctx.type_mapper.lookup_named(&guard_mangled)
-        .unwrap_or(inner_type);
-    let mutex_mangled = format!("Mutex__{inner_c}");
-    let lock_fn = format!("{mutex_mangled}__lock");
-    let get_fn = format!("{guard_mangled}__get");
-    let release_fn = format!("{guard_mangled}__drop");
-    let guard = builder.call(&lock_fn, vec![FunctionBuilder::copy(mutex_local)], guard_type);
-    // Guard__T__get/release take &self (pointer to guard)
-    let guard_ptr_type = ctx.register_ptr_type(guard_type);
-    let guard_ptr = builder.add_local(guard_ptr_type, None);
-    builder.emit_borrow(guard_ptr, Place::local(guard));
-    let val = builder.call(&get_fn, vec![FunctionBuilder::copy(guard_ptr)], inner_type);
-    // Release the guard immediately so the lock doesn't deadlock on subsequent access
-    builder.call(&release_fn, vec![FunctionBuilder::copy(guard_ptr)], UNIT_TYPE);
-    FunctionBuilder::copy(val)
-}
-
 /// Emit Shared.get() → Mutex, then lock+get+release on a Shared[Mutex[T]] hidden local.
 /// Returns an operand holding the inner value T.
 pub fn emit_shared_mutex_lock_get(
@@ -232,32 +203,6 @@ pub fn atomic_type_name_for(inner_type: TypeId) -> String {
     } else {
         "AtomicInt".to_string()
     }
-}
-
-/// Emit lock+set+release on a shared variable's hidden mutex local.
-pub fn emit_shared_lock_set(
-    ctx: &mut LoweringContext,
-    builder: &mut FunctionBuilder,
-    mutex_local: LocalId,
-    inner_type: TypeId,
-    value: Operand,
-) {
-    let inner_c = ctx.type_name_for_id(inner_type)
-        .unwrap_or("int64_t")
-        .to_string();
-    let guard_mangled = format!("Guard__{inner_c}");
-    let guard_type = ctx.type_mapper.lookup_named(&guard_mangled)
-        .unwrap_or(inner_type);
-    let mutex_mangled = format!("Mutex__{inner_c}");
-    let lock_fn = format!("{mutex_mangled}__lock");
-    let set_fn = format!("{guard_mangled}__set");
-    let release_fn = format!("{guard_mangled}__drop");
-    let guard = builder.call(&lock_fn, vec![FunctionBuilder::copy(mutex_local)], guard_type);
-    let guard_ptr_type = ctx.register_ptr_type(guard_type);
-    let guard_ptr = builder.add_local(guard_ptr_type, None);
-    builder.emit_borrow(guard_ptr, Place::local(guard));
-    builder.call(&set_fn, vec![FunctionBuilder::copy(guard_ptr), value], UNIT_TYPE);
-    builder.call(&release_fn, vec![FunctionBuilder::copy(guard_ptr)], UNIT_TYPE);
 }
 
 pub fn guard_inner_suffix(type_name: &str) -> Option<(&str, bool)> {
