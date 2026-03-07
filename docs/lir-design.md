@@ -18,6 +18,22 @@ This coupling creates two problems:
 
 LIR solves both by making all implicit operations explicit *before* backend emission.
 
+## Research Base
+
+This design is informed by study of six production SSA IRs:
+
+- **Cranelift CLIF** — Block parameters (not phi nodes), no aggregate types, FunctionBuilder with def_var/use_var for SSA construction. Validates block-parameter approach.
+- **Swift SIL (OSSA)** — Ownership annotations on SSA values, loadable vs address-only type split, `destructure_struct` for consuming aggregates. Proves SSA + ownership is possible but adds significant complexity.
+- **Rust MIR** — Non-SSA with mutable places. Chosen because borrow checking runs on MIR. Gorget's borrow checking runs on the AST, so this constraint doesn't apply.
+- **QBE** — Accepts non-SSA input and constructs SSA automatically. 4 base types, no pointer type. ~15k lines, targets "70% of LLVM's performance in 10% of the code."
+- **Go SSA** — Memory as a first-class SSA value. Decompose pass breaks aggregates into scalars. Architecture-specific lowering via rewrite rules.
+- **Zig** — 4 IR layers (ZIR→AIR→MIR→machine code). Untyped pre-specialization IR cached per-file. Backend-specific MIR dialects.
+
+Key takeaways:
+- **Sea of Nodes rejected** — V8 abandoned it for CFG after years of investment. Too complex, slower compile times, harder to debug.
+- **MLIR rejected** — dialect infrastructure is overengineered for a single-language compiler.
+- **Ownership in LIR unnecessary** — Gorget's borrow checker runs on the AST. By LIR time, all ownership decisions are made and drops are inserted as regular calls. (Swift needs OSSA because its borrow analysis runs on SIL.)
+
 ## New Pipeline
 
 ```
@@ -30,51 +46,64 @@ LIR solves both by making all implicit operations explicit *before* backend emis
 
 ## Design Principles
 
-1. **SSA with block parameters** (Cranelift-style, not phi nodes). Block parameters are simpler to construct and transform than phi nodes, and map naturally to both C (via parallel-move lowering) and LLVM IR (via phi insertion).
+1. **SSA with block parameters** (Cranelift-style). Block parameters are simpler to construct and transform than phi nodes, and map naturally to both C (via parallel-move lowering) and LLVM IR (via phi insertion). Validated by Cranelift's production use in Wasmtime.
 
-2. **Explicit everything.** If the C backend currently generates code for it, LIR must have an instruction for it. No implicit drops, no implicit coercions, no name-convention dispatch.
+2. **Non-SSA input with mechanical SSA construction.** GIR→LIR lowering emits place-based code (store/load to named slots). A separate pass promotes slots to SSA values and inserts block parameters. This is the QBE/LLVM mem2reg pattern — dramatically simpler than constructing SSA during lowering.
 
-3. **Typed instructions.** Every value has an LIR type. Types are concrete (no generics — monomorphization happens in GIR). Types include pointer representations, struct layouts, and function signatures.
+3. **Address-only aggregates.** Scalars (int, float, bool, pointers) are SSA values. Structs, enums, and arrays live in memory (stack slots), accessed via typed field projections. This matches GIR's current model, maps naturally to C, and works well with LLVM (alloca+mem2reg) and WASM (linear memory). SSA aggregates (SIL-style) can be added later as a targeted optimization for small structs.
 
-4. **Backend-agnostic.** LIR knows about memory layout but not about C syntax, LLVM intrinsics, or WASM opcodes. Backends translate LIR 1:1 without semantic decisions.
+4. **No ownership tracking.** LIR is ownership-unaware. Drop calls are regular function calls. No `@owned`/`@guaranteed` annotations. Borrow checking is done, drops are placed — LIR just executes them.
 
-5. **Optimizable.** Standard SSA optimizations (constant propagation, dead code elimination, copy propagation, function inlining, common subexpression elimination) work directly on LIR with no special cases.
+5. **Explicit everything.** If the C backend currently generates code for it, LIR must have an instruction for it. No implicit drops, no implicit coercions, no name-convention dispatch.
+
+6. **Backend-agnostic.** LIR knows about memory layout but not about C syntax, LLVM intrinsics, or WASM opcodes. Backends translate LIR 1:1 without semantic decisions.
 
 ## Type System
 
-LIR types are concrete machine representations, not Gorget semantic types.
+LIR types are concrete machine representations. Following QBE's philosophy of minimalism, but with enough structure for sizeof/layout computation.
 
 ```rust
-enum LirType {
-    // Scalars
+/// Concrete machine type — no generics, no ownership qualifiers.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LirType {
+    // Scalars (SSA values)
     I8, I16, I32, I64,
     U8, U16, U32, U64,
     F32, F64,
-    Bool,
-    Ptr(Box<LirType>),         // typed pointer
-    RawPtr,                     // void*
-    FnPtr(FnSig),              // typed function pointer
+    Bool,                           // i8 with 0/1 semantics (may remove per Cranelift's lesson)
+    Ptr,                            // opaque pointer (like LLVM's ptr)
 
-    // Aggregates (all fields have concrete LirType)
-    Struct(StructId),           // reference to StructDef
-    Array(Box<LirType>, usize), // fixed-size array [T; N]
+    // Aggregates (address-only — live in stack slots, not SSA values)
+    Struct(StructId),
 
     // Special
-    Void,                       // for void-returning functions
-}
-
-struct StructDef {
-    name: String,
-    fields: Vec<(String, LirType)>,
-    size: usize,
-    align: usize,
-}
-
-struct FnSig {
-    params: Vec<LirType>,
-    ret: LirType,
+    Void,
 }
 ```
+
+Note: no separate `FnPtr` type — function pointers are just `Ptr`. No separate `RawPtr` vs typed pointer — all pointers are opaque `Ptr` (like LLVM's opaque pointer transition). The type of the pointed-to data is carried by load/store instructions, not the pointer itself.
+
+### Struct Definitions
+
+```rust
+#[derive(Debug, Clone)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<(String, LirType)>,
+    // Size and alignment computed lazily or by the backend
+}
+```
+
+Structs cover all aggregate types:
+- Gorget structs → LIR Struct with named fields
+- Gorget enums → LIR Struct with `tag: I32` + union-like variant fields
+- Gorget tuples → LIR Struct with positional fields `_0`, `_1`, ...
+- `Str` → Struct `{ data: Ptr, len: I64 }`
+- `GorgetString` → Struct `{ data: Ptr, len: I64, cap: I64 }`
+- `GorgetArray` → Struct `{ data: Ptr, len: I64, cap: I64, elem_size: I64 }`
+- Closures → Struct `{ fn_ptr: Ptr, env: Ptr }`
+- Trait objects → Struct `{ data: Ptr, vtable: Ptr }`
+- Tasks → Struct `{ task_ptr: Ptr, drop_fn: Ptr }`
 
 ### GIR → LIR Type Mapping
 
@@ -83,463 +112,410 @@ struct FnSig {
 | `int` / `int64` | `I64` |
 | `float` / `float64` | `F64` |
 | `bool` | `Bool` |
-| `str` | `Struct(Str)` — `{ Ptr(U8), I64 }` (data, len) |
-| `String` | `Struct(GorgetString)` — `{ Ptr(U8), I64, I64 }` (data, len, cap) |
-| `cstr` | `Ptr(U8)` |
-| `Vector[T]` | `Struct(GorgetArray)` — `{ RawPtr, I64, I64, I64 }` (data, len, cap, elem_size) |
+| `str` | `Struct(Str)` |
+| `String` | `Struct(GorgetString)` |
+| `cstr` | `Ptr` |
+| `Vector[T]` | `Struct(GorgetArray)` |
 | `Dict[K,V]` | `Struct(GorgetDict_K_V)` |
-| `Option[T]` | `Struct(Option_T)` — `{ I32, Union(T) }` |
-| `Result[T,E]` | `Struct(Result_T_E)` — `{ I32, Union(T,E) }` |
-| `Box[T]` | `Ptr(T)` |
-| `Box[Trait]` | `Struct(TraitObj)` — `{ RawPtr, Ptr(VTable) }` |
-| `Shared[T]` | `Ptr(SharedInner_T)` |
-| `Callable[R(P...)]` | `Struct(Closure)` — `{ FnPtr, RawPtr }` (fn_ptr, env) |
-| User struct `S` | `Struct(S)` — fields mapped recursively |
-| User enum `E` | `Struct(E)` — `{ I32, Union(...variants...) }` |
-| `Task[T]` | `Struct(Task_T)` — `{ RawPtr, FnPtr }` (task_ptr, drop_fn) |
-
-## Instruction Set
-
-### Values and Control Flow
-
-```rust
-/// SSA value — produced by exactly one instruction, used zero or more times.
-/// In block parameters and instructions, values are referenced by ValueId.
-struct ValueId(u32);
-
-/// A basic block with parameters (replaces phi nodes).
-struct Block {
-    id: BlockId,
-    params: Vec<(ValueId, LirType)>,   // block parameters (SSA "phis")
-    insts: Vec<Inst>,
-    terminator: Term,
-}
-
-enum Term {
-    Ret(ValueId),
-    RetVoid,
-    Jump { target: BlockId, args: Vec<ValueId> },
-    Branch { cond: ValueId, then_: BlockId, then_args: Vec<ValueId>,
-             else_: BlockId, else_args: Vec<ValueId> },
-    Switch { value: ValueId, cases: Vec<(i64, BlockId, Vec<ValueId>)>,
-             default: BlockId, default_args: Vec<ValueId> },
-    Unreachable,
-}
-```
-
-### Instructions
-
-Each instruction produces zero or one `ValueId`. All side-effecting operations are explicit.
-
-```rust
-enum Inst {
-    // ── Constants ──────────────────────────────────────────────
-    IConst   { dst: ValueId, ty: LirType, value: i64 },
-    FConst   { dst: ValueId, ty: LirType, value: f64 },
-    BoolConst{ dst: ValueId, value: bool },
-    StrLit   { dst: ValueId, data: Vec<u8> },  // emits static const + Str{} init
-    NullPtr  { dst: ValueId, ty: LirType },
-    FuncAddr { dst: ValueId, func: FuncId },    // address of a function
-    GlobalAddr { dst: ValueId, global: GlobalId },
-
-    // ── Arithmetic ────────────────────────────────────────────
-    // All arithmetic is explicit about overflow behavior.
-    Add      { dst: ValueId, lhs: ValueId, rhs: ValueId, overflow: Overflow },
-    Sub      { dst: ValueId, lhs: ValueId, rhs: ValueId, overflow: Overflow },
-    Mul      { dst: ValueId, lhs: ValueId, rhs: ValueId, overflow: Overflow },
-    Div      { dst: ValueId, lhs: ValueId, rhs: ValueId },  // traps on zero
-    Rem      { dst: ValueId, lhs: ValueId, rhs: ValueId },  // C remainder
-    Mod      { dst: ValueId, lhs: ValueId, rhs: ValueId },  // Python modulo
-    Neg      { dst: ValueId, operand: ValueId },
-    // Bitwise
-    BitAnd   { dst: ValueId, lhs: ValueId, rhs: ValueId },
-    BitOr    { dst: ValueId, lhs: ValueId, rhs: ValueId },
-    BitXor   { dst: ValueId, lhs: ValueId, rhs: ValueId },
-    BitNot   { dst: ValueId, operand: ValueId },
-    Shl      { dst: ValueId, lhs: ValueId, rhs: ValueId },
-    Shr      { dst: ValueId, lhs: ValueId, rhs: ValueId },
-    // Comparison
-    Cmp      { dst: ValueId, op: CmpOp, lhs: ValueId, rhs: ValueId },
-    // Logical
-    Not      { dst: ValueId, operand: ValueId },
-
-    // ── Type Conversions ──────────────────────────────────────
-    // ALL coercions are explicit instructions.
-    IntCast  { dst: ValueId, value: ValueId, to: LirType },     // int widening/narrowing
-    FloatCast{ dst: ValueId, value: ValueId, to: LirType },     // float widening/narrowing
-    IntToFloat { dst: ValueId, value: ValueId, to: LirType },
-    FloatToInt { dst: ValueId, value: ValueId, to: LirType },
-    PtrCast  { dst: ValueId, value: ValueId, to: LirType },     // pointer reinterpret
-    Bitcast  { dst: ValueId, value: ValueId, to: LirType },     // same-size reinterpret
-
-    // ── String coercions (currently implicit in C backend) ────
-    // GorgetString → Str: extract data+len into Str struct
-    StringToStr { dst: ValueId, value: ValueId },
-    // Str → const char*: extract .data field (NOTE: not null-terminated!)
-    StrToPtr { dst: ValueId, value: ValueId },
-    // const char* → Str: wrap with strlen
-    PtrToStr { dst: ValueId, value: ValueId },
-    // Str → GorgetString: heap-copy
-    StrToString { dst: ValueId, value: ValueId },
-
-    // ── Memory ────────────────────────────────────────────────
-    StackAlloc { dst: ValueId, ty: LirType },                   // alloca
-    HeapAlloc  { dst: ValueId, ty: LirType, allocator: ValueId },
-    HeapAllocArray { dst: ValueId, ty: LirType, count: ValueId, allocator: ValueId },
-    Free     { ptr: ValueId, allocator: ValueId },
-    Load     { dst: ValueId, ptr: ValueId, ty: LirType },       // *ptr
-    Store    { ptr: ValueId, value: ValueId },                   // *ptr = value
-    Memset   { ptr: ValueId, value: ValueId, size: ValueId },   // memset (for move zeroing)
-    Memcpy   { dst: ValueId, src: ValueId, size: ValueId },     // memcpy (for deep copy)
-
-    // ── Aggregate Access ──────────────────────────────────────
-    // All struct/enum field access goes through explicit GEP + Load/Store.
-    GetFieldPtr { dst: ValueId, base: ValueId, struct_id: StructId, field: u32 },
-    GetElementPtr { dst: ValueId, base: ValueId, index: ValueId, elem_ty: LirType },
-    ExtractValue { dst: ValueId, aggregate: ValueId, field: u32 },  // SSA aggregate extract
-    InsertValue  { dst: ValueId, aggregate: ValueId, field: u32, value: ValueId },
-
-    // ── Aggregate Construction ────────────────────────────────
-    StructLit { dst: ValueId, struct_id: StructId, fields: Vec<ValueId> },
-    // Enum variant: sets tag + variant data
-    EnumLit   { dst: ValueId, struct_id: StructId, tag: i32,
-                variant_field: u32, fields: Vec<ValueId> },
-
-    // ── Calls ─────────────────────────────────────────────────
-    // Direct call to a known function.
-    Call     { dst: Option<ValueId>, func: FuncId, args: Vec<ValueId> },
-    // Indirect call through a function pointer (closures, vtable dispatch).
-    CallPtr  { dst: Option<ValueId>, callee: ValueId, sig: FnSig, args: Vec<ValueId> },
-
-    // ── Drop / Cleanup ────────────────────────────────────────
-    // Explicit drop call — the GIR→LIR lowering resolves the drop strategy
-    // and emits the appropriate sequence (call custom drop, iterate fields,
-    // loop over collection elements, etc.) as regular instructions.
-    // There is NO implicit drop instruction in LIR.
-    //
-    // Example: dropping a Vector[String] becomes:
-    //   loop over elements { call gorget_string_free(elem) }
-    //   call gorget_array_free(vec)
-    //
-    // This is emitted as regular Call + branch instructions during lowering.
-
-    // ── Overflow Trap ─────────────────────────────────────────
-    Trap     { msg: String },  // abort with message (overflow, bounds, etc.)
-
-    // ── Checked Operations ────────────────────────────────────
-    // Bounds check: traps if index >= len.
-    BoundsCheck { index: ValueId, len: ValueId },
-    // Division-by-zero check: traps if divisor == 0.
-    DivCheck { divisor: ValueId },
-
-    // ── Printf (kept as a high-level instruction for ergonomics) ──
-    // Backend lowers to appropriate printf/fprintf with format expansion.
-    // All Str args are pre-expanded to (len, data) pairs during lowering.
-    Printf   { fmt: String, args: Vec<ValueId> },
-    Fprintf  { fd: ValueId, fmt: String, args: Vec<ValueId> },
-
-    // ── Inline Assembly / Backend Escape Hatch ────────────────
-    InlineAsm { template: String, inputs: Vec<ValueId>, outputs: Vec<ValueId> },
-}
-
-enum Overflow {
-    Trap,   // default: abort on overflow
-    Wrap,   // wrapping arithmetic (+%, -%, *%)
-    // Future: Saturate, Clamp
-}
-```
-
-## What Moves from C Backend to GIR→LIR Lowering
-
-Each category of implicit C backend work becomes explicit LIR instructions during the lowering pass:
-
-### 1. Drop Glue → Regular Call/Loop Instructions
-
-GIR `Drop { place }` is resolved during lowering using the type registry:
-
-```
-// GIR:  Drop { place: _5 }  (where _5: Vector[String])
-// LIR:
-    %len = load %vec_ptr.len
-    %i = block_param(0)           // loop counter
-    jump loop_body(%i)
-loop_body(%i):
-    %done = cmp ge %i, %len
-    branch %done, loop_exit(), loop_iter()
-loop_iter:
-    %elem_ptr = get_element_ptr %vec_data, %i, Str
-    %elem = load %elem_ptr
-    call @gorget_string_free(%elem)
-    %next = add %i, 1
-    jump loop_body(%next)
-loop_exit:
-    call @gorget_array_free(%vec_ptr)
-```
-
-No more `emit_drop_code` / `emit_field_drops` / `lookup_drop_strategy` in the backend.
-
-### 2. Vtable Dispatch → CallPtr through Explicit GEP
-
-```
-// GIR:  Call { func: "Shape_for_Circle__area", args: [_3] }
-//   (emitted via vtable lookup in C backend)
-// LIR:
-    %vtable_ptr = get_field_ptr %trait_obj, TraitObj, 1   // .vtable
-    %vtable = load %vtable_ptr
-    %method_ptr = get_field_ptr %vtable, Shape_VTable, 0  // .area slot
-    %fn = load %method_ptr
-    %data = get_field_ptr %trait_obj, TraitObj, 0          // .data
-    %result = call_ptr %fn, [%data]
-```
-
-### 3. Closure Dispatch → CallPtr with Env Extraction
-
-```
-// GIR:  CallIndirect { callee: _2, args: [_3] }
-// LIR:
-    %fn_ptr = extract_value %closure, 0     // .fn_ptr
-    %env = extract_value %closure, 1        // .env
-    %result = call_ptr %fn_ptr, [%env, %arg]
-```
-
-### 4. Type Coercions → Explicit Conversion Instructions
-
-```
-// GIR:  Assign { dst: _5, value: Copy(_3) }
-//   (where _3: GorgetString, _5: Str — implicit coercion in C backend)
-// LIR:
-    %data = get_field_ptr %gs, GorgetString, 0  // .data
-    %len = get_field_ptr %gs, GorgetString, 1   // .len
-    %str = struct_lit Str, [%data, %len]
-```
-
-### 5. Collection Methods → Inlined Call Sequences
-
-```
-// GIR:  Call { func: "vec_push", args: [&_1, _2] }
-//   (C backend inlines bounds check + realloc + memcpy)
-// LIR:
-    call @gorget_array_push(%vec_ptr, %elem_ptr, %elem_size)
-```
-
-Or for methods that the C backend currently inlines (pop, sort, etc.):
-
-```
-// vec.pop() → LIR:
-    %len = load %vec.len_ptr
-    %new_len = sub %len, 1
-    store %vec.len_ptr, %new_len
-    %elem_ptr = get_element_ptr %vec.data, %new_len, T
-    %elem = load %elem_ptr
-```
-
-### 6. Named-Function Adapters → FuncAddr + StructLit
-
-```
-// GIR:  Assign { dst: _5, value: Constant(FuncRef("add")) }
-//   (C backend generates __adapt_add wrapper)
-// LIR:
-    %adapter = func_addr @__adapt_add      // adapter function emitted during lowering
-    %null_env = null_ptr RawPtr
-    %closure = struct_lit Closure, [%adapter, %null_env]
-```
-
-The adapter function itself is emitted as a regular LIR function during lowering.
-
-### 7. Printf Formatting → Pre-expanded Args
-
-```
-// GIR:  CallExtern { func: "printf", args: [fmt, _3] }
-//   (C backend expands Str args to (int)len, data)
-// LIR:
-    %data = extract_value %str, 0
-    %len = extract_value %str, 1
-    %len_i32 = int_cast %len, I32
-    printf "%.*s", [%len_i32, %data]
-```
-
-### 8. Iterator Protocol → Explicit Loop CFG
-
-```
-// GIR:  (for-loop desugaring is partially in GIR, partially in C backend)
-// LIR:  fully explicit loop with call to __next, tag check, branch
-    %iter = call @NumberRange__iter(%range_ptr)
-loop:
-    %opt = call @NumberRangeIter__next(%iter_ptr)
-    %tag = extract_value %opt, 0
-    %done = cmp eq %tag, 1   // None tag
-    branch %done, exit(), body()
-body:
-    %val = extract_value %opt, 1
-    // ... loop body ...
-    jump loop()
-exit:
-    // ... post-loop ...
-```
-
-### 9. Spawn Wrappers → Regular LIR Functions
-
-`__spawn_run_*` and `__spawn_drop_*` become regular LIR functions emitted during lowering, with explicit `Call` to the spawned function. No more implicit generation in the backend.
-
-### 10. Test Harness → Regular LIR main() Function
-
-The test runner `main()` with setjmp/longjmp, timing, cleanup registration — all emitted as regular LIR instructions during lowering.
+| `Option[T]` | `Struct(Option_T)` |
+| `Result[T,E]` | `Struct(Result_T_E)` |
+| `Box[T]` | `Ptr` |
+| `Box[Trait]` | `Struct(TraitObj)` |
+| `Shared[T]` | `Ptr` |
+| `Callable[R(P...)]` | `Struct(Closure)` |
+| User struct | `Struct(S)` — fields mapped recursively |
+| User enum | `Struct(E)` — `{ I32, union fields }` |
 
 ## Function Representation
 
 ```rust
-struct LirFunction {
-    id: FuncId,
-    name: String,
-    sig: FnSig,
-    blocks: Vec<Block>,
-    // No locals array — SSA values are the "locals"
+pub struct LirFunction {
+    pub name: String,
+    pub params: Vec<LirType>,       // parameter types (slots _1.._N)
+    pub return_type: LirType,
+    pub slots: Vec<Slot>,            // named memory slots (pre-SSA "locals")
+    pub blocks: Vec<Block>,
 }
 
-struct LirModule {
-    structs: Vec<StructDef>,
-    globals: Vec<LirGlobal>,
-    functions: Vec<LirFunction>,
-    externs: Vec<ExternDecl>,
-    // Runtime strings, vtable data, etc. — all as globals
+/// A named memory slot — the pre-SSA representation of a local variable.
+/// SSA construction promotes scalar slots to SSA values + block parameters.
+/// Aggregate slots remain as stack allocations.
+pub struct Slot {
+    pub ty: LirType,
+    pub name: Option<String>,        // debug name hint
 }
 
-struct LirGlobal {
-    id: GlobalId,
-    name: String,
-    ty: LirType,
-    init: GlobalInit,    // Zeroed, ConstStruct, ConstArray, FuncAddr, etc.
-    is_const: bool,
+/// A basic block with optional parameters (added by SSA construction).
+pub struct Block {
+    pub id: BlockId,
+    pub params: Vec<(ValueId, LirType)>,
+    pub insts: Vec<Inst>,
+    pub terminator: Term,
 }
 ```
 
-## Optimization Passes on LIR
+### Pre-SSA vs Post-SSA
 
-All optimization passes move to LIR. Current GIR passes can remain as a quick pre-pass, but the heavy lifting happens on SSA:
+The same data structures serve both phases:
 
-| Pass | GIR (current) | LIR (new) |
-|---|---|---|
-| Constant propagation | Yes (keep) | Yes — full SSA, much more powerful |
-| Constant folding | Yes (keep) | Yes |
-| Dead code elimination | Yes (keep) | Yes — trivial on SSA (unused ValueId) |
-| Dead function elimination | Broken (implicit refs) | **Works** — all refs explicit |
-| Copy propagation | Broken (type coercion) | **Works** — coercions are explicit Cast instructions |
-| Common subexpression elim. | Yes (limited) | Yes — hash-consing on SSA values |
-| Function inlining | No | **New** — straightforward on SSA |
-| Strength reduction | Yes (keep) | Yes |
-| Loop-invariant code motion | No | **New** — dominator tree + loop detection |
-| Tail call optimization | No | **New** — detect tail calls in terminators |
-| Escape analysis | No | **New** — stack-allocate non-escaping heap objects |
+**Pre-SSA (output of GIR→LIR lowering):**
+- All values go through slots: `SlotStore { slot, value }` / `SlotLoad { dst, slot }`
+- Block params are empty (no merge-point resolution yet)
+- Scalar slots may be stored multiple times (not single-assignment)
+
+**Post-SSA (output of SSA construction pass):**
+- Scalar slots promoted to SSA values — `SlotStore`/`SlotLoad` replaced with direct value references
+- Block params populated at merge points
+- Aggregate slots remain as stack allocations with `SlotAddr`/`Load`/`Store`
+
+## Instruction Set
+
+```rust
+pub type ValueId = u32;
+pub type SlotId = u32;
+pub type BlockId = u32;
+pub type StructId = u32;
+pub type FuncId = u32;
+pub type GlobalId = u32;
+
+pub enum Term {
+    Ret(ValueId),
+    RetVoid,
+    Jump(BlockId, Vec<ValueId>),
+    Branch {
+        cond: ValueId,
+        then_block: BlockId, then_args: Vec<ValueId>,
+        else_block: BlockId, else_args: Vec<ValueId>,
+    },
+    Switch {
+        value: ValueId,
+        cases: Vec<(i64, BlockId, Vec<ValueId>)>,
+        default: BlockId, default_args: Vec<ValueId>,
+    },
+    Unreachable,
+}
+
+pub enum Inst {
+    // ── Slot Access (pre-SSA, lowered by SSA construction) ────
+    SlotStore  { slot: SlotId, value: ValueId },
+    SlotLoad   { dst: ValueId, slot: SlotId, ty: LirType },
+    SlotAddr   { dst: ValueId, slot: SlotId },           // address of slot (for aggregates)
+
+    // ── Constants ─────────────────────────────────────────────
+    IConst     { dst: ValueId, ty: LirType, value: i64 },
+    FConst     { dst: ValueId, ty: LirType, value: f64 },
+    BoolConst  { dst: ValueId, value: bool },
+    NullPtr    { dst: ValueId },
+    FuncAddr   { dst: ValueId, func: FuncId },
+    GlobalAddr { dst: ValueId, global: GlobalId },
+    StrLit     { dst: ValueId, data: Vec<u8> },          // static string → Str struct
+
+    // ── Arithmetic ────────────────────────────────────────────
+    Add        { dst: ValueId, lhs: ValueId, rhs: ValueId, overflow: Overflow },
+    Sub        { dst: ValueId, lhs: ValueId, rhs: ValueId, overflow: Overflow },
+    Mul        { dst: ValueId, lhs: ValueId, rhs: ValueId, overflow: Overflow },
+    Div        { dst: ValueId, lhs: ValueId, rhs: ValueId },
+    Rem        { dst: ValueId, lhs: ValueId, rhs: ValueId },
+    Mod        { dst: ValueId, lhs: ValueId, rhs: ValueId },  // Python semantics
+    Neg        { dst: ValueId, operand: ValueId },
+
+    // ── Bitwise ───────────────────────────────────────────────
+    BitAnd     { dst: ValueId, lhs: ValueId, rhs: ValueId },
+    BitOr      { dst: ValueId, lhs: ValueId, rhs: ValueId },
+    BitXor     { dst: ValueId, lhs: ValueId, rhs: ValueId },
+    BitNot     { dst: ValueId, operand: ValueId },
+    Shl        { dst: ValueId, lhs: ValueId, rhs: ValueId },
+    Shr        { dst: ValueId, lhs: ValueId, rhs: ValueId },
+
+    // ── Comparison & Logic ────────────────────────────────────
+    Cmp        { dst: ValueId, op: CmpOp, lhs: ValueId, rhs: ValueId },
+    Not        { dst: ValueId, operand: ValueId },
+
+    // ── Type Conversions (ALL coercions are explicit) ─────────
+    IntCast    { dst: ValueId, value: ValueId, to: LirType },  // int widening/narrowing
+    FloatCast  { dst: ValueId, value: ValueId, to: LirType },  // float precision change
+    IntToFloat { dst: ValueId, value: ValueId, to: LirType },
+    FloatToInt { dst: ValueId, value: ValueId, to: LirType },
+    PtrCast    { dst: ValueId, value: ValueId },               // pointer reinterpret
+    Bitcast    { dst: ValueId, value: ValueId, to: LirType },  // same-size reinterpret
+
+    // ── Memory ────────────────────────────────────────────────
+    Load       { dst: ValueId, ptr: ValueId, ty: LirType },
+    Store      { ptr: ValueId, value: ValueId },
+    FieldPtr   { dst: ValueId, base: ValueId, struct_id: StructId, field: u32 },
+    ElemPtr    { dst: ValueId, base: ValueId, index: ValueId, elem_size: u32 },
+    Memset     { ptr: ValueId, byte: ValueId, size: ValueId },
+    Memcpy     { dst_ptr: ValueId, src_ptr: ValueId, size: ValueId },
+
+    // ── Calls ─────────────────────────────────────────────────
+    Call       { dst: Option<ValueId>, func: FuncId, args: Vec<ValueId> },
+    CallExtern { dst: Option<ValueId>, name: String, args: Vec<ValueId> },
+    CallPtr    { dst: Option<ValueId>, callee: ValueId, args: Vec<ValueId> },
+
+    // ── Runtime Checks ────────────────────────────────────────
+    BoundsCheck { index: ValueId, len: ValueId },              // trap if index >= len
+    DivCheck    { divisor: ValueId },                          // trap if divisor == 0
+    Trap        { msg: String },                               // unconditional abort
+
+    // ── Printf (pragmatic high-level instruction) ─────────────
+    // Str args pre-expanded to (len, data) pairs during lowering.
+    // Backend lowers to platform-appropriate printf/fprintf.
+    Printf     { fmt: String, args: Vec<ValueId> },
+    Fprintf    { fd: ValueId, fmt: String, args: Vec<ValueId> },
+
+    // ── Nop (source mapping placeholder) ──────────────────────
+    Nop,
+}
+
+pub enum Overflow {
+    Trap,   // default: abort on overflow
+    Wrap,   // wrapping arithmetic (+%, -%, *%)
+}
+
+pub enum CmpOp {
+    Eq, Ne, Lt, Le, Gt, Ge,
+}
+```
+
+## Module Structure
+
+```rust
+pub struct LirModule {
+    pub structs: Vec<StructDef>,
+    pub globals: Vec<LirGlobal>,
+    pub functions: Vec<LirFunction>,
+    pub externs: Vec<LirExtern>,
+    pub source_filename: Option<String>,
+}
+
+pub struct LirGlobal {
+    pub name: String,
+    pub ty: LirType,
+    pub init: LirGlobalInit,
+    pub is_const: bool,
+}
+
+pub enum LirGlobalInit {
+    Zeroed,
+    Bytes(Vec<u8>),
+    FuncAddr(FuncId),
+    Struct { struct_id: StructId, fields: Vec<LirGlobalInit> },
+}
+
+pub struct LirExtern {
+    pub name: String,
+    pub params: Vec<LirType>,
+    pub return_type: LirType,
+}
+```
+
+## SSA Construction Pass
+
+The SSA construction pass runs after GIR→LIR lowering. It uses the standard algorithm (Braun et al. 2013, "Simple and Efficient Construction of SSA Form"):
+
+1. **Identify promotable slots.** A slot is promotable if it has scalar type and is never addressed (no `SlotAddr` pointing to it). Aggregate slots and addressed slots stay as stack allocations.
+
+2. **For each promotable slot**, walk blocks in dominator-tree order:
+   - `SlotStore { slot, value }` → record `value` as the current definition of `slot`
+   - `SlotLoad { dst, slot }` → replace with the reaching definition of `slot`
+   - At merge points (blocks with multiple predecessors), insert block parameters
+
+3. **Remove promoted `SlotStore`/`SlotLoad` instructions.** The slot itself becomes dead.
+
+4. **Update terminators.** Jumps/branches to blocks with parameters must provide matching arguments.
+
+This is the same algorithm as LLVM's mem2reg and QBE's SSA fixup.
+
+## What Moves from C Backend to GIR→LIR Lowering
+
+Each category of implicit C backend work becomes explicit LIR instructions:
+
+### 1. Drop Glue → Regular Call/Loop Sequences
+
+GIR `Drop { place }` is resolved during lowering using the type registry. The lowering emits explicit calls to drop functions, element-iteration loops, and field-recursive drops as regular LIR instructions (Call, Branch, Load, Store).
+
+### 2. Vtable Dispatch → FieldPtr + Load + CallPtr
+
+```
+// Trait method call on Box[Trait]:
+%vtable_ptr = field_ptr %trait_obj, TraitObj, 1    // .vtable
+%vtable     = load %vtable_ptr, Ptr
+%method_ptr = field_ptr %vtable, VTable, 0         // .area slot
+%fn         = load %method_ptr, Ptr
+%data       = field_ptr %trait_obj, TraitObj, 0    // .data
+%result     = call_ptr %fn, [%data]
+```
+
+### 3. Closure Dispatch → Load + CallPtr
+
+```
+// Indirect closure call:
+%fn_ptr = load (field_ptr %closure, Closure, 0), Ptr
+%env    = load (field_ptr %closure, Closure, 1), Ptr
+%result = call_ptr %fn_ptr, [%env, %arg1, %arg2]
+```
+
+### 4. Type Coercions → Explicit FieldPtr + Load/Store
+
+```
+// GorgetString → Str (currently implicit in C backend):
+%data = load (field_ptr %gs, GorgetString, 0), Ptr
+%len  = load (field_ptr %gs, GorgetString, 1), I64
+store (field_ptr %str_slot, Str, 0), %data
+store (field_ptr %str_slot, Str, 1), %len
+```
+
+### 5. Collection Methods → Call to Runtime Functions
+
+All collection method dispatch resolved during lowering. The result is plain `Call` or `CallExtern` instructions to runtime functions (`gorget_array_push`, `gorget_map_get`, etc.).
+
+### 6. Named-Function Adapters → Regular LIR Functions
+
+`__adapt_*` wrappers emitted as regular LIR functions during lowering, with `FuncAddr` instruction to reference the original function.
+
+### 7. Spawn Wrappers → Regular LIR Functions
+
+`__spawn_run_*` and `__spawn_drop_*` emitted as regular LIR functions with explicit `Call` to the spawned function.
+
+### 8. Printf Formatting → Pre-expanded Args
+
+Str arguments expanded to `(len, data)` pairs during lowering:
+```
+%data    = load (field_ptr %str, Str, 0), Ptr
+%len     = load (field_ptr %str, Str, 1), I64
+%len_i32 = int_cast %len, I32
+printf "%.*s", [%len_i32, %data]
+```
+
+### 9. Test Harness → Regular LIR main() Function
+
+Test runner main() with setjmp/timing/cleanup emitted as regular LIR code.
 
 ## Backend Responsibilities (Post-LIR)
 
-Each backend becomes a simple translator:
+Each backend is a thin translator with no semantic decisions:
 
 ### C Backend (~2000 lines, down from ~10,000)
 
-- Map LirType → C type string
-- Map Inst → C statement (1:1)
-- Map Block → labeled block with gotos
-- Map block parameters → parallel move + goto
-- Emit struct/union/typedef declarations from StructDef
-- Emit `#include` for runtime library
-- No semantic decisions, no type inspection, no name-convention dispatch
+- `LirType` → C type string
+- `Inst` → C statement (1:1)
+- `Block` → labeled block with gotos
+- Block parameters → parallel move variables + goto
+- `StructDef` → C struct/union/typedef
+- `Slot` → C local variable declaration
+- `#include` for runtime library
 
-### LLVM Backend (~1500 lines, new)
+### LLVM Backend (~1500 lines)
 
-- Map LirType → LLVM type
-- Map Inst → LLVM instruction (1:1 — LIR is designed to map closely)
+- `LirType` → LLVM type (scalars direct, Ptr → `ptr`)
+- `Inst` → LLVM instruction (1:1)
+- `Slot` → `alloca` (LLVM's mem2reg promotes further)
 - Block parameters → phi nodes (mechanical transformation)
-- Use alloca+mem2reg for register allocation
-- Emit debug info from source spans
+- Debug info from source spans
 
-### WASM Backend (~1500 lines, new)
+### WASM Backend (~1500 lines)
 
-- Map LirType → WASM value types
-- Restructure CFG into structured control flow (Relooper/Stackifier algorithm)
-- Map Inst → WASM instructions
-- Linear memory layout for structs
+- `LirType` → WASM value types
+- Restructure CFG into structured control flow (Relooper/Stackifier)
+- `Slot` → WASM locals or linear memory offsets
+- `Inst` → WASM instructions
+
+## Optimization Passes on LIR
+
+All optimizations move to post-SSA LIR:
+
+| Pass | Works on GIR? | Works on LIR? | Notes |
+|---|---|---|---|
+| Constant propagation | Yes (keep as pre-pass) | Yes — full SSA | |
+| Constant folding | Yes (keep) | Yes | |
+| Dead code elimination | Yes (keep) | Yes — trivial (unused ValueId) | |
+| Dead function elimination | **Broken** | **Works** — all refs explicit | The main motivator |
+| Copy propagation (scalar) | **Broken** | **Works** — coercions explicit | Second motivator |
+| Common subexpression elim. | Yes (limited) | Yes — hash-consing on values | |
+| Function inlining | No | **New** — straightforward on SSA | |
+| Strength reduction | Yes (keep) | Yes | |
+| Loop-invariant code motion | No | **New** — dominator tree + loops | |
+| Tail call optimization | No | **New** — detect in terminators | |
+| Escape analysis | No | **New** — stack-allocate non-escaping | |
 
 ## Implementation Plan
 
-### Phase 1: LIR Data Structures + Skeleton
+### Phase 1: Data Structures + Skeleton
 
-- Define `src/lir/mod.rs` with `LirModule`, `LirFunction`, `Block`, `Inst`, `Term`, `LirType`
-- Define `src/lir/types.rs` for `StructDef`, `FnSig`, type mapping
-- Define `src/lir/pretty.rs` for human-readable LIR dump (`gg build --dump-lir`)
-- Define `src/lir/validate.rs` for SSA invariant checking (every use dominated by def, block params match jump args)
+- `src/lir/mod.rs` — `LirModule`, `LirFunction`, `Block`, `Inst`, `Term`, `LirType`, `StructDef`
+- `src/lir/types.rs` — type IDs, struct registry, type mapping helpers
+- `src/lir/display.rs` — human-readable LIR dump (`gg build --dump-lir`)
+- `src/lir/validate.rs` — invariant checking (post-SSA: every use dominated by def, block params match jump args)
 - No behavioral changes — just data structures and printers.
 
-### Phase 2: GIR → LIR Lowering (Core)
+### Phase 2: GIR → LIR Lowering (Incremental)
 
-Start with the simplest subset and grow incrementally. Each sub-phase adds one category:
+Emits **pre-SSA** LIR (slot-based, not SSA). Each sub-phase adds one category:
 
-1. **Scalars + arithmetic + control flow** — constants, binops, cmp, branch, return. Enough for `hello_world.gg`.
-2. **Structs + field access** — StructLit, GetFieldPtr, Load/Store. Enough for struct tests.
-3. **Function calls** — Call, CallExtern. Enough for stdlib function calls.
-4. **Enums + match** — EnumLit, TagOf, Switch. Enough for Option/Result.
-5. **Type conversions** — all Cast/Coercion instructions. Str/String/cstr.
-6. **Drop elaboration** — resolve GIR `Drop` into LIR call sequences. The big one.
-7. **Closures** — closure struct construction, CallPtr, adapter emission.
-8. **Vtables + trait objects** — vtable globals, trait dispatch via CallPtr.
-9. **Collections** — collection constructor/method lowering.
-10. **Concurrency** — spawn wrappers, coroutine state machines, task types.
-11. **Test harness** — test runner main() generation.
+1. **Scalars + arithmetic + control flow** — constants, binops, cmp, branch, return
+2. **Function calls** — Call, CallExtern
+3. **Structs + field access** — SlotAddr, FieldPtr, Load/Store
+4. **Enums + match** — tag field, Switch
+5. **Type conversions** — all explicit Cast/Coercion instructions
+6. **Drop elaboration** — resolve GIR `Drop` into call sequences
+7. **Closures** — closure struct, CallPtr, adapter emission
+8. **Vtables + trait objects** — vtable globals, dispatch via CallPtr
+9. **Collections** — constructor/method lowering to runtime calls
+10. **Concurrency** — spawn wrappers, coroutine state machines, task types
+11. **Test harness** — test runner main()
+
+### Phase 2.5: SSA Construction
+
+- Implement Braun et al. algorithm for slot promotion
+- Validate with existing test suite
+- Add `--dump-lir` flag showing both pre-SSA and post-SSA forms
 
 ### Phase 3: C Backend on LIR
 
-- New `src/backend/c_lir/` — thin C emitter from LIR (target: ~2000 lines)
-- Wire `gg build --backend=c-lir` flag for gradual rollout
-- Run integration tests against both backends, fix mismatches
+- New `src/backend/c_lir/` — thin C emitter (~2000 lines)
+- Wire `gg build --backend=c-lir` for A/B testing
+- Run integration tests against both backends
 - Once at parity, replace old C backend
 
 ### Phase 4: LIR Optimizations
 
-- Move existing GIR passes to LIR (they become simpler on SSA)
-- Enable dead function elimination (now trivial)
-- Enable copy propagation (now trivial)
-- Add function inlining
+- Dead function elimination (trivial — all refs explicit)
+- Copy propagation (trivial — coercions explicit)
+- Function inlining
+- Constant propagation on SSA (more powerful than GIR version)
 
 ### Phase 5: LLVM Backend
 
-- `src/backend/llvm/` using `inkwell` crate (safe LLVM bindings)
-- Wire `gg build --backend=llvm`
-- Inherit all LIR optimizations for free
+- `src/backend/llvm/` using `inkwell` crate
+- `gg build --backend=llvm`
+- Inherits all LIR optimizations
 
 ### Phase 6: WASM Backend
 
 - `src/backend/wasm/` with Relooper for structured control flow
-- Wire `gg build --backend=wasm`
-
-## Risk Assessment
-
-| Risk | Mitigation |
-|---|---|
-| GIR→LIR lowering is as complex as the C backend | It IS the C backend logic, restructured. Same complexity, better architecture. The win is write-once vs write-per-backend. |
-| Performance regression during transition | Old C backend stays until LIR C backend reaches parity. `--backend=c-lir` flag allows A/B testing. |
-| SSA construction complexity | Block parameters (Cranelift-style) are simpler than phi nodes. GIR is already in block form — SSA construction is mostly inserting block params at control-flow merge points. |
-| Printf/Fprintf are high-level in a low-level IR | Pragmatic choice. The alternative (lowering to individual write() calls) is worse for readability and debugging. Backends can lower Printf however they want. |
-| Scope creep | Strict phase discipline. Each phase has a clear deliverable and can be tested independently. |
+- `gg build --backend=wasm`
 
 ## What Stays in GIR
 
-GIR is NOT replaced — it stays as the high-level IR for:
+GIR is NOT replaced. It stays as the high-level IR for:
 
 - Monomorphization (generic instantiation)
 - Ownership/borrow checking validation
 - Drop insertion (deciding WHERE drops go — LIR decides HOW)
 - Closure lifting (deciding WHAT to capture)
 - Trait method resolution (deciding WHICH function — LIR handles dispatch mechanics)
-- Quick pre-optimization (constant folding, dead block/local elimination — cheap wins before LIR lowering)
+- Quick pre-optimization (constant folding, dead block/local elimination)
 
-The split: **GIR decides semantics, LIR decides mechanics.**
+**The split: GIR decides semantics, LIR decides mechanics.**
 
 ## Open Questions
 
-1. **Coroutine state machines in LIR or in GIR→LIR lowering?** Currently the C backend does coroutine transformation (poll function generation, state splitting). This could live in GIR→LIR lowering (emit the state machine as regular LIR blocks) or as a dedicated LIR→LIR transform. The former is simpler; the latter allows optimizing the state machine.
+1. **Bool type: keep or remove?** Cranelift removed booleans in 2022 (just use i8 with 0/1) to eliminate representation ambiguity. Worth considering for simplicity. Current plan: keep `Bool` initially, evaluate during implementation.
 
-2. **How much inlining of runtime calls?** Some collection methods (vec.pop, vec.len) are trivially inlineable. Should LIR inline them during lowering, or should the runtime remain opaque and let the C compiler / LLVM optimize? Recommendation: keep them as `Call` to runtime functions initially; add selective inlining in Phase 4 if profiling shows benefit.
+2. **Printf as instruction vs Call to runtime.** Printf is kept as a high-level instruction for ergonomics and because format-string expansion varies by backend. Alternative: lower to explicit write() calls during GIR→LIR lowering. Current plan: keep Printf, let backends lower it.
 
-3. **Debug info representation.** LIR needs source location tracking for error messages and debugger support. Options: (a) attach spans to every instruction (verbose), (b) attach spans to blocks only (coarse), (c) separate span map indexed by ValueId (flexible). Recommendation: (c), matching GIR's `inst_spans` approach.
+3. **Coroutine state machines: GIR→LIR or LIR→LIR?** Current plan: GIR→LIR lowering emits the state machine as regular blocks. Alternative: emit normal function bodies and transform to state machines as a LIR→LIR pass. The latter allows optimizing before state splitting.
 
-4. **String literal deduplication.** Multiple `StrLit` with the same content should share storage. Handle during LIR construction (intern into a string table) or leave to the backend (C compiler / LLVM do this anyway)? Recommendation: leave to backend initially.
+4. **String literal deduplication.** Leave to backend initially (C compiler / LLVM handle this).
+
+5. **Debug info / source spans.** Separate span map indexed by instruction position, matching GIR's `inst_spans` approach. Not needed for Phase 1.
