@@ -2,7 +2,7 @@
 
 ## High
 
-(No high-priority items at this time.)
+- **LIR: SSA-form lower IR between GIR and backends**: Design complete (`docs/lir-design.md`). 6-phase plan: (1) data structures + skeleton, (2) GIR→LIR lowering (10 sub-phases), (3) C backend on LIR, (4) LIR optimizations, (5) LLVM backend, (6) WASM backend. Unblocks dead function elimination, copy propagation, function inlining, and multi-backend support. [added: 2026-03-07]
 
 ## Medium
 
@@ -20,9 +20,9 @@
 
 - **Async `.lock()` / `.read()` / `.write()` for explicit Mutex/RwLock**: Currently these are synchronous (`pthread_mutex_lock`/`pthread_rwlock_rdlock`), blocking the OS thread. In async code on the M:N scheduler, this ties up a worker thread under contention. Should use trylock + waker-queue protocol: try to acquire, if contended register task's waker on the sync primitive's wait queue and return Pending, wake one waiter on guard drop. The `shared` keyword path manages this internally, but explicit `Mutex[T]` in async functions needs it for correct M:N behavior. Requires: waker queue field on `gorget_mutex_t`/`gorget_rwlock_t`, async-aware lock methods that return `Future[Guard[T]]`, integration with executor's poll loop. [added: 2026-03-06]
 
-- **GIR dead function elimination**: Implementation exists (`eliminate_dead_functions` in optimize.rs) but NOT enabled. The C backend generates implicit function references (closure `__adapt_*` adapters, drop glue, vtable `__call` functions) that aren't visible in GIR. Enabling requires: annotate GIR functions with `#[used]` / `#[entry]` flags during lowering for backend-referenced functions, OR move elimination to after C codegen (linker-level `-ffunction-sections -Wl,--gc-sections`). When enabled, dataframe_basic.gg went from 134→86 functions. [added: 2026-03-07]
+- **GIR dead function elimination**: Disabled — C backend generates implicit function references not visible in GIR. **Superseded by LIR** where all references are explicit. [added: 2026-03-07, updated: 2026-03-07]
 
-- **GIR Phase 5 — Copy propagation**: Implementation exists (`propagate_copies` in optimize.rs) but disabled. Intra-block same-type copy prop with call-invalidation causes 39 integration test failures. Root cause: the C backend relies on specific local assignments for implicit type coercions (e.g., GorgetString→Str) and struct/closure return value patterns. Even same-type, single-block propagation disrupts these. A second attempt (2026-03-07) narrowed failures from 83→39 with a type-equality guard but couldn't eliminate them. **True fix requires either:** (1) making C backend coercions explicit GIR instructions (Cast/BitCast) so the optimizer can reason about them, or (2) SSA form with phi nodes. [added: 2026-03-05, updated: 2026-03-07]
+- **GIR copy propagation**: Disabled — C backend relies on implicit type coercions between locals. **Superseded by LIR** where coercions are explicit Cast instructions. [added: 2026-03-05, updated: 2026-03-07]
 
 - **`gg sim` aliasing model — Tree Borrows tracking**: sim.md identifies this as the "core differentiator from naive interpreters." Implement borrow-level tracking to catch aliasing violations. Add `--tree-borrows` (default) and `--strict-aliasing` flags (stricter stacked-borrows model). Currently sim detects UB (bounds, uninit, etc.) but does not track borrow validity. [added: 2026-03-05]
 

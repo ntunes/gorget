@@ -1,5 +1,9 @@
 # DONE
 
+- [2026-03-07] **docs: LIR design — SSA-form lower IR between GIR and backends**: Complete design for a new compilation layer that makes all implicit C backend operations explicit (drop glue, vtable dispatch, closure calls, type coercions, collection methods, spawn wrappers). SSA with block parameters. 6-phase implementation plan. Unblocks dead function elimination, copy propagation, inlining, LLVM and WASM backends.
+
+- [2026-03-07] **docs: design direction pillars integrated into language-design.md**: 8 pillars (Memory Safety, Type System, Error Handling, Concurrency, Syntax, Tooling, C Interop, Stdlib, Learnability) with explicit targets and anti-targets.
+
 - [2026-03-07] **feat: await on vector-indexed tasks + zero-on-move-out**: Type-based await dispatch fallback via `task_type_fns` map enables `tasks[j].await()`. Zero-on-move-out for Move-type Vector IndexLoad prevents double-free. New fixture: spawn_vector_await.
 
 - [2026-03-07] **feat: iterative optimization pipeline**: Runs passes until fixpoint (up to 3 iterations). After block merging, new constant propagation and dead code opportunities emerge.
