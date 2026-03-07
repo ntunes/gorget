@@ -158,7 +158,8 @@ fn cmp_ord(ord: std::cmp::Ordering, op: CmpOp) -> bool {
     }
 }
 
-/// Replace Branch terminators with constant conditions by Jump.
+/// Replace Branch terminators with constant conditions by Jump, and
+/// simplify branches where both targets are the same block.
 fn fold_constant_branches(func: &mut Function) {
     for bb in &mut func.blocks {
         let folded = match &bb.terminator {
@@ -167,6 +168,10 @@ fn fold_constant_branches(func: &mut Function) {
             }
             Some(Terminator::Branch { cond: Operand::Constant(Constant::Bool(false)), else_block, .. }) => {
                 Some(Terminator::Jump(*else_block))
+            }
+            // Both targets identical — condition is dead code
+            Some(Terminator::Branch { then_block, else_block, .. }) if then_block == else_block => {
+                Some(Terminator::Jump(*then_block))
             }
             Some(Terminator::Switch { value: Operand::Constant(Constant::I64(v)), cases, default, .. }) => {
                 let target = cases.iter()
@@ -889,6 +894,20 @@ mod tests {
         ], vec![local(I64_TYPE)], vec![]);
         fold_constant_branches(&mut f);
         assert!(matches!(f.blocks[0].terminator, Some(Terminator::Jump(BlockId(2)))));
+    }
+
+    #[test]
+    fn fold_identity_branch() {
+        // Branch where both targets are the same → Jump
+        let mut f = make_func(vec![
+            bb(vec![], Terminator::Branch {
+                cond: Operand::Copy(Place::local(LocalId(1))),
+                then_block: BlockId(1), else_block: BlockId(1),
+            }),
+            bb(vec![], ret_i64(0)),
+        ], vec![local(I64_TYPE), local(BOOL_TYPE)], vec![BOOL_TYPE]);
+        fold_constant_branches(&mut f);
+        assert!(matches!(f.blocks[0].terminator, Some(Terminator::Jump(BlockId(1)))));
     }
 
     // ── Drop Elision Tests ──────────────────────────────────────────
