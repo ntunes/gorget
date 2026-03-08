@@ -8,7 +8,7 @@ safe concurrent code from code that merely appears to work.
 
 This chapter covers how those primitives work, when each is the right tool, and how they
 fit together in practice. It assumes you're comfortable with `async` functions and `spawn`
-from *[Chapter N: Tasks and Async/Await]*.
+from *[Chapter 13: Tasks and Async/Await](13-async.md)*.
 
 ---
 
