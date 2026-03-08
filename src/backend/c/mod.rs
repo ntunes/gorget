@@ -1850,6 +1850,634 @@ fn fn_has_internal_await(fn_name: &str, module: &Module) -> bool {
         })
     })
 }
+/// Compute type overrides for a GIR function's locals.
+/// The GIR type system doesn't always track C-level types precisely,
+/// so this pre-scan infers correct C types from instruction patterns.
+fn compute_type_overrides(
+    func: &Function,
+    registry: &TypeRegistry,
+    module: &Module,
+) -> std::collections::HashMap<usize, String> {
+    let mut type_overrides: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    for _pass in 0..3 {
+    let prev_count = type_overrides.len();
+    for block in &func.blocks {
+        for inst in &block.instructions {
+            match inst {
+                Instruction::Call { dst: Some(dst_id), func: call_name, args: call_args }
+                | Instruction::CallExtern { dst: Some(dst_id), func: call_name, args: call_args } => {
+                    // GIR IR trust: if the local already has a meaningful Named type from the IR,
+                    // use it instead of heuristic overrides. This prevents infer_runtime_return_type
+                    // from incorrectly overriding Result/Option/struct types.
+                    let dst_idx = dst_id.0 as usize;
+                    let ir_type_is_named = dst_idx < func.locals.len() && {
+                        let tid = func.locals[dst_idx].type_id;
+                        matches!(registry.get(tid), Some(GirType::Named(_)))
+                    };
+                    // __result_unwrap / __option_unwrap: extract inner type from the arg's type
+                    if (call_name.starts_with("__result_unwrap") || call_name.starts_with("__option_unwrap"))
+                        && !call_args.is_empty()
+                    {
+                        let arg_type = match &call_args[0] {
+                            Operand::Copy(p) | Operand::Move(p) => {
+                                effective_c_type(p.local.0 as usize, func, registry, &type_overrides)
+                            }
+                            _ => String::new(),
+                        };
+                        // Strip pointer suffix for &option / &result
+                        let base = arg_type.strip_suffix('*').unwrap_or(&arg_type);
+                        if let Some(inner) = extract_enum_payload_type(base) {
+                            let rt = runtime_type_name(&inner).unwrap_or(&inner);
+                            type_overrides.insert(dst_idx, rt.to_string());
+                        }
+                    }
+                    // Check if this is a collection method with a known scalar return type
+                    // (e.g., Vector__T__len returns int64_t, not Vector__T)
+                    let method_return_override = if let Some(rewrite) = try_rewrite_collection_method(call_name) {
+                        if rewrite.field_access.is_some() {
+                            // field_access methods (len, is_empty) return scalars
+                            Some("int64_t".to_string())
+                        } else {
+                            None
+                        }
+                    } else if let Some(rt) = infer_method_return_type(call_name) {
+                        if rt != "int64_t" && rt != "void" {
+                            Some(rt.to_string())
+                        } else {
+                            None // let it fall through to the normal heuristics
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(ret_type) = method_return_override {
+                        type_overrides.insert(dst_idx, ret_type);
+                    } else if ir_type_is_named && !type_overrides.contains_key(&dst_idx) {
+                        let tid = func.locals[dst_idx].type_id;
+                        let gir_c_type = format_type(tid, registry);
+                        // Cross-check with callee return type: if callee has a different
+                        // return type, trust the callee over the GIR local type.
+                        let callee_ret = module.functions.iter()
+                            .find(|f| f.name == call_name.as_str())
+                            .map(|callee| format_type(callee.return_type, registry));
+                        let runtime_ret = infer_runtime_return_type(call_name)
+                            .or_else(|| infer_method_return_type(call_name));
+                        let c_type = if let Some(ref ret) = callee_ret {
+                            if ret != "int64_t" && ret != "void" && ret != &gir_c_type {
+                                ret.clone()
+                            } else {
+                                gir_c_type
+                            }
+                        } else if let Some(rt) = runtime_ret {
+                            if rt != "int64_t" && rt != "void" && rt != gir_c_type {
+                                rt.to_string()
+                            } else {
+                                gir_c_type
+                            }
+                        } else {
+                            gir_c_type
+                        };
+                        type_overrides.insert(dst_idx, c_type);
+                    } else if is_collection_constructor(call_name) {
+                        let type_name = call_name.strip_suffix("__new").unwrap_or(call_name);
+                        let c_type = if let Some(alias) = collection_type_alias(type_name) {
+                            alias.to_string()
+                        } else if type_name == "String" {
+                            "GorgetString".to_string()
+                        } else if type_name == "Box" {
+                            "void*".to_string()
+                        } else {
+                            type_name.to_string()
+                        };
+                        type_overrides.insert(dst_id.0 as usize, c_type);
+                    } else if registry.get_type_def(call_name).is_some() {
+                        type_overrides.insert(dst_id.0 as usize, call_name.to_string());
+                    } else if call_name == "gorget_array_new" {
+                        // gorget_array_new(sizeof(T)) → Vector__T
+                        if let Some(Operand::Constant(Constant::SizeOf(elem_tid))) = call_args.first() {
+                            let elem_c = format_type(*elem_tid, registry);
+                            let vec_type = format!("Vector__{}", elem_c);
+                            if collection_type_alias(&vec_type).is_some() {
+                                type_overrides.insert(dst_id.0 as usize, vec_type);
+                            } else {
+                                type_overrides.insert(dst_id.0 as usize, "GorgetArray".to_string());
+                            }
+                        } else {
+                            type_overrides.insert(dst_id.0 as usize, "GorgetArray".to_string());
+                        }
+                    } else if call_name == "gorget_dict_new" || call_name == "gorget_map_new"
+                        || call_name == "gorget_dict_new_str" || call_name == "gorget_map_new_str" {
+                        type_overrides.insert(dst_id.0 as usize, "GorgetDict".to_string());
+                    } else if call_name == "gorget_set_new" {
+                        type_overrides.insert(dst_id.0 as usize, "GorgetSet".to_string());
+                    } else {
+                        // For Dict/HashMap filter, force GorgetMap return type
+                        if (call_name.starts_with("Dict__") || call_name.starts_with("HashMap__"))
+                            && extract_trailing_method(call_name, "") == "filter"
+                        {
+                            type_overrides.insert(dst_id.0 as usize, "GorgetMap".to_string());
+                        }
+                        // Option/Result.map/map_err/and_then/flatten: output type depends on closure return type
+                        if call_name.starts_with("Option__") || call_name.starts_with("Result__") {
+                            let method = extract_trailing_method(call_name, "");
+                            let needs_closure_ret = matches!(method, "map" | "map_err" | "and_then");
+                            let is_flatten = method == "flatten";
+                            if needs_closure_ret {
+                                if let Some(closure_op) = call_args.get(1) {
+                                    if let Operand::Copy(p) | Operand::Move(p) = closure_op {
+                                        let closure_c_type = effective_c_type(p.local.0 as usize, func, registry, &type_overrides);
+                                        let call_fn = format!("{closure_c_type}__call");
+                                        if let Some(callee) = module.functions.iter().find(|f| f.name == call_fn) {
+                                            let ret = format_type(callee.return_type, registry);
+                                            let ret = runtime_type_name(&ret).unwrap_or(&ret).to_string();
+                                            if call_name.starts_with("Option__") {
+                                                if method == "map" {
+                                                    type_overrides.insert(dst_id.0 as usize, format!("Option__{ret}"));
+                                                } else if method == "and_then" {
+                                                    // and_then closure returns Option<T> directly
+                                                    type_overrides.insert(dst_id.0 as usize, ret);
+                                                }
+                                            } else {
+                                                // Result — extract error type from type prefix
+                                                // call_name = Result__OkType__ErrType__method
+                                                let type_prefix = &call_name[..call_name.len() - method.len() - 2]; // strip __method
+                                                let inner = type_prefix.strip_prefix("Result__").unwrap_or(type_prefix);
+                                                // Extract error type: last type component after __
+                                                let err_type = if let Some(pos) = inner.rfind("__") {
+                                                    &inner[pos + 2..]
+                                                } else {
+                                                    inner
+                                                };
+                                                let ok_type = if let Some(pos) = inner.rfind("__") {
+                                                    &inner[..pos]
+                                                } else {
+                                                    inner
+                                                };
+                                                if method == "map" {
+                                                    type_overrides.insert(dst_id.0 as usize, format!("Result__{ret}__{err_type}"));
+                                                } else if method == "map_err" {
+                                                    type_overrides.insert(dst_id.0 as usize, format!("Result__{ok_type}__{ret}"));
+                                                } else if method == "and_then" {
+                                                    // and_then closure returns Result — extract its Ok type
+                                                    // but preserve the original error type from the source Result
+                                                    let new_ok = if let Some(inner_ret) = ret.strip_prefix("Result__") {
+                                                        // Get the Ok type from Result__NewOk__Whatever
+                                                        if let Some(pos) = inner_ret.rfind("__") {
+                                                            &inner_ret[..pos]
+                                                        } else {
+                                                            inner_ret
+                                                        }
+                                                    } else {
+                                                        &ret
+                                                    };
+                                                    type_overrides.insert(dst_id.0 as usize, format!("Result__{new_ok}__{err_type}"));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if is_flatten {
+                                // Option[Option[T]].flatten() → Option[T]
+                                // Extract inner type from Option__Option__X
+                                let type_prefix = &call_name[..call_name.len() - "flatten".len() - 2];
+                                if let Some(inner) = type_prefix.strip_prefix("Option__Option__") {
+                                    type_overrides.insert(dst_id.0 as usize, format!("Option__{inner}"));
+                                } else if let Some(inner) = type_prefix.strip_prefix("Result__Result__") {
+                                    type_overrides.insert(dst_id.0 as usize, format!("Result__{inner}"));
+                                }
+                            }
+                        }
+                        // General inference path (for everything not already overridden)
+                        if !type_overrides.contains_key(&(dst_id.0 as usize)) {
+                            // Check user-defined functions FIRST (they take priority over stdlib heuristics)
+                            let lookup_name = call_name.as_str();
+                            let user_fn_ret = module.functions.iter()
+                                .find(|f| f.name == lookup_name)
+                                .map(|callee| {
+                                    // FnPtr return type = escaped closure → GorgetClosure
+                                    if matches!(registry.get(callee.return_type), Some(GirType::FnPtr { .. })) {
+                                        "GorgetClosure".to_string()
+                                    } else {
+                                        format_type(callee.return_type, registry)
+                                    }
+                                });
+                            if let Some(ref ret) = user_fn_ret {
+                                if ret != "int64_t" && ret != "void" {
+                                    type_overrides.insert(dst_id.0 as usize, ret.clone());
+                                }
+                            } else if let Some(rt) = infer_runtime_return_type(call_name) {
+                                // Float-aware dispatch for abs/min/max
+                                let rt = if matches!(call_name.as_str(), "abs" | "min" | "max" | "gorget_abs" | "gorget_min" | "gorget_max")
+                                    && has_float_arg_with_overrides(call_args, func, &type_overrides)
+                                {
+                                    "double"
+                                } else {
+                                    rt
+                                };
+                                type_overrides.insert(dst_id.0 as usize, rt.to_string());
+                            } else if let Some(rt) = infer_method_return_type(call_name) {
+                                type_overrides.insert(dst_id.0 as usize, rt.to_string());
+                            }
+                        }
+                    }
+                }
+                Instruction::StructInit { dst, type_name, .. }
+                | Instruction::EnumInit { dst, type_name, .. } => {
+                    type_overrides.insert(dst.0 as usize, type_name.clone());
+                }
+                // Propagate type through simple assignments
+                Instruction::Assign { dst, value } => {
+                    // Handle float constant assignments for type override propagation
+                    // Only F64/F32 — other constants (Str, Bool) are handled by the IR type system
+                    if matches!(value, Operand::Constant(Constant::F64(_)) | Operand::Constant(Constant::F32(_))) {
+                        let dst_idx = dst.local.0 as usize;
+                        type_overrides.entry(dst_idx).or_insert_with(|| "double".to_string());
+                    }
+                    if let Operand::Copy(src_place) | Operand::Move(src_place) = value {
+                        let src_idx = src_place.local.0 as usize;
+                        let dst_idx = dst.local.0 as usize;
+                        // If source place has a Deref projection, strip pointer from type
+                        let _has_deref = src_place.projections.iter().any(|p| matches!(p, Projection::Deref));
+                        // Resolve Field projections: walk projections to find the actual type
+                        // e.g., _x[Field(1)] on GorgetArray → resolve .len → int64_t
+                        let resolve_field_projections = |base_type: &str| -> String {
+                            let mut current = base_type.to_string();
+                            for proj in &src_place.projections {
+                                match proj {
+                                    Projection::Deref => {
+                                        // Handle Box__T typedef: deref gives T
+                                        if let Some(inner) = current.strip_prefix("Box__") {
+                                            current = inner.to_string();
+                                        } else {
+                                            current = current.strip_suffix('*')
+                                                .unwrap_or(&current).to_string();
+                                            current = current.strip_prefix("const ")
+                                                .unwrap_or(&current).to_string();
+                                        }
+                                    }
+                                    Projection::Field(idx) => {
+                                        let deref = current.strip_suffix('*')
+                                            .unwrap_or(&current);
+                                        let deref = deref.strip_prefix("const ")
+                                            .unwrap_or(deref);
+                                        // Look up field type from type def
+                                        let field_type = if let Some(type_def) = registry.get_type_def(deref) {
+                                            if let TypeDefKind::Struct(ref sd) = type_def.kind {
+                                                sd.fields.get(*idx as usize)
+                                                    .map(|fld| format_type(fld.type_id, registry))
+                                            } else if let TypeDefKind::Enum(ref ed) = type_def.kind {
+                                                // For enum field access, resolve variant field types
+                                                // Field(0) = tag (int32_t), Field(1+) = variant data
+                                                if *idx == 0 {
+                                                    Some("int32_t".to_string())
+                                                } else {
+                                                    // Accessing variant data — resolve through variant fields
+                                                    ed.variants.get((*idx - 1) as usize)
+                                                        .and_then(|v| v.fields.first())
+                                                        .map(|f| format_type(f.type_id, registry))
+                                                }
+                                            } else { None }
+                                        } else { None };
+                                        // Fallback: runtime type fields
+                                        let resolved_alias = collection_type_alias(deref)
+                                            .unwrap_or(deref);
+                                        let field_type = field_type.or_else(|| {
+                                            match (resolved_alias, *idx) {
+                                                ("GorgetArray", 0) => Some("void*".to_string()),
+                                                ("GorgetArray", 1..=3) => Some("int64_t".to_string()),
+                                                ("Str", 0) => Some("char*".to_string()),
+                                                ("Str", 1) => Some("int64_t".to_string()),
+                                                ("GorgetString", 0) => Some("char*".to_string()),
+                                                ("GorgetString", 1..=2) => Some("int64_t".to_string()),
+                                                _ => None,
+                                            }
+                                        });
+                                        // Result/Option inner type extraction:
+                                        // When accessing .data.Ok._0 or .data.Some._0, resolve
+                                        // to the inner payload type from the type name.
+                                        let field_type = field_type.or_else(|| {
+                                            extract_enum_payload_type(deref)
+                                        });
+                                        if let Some(ft) = field_type {
+                                            current = ft;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            current
+                        };
+                        // Check if destination is UNIT_TYPE and lacks an override
+                        let dst_is_unit = dst_idx < func.locals.len()
+                            && func.locals[dst_idx].type_id == UNIT_TYPE
+                            && !type_overrides.contains_key(&dst_idx);
+                        if dst_is_unit {
+                            // Try override first, then IR type
+                            if let Some(src_type) = type_overrides.get(&src_idx).cloned() {
+                                let src_type = resolve_field_projections(&src_type);
+                                type_overrides.insert(dst_idx, src_type);
+                            } else if src_idx < func.locals.len() {
+                                let tid = func.locals[src_idx].type_id;
+                                if tid != UNIT_TYPE {
+                                    let formatted = format_type(tid, registry);
+                                    if formatted != "void" {
+                                        let resolved = resolve_field_projections(&formatted);
+                                        type_overrides.insert(dst_idx, resolved);
+                                    }
+                                }
+                            }
+                        } else {
+                            // Get effective source type: override first, then GIR type
+                            let raw_src_type = if let Some(ovr) = type_overrides.get(&src_idx).cloned() {
+                                Some(ovr)
+                            } else if !src_place.projections.is_empty() && src_idx < func.locals.len() {
+                                // Source has projections (Deref/Field) — resolve from GIR type
+                                let formatted = format_type(func.locals[src_idx].type_id, registry);
+                                if formatted != "int64_t" && formatted != "void" {
+                                    Some(formatted)
+                                } else { None }
+                            } else { None };
+                            if let Some(raw_src_type) = raw_src_type {
+                                let src_type = resolve_field_projections(&raw_src_type);
+                                let dst_ir_type = if dst_idx < func.locals.len() {
+                                    func.locals[dst_idx].type_id
+                                } else {
+                                    UNIT_TYPE
+                                };
+                                if dst_ir_type == UNIT_TYPE {
+                                    // UNIT_TYPE = placeholder, always propagate
+                                    type_overrides.entry(dst_idx).or_insert(src_type);
+                                } else if dst_ir_type == I64_TYPE && src_type != "int64_t" {
+                                    // I64_TYPE is the GIR fallback for unknown types.
+                                    // If the source has a real override (struct, collection, Str, etc.),
+                                    // propagate it. This handles FieldLoad/IndexLoad chains.
+                                    // Don't downgrade existing overrides.
+                                    // Exception: don't propagate Option__* types to I64_TYPE
+                                    // destinations — the GIR may have lowered .unwrap() as a no-op
+                                    // copy because it doesn't know the intermediate is Option.
+                                    if !type_overrides.contains_key(&dst_idx)
+                                        && !src_type.starts_with("Option__")
+                                    {
+                                        type_overrides.insert(dst_idx, src_type);
+                                    }
+                                } else if src_type == "double" && (dst_ir_type == I64_TYPE || dst_ir_type == F64_TYPE) {
+                                    // Float return from abs/min/max/etc: override int64_t → double
+                                    type_overrides.insert(dst_idx, src_type);
+                                } else if src_place.projections.is_empty()
+                                    && (src_type.starts_with("Result__") || src_type.starts_with("Option__"))
+                                {
+                                    // Result/Option type override from closure-based inference:
+                                    // map/and_then/map_err can change the type signature.
+                                    // Propagate — this takes precedence over GIR-inferred Result/Option types
+                                    // because GIR doesn't track closure return types correctly.
+                                    type_overrides.insert(dst_idx, src_type);
+                                } else if !src_place.projections.is_empty()
+                                    && !type_overrides.contains_key(&dst_idx)
+                                    && type_overrides.contains_key(&src_idx)
+                                {
+                                    // Source has field projections through an overridden base.
+                                    type_overrides.insert(dst_idx, src_type);
+                                }
+                            }
+                        }
+                    }
+                }
+                // IndexLoad on a collection: override element type (or collection type for slices)
+                Instruction::IndexLoad { dst, base, index } => {
+                    let base_idx = base.local.0 as usize;
+                    let dst_idx = dst.0 as usize;
+                    let base_type = if let Some(bt) = type_overrides.get(&base_idx) {
+                        bt.clone()
+                    } else if base_idx < func.locals.len() {
+                        format_type(func.locals[base_idx].type_id, registry)
+                    } else {
+                        "int64_t".to_string()
+                    };
+                    // Strip pointer suffix and const qualifier for ref-to-collection
+                    let base_deref = base_type.strip_suffix('*').unwrap_or(&base_type);
+                    let base_deref = base_deref.strip_prefix("const ").unwrap_or(base_deref);
+                    // Check if index is a Range (slice operation) → result is same collection type
+                    let index_is_range = match index {
+                        Operand::Copy(p) | Operand::Move(p) => {
+                            let idx_local = p.local.0 as usize;
+                            if let Some(override_t) = type_overrides.get(&idx_local) {
+                                override_t == "GorgetRange"
+                            } else if idx_local < func.locals.len() {
+                                matches!(registry.get(func.locals[idx_local].type_id),
+                                    Some(GirType::Named(n)) if n == "GorgetRange")
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false,
+                    };
+                    if index_is_range && (base_deref.starts_with("Vector__")
+                        || base_deref.starts_with("GorgetArray")
+                        || base_deref.starts_with("Dict__")
+                        || base_deref.starts_with("HashMap__"))
+                    {
+                        // Slice returns the same collection type
+                        type_overrides.insert(dst_idx, base_deref.to_string());
+                    } else if let Some(elem) = extract_element_type_from_collection(base_deref)
+                        .or_else(|| {
+                            // base_deref may be normalized (e.g. "GorgetArray"); recover element
+                            // type from the raw IR type when it is a named collection.
+                            if base_idx < func.locals.len() {
+                                if let Some(GirType::Named(raw)) = registry.get(func.locals[base_idx].type_id) {
+                                    extract_element_type_from_collection(raw.as_str())
+                                } else { None }
+                            } else { None }
+                        })
+                    {
+                        type_overrides.insert(dst_idx, elem);
+                    } else if base_deref == "Str" {
+                        type_overrides.insert(dst_idx, "Str".to_string());
+                    }
+                }
+                // Borrow/BorrowMut: track that dst is a pointer to the base's type
+                Instruction::Borrow { dst, place } | Instruction::BorrowMut { dst, place } => {
+                    let base_idx = place.local.0 as usize;
+                    let base_type = if let Some(bt) = type_overrides.get(&base_idx) {
+                        bt.clone()
+                    } else if base_idx < func.locals.len() {
+                        format_type(func.locals[base_idx].type_id, registry)
+                    } else {
+                        continue;
+                    };
+                    // Walk projections to resolve actual borrowed type
+                    // e.g., &_1.items where _1 is Registry → resolved to GorgetMap
+                    let mut resolved = base_type.clone();
+                    for proj in &place.projections {
+                        match proj {
+                            Projection::Deref => {
+                                // Unwrap pointer
+                                if let Some(inner) = resolved.strip_prefix("Box__") {
+                                    resolved = inner.to_string();
+                                } else {
+                                    resolved = resolved.strip_suffix('*')
+                                        .unwrap_or(&resolved).to_string();
+                                    resolved = resolved.strip_prefix("const ")
+                                        .unwrap_or(&resolved).to_string();
+                                }
+                            }
+                            Projection::Field(idx) => {
+                                let deref = resolved.strip_suffix('*')
+                                    .unwrap_or(&resolved);
+                                let deref = deref.strip_prefix("const ")
+                                    .unwrap_or(deref);
+                                // Look up field type from type def
+                                let field_type = if let Some(type_def) = registry.get_type_def(deref) {
+                                    if let TypeDefKind::Struct(ref sd) = type_def.kind {
+                                        sd.fields.get(*idx as usize)
+                                            .map(|fld| format_type(fld.type_id, registry))
+                                    } else { None }
+                                } else { None };
+                                // Fallback: runtime type fields
+                                let resolved_alias = collection_type_alias(deref)
+                                    .unwrap_or(deref);
+                                let field_type = field_type.or_else(|| {
+                                    match (resolved_alias, *idx) {
+                                        ("GorgetArray", 0) => Some("void*".to_string()),
+                                        ("GorgetArray", 1..=3) => Some("int64_t".to_string()),
+                                        ("Str", 0) => Some("char*".to_string()),
+                                        ("Str", 1) => Some("int64_t".to_string()),
+                                        ("GorgetString", 0) => Some("char*".to_string()),
+                                        ("GorgetString", 1..=2) => Some("int64_t".to_string()),
+                                        _ => None,
+                                    }
+                                });
+                                if let Some(ft) = field_type {
+                                    resolved = ft;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Store as pointer type for IndexLoad lookups
+                    if resolved != "int64_t" && resolved != "void" {
+                        type_overrides.insert(dst.0 as usize, format!("{}*", resolved));
+                    }
+                }
+                // FieldLoad: propagate known struct field types
+                Instruction::FieldLoad { dst, base, field } => {
+                    let base_idx = base.local.0 as usize;
+                    let base_type = if let Some(bt) = type_overrides.get(&base_idx) {
+                        bt.clone()
+                    } else if base_idx < func.locals.len() {
+                        format_type(func.locals[base_idx].type_id, registry)
+                    } else {
+                        continue;
+                    };
+                    let base_deref = base_type.strip_suffix('*').unwrap_or(&base_type);
+                    let base_deref = base_deref.strip_prefix("const ").unwrap_or(base_deref);
+                    let dst_idx = dst.0 as usize;
+                    // Look up field type from type def registry
+                    let field_c_type = if let Some(type_def) = registry.get_type_def(base_deref) {
+                        if let TypeDefKind::Struct(ref sd) = type_def.kind {
+                            sd.fields.get(*field as usize)
+                                .map(|fld| format_type(fld.type_id, registry))
+                        } else if let TypeDefKind::Enum(ref ed) = type_def.kind {
+                            // Enum field access: Field(0) = tag, Field(1+) = variant data
+                            if *field == 0 {
+                                Some("int32_t".to_string())
+                            } else {
+                                ed.variants.get(*field as usize - 1)
+                                    .and_then(|v| v.fields.first())
+                                    .map(|f| format_type(f.type_id, registry))
+                            }
+                        } else { None }
+                    } else { None };
+                    // Fallback: resolve known runtime type fields
+                    let resolved = base_deref.strip_prefix("const ").unwrap_or(base_deref);
+                    let resolved_alias = collection_type_alias(resolved).unwrap_or(resolved);
+                    let field_c_type = field_c_type.or_else(|| {
+                        match (resolved_alias, *field) {
+                            ("Str", 0) => Some("char*".to_string()),      // data
+                            ("Str", 1) => Some("int64_t".to_string()),    // len
+                            ("GorgetString", 0) => Some("char*".to_string()),
+                            ("GorgetString", 1) => Some("int64_t".to_string()),
+                            ("GorgetString", 2) => Some("int64_t".to_string()),
+                            ("GorgetArray", 0) => Some("void*".to_string()),   // data
+                            ("GorgetArray", 1) => Some("int64_t".to_string()), // len
+                            ("GorgetArray", 2) | ("GorgetArray", 3) => Some("int64_t".to_string()),
+                            _ => None,
+                        }
+                    });
+                    if let Some(field_c_type) = field_c_type {
+                        if field_c_type != "int64_t" && field_c_type != "void" {
+                            type_overrides.insert(dst_idx, field_c_type);
+                        } else if field_c_type == "int64_t" && !type_overrides.contains_key(&dst_idx) {
+                            // Only correct if dst has no existing override and its GIR type
+                            // is a collection (clearly wrong for a scalar field like .len)
+                            let gir_type = if dst_idx < func.locals.len() {
+                                format_type(func.locals[dst_idx].type_id, registry)
+                            } else { "int64_t".to_string() };
+                            if gir_type == "GorgetArray" || gir_type.starts_with("Vector__")
+                                || gir_type == "GorgetDict" || gir_type == "GorgetMap" {
+                                type_overrides.insert(dst_idx, "int64_t".to_string());
+                            }
+                        }
+                    }
+                }
+                // EnumFieldLoad: look up enum variant field type
+                Instruction::EnumFieldLoad { dst, base, variant, field } => {
+                    let base_idx = base.local.0 as usize;
+                    let base_type = if let Some(bt) = type_overrides.get(&base_idx) {
+                        bt.clone()
+                    } else if base_idx < func.locals.len() {
+                        format_type(func.locals[base_idx].type_id, registry)
+                    } else {
+                        continue;
+                    };
+                    // Strip pointer suffix for borrowed enum values
+                    let base_deref = base_type.strip_suffix('*').unwrap_or(&base_type);
+                    let base_deref = base_deref.strip_prefix("const ").unwrap_or(base_deref);
+                    if let Some(type_def) = registry.get_type_def(base_deref) {
+                        if let TypeDefKind::Enum(ref e) = type_def.kind {
+                            if let Some(var) = e.variants.iter().find(|v| v.name == *variant) {
+                                if let Some(fld) = var.fields.get(*field as usize) {
+                                    let field_c_type = format_type(fld.type_id, registry);
+                                    let dst_idx = dst.0 as usize;
+                                    if field_c_type != "void" {
+                                        // Always set override for enum field loads — the base
+                                        // type may have been corrected by map/map_err/and_then
+                                        // in a later pass, so we need to update the field type.
+                                        if field_c_type != "int64_t" || type_overrides.contains_key(&dst_idx) {
+                                            type_overrides.insert(dst_idx, field_c_type);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Type def not found (may be a C-backend-created type name from
+                        // map/map_err/and_then type override). Extract field type from type name.
+                        if let Some(inner) = base_deref.strip_prefix("Result__") {
+                            let (ok_type, err_type) = if let Some(pos) = inner.rfind("__") {
+                                (&inner[..pos], &inner[pos + 2..])
+                            } else {
+                                (inner, inner)
+                            };
+                            let field_c_type = if variant == "Ok" { ok_type } else { err_type };
+                            let field_c_type = runtime_type_name(field_c_type).unwrap_or(field_c_type);
+                            type_overrides.insert(dst.0 as usize, field_c_type.to_string());
+                        } else if let Some(inner) = base_deref.strip_prefix("Option__") {
+                            if variant == "Some" {
+                                let inner = runtime_type_name(inner).unwrap_or(inner);
+                                type_overrides.insert(dst.0 as usize, inner.to_string());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // Convergence: stop when no new overrides were added
+    if type_overrides.len() == prev_count { break; }
+    } // end multi-pass loop
+    type_overrides
+}
+
 
 /// True if the function can be converted to a stackless coroutine.
 /// Returns false for functions with unsupported instructions / terminators.
@@ -2145,6 +2773,8 @@ fn emit_poll_inst(
     func: &Function,
     registry: &TypeRegistry,
     overflow_wrap: bool,
+    type_overrides: &std::collections::HashMap<usize, String>,
+    _module: &Module,
 ) -> Option<u32> {
     match inst {
         Instruction::Nop => {}
@@ -2156,7 +2786,7 @@ fn emit_poll_inst(
             }
             let dst_str = fmt_place_poll(dst, func, registry);
             if let Operand::Constant(Constant::Str(s)) = value {
-                let local_type = format_type(func.locals[dst.local.0 as usize].type_id, registry);
+                let local_type = effective_c_type(dst.local.0 as usize, func, registry, type_overrides);
                 let escaped = escape_c_string(s);
                 if local_type == "Str" {
                     let _ = writeln!(out, "        {dst_str} = gorget_str_from_literal(\"{escaped}\", {});", s.len());
@@ -2169,10 +2799,10 @@ fn emit_poll_inst(
             }
             let val_str = fmt_operand_poll(value, func, registry);
             // Type coercion: GorgetString → Str via compound literal
-            let dst_type = format_type(func.locals[dst.local.0 as usize].type_id, registry);
+            let dst_type = effective_c_type(dst.local.0 as usize, func, registry, type_overrides);
             if dst_type == "Str" {
                 if let Operand::Copy(p) | Operand::Move(p) = value {
-                    let src_type = format_type(func.locals[p.local.0 as usize].type_id, registry);
+                    let src_type = effective_c_type(p.local.0 as usize, func, registry, type_overrides);
                     if src_type == "GorgetString" {
                         let _ = writeln!(out, "        {dst_str} = (Str){{ .data = {val_str}.data, .len = {val_str}.len }};");
                         return None;
@@ -2247,25 +2877,135 @@ fn emit_poll_inst(
                     return Some(p.local.0);
                 }
             }
+            // Option/Result unwrap: inline field access
+            if (call_fn.starts_with("__result_unwrap") || call_fn.starts_with("__option_unwrap"))
+                && !args.is_empty()
+            {
+                if let Some(dst_id) = dst {
+                    let ptr = fmt_operand_poll(&args[0], func, registry);
+                    let variant = if call_fn.starts_with("__result") { "Ok" } else { "Some" };
+                    if call_fn.ends_with("_or") && args.len() > 1 {
+                        let default_val = fmt_operand_poll(&args[1], func, registry);
+                        let _ = writeln!(out, "        f->_{id} = (({ptr})->tag == 0) ? ({ptr})->data.{variant}._0 : {default_val};",
+                            id = dst_id.0);
+                    } else {
+                        let _ = writeln!(out, "        f->_{id} = ({ptr})->data.{variant}._0;", id = dst_id.0);
+                    }
+                }
+                return None;
+            }
+            // Option is_some/is_none: inline tag check
+            if call_fn == "__option_is_some" || call_fn == "__option_is_none" {
+                if let Some(dst_id) = dst {
+                    if let Some(arg) = args.first() {
+                        let ptr = fmt_operand_poll(arg, func, registry);
+                        let check = if call_fn == "__option_is_some" { "== 0" } else { "!= 0" };
+                        let _ = writeln!(out, "        f->_{} = ({ptr})->tag {check};", dst_id.0);
+                    }
+                }
+                return None;
+            }
             // Map GIR stdlib names to C runtime names
-            let c_fn = map_stdlib_name(call_fn);
-            let was_mapped = c_fn != call_fn;
+            let c_fn_mapped = map_stdlib_name(call_fn);
+            let was_mapped = c_fn_mapped != call_fn;
+            // Collection method rewriting (Str__starts_with → gorget_str_starts_with, etc.)
+            if !was_mapped {
+                if let Some(rewrite) = try_rewrite_collection_method(call_fn) {
+                    if !rewrite.runtime_fn.is_empty() {
+                        // Emit collection method call in poll context
+                        // Self arg: if pass_by_ptr, pass as pointer; otherwise deref
+                        let mut arg_parts: Vec<String> = Vec::new();
+                        for (i, arg) in args.iter().enumerate() {
+                            if i == 0 {
+                                // Self argument
+                                let self_str = fmt_operand_poll(arg, func, registry);
+                                if rewrite.pass_by_ptr {
+                                    arg_parts.push(self_str);
+                                } else {
+                                    // Deref if self is a pointer
+                                    let is_ptr = if let Operand::Copy(p) | Operand::Move(p) = arg {
+                                        let ct = effective_c_type(p.local.0 as usize, func, registry, type_overrides);
+                                        ct.ends_with('*')
+                                    } else { false };
+                                    if is_ptr {
+                                        arg_parts.push(format!("(*{self_str})"));
+                                    } else {
+                                        arg_parts.push(self_str);
+                                    }
+                                }
+                            } else {
+                                arg_parts.push(fmt_operand_poll_as_str(arg, func, registry));
+                            }
+                        }
+                        let args_str = arg_parts.join(", ");
+                        if let Some(ref fa) = rewrite.field_access {
+                            // field_access methods (len, is_empty): emit inline
+                            if let Some(dst_id) = dst {
+                                let self_str = if !args.is_empty() {
+                                    fmt_operand_poll(&args[0], func, registry)
+                                } else { String::new() };
+                                let is_ptr = if let Some(Operand::Copy(p) | Operand::Move(p)) = args.first() {
+                                    let ct = effective_c_type(p.local.0 as usize, func, registry, type_overrides);
+                                    ct.ends_with('*')
+                                } else { false };
+                                let deref = if is_ptr { format!("(*{self_str})") } else { self_str };
+                                let _ = writeln!(out, "        f->_{} = {deref}.{fa};", dst_id.0);
+                            }
+                        } else if rewrite.has_return {
+                            if let Some(dst_id) = dst {
+                                let _ = writeln!(out, "        f->_{} = {}({args_str});", dst_id.0, rewrite.runtime_fn);
+                            }
+                        } else {
+                            let _ = writeln!(out, "        {}({args_str});", rewrite.runtime_fn);
+                        }
+                        return None;
+                    }
+                }
+            }
+            let c_fn = c_fn_mapped;
             // Blocking calls: wrap with enter/exit to keep pool at capacity
             let is_blocking = is_blocking_call(call_fn) || is_blocking_call(c_fn);
             if is_blocking {
                 out.push_str("        __gorget_blocking_enter();\n");
             }
-            // Mapped C functions expect const char*, unmapped Gorget functions expect Str
-            let args_str = if was_mapped {
+            // Mapped C functions (or already-C-named functions) expect const char*,
+            // unmapped Gorget functions expect Str.
+            let needs_cstr = was_mapped || c_fn.starts_with("gorget_");
+            let args_str = if needs_cstr {
                 fmt_args_poll_cstr(args, func, registry)
             } else {
                 fmt_args_poll_gorget(args, func, registry)
             };
+            // Result-wrapping: if destination is Result__* and function has last_error_fn,
+            // emit compound-literal wrapping (same pattern as try_emit_result_wrapped_call).
+            let mut emitted_result_wrap = false;
             if let Some(dst_id) = dst {
-                let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
-                let _ = writeln!(out, "        {dst_str} = {c_fn}({args_str});");
-            } else {
-                let _ = writeln!(out, "        {c_fn}({args_str});");
+                let dst_c = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                if dst_c.starts_with("Result__") {
+                    if let Some(err_fn) = last_error_fn(call_fn).or_else(|| last_error_fn(c_fn)) {
+                        let id = dst_id.0;
+                        let ret_cstr = returns_cstr(c_fn);
+                        let raw_capture = if ret_cstr {
+                            format!("gorget_str_from_cstr({c_fn}({args_str}))")
+                        } else {
+                            format!("{c_fn}({args_str})")
+                        };
+                        let _ = writeln!(out,
+                            "        f->_{id} = ({{ __typeof__(f->_{id}.data.Ok._0) __raw = {raw_capture}; \
+                            const char* __err = {err_fn}(); \
+                            {dst_c} __wr; if (__err) {{ __wr.tag = 1; __wr.data.Error._0 = gorget_str_from_cstr(__err); }} \
+                            else {{ __wr.tag = 0; __wr.data.Ok._0 = __raw; }} __wr; }});");
+                        emitted_result_wrap = true;
+                    }
+                }
+            }
+            if !emitted_result_wrap {
+                if let Some(dst_id) = dst {
+                    let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
+                    let _ = writeln!(out, "        {dst_str} = {c_fn}({args_str});");
+                } else {
+                    let _ = writeln!(out, "        {c_fn}({args_str});");
+                }
             }
             if is_blocking {
                 out.push_str("        __gorget_blocking_exit();\n");
@@ -2273,6 +3013,34 @@ fn emit_poll_inst(
         }
 
         Instruction::CallExtern { dst, func: call_fn, args } => {
+            // Option/Result unwrap: inline field access
+            if (call_fn.starts_with("__result_unwrap") || call_fn.starts_with("__option_unwrap"))
+                && !args.is_empty()
+            {
+                if let Some(dst_id) = dst {
+                    let ptr = fmt_operand_poll(&args[0], func, registry);
+                    let variant = if call_fn.starts_with("__result") { "Ok" } else { "Some" };
+                    if call_fn.ends_with("_or") && args.len() > 1 {
+                        let default_val = fmt_operand_poll(&args[1], func, registry);
+                        let _ = writeln!(out, "        f->_{id} = (({ptr})->tag == 0) ? ({ptr})->data.{variant}._0 : {default_val};",
+                            id = dst_id.0);
+                    } else {
+                        let _ = writeln!(out, "        f->_{id} = ({ptr})->data.{variant}._0;", id = dst_id.0);
+                    }
+                }
+                return None;
+            }
+            // Option is_some/is_none: inline tag check
+            if call_fn == "__option_is_some" || call_fn == "__option_is_none" {
+                if let Some(dst_id) = dst {
+                    if let Some(arg) = args.first() {
+                        let ptr = fmt_operand_poll(arg, func, registry);
+                        let check = if call_fn == "__option_is_some" { "== 0" } else { "!= 0" };
+                        let _ = writeln!(out, "        f->_{} = ({ptr})->tag {check};", dst_id.0);
+                    }
+                }
+                return None;
+            }
             let is_printf = call_fn == "printf" || call_fn == "fprintf" || call_fn == "sprintf"
                 || call_fn == "gorget_string_format";
             let args_str = if is_printf {
@@ -2280,11 +3048,36 @@ fn emit_poll_inst(
             } else {
                 fmt_args_poll(args, func, registry)
             };
+            // Result wrapping for extern calls (socket_connect, etc.)
+            let mut emitted_result_wrap = false;
             if let Some(dst_id) = dst {
-                let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
-                let _ = writeln!(out, "        {dst_str} = {call_fn}({args_str});");
-            } else {
-                let _ = writeln!(out, "        {call_fn}({args_str});");
+                let dst_c = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                if dst_c.starts_with("Result__") {
+                    if let Some(err_fn) = last_error_fn(call_fn) {
+                        let id = dst_id.0;
+                        let c_fn = call_fn;
+                        let ret_cstr = returns_cstr(c_fn);
+                        let raw_capture = if ret_cstr {
+                            format!("gorget_str_from_cstr({c_fn}({args_str}))")
+                        } else {
+                            format!("{c_fn}({args_str})")
+                        };
+                        let _ = writeln!(out,
+                            "        f->_{id} = ({{ __typeof__(f->_{id}.data.Ok._0) __raw = {raw_capture}; \
+                            const char* __err = {err_fn}(); \
+                            {dst_c} __wr; if (__err) {{ __wr.tag = 1; __wr.data.Error._0 = gorget_str_from_cstr(__err); }} \
+                            else {{ __wr.tag = 0; __wr.data.Ok._0 = __raw; }} __wr; }});");
+                        emitted_result_wrap = true;
+                    }
+                }
+            }
+            if !emitted_result_wrap {
+                if let Some(dst_id) = dst {
+                    let dst_str = fmt_place_poll(&Place::local(LocalId(dst_id.0)), func, registry);
+                    let _ = writeln!(out, "        {dst_str} = {call_fn}({args_str});");
+                } else {
+                    let _ = writeln!(out, "        {call_fn}({args_str});");
+                }
             }
         }
 
@@ -2570,6 +3363,7 @@ fn emit_coroutine(
     let task_name = if is_void { "Task__void".to_string() } else { format!("Task__{ret_c}") };
     let frame_name = format!("__Frame_{fn_name}");
     let state_ids = coroutine_state_ids(func);
+    let type_overrides = compute_type_overrides(func, registry, module);
 
     // ── 1. Frame struct ─────────────────────────────────────────────────────
     let _ = writeln!(out, "typedef struct {frame_name} {{");
@@ -2577,7 +3371,11 @@ fn emit_coroutine(
     out.push_str("    int __state;\n");
     // All locals (including _0 = return place, _1.._N = params + user vars)
     for (idx, local) in func.locals.iter().enumerate() {
-        let c_type = format_type(local.type_id, registry);
+        let c_type = if let Some(ovr) = type_overrides.get(&idx) {
+            ovr.clone()
+        } else {
+            format_type(local.type_id, registry)
+        };
         if c_type == "void" { continue; }
         let _ = writeln!(out, "    {c_type} _{idx};");
     }
@@ -2609,7 +3407,7 @@ fn emit_coroutine(
             // ── No-yield state: emit all instructions + terminator ────────────
             let _ = writeln!(out, "    case {base_state}: {{");
             for inst in &bb.instructions {
-                emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap);
+                emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap, &type_overrides, module);
             }
             if let Some(term) = &bb.terminator {
                 emit_poll_terminator(out, term, func, registry, &state_ids);
@@ -2656,7 +3454,7 @@ fn emit_coroutine(
                 // Emit instructions from after the previous yield (or BB start) to this yield
                 let inst_start = if yield_idx == 0 { 0 } else { yield_positions[yield_idx - 1].0 + 1 };
                 for inst in &bb.instructions[inst_start..yield_pos] {
-                    emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap);
+                    emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap, &type_overrides, module);
                 }
 
                 // If we need to split (retry yield after non-retry yield), close this
@@ -2780,7 +3578,7 @@ fn emit_coroutine(
                 }
             }
             for inst in &bb.instructions[last_pos + 1..] {
-                emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap);
+                emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap, &type_overrides, module);
             }
             if let Some(term) = &bb.terminator {
                 emit_poll_terminator(out, term, func, registry, &state_ids);
@@ -3703,623 +4501,7 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
 
     // Pre-scan: find locals assigned by constructors/type-defs and override their types.
     // Run multiple passes until convergence so assignment chains propagate correctly.
-    let mut type_overrides: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
-    for _pass in 0..3 {
-    let prev_count = type_overrides.len();
-    for block in &func.blocks {
-        for inst in &block.instructions {
-            match inst {
-                Instruction::Call { dst: Some(dst_id), func: call_name, args: call_args }
-                | Instruction::CallExtern { dst: Some(dst_id), func: call_name, args: call_args } => {
-                    // GIR IR trust: if the local already has a meaningful Named type from the IR,
-                    // use it instead of heuristic overrides. This prevents infer_runtime_return_type
-                    // from incorrectly overriding Result/Option/struct types.
-                    let dst_idx = dst_id.0 as usize;
-                    let ir_type_is_named = dst_idx < func.locals.len() && {
-                        let tid = func.locals[dst_idx].type_id;
-                        matches!(registry.get(tid), Some(GirType::Named(_)))
-                    };
-                    // __result_unwrap / __option_unwrap: extract inner type from the arg's type
-                    if (call_name.starts_with("__result_unwrap") || call_name.starts_with("__option_unwrap"))
-                        && !call_args.is_empty()
-                    {
-                        let arg_type = match &call_args[0] {
-                            Operand::Copy(p) | Operand::Move(p) => {
-                                effective_c_type(p.local.0 as usize, func, registry, &type_overrides)
-                            }
-                            _ => String::new(),
-                        };
-                        // Strip pointer suffix for &option / &result
-                        let base = arg_type.strip_suffix('*').unwrap_or(&arg_type);
-                        if let Some(inner) = extract_enum_payload_type(base) {
-                            let rt = runtime_type_name(&inner).unwrap_or(&inner);
-                            type_overrides.insert(dst_idx, rt.to_string());
-                        }
-                    }
-                    // Check if this is a collection method with a known scalar return type
-                    // (e.g., Vector__T__len returns int64_t, not Vector__T)
-                    let method_return_override = if let Some(rewrite) = try_rewrite_collection_method(call_name) {
-                        if rewrite.field_access.is_some() {
-                            // field_access methods (len, is_empty) return scalars
-                            Some("int64_t".to_string())
-                        } else {
-                            None
-                        }
-                    } else if let Some(rt) = infer_method_return_type(call_name) {
-                        if rt != "int64_t" && rt != "void" {
-                            Some(rt.to_string())
-                        } else {
-                            None // let it fall through to the normal heuristics
-                        }
-                    } else {
-                        None
-                    };
-                    if let Some(ret_type) = method_return_override {
-                        type_overrides.insert(dst_idx, ret_type);
-                    } else if ir_type_is_named && !type_overrides.contains_key(&dst_idx) {
-                        let tid = func.locals[dst_idx].type_id;
-                        let gir_c_type = format_type(tid, registry);
-                        // Cross-check with callee return type: if callee has a different
-                        // return type, trust the callee over the GIR local type.
-                        let callee_ret = module.functions.iter()
-                            .find(|f| f.name == call_name.as_str())
-                            .map(|callee| format_type(callee.return_type, registry));
-                        let runtime_ret = infer_runtime_return_type(call_name)
-                            .or_else(|| infer_method_return_type(call_name));
-                        let c_type = if let Some(ref ret) = callee_ret {
-                            if ret != "int64_t" && ret != "void" && ret != &gir_c_type {
-                                ret.clone()
-                            } else {
-                                gir_c_type
-                            }
-                        } else if let Some(rt) = runtime_ret {
-                            if rt != "int64_t" && rt != "void" && rt != gir_c_type {
-                                rt.to_string()
-                            } else {
-                                gir_c_type
-                            }
-                        } else {
-                            gir_c_type
-                        };
-                        type_overrides.insert(dst_idx, c_type);
-                    } else if is_collection_constructor(call_name) {
-                        let type_name = call_name.strip_suffix("__new").unwrap_or(call_name);
-                        let c_type = if let Some(alias) = collection_type_alias(type_name) {
-                            alias.to_string()
-                        } else if type_name == "String" {
-                            "GorgetString".to_string()
-                        } else if type_name == "Box" {
-                            "void*".to_string()
-                        } else {
-                            type_name.to_string()
-                        };
-                        type_overrides.insert(dst_id.0 as usize, c_type);
-                    } else if registry.get_type_def(call_name).is_some() {
-                        type_overrides.insert(dst_id.0 as usize, call_name.to_string());
-                    } else if call_name == "gorget_array_new" {
-                        // gorget_array_new(sizeof(T)) → Vector__T
-                        if let Some(Operand::Constant(Constant::SizeOf(elem_tid))) = call_args.first() {
-                            let elem_c = format_type(*elem_tid, registry);
-                            let vec_type = format!("Vector__{}", elem_c);
-                            if collection_type_alias(&vec_type).is_some() {
-                                type_overrides.insert(dst_id.0 as usize, vec_type);
-                            } else {
-                                type_overrides.insert(dst_id.0 as usize, "GorgetArray".to_string());
-                            }
-                        } else {
-                            type_overrides.insert(dst_id.0 as usize, "GorgetArray".to_string());
-                        }
-                    } else if call_name == "gorget_dict_new" || call_name == "gorget_map_new"
-                        || call_name == "gorget_dict_new_str" || call_name == "gorget_map_new_str" {
-                        type_overrides.insert(dst_id.0 as usize, "GorgetDict".to_string());
-                    } else if call_name == "gorget_set_new" {
-                        type_overrides.insert(dst_id.0 as usize, "GorgetSet".to_string());
-                    } else {
-                        // For Dict/HashMap filter, force GorgetMap return type
-                        if (call_name.starts_with("Dict__") || call_name.starts_with("HashMap__"))
-                            && extract_trailing_method(call_name, "") == "filter"
-                        {
-                            type_overrides.insert(dst_id.0 as usize, "GorgetMap".to_string());
-                        }
-                        // Option/Result.map/map_err/and_then/flatten: output type depends on closure return type
-                        if call_name.starts_with("Option__") || call_name.starts_with("Result__") {
-                            let method = extract_trailing_method(call_name, "");
-                            let needs_closure_ret = matches!(method, "map" | "map_err" | "and_then");
-                            let is_flatten = method == "flatten";
-                            if needs_closure_ret {
-                                if let Some(closure_op) = call_args.get(1) {
-                                    if let Operand::Copy(p) | Operand::Move(p) = closure_op {
-                                        let closure_c_type = effective_c_type(p.local.0 as usize, func, registry, &type_overrides);
-                                        let call_fn = format!("{closure_c_type}__call");
-                                        if let Some(callee) = module.functions.iter().find(|f| f.name == call_fn) {
-                                            let ret = format_type(callee.return_type, registry);
-                                            let ret = runtime_type_name(&ret).unwrap_or(&ret).to_string();
-                                            if call_name.starts_with("Option__") {
-                                                if method == "map" {
-                                                    type_overrides.insert(dst_id.0 as usize, format!("Option__{ret}"));
-                                                } else if method == "and_then" {
-                                                    // and_then closure returns Option<T> directly
-                                                    type_overrides.insert(dst_id.0 as usize, ret);
-                                                }
-                                            } else {
-                                                // Result — extract error type from type prefix
-                                                // call_name = Result__OkType__ErrType__method
-                                                let type_prefix = &call_name[..call_name.len() - method.len() - 2]; // strip __method
-                                                let inner = type_prefix.strip_prefix("Result__").unwrap_or(type_prefix);
-                                                // Extract error type: last type component after __
-                                                let err_type = if let Some(pos) = inner.rfind("__") {
-                                                    &inner[pos + 2..]
-                                                } else {
-                                                    inner
-                                                };
-                                                let ok_type = if let Some(pos) = inner.rfind("__") {
-                                                    &inner[..pos]
-                                                } else {
-                                                    inner
-                                                };
-                                                if method == "map" {
-                                                    type_overrides.insert(dst_id.0 as usize, format!("Result__{ret}__{err_type}"));
-                                                } else if method == "map_err" {
-                                                    type_overrides.insert(dst_id.0 as usize, format!("Result__{ok_type}__{ret}"));
-                                                } else if method == "and_then" {
-                                                    // and_then closure returns Result — extract its Ok type
-                                                    // but preserve the original error type from the source Result
-                                                    let new_ok = if let Some(inner_ret) = ret.strip_prefix("Result__") {
-                                                        // Get the Ok type from Result__NewOk__Whatever
-                                                        if let Some(pos) = inner_ret.rfind("__") {
-                                                            &inner_ret[..pos]
-                                                        } else {
-                                                            inner_ret
-                                                        }
-                                                    } else {
-                                                        &ret
-                                                    };
-                                                    type_overrides.insert(dst_id.0 as usize, format!("Result__{new_ok}__{err_type}"));
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            } else if is_flatten {
-                                // Option[Option[T]].flatten() → Option[T]
-                                // Extract inner type from Option__Option__X
-                                let type_prefix = &call_name[..call_name.len() - "flatten".len() - 2];
-                                if let Some(inner) = type_prefix.strip_prefix("Option__Option__") {
-                                    type_overrides.insert(dst_id.0 as usize, format!("Option__{inner}"));
-                                } else if let Some(inner) = type_prefix.strip_prefix("Result__Result__") {
-                                    type_overrides.insert(dst_id.0 as usize, format!("Result__{inner}"));
-                                }
-                            }
-                        }
-                        // General inference path (for everything not already overridden)
-                        if !type_overrides.contains_key(&(dst_id.0 as usize)) {
-                            // Check user-defined functions FIRST (they take priority over stdlib heuristics)
-                            let lookup_name = call_name.as_str();
-                            let user_fn_ret = module.functions.iter()
-                                .find(|f| f.name == lookup_name)
-                                .map(|callee| {
-                                    // FnPtr return type = escaped closure → GorgetClosure
-                                    if matches!(registry.get(callee.return_type), Some(GirType::FnPtr { .. })) {
-                                        "GorgetClosure".to_string()
-                                    } else {
-                                        format_type(callee.return_type, registry)
-                                    }
-                                });
-                            if let Some(ref ret) = user_fn_ret {
-                                if ret != "int64_t" && ret != "void" {
-                                    type_overrides.insert(dst_id.0 as usize, ret.clone());
-                                }
-                            } else if let Some(rt) = infer_runtime_return_type(call_name) {
-                                // Float-aware dispatch for abs/min/max
-                                let rt = if matches!(call_name.as_str(), "abs" | "min" | "max" | "gorget_abs" | "gorget_min" | "gorget_max")
-                                    && has_float_arg_with_overrides(call_args, func, &type_overrides)
-                                {
-                                    "double"
-                                } else {
-                                    rt
-                                };
-                                type_overrides.insert(dst_id.0 as usize, rt.to_string());
-                            } else if let Some(rt) = infer_method_return_type(call_name) {
-                                type_overrides.insert(dst_id.0 as usize, rt.to_string());
-                            }
-                        }
-                    }
-                }
-                Instruction::StructInit { dst, type_name, .. }
-                | Instruction::EnumInit { dst, type_name, .. } => {
-                    type_overrides.insert(dst.0 as usize, type_name.clone());
-                }
-                // Propagate type through simple assignments
-                Instruction::Assign { dst, value } => {
-                    // Handle float constant assignments for type override propagation
-                    // Only F64/F32 — other constants (Str, Bool) are handled by the IR type system
-                    if matches!(value, Operand::Constant(Constant::F64(_)) | Operand::Constant(Constant::F32(_))) {
-                        let dst_idx = dst.local.0 as usize;
-                        type_overrides.entry(dst_idx).or_insert_with(|| "double".to_string());
-                    }
-                    if let Operand::Copy(src_place) | Operand::Move(src_place) = value {
-                        let src_idx = src_place.local.0 as usize;
-                        let dst_idx = dst.local.0 as usize;
-                        // If source place has a Deref projection, strip pointer from type
-                        let _has_deref = src_place.projections.iter().any(|p| matches!(p, Projection::Deref));
-                        // Resolve Field projections: walk projections to find the actual type
-                        // e.g., _x[Field(1)] on GorgetArray → resolve .len → int64_t
-                        let resolve_field_projections = |base_type: &str| -> String {
-                            let mut current = base_type.to_string();
-                            for proj in &src_place.projections {
-                                match proj {
-                                    Projection::Deref => {
-                                        // Handle Box__T typedef: deref gives T
-                                        if let Some(inner) = current.strip_prefix("Box__") {
-                                            current = inner.to_string();
-                                        } else {
-                                            current = current.strip_suffix('*')
-                                                .unwrap_or(&current).to_string();
-                                            current = current.strip_prefix("const ")
-                                                .unwrap_or(&current).to_string();
-                                        }
-                                    }
-                                    Projection::Field(idx) => {
-                                        let deref = current.strip_suffix('*')
-                                            .unwrap_or(&current);
-                                        let deref = deref.strip_prefix("const ")
-                                            .unwrap_or(deref);
-                                        // Look up field type from type def
-                                        let field_type = if let Some(type_def) = registry.get_type_def(deref) {
-                                            if let TypeDefKind::Struct(ref sd) = type_def.kind {
-                                                sd.fields.get(*idx as usize)
-                                                    .map(|fld| format_type(fld.type_id, registry))
-                                            } else if let TypeDefKind::Enum(ref ed) = type_def.kind {
-                                                // For enum field access, resolve variant field types
-                                                // Field(0) = tag (int32_t), Field(1+) = variant data
-                                                if *idx == 0 {
-                                                    Some("int32_t".to_string())
-                                                } else {
-                                                    // Accessing variant data — resolve through variant fields
-                                                    ed.variants.get((*idx - 1) as usize)
-                                                        .and_then(|v| v.fields.first())
-                                                        .map(|f| format_type(f.type_id, registry))
-                                                }
-                                            } else { None }
-                                        } else { None };
-                                        // Fallback: runtime type fields
-                                        let resolved_alias = collection_type_alias(deref)
-                                            .unwrap_or(deref);
-                                        let field_type = field_type.or_else(|| {
-                                            match (resolved_alias, *idx) {
-                                                ("GorgetArray", 0) => Some("void*".to_string()),
-                                                ("GorgetArray", 1..=3) => Some("int64_t".to_string()),
-                                                ("Str", 0) => Some("char*".to_string()),
-                                                ("Str", 1) => Some("int64_t".to_string()),
-                                                ("GorgetString", 0) => Some("char*".to_string()),
-                                                ("GorgetString", 1..=2) => Some("int64_t".to_string()),
-                                                _ => None,
-                                            }
-                                        });
-                                        // Result/Option inner type extraction:
-                                        // When accessing .data.Ok._0 or .data.Some._0, resolve
-                                        // to the inner payload type from the type name.
-                                        let field_type = field_type.or_else(|| {
-                                            extract_enum_payload_type(deref)
-                                        });
-                                        if let Some(ft) = field_type {
-                                            current = ft;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            current
-                        };
-                        // Check if destination is UNIT_TYPE and lacks an override
-                        let dst_is_unit = dst_idx < func.locals.len()
-                            && func.locals[dst_idx].type_id == UNIT_TYPE
-                            && !type_overrides.contains_key(&dst_idx);
-                        if dst_is_unit {
-                            // Try override first, then IR type
-                            if let Some(src_type) = type_overrides.get(&src_idx).cloned() {
-                                let src_type = resolve_field_projections(&src_type);
-                                type_overrides.insert(dst_idx, src_type);
-                            } else if src_idx < func.locals.len() {
-                                let tid = func.locals[src_idx].type_id;
-                                if tid != UNIT_TYPE {
-                                    let formatted = format_type(tid, registry);
-                                    if formatted != "void" {
-                                        let resolved = resolve_field_projections(&formatted);
-                                        type_overrides.insert(dst_idx, resolved);
-                                    }
-                                }
-                            }
-                        } else {
-                            // Get effective source type: override first, then GIR type
-                            let raw_src_type = if let Some(ovr) = type_overrides.get(&src_idx).cloned() {
-                                Some(ovr)
-                            } else if !src_place.projections.is_empty() && src_idx < func.locals.len() {
-                                // Source has projections (Deref/Field) — resolve from GIR type
-                                let formatted = format_type(func.locals[src_idx].type_id, registry);
-                                if formatted != "int64_t" && formatted != "void" {
-                                    Some(formatted)
-                                } else { None }
-                            } else { None };
-                            if let Some(raw_src_type) = raw_src_type {
-                                let src_type = resolve_field_projections(&raw_src_type);
-                                let dst_ir_type = if dst_idx < func.locals.len() {
-                                    func.locals[dst_idx].type_id
-                                } else {
-                                    UNIT_TYPE
-                                };
-                                if dst_ir_type == UNIT_TYPE {
-                                    // UNIT_TYPE = placeholder, always propagate
-                                    type_overrides.entry(dst_idx).or_insert(src_type);
-                                } else if dst_ir_type == I64_TYPE && src_type != "int64_t" {
-                                    // I64_TYPE is the GIR fallback for unknown types.
-                                    // If the source has a real override (struct, collection, Str, etc.),
-                                    // propagate it. This handles FieldLoad/IndexLoad chains.
-                                    // Don't downgrade existing overrides.
-                                    // Exception: don't propagate Option__* types to I64_TYPE
-                                    // destinations — the GIR may have lowered .unwrap() as a no-op
-                                    // copy because it doesn't know the intermediate is Option.
-                                    if !type_overrides.contains_key(&dst_idx)
-                                        && !src_type.starts_with("Option__")
-                                    {
-                                        type_overrides.insert(dst_idx, src_type);
-                                    }
-                                } else if src_type == "double" && (dst_ir_type == I64_TYPE || dst_ir_type == F64_TYPE) {
-                                    // Float return from abs/min/max/etc: override int64_t → double
-                                    type_overrides.insert(dst_idx, src_type);
-                                } else if src_place.projections.is_empty()
-                                    && (src_type.starts_with("Result__") || src_type.starts_with("Option__"))
-                                {
-                                    // Result/Option type override from closure-based inference:
-                                    // map/and_then/map_err can change the type signature.
-                                    // Propagate — this takes precedence over GIR-inferred Result/Option types
-                                    // because GIR doesn't track closure return types correctly.
-                                    type_overrides.insert(dst_idx, src_type);
-                                } else if !src_place.projections.is_empty()
-                                    && !type_overrides.contains_key(&dst_idx)
-                                    && type_overrides.contains_key(&src_idx)
-                                {
-                                    // Source has field projections through an overridden base.
-                                    type_overrides.insert(dst_idx, src_type);
-                                }
-                            }
-                        }
-                    }
-                }
-                // IndexLoad on a collection: override element type (or collection type for slices)
-                Instruction::IndexLoad { dst, base, index } => {
-                    let base_idx = base.local.0 as usize;
-                    let dst_idx = dst.0 as usize;
-                    let base_type = if let Some(bt) = type_overrides.get(&base_idx) {
-                        bt.clone()
-                    } else if base_idx < func.locals.len() {
-                        format_type(func.locals[base_idx].type_id, registry)
-                    } else {
-                        "int64_t".to_string()
-                    };
-                    // Strip pointer suffix and const qualifier for ref-to-collection
-                    let base_deref = base_type.strip_suffix('*').unwrap_or(&base_type);
-                    let base_deref = base_deref.strip_prefix("const ").unwrap_or(base_deref);
-                    // Check if index is a Range (slice operation) → result is same collection type
-                    let index_is_range = match index {
-                        Operand::Copy(p) | Operand::Move(p) => {
-                            let idx_local = p.local.0 as usize;
-                            if let Some(override_t) = type_overrides.get(&idx_local) {
-                                override_t == "GorgetRange"
-                            } else if idx_local < func.locals.len() {
-                                matches!(registry.get(func.locals[idx_local].type_id),
-                                    Some(GirType::Named(n)) if n == "GorgetRange")
-                            } else {
-                                false
-                            }
-                        }
-                        _ => false,
-                    };
-                    if index_is_range && (base_deref.starts_with("Vector__")
-                        || base_deref.starts_with("GorgetArray")
-                        || base_deref.starts_with("Dict__")
-                        || base_deref.starts_with("HashMap__"))
-                    {
-                        // Slice returns the same collection type
-                        type_overrides.insert(dst_idx, base_deref.to_string());
-                    } else if let Some(elem) = extract_element_type_from_collection(base_deref)
-                        .or_else(|| {
-                            // base_deref may be normalized (e.g. "GorgetArray"); recover element
-                            // type from the raw IR type when it is a named collection.
-                            if base_idx < func.locals.len() {
-                                if let Some(GirType::Named(raw)) = registry.get(func.locals[base_idx].type_id) {
-                                    extract_element_type_from_collection(raw.as_str())
-                                } else { None }
-                            } else { None }
-                        })
-                    {
-                        type_overrides.insert(dst_idx, elem);
-                    } else if base_deref == "Str" {
-                        type_overrides.insert(dst_idx, "Str".to_string());
-                    }
-                }
-                // Borrow/BorrowMut: track that dst is a pointer to the base's type
-                Instruction::Borrow { dst, place } | Instruction::BorrowMut { dst, place } => {
-                    let base_idx = place.local.0 as usize;
-                    let base_type = if let Some(bt) = type_overrides.get(&base_idx) {
-                        bt.clone()
-                    } else if base_idx < func.locals.len() {
-                        format_type(func.locals[base_idx].type_id, registry)
-                    } else {
-                        continue;
-                    };
-                    // Walk projections to resolve actual borrowed type
-                    // e.g., &_1.items where _1 is Registry → resolved to GorgetMap
-                    let mut resolved = base_type.clone();
-                    for proj in &place.projections {
-                        match proj {
-                            Projection::Deref => {
-                                // Unwrap pointer
-                                if let Some(inner) = resolved.strip_prefix("Box__") {
-                                    resolved = inner.to_string();
-                                } else {
-                                    resolved = resolved.strip_suffix('*')
-                                        .unwrap_or(&resolved).to_string();
-                                    resolved = resolved.strip_prefix("const ")
-                                        .unwrap_or(&resolved).to_string();
-                                }
-                            }
-                            Projection::Field(idx) => {
-                                let deref = resolved.strip_suffix('*')
-                                    .unwrap_or(&resolved);
-                                let deref = deref.strip_prefix("const ")
-                                    .unwrap_or(deref);
-                                // Look up field type from type def
-                                let field_type = if let Some(type_def) = registry.get_type_def(deref) {
-                                    if let TypeDefKind::Struct(ref sd) = type_def.kind {
-                                        sd.fields.get(*idx as usize)
-                                            .map(|fld| format_type(fld.type_id, registry))
-                                    } else { None }
-                                } else { None };
-                                // Fallback: runtime type fields
-                                let resolved_alias = collection_type_alias(deref)
-                                    .unwrap_or(deref);
-                                let field_type = field_type.or_else(|| {
-                                    match (resolved_alias, *idx) {
-                                        ("GorgetArray", 0) => Some("void*".to_string()),
-                                        ("GorgetArray", 1..=3) => Some("int64_t".to_string()),
-                                        ("Str", 0) => Some("char*".to_string()),
-                                        ("Str", 1) => Some("int64_t".to_string()),
-                                        ("GorgetString", 0) => Some("char*".to_string()),
-                                        ("GorgetString", 1..=2) => Some("int64_t".to_string()),
-                                        _ => None,
-                                    }
-                                });
-                                if let Some(ft) = field_type {
-                                    resolved = ft;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    // Store as pointer type for IndexLoad lookups
-                    if resolved != "int64_t" && resolved != "void" {
-                        type_overrides.insert(dst.0 as usize, format!("{}*", resolved));
-                    }
-                }
-                // FieldLoad: propagate known struct field types
-                Instruction::FieldLoad { dst, base, field } => {
-                    let base_idx = base.local.0 as usize;
-                    let base_type = if let Some(bt) = type_overrides.get(&base_idx) {
-                        bt.clone()
-                    } else if base_idx < func.locals.len() {
-                        format_type(func.locals[base_idx].type_id, registry)
-                    } else {
-                        continue;
-                    };
-                    let base_deref = base_type.strip_suffix('*').unwrap_or(&base_type);
-                    let base_deref = base_deref.strip_prefix("const ").unwrap_or(base_deref);
-                    let dst_idx = dst.0 as usize;
-                    // Look up field type from type def registry
-                    let field_c_type = if let Some(type_def) = registry.get_type_def(base_deref) {
-                        if let TypeDefKind::Struct(ref sd) = type_def.kind {
-                            sd.fields.get(*field as usize)
-                                .map(|fld| format_type(fld.type_id, registry))
-                        } else if let TypeDefKind::Enum(ref ed) = type_def.kind {
-                            // Enum field access: Field(0) = tag, Field(1+) = variant data
-                            if *field == 0 {
-                                Some("int32_t".to_string())
-                            } else {
-                                ed.variants.get(*field as usize - 1)
-                                    .and_then(|v| v.fields.first())
-                                    .map(|f| format_type(f.type_id, registry))
-                            }
-                        } else { None }
-                    } else { None };
-                    // Fallback: resolve known runtime type fields
-                    let resolved = base_deref.strip_prefix("const ").unwrap_or(base_deref);
-                    let resolved_alias = collection_type_alias(resolved).unwrap_or(resolved);
-                    let field_c_type = field_c_type.or_else(|| {
-                        match (resolved_alias, *field) {
-                            ("Str", 0) => Some("char*".to_string()),      // data
-                            ("Str", 1) => Some("int64_t".to_string()),    // len
-                            ("GorgetString", 0) => Some("char*".to_string()),
-                            ("GorgetString", 1) => Some("int64_t".to_string()),
-                            ("GorgetString", 2) => Some("int64_t".to_string()),
-                            ("GorgetArray", 0) => Some("void*".to_string()),   // data
-                            ("GorgetArray", 1) => Some("int64_t".to_string()), // len
-                            ("GorgetArray", 2) | ("GorgetArray", 3) => Some("int64_t".to_string()),
-                            _ => None,
-                        }
-                    });
-                    if let Some(field_c_type) = field_c_type {
-                        if field_c_type != "int64_t" && field_c_type != "void" {
-                            type_overrides.insert(dst_idx, field_c_type);
-                        } else if field_c_type == "int64_t" && !type_overrides.contains_key(&dst_idx) {
-                            // Only correct if dst has no existing override and its GIR type
-                            // is a collection (clearly wrong for a scalar field like .len)
-                            let gir_type = if dst_idx < func.locals.len() {
-                                format_type(func.locals[dst_idx].type_id, registry)
-                            } else { "int64_t".to_string() };
-                            if gir_type == "GorgetArray" || gir_type.starts_with("Vector__")
-                                || gir_type == "GorgetDict" || gir_type == "GorgetMap" {
-                                type_overrides.insert(dst_idx, "int64_t".to_string());
-                            }
-                        }
-                    }
-                }
-                // EnumFieldLoad: look up enum variant field type
-                Instruction::EnumFieldLoad { dst, base, variant, field } => {
-                    let base_idx = base.local.0 as usize;
-                    let base_type = if let Some(bt) = type_overrides.get(&base_idx) {
-                        bt.clone()
-                    } else if base_idx < func.locals.len() {
-                        format_type(func.locals[base_idx].type_id, registry)
-                    } else {
-                        continue;
-                    };
-                    // Strip pointer suffix for borrowed enum values
-                    let base_deref = base_type.strip_suffix('*').unwrap_or(&base_type);
-                    let base_deref = base_deref.strip_prefix("const ").unwrap_or(base_deref);
-                    if let Some(type_def) = registry.get_type_def(base_deref) {
-                        if let TypeDefKind::Enum(ref e) = type_def.kind {
-                            if let Some(var) = e.variants.iter().find(|v| v.name == *variant) {
-                                if let Some(fld) = var.fields.get(*field as usize) {
-                                    let field_c_type = format_type(fld.type_id, registry);
-                                    let dst_idx = dst.0 as usize;
-                                    if field_c_type != "void" {
-                                        // Always set override for enum field loads — the base
-                                        // type may have been corrected by map/map_err/and_then
-                                        // in a later pass, so we need to update the field type.
-                                        if field_c_type != "int64_t" || type_overrides.contains_key(&dst_idx) {
-                                            type_overrides.insert(dst_idx, field_c_type);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // Type def not found (may be a C-backend-created type name from
-                        // map/map_err/and_then type override). Extract field type from type name.
-                        if let Some(inner) = base_deref.strip_prefix("Result__") {
-                            let (ok_type, err_type) = if let Some(pos) = inner.rfind("__") {
-                                (&inner[..pos], &inner[pos + 2..])
-                            } else {
-                                (inner, inner)
-                            };
-                            let field_c_type = if variant == "Ok" { ok_type } else { err_type };
-                            let field_c_type = runtime_type_name(field_c_type).unwrap_or(field_c_type);
-                            type_overrides.insert(dst.0 as usize, field_c_type.to_string());
-                        } else if let Some(inner) = base_deref.strip_prefix("Option__") {
-                            if variant == "Some" {
-                                let inner = runtime_type_name(inner).unwrap_or(inner);
-                                type_overrides.insert(dst.0 as usize, inner.to_string());
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    // Convergence: stop when no new overrides were added
-    if type_overrides.len() == prev_count { break; }
-    } // end multi-pass loop
+    let type_overrides = compute_type_overrides(func, registry, module);
 
 
     // Pre-scan: find UNIT_TYPE locals that are referenced as operands.
