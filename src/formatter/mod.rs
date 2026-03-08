@@ -49,13 +49,19 @@ impl Emitter {
 
     /// Write pre-formatted text from the Doc renderer.
     /// The text may contain newlines with indentation already baked in.
-    /// Updates col and at_line_start state without adding Emitter-level indentation.
+    /// If we're at line start, prepends the emitter's base indentation first
+    /// (just like `write()` does), since the Doc renderer doesn't know about it.
     fn write_preformatted(&mut self, s: &str) {
         if s.is_empty() {
             return;
         }
-        // If we're at line start, the doc renderer has already handled indentation
-        // for its first line, but we still need our base indent if nothing was written yet
+        if self.at_line_start {
+            let indent_width = self.indent * 4;
+            for _ in 0..self.indent {
+                self.buf.push_str("    ");
+            }
+            self.col = indent_width;
+        }
         self.at_line_start = false;
         self.buf.push_str(s);
         if let Some(last_nl) = s.rfind('\n') {
@@ -121,6 +127,10 @@ impl Formatter {
         self.format_module(module);
         self.emit_remaining_comments();
         let mut result = self.emitter.finish();
+        // Normalize blank lines: collapse 3+ consecutive newlines to 2 (one blank line max).
+        while result.contains("\n\n\n") {
+            result = result.replace("\n\n\n", "\n\n");
+        }
         // Ensure trailing newline
         if !result.ends_with('\n') {
             result.push('\n');
@@ -637,7 +647,10 @@ impl Formatter {
         self.emitter.write(":");
         self.emitter.newline();
         self.emitter.indent();
-        for item in &t.items {
+        for (i, item) in t.items.iter().enumerate() {
+            if i > 0 {
+                self.emitter.blank_line();
+            }
             self.emit_comments_before(item.span.start);
             match &item.node {
                 TraitItem::Method(f) => self.format_function(f),
@@ -941,6 +954,93 @@ impl Formatter {
         }).collect();
         let doc = doc::surround("[", items, "]", true);
         self.write_doc(&doc);
+    }
+
+    /// Format a method chain with line-width-aware wrapping.
+    /// When the chain fits on one line: `items.filter(pred).map(f).collect()`
+    /// When broken:
+    /// ```text
+    /// items
+    ///     .filter(pred)
+    ///     .map(f)
+    ///     .collect()
+    /// ```
+    fn format_method_chain(&mut self, expr: &Spanned<Expr>) {
+        let (root, segments) = collect_method_chain(expr);
+        let root_str = self.element_to_string(|f| f.format_expr(root));
+
+        let mut parts = Vec::with_capacity(segments.len() + 1);
+        // Format each .method(args) segment as a string
+        for (method, generic_args, args) in &segments {
+            let seg_str = self.element_to_string(|f| {
+                f.emitter.write(".");
+                f.emitter.write(&method.node);
+                if let Some(ga) = generic_args {
+                    f.format_generic_args_wrapped(ga);
+                }
+                f.format_call_args_wrapped(args);
+            });
+            parts.push(seg_str);
+        }
+
+        // Build Doc: root + indent(softline + .method1() + softline + .method2() + ...)
+        let mut inner_docs = Vec::with_capacity(parts.len() * 2);
+        for part in &parts {
+            inner_docs.push(doc::softline());
+            inner_docs.push(doc::text(part));
+        }
+
+        let chain_doc = doc::group(doc::concat(vec![
+            doc::text(root_str),
+            doc::indent(doc::concat(inner_docs)),
+        ]));
+        self.write_doc(&chain_doc);
+    }
+
+    /// Format a binary expression with line-width-aware wrapping.
+    /// Flattens chains of the same operator for clean breaking.
+    /// When the expression fits: `a + b + c`
+    /// When broken:
+    /// ```text
+    /// a
+    ///     + b
+    ///     + c
+    /// ```
+    fn format_binary_chain(
+        &mut self,
+        left: &Spanned<Expr>,
+        op: BinaryOp,
+        right: &Spanned<Expr>,
+    ) {
+        // Flatten same-operator chains for clean wrapping.
+        let mut operands = Vec::new();
+        collect_binary_operands(left, op, &mut operands);
+        operands.push(right);
+
+        let op_str = binary_op_str(op);
+
+        // If only 2 operands (no chain), use simpler Doc
+        let operand_strs: Vec<String> = operands
+            .iter()
+            .map(|o| self.element_to_string(|f| f.format_expr(o)))
+            .collect();
+
+        // Build: operand1 <line " op "> operand2 <line " op "> operand3 ...
+        let mut docs = Vec::with_capacity(operand_strs.len() * 2);
+        for (i, s) in operand_strs.iter().enumerate() {
+            if i > 0 {
+                // In flat mode: ` op `. In broken mode: newline + indent + `op `.
+                docs.push(doc::line());
+                docs.push(doc::text(format!("{op_str} ")));
+            }
+            docs.push(doc::text(s));
+        }
+
+        let bin_doc = doc::group(doc::concat(vec![
+            docs.remove(0), // first operand
+            doc::indent(doc::concat(docs)),
+        ]));
+        self.write_doc(&bin_doc);
     }
 
     fn format_param(&mut self, param: &Param) {
@@ -1592,11 +1692,7 @@ impl Formatter {
                 self.format_expr(operand);
             }
             Expr::BinaryOp { left, op, right } => {
-                self.format_expr(left);
-                self.emitter.write(" ");
-                self.emitter.write(binary_op_str(*op));
-                self.emitter.write(" ");
-                self.format_expr(right);
+                self.format_binary_chain(left, *op, right);
             }
             Expr::Call {
                 callee,
@@ -1615,13 +1711,20 @@ impl Formatter {
                 generic_args,
                 args,
             } => {
-                self.format_expr(receiver);
-                self.emitter.write(".");
-                self.emitter.write(&method.node);
-                if let Some(ga) = generic_args {
-                    self.format_generic_args_wrapped(ga);
+                // Detect method chains (2+ consecutive .method() calls).
+                // Flatten and wrap with Doc for line-width-aware breaking.
+                let chain_len = method_chain_length(expr);
+                if chain_len >= 2 {
+                    self.format_method_chain(expr);
+                } else {
+                    self.format_expr(receiver);
+                    self.emitter.write(".");
+                    self.emitter.write(&method.node);
+                    if let Some(ga) = generic_args {
+                        self.format_generic_args_wrapped(ga);
+                    }
+                    self.format_call_args_wrapped(args);
                 }
-                self.format_call_args_wrapped(args);
             }
             Expr::FieldAccess { object, field } => {
                 self.format_expr(object);
@@ -2152,6 +2255,68 @@ fn is_std_import(path: &str) -> bool {
     path.starts_with("std.") || path.starts_with("gg.") || path == "std" || path == "gg"
 }
 
+// ── Expression chain helpers ────────────────────────────────
+
+/// Count the length of a method call chain (consecutive `.method()` calls).
+/// Returns 1 for a single method call, 2+ for chains.
+fn method_chain_length(expr: &Spanned<Expr>) -> usize {
+    match &expr.node {
+        Expr::MethodCall { receiver, .. } => 1 + method_chain_length(receiver),
+        _ => 0,
+    }
+}
+
+/// Collect method chain segments from outermost to innermost.
+/// Returns (root_expr, vec of (method_name, generic_args, args)) from left to right.
+fn collect_method_chain<'a>(
+    expr: &'a Spanned<Expr>,
+) -> (
+    &'a Spanned<Expr>,
+    Vec<(
+        &'a Spanned<String>,
+        &'a Option<Vec<Spanned<Type>>>,
+        &'a Vec<Spanned<CallArg>>,
+    )>,
+) {
+    let mut segments = Vec::new();
+    let mut current = expr;
+    loop {
+        match &current.node {
+            Expr::MethodCall {
+                receiver,
+                method,
+                generic_args,
+                args,
+            } => {
+                segments.push((method, generic_args, args));
+                current = receiver;
+            }
+            _ => break,
+        }
+    }
+    segments.reverse();
+    (current, segments)
+}
+
+/// Flatten a left-associative binary expression chain of the same operator.
+/// `a + b + c` is parsed as `(a + b) + c`. This collects `[a, b]` into `operands`
+/// (the caller adds `c`).
+fn collect_binary_operands<'a>(
+    expr: &'a Spanned<Expr>,
+    target_op: BinaryOp,
+    operands: &mut Vec<&'a Spanned<Expr>>,
+) {
+    match &expr.node {
+        Expr::BinaryOp { left, op, right } if *op == target_op => {
+            collect_binary_operands(left, target_op, operands);
+            operands.push(right);
+        }
+        _ => {
+            operands.push(expr);
+        }
+    }
+}
+
 // ══════════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════════
@@ -2322,5 +2487,29 @@ void main():
         let input = "import mylib.utils\n\nimport std.io\n\nimport gg.log\n";
         let output = fmt(input);
         assert_eq!(output, "import gg.log\n\nimport std.io\n\nimport mylib.utils\n");
+    }
+
+    #[test]
+    fn test_method_chain_idempotent() {
+        let input = "void main():\n    auto x = items.filter(pred).map(f).collect()\n";
+        let first = fmt(input);
+        let second = fmt(&first);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_binary_expr_idempotent() {
+        let input = "void main():\n    int x = a + b + c\n";
+        let first = fmt(input);
+        let second = fmt(&first);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_binary_expr_preserves_operators() {
+        let input = "void main():\n    bool x = a and b or c\n";
+        let first = fmt(input);
+        let second = fmt(&first);
+        assert_eq!(first, second);
     }
 }
