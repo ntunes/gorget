@@ -138,7 +138,7 @@
 - **Associated type validation**: Associated types are parsed but not validated or resolved in semantic analysis. [from roadmap, added: 2026-02-16]
 
 
-- **`gg fmt` remaining polish**: Comprehension wrapping (break after `for`/`in`/`if`). All 8 phases done. [from roadmap, updated: 2026-03-08]
+- **`gg fmt` remaining polish**: All phases complete. Future: `from X import (a, b, c)` parenthesized import syntax for wrapping long `from` imports (requires parser change). [from roadmap, updated: 2026-03-08]
 
 - **LSP server**: Language Server Protocol for IDE integration (completions, diagnostics, go-to-definition). [from roadmap, added: 2026-02-16]
 

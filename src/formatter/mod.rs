@@ -567,7 +567,7 @@ impl Formatter {
         self.emitter.write("struct ");
         self.emitter.write(&s.name.node);
         if let Some(ref gp) = s.generic_params {
-            self.format_generic_params(gp);
+            self.format_generic_params_wrapped(gp);
         }
         self.emitter.write(":");
         self.emitter.newline();
@@ -600,7 +600,7 @@ impl Formatter {
         self.emitter.write("enum ");
         self.emitter.write(&e.name.node);
         if let Some(ref gp) = e.generic_params {
-            self.format_generic_params(gp);
+            self.format_generic_params_wrapped(gp);
         }
         self.emitter.write(":");
         self.emitter.newline();
@@ -633,7 +633,7 @@ impl Formatter {
         self.emitter.write("trait ");
         self.emitter.write(&t.name.node);
         if let Some(ref gp) = t.generic_params {
-            self.format_generic_params(gp);
+            self.format_generic_params_wrapped(gp);
         }
         if !t.extends.is_empty() {
             self.emitter.write(" extends ");
@@ -671,7 +671,7 @@ impl Formatter {
     fn format_equip(&mut self, e: &EquipBlock) {
         self.emitter.write("equip ");
         if let Some(ref gp) = e.generic_params {
-            self.format_generic_params(gp);
+            self.format_generic_params_wrapped(gp);
         }
         self.format_type(&e.type_);
         if let Some(ref trait_) = e.trait_ {
@@ -754,7 +754,7 @@ impl Formatter {
         self.emitter.write("type ");
         self.emitter.write(&ta.name.node);
         if let Some(ref gp) = ta.generic_params {
-            self.format_generic_params(gp);
+            self.format_generic_params_wrapped(gp);
         }
         self.emitter.write(" = ");
         self.format_type(&ta.type_);
@@ -821,17 +821,6 @@ impl Formatter {
     }
 
     // ── Generics & Bounds ───────────────────────────────────
-
-    fn format_generic_params(&mut self, gp: &Spanned<GenericParams>) {
-        self.emitter.write("[");
-        for (i, param) in gp.node.params.iter().enumerate() {
-            if i > 0 {
-                self.emitter.write(", ");
-            }
-            self.format_generic_param(&param.node);
-        }
-        self.emitter.write("]");
-    }
 
     fn format_generic_param(&mut self, param: &GenericParam) {
         match param {
@@ -1761,9 +1750,16 @@ impl Formatter {
                 self.emitter.write(&field.node);
             }
             Expr::NilCoalescing { lhs, rhs } => {
-                self.format_expr(lhs);
-                self.emitter.write(" ?? ");
-                self.format_expr(rhs);
+                let lhs_s = self.element_to_string(|f| f.format_expr(lhs));
+                let rhs_s = self.element_to_string(|f| f.format_expr(rhs));
+                let nil_doc = doc::group(doc::concat(vec![
+                    doc::text(lhs_s),
+                    doc::indent(doc::concat(vec![
+                        doc::line(),
+                        doc::text(format!("?? {rhs_s}")),
+                    ])),
+                ]));
+                self.write_doc(&nil_doc);
             }
             Expr::Try { expr } => {
                 self.format_expr(expr);
@@ -1848,14 +1844,12 @@ impl Formatter {
                 if *is_move {
                     self.emitter.write("!");
                 }
-                self.emitter.write("(");
-                for (i, param) in params.iter().enumerate() {
-                    if i > 0 {
-                        self.emitter.write(", ");
-                    }
-                    self.format_closure_param(&param.node);
-                }
-                self.emitter.write("): ");
+                let items: Vec<doc::Doc> = params.iter().map(|p| {
+                    doc::text(self.element_to_string(|f| f.format_closure_param(&p.node)))
+                }).collect();
+                let params_doc = doc::surround("(", items, ")", true);
+                self.write_doc(&params_doc);
+                self.emitter.write(": ");
                 // Check if closure body is a multi-line block
                 if let Expr::Block(ref block) = body.node {
                     self.emitter.newline();
@@ -1879,22 +1873,21 @@ impl Formatter {
                 iterable,
                 condition,
             } => {
-                self.emitter.write("[");
-                self.format_expr(expr);
-                self.emitter.write(" for ");
-                self.format_pattern(variable);
-                self.emitter.write(" in ");
-                match ownership {
-                    Ownership::Borrow => {}
-                    Ownership::MutableBorrow => self.emitter.write("&"),
-                    Ownership::Move => self.emitter.write("!"),
-                }
-                self.format_expr(iterable);
-                if let Some(cond) = condition {
-                    self.emitter.write(" if ");
-                    self.format_expr(cond);
-                }
-                self.emitter.write("]");
+                let expr_s = self.element_to_string(|f| f.format_expr(expr));
+                let var_s = self.element_to_string(|f| f.format_pattern(variable));
+                let own_prefix = match ownership {
+                    Ownership::Borrow => "",
+                    Ownership::MutableBorrow => "&",
+                    Ownership::Move => "!",
+                };
+                let iter_s = self.element_to_string(|f| f.format_expr(iterable));
+                let cond_s = condition.as_ref().map(|c| {
+                    self.element_to_string(|f| f.format_expr(c))
+                });
+                let comp_doc = build_comprehension_doc(
+                    "[", &expr_s, &var_s, own_prefix, &iter_s, cond_s.as_deref(), "]",
+                );
+                self.write_doc(&comp_doc);
             }
             Expr::DictComprehension {
                 key,
@@ -1903,24 +1896,21 @@ impl Formatter {
                 iterable,
                 condition,
             } => {
-                self.emitter.write("{");
-                self.format_expr(key);
-                self.emitter.write(": ");
-                self.format_expr(value);
-                self.emitter.write(" for ");
-                for (i, var) in variables.iter().enumerate() {
-                    if i > 0 {
-                        self.emitter.write(", ");
-                    }
-                    self.emitter.write(&var.node);
-                }
-                self.emitter.write(" in ");
-                self.format_expr(iterable);
-                if let Some(cond) = condition {
-                    self.emitter.write(" if ");
-                    self.format_expr(cond);
-                }
-                self.emitter.write("}");
+                let kv_s = self.element_to_string(|f| {
+                    f.format_expr(key);
+                    f.emitter.write(": ");
+                    f.format_expr(value);
+                });
+                let vars_s = variables.iter().map(|v| v.node.as_str())
+                    .collect::<Vec<_>>().join(", ");
+                let iter_s = self.element_to_string(|f| f.format_expr(iterable));
+                let cond_s = condition.as_ref().map(|c| {
+                    self.element_to_string(|f| f.format_expr(c))
+                });
+                let comp_doc = build_comprehension_doc(
+                    "{", &kv_s, &vars_s, "", &iter_s, cond_s.as_deref(), "}",
+                );
+                self.write_doc(&comp_doc);
             }
             Expr::SetComprehension {
                 expr,
@@ -1928,17 +1918,15 @@ impl Formatter {
                 iterable,
                 condition,
             } => {
-                self.emitter.write("{");
-                self.format_expr(expr);
-                self.emitter.write(" for ");
-                self.emitter.write(&variable.node);
-                self.emitter.write(" in ");
-                self.format_expr(iterable);
-                if let Some(cond) = condition {
-                    self.emitter.write(" if ");
-                    self.format_expr(cond);
-                }
-                self.emitter.write("}");
+                let expr_s = self.element_to_string(|f| f.format_expr(expr));
+                let iter_s = self.element_to_string(|f| f.format_expr(iterable));
+                let cond_s = condition.as_ref().map(|c| {
+                    self.element_to_string(|f| f.format_expr(c))
+                });
+                let comp_doc = build_comprehension_doc(
+                    "{", &expr_s, &variable.node, "", &iter_s, cond_s.as_deref(), "}",
+                );
+                self.write_doc(&comp_doc);
             }
             Expr::ArrayLiteral(elems) => {
                 let items: Vec<doc::Doc> = elems.iter().map(|e| {
@@ -2024,9 +2012,7 @@ impl Formatter {
                 self.emitter.write(".");
                 self.emitter.write(&variant.node);
                 if !args.is_empty() {
-                    self.emitter.write("(");
-                    self.format_call_args(args);
-                    self.emitter.write(")");
+                    self.format_call_args_wrapped(args);
                 }
             }
             Expr::MetaOpInfix { left, op_name, right } => {
@@ -2040,14 +2026,6 @@ impl Formatter {
         }
     }
 
-    fn format_call_args(&mut self, args: &[Spanned<CallArg>]) {
-        for (i, arg) in args.iter().enumerate() {
-            if i > 0 {
-                self.emitter.write(", ");
-            }
-            self.format_call_arg(&arg.node);
-        }
-    }
 
     fn format_call_arg(&mut self, arg: &CallArg) {
         if let Some(ref name) = arg.name {
@@ -2317,6 +2295,43 @@ fn collect_binary_operands<'a>(
     }
 }
 
+/// Build a Doc for a comprehension expression with line-width-aware wrapping.
+/// Flat: `[expr for var in iterable if cond]`
+/// Broken:
+/// ```text
+/// [
+///     expr
+///     for var in iterable
+///     if cond
+/// ]
+/// ```
+fn build_comprehension_doc(
+    open: &str,
+    expr_s: &str,
+    var_s: &str,
+    own_prefix: &str,
+    iter_s: &str,
+    cond_s: Option<&str>,
+    close: &str,
+) -> doc::Doc {
+    let mut inner = vec![
+        doc::text(expr_s),
+        doc::line(),
+        doc::text(format!("for {var_s} in {own_prefix}{iter_s}")),
+    ];
+    if let Some(cond) = cond_s {
+        inner.push(doc::line());
+        inner.push(doc::text(format!("if {cond}")));
+    }
+
+    doc::group(doc::concat(vec![
+        doc::text(open),
+        doc::indent(doc::concat(vec![doc::softline(), doc::concat(inner)])),
+        doc::softline(),
+        doc::text(close),
+    ]))
+}
+
 // ══════════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════════
@@ -2508,6 +2523,30 @@ void main():
     #[test]
     fn test_binary_expr_preserves_operators() {
         let input = "void main():\n    bool x = a and b or c\n";
+        let first = fmt(input);
+        let second = fmt(&first);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_list_comprehension_idempotent() {
+        let input = "void main():\n    auto items = [x * 2 for x in range(10) if x > 0]\n";
+        let first = fmt(input);
+        let second = fmt(&first);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_dict_comprehension_idempotent() {
+        let input = "void main():\n    auto d = {k: v for k, v in items}\n";
+        let first = fmt(input);
+        let second = fmt(&first);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_set_comprehension_idempotent() {
+        let input = "void main():\n    auto s = {x for x in items if x > 0}\n";
         let first = fmt(input);
         let second = fmt(&first);
         assert_eq!(first, second);
