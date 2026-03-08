@@ -1,0 +1,39 @@
+# Stress: work-queue pattern — channel distributes 100 jobs across 4 workers,
+# shared variable accumulates the result under concurrent contention.
+# Each job is a number 1..100; workers terminate on a -1 sentinel.
+# Sum of 1..100 = 5050.
+#
+# Tests: Channel (work distribution) + shared (concurrent accumulation)
+#        + TaskGroup (join all workers)
+
+from std.channel import Channel
+
+async void worker(Channel[int] jobs, int &total):
+    loop:
+        int n = jobs.recv()
+        if n < 0:
+            break
+        total += n
+
+async void main():
+    shared int sum = 0
+    Channel[int] jobs = Channel[int](16)
+
+    TaskGroup group = TaskGroup()
+    int w = 0
+    while w < 4:
+        group.spawn(spawn worker(jobs, &sum))
+        w += 1
+
+    int i = 1
+    while i <= 100:
+        jobs.send(i)
+        i += 1
+
+    w = 0
+    while w < 4:
+        jobs.send(-1)
+        w += 1
+
+    group.join()
+    print(sum)

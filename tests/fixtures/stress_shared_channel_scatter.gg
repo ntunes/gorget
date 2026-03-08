@@ -1,0 +1,83 @@
+# Stress: scatter-gather — fan-out to 5 workers, fan-in via result channel.
+# Main scatters jobs 1..25 across 5 workers (5 jobs each via round-robin send).
+# Each worker squares its inputs and sends results to a shared result channel.
+# A collector task reads all 25 results into a shared sum.
+# A shared completion counter tracks how many workers have finished.
+# Sum of squares 1..25 = 5525. Finished workers = 5.
+#
+# Tests: fan-out (channel per worker) + fan-in (single result channel)
+#        + shared completion counter + TaskGroup
+
+from std.channel import Channel
+
+async void worker(Channel[int] jobs, Channel[int] results, int id):
+    loop:
+        int n = jobs.recv()
+        if n < 0:
+            break
+        results.send(n * n)
+
+async void collector(Channel[int] results, int &sum, int count):
+    int i = 0
+    while i < count:
+        sum += results.recv()
+        i += 1
+
+async void main():
+    shared int total = 0
+    Channel[int] results = Channel[int](32)
+
+    int num_workers = 5
+    int num_jobs = 25
+
+    TaskGroup group = TaskGroup()
+
+    # Create one channel per worker
+    Channel[int] w0 = Channel[int](8)
+    Channel[int] w1 = Channel[int](8)
+    Channel[int] w2 = Channel[int](8)
+    Channel[int] w3 = Channel[int](8)
+    Channel[int] w4 = Channel[int](8)
+
+    group.spawn(spawn worker(w0, results, 0))
+    group.spawn(spawn worker(w1, results, 1))
+    group.spawn(spawn worker(w2, results, 2))
+    group.spawn(spawn worker(w3, results, 3))
+    group.spawn(spawn worker(w4, results, 4))
+
+    Task[void] col = spawn collector(results, &total, num_jobs)
+
+    # Scatter: round-robin dispatch
+    int i = 1
+    while i <= num_jobs:
+        int slot = (i - 1) % num_workers
+        if slot == 0:
+            w0.send(i)
+        elif slot == 1:
+            w1.send(i)
+        elif slot == 2:
+            w2.send(i)
+        elif slot == 3:
+            w3.send(i)
+        else:
+            w4.send(i)
+        i += 1
+
+    # Send sentinels
+    w0.send(-1)
+    w1.send(-1)
+    w2.send(-1)
+    w3.send(-1)
+    w4.send(-1)
+
+    group.join()
+    col.await()
+
+    w0.close()
+    w1.close()
+    w2.close()
+    w3.close()
+    w4.close()
+    results.close()
+
+    print(total)

@@ -1,0 +1,47 @@
+# Stress: semaphore pattern — buffered channel as token pool limits concurrency
+# to 3 simultaneous workers out of 12 total. Each worker acquires a token,
+# increments a shared completed counter, does work, then releases the token.
+# The result channel collects all 12 worker IDs to verify all ran.
+# Total completions = 12.
+#
+# Tests: Semaphore pattern (Pattern 4) + shared counter
+#        + channel-as-rate-limiter + TaskGroup
+
+from std.channel import Channel
+
+async void limited_worker(Channel[int] sem, Channel[int] done, int id, int &completed):
+    sem.recv()
+    completed += 1
+    done.send(id)
+    sem.send(1)
+
+async void main():
+    shared int completed = 0
+    Channel[int] sem = Channel[int](3)
+    Channel[int] done = Channel[int](12)
+
+    # Pre-fill semaphore with 3 tokens
+    sem.send(1)
+    sem.send(1)
+    sem.send(1)
+
+    int num_workers = 12
+    TaskGroup group = TaskGroup()
+    int i = 0
+    while i < num_workers:
+        group.spawn(spawn limited_worker(sem, done, i, &completed))
+        i += 1
+
+    group.join()
+
+    # Drain result channel to verify all workers ran
+    int received = 0
+    while received < num_workers:
+        done.recv()
+        received += 1
+
+    with completed:
+        print(completed)
+
+    sem.close()
+    done.close()

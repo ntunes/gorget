@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-08] **feat: stress fixtures — shared variables × channels (6 fixtures)**: `stress_shared_channel_workqueue` (4 workers, sum 1..100=5050), `stress_shared_channel_pipeline` (3-stage pipeline, shared throughput counter, processed=40/sum=1640), `stress_shared_channel_select` (select over 3 producers, per-channel counts, sum=6630), `stress_shared_channel_scatter` (scatter-gather 5 workers, sum of squares 1..25=5525), `stress_shared_channel_notify` (notification pattern at scale, 10 producers×5 increments=50), `stress_shared_channel_semaphore` (buffered-channel token pool, 12 workers rate-limited to 3 concurrent). All passing. Added to integration test harness. `docs/concurrency.md` book chapter added (499 lines, 5 coordination patterns, §3.4–§3.8 compiler catch guide).
+
 - [2026-03-08] **feat: shared variable atomicity hazard warnings (§3.5–§3.8)**: Comprehensive static detection of atomicity assumptions that `with` blocks don't guarantee:
   - §3.5 Check-then-act: yield inside branch guarded by with-tracked shared variable
   - §3.6 Stale write-back: writing stale-derived value to shared variable (Assign + CompoundAssign)

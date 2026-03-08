@@ -9842,3 +9842,45 @@ fn scheduler_single() {
     // Cooperative single-threaded: add(10,20)=30 + add(30,40)=70 = 100
     run_gg("scheduler_single.gg", "100");
 }
+
+#[test]
+fn stress_shared_channel_workqueue() {
+    // Work-queue: 4 workers drain 100 jobs via channel, accumulate in shared sum.
+    // Sum 1..100 = 5050.
+    run_gg("stress_shared_channel_workqueue.gg", "5050");
+}
+
+#[test]
+fn stress_shared_channel_pipeline() {
+    // 3-stage pipeline: generate(1..40) → transform(*2) → collect(sum).
+    // Shared counter tracks items through transform. processed=40, sum=1640.
+    run_gg("stress_shared_channel_pipeline.gg", "40\n1640");
+}
+
+#[test]
+fn stress_shared_channel_select() {
+    // select over 3 producers; shared per-channel counters track provenance.
+    // sum = 210+2210+4210 = 6630; each count = 20.
+    run_gg("stress_shared_channel_select.gg", "6630\n20\n20\n20");
+}
+
+#[test]
+fn stress_shared_channel_scatter() {
+    // Scatter-gather: 5 workers square 25 inputs fan-in via result channel.
+    // Sum of squares 1..25 = 5525.
+    run_gg("stress_shared_channel_scatter.gg", "5525");
+}
+
+#[test]
+fn stress_shared_channel_notify() {
+    // Notify pattern: 10 producers each increment shared counter 5 times,
+    // signal via dedicated channel. Final count = 50.
+    run_gg("stress_shared_channel_notify.gg", "50");
+}
+
+#[test]
+fn stress_shared_channel_semaphore() {
+    // Semaphore: buffered channel limits concurrency to 3 across 12 workers.
+    // All 12 complete; shared completed counter = 12.
+    run_gg("stress_shared_channel_semaphore.gg", "12");
+}

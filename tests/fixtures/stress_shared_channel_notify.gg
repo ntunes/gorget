@@ -1,0 +1,69 @@
+# Stress: notification pattern at scale — 10 producers each increment a shared
+# counter and then signal via a dedicated done channel. The coordinator waits
+# for all 10 signals before reading the final count.
+# Each producer increments the counter N times (N=5). Total = 10 * 5 = 50.
+#
+# Tests: Notify pattern (Pattern 1 from concurrency guide) at scale
+#        + shared counter (concurrent writes) + per-task signalling channels
+#        + deterministic final read after all signals received
+
+from std.channel import Channel
+
+async void producer(int &counter, Channel[int] done, int n):
+    int i = 0
+    while i < n:
+        counter += 1
+        i += 1
+    done.send(1)
+
+async void main():
+    shared int counter = 0
+
+    Channel[int] d0 = Channel[int](1)
+    Channel[int] d1 = Channel[int](1)
+    Channel[int] d2 = Channel[int](1)
+    Channel[int] d3 = Channel[int](1)
+    Channel[int] d4 = Channel[int](1)
+    Channel[int] d5 = Channel[int](1)
+    Channel[int] d6 = Channel[int](1)
+    Channel[int] d7 = Channel[int](1)
+    Channel[int] d8 = Channel[int](1)
+    Channel[int] d9 = Channel[int](1)
+
+    int n = 5
+    spawn producer(&counter, d0, n)
+    spawn producer(&counter, d1, n)
+    spawn producer(&counter, d2, n)
+    spawn producer(&counter, d3, n)
+    spawn producer(&counter, d4, n)
+    spawn producer(&counter, d5, n)
+    spawn producer(&counter, d6, n)
+    spawn producer(&counter, d7, n)
+    spawn producer(&counter, d8, n)
+    spawn producer(&counter, d9, n)
+
+    # Wait for all signals
+    d0.recv()
+    d1.recv()
+    d2.recv()
+    d3.recv()
+    d4.recv()
+    d5.recv()
+    d6.recv()
+    d7.recv()
+    d8.recv()
+    d9.recv()
+
+    with counter:
+        print(counter)
+
+    d0.close()
+    d1.close()
+    d2.close()
+    d3.close()
+    d4.close()
+    d5.close()
+    d6.close()
+    d7.close()
+    d8.close()
+    d9.close()

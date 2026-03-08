@@ -1,0 +1,46 @@
+# Stress: 3-stage pipeline with shared throughput monitoring.
+# Stages: generate(1..40) → transform(*2) → collect(sum).
+# Shared variable counts items that passed through the transform stage.
+# Sum = 2*(1+2+...+40) = 2*820 = 1640. Processed = 40.
+#
+# Tests: multi-channel pipeline (data flow) + shared variable (observability)
+#        + independent async stages with yield-point token release/reacquire
+
+from std.channel import Channel
+
+async void generate(Channel[int] out):
+    int i = 1
+    while i <= 40:
+        out.send(i)
+        i += 1
+
+async void transform(Channel[int] inp, Channel[int] out, int &count):
+    int i = 0
+    while i < 40:
+        int v = inp.recv()
+        out.send(v * 2)
+        count += 1
+        i += 1
+
+async void main():
+    shared int processed = 0
+    Channel[int] ch1 = Channel[int](8)
+    Channel[int] ch2 = Channel[int](8)
+
+    Task[void] gen = spawn generate(ch1)
+    Task[void] xfm = spawn transform(ch1, ch2, &processed)
+
+    int sum = 0
+    int i = 0
+    while i < 40:
+        sum += ch2.recv()
+        i += 1
+
+    gen.await()
+    xfm.await()
+    ch1.close()
+    ch2.close()
+
+    with processed:
+        print(processed)
+    print(sum)
