@@ -1619,6 +1619,10 @@ impl Parser {
             if !self.match_token(&Token::Comma) {
                 break;
             }
+            // Trailing comma: `f(int a, int b,)` — stop before `)`
+            if self.check(&Token::RParen) {
+                break;
+            }
         }
 
         Ok(params)

@@ -1,3 +1,5 @@
+pub mod doc;
+
 use crate::lexer::token::{StringKind, StringLiteral, StringSegment};
 use crate::parser::ast::*;
 use crate::span::Spanned;
@@ -9,6 +11,7 @@ use crate::span::Spanned;
 struct Emitter {
     buf: String,
     indent: usize,
+    col: usize,
     at_line_start: bool,
 }
 
@@ -17,6 +20,7 @@ impl Emitter {
         Self {
             buf: String::new(),
             indent: 0,
+            col: 0,
             at_line_start: true,
         }
     }
@@ -32,16 +36,38 @@ impl Emitter {
 
     fn write(&mut self, s: &str) {
         if self.at_line_start && !s.is_empty() {
+            let indent_width = self.indent * 4;
             for _ in 0..self.indent {
                 self.buf.push_str("    ");
             }
             self.at_line_start = false;
+            self.col = indent_width;
         }
         self.buf.push_str(s);
+        self.col += s.len();
+    }
+
+    /// Write pre-formatted text from the Doc renderer.
+    /// The text may contain newlines with indentation already baked in.
+    /// Updates col and at_line_start state without adding Emitter-level indentation.
+    fn write_preformatted(&mut self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        // If we're at line start, the doc renderer has already handled indentation
+        // for its first line, but we still need our base indent if nothing was written yet
+        self.at_line_start = false;
+        self.buf.push_str(s);
+        if let Some(last_nl) = s.rfind('\n') {
+            self.col = s.len() - last_nl - 1;
+        } else {
+            self.col += s.len();
+        }
     }
 
     fn newline(&mut self) {
         self.buf.push('\n');
+        self.col = 0;
         self.at_line_start = true;
     }
 
@@ -102,6 +128,29 @@ impl Formatter {
         result
     }
 
+    // ── Doc IR integration ────────────────────────────────
+
+    /// Format an AST element to a string using a temporary formatter.
+    /// Used to produce string representations of elements for Doc wrapping.
+    fn element_to_string(&self, f: impl FnOnce(&mut Formatter)) -> String {
+        let mut fmt = Formatter::new(vec![]);
+        fmt.name_first = self.name_first;
+        f(&mut fmt);
+        fmt.emitter.finish()
+    }
+
+    /// Render a Doc tree at the current cursor position and write it
+    /// into the output buffer. The Doc handles line-break decisions.
+    fn write_doc(&mut self, doc: &doc::Doc) {
+        let rendered = doc::render_at(
+            doc,
+            doc::MAX_WIDTH,
+            self.emitter.col,
+            self.emitter.indent,
+        );
+        self.emitter.write_preformatted(&rendered);
+    }
+
     // ── Comment interleaving ────────────────────────────────
 
     fn emit_comments_before(&mut self, pos: usize) {
@@ -130,12 +179,81 @@ impl Formatter {
     // ── Module ──────────────────────────────────────────────
 
     fn format_module(&mut self, module: &Module) {
-        for (i, item) in module.items.iter().enumerate() {
-            if i > 0 {
+        // Partition items into leading directives, imports, and the rest.
+        let mut directives: Vec<&Spanned<Item>> = Vec::new();
+        let mut imports: Vec<&Spanned<Item>> = Vec::new();
+        let mut rest: Vec<&Spanned<Item>> = Vec::new();
+        let mut past_imports = false;
+
+        for item in &module.items {
+            match &item.node {
+                Item::Directive(_) if !past_imports => directives.push(item),
+                Item::Import(_) if !past_imports => imports.push(item),
+                _ => {
+                    past_imports = true;
+                    rest.push(item);
+                }
+            }
+        }
+
+        // Sort imports: std/gg first, then third-party, alphabetically within groups.
+        if !imports.is_empty() {
+            imports.sort_by(|a, b| {
+                let path_a = import_sort_key(a);
+                let path_b = import_sort_key(b);
+                let is_std_a = is_std_import(&path_a);
+                let is_std_b = is_std_import(&path_b);
+                // std/gg imports come first
+                match (is_std_a, is_std_b) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => path_a.cmp(&path_b),
+                }
+            });
+        }
+
+        // Emit directives.
+        let mut emitted = 0;
+        for item in &directives {
+            if emitted > 0 {
                 self.emitter.blank_line();
             }
             self.emit_comments_before(item.span.start);
             self.format_item(item);
+            emitted += 1;
+        }
+
+        // Emit sorted imports, with a blank line between std and non-std groups.
+        let mut prev_was_std: Option<bool> = None;
+        for item in &imports {
+            let path = import_sort_key(item);
+            let is_std = is_std_import(&path);
+            if emitted > 0 {
+                if let Some(prev) = prev_was_std {
+                    if prev && !is_std {
+                        // Extra blank line between std and third-party groups
+                        self.emitter.blank_line();
+                    } else {
+                        self.emitter.blank_line();
+                    }
+                } else {
+                    self.emitter.blank_line();
+                }
+            }
+            self.emit_comments_before(item.span.start);
+            self.format_item(item);
+            prev_was_std = Some(is_std);
+            emitted += 1;
+        }
+
+        // Emit remaining items.
+        for item in &rest {
+            if emitted > 0 {
+                self.emitter.blank_line();
+            }
+            self.emit_comments_before(item.span.start);
+            self.format_item(item);
+            emitted += 1;
         }
     }
 
@@ -166,9 +284,96 @@ impl Formatter {
             Item::Test(t) => self.format_test(t),
             Item::SuiteSetup(s) => self.format_suite_setup(s),
             Item::SuiteTeardown(s) => self.format_suite_teardown(s),
-            Item::MetaConst(_) | Item::MetaType(_) | Item::MetaTypeFunc(_)
-            | Item::MetaAssert(_) | Item::MetaIf(_) => {
-                // TODO: meta formatting not yet implemented
+            Item::MetaConst(mc) => {
+                self.emitter.write("meta ");
+                self.format_type(&mc.type_);
+                self.emitter.write(" ");
+                self.emitter.write(&mc.name.node);
+                self.emitter.write(" = ");
+                self.format_expr(&mc.value);
+                self.emitter.newline();
+            }
+            Item::MetaType(mt) => {
+                self.emitter.write("meta type ");
+                self.emitter.write(&mt.name.node);
+                self.emitter.write(" = ");
+                match &mt.rhs {
+                    MetaTypeRhs::Plain(t) => self.format_type(t),
+                    MetaTypeRhs::Conditional { then_type, condition, else_type } => {
+                        self.format_type(then_type);
+                        self.emitter.write(" if ");
+                        self.format_expr(condition);
+                        self.emitter.write(" else ");
+                        self.format_type(else_type);
+                    }
+                    MetaTypeRhs::Call { callee, args } => {
+                        self.emitter.write(&callee.node);
+                        self.emitter.write("(");
+                        for (i, arg) in args.iter().enumerate() {
+                            if i > 0 { self.emitter.write(", "); }
+                            self.format_expr(arg);
+                        }
+                        self.emitter.write(")");
+                    }
+                }
+                self.emitter.newline();
+            }
+            Item::MetaTypeFunc(mtf) => {
+                self.emitter.write("meta type ");
+                self.emitter.write(&mtf.name.node);
+                self.emitter.write("(");
+                for (i, p) in mtf.params.iter().enumerate() {
+                    if i > 0 { self.emitter.write(", "); }
+                    self.format_param(&p.node);
+                }
+                self.emitter.write("):");
+                self.emitter.newline();
+                self.emitter.indent();
+                self.format_block_stmts(&mtf.body);
+                self.emitter.dedent();
+            }
+            Item::MetaAssert(ma) => {
+                self.emitter.write("meta assert ");
+                self.format_expr(&ma.condition);
+                if let Some(ref msg) = ma.message {
+                    self.emitter.write(", ");
+                    self.format_expr(msg);
+                }
+                self.emitter.newline();
+            }
+            Item::MetaIf(mi) => {
+                self.emitter.write("meta if ");
+                self.format_expr(&mi.condition);
+                self.emitter.write(":");
+                self.emitter.newline();
+                self.emitter.indent();
+                for item in &mi.then_items {
+                    self.emit_comments_before(item.span.start);
+                    self.format_item(item);
+                }
+                self.emitter.dedent();
+                for (cond, items) in &mi.elif_branches {
+                    self.emitter.write("elif ");
+                    self.format_expr(cond);
+                    self.emitter.write(":");
+                    self.emitter.newline();
+                    self.emitter.indent();
+                    for item in items {
+                        self.emit_comments_before(item.span.start);
+                        self.format_item(item);
+                    }
+                    self.emitter.dedent();
+                }
+                if let Some(ref else_items) = mi.else_items {
+                    self.emitter.write("else:");
+                    self.emitter.newline();
+                    self.emitter.indent();
+                    for item in else_items {
+                        self.emit_comments_before(item.span.start);
+                        self.format_item(item);
+                    }
+                    self.emitter.dedent();
+                }
             }
             Item::MetaLog(ml) => {
                 self.emitter.write("meta log ");
@@ -273,11 +478,9 @@ impl Formatter {
             self.emitter.write("fn ");
             self.emitter.write(&f.name.node);
             if let Some(ref gp) = f.generic_params {
-                self.format_generic_params(gp);
+                self.format_generic_params_wrapped(gp);
             }
-            self.emitter.write("(");
-            self.format_params(&f.params);
-            self.emitter.write(")");
+            self.format_params_wrapped(&f.params);
             if !matches!(f.return_type.node, Type::Primitive(PrimitiveType::Void)) {
                 self.emitter.write(" -> ");
                 self.format_type(&f.return_type);
@@ -298,11 +501,9 @@ impl Formatter {
             self.emitter.write(" ");
             self.emitter.write(&f.name.node);
             if let Some(ref gp) = f.generic_params {
-                self.format_generic_params(gp);
+                self.format_generic_params_wrapped(gp);
             }
-            self.emitter.write("(");
-            self.format_params(&f.params);
-            self.emitter.write(")");
+            self.format_params_wrapped(&f.params);
         }
         if let Some(ref throws) = f.throws {
             self.emitter.write(" throws ");
@@ -499,25 +700,28 @@ impl Formatter {
             ImportStmt::Grouped { path, names, .. } => {
                 self.emitter.write("import ");
                 self.format_dotted_path(path);
-                self.emitter.write(".{");
-                for (j, name) in names.iter().enumerate() {
-                    if j > 0 {
-                        self.emitter.write(", ");
-                    }
-                    self.emitter.write(&name.node);
-                }
-                self.emitter.write("}");
+                self.emitter.write(".");
+                let mut sorted: Vec<&str> = names.iter().map(|n| n.node.as_str()).collect();
+                sorted.sort_unstable();
+                let items: Vec<doc::Doc> = sorted.iter().map(|n| doc::text(*n)).collect();
+                let doc = doc::surround("{", items, "}", true);
+                self.write_doc(&doc);
                 self.emitter.newline();
             }
             ImportStmt::From { path, names, .. } => {
                 self.emitter.write("from ");
                 self.format_dotted_path(path);
                 self.emitter.write(" import ");
-                for (j, name) in names.iter().enumerate() {
+                // Sort names alphabetically within the import.
+                let mut sorted: Vec<&str> = names.iter().map(|n| n.node.as_str()).collect();
+                sorted.sort_unstable();
+                // No wrapping for `from` imports — bare names on new lines
+                // would be parsed as new statements in indentation-based syntax.
+                for (j, name) in sorted.iter().enumerate() {
                     if j > 0 {
                         self.emitter.write(", ");
                     }
-                    self.emitter.write(&name.node);
+                    self.emitter.write(name);
                 }
                 self.emitter.newline();
             }
@@ -611,38 +815,42 @@ impl Formatter {
             if i > 0 {
                 self.emitter.write(", ");
             }
-            match &param.node {
-                GenericParam::Type { name, bounds } => {
-                    for (i, tb) in bounds.iter().enumerate() {
-                        if i > 0 {
-                            self.emitter.write(" & ");
-                        }
-                        self.format_trait_bound(tb);
+            self.format_generic_param(&param.node);
+        }
+        self.emitter.write("]");
+    }
+
+    fn format_generic_param(&mut self, param: &GenericParam) {
+        match param {
+            GenericParam::Type { name, bounds } => {
+                for (i, tb) in bounds.iter().enumerate() {
+                    if i > 0 {
+                        self.emitter.write(" & ");
                     }
-                    if !bounds.is_empty() {
-                        self.emitter.write(" ");
-                    }
-                    self.emitter.write(&name.node);
+                    self.format_trait_bound(tb);
                 }
-                GenericParam::Lifetime(name) => {
-                    self.emitter.write("live ");
-                    self.emitter.write(&name.node);
+                if !bounds.is_empty() {
+                    self.emitter.write(" ");
                 }
-                GenericParam::Const { type_, name } => {
-                    self.emitter.write("const ");
-                    if self.name_first {
-                        self.emitter.write(&name.node);
-                        self.emitter.write(": ");
-                        self.format_type(type_);
-                    } else {
-                        self.format_type(type_);
-                        self.emitter.write(" ");
-                        self.emitter.write(&name.node);
-                    }
+                self.emitter.write(&name.node);
+            }
+            GenericParam::Lifetime(name) => {
+                self.emitter.write("live ");
+                self.emitter.write(&name.node);
+            }
+            GenericParam::Const { type_, name } => {
+                self.emitter.write("const ");
+                if self.name_first {
+                    self.emitter.write(&name.node);
+                    self.emitter.write(": ");
+                    self.format_type(type_);
+                } else {
+                    self.format_type(type_);
+                    self.emitter.write(" ");
+                    self.emitter.write(&name.node);
                 }
             }
         }
-        self.emitter.write("]");
     }
 
     fn format_where_clause(&mut self, wc: &Spanned<WhereClause>) {
@@ -692,13 +900,47 @@ impl Formatter {
 
     // ── Parameters ──────────────────────────────────────────
 
-    fn format_params(&mut self, params: &[Spanned<Param>]) {
-        for (i, param) in params.iter().enumerate() {
-            if i > 0 {
-                self.emitter.write(", ");
-            }
-            self.format_param(&param.node);
-        }
+    /// Format a parenthesized parameter list with line-width-aware wrapping.
+    /// Writes `(param1, param2)` on one line if it fits, otherwise wraps:
+    /// ```text
+    /// (
+    ///     param1,
+    ///     param2,
+    /// )
+    /// ```
+    fn format_params_wrapped(&mut self, params: &[Spanned<Param>]) {
+        let items: Vec<doc::Doc> = params.iter().map(|p| {
+            doc::text(self.element_to_string(|f| f.format_param(&p.node)))
+        }).collect();
+        let doc = doc::surround("(", items, ")", true);
+        self.write_doc(&doc);
+    }
+
+    /// Format a parenthesized call argument list with line-width-aware wrapping.
+    fn format_call_args_wrapped(&mut self, args: &[Spanned<CallArg>]) {
+        let items: Vec<doc::Doc> = args.iter().map(|a| {
+            doc::text(self.element_to_string(|f| f.format_call_arg(&a.node)))
+        }).collect();
+        let doc = doc::surround("(", items, ")", true);
+        self.write_doc(&doc);
+    }
+
+    /// Format a bracketed generic parameter list with line-width-aware wrapping.
+    fn format_generic_params_wrapped(&mut self, gp: &Spanned<GenericParams>) {
+        let items: Vec<doc::Doc> = gp.node.params.iter().map(|p| {
+            doc::text(self.element_to_string(|f| f.format_generic_param(&p.node)))
+        }).collect();
+        let doc = doc::surround("[", items, "]", true);
+        self.write_doc(&doc);
+    }
+
+    /// Format a bracketed generic argument list (types) with wrapping.
+    fn format_generic_args_wrapped(&mut self, args: &[Spanned<Type>]) {
+        let items: Vec<doc::Doc> = args.iter().map(|t| {
+            doc::text(self.element_to_string(|f| f.format_type(t)))
+        }).collect();
+        let doc = doc::surround("[", items, "]", true);
+        self.write_doc(&doc);
     }
 
     fn format_param(&mut self, param: &Param) {
@@ -1201,14 +1443,7 @@ impl Formatter {
             Type::Named { name, generic_args } => {
                 self.emitter.write(&name.node);
                 if !generic_args.is_empty() {
-                    self.emitter.write("[");
-                    for (i, arg) in generic_args.iter().enumerate() {
-                        if i > 0 {
-                            self.emitter.write(", ");
-                        }
-                        self.format_type(arg);
-                    }
-                    self.emitter.write("]");
+                    self.format_generic_args_wrapped(generic_args);
                 }
             }
             Type::Array { element, size } => {
@@ -1370,18 +1605,9 @@ impl Formatter {
             } => {
                 self.format_expr(callee);
                 if let Some(ga) = generic_args {
-                    self.emitter.write("[");
-                    for (i, ty) in ga.iter().enumerate() {
-                        if i > 0 {
-                            self.emitter.write(", ");
-                        }
-                        self.format_type(ty);
-                    }
-                    self.emitter.write("]");
+                    self.format_generic_args_wrapped(ga);
                 }
-                self.emitter.write("(");
-                self.format_call_args(args);
-                self.emitter.write(")");
+                self.format_call_args_wrapped(args);
             }
             Expr::MethodCall {
                 receiver,
@@ -1393,18 +1619,9 @@ impl Formatter {
                 self.emitter.write(".");
                 self.emitter.write(&method.node);
                 if let Some(ga) = generic_args {
-                    self.emitter.write("[");
-                    for (i, ty) in ga.iter().enumerate() {
-                        if i > 0 {
-                            self.emitter.write(", ");
-                        }
-                        self.format_type(ty);
-                    }
-                    self.emitter.write("]");
+                    self.format_generic_args_wrapped(ga);
                 }
-                self.emitter.write("(");
-                self.format_call_args(args);
-                self.emitter.write(")");
+                self.format_call_args_wrapped(args);
             }
             Expr::FieldAccess { object, field } => {
                 self.format_expr(object);
@@ -1621,61 +1838,47 @@ impl Formatter {
                 self.emitter.write("}");
             }
             Expr::ArrayLiteral(elems) => {
-                self.emitter.write("[");
-                for (i, e) in elems.iter().enumerate() {
-                    if i > 0 {
-                        self.emitter.write(", ");
-                    }
-                    self.format_expr(e);
-                }
-                self.emitter.write("]");
+                let items: Vec<doc::Doc> = elems.iter().map(|e| {
+                    doc::text(self.element_to_string(|f| f.format_expr(e)))
+                }).collect();
+                let doc = doc::surround("[", items, "]", true);
+                self.write_doc(&doc);
             }
             Expr::TupleLiteral(elems) => {
-                self.emitter.write("(");
-                for (i, e) in elems.iter().enumerate() {
-                    if i > 0 {
-                        self.emitter.write(", ");
-                    }
-                    self.format_expr(e);
-                }
-                // Single-element tuples need trailing comma
                 if elems.len() == 1 {
-                    self.emitter.write(",");
+                    // Single-element tuples always need trailing comma
+                    self.emitter.write("(");
+                    self.format_expr(&elems[0]);
+                    self.emitter.write(",)");
+                } else {
+                    let items: Vec<doc::Doc> = elems.iter().map(|e| {
+                        doc::text(self.element_to_string(|f| f.format_expr(e)))
+                    }).collect();
+                    let doc = doc::surround("(", items, ")", true);
+                    self.write_doc(&doc);
                 }
-                self.emitter.write(")");
             }
             Expr::DictLiteral(pairs) => {
-                self.emitter.write("{");
-                for (i, (k, v)) in pairs.iter().enumerate() {
-                    if i > 0 {
-                        self.emitter.write(", ");
-                    }
-                    self.format_expr(k);
-                    self.emitter.write(": ");
-                    self.format_expr(v);
-                }
-                self.emitter.write("}");
+                let items: Vec<doc::Doc> = pairs.iter().map(|(k, v)| {
+                    doc::text(self.element_to_string(|f| {
+                        f.format_expr(k);
+                        f.emitter.write(": ");
+                        f.format_expr(v);
+                    }))
+                }).collect();
+                let doc = doc::surround("{", items, "}", true);
+                self.write_doc(&doc);
             }
             Expr::StructLiteral { name, generic_args, args } => {
                 self.emitter.write(&name.node);
                 if let Some(ga) = generic_args {
-                    self.emitter.write("[");
-                    for (i, t) in ga.iter().enumerate() {
-                        if i > 0 {
-                            self.emitter.write(", ");
-                        }
-                        self.format_type(t);
-                    }
-                    self.emitter.write("]");
+                    self.format_generic_args_wrapped(ga);
                 }
-                self.emitter.write("(");
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        self.emitter.write(", ");
-                    }
-                    self.format_expr(arg);
-                }
-                self.emitter.write(")");
+                let items: Vec<doc::Doc> = args.iter().map(|a| {
+                    doc::text(self.element_to_string(|f| f.format_expr(a)))
+                }).collect();
+                let doc = doc::surround("(", items, ")", true);
+                self.write_doc(&doc);
             }
             Expr::As { expr, type_ } => {
                 self.format_expr(expr);
@@ -1739,17 +1942,21 @@ impl Formatter {
             if i > 0 {
                 self.emitter.write(", ");
             }
-            if let Some(ref name) = arg.node.name {
-                self.emitter.write(&name.node);
-                self.emitter.write(" = ");
-            }
-            match arg.node.ownership {
-                Ownership::Borrow => {}
-                Ownership::MutableBorrow => self.emitter.write("&"),
-                Ownership::Move => self.emitter.write("!"),
-            }
-            self.format_expr(&arg.node.value);
+            self.format_call_arg(&arg.node);
         }
+    }
+
+    fn format_call_arg(&mut self, arg: &CallArg) {
+        if let Some(ref name) = arg.name {
+            self.emitter.write(&name.node);
+            self.emitter.write(" = ");
+        }
+        match arg.ownership {
+            Ownership::Borrow => {}
+            Ownership::MutableBorrow => self.emitter.write("&"),
+            Ownership::Move => self.emitter.write("!"),
+        }
+        self.format_expr(&arg.value);
     }
 
     fn format_closure_param(&mut self, param: &ClosureParam) {
@@ -1926,6 +2133,25 @@ pub fn format_source(source: &str) -> String {
     Formatter::new(comments).format(&module)
 }
 
+// ── Import sorting helpers ──────────────────────────────────
+
+/// Extract the dotted path from an import item for sorting purposes.
+fn import_sort_key(item: &Spanned<Item>) -> String {
+    match &item.node {
+        Item::Import(ImportStmt::Simple { path, .. })
+        | Item::Import(ImportStmt::Grouped { path, .. })
+        | Item::Import(ImportStmt::From { path, .. }) => {
+            path.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join(".")
+        }
+        _ => String::new(),
+    }
+}
+
+/// Returns true if the import path starts with `std` or `gg` (standard library).
+fn is_std_import(path: &str) -> bool {
+    path.starts_with("std.") || path.starts_with("gg.") || path == "std" || path == "gg"
+}
+
 // ══════════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════════
@@ -2080,5 +2306,21 @@ void main():
         let input = "newtype UserId(int)\n";
         let output = fmt(input);
         assert_eq!(output, "newtype UserId(int)\n");
+    }
+
+    #[test]
+    fn test_import_name_sorting() {
+        // Names within `from` imports should be sorted alphabetically.
+        let input = "from std.io import Writer, Reader, Closer\n";
+        let output = fmt(input);
+        assert_eq!(output, "from std.io import Closer, Reader, Writer\n");
+    }
+
+    #[test]
+    fn test_import_order_sorting() {
+        // std imports should come before third-party imports.
+        let input = "import mylib.utils\n\nimport std.io\n\nimport gg.log\n";
+        let output = fmt(input);
+        assert_eq!(output, "import gg.log\n\nimport std.io\n\nimport mylib.utils\n");
     }
 }

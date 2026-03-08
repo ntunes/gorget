@@ -1559,8 +1559,14 @@ fn main() {
         }
         "fmt" => {
             let in_place = args.iter().any(|a| a == "--in-place" || a == "-i");
+            let check = args.iter().any(|a| a == "--check" || a == "-c");
             let formatted = gorget::formatter::format_source(&source);
-            if in_place {
+            if check {
+                if formatted != source {
+                    eprintln!("{filename}: not formatted");
+                    process::exit(1);
+                }
+            } else if in_place {
                 if let Err(e) = fs::write(filename, &formatted) {
                     eprintln!("Error writing {filename}: {e}");
                     process::exit(1);

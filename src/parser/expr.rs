@@ -1524,6 +1524,10 @@ impl Parser {
             if !self.match_token(&Token::Comma) {
                 break;
             }
+            // Trailing comma: `foo(a, b,)` — stop before `)`
+            if self.check(&Token::RParen) {
+                break;
+            }
         }
         Ok(args)
     }

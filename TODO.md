@@ -138,7 +138,7 @@
 - **Associated type validation**: Associated types are parsed but not validated or resolved in semantic analysis. [from roadmap, added: 2026-02-16]
 
 
-- **`gg fmt` (code formatter)**: Auto-formatter for `.gg` source files. [from roadmap, added: 2026-02-16]
+- **`gg fmt` remaining polish**: Blank line normalization (collapse consecutive blanks in bodies, no-blank-after-opener), method chain wrapping (break before `.`), binary expression wrapping (break before operator). Phases 1-5, 7-8 done. [from roadmap, updated: 2026-03-08]
 
 - **LSP server**: Language Server Protocol for IDE integration (completions, diagnostics, go-to-definition). [from roadmap, added: 2026-02-16]
 
