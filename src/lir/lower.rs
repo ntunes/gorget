@@ -48,6 +48,8 @@ struct FuncLowering<'a> {
     func_index: &'a std::collections::HashMap<String, FuncId>,
     /// Module struct definitions (for field-count checking).
     module_structs: &'a [StructDef],
+    /// Synthetic externs discovered during lowering (for unknown Call targets).
+    pending_externs: Vec<LirExtern>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -102,6 +104,7 @@ impl<'a> LoweringContext<'a> {
         }
 
         // Lower functions.
+        let mut all_pending_externs: Vec<LirExtern> = Vec::new();
         let funcs: Vec<LirFunction> = self
             .gir
             .functions
@@ -115,9 +118,22 @@ impl<'a> LoweringContext<'a> {
                     &self.module.structs,
                 );
                 fl.lower();
+                all_pending_externs.extend(fl.pending_externs.drain(..));
                 fl.lir_func
             })
             .collect();
+
+        // Register synthetic externs discovered during function lowering.
+        for ext in all_pending_externs {
+            if let Some(existing) = self.module.externs.iter_mut().find(|e| e.name == ext.name) {
+                // Replace if existing is variadic or has fewer params (less specific).
+                if existing.is_variadic || (existing.params.is_empty() && !ext.params.is_empty()) {
+                    *existing = ext;
+                }
+            } else {
+                self.module.add_extern(ext);
+            }
+        }
 
         for func in funcs {
             self.module.add_function(func);
@@ -246,6 +262,7 @@ impl<'a> FuncLowering<'a> {
             struct_reg,
             func_index,
             module_structs,
+            pending_externs: Vec::new(),
         }
     }
 
@@ -404,6 +421,13 @@ impl<'a> FuncLowering<'a> {
                     });
                 } else {
                     // Unknown function — treat as extern.
+                    // Derive return type from destination local so infer_inst_type works.
+                    let ret_ty = dst.map(|d| {
+                        let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+                        map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
+                    }).unwrap_or(LirType::Void);
+                    let arg_types: Vec<LirType> = args.iter().map(|a| self.operand_lir_type(a)).collect();
+                    self.ensure_extern(func, &arg_types, &ret_ty);
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: result,
                         name: func.clone(),
@@ -417,8 +441,27 @@ impl<'a> FuncLowering<'a> {
             }
 
             Instruction::CallExtern { dst, func, args } => {
-                let lir_args: Vec<ValueId> =
-                    args.iter().map(|a| self.lower_operand(a, bb)).collect();
+                let is_printf_like = func == "printf" || func == "fprintf_stderr";
+                let lir_args: Vec<ValueId> = if is_printf_like {
+                    // For printf, expand Str-typed args into (int)len, data pairs.
+                    self.lower_printf_args(args, bb)
+                } else {
+                    args.iter().map(|a| self.lower_operand(a, bb)).collect()
+                };
+                // Derive arg types from GIR operand types (for proper extern declarations).
+                let arg_types: Vec<LirType> = if is_printf_like {
+                    lir_args.iter().map(|_| LirType::Ptr).collect()
+                } else {
+                    args.iter().map(|a| self.operand_lir_type(a)).collect()
+                };
+                // Ensure the extern has the correct return type (for collection constructors etc.)
+                {
+                    let ret_ty = dst.map(|d| {
+                        let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+                        map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
+                    }).unwrap_or(LirType::Void);
+                    self.ensure_extern(func, &arg_types, &ret_ty);
+                }
                 let result = dst.map(|_| self.lir_func.next_value());
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: result,
@@ -882,6 +925,98 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
+    /// Check if a GIR operand refers to a Str-typed local (simple, no projections).
+    fn operand_is_str(&self, operand: &Operand) -> bool {
+        let str_sid = self.struct_reg.lookup("Str");
+        let gs_sid = self.struct_reg.lookup("GorgetString");
+        match operand {
+            Operand::Copy(place) | Operand::Move(place) => {
+                if !place.projections.is_empty() { return false; }
+                let idx = place.local.0 as usize;
+                if idx >= self.local_to_slot.len() { return false; }
+                let slot = self.local_to_slot[idx];
+                let slot_ty = &self.lir_func.slots[slot.0 as usize].ty;
+                matches!(slot_ty, LirType::Struct(sid) if Some(*sid) == str_sid || Some(*sid) == gs_sid)
+            }
+            _ => false,
+        }
+    }
+
+    /// Lower printf/fprintf args, expanding Str-typed operands to (int)len, data.
+    fn lower_printf_args(&mut self, args: &[Operand], bb: BlockId) -> Vec<ValueId> {
+        let mut lir_args = Vec::new();
+        for (i, arg) in args.iter().enumerate() {
+            if i == 0 {
+                // First arg is always the format string (const char*) — pass as-is.
+                lir_args.push(self.lower_operand(arg, bb));
+            } else if self.operand_is_str(arg) {
+                // Str-typed arg: expand to (int)len, (const char*)data for %.*s.
+                if let Operand::Copy(place) | Operand::Move(place) = arg {
+                    let slot = self.local_to_slot[place.local.0 as usize];
+                    let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
+                    let struct_id = match &slot_ty {
+                        LirType::Struct(sid) => *sid,
+                        _ => unreachable!(),
+                    };
+
+                    // Str fields: 0=data (Ptr), 1=len (I64)
+                    // Load .len (field 1) → cast to I32 for printf %.*s precision
+                    let base = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                        dst: base,
+                        slot,
+                    });
+                    let len_ptr = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                        dst: len_ptr,
+                        base,
+                        struct_id,
+                        field: 1,
+                    });
+                    let len_load = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: len_load,
+                        ptr: len_ptr,
+                        ty: LirType::I64,
+                    });
+                    let len_i32 = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
+                        dst: len_i32,
+                        value: len_load,
+                        to: LirType::I32,
+                    });
+                    lir_args.push(len_i32);
+
+                    // Load .data (field 0) — const char*
+                    let base2 = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                        dst: base2,
+                        slot,
+                    });
+                    let data_ptr = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                        dst: data_ptr,
+                        base: base2,
+                        struct_id,
+                        field: 0,
+                    });
+                    let data_load = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: data_load,
+                        ptr: data_ptr,
+                        ty: LirType::Ptr,
+                    });
+                    lir_args.push(data_load);
+                } else {
+                    lir_args.push(self.lower_operand(arg, bb));
+                }
+            } else {
+                lir_args.push(self.lower_operand(arg, bb));
+            }
+        }
+        lir_args
+    }
+
     /// Load a value from a GIR place.
     fn lower_place_load(&mut self, place: &Place, bb: BlockId) -> ValueId {
         if place.projections.is_empty() {
@@ -1027,6 +1162,57 @@ impl<'a> FuncLowering<'a> {
     }
 
     // ── Store helpers ───────────────────────────────────────────────────────
+
+    /// Derive the LIR type of a GIR operand.
+    fn operand_lir_type(&self, operand: &Operand) -> LirType {
+        match operand {
+            Operand::Copy(place) | Operand::Move(place) => {
+                let idx = place.local.0 as usize;
+                if idx < self.gir_func.locals.len() {
+                    let gir_ty = self.gir_func.locals[idx].type_id;
+                    map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
+                } else {
+                    LirType::Ptr
+                }
+            }
+            Operand::Constant(c) => match c {
+                Constant::I8(_) | Constant::I16(_) | Constant::I32(_) | Constant::I64(_)
+                | Constant::U8(_) | Constant::U16(_) | Constant::U32(_) | Constant::U64(_)
+                | Constant::SizeOf(_) => LirType::I64,
+                Constant::F32(_) | Constant::F64(_) => LirType::F64,
+                Constant::Bool(_) => LirType::Bool,
+                Constant::Str(_) | Constant::Null | Constant::FuncRef(_) | Constant::GlobalRef(_) => LirType::Ptr,
+                Constant::Unit => LirType::Void,
+            },
+        }
+    }
+
+    /// Ensure a synthetic extern declaration exists for an unknown function.
+    /// If the extern already exists from a previous call site, merge parameter types
+    /// by preferring more specific types (e.g., Struct over Ptr).
+    fn ensure_extern(&mut self, name: &str, arg_types: &[LirType], ret_ty: &LirType) {
+        if let Some(existing) = self.pending_externs.iter_mut().find(|e| e.name == name) {
+            // Merge param types: prefer aggregate/specific types over Ptr.
+            for (i, new_ty) in arg_types.iter().enumerate() {
+                if i < existing.params.len() {
+                    if matches!(existing.params[i], LirType::Ptr) && !matches!(new_ty, LirType::Ptr) {
+                        existing.params[i] = new_ty.clone();
+                    }
+                }
+            }
+            // Also update return type if existing is I64 and new is more specific.
+            if matches!(existing.return_type, LirType::I64) && !matches!(ret_ty, LirType::I64) {
+                existing.return_type = ret_ty.clone();
+            }
+            return;
+        }
+        self.pending_externs.push(LirExtern {
+            name: name.to_string(),
+            params: arg_types.to_vec(),
+            return_type: ret_ty.clone(),
+            is_variadic: false,
+        });
+    }
 
     fn store_to_local(&mut self, local: ir::types::LocalId, value: ValueId, bb: BlockId) {
         let slot = self.local_to_slot[local.0 as usize];

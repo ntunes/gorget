@@ -57,7 +57,7 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
 
     // Struct forward declarations (skip runtime-provided structs)
     for (i, def) in module.structs.iter().enumerate() {
-        if def.fields.is_empty() || RUNTIME_STRUCTS.contains(&def.name.as_str()) {
+        if RUNTIME_STRUCTS.contains(&def.name.as_str()) {
             continue;
         }
         let cname = &struct_names[&(i as u32)];
@@ -67,22 +67,27 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
 
     // Struct definitions (skip runtime-provided structs)
     for (i, def) in module.structs.iter().enumerate() {
-        if def.fields.is_empty() || RUNTIME_STRUCTS.contains(&def.name.as_str()) {
+        if RUNTIME_STRUCTS.contains(&def.name.as_str()) {
             continue;
         }
         let cname = &struct_names[&(i as u32)];
         writeln!(out, "// {}", def.name).unwrap();
         writeln!(out, "struct {cname} {{").unwrap();
-        for (fname, fty) in &def.fields {
-            writeln!(out, "    {} {};", c_type_named(fty, &struct_names), c_field_name(fname)).unwrap();
+        if def.fields.is_empty() {
+            // C doesn't allow empty structs — add a dummy byte.
+            writeln!(out, "    char __pad;").unwrap();
+        } else {
+            for (fname, fty) in &def.fields {
+                writeln!(out, "    {} {};", c_type_named(fty, &struct_names), c_field_name(fname)).unwrap();
+            }
         }
         writeln!(out, "}};").unwrap();
         writeln!(out).unwrap();
     }
 
-    // Extern declarations (skip functions already provided by included headers)
+    // Extern declarations (skip functions already provided by included headers or runtime)
     for ext in &module.externs {
-        if is_std_header_fn(&ext.name) {
+        if is_std_header_fn(&ext.name) || is_runtime_fn(&ext.name) {
             continue;
         }
         // Skip variadic externs with no named params — these are Gorget runtime
@@ -205,6 +210,8 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     // Declare all values as their inferred types.
     // Build a type map from instructions (two passes for arithmetic type propagation).
     let mut val_types: Vec<Option<LirType>> = vec![None; max_val as usize];
+    // Track which values originate from StrLit instructions (raw `const char*`).
+    let mut str_lit_vals: Vec<bool> = vec![false; max_val as usize];
     for block in &func.blocks {
         for (vid, ty) in &block.params {
             val_types[vid.0 as usize] = Some(ty.clone());
@@ -214,6 +221,9 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                 if let Some(dst) = inst.dst() {
                     val_types[dst.0 as usize] = Some(ty);
                 }
+            }
+            if let Inst::StrLit { dst, .. } = inst {
+                str_lit_vals[dst.0 as usize] = true;
             }
         }
     }
@@ -251,20 +261,20 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         // Instructions
         for inst in &block.insts {
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, func, module, sn);
+            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals);
             writeln!(out).unwrap();
         }
 
         // Terminator
         write!(out, "    ").unwrap();
-        emit_term(out, &block.terminator, func);
+        emit_term(out, &block.terminator, func, sn, &val_types);
         writeln!(out).unwrap();
     }
 
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>) {
+fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool]) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -272,10 +282,23 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
         // Slot access
         Inst::SlotStore { slot, value } => {
             let slot_ty = &func.slots[slot.0 as usize].ty;
-            if slot_ty.is_aggregate() {
-                // Aggregate store: value is a pointer to source data. Use memcpy.
+            let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
+            let slot_is_str = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
+            let is_str_lit_val = str_lit_vals.get(value.0 as usize).copied().unwrap_or(false);
+            if slot_is_str && is_str_lit_val {
+                // String literal (const char*) → Str slot: wrap with gorget_str_from_literal.
+                write!(out, "{} = gorget_str_from_literal({}, strlen({}));", s(*slot), v(*value), v(*value)).unwrap();
+            } else if slot_ty.is_aggregate() {
+                // Aggregate store: source may be a pointer (SlotAddr) or a struct value (ParamRef, Call result).
+                let val_is_ptr = matches!(val_ty, Some(LirType::Ptr));
                 let ty_name = c_type_named(slot_ty, sn);
-                write!(out, "memcpy(&{}, {}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
+                if val_is_ptr {
+                    // Value is a pointer to source data — use memcpy.
+                    write!(out, "memcpy(&{}, {}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
+                } else {
+                    // Value is a struct by value (e.g., from ParamRef or function return) — direct assignment.
+                    write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
+                }
             } else {
                 write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
             }
@@ -415,19 +438,47 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
         }
         Inst::Store { ptr, value } => {
             // Generic store — type is determined by context.
-            // Use memcpy as a safe fallback that handles any type size.
-            write!(out, "memcpy({p}, &{val}, sizeof({val}));", p = v(*ptr), val = v(*value)).unwrap();
+            let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
+            if matches!(val_ty, Some(LirType::Ptr)) {
+                // Source is a pointer to aggregate data — use memcpy with pointer as source.
+                // We don't know the size, so we need to find the pointed-to type.
+                // Fall back to dereferencing: *((type*)ptr) = *((type*)value)
+                write!(out, "memcpy({p}, {val}, sizeof(*({val})));", p = v(*ptr), val = v(*value)).unwrap();
+            } else if val_ty.map_or(false, |t| t.is_scalar()) {
+                // Scalar — simple dereference store.
+                let ty_name = c_type_named(val_ty.unwrap(), sn);
+                write!(out, "*({ty_name}*)({p}) = {val};", p = v(*ptr), val = v(*value)).unwrap();
+            } else {
+                // Struct by value — take address for memcpy source.
+                write!(out, "memcpy({p}, &{val}, sizeof({val}));", p = v(*ptr), val = v(*value)).unwrap();
+            }
         }
         Inst::FieldPtr { dst, base, struct_id, field } => {
-            let field_name = &module.structs[struct_id.0 as usize].fields[*field as usize].0;
-            write!(
-                out,
-                "{} = (void*)&(({} *)({}))->{};",
-                v(*dst),
-                sn.get(&struct_id.0).map(|s| s.as_str()).unwrap_or("void"),
-                v(*base),
-                c_field_name(field_name)
-            ).unwrap();
+            let struct_def = &module.structs[struct_id.0 as usize];
+            let sname = sn.get(&struct_id.0).map(|s| s.as_str()).unwrap_or("void");
+            if (*field as usize) < struct_def.fields.len() {
+                let field_name = &struct_def.fields[*field as usize].0;
+                write!(
+                    out,
+                    "{} = (void*)&(({} *)({}))->{};",
+                    v(*dst),
+                    sname,
+                    v(*base),
+                    c_field_name(field_name)
+                ).unwrap();
+            } else {
+                // Fallback: field index exceeds struct definition — use byte offset.
+                // This can happen for runtime-opaque structs (e.g., GorgetArray, Dict).
+                write!(
+                    out,
+                    "{} = (void*)((char*)({}) + {} * sizeof(void*)); /* {}.{} (oob) */",
+                    v(*dst),
+                    v(*base),
+                    field,
+                    sname,
+                    field
+                ).unwrap();
+            }
         }
         Inst::ElemPtr { dst, base, index, elem_size } => {
             write!(
@@ -454,7 +505,8 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
 
         // Calls
         Inst::Call { dst, func, args } => {
-            let fname = c_func_name(&module.functions[func.0 as usize].name);
+            let target_func = &module.functions[func.0 as usize];
+            let fname = c_func_name(&target_func.name);
             if let Some(d) = dst {
                 write!(out, "{} = ", v(*d)).unwrap();
             }
@@ -463,11 +515,15 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 if i > 0 {
                     write!(out, ", ").unwrap();
                 }
-                write!(out, "{}", v(*a)).unwrap();
+                emit_coerced_arg(out, a, target_func.params.get(i), val_types, str_lit_vals, sn);
             }
             write!(out, ");").unwrap();
         }
         Inst::CallExtern { dst, name, args } => {
+            let is_printf = name == "printf" || name == "fprintf_stderr";
+            let ext_params: Option<&[LirType]> = module.externs.iter()
+                .find(|e| &e.name == name)
+                .map(|e| e.params.as_slice());
             if let Some(d) = dst {
                 write!(out, "{} = ", v(*d)).unwrap();
             }
@@ -476,7 +532,21 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 if i > 0 {
                     write!(out, ", ").unwrap();
                 }
-                write!(out, "{}", v(*a)).unwrap();
+                let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                // For printf, wrap bool args with ? "true" : "false"
+                if is_printf && i > 0 && matches!(arg_ty, Some(LirType::Bool)) {
+                    write!(out, "{} ? \"true\" : \"false\"", v(*a)).unwrap();
+                }
+                // String literal arg to a gorget_str_* function that takes Str → wrap.
+                else if is_str_lit && name.starts_with("gorget_str_") {
+                    write!(out, "gorget_str_from_literal({}, strlen({}))", v(*a), v(*a)).unwrap();
+                }
+                // Use general coercion for extern params.
+                else {
+                    let ext_param = ext_params.and_then(|p| p.get(i));
+                    emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                }
             }
             write!(out, ");").unwrap();
         }
@@ -544,12 +614,19 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
     }
 }
 
-fn emit_term(out: &mut String, term: &Term, func: &LirFunction) {
+fn emit_term(out: &mut String, term: &Term, func: &LirFunction, sn: &HashMap<u32, String>, val_types: &[Option<LirType>]) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
 
     match term {
         Term::Ret(val) => {
-            write!(out, "return {};", v(*val)).unwrap();
+            // If the function returns an aggregate but the value is a pointer, dereference.
+            let val_ty = val_types.get(val.0 as usize).and_then(|t| t.as_ref());
+            if func.return_type.is_aggregate() && matches!(val_ty, Some(LirType::Ptr)) {
+                let ty_name = c_type_named(&func.return_type, sn);
+                write!(out, "return *({ty_name}*){};", v(*val)).unwrap();
+            } else {
+                write!(out, "return {};", v(*val)).unwrap();
+            }
         }
         Term::RetVoid => {
             write!(out, "return;").unwrap();
@@ -637,6 +714,54 @@ fn emit_global_init(out: &mut String, init: &LirGlobalInit) {
 /// Map LirType to C type string.
 /// Returns true if the function is provided by standard C headers
 /// (stdio.h, stdlib.h, string.h) and should not be re-declared.
+/// Emit a coerced argument value.
+/// Handles: Ptr→Str (string literal wrapping), Ptr→Aggregate (dereference), GorgetString→Str.
+fn emit_coerced_arg(
+    out: &mut String,
+    a: &ValueId,
+    param_ty: Option<&LirType>,
+    val_types: &[Option<LirType>],
+    str_lit_vals: &[bool],
+    sn: &HashMap<u32, String>,
+) {
+    let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+    let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+    let param_name = param_ty.map(|t| c_type_named(t, sn));
+    let arg_name = arg_ty.map(|t| c_type_named(t, sn));
+
+    // GorgetString → Str coercion (works for both pointer and value args).
+    if param_name.as_deref() == Some("Str") && arg_name.as_deref() == Some("GorgetString") {
+        // GorgetString by value (from ParamRef or Call result):
+        write!(out, "(Str){{ .data = ({v}).data, .len = ({v}).len }}", v = format!("__v{}", a.0)).unwrap();
+        return;
+    }
+
+    if param_ty.map_or(false, |t| t.is_aggregate()) && matches!(arg_ty, Some(LirType::Ptr)) {
+        let ty_name = param_name.as_deref().unwrap_or("void");
+        if is_str_lit && ty_name == "Str" {
+            write!(out, "gorget_str_from_literal({v}, strlen({v}))", v = format!("__v{}", a.0)).unwrap();
+        } else if is_str_lit && ty_name == "GorgetString" {
+            // String literal → GorgetString: wrap with gorget_string_new.
+            write!(out, "gorget_string_new({})", format!("__v{}", a.0)).unwrap();
+        } else if ty_name == "Str" {
+            // Ptr to Str (from SlotAddr of GorgetString slot?) — try coercion.
+            // Check if the slot is a GorgetString.
+            write!(out, "*({ty_name}*)__v{}", a.0).unwrap();
+        } else {
+            write!(out, "*({ty_name}*)__v{}", a.0).unwrap();
+        }
+    } else {
+        write!(out, "__v{}", a.0).unwrap();
+    }
+}
+
+/// Returns true if the function is provided by the Gorget C runtime (static inline).
+fn is_runtime_fn(name: &str) -> bool {
+    name.starts_with("gorget_")
+        || name.starts_with("GORGET_")
+        || name.starts_with("__gorget_")
+}
+
 fn is_std_header_fn(name: &str) -> bool {
     matches!(
         name,
@@ -648,6 +773,13 @@ fn is_std_header_fn(name: &str) -> bool {
             | "memcpy" | "memmove" | "memset" | "memcmp"
             | "strlen" | "strcpy" | "strncpy" | "strcat" | "strncat" | "strcmp" | "strncmp"
             | "strstr" | "strchr" | "strrchr"
+            | "abs" | "labs" | "llabs"
+            | "getenv" | "setenv" | "unsetenv"
+            | "getcwd" | "chdir" | "getpid"
+            | "time" | "localtime" | "gmtime" | "strftime" | "mktime" | "difftime"
+            | "clock_gettime" | "nanosleep"
+            | "rand" | "srand"
+            | "qsort" | "bsearch"
     )
 }
 

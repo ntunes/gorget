@@ -50,8 +50,10 @@ fn run_lir(fixture_path: &std::path::Path) -> Option<String> {
     }
 
     // Step 2: write C to temp file and compile with cc
-    let tmp_c = std::env::temp_dir().join("gorget_lir_ab_test.c");
-    let tmp_exe = std::env::temp_dir().join("gorget_lir_ab_test");
+    // Use fixture stem in temp name to avoid collisions during parallel test runs.
+    let stem = fixture_path.file_stem()?.to_str()?;
+    let tmp_c = std::env::temp_dir().join(format!("gorget_lir_ab_{stem}.c"));
+    let tmp_exe = std::env::temp_dir().join(format!("gorget_lir_ab_{stem}"));
     std::fs::write(&tmp_c, c_code.as_bytes()).ok()?;
 
     let cc = Command::new("cc")
@@ -139,4 +141,37 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_trace_test() { ab_test("trace_test.gg"); }
 #[test] fn lir_ab_trait_inherit_defaults() { ab_test("trait_inherit_defaults.gg"); }
 #[test] fn lir_ab_type_alias_fn_sig() { ab_test("type_alias_fn_sig.gg"); }
+#[test] fn lir_ab_core_traits() { ab_test("core_traits.gg"); }
+#[test] fn lir_ab_default_trait() { ab_test("default_trait.gg"); }
+#[test] fn lir_ab_dot_shorthand() { ab_test("dot_shorthand.gg"); }
+#[test] fn lir_ab_error_handling() { ab_test("error_handling.gg"); }
+#[test] fn lir_ab_from_trait() { ab_test("from_trait.gg"); }
+#[test] fn lir_ab_from_trait_multi() { ab_test("from_trait_multi.gg"); }
+#[test] fn lir_ab_fstring_basic() { ab_test("fstring_basic.gg"); }
+#[test] fn lir_ab_generic_op_smoke() { ab_test("generic_op_smoke.gg"); }
+#[test] fn lir_ab_meta_basic() { ab_test("meta_basic.gg"); }
+#[test] fn lir_ab_meta_builtins() { ab_test("meta_builtins.gg"); }
+#[test] fn lir_ab_meta_delayed_match() { ab_test("meta_delayed_match.gg"); }
+#[test] fn lir_ab_meta_log() { ab_test("meta_log.gg"); }
+#[test] fn lir_ab_meta_numeric_meta() { ab_test("meta_numeric_meta.gg"); }
+#[test] fn lir_ab_meta_reflection() { ab_test("meta_reflection.gg"); }
+#[test] fn lir_ab_meta_type_is() { ab_test("meta_type_is.gg"); }
+#[test] fn lir_ab_meta_variant_payloads() { ab_test("meta_variant_payloads.gg"); }
+#[test] fn lir_ab_multiline_strings() { ab_test("multiline_strings.gg"); }
+#[test] fn lir_ab_mutable_borrow_params() { ab_test("mutable_borrow_params.gg"); }
+#[test] fn lir_ab_name_first() { ab_test("name_first.gg"); }
+#[test] fn lir_ab_operator_overload() { ab_test("operator_overload.gg"); }
+#[test] fn lir_ab_operators() { ab_test("operators.gg"); }
+#[test] fn lir_ab_raw_strings() { ab_test("raw_strings.gg"); }
+#[test] fn lir_ab_str_fat_ptr() { ab_test("str_fat_ptr.gg"); }
+#[test] fn lir_ab_structs() { ab_test("structs.gg"); }
+#[test] fn lir_ab_variables() { ab_test("variables.gg"); }
+#[test] fn lir_ab_cstr_basic() { ab_test("cstr_basic.gg"); }
+#[test] fn lir_ab_generic_functions() { ab_test("generic_functions.gg"); }
+#[test] fn lir_ab_lifetime_basic() { ab_test("lifetime_basic.gg"); }
+#[test] fn lir_ab_meta_delayed_basic() { ab_test("meta_delayed_basic.gg"); }
+#[test] fn lir_ab_meta_delayed_for() { ab_test("meta_delayed_for.gg"); }
+#[test] fn lir_ab_meta_delayed_nested() { ab_test("meta_delayed_nested.gg"); }
+#[test] fn lir_ab_trait_bounds() { ab_test("trait_bounds.gg"); }
+#[test] fn lir_ab_char_str_coerce() { ab_test("char_str_coerce.gg"); }
 // Async fixtures skipped — timing-sensitive output can cause false A/B mismatches.

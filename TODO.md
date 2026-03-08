@@ -2,7 +2,7 @@
 
 ## High
 
-- **LIR: Phase 5 — expand A/B test coverage**: 43 fixtures match (8% of ~540). Named→Struct resolution done. ParamRef + C keyword escaping done. Remaining: ~500 CC_FAIL fixtures mostly need collection/stdlib method dispatch, string variable handling, and trait object support. Incremental gains possible by fixing specific patterns. [updated: 2026-03-07]
+- **LIR: Phase 5 — expand A/B test coverage**: 76 fixtures match (13% of ~584). Fixed: StrLit vs Str coercion, FieldPtr bounds-safe fallback, synthetic extern merge, runtime fn declaration skip, struct forward declarations for empty structs, GorgetString→Str arg coercion (partial). Remaining: GorgetString→Str coercion for runtime functions (gorget_str_cat etc.), collection method dispatch, trait object support, generic Option/Result method lowering. [updated: 2026-03-08]
 
 ## Medium
 
@@ -23,7 +23,7 @@
 
 - **`gg sim` aliasing model — Tree Borrows tracking**: sim.md identifies this as the "core differentiator from naive interpreters." Implement borrow-level tracking to catch aliasing violations. Add `--tree-borrows` (default) and `--strict-aliasing` flags (stricter stacked-borrows model). Currently sim detects UB (bounds, uninit, etc.) but does not track borrow validity. [added: 2026-03-05]
 
-- **`gg.httpserver` V2 — non-blocking sockets + async handlers**: Blocked on `GorgetSocket` having no `poll`/`epoll`/`kqueue` integration — reads and writes block the calling thread. Needs `gorget_socket_set_nonblocking()` + fd registration with the existing reactor (epoll fd on Linux, kqueue on macOS), and a `GorgetWaker` protocol extension for readable/writable events. API impact: handler type becomes `async Callable[HttpServerResponse(HttpRequest)]` — one-word change for users. [added: 2026-03-03]
+- **`gg.httpserver` V2 — non-blocking sockets + async handlers**: Reactor fd readiness (epoll/kqueue) and async socket ops done. `nb_read`/`nb_write`/`nb_accept` methods on Socket/ServerSocket. Coroutine yield kinds for socket I/O working. Remaining: wire async handlers into httpserver dispatch loop, connection keep-alive. [updated: 2026-03-08]
 
 
 
