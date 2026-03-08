@@ -425,6 +425,18 @@ struct BorrowChecker<'a> {
     /// These are exempt from stale-condition warnings — the compiler guarantees
     /// they are refreshed after every await point.
     with_shared_tracked: FxHashSet<DefId>,
+    /// Stack of (shared_name, condition_span, kind) for enclosing branches/loops
+    /// whose condition/iterable references a `with`-tracked shared variable.
+    /// Yield points inside these trigger check-then-act or iterator invalidation warnings.
+    with_guarded_conditions: Vec<(String, Span, WithGuardKind)>,
+    /// Depth of `with` blocks (for detecting spawn inside `with`).
+    with_depth: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WithGuardKind {
+    BranchCondition,
+    Iteration,
 }
 
 impl<'a> BorrowChecker<'a> {
@@ -480,6 +492,8 @@ impl<'a> BorrowChecker<'a> {
             shared_out: FxHashMap::default(),
             stale_warnings: Vec::new(),
             with_shared_tracked: FxHashSet::default(),
+            with_guarded_conditions: Vec::new(),
+            with_depth: 0,
         }
     }
 
@@ -1271,6 +1285,79 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// Find the first `with`-tracked shared variable referenced in a condition expression.
+    /// Returns (shared_name, DefId) if found.
+    fn find_with_tracked_in_condition(&self, expr: &Spanned<Expr>) -> Option<String> {
+        match &expr.node {
+            Expr::Identifier(name) => {
+                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                    if self.with_shared_tracked.contains(&def_id) {
+                        return Some(name.clone());
+                    }
+                }
+                None
+            }
+            Expr::BinaryOp { left, right, .. }
+            | Expr::NilCoalescing { lhs: left, rhs: right } => {
+                self.find_with_tracked_in_condition(left)
+                    .or_else(|| self.find_with_tracked_in_condition(right))
+            }
+            Expr::UnaryOp { operand, .. } => self.find_with_tracked_in_condition(operand),
+            Expr::Call { callee, args, .. } => {
+                self.find_with_tracked_in_condition(callee)
+                    .or_else(|| args.iter().find_map(|a| self.find_with_tracked_in_condition(&a.node.value)))
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.find_with_tracked_in_condition(receiver)
+                    .or_else(|| args.iter().find_map(|a| self.find_with_tracked_in_condition(&a.node.value)))
+            }
+            Expr::FieldAccess { object, .. }
+            | Expr::TupleFieldAccess { object, .. }
+            | Expr::OptionalChain { object, .. } => self.find_with_tracked_in_condition(object),
+            Expr::Index { object, index } => {
+                self.find_with_tracked_in_condition(object)
+                    .or_else(|| self.find_with_tracked_in_condition(index))
+            }
+            Expr::As { expr: inner, .. }
+            | Expr::MutableBorrow { expr: inner }
+            | Expr::Move { expr: inner }
+            | Expr::Deref { expr: inner }
+            | Expr::Is { expr: inner, .. } => self.find_with_tracked_in_condition(inner),
+            Expr::TupleLiteral(elems)
+            | Expr::ArrayLiteral(elems) => {
+                elems.iter().find_map(|e| self.find_with_tracked_in_condition(e))
+            }
+            _ => None,
+        }
+    }
+
+    /// Emit a check-then-act or iterator-invalidation warning if we are inside
+    /// a branch/loop guarded by a `with`-tracked shared variable.
+    fn check_with_check_then_act(&mut self, yield_span: Span) {
+        if let Some((shared_name, guard_span, kind)) = self.with_guarded_conditions.last().cloned() {
+            let warning_kind = match kind {
+                WithGuardKind::BranchCondition => {
+                    super::errors::SemanticWarningKind::WithCheckThenAct {
+                        shared_name,
+                        condition_span: guard_span,
+                        yield_span,
+                    }
+                }
+                WithGuardKind::Iteration => {
+                    super::errors::SemanticWarningKind::SharedIteratorInvalidation {
+                        shared_name,
+                        iterable_span: guard_span,
+                        yield_span,
+                    }
+                }
+            };
+            self.stale_warnings.push(super::errors::SemanticWarning {
+                kind: warning_kind,
+                span: yield_span,
+            });
+        }
+    }
+
     /// Check a condition expression for uses of stale-shared-derived locals.
     /// Returns the stale info and the span where the stale local is used in the condition.
     fn find_stale_in_condition(&self, expr: &Spanned<Expr>) -> Option<(SharedDerivedInfo, Span)> {
@@ -1518,6 +1605,9 @@ impl<'a> BorrowChecker<'a> {
                                 self.stale_shared_derived.insert(def_id, info);
                             }
                         }
+
+                        // §3.5 Check-then-act: yield inside a with-guarded branch
+                        self.check_with_check_then_act(call_span);
                     }
                 }
             }
@@ -1649,6 +1739,9 @@ impl<'a> BorrowChecker<'a> {
                             self.stale_shared_derived.insert(def_id, info);
                         }
                     }
+
+                    // §3.5 Check-then-act: yield inside a with-guarded branch
+                    self.check_with_check_then_act(expr.span);
                 }
             }
 
@@ -1710,6 +1803,27 @@ impl<'a> BorrowChecker<'a> {
                     self.check_spawn_args(args);
                 } else {
                     self.error(SemanticErrorKind::SpawnRequiresDirectCall, inner.span);
+                }
+
+                // §3.8 Spawn inside `with`: warn if spawn args include with-tracked bindings.
+                if self.with_depth > 0 && self.current_function_is_async {
+                    if let Expr::Call { args, .. } = &inner.node {
+                        for arg in args {
+                            if let Expr::Identifier(name) = &arg.node.value.node {
+                                if let Some(&def_id) = self.resolution_map.get(&arg.node.value.span.start) {
+                                    if self.with_shared_tracked.contains(&def_id) {
+                                        self.stale_warnings.push(super::errors::SemanticWarning {
+                                            kind: super::errors::SemanticWarningKind::SpawnWithTrackedBinding {
+                                                shared_name: name.clone(),
+                                                spawn_span: inner.span,
+                                            },
+                                            span: arg.node.value.span,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -2139,6 +2253,33 @@ impl<'a> BorrowChecker<'a> {
                         if self.shared_var_defs.contains_key(&def_id) {
                             self.shared_written.insert(def_id);
                         }
+
+                        // §3.6 Stale write-back: if writing to a shared/with-tracked
+                        // variable and the RHS contains a stale-derived value, warn.
+                        if self.current_function_is_async {
+                            let is_shared_target = self.shared_var_defs.contains_key(&def_id)
+                                || self.with_shared_tracked.contains(&def_id);
+                            if is_shared_target {
+                                let target_shared_name = if let Some((_, name, _)) = self.shared_var_defs.get(&def_id) {
+                                    name.clone()
+                                } else {
+                                    self.scopes.get_def(def_id).name.clone()
+                                };
+                                if let Some((info, _use_span)) = self.find_stale_in_condition(value) {
+                                    self.stale_warnings.push(super::errors::SemanticWarning {
+                                        kind: super::errors::SemanticWarningKind::StaleSharedWriteBack {
+                                            local_name: info.local_name,
+                                            source_shared_name: info.shared_name,
+                                            target_shared_name,
+                                            derivation_span: Some(info.derivation_span),
+                                            yield_span: info.await_span,
+                                        },
+                                        span: value.span,
+                                    });
+                                }
+                            }
+                        }
+
                         // §3.4: Clear stale status if this local is reassigned (fresh value)
                         self.stale_shared_derived.remove(&def_id);
                         self.shared_derived.remove(&def_id);
@@ -2357,6 +2498,31 @@ impl<'a> BorrowChecker<'a> {
                         if self.shared_var_defs.contains_key(&def_id) {
                             self.shared_written.insert(def_id);
                         }
+
+                        // §3.6 Stale write-back: compound assign to shared/with-tracked target
+                        if self.current_function_is_async {
+                            let is_shared_target = self.shared_var_defs.contains_key(&def_id)
+                                || self.with_shared_tracked.contains(&def_id);
+                            if is_shared_target {
+                                let target_shared_name = if let Some((_, name, _)) = self.shared_var_defs.get(&def_id) {
+                                    name.clone()
+                                } else {
+                                    self.scopes.get_def(def_id).name.clone()
+                                };
+                                if let Some((info, _use_span)) = self.find_stale_in_condition(value) {
+                                    self.stale_warnings.push(super::errors::SemanticWarning {
+                                        kind: super::errors::SemanticWarningKind::StaleSharedWriteBack {
+                                            local_name: info.local_name,
+                                            source_shared_name: info.shared_name,
+                                            target_shared_name,
+                                            derivation_span: Some(info.derivation_span),
+                                            yield_span: info.await_span,
+                                        },
+                                        span: value.span,
+                                    });
+                                }
+                            }
+                        }
                     }
                 }
                 self.check_expr(target);
@@ -2452,6 +2618,18 @@ impl<'a> BorrowChecker<'a> {
                 ..
             } => {
                 self.check_expr(iterable);
+
+                // §3.7 Iterator invalidation: track if iterable is a with-tracked shared
+                let iter_guard = if self.current_function_is_async {
+                    self.find_with_tracked_in_condition(iterable)
+                        .map(|name| (name, iterable.span, WithGuardKind::Iteration))
+                } else {
+                    None
+                };
+                if let Some(ref guard) = iter_guard {
+                    self.with_guarded_conditions.push(guard.clone());
+                }
+
                 let before = self.save_branch_state();
                 let saved_in_return = self.in_return_expr;
                 self.in_return_expr = false;
@@ -2461,6 +2639,11 @@ impl<'a> BorrowChecker<'a> {
                 self.loop_local_defs.pop();
                 self.loop_depth -= 1;
                 self.in_return_expr = saved_in_return;
+
+                if iter_guard.is_some() {
+                    self.with_guarded_conditions.pop();
+                }
+
                 let after_body = self.save_branch_state();
                 if let Some(else_body) = else_body {
                     // for-else: else only runs if body never does (0 iterations)
@@ -2483,6 +2666,18 @@ impl<'a> BorrowChecker<'a> {
                 self.check_stale_condition(condition);
                 // Mark borrow origins for all `is` pattern bindings (including compound conditions)
                 self.mark_compound_is_origins(&condition.node);
+
+                // §3.5 Check-then-act: track if condition depends on with-tracked shared
+                let with_guard = if self.current_function_is_async {
+                    self.find_with_tracked_in_condition(condition)
+                        .map(|name| (name, condition.span, WithGuardKind::BranchCondition))
+                } else {
+                    None
+                };
+                if let Some(ref guard) = with_guard {
+                    self.with_guarded_conditions.push(guard.clone());
+                }
+
                 let before = self.save_branch_state();
                 let saved_in_return = self.in_return_expr;
                 self.in_return_expr = false;
@@ -2492,6 +2687,11 @@ impl<'a> BorrowChecker<'a> {
                 self.loop_local_defs.pop();
                 self.loop_depth -= 1;
                 self.in_return_expr = saved_in_return;
+
+                if with_guard.is_some() {
+                    self.with_guarded_conditions.pop();
+                }
+
                 let after_body = self.save_branch_state();
                 if let Some(else_body) = else_body {
                     self.restore_branch_state(&before);
@@ -2529,17 +2729,47 @@ impl<'a> BorrowChecker<'a> {
                 // Mark borrow origins for all `is` pattern bindings (including compound conditions)
                 self.mark_compound_is_origins(&condition.node);
 
+                // §3.5 Check-then-act: track if condition depends on with-tracked shared
+                let with_guard = if self.current_function_is_async {
+                    self.find_with_tracked_in_condition(condition)
+                        .map(|name| (name, condition.span, WithGuardKind::BranchCondition))
+                } else {
+                    None
+                };
+                if let Some(ref guard) = with_guard {
+                    self.with_guarded_conditions.push(guard.clone());
+                }
+
                 let before = self.save_branch_state();
                 self.check_block(then_body);
                 let mut branch_states = vec![self.save_branch_state()];
+
+                if with_guard.is_some() {
+                    self.with_guarded_conditions.pop();
+                }
 
                 for (cond, body) in elif_branches {
                     self.restore_branch_state(&before);
                     self.check_expr(cond);
                     self.check_stale_condition(cond);
                     self.mark_compound_is_origins(&cond.node);
+
+                    let elif_guard = if self.current_function_is_async {
+                        self.find_with_tracked_in_condition(cond)
+                            .map(|name| (name, cond.span, WithGuardKind::BranchCondition))
+                    } else {
+                        None
+                    };
+                    if let Some(ref guard) = elif_guard {
+                        self.with_guarded_conditions.push(guard.clone());
+                    }
+
                     self.check_block(body);
                     branch_states.push(self.save_branch_state());
+
+                    if elif_guard.is_some() {
+                        self.with_guarded_conditions.pop();
+                    }
                 }
 
                 if let Some(else_body) = else_body {
@@ -2561,6 +2791,18 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(scrutinee);
                 self.check_stale_condition(scrutinee);
                 let scrutinee_origin = self.compute_expr_origin(scrutinee);
+
+                // §3.5 Check-then-act: track if scrutinee depends on with-tracked shared
+                let with_guard = if self.current_function_is_async {
+                    self.find_with_tracked_in_condition(scrutinee)
+                        .map(|name| (name, scrutinee.span, WithGuardKind::BranchCondition))
+                } else {
+                    None
+                };
+                if let Some(ref guard) = with_guard {
+                    self.with_guarded_conditions.push(guard.clone());
+                }
+
                 let before = self.save_branch_state();
                 let mut branch_states = Vec::new();
 
@@ -2580,6 +2822,10 @@ impl<'a> BorrowChecker<'a> {
                     branch_states.push(self.save_branch_state());
                 } else {
                     branch_states.push(before);
+                }
+
+                if with_guard.is_some() {
+                    self.with_guarded_conditions.pop();
                 }
 
                 self.merge_branch_states(&branch_states);
@@ -2642,7 +2888,9 @@ impl<'a> BorrowChecker<'a> {
                 if is_arena_with {
                     self.arena_depth += 1;
                 }
+                self.with_depth += 1;
                 self.check_block(body);
+                self.with_depth -= 1;
                 if is_arena_with {
                     self.arena_depth -= 1;
                 }
@@ -3271,6 +3519,8 @@ impl<'a> BorrowChecker<'a> {
         self.pending_capture_set = None;
         self.mut_captured_vars.clear();
         self.mut_capture_owners.clear();
+        self.with_guarded_conditions.clear();
+        self.with_depth = 0;
 
         // Set scope-aware lookup context for this function
         self.current_fn_scope = self.function_body_scopes
@@ -6879,6 +7129,269 @@ async void main():
                 crate::semantic::errors::SemanticWarningKind::StaleSharedCondition { .. }
             )),
             "expected no StaleSharedCondition after refresh, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn with_check_then_act_warns_if_yield_inside_guarded_branch() {
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        if x > 0:
+            sleep(100)
+            print(x)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { shared_name, .. }
+                if shared_name == "x"
+            )),
+            "expected WithCheckThenAct warning, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn with_check_then_act_no_warn_without_yield() {
+        // No yield inside the branch — no check-then-act race
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        if x > 0:
+            print(x)
+    t.await()
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { .. }
+            )),
+            "expected no WithCheckThenAct warning, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn with_check_then_act_warns_blocking_call() {
+        // Blocking call (read_file) inside a with-guarded branch
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        if x > 0:
+            str data = read_file(\"test.txt\")
+            print(data)
+    t.await()
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { shared_name, .. }
+                if shared_name == "x"
+            )),
+            "expected WithCheckThenAct warning for blocking call, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn with_check_then_act_warns_while_loop() {
+        // Yield inside a while loop guarded by with-tracked variable
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        while x > 0:
+            sleep(50)
+    t.await()
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { shared_name, .. }
+                if shared_name == "x"
+            )),
+            "expected WithCheckThenAct warning for while loop, got: {:?}", warnings
+        );
+    }
+
+    // ─── §3.6 Stale Write-Back Tests ─────────────────────────
+
+    #[test]
+    fn stale_writeback_assign_warns() {
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    int val = x
+    t.await()
+    x = val
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::StaleSharedWriteBack { local_name, target_shared_name, .. }
+                if local_name == "val" && target_shared_name == "x"
+            )),
+            "expected StaleSharedWriteBack warning for assign, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn stale_writeback_compound_assign_warns() {
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    int delta = x
+    t.await()
+    x += delta
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::StaleSharedWriteBack { local_name, target_shared_name, .. }
+                if local_name == "delta" && target_shared_name == "x"
+            )),
+            "expected StaleSharedWriteBack warning for compound assign, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn stale_writeback_no_yield_no_warn() {
+        // No yield between derivation and write-back — no warning
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    int val = x
+    x = val + 1
+    t.await()
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::StaleSharedWriteBack { .. }
+            )),
+            "expected no StaleSharedWriteBack without yield, got: {:?}", warnings
+        );
+    }
+
+    // ─── §3.7 Iterator Invalidation Tests ────────────────────
+
+    #[test]
+    fn shared_iteration_with_yield_warns() {
+        let source = "\
+async void worker(Vector[int] &items):
+    items.push(99)
+
+async void main():
+    shared Vector[int] items = Vector[int]()
+    Task[void] t = spawn worker(&items)
+    with items:
+        for item in items:
+            sleep(50)
+            print(item)
+    t.await()
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::SharedIteratorInvalidation { shared_name, .. }
+                if shared_name == "items"
+            )),
+            "expected SharedIteratorInvalidation warning, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn shared_iteration_without_yield_no_warn() {
+        let source = "\
+async void worker(Vector[int] &items):
+    items.push(99)
+
+async void main():
+    shared Vector[int] items = Vector[int]()
+    Task[void] t = spawn worker(&items)
+    with items:
+        for item in items:
+            print(item)
+    t.await()
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::SharedIteratorInvalidation { .. }
+            )),
+            "expected no SharedIteratorInvalidation without yield, got: {:?}", warnings
+        );
+    }
+
+    // ─── §3.8 Spawn Inside With Tests ────────────────────────
+
+    #[test]
+    fn spawn_with_tracked_binding_warns() {
+        let source = "\
+async void other(int val):
+    print(val)
+
+async void main():
+    shared int x = 0
+    with x:
+        spawn other(x)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::SpawnWithTrackedBinding { shared_name, .. }
+                if shared_name == "x"
+            )),
+            "expected SpawnWithTrackedBinding warning, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn spawn_outside_with_no_warn() {
+        let source = "\
+async void other(int val):
+    print(val)
+
+async void main():
+    shared int x = 0
+    int copy = x
+    spawn other(copy)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::SpawnWithTrackedBinding { .. }
+            )),
+            "expected no SpawnWithTrackedBinding outside with, got: {:?}", warnings
         );
     }
 }

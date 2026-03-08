@@ -7782,6 +7782,27 @@ fn shared_stale_refreshed() {
 }
 
 #[test]
+fn shared_with_check_then_act() {
+    run_gg("shared_with_check_then_act.gg", "was zero\nafter sleep\n1");
+}
+
+#[test]
+fn shared_stale_writeback() {
+    // Worker increments to 1; main's stale snapshot=0 overwrites it back to 0.
+    run_gg("shared_stale_writeback.gg", "0");
+}
+
+#[test]
+fn shared_iterator_invalidation() {
+    run_gg("shared_iterator_invalidation.gg", "done");
+}
+
+#[test]
+fn shared_spawn_with_tracked() {
+    run_gg("shared_spawn_with_tracked.gg", "42");
+}
+
+#[test]
 fn shared_float() {
     run_gg("shared_float.gg", "2.500000");
 }

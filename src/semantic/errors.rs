@@ -28,6 +28,43 @@ pub enum SemanticWarningKind {
         /// The await point that made the cached value stale.
         await_span: Option<Span>,
     },
+    /// A yield point occurs inside a branch whose condition depends on a
+    /// `with`-tracked shared variable — check-then-act race.
+    WithCheckThenAct {
+        /// The shared variable name used in the condition.
+        shared_name: String,
+        /// Span of the condition expression.
+        condition_span: Span,
+        /// The yield point inside the branch body.
+        yield_span: Span,
+    },
+    /// A stale value derived from a shared variable is written back to a
+    /// shared variable after a yield — lost update.
+    StaleSharedWriteBack {
+        /// The local whose value is stale.
+        local_name: String,
+        /// The shared variable the local was derived from.
+        source_shared_name: String,
+        /// The shared variable being written to.
+        target_shared_name: String,
+        /// Where the local was derived from the shared variable.
+        derivation_span: Option<Span>,
+        /// The yield point that made the value stale.
+        yield_span: Option<Span>,
+    },
+    /// A yield point inside a `for` loop iterating over a `with`-tracked
+    /// shared collection — the iterator may be invalidated.
+    SharedIteratorInvalidation {
+        shared_name: String,
+        iterable_span: Span,
+        yield_span: Span,
+    },
+    /// A `with`-tracked binding is passed to a `spawn` call — the spawned
+    /// task operates outside the `with` block's lock scope.
+    SpawnWithTrackedBinding {
+        shared_name: String,
+        spawn_span: Span,
+    },
 }
 
 impl std::fmt::Display for SemanticWarning {
@@ -38,6 +75,18 @@ impl std::fmt::Display for SemanticWarning {
             }
             SemanticWarningKind::StaleSharedCondition { local_name, shared_name, .. } => {
                 write!(f, "`{local_name}` derived from shared `{shared_name}` may be stale after await")
+            }
+            SemanticWarningKind::WithCheckThenAct { shared_name, .. } => {
+                write!(f, "yield inside branch guarded by shared `{shared_name}` — condition may no longer hold")
+            }
+            SemanticWarningKind::StaleSharedWriteBack { local_name, target_shared_name, .. } => {
+                write!(f, "writing stale `{local_name}` to shared `{target_shared_name}` — lost update after yield")
+            }
+            SemanticWarningKind::SharedIteratorInvalidation { shared_name, .. } => {
+                write!(f, "yield inside loop over shared `{shared_name}` — iterator may be invalidated")
+            }
+            SemanticWarningKind::SpawnWithTrackedBinding { shared_name, .. } => {
+                write!(f, "spawning task with `with`-tracked `{shared_name}` — spawned task runs outside `with` lock scope")
             }
         }
     }

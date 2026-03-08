@@ -1,0 +1,17 @@
+# Test: stale write-back warning (§3.6).
+# A value derived from a shared variable before a yield, then written
+# back to a shared variable after the yield, is a lost update.
+# The warning is non-fatal — program still compiles and runs.
+
+from std.async import sleep
+
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    int snapshot = x
+    t.await()
+    x = snapshot
+    print(x)

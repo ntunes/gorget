@@ -1,0 +1,15 @@
+# Test: spawn-inside-with warning (§3.8).
+# Passing a `with`-tracked binding to a spawned task warns because the
+# spawned task runs outside the `with` block's lock scope.
+# The warning is non-fatal — program still compiles and runs.
+
+from std.async import sleep
+
+async void printer(int val):
+    print(val)
+
+async void main():
+    shared int x = 42
+    with x:
+        Task[void] t = spawn printer(x)
+        t.await()

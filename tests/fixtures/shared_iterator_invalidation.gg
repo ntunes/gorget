@@ -1,0 +1,18 @@
+# Test: iterator invalidation warning (§3.7).
+# A yield inside a `for` loop over a `with`-tracked shared collection
+# releases the lock — another task could modify the collection between
+# iterations. The warning is non-fatal.
+
+from std.async import sleep
+
+async void worker(Vector[int] &items):
+    items.push(99)
+
+async void main():
+    shared Vector[int] items = Vector[int]()
+    Task[void] t = spawn worker(&items)
+    with items:
+        for item in items:
+            sleep(1)
+    t.await()
+    print("done")

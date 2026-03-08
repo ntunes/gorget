@@ -1,5 +1,12 @@
 # DONE
 
+- [2026-03-08] **feat: shared variable atomicity hazard warnings (§3.5–§3.8)**: Comprehensive static detection of atomicity assumptions that `with` blocks don't guarantee:
+  - §3.5 Check-then-act: yield inside branch guarded by with-tracked shared variable
+  - §3.6 Stale write-back: writing stale-derived value to shared variable (Assign + CompoundAssign)
+  - §3.7 Iterator invalidation: yield inside `for` loop over with-tracked shared collection
+  - §3.8 Spawn inside `with`: passing with-tracked binding to spawned task (runs outside lock scope)
+  - `WithGuardKind` enum for differentiated yield-detection warnings. `with_depth` counter for spawn-in-with detection. 6 new warning variants, multi-span reporter labels, 12 unit tests, 1 integration test.
+
 - [2026-03-08] **feat: LIR c_lir backend — Str coercion + type system improvements**: String literal values tracked via `str_lit_vals` bitset; `SlotStore Str←Ptr` only wraps with `gorget_str_from_literal` for actual string literals (not SlotAddr pointers). Unified `emit_coerced_arg` helper handles Ptr→Str (StrLit wrapping), Ptr→Aggregate (dereference), GorgetString→Str (compound literal coercion). Synthetic extern declarations: `operand_lir_type` derives actual arg types from GIR operands (replaces blanket Ptr), merge param types across call sites, replace variadic GIR externs with specific ones. Runtime function (`gorget_*`) forward declarations suppressed. FieldPtr bounds-check fallback prevents panics on struct field index overflow. Empty struct forward declarations + dummy byte padding for C compatibility. Expanded `is_std_header_fn` for standard C library functions. LIR A/B tests: 43 → 76 passing fixtures.
 
 - [2026-03-08] **feat: async non-blocking socket I/O — reactor fd readiness + coroutine yield**: Extended reactor (epoll/kqueue) to support EPOLLIN/EPOLLOUT/EVFILT_READ/EVFILT_WRITE for socket fd readiness. Added `nb_read`/`nb_write`/`nb_write_str` on Socket and `nb_accept` on ServerSocket as explicit non-blocking methods. Coroutine yield kinds: SocketRead/SocketWrite/SocketAccept/SocketConnect — try-once with immediate-success fast path, PENDING → reactor registration → waker re-submit. Fixed state machine: yield handler manages result storage and blocking mode restoration, resume state is a no-op. Test: `async_socket_echo`.

@@ -18,6 +18,12 @@
 
 - **IR: Continue `generics/` split**: Phase 1 done (substitute.rs extracted, 331 lines). `mod.rs` still 1,236 lines. Remaining: monomorphization helpers (~188 lines) could move to `monomorphize.rs`, but they're tightly coupled to GenericCollector::emit(). Consider done unless mod.rs grows. [updated: 2026-03-07, from: IR code review]
 
+- **Shared atomicity: compound expression spanning yield**: `x = x + blocking_call()` — the read of `x` is before the yield but the write is after. Need `expr_contains_yield_point()` helper to scan expression trees for yield points, then flag assignments to with-tracked bindings where RHS contains both a self-reference and a yield point. [added: 2026-03-08]
+
+- **Shared atomicity: multi-variable invariant message improvement**: When check-then-act fires and condition references multiple with-tracked bindings, collect all of them. Change `find_with_tracked_in_condition` to return `Vec<String>`, update `WithCheckThenAct` to hold `shared_names: Vec<String>`. [added: 2026-03-08]
+
+- **Shared atomicity: closure capture of `with` binding**: Closure created inside `with` that captures a with-tracked binding, followed by yield, then invocation — closure uses stale captured value. Cross-reference `closure_capture_sets` with `with_shared_tracked` to detect. [added: 2026-03-08]
+
 - **Async Channel: rendezvous (capacity=0) poll_send ack**: Current poll_send for rendezvous channels treats deposit-into-slot as completion (no ack wait). True rendezvous semantics require two-phase state machine (deposit → wait for count==0). Low priority — buffered channels work correctly. [added: 2026-03-07]
 
 

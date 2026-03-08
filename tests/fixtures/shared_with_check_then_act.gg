@@ -1,0 +1,21 @@
+# Test: check-then-act warning (§3.5).
+# A yield point inside a branch guarded by a `with`-tracked shared
+# variable should warn — the condition may no longer hold after the
+# yield re-acquires the lock.
+# The warning is non-fatal — program still compiles and runs.
+
+from std.async import sleep
+
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        if x == 0:
+            print("was zero")
+            sleep(50)
+            print("after sleep")
+    t.await()
+    print(x)

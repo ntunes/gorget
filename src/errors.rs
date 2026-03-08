@@ -212,6 +212,59 @@ impl ErrorReporter {
             notes.push(format!("re-read `{shared_name}` after the await, or use `with {shared_name}:` to auto-refresh across await points"));
         }
 
+        if let SemanticWarningKind::WithCheckThenAct {
+            shared_name, condition_span, yield_span,
+        } = &warn.kind {
+            labels.push(
+                Label::secondary(self.file_id, condition_span.start..condition_span.end)
+                    .with_message(format!("condition reads shared `{shared_name}` here")),
+            );
+            labels.push(
+                Label::secondary(self.file_id, yield_span.start..yield_span.end)
+                    .with_message("yield point releases the lock — another task may invalidate the condition"),
+            );
+            notes.push(format!("move the yield before the branch, or re-check `{shared_name}` after the yield"));
+        }
+
+        if let SemanticWarningKind::StaleSharedWriteBack {
+            source_shared_name, derivation_span, yield_span, ..
+        } = &warn.kind {
+            if let Some(ds) = derivation_span {
+                labels.push(
+                    Label::secondary(self.file_id, ds.start..ds.end)
+                        .with_message(format!("value derived from shared `{source_shared_name}` here")),
+                );
+            }
+            if let Some(ys) = yield_span {
+                labels.push(
+                    Label::secondary(self.file_id, ys.start..ys.end)
+                        .with_message("yield point here — value is now stale"),
+                );
+            }
+            notes.push(format!("re-read `{source_shared_name}` after the yield and recompute before writing back"));
+        }
+
+        if let SemanticWarningKind::SharedIteratorInvalidation {
+            shared_name, iterable_span, yield_span,
+        } = &warn.kind {
+            labels.push(
+                Label::secondary(self.file_id, iterable_span.start..iterable_span.end)
+                    .with_message(format!("iterating over shared `{shared_name}` here")),
+            );
+            labels.push(
+                Label::secondary(self.file_id, yield_span.start..yield_span.end)
+                    .with_message("yield point releases the lock — collection may change between iterations"),
+            );
+            notes.push(format!("collect into a local copy before iterating, or move the yield outside the loop"));
+        }
+
+        if let SemanticWarningKind::SpawnWithTrackedBinding {
+            shared_name, ..
+        } = &warn.kind {
+            notes.push(format!("`{shared_name}` is managed by a `with` block — the spawned task won't hold the lock"));
+            notes.push("copy the value before spawning, or pass the underlying shared variable with `&`".to_string());
+        }
+
         let mut diag = diagnostic::Diagnostic::warning()
             .with_message(warn.to_string())
             .with_labels(labels);
