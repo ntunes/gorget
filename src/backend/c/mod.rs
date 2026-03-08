@@ -634,7 +634,8 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     }
     // Detect std.async.async_sleep(ms) calls — mapped to gorget_reactor_sleep_ms in KNOWN_MAPPINGS.
     // Also detect legacy int-arg sleep() calls from std.async import (pre-rename path).
-    let needs_reactor = all_call_names.iter().any(|n| n == "async_sleep" || n == "gorget_reactor_sleep_ms")
+    let needs_reactor = all_call_names.iter().any(|n| n == "async_sleep" || n == "gorget_reactor_sleep_ms"
+        || n.starts_with("gorget_socket_async_") || n == "gorget_reactor_wait_readable" || n == "gorget_reactor_wait_writable")
         || module.functions.iter().any(|f| {
             f.blocks.iter().any(|b| b.instructions.iter().any(|inst| {
                 let (fname, args) = match inst {
@@ -1659,6 +1660,14 @@ enum YieldKind {
     ChannelSend,
     /// `Channel__*__recv` — async-aware poll recv + waker yield.
     ChannelRecv,
+    /// Async socket read — explicit `async_read()` call in coroutine context.
+    SocketRead,
+    /// Async socket write — explicit `async_write()` call in coroutine context.
+    SocketWrite,
+    /// Async server socket accept — explicit `async_accept()` call in coroutine context.
+    SocketAccept,
+    /// Async socket connect — explicit `async_connect()` call in coroutine context.
+    SocketConnect,
 }
 
 /// Known blocking function names that should be auto-offloaded in coroutines.
@@ -1676,14 +1685,14 @@ const BLOCKING_STDLIB_CALLS: &[&str] = &[
     "gorget_file_open_read",
     "gorget_file_append",
     "readdir", "gorget_readdir",
-    // Network (blocking socket ops)
+    // Network (blocking socket ops — offloaded to blocking pool in coroutines)
     "gorget_socket_connect",
     "gorget_tls_connect",
     "gorget_socket_read_line",
     "gorget_tls_read_line",
     "gorget_socket_read_bytes",
     "gorget_tls_read_bytes",
-    "gorget_socket_accept",
+    "gorget_server_socket_accept",
     // SQLite
     "gorget_sqlite_open",
     "gorget_sqlite_exec",
@@ -1721,6 +1730,31 @@ fn is_sleep_call(func_name: &str, args: &[Operand], func: &Function) -> bool {
 /// True if a GIR call is a known blocking stdlib call.
 fn is_blocking_call(func_name: &str) -> bool {
     BLOCKING_STDLIB_CALLS.contains(&func_name)
+}
+
+/// Explicit async socket read calls (Gorget `async_read` methods).
+fn is_socket_read_call(func_name: &str) -> bool {
+    matches!(func_name,
+        "gorget_socket_async_read" | "gorget_socket_async_read_line"
+        | "gorget_socket_async_read_exact"
+    )
+}
+
+/// Explicit async socket write calls (Gorget `async_write` methods).
+fn is_socket_write_call(func_name: &str) -> bool {
+    matches!(func_name,
+        "gorget_socket_async_write" | "gorget_socket_async_write_str"
+    )
+}
+
+/// Explicit async accept call.
+fn is_socket_accept_call(func_name: &str) -> bool {
+    matches!(func_name, "gorget_socket_async_accept")
+}
+
+/// Explicit async connect call.
+fn is_socket_connect_call(func_name: &str) -> bool {
+    matches!(func_name, "gorget_socket_async_connect_start")
 }
 
 /// True if a GIR call is a Mutex lock call (pattern: `Mutex__*__lock`).
@@ -1793,6 +1827,21 @@ fn extract_lock_call_info(inst: &Instruction, func: &Function, registry: &TypeRe
 
 
 
+/// Extract socket call info: (dst_local_id, func_name, args_as_strings).
+fn extract_socket_call_info(inst: &Instruction, func: &Function, registry: &TypeRegistry) -> (u32, String, Vec<String>) {
+    match inst {
+        Instruction::Call { dst, func: fname, args, .. }
+        | Instruction::CallExtern { dst, func: fname, args, .. } => {
+            let d = dst.map(|id| id.0).unwrap_or(0);
+            let arg_strs: Vec<String> = args.iter()
+                .map(|a| fmt_operand_poll(a, func, registry))
+                .collect();
+            (d, fname.clone(), arg_strs)
+        }
+        _ => (0, String::new(), vec![]),
+    }
+}
+
 /// Classify an instruction as a yield point (if any).
 fn classify_yield(inst: &Instruction, func: &Function) -> Option<YieldKind> {
     match inst {
@@ -1811,6 +1860,14 @@ fn classify_yield(inst: &Instruction, func: &Function) -> Option<YieldKind> {
                 Some(YieldKind::ChannelSend)
             } else if is_channel_recv_call(fname) {
                 Some(YieldKind::ChannelRecv)
+            } else if is_socket_read_call(fname) {
+                Some(YieldKind::SocketRead)
+            } else if is_socket_write_call(fname) {
+                Some(YieldKind::SocketWrite)
+            } else if is_socket_accept_call(fname) {
+                Some(YieldKind::SocketAccept)
+            } else if is_socket_connect_call(fname) {
+                Some(YieldKind::SocketConnect)
             } else if is_blocking_call(fname) {
                 Some(YieldKind::Blocking)
             } else {
@@ -1830,6 +1887,14 @@ fn classify_yield(inst: &Instruction, func: &Function) -> Option<YieldKind> {
                 Some(YieldKind::ChannelSend)
             } else if is_channel_recv_call(fname) {
                 Some(YieldKind::ChannelRecv)
+            } else if is_socket_read_call(fname) {
+                Some(YieldKind::SocketRead)
+            } else if is_socket_write_call(fname) {
+                Some(YieldKind::SocketWrite)
+            } else if is_socket_accept_call(fname) {
+                Some(YieldKind::SocketAccept)
+            } else if is_socket_connect_call(fname) {
+                Some(YieldKind::SocketConnect)
             } else if is_blocking_call(fname) {
                 Some(YieldKind::Blocking)
             } else {
@@ -1846,7 +1911,7 @@ fn fn_has_internal_await(fn_name: &str, module: &Module) -> bool {
     let Some(func) = module.find_function(fn_name) else { return false };
     func.blocks.iter().any(|bb| {
         bb.instructions.iter().any(|inst| {
-            matches!(classify_yield(inst, func), Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv))
+            matches!(classify_yield(inst, func), Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv | YieldKind::SocketRead | YieldKind::SocketWrite | YieldKind::SocketAccept | YieldKind::SocketConnect))
         })
     })
 }
@@ -3277,7 +3342,7 @@ fn coroutine_state_ids(func: &Function) -> Vec<u32> {
         let yield_count = bb.instructions.iter()
             .filter(|i| {
                 let kind = classify_yield(i, func);
-                matches!(kind, Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv))
+                matches!(kind, Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv | YieldKind::SocketRead | YieldKind::SocketWrite | YieldKind::SocketAccept | YieldKind::SocketConnect))
             })
             .count() as u32;
         next += 1 + yield_count;
@@ -3421,10 +3486,10 @@ fn emit_coroutine(
                 // Determine if this retry-in-place yield follows a non-retry yield.
                 // If so, we need an extra state to avoid re-executing the previous
                 // yield's resume code (e.g., await free) when the retry re-enters.
-                let is_retry = matches!(yield_kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv);
+                let is_retry = matches!(yield_kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv | YieldKind::SocketRead | YieldKind::SocketWrite | YieldKind::SocketAccept | YieldKind::SocketConnect);
                 let prev_was_non_retry = yield_idx > 0 && {
                     let prev_kind = yield_positions[yield_idx - 1].1;
-                    !matches!(prev_kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv)
+                    !matches!(prev_kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv | YieldKind::SocketRead | YieldKind::SocketWrite | YieldKind::SocketAccept | YieldKind::SocketConnect)
                 };
                 let needs_split = is_retry && prev_was_non_retry;
 
@@ -3447,6 +3512,18 @@ fn emit_coroutine(
                         YieldKind::ChannelSend => {}
                         YieldKind::ChannelRecv => {
                             // Recv result already written to frame local by poll_recv.
+                        }
+                        YieldKind::SocketRead => {
+                            // Result already stored + blocking restored by yield handler.
+                        }
+                        YieldKind::SocketWrite => {
+                            // Result already stored + blocking restored by yield handler.
+                        }
+                        YieldKind::SocketAccept => {
+                            // Result already stored by yield handler.
+                        }
+                        YieldKind::SocketConnect => {
+                            // Connect finished by yield handler.
                         }
                     }
                 }
@@ -3550,6 +3627,97 @@ fn emit_coroutine(
                         let _ = writeln!(out, "            if (__r) {{ f->__state = {resume_state}; continue; }}");
                         out.push_str("        }\n");
                     }
+                    YieldKind::SocketRead => {
+                        // Non-blocking read: set socket non-blocking, try async_read.
+                        // If pending → register reactor wait_readable, return PENDING.
+                        // On resume (next state) → retry the read.
+                        let (dst_local, fname, args) = extract_socket_call_info(&bb.instructions[yield_pos], func, registry);
+                        let sock_arg = args.first().map(|s| s.as_str()).unwrap_or("NULL");
+                        let _ = writeln!(out, "        {{");
+                        let _ = writeln!(out, "            GorgetWaker __w = (GorgetWaker){{__gorget_fiber_waker_wake, (void*)f}};");
+                        let _ = writeln!(out, "            gorget_socket_set_nonblocking({sock_arg});");
+                        if fname == "gorget_socket_read_line" {
+                            // read_line returns GorgetString — use a poll loop pattern
+                            // For simplicity, offload read_line to blocking pool for now
+                            // (line-buffered I/O is complex to make async)
+                            let _ = writeln!(out, "            f->_{dst_local} = gorget_socket_read_line({sock_arg});");
+                            let _ = writeln!(out, "            gorget_socket_set_blocking({sock_arg});");
+                            let _ = writeln!(out, "            f->__state = {resume_state}; continue;");
+                        } else {
+                            let n_arg = args.get(1).map(|s| s.as_str()).unwrap_or("4096");
+                            if fname == "gorget_socket_read_exact" {
+                                let _ = writeln!(out, "            f->_{dst_local} = gorget_socket_async_read({sock_arg}, {n_arg});");
+                            } else {
+                                let _ = writeln!(out, "            f->_{dst_local} = gorget_socket_async_read({sock_arg}, {n_arg});");
+                            }
+                            let _ = writeln!(out, "            if (!gorget_socket_async_read_is_pending(&f->_{dst_local})) {{");
+                            let _ = writeln!(out, "                gorget_socket_set_blocking({sock_arg});");
+                            let _ = writeln!(out, "                f->__state = {resume_state}; continue;");
+                            let _ = writeln!(out, "            }}");
+                            let _ = writeln!(out, "            gorget_reactor_wait_readable({sock_arg}->fd, __w);");
+                        }
+                        out.push_str("        }\n");
+                    }
+                    YieldKind::SocketWrite => {
+                        let (dst_local, fname, args) = extract_socket_call_info(&bb.instructions[yield_pos], func, registry);
+                        let sock_arg = args.first().map(|s| s.as_str()).unwrap_or("NULL");
+                        let data_arg = args.get(1).map(|s| s.as_str()).unwrap_or("\"\"");
+                        let _ = writeln!(out, "        {{");
+                        let _ = writeln!(out, "            GorgetWaker __w = (GorgetWaker){{__gorget_fiber_waker_wake, (void*)f}};");
+                        let _ = writeln!(out, "            gorget_socket_set_nonblocking({sock_arg});");
+                        if fname == "gorget_socket_async_write_str" {
+                            let _ = writeln!(out, "            int64_t __wr = gorget_socket_async_write_str({sock_arg}, {data_arg});");
+                        } else {
+                            let _ = writeln!(out, "            int64_t __wr = gorget_socket_async_write({sock_arg}, {data_arg});");
+                        }
+                        let _ = writeln!(out, "            if (__wr != GORGET_IO_PENDING) {{");
+                        let _ = writeln!(out, "                gorget_socket_set_blocking({sock_arg});");
+                        let _ = writeln!(out, "                f->_{dst_local} = __wr;");
+                        let _ = writeln!(out, "                f->__state = {resume_state}; continue;");
+                        let _ = writeln!(out, "            }}");
+                        let _ = writeln!(out, "            gorget_reactor_wait_writable({sock_arg}->fd, __w);");
+                        out.push_str("        }\n");
+                    }
+                    YieldKind::SocketAccept => {
+                        let (dst_local, _fname, args) = extract_socket_call_info(&bb.instructions[yield_pos], func, registry);
+                        let srv_arg = args.first().map(|s| s.as_str()).unwrap_or("NULL");
+                        let dst_c = effective_c_type(dst_local as usize, func, registry, &type_overrides);
+                        let _ = writeln!(out, "        {{");
+                        let _ = writeln!(out, "            GorgetWaker __w = (GorgetWaker){{__gorget_fiber_waker_wake, (void*)f}};");
+                        let _ = writeln!(out, "            gorget_server_socket_set_nonblocking({srv_arg});");
+                        let _ = writeln!(out, "            GorgetSocket __acc = gorget_socket_async_accept({srv_arg});");
+                        let _ = writeln!(out, "            if (__acc.fd != GORGET_IO_PENDING) {{");
+                        // Wrap in Result
+                        if dst_c.starts_with("Result__") {
+                            let _ = writeln!(out, "                const char* __err = gorget_socket_last_error();");
+                            let _ = writeln!(out, "                if (__acc.fd >= 0) {{");
+                            let _ = writeln!(out, "                    f->_{dst_local} = ({dst_c}){{ .tag = 0, .data = {{ .Ok = {{ ._0 = __acc }} }} }};");
+                            let _ = writeln!(out, "                }} else {{");
+                            let _ = writeln!(out, "                    f->_{dst_local} = ({dst_c}){{ .tag = 1, .data = {{ .Error = {{ ._0 = gorget_str_from_cstr(__err ? __err : \"accept failed\") }} }} }};");
+                            let _ = writeln!(out, "                }}");
+                        } else {
+                            let _ = writeln!(out, "                f->_{dst_local} = __acc;");
+                        }
+                        let _ = writeln!(out, "                f->__state = {resume_state}; continue;");
+                        let _ = writeln!(out, "            }}");
+                        let _ = writeln!(out, "            gorget_reactor_wait_readable({srv_arg}->fd, __w);");
+                        out.push_str("        }\n");
+                    }
+                    YieldKind::SocketConnect => {
+                        let (dst_local, _fname, args) = extract_socket_call_info(&bb.instructions[yield_pos], func, registry);
+                        let host_arg = args.first().map(|s| s.as_str()).unwrap_or("\"\"");
+                        let port_arg = args.get(1).map(|s| s.as_str()).unwrap_or("0");
+                        let _ = writeln!(out, "        {{");
+                        let _ = writeln!(out, "            GorgetWaker __w = (GorgetWaker){{__gorget_fiber_waker_wake, (void*)f}};");
+                        let _ = writeln!(out, "            int __rc = gorget_socket_async_connect_start({host_arg}, {port_arg}, &f->_{dst_local});");
+                        let _ = writeln!(out, "            if (__rc == 0) {{ f->__state = {resume_state}; continue; }}");
+                        let _ = writeln!(out, "            if (__rc == GORGET_IO_PENDING) {{");
+                        let _ = writeln!(out, "                gorget_reactor_wait_writable(f->_{dst_local}.fd, __w);");
+                        let _ = writeln!(out, "            }} else {{");
+                        let _ = writeln!(out, "                f->__state = {resume_state}; continue;"); // error — still advance
+                        let _ = writeln!(out, "            }}");
+                        out.push_str("        }\n");
+                    }
                     YieldKind::Blocking => unreachable!("blocking calls filtered out of yield_positions"),
                 }
 
@@ -3575,6 +3743,18 @@ fn emit_coroutine(
                 }
                 YieldKind::ChannelRecv => {
                     // Recv result already written to frame local by poll_recv in previous state.
+                }
+                YieldKind::SocketRead => {
+                    // Result already stored + blocking restored by yield handler.
+                }
+                YieldKind::SocketWrite => {
+                    // Result already stored + blocking restored by yield handler.
+                }
+                YieldKind::SocketAccept => {
+                    // Result already stored by yield handler.
+                }
+                YieldKind::SocketConnect => {
+                    // Connect finished by yield handler.
                 }
             }
             for inst in &bb.instructions[last_pos + 1..] {

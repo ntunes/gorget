@@ -3419,10 +3419,17 @@ typedef struct {
     volatile int     woken;
 } GorgetReactorWaiter;
 
+enum {
+    GORGET_REACTOR_TIMER = 0,
+    GORGET_REACTOR_READ  = 1,
+    GORGET_REACTOR_WRITE = 2
+};
+
 typedef struct {
-    int                  fd;    /* timerfd (Linux) or kqueue ident (macOS) */
+    int                  fd;    /* timerfd (Linux) or kqueue ident (macOS) or socket fd */
     GorgetReactorWaiter* w;     /* NULL when is_async=1 */
     int                  is_async;
+    int                  kind;  /* GORGET_REACTOR_TIMER / _READ / _WRITE */
     GorgetWaker          async_waker;
 } GorgetReactorEntry;
 
@@ -3438,6 +3445,21 @@ typedef struct {
 static GorgetReactor     __gorget_reactor;
 static pthread_once_t    __gorget_reactor_once = PTHREAD_ONCE_INIT;
 
+static void __gorget_reactor_fire_entry(GorgetReactorEntry* entry) {
+    if (entry->is_async) {
+        if (entry->kind == GORGET_REACTOR_TIMER) {
+            close(entry->fd); /* timerfds are owned by reactor */
+        }
+        /* socket fds are NOT closed — owned by caller */
+        entry->async_waker.wake(&entry->async_waker);
+    } else {
+        pthread_mutex_lock(&entry->w->mtx);
+        entry->w->woken = 1;
+        pthread_cond_signal(&entry->w->cond);
+        pthread_mutex_unlock(&entry->w->mtx);
+    }
+}
+
 static void* __gorget_reactor_thread(void* arg) {
     GorgetReactor* r = (GorgetReactor*)arg;
 #ifdef __linux__
@@ -3446,24 +3468,22 @@ static void* __gorget_reactor_thread(void* arg) {
         int n = epoll_wait(r->event_fd, events, 32, 50 /* ms */);
         for (int i = 0; i < n; i++) {
             int fd = events[i].data.fd;
-            uint64_t expirations;
-            /* drain the timerfd */
-            (void)read(fd, &expirations, sizeof(expirations));
             pthread_mutex_lock(&r->mtx);
             for (size_t j = 0; j < r->len; j++) {
                 if (r->entries[j].fd == fd) {
                     GorgetReactorEntry entry = r->entries[j];
                     r->entries[j] = r->entries[--r->len];
                     pthread_mutex_unlock(&r->mtx);
-                    if (entry.is_async) {
-                        close(fd);
-                        entry.async_waker.wake(&entry.async_waker);
+                    if (entry.kind == GORGET_REACTOR_TIMER) {
+                        /* drain the timerfd */
+                        uint64_t expirations;
+                        (void)read(fd, &expirations, sizeof(expirations));
                     } else {
-                        pthread_mutex_lock(&entry.w->mtx);
-                        entry.w->woken = 1;
-                        pthread_cond_signal(&entry.w->cond);
-                        pthread_mutex_unlock(&entry.w->mtx);
+                        /* fd readiness: deregister from epoll (oneshot already did this
+                           for EPOLLONESHOT, but explicit DEL is safe) */
+                        epoll_ctl(r->event_fd, EPOLL_CTL_DEL, fd, NULL);
                     }
+                    __gorget_reactor_fire_entry(&entry);
                     goto reactor_next;
                 }
             }
@@ -3484,14 +3504,8 @@ static void* __gorget_reactor_thread(void* arg) {
                     GorgetReactorEntry entry = r->entries[j];
                     r->entries[j] = r->entries[--r->len];
                     pthread_mutex_unlock(&r->mtx);
-                    if (entry.is_async) {
-                        entry.async_waker.wake(&entry.async_waker);
-                    } else {
-                        pthread_mutex_lock(&entry.w->mtx);
-                        entry.w->woken = 1;
-                        pthread_cond_signal(&entry.w->cond);
-                        pthread_mutex_unlock(&entry.w->mtx);
-                    }
+                    /* kqueue EV_ONESHOT auto-removes; no cleanup needed for either kind */
+                    __gorget_reactor_fire_entry(&entry);
                     goto reactor_next_apple;
                 }
             }
@@ -3558,6 +3572,7 @@ static void gorget_reactor_sleep_ms(int64_t ms) {
         __gorget_reactor.entries[__gorget_reactor.len].fd = fd;
         __gorget_reactor.entries[__gorget_reactor.len].w  = &waiter;
         __gorget_reactor.entries[__gorget_reactor.len].is_async = 0;
+        __gorget_reactor.entries[__gorget_reactor.len].kind = GORGET_REACTOR_TIMER;
         __gorget_reactor.len++;
         pthread_mutex_unlock(&__gorget_reactor.mtx);
 
@@ -3591,6 +3606,7 @@ static void gorget_reactor_sleep_ms(int64_t ms) {
         __gorget_reactor.entries[__gorget_reactor.len].fd = ident;
         __gorget_reactor.entries[__gorget_reactor.len].w  = &waiter;
         __gorget_reactor.entries[__gorget_reactor.len].is_async = 0;
+        __gorget_reactor.entries[__gorget_reactor.len].kind = GORGET_REACTOR_TIMER;
         __gorget_reactor.len++;
         pthread_mutex_unlock(&__gorget_reactor.mtx);
 
@@ -3646,6 +3662,7 @@ static void gorget_reactor_sleep_async(int64_t ms, GorgetWaker waker) {
         e->fd = fd;
         e->w  = NULL;
         e->is_async = 1;
+        e->kind = GORGET_REACTOR_TIMER;
         e->async_waker = waker;
         pthread_mutex_unlock(&__gorget_reactor.mtx);
         return;
@@ -3670,6 +3687,7 @@ static void gorget_reactor_sleep_async(int64_t ms, GorgetWaker waker) {
         e->fd = ident;
         e->w  = NULL;
         e->is_async = 1;
+        e->kind = GORGET_REACTOR_TIMER;
         e->async_waker = waker;
         pthread_mutex_unlock(&__gorget_reactor.mtx);
         return;
@@ -3677,6 +3695,101 @@ static void gorget_reactor_sleep_async(int64_t ms, GorgetWaker waker) {
 #endif
     /* Fallback: fire waker immediately (timer not available). */
     waker.wake(&waker);
+}
+
+/* ── Reactor fd-readiness registration ──────────────────────── */
+
+/* Helper: grow entries array if needed (must hold r->mtx). */
+static void __gorget_reactor_grow_if_needed(GorgetReactor* r) {
+    if (r->len == r->cap) {
+        r->cap *= 2;
+        r->entries = (GorgetReactorEntry*)GORGET_REALLOC(
+            r->entries,
+            (r->cap / 2) * sizeof(GorgetReactorEntry),
+            r->cap * sizeof(GorgetReactorEntry));
+    }
+}
+
+/* Register interest in fd becoming readable.  Fires waker exactly once.
+ * The fd is NOT owned by the reactor — caller retains ownership. */
+static void gorget_reactor_wait_readable(int fd, GorgetWaker waker) {
+    pthread_once(&__gorget_reactor_once, __gorget_reactor_init);
+    GorgetReactor* r = &__gorget_reactor;
+
+#ifdef __linux__
+    struct epoll_event ev;
+    ev.events  = EPOLLIN | EPOLLONESHOT;
+    ev.data.fd = fd;
+    /* Try MOD first (fd may already be registered from a previous wait) */
+    if (epoll_ctl(r->event_fd, EPOLL_CTL_MOD, fd, &ev) != 0) {
+        epoll_ctl(r->event_fd, EPOLL_CTL_ADD, fd, &ev);
+    }
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    struct kevent change;
+    EV_SET(&change, (uintptr_t)fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, NULL);
+    kevent(r->event_fd, &change, 1, NULL, 0, NULL);
+#endif
+
+    pthread_mutex_lock(&r->mtx);
+    __gorget_reactor_grow_if_needed(r);
+    GorgetReactorEntry* e = &r->entries[r->len++];
+    e->fd          = fd;
+    e->w           = NULL;
+    e->is_async    = 1;
+    e->kind        = GORGET_REACTOR_READ;
+    e->async_waker = waker;
+    pthread_mutex_unlock(&r->mtx);
+}
+
+/* Register interest in fd becoming writable.  Fires waker exactly once. */
+static void gorget_reactor_wait_writable(int fd, GorgetWaker waker) {
+    pthread_once(&__gorget_reactor_once, __gorget_reactor_init);
+    GorgetReactor* r = &__gorget_reactor;
+
+#ifdef __linux__
+    struct epoll_event ev;
+    ev.events  = EPOLLOUT | EPOLLONESHOT;
+    ev.data.fd = fd;
+    if (epoll_ctl(r->event_fd, EPOLL_CTL_MOD, fd, &ev) != 0) {
+        epoll_ctl(r->event_fd, EPOLL_CTL_ADD, fd, &ev);
+    }
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    struct kevent change;
+    EV_SET(&change, (uintptr_t)fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, NULL);
+    kevent(r->event_fd, &change, 1, NULL, 0, NULL);
+#endif
+
+    pthread_mutex_lock(&r->mtx);
+    __gorget_reactor_grow_if_needed(r);
+    GorgetReactorEntry* e = &r->entries[r->len++];
+    e->fd          = fd;
+    e->w           = NULL;
+    e->is_async    = 1;
+    e->kind        = GORGET_REACTOR_WRITE;
+    e->async_waker = waker;
+    pthread_mutex_unlock(&r->mtx);
+}
+
+/* Cancel all pending reactor entries for a given fd (e.g., on socket close). */
+static void gorget_reactor_cancel_fd(int fd) {
+    GorgetReactor* r = &__gorget_reactor;
+    pthread_mutex_lock(&r->mtx);
+    for (size_t j = 0; j < r->len; ) {
+        if (r->entries[j].fd == fd) {
+            r->entries[j] = r->entries[--r->len];
+        } else {
+            j++;
+        }
+    }
+    pthread_mutex_unlock(&r->mtx);
+#ifdef __linux__
+    epoll_ctl(r->event_fd, EPOLL_CTL_DEL, fd, NULL);
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    struct kevent changes[2];
+    EV_SET(&changes[0], (uintptr_t)fd, EVFILT_READ,  EV_DELETE, 0, 0, NULL);
+    EV_SET(&changes[1], (uintptr_t)fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    kevent(r->event_fd, changes, 2, NULL, 0, NULL); /* ignore errors — filter may not exist */
+#endif
 }
 "#;
 
@@ -6461,12 +6574,175 @@ static void gorget_socket_close(GorgetSocket* sock) {
     }
 }
 
+/* ── Async (non-blocking) socket operations ─────────────────
+ * These are used by coroutine poll functions.  They attempt the operation
+ * once; if it would block (EAGAIN/EWOULDBLOCK), they register with the
+ * reactor and return a sentinel to signal PENDING.
+ *
+ * Convention:
+ *   gorget_socket_async_read   → returns GorgetArray with .data==NULL on PENDING
+ *   gorget_socket_async_write  → returns -2 on PENDING
+ *   gorget_socket_async_accept → returns GorgetSocket{-2} on PENDING
+ *   gorget_socket_async_connect → returns -2 on PENDING, 0 on success, -1 on error
+ */
+
+#define GORGET_IO_PENDING (-2)
+
+/* MSG_NOSIGNAL prevents SIGPIPE on broken connections (Linux).
+ * macOS doesn't have it — uses SO_NOSIGPIPE per-socket instead. */
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
+/* Non-blocking read: try recv once.
+ * Returns array with data on success, empty array on EOF/error,
+ * array with data==NULL && len==0 && cap==(size_t)-1 on WOULD_BLOCK. */
+static GorgetArray gorget_socket_async_read(GorgetSocket* sock, int64_t n) {
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    if (n <= 0 || sock->fd < 0) return arr;
+    uint8_t* buf = (uint8_t*)GORGET_ALLOC((size_t)n);
+    ssize_t got = recv(sock->fd, buf, (size_t)n, 0);
+    if (got > 0) {
+        arr.data = buf;
+        arr.len  = (size_t)got;
+        arr.cap  = (size_t)n;
+        return arr;
+    }
+    GORGET_FREE(buf, 0);
+    if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        /* Signal PENDING */
+        arr.data = NULL;
+        arr.len  = 0;
+        arr.cap  = (size_t)-1; /* sentinel */
+        return arr;
+    }
+    /* EOF or real error */
+    return arr;
+}
+
+static int gorget_socket_async_read_is_pending(GorgetArray* a) {
+    return a->data == NULL && a->cap == (size_t)-1;
+}
+
+/* Non-blocking write_str: try send once.
+ * Returns bytes sent (>=0), -1 on error, GORGET_IO_PENDING on WOULD_BLOCK. */
+static int64_t gorget_socket_async_write_str(GorgetSocket* sock, const char* s) {
+    if (sock->fd < 0 || !s) return 0;
+    size_t len = strlen(s);
+    if (len == 0) return 0;
+    ssize_t sent = send(sock->fd, s, len, MSG_NOSIGNAL);
+    if (sent >= 0) return (int64_t)sent;
+    if (errno == EAGAIN || errno == EWOULDBLOCK) return GORGET_IO_PENDING;
+    return -1;
+}
+
+/* Non-blocking write (bytes): try send once. */
+static int64_t gorget_socket_async_write(GorgetSocket* sock, GorgetArray data) {
+    if (sock->fd < 0 || data.len == 0) return 0;
+    ssize_t sent = send(sock->fd, (uint8_t*)data.data, data.len, MSG_NOSIGNAL);
+    if (sent >= 0) return (int64_t)sent;
+    if (errno == EAGAIN || errno == EWOULDBLOCK) return GORGET_IO_PENDING;
+    return -1;
+}
+
+/* Non-blocking connect: initiate connection.
+ * Returns 0 on immediate success, GORGET_IO_PENDING if in progress, -1 on error. */
+static int gorget_socket_async_connect_start(const char* host, int64_t port, GorgetSocket* out) {
+    __gorget_socket_last_error = NULL;
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%lld", (long long)port);
+
+    struct addrinfo hints, *res, *rp;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    int err = getaddrinfo(host, port_str, &hints, &res);
+    if (err != 0) {
+        __gorget_socket_last_error = gai_strerror(err);
+        *out = (GorgetSocket){-1};
+        return -1;
+    }
+
+    int fd = -1;
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (fd < 0) continue;
+        /* Set non-blocking before connect */
+        int flags = fcntl(fd, F_GETFL, 0);
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        int rc = connect(fd, rp->ai_addr, rp->ai_addrlen);
+        if (rc == 0) {
+            /* Immediate connect (e.g., loopback) */
+            freeaddrinfo(res);
+            *out = (GorgetSocket){fd};
+            return 0;
+        }
+        if (errno == EINPROGRESS) {
+            /* Connection in progress — wait for writable */
+            freeaddrinfo(res);
+            *out = (GorgetSocket){fd};
+            return GORGET_IO_PENDING;
+        }
+        close(fd);
+        fd = -1;
+    }
+    freeaddrinfo(res);
+    __gorget_socket_last_error = strerror(errno);
+    *out = (GorgetSocket){-1};
+    return -1;
+}
+
+/* Check if an async connect completed.  Call after fd becomes writable.
+ * Returns 0 on success, -1 on error. */
+static int gorget_socket_async_connect_finish(GorgetSocket* sock) {
+    int err = 0;
+    socklen_t len = sizeof(err);
+    if (getsockopt(sock->fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0 || err != 0) {
+        __gorget_socket_last_error = strerror(err ? err : errno);
+        close(sock->fd);
+        sock->fd = -1;
+        return -1;
+    }
+    return 0;
+}
+
+// Set a socket to non-blocking mode (for async I/O)
+static void gorget_socket_set_nonblocking(GorgetSocket* sock) {
+    if (sock->fd >= 0) {
+        int flags = fcntl(sock->fd, F_GETFL, 0);
+        fcntl(sock->fd, F_SETFL, flags | O_NONBLOCK);
+    }
+}
+
+// Set a socket back to blocking mode
+static void gorget_socket_set_blocking(GorgetSocket* sock) {
+    if (sock->fd >= 0) {
+        int flags = fcntl(sock->fd, F_GETFL, 0);
+        fcntl(sock->fd, F_SETFL, flags & ~O_NONBLOCK);
+    }
+}
+
 // Server socket type — always declared alongside GorgetSocket so that the
 // ServerSocket Gorget type (which is co-registered in std.net.socket) can
 // be typedef'd to GorgetServerSocket even when SERVER_SOCKET_RUNTIME is not emitted.
 typedef struct {
     int fd;
 } GorgetServerSocket;
+
+/* Non-blocking accept: try accept once.
+ * Returns GorgetSocket{fd} on success, {-1} on error, {GORGET_IO_PENDING} on WOULD_BLOCK. */
+static GorgetSocket gorget_socket_async_accept(GorgetServerSocket* srv) {
+    if (srv->fd < 0) {
+        __gorget_socket_last_error = "server socket is closed";
+        return (GorgetSocket){-1};
+    }
+    int fd = accept(srv->fd, NULL, NULL);
+    if (fd >= 0) return (GorgetSocket){fd};
+    if (errno == EAGAIN || errno == EWOULDBLOCK) return (GorgetSocket){GORGET_IO_PENDING};
+    __gorget_socket_last_error = strerror(errno);
+    return (GorgetSocket){-1};
+}
 
 "#;
 
@@ -6543,6 +6819,14 @@ static void gorget_server_socket_close(GorgetServerSocket* srv) {
     if (srv->fd >= 0) {
         close(srv->fd);
         srv->fd = -1;
+    }
+}
+
+// Set server socket to non-blocking mode (for async accept)
+static void gorget_server_socket_set_nonblocking(GorgetServerSocket* srv) {
+    if (srv->fd >= 0) {
+        int flags = fcntl(srv->fd, F_GETFL, 0);
+        fcntl(srv->fd, F_SETFL, flags | O_NONBLOCK);
     }
 }
 

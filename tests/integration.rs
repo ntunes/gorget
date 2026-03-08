@@ -7145,6 +7145,11 @@ fn async_sleep_yield() {
 }
 
 #[test]
+fn async_socket_echo() {
+    run_gg("async_socket_echo.gg", "5\ngot reply");
+}
+
+#[test]
 fn async_blocking_io() {
     run_gg("async_blocking_io.gg", "hello from blocking io");
 }

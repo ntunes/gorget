@@ -1157,6 +1157,9 @@ fn gen_socket_module() -> Module {
         decl_fn("socket_connect", &[("host", ty_str()), ("port", ty_int())], ty_result(ty_socket(), ty_str())),
     )));
 
+    // NOTE: async_socket_connect deferred — connect is rarely the hot path in servers.
+    // The important async ops are async_accept, async_read, async_write for server loops.
+
     // Socket methods — extern bindings
     items.push(equip_block("Socket", vec![
         extern_method("read", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_socket_read"),
@@ -1166,6 +1169,10 @@ fn gen_socket_module() -> Module {
         extern_method("read_line", Ownership::MutableBorrow, &[], ty_result(ty_string(), ty_str()), "gorget_socket_read_line"),
         extern_method("set_timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void(), "gorget_socket_set_timeout"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_socket_close"),
+        // Non-blocking socket methods — for use in spawned/coroutine context
+        extern_method("nb_read", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_socket_async_read"),
+        extern_method("nb_write", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_int(), "gorget_socket_async_write"),
+        extern_method("nb_write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_socket_async_write_str"),
     ]));
 
     // Opaque struct: ServerSocket
@@ -1181,6 +1188,8 @@ fn gen_socket_module() -> Module {
     items.push(equip_block("ServerSocket", vec![
         extern_method("accept", Ownership::MutableBorrow, &[], ty_result(ty_socket(), ty_str()), "gorget_server_socket_accept"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_server_socket_close"),
+        // Non-blocking accept — for use in spawned/coroutine context
+        extern_method("nb_accept", Ownership::MutableBorrow, &[], ty_result(ty_socket(), ty_str()), "gorget_socket_async_accept"),
     ]));
 
     Module {
@@ -2570,7 +2579,10 @@ mod tests {
                                 "write_str",
                                 "read_line",
                                 "set_timeout",
-                                "close"
+                                "close",
+                                "nb_read",
+                                "nb_write",
+                                "nb_write_str",
                             ]
                         );
                         for method in &eq.items {
