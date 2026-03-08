@@ -169,6 +169,13 @@ impl TypeMapper {
                         make_opaque_type_def(n, CopySemantics::Copy, DropStrategy::None)
                     });
                 }
+                // WaitGroup, Semaphore — heap-allocated pointer types, Copy semantics
+                // (shared across threads by copying the pointer).
+                if matches!(name.node.as_str(), "WaitGroup" | "Semaphore") {
+                    return self.get_or_register(&name.node, registry, |n| {
+                        make_opaque_type_def(n, CopySemantics::Copy, DropStrategy::None)
+                    });
+                }
                 // Auto-register std.process Process type (non-generic, Move, RAII).
                 if name.node == "Process" {
                     return self.get_or_register("Process", registry, |n| {

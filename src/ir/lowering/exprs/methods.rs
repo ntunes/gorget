@@ -711,6 +711,55 @@ pub(super) fn lower_method_call(
         }
     }
 
+    // WaitGroup methods — receiver is GorgetWaitGroup* (pointer), passed by value.
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref wtn) = recv_type_name {
+            if wtn == "WaitGroup" {
+                match method_name {
+                    "add" if !args.is_empty() => {
+                        let n = lower_expr(ctx, builder, &args[0].node.value);
+                        builder.call_void("WaitGroup__add", vec![recv, n]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    "done" => {
+                        builder.call_void("WaitGroup__done", vec![recv]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    "wait" => {
+                        builder.call_void("WaitGroup__wait", vec![recv]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Semaphore methods — receiver is GorgetSemaphore* (pointer), passed by value.
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref stn) = recv_type_name {
+            if stn == "Semaphore" {
+                match method_name {
+                    "acquire" => {
+                        builder.call_void("Semaphore__acquire", vec![recv]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    "release" => {
+                        builder.call_void("Semaphore__release", vec![recv]);
+                        return Operand::Constant(Constant::Unit);
+                    }
+                    "try_acquire" => {
+                        let dst = builder.call("Semaphore__try_acquire", vec![recv], BOOL_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     // RWLock[T] methods: read, write — pass the GorgetRWLock* receiver directly by value.
     {
         let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);

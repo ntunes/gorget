@@ -134,6 +134,18 @@ fn map_stdlib_name(name: &str) -> &str {
         "CondVar__notify_one" => "gorget_condvar_notify_one",
         "CondVar__notify_all" => "gorget_condvar_notify_all",
         "CondVar__wait"       => "gorget_condvar_wait_guard",
+        // WaitGroup methods
+        "WaitGroup__new" => "gorget_waitgroup_new",
+        "WaitGroup__add" => "gorget_waitgroup_add",
+        "WaitGroup__done" => "gorget_waitgroup_done",
+        "WaitGroup__wait" => "gorget_waitgroup_wait",
+        "WaitGroup__free" => "gorget_waitgroup_free",
+        // Semaphore methods
+        "Semaphore__new" => "gorget_semaphore_new",
+        "Semaphore__acquire" => "gorget_semaphore_acquire",
+        "Semaphore__release" => "gorget_semaphore_release",
+        "Semaphore__try_acquire" => "gorget_semaphore_try_acquire",
+        "Semaphore__free" => "gorget_semaphore_free",
         // std.thread
         "current_thread_id" => "gorget_current_thread_id",
         // Environment
@@ -550,7 +562,7 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         out.push_str(c_runtime::PROCESS_SPAWN_RUNTIME);
     }
     if module.runtime.has_sync
-        || all_call_names.iter().any(|n| n.starts_with("gorget_atomic_") || n.starts_with("gorget_barrier_") || n.starts_with("gorget_condvar_") || n.starts_with("gorget_rwlock_") || n.starts_with("AtomicInt__") || n.starts_with("AtomicBool__") || n.starts_with("Barrier__") || n.starts_with("CondVar__") || n.starts_with("RWLock__") || n.starts_with("ReadGuard__") || n.starts_with("WriteGuard__")) {
+        || all_call_names.iter().any(|n| n.starts_with("gorget_atomic_") || n.starts_with("gorget_barrier_") || n.starts_with("gorget_condvar_") || n.starts_with("gorget_rwlock_") || n.starts_with("AtomicInt__") || n.starts_with("AtomicBool__") || n.starts_with("Barrier__") || n.starts_with("CondVar__") || n.starts_with("RWLock__") || n.starts_with("ReadGuard__") || n.starts_with("WriteGuard__") || n.starts_with("WaitGroup__") || n.starts_with("Semaphore__") || n.starts_with("gorget_waitgroup_") || n.starts_with("gorget_semaphore_")) {
         out.push_str(c_runtime::SYNC_RUNTIME);
     }
     if module.runtime.has_thread
@@ -3463,6 +3475,8 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         "Barrier" => Some("GorgetBarrier*"),
         "CondVar" => Some("GorgetCondVar*"),
         "RWLock" => Some("GorgetRWLock*"),
+        "WaitGroup" => Some("GorgetWaitGroup*"),
+        "Semaphore" => Some("GorgetSemaphore*"),
         // std.process Process type
         "Process" => Some("GorgetProcess*"),
         // Crypto types

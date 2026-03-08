@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-08] **feat: WaitGroup + Semaphore sync primitives**: `WaitGroup` — `add(n)`, `done()`, `wait()` for fan-out/fan-in coordination. `Semaphore(n)` — `acquire()`, `release()`, `try_acquire()` for concurrency limiting. Both: opaque pointer types (Copy semantics for thread sharing), C runtime (mutex+condvar), stdlib equip blocks, GIR lowering via StructLiteral intercept + method dispatch. Tests: `waitgroup_basic`, `semaphore_basic`.
+
 - [2026-03-08] **fix: coroutine poll double-free when retry-in-place yield follows await**: When a MutexLock/RwLock/Channel yield point followed an Await yield in a coroutine poll function, the await's result-extraction code (which frees the inner task context) was re-executed on each mutex retry, causing use-after-free/double-free under concurrency. Fixed by splitting the state: await resume + intermediate instructions get their own state, retry-in-place yield gets the next. Added comprehensive stress test (1300 tasks: writers, readers with-refresh, nested spawns, conditional writers).
 
 - [2026-03-07] **feat: Channel recv_timeout + introspection methods**: `ch.recv_timeout(ms)` returns `Option[T]` — blocking recv with `pthread_cond_timedwait`. C runtime `gorget_channel_recv_timeout`, typed wrapper emitted only when called (deferred after Option__T). Added `len()`, `capacity()`, `is_closed()` introspection. GIR lowering for all 5 new Channel methods. Multi-task `spawn_blocking` test. Tests: `channel_recv_timeout`, `async_channel_multi`, `spawn_blocking_multi`.

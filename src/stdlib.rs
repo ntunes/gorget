@@ -518,6 +518,22 @@ fn gen_sync_module() -> Module {
         span: Span::dummy(),
     }));
 
+    // WaitGroup — non-generic opaque struct
+    let waitgroup_struct = opaque_struct("WaitGroup");
+    let waitgroup_equip = equip_block("WaitGroup", vec![
+        decl_method("add", Ownership::Borrow, &[("n", ty_int())], ty_void()),
+        decl_method("done", Ownership::Borrow, &[], ty_void()),
+        decl_method("wait", Ownership::Borrow, &[], ty_void()),
+    ]);
+
+    // Semaphore — non-generic opaque struct
+    let semaphore_struct = opaque_struct("Semaphore");
+    let semaphore_equip = equip_block("Semaphore", vec![
+        decl_method("acquire", Ownership::Borrow, &[], ty_void()),
+        decl_method("release", Ownership::Borrow, &[], ty_void()),
+        decl_method("try_acquire", Ownership::Borrow, &[], ty_bool()),
+    ]);
+
     Module {
         items: vec![
             atomic_int_struct, atomic_int_equip,
@@ -527,6 +543,8 @@ fn gen_sync_module() -> Module {
             rwlock_struct, rwlock_equip,
             read_guard_struct, read_guard_equip,
             write_guard_struct, write_guard_equip,
+            waitgroup_struct, waitgroup_equip,
+            semaphore_struct, semaphore_equip,
         ],
         span: Span::dummy(),
     }

@@ -1,0 +1,33 @@
+from std.sync import Semaphore, AtomicInt
+from std.time import sleep_ms
+
+async int limited_work(Semaphore sem, AtomicInt counter):
+    sem.acquire()
+    counter.add(1)
+    sem.release()
+    return 0
+
+async void main():
+    Semaphore sem = Semaphore(2)
+    AtomicInt counter = AtomicInt(0)
+
+    spawn limited_work(sem, counter)
+    spawn limited_work(sem, counter)
+    spawn limited_work(sem, counter)
+    spawn limited_work(sem, counter)
+
+    sleep_ms(100)
+
+    print(counter.load())
+
+    # Test try_acquire
+    bool got1 = sem.try_acquire()
+    bool got2 = sem.try_acquire()
+    bool got3 = sem.try_acquire()
+    print(got1)
+    print(got2)
+    print(got3)
+    if got1:
+        sem.release()
+    if got2:
+        sem.release()

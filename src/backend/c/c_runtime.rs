@@ -8124,6 +8124,85 @@ static inline void gorget_condvar_notify_one(GorgetCondVar* cv) {
 static inline void gorget_condvar_notify_all(GorgetCondVar* cv) {
     pthread_cond_broadcast(&cv->cond);
 }
+
+// ── WaitGroup ──
+typedef struct {
+    pthread_mutex_t mtx;
+    pthread_cond_t  cond;
+    int64_t         count;
+} GorgetWaitGroup;
+
+static inline GorgetWaitGroup* gorget_waitgroup_new(void) {
+    GorgetWaitGroup* wg = (GorgetWaitGroup*)GORGET_CALLOC(1, sizeof(GorgetWaitGroup));
+    pthread_mutex_init(&wg->mtx, NULL);
+    pthread_cond_init(&wg->cond, NULL);
+    return wg;
+}
+static inline void gorget_waitgroup_add(GorgetWaitGroup* wg, int64_t n) {
+    pthread_mutex_lock(&wg->mtx);
+    wg->count += n;
+    pthread_mutex_unlock(&wg->mtx);
+}
+static inline void gorget_waitgroup_done(GorgetWaitGroup* wg) {
+    pthread_mutex_lock(&wg->mtx);
+    wg->count--;
+    if (wg->count <= 0) pthread_cond_broadcast(&wg->cond);
+    pthread_mutex_unlock(&wg->mtx);
+}
+static inline void gorget_waitgroup_wait(GorgetWaitGroup* wg) {
+    pthread_mutex_lock(&wg->mtx);
+    while (wg->count > 0) pthread_cond_wait(&wg->cond, &wg->mtx);
+    pthread_mutex_unlock(&wg->mtx);
+}
+static inline void gorget_waitgroup_free(GorgetWaitGroup** wgp) {
+    GorgetWaitGroup* wg = *wgp;
+    if (!wg) return;
+    pthread_mutex_destroy(&wg->mtx);
+    pthread_cond_destroy(&wg->cond);
+    GORGET_FREE(wg, sizeof(GorgetWaitGroup));
+    *wgp = NULL;
+}
+
+// ── Semaphore ──
+typedef struct {
+    pthread_mutex_t mtx;
+    pthread_cond_t  cond;
+    int64_t         permits;
+} GorgetSemaphore;
+
+static inline GorgetSemaphore* gorget_semaphore_new(int64_t n) {
+    GorgetSemaphore* s = (GorgetSemaphore*)GORGET_CALLOC(1, sizeof(GorgetSemaphore));
+    pthread_mutex_init(&s->mtx, NULL);
+    pthread_cond_init(&s->cond, NULL);
+    s->permits = n;
+    return s;
+}
+static inline void gorget_semaphore_acquire(GorgetSemaphore* s) {
+    pthread_mutex_lock(&s->mtx);
+    while (s->permits <= 0) pthread_cond_wait(&s->cond, &s->mtx);
+    s->permits--;
+    pthread_mutex_unlock(&s->mtx);
+}
+static inline void gorget_semaphore_release(GorgetSemaphore* s) {
+    pthread_mutex_lock(&s->mtx);
+    s->permits++;
+    pthread_cond_signal(&s->cond);
+    pthread_mutex_unlock(&s->mtx);
+}
+static inline int gorget_semaphore_try_acquire(GorgetSemaphore* s) {
+    pthread_mutex_lock(&s->mtx);
+    if (s->permits > 0) { s->permits--; pthread_mutex_unlock(&s->mtx); return 1; }
+    pthread_mutex_unlock(&s->mtx);
+    return 0;
+}
+static inline void gorget_semaphore_free(GorgetSemaphore** sp) {
+    GorgetSemaphore* s = *sp;
+    if (!s) return;
+    pthread_mutex_destroy(&s->mtx);
+    pthread_cond_destroy(&s->cond);
+    GORGET_FREE(s, sizeof(GorgetSemaphore));
+    *sp = NULL;
+}
 "#;
 
 /// std.thread — Thread[T], thread_spawn, current_thread_id.

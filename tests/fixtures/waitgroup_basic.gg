@@ -1,0 +1,18 @@
+from std.sync import WaitGroup, AtomicInt
+
+async int worker(AtomicInt counter, WaitGroup wg):
+    counter.add(1)
+    wg.done()
+    return 0
+
+async void main():
+    AtomicInt counter = AtomicInt(0)
+    WaitGroup wg = WaitGroup()
+
+    wg.add(3)
+    spawn worker(counter, wg)
+    spawn worker(counter, wg)
+    spawn worker(counter, wg)
+
+    wg.wait()
+    print(counter.load())

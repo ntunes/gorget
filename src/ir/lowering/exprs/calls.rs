@@ -392,6 +392,21 @@ pub(super) fn lower_call(
             return FunctionBuilder::copy(dst);
         }
 
+        // WaitGroup() → gorget_waitgroup_new()
+        if name == "WaitGroup" && args.is_empty() {
+            let wg_type = ctx.type_mapper.lookup_named("WaitGroup").unwrap_or(I64_TYPE);
+            let dst = builder.call_extern("gorget_waitgroup_new", vec![], wg_type);
+            return FunctionBuilder::copy(dst);
+        }
+
+        // Semaphore(n) → gorget_semaphore_new(n)
+        if name == "Semaphore" && args.len() == 1 {
+            let n_op = lower_expr(ctx, builder, &args[0].node.value);
+            let s_type = ctx.type_mapper.lookup_named("Semaphore").unwrap_or(I64_TYPE);
+            let dst = builder.call_extern("gorget_semaphore_new", vec![n_op], s_type);
+            return FunctionBuilder::copy(dst);
+        }
+
         // RWLock[T](initial_value) → RWLock__T__new(value)
         if name == "RWLock" {
             if let Some(type_args) = generic_args {

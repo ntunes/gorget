@@ -7160,6 +7160,16 @@ fn spawn_blocking_multi() {
 }
 
 #[test]
+fn waitgroup_basic() {
+    run_gg("waitgroup_basic.gg", "3");
+}
+
+#[test]
+fn semaphore_basic() {
+    run_gg("semaphore_basic.gg", "4\ntrue\ntrue\nfalse");
+}
+
+#[test]
 fn async_blocking_coroutine() {
     run_gg("async_blocking_coroutine.gg", "coroutine+blocking");
 }
