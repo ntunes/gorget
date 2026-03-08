@@ -1,5 +1,9 @@
 # DONE
 
+- [2026-03-08] **fix: coroutine codegen — Result wrapping, type overrides, collection methods**: Extracted `compute_type_overrides()` into reusable function, shared between blocking and coroutine paths. Coroutine frame struct now uses correct C types. Added Result-wrapping, inline Option/Result unwrap, collection method dispatch (`try_rewrite_collection_method`), and GorgetString→Str coercion to `emit_poll_inst`. Fixes `httpserver_concurrent` C compile errors. All 583 integration tests pass.
+
+- [2026-03-08] **feat: OnceFlag sync primitive**: Exactly-once initialization via atomic CAS. `do_once()` returns true for one caller, `is_done()` checks completion. Full pipeline: stdlib equip, IR lowering, C backend. Test: `onceflag_basic`.
+
 - [2026-03-08] **feat: WaitGroup + Semaphore sync primitives**: `WaitGroup` — `add(n)`, `done()`, `wait()` for fan-out/fan-in coordination. `Semaphore(n)` — `acquire()`, `release()`, `try_acquire()` for concurrency limiting. Both: opaque pointer types (Copy semantics for thread sharing), C runtime (mutex+condvar), stdlib equip blocks, GIR lowering via StructLiteral intercept + method dispatch. Tests: `waitgroup_basic`, `semaphore_basic`.
 
 - [2026-03-08] **fix: coroutine poll double-free when retry-in-place yield follows await**: When a MutexLock/RwLock/Channel yield point followed an Await yield in a coroutine poll function, the await's result-extraction code (which frees the inner task context) was re-executed on each mutex retry, causing use-after-free/double-free under concurrency. Fixed by splitting the state: await resume + intermediate instructions get their own state, retry-in-place yield gets the next. Added comprehensive stress test (1300 tasks: writers, readers with-refresh, nested spawns, conditional writers).
