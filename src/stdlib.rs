@@ -186,10 +186,10 @@ fn gen_conv_module() -> Module {
         decl_fn("chr", &[("n", ty_int())], ty_str()),
         decl_fn("parse_int", &[("s", ty_str())], ty_result(ty_int(), ty_str())),
         decl_fn("parse_float", &[("s", ty_str())], ty_result(ty_float(), ty_str())),
-        decl_fn("int_to_str", &[("n", ty_int())], ty_string()),
-        decl_fn("float_to_str", &[("x", ty_float())], ty_string()),
+        decl_fn("int_to_str", &[("n", ty_int())], ty_str()),
+        decl_fn("float_to_str", &[("x", ty_float())], ty_str()),
         decl_fn("bool_to_str", &[("b", ty_bool())], ty_str()),
-        decl_fn("codepoint_to_str", &[("cp", ty_int())], ty_string()),
+        decl_fn("codepoint_to_str", &[("cp", ty_int())], ty_str()),
         decl_fn("int_to_float", &[("n", ty_int())], ty_float()),
     ])
 }

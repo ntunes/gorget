@@ -177,9 +177,14 @@ equip Column:
 
     str dtype_name(self):
         match self:
-            meta for vname, T in variant_payloads(Column):
-                case vname(_):
-                    return T
+            case IntCol(_):
+                return "int"
+            case FloatCol(_):
+                return "float"
+            case StrCol(_):
+                return "str"
+            case BoolCol(_):
+                return "bool"
 
     int null_count(self):
         match self:

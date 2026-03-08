@@ -38,8 +38,12 @@ pub struct VTableMethod {
     pub name: String,
     /// TypeId for the function pointer type in the TypeRegistry.
     pub fn_ptr_type_id: TypeId,
-    /// Full parameter list including void* self as first param.
+    /// Full parameter list including void* self as first param (resolved via resolve_param_type).
+    /// Used for the vtable FnPtr signature and wrapper function params.
     pub param_types: Vec<TypeId>,
+    /// Base (unresolved) parameter types for fn_sigs registration.
+    /// auto-borrow checks at call sites need the base Move type to trigger.
+    pub base_param_types: Vec<TypeId>,
     /// Method return type.
     pub return_type: TypeId,
     /// Whether self is `&self` (mutable borrow).
@@ -103,13 +107,18 @@ pub fn register_trait_types(
                     };
 
                     // Build full parameter list: void* self + other params
+                    // param_types uses resolve_param_type (for vtable FnPtr + wrapper fn signature).
+                    // base_param_types uses map_ast_type (for fn_sigs auto-borrow at call sites).
                     let mut param_types = vec![self_type];
+                    let mut base_param_types = vec![self_type];
                     for p in &method_def.params {
                         if p.node.name.node == "self" {
                             continue;
                         }
-                        param_types
-                            .push(ctx.type_mapper.map_ast_type(&p.node.type_.node));
+                        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                        let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
+                        param_types.push(gir_type);
+                        base_param_types.push(base_type);
                     }
 
                     // Create function pointer type in the registry
@@ -122,6 +131,7 @@ pub fn register_trait_types(
                         name: method_name.clone(),
                         fn_ptr_type_id,
                         param_types,
+                        base_param_types,
                         return_type,
                         self_is_mutable,
                     });
@@ -236,10 +246,12 @@ pub fn register_trait_equip_sigs(
                     .iter()
                     .find(|m| m.name == *method_name)
                 {
+                    // Use base_param_types for fn_sigs so auto-borrow
+                    // triggers correctly at call sites (is_move_type check).
                     ctx.fn_sigs.insert(
                         mangled,
                         (
-                            vtable_method.param_types.clone(),
+                            vtable_method.base_param_types.clone(),
                             vtable_method.return_type,
                         ),
                     );
@@ -278,7 +290,7 @@ pub fn register_trait_equip_sigs(
                 ctx.fn_sigs.insert(
                     mangled,
                     (
-                        vtable_method.param_types.clone(),
+                        vtable_method.base_param_types.clone(),
                         vtable_method.return_type,
                     ),
                 );
@@ -608,15 +620,17 @@ fn lower_trait_method_body(
     let return_type = vtable_method.return_type;
 
     // Build parameter list: void* self + other params
+    // Use vtable's param types directly so the wrapper signature matches the vtable FnPtr.
     let mut params: Vec<(TypeId, Option<&str>)> =
         vec![(vtable_method.param_types[0], Some("self_void"))];
+    let mut non_self_idx = 1; // vtable_method.param_types[0] is self
     for p in &method_def.params {
         if p.node.name.node == "self" {
             continue;
         }
-        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
-        let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
-        params.push((gir_type, Some(p.node.name.node.as_str())));
+        let vtable_type = vtable_method.param_types[non_self_idx];
+        params.push((vtable_type, Some(p.node.name.node.as_str())));
+        non_self_idx += 1;
     }
 
     let mut builder =
@@ -640,18 +654,22 @@ fn lower_trait_method_body(
         .ptr_cast(cast_type, FunctionBuilder::copy(LocalId(1)));
     ctx.register_local("self", self_cast, cast_type);
 
-    // Register other params
+    // Register other params using vtable types (must match wrapper signature)
     let mut param_idx = 2u32;
+    let mut vt_idx = 1usize;
     for p in &method_def.params {
         if p.node.name.node == "self" {
             continue;
         }
-        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
-        let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
-        ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
-        if ctx.is_auto_borrowed(base_type, p.node.ownership) {
+        let vtable_type = vtable_method.param_types[vt_idx];
+        let base_type = vtable_method.base_param_types[vt_idx];
+        ctx.register_local(&p.node.name.node, LocalId(param_idx), vtable_type);
+        // If this param was auto-borrowed (base is Move, vtable type is MutPtr),
+        // mark in mut_capture_locals so nested calls don't double-borrow.
+        if vtable_type != base_type {
             ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }
+        vt_idx += 1;
         param_idx += 1;
     }
 
@@ -659,13 +677,14 @@ fn lower_trait_method_body(
     ctx.drops.push_scope(DropScopeKind::Function);
     {
         let mut pidx = 2u32; // skip self_void at _1
+        let mut vt_idx2 = 1usize;
         for p in &method_def.params {
             if p.node.name.node == "self" {
                 continue;
             }
-            let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
-            let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
-            ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
+            let vtable_type = vtable_method.param_types[vt_idx2];
+            ctx.drops.register_param(LocalId(pidx), vtable_type, &ctx.type_registry);
+            vt_idx2 += 1;
             pidx += 1;
         }
     }

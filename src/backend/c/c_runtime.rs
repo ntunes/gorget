@@ -2756,6 +2756,10 @@ static GorgetWaker __gorget_main_waker = { __gorget_main_wake, NULL };
 /// Bounded MPMC channel runtime (mutex + condvar ring buffer) with async waker support.
 pub const CHANNEL_RUNTIME: &str = r#"
 // ── Channel (bounded MPMC) ──
+#ifndef GORGET_PTHREAD_INCLUDED
+#define GORGET_PTHREAD_INCLUDED
+#include <pthread.h>
+#endif
 typedef struct GorgetChannel {
     void*           buf;
     size_t          elem_size;
@@ -3291,6 +3295,10 @@ static inline int64_t gorget_shared_array_len(GorgetShared* s) {
 /// Async poll variant `gorget_mutex_poll_lock` supports waker-based notification.
 pub const MUTEX_RUNTIME: &str = r#"
 // ── Mutex[T] + Guard[T] ──
+#ifndef GORGET_PTHREAD_INCLUDED
+#define GORGET_PTHREAD_INCLUDED
+#include <pthread.h>
+#endif
 typedef struct GorgetMutex {
     pthread_mutex_t lock;
     void*           data;
@@ -3411,6 +3419,7 @@ pub const REACTOR_RUNTIME: &str = r#"
 #include <sys/event.h>
 #include <sys/time.h>
 #endif
+#include <errno.h>
 
 typedef struct {
     int              fd;       /* timerfd (Linux) or kqueue ident (macOS) */
@@ -3588,10 +3597,10 @@ static void gorget_reactor_sleep_ms(int64_t ms) {
 #elif defined(__APPLE__) || defined(__FreeBSD__)
     if (__gorget_reactor.event_fd >= 0) {
         /* Use kqueue EVFILT_TIMER (ms unit) */
-        static _Atomic int __reactor_timer_id = 0;
-        int ident = (int)__atomic_fetch_add(&__reactor_timer_id, 1, __ATOMIC_SEQ_CST) + 100;
+        static volatile int __reactor_timer_id = 0;
+        int ident = __sync_fetch_and_add(&__reactor_timer_id, 1) + 100;
         struct kevent change;
-        EV_SET(&change, (uintptr_t)ident, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_MSECONDS, ms, NULL);
+        EV_SET(&change, (uintptr_t)ident, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_USECONDS, ms * 1000, NULL);
         kevent(__gorget_reactor.event_fd, &change, 1, NULL, 0, NULL);
         waiter.fd = ident;
 
@@ -3616,14 +3625,12 @@ static void gorget_reactor_sleep_ms(int64_t ms) {
         goto reactor_sleep_cleanup;
     }
 #endif
-    /* Fallback: clock_nanosleep */
+    /* Fallback: nanosleep */
     {
         struct timespec ts;
-        clock_gettime(CLOCK_MONOTONIC, &ts);
-        int64_t total_ns = (int64_t)ts.tv_nsec + (ms % 1000) * 1000000LL;
-        ts.tv_sec  += (time_t)(ms / 1000 + total_ns / 1000000000LL);
-        ts.tv_nsec  = (long)(total_ns % 1000000000LL);
-        while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) == EINTR) {}
+        ts.tv_sec  = (time_t)(ms / 1000);
+        ts.tv_nsec = (long)((ms % 1000) * 1000000LL);
+        while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {}
     }
 
 reactor_sleep_cleanup:
@@ -3669,10 +3676,10 @@ static void gorget_reactor_sleep_async(int64_t ms, GorgetWaker waker) {
     }
 #elif defined(__APPLE__) || defined(__FreeBSD__)
     if (__gorget_reactor.event_fd >= 0) {
-        static _Atomic int __reactor_async_timer_id = 1000000;
-        int ident = (int)__atomic_fetch_add(&__reactor_async_timer_id, 1, __ATOMIC_SEQ_CST);
+        static volatile int __reactor_async_timer_id = 1000000;
+        int ident = __sync_fetch_and_add(&__reactor_async_timer_id, 1);
         struct kevent change;
-        EV_SET(&change, (uintptr_t)ident, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_MSECONDS, ms, NULL);
+        EV_SET(&change, (uintptr_t)ident, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_USECONDS, ms * 1000, NULL);
         kevent(__gorget_reactor.event_fd, &change, 1, NULL, 0, NULL);
 
         pthread_mutex_lock(&__gorget_reactor.mtx);
