@@ -2604,6 +2604,16 @@ fn emit_coroutine(
             let mut current_state = base_state;
 
             for (yield_idx, &(yield_pos, yield_kind)) in yield_positions.iter().enumerate() {
+                // Determine if this retry-in-place yield follows a non-retry yield.
+                // If so, we need an extra state to avoid re-executing the previous
+                // yield's resume code (e.g., await free) when the retry re-enters.
+                let is_retry = matches!(yield_kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv);
+                let prev_was_non_retry = yield_idx > 0 && {
+                    let prev_kind = yield_positions[yield_idx - 1].1;
+                    !matches!(prev_kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv)
+                };
+                let needs_split = is_retry && prev_was_non_retry;
+
                 let _ = writeln!(out, "    case {current_state}: {{");
 
                 // For resume states (not the first), emit the previous yield's resume code
@@ -2633,9 +2643,19 @@ fn emit_coroutine(
                     emit_poll_inst(out, inst, func, registry, module.runtime.overflow_wrap);
                 }
 
+                // If we need to split (retry yield after non-retry yield), close this
+                // state and open a new one for the retry. This prevents re-executing
+                // the resume code (e.g., await free) when the retry re-enters.
+                if needs_split {
+                    current_state += 1;
+                    let _ = writeln!(out, "        f->__state = {current_state};");
+                    out.push_str("    }\n");
+                    let _ = writeln!(out, "    case {current_state}: {{");
+                }
+
                 let resume_state = current_state + 1;
                 // Lock/channel yield kinds manage their own state transition (only advance on success).
-                if !matches!(yield_kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv) {
+                if !is_retry {
                     let _ = writeln!(out, "        f->__state = {resume_state};");
                 }
 

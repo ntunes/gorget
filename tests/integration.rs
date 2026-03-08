@@ -9741,6 +9741,13 @@ fn stress_shared_multi_token() {
 }
 
 #[test]
+fn stress_shared_comprehensive() {
+    // 1300 tasks: 500 writers, 500 readers (with-refresh+sleep), 200 nested spawns,
+    // 100 conditional writers. Multi-token, nested, with-refresh, early return.
+    run_gg("stress_shared_comprehensive.gg", "6500\n6500\ndone");
+}
+
+#[test]
 fn stress_taskgroup_fan() {
     // TaskGroup with 100 tasks, each atomic-incrementing a counter.
     run_gg("stress_taskgroup_fan.gg", "100");
