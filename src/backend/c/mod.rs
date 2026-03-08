@@ -146,6 +146,10 @@ fn map_stdlib_name(name: &str) -> &str {
         "Semaphore__release" => "gorget_semaphore_release",
         "Semaphore__try_acquire" => "gorget_semaphore_try_acquire",
         "Semaphore__free" => "gorget_semaphore_free",
+        // OnceFlag methods
+        "OnceFlag__new" => "gorget_onceflag_new",
+        "OnceFlag__do_once" => "gorget_onceflag_do_once",
+        "OnceFlag__is_done" => "gorget_onceflag_is_done",
         // std.thread
         "current_thread_id" => "gorget_current_thread_id",
         // Environment
@@ -562,7 +566,7 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         out.push_str(c_runtime::PROCESS_SPAWN_RUNTIME);
     }
     if module.runtime.has_sync
-        || all_call_names.iter().any(|n| n.starts_with("gorget_atomic_") || n.starts_with("gorget_barrier_") || n.starts_with("gorget_condvar_") || n.starts_with("gorget_rwlock_") || n.starts_with("AtomicInt__") || n.starts_with("AtomicBool__") || n.starts_with("Barrier__") || n.starts_with("CondVar__") || n.starts_with("RWLock__") || n.starts_with("ReadGuard__") || n.starts_with("WriteGuard__") || n.starts_with("WaitGroup__") || n.starts_with("Semaphore__") || n.starts_with("gorget_waitgroup_") || n.starts_with("gorget_semaphore_")) {
+        || all_call_names.iter().any(|n| n.starts_with("gorget_atomic_") || n.starts_with("gorget_barrier_") || n.starts_with("gorget_condvar_") || n.starts_with("gorget_rwlock_") || n.starts_with("AtomicInt__") || n.starts_with("AtomicBool__") || n.starts_with("Barrier__") || n.starts_with("CondVar__") || n.starts_with("RWLock__") || n.starts_with("ReadGuard__") || n.starts_with("WriteGuard__") || n.starts_with("WaitGroup__") || n.starts_with("Semaphore__") || n.starts_with("gorget_waitgroup_") || n.starts_with("gorget_semaphore_") || n.starts_with("OnceFlag__") || n.starts_with("gorget_onceflag_")) {
         out.push_str(c_runtime::SYNC_RUNTIME);
     }
     if module.runtime.has_thread
@@ -3477,6 +3481,7 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         "RWLock" => Some("GorgetRWLock*"),
         "WaitGroup" => Some("GorgetWaitGroup*"),
         "Semaphore" => Some("GorgetSemaphore*"),
+        "OnceFlag" => Some("GorgetOnceFlag*"),
         // std.process Process type
         "Process" => Some("GorgetProcess*"),
         // Crypto types

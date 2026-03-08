@@ -1228,7 +1228,7 @@ fn collect_runtime_metadata(ctx: &LoweringContext, module: &mut Module) {
                 module.runtime.rwlock_types.push(elem.to_string());
             }
         }
-        if matches!(name.as_str(), "AtomicInt" | "AtomicBool" | "Barrier" | "CondVar" | "WaitGroup" | "Semaphore")
+        if matches!(name.as_str(), "AtomicInt" | "AtomicBool" | "Barrier" | "CondVar" | "WaitGroup" | "Semaphore" | "OnceFlag")
             || name.starts_with("RWLock__")
             || name.starts_with("ReadGuard__")
             || name.starts_with("WriteGuard__")

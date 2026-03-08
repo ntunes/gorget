@@ -171,7 +171,7 @@ impl TypeMapper {
                 }
                 // WaitGroup, Semaphore — heap-allocated pointer types, Copy semantics
                 // (shared across threads by copying the pointer).
-                if matches!(name.node.as_str(), "WaitGroup" | "Semaphore") {
+                if matches!(name.node.as_str(), "WaitGroup" | "Semaphore" | "OnceFlag") {
                     return self.get_or_register(&name.node, registry, |n| {
                         make_opaque_type_def(n, CopySemantics::Copy, DropStrategy::None)
                     });

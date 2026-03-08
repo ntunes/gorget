@@ -7170,6 +7170,11 @@ fn semaphore_basic() {
 }
 
 #[test]
+fn onceflag_basic() {
+    run_gg("onceflag_basic.gg", "1\ntrue\nfalse");
+}
+
+#[test]
 fn async_blocking_coroutine() {
     run_gg("async_blocking_coroutine.gg", "coroutine+blocking");
 }

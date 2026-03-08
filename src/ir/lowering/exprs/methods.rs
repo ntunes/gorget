@@ -760,6 +760,26 @@ pub(super) fn lower_method_call(
         }
     }
 
+    // OnceFlag methods — receiver is GorgetOnceFlag* (pointer), passed by value.
+    {
+        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        if let Some(ref otn) = recv_type_name {
+            if otn == "OnceFlag" {
+                match method_name {
+                    "do_once" => {
+                        let dst = builder.call("OnceFlag__do_once", vec![recv], BOOL_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    "is_done" => {
+                        let dst = builder.call("OnceFlag__is_done", vec![recv], BOOL_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     // RWLock[T] methods: read, write — pass the GorgetRWLock* receiver directly by value.
     {
         let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);

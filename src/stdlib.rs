@@ -534,6 +534,13 @@ fn gen_sync_module() -> Module {
         decl_method("try_acquire", Ownership::Borrow, &[], ty_bool()),
     ]);
 
+    // OnceFlag — exactly-once initialization primitive
+    let onceflag_struct = opaque_struct("OnceFlag");
+    let onceflag_equip = equip_block("OnceFlag", vec![
+        decl_method("do_once", Ownership::Borrow, &[], ty_bool()),
+        decl_method("is_done", Ownership::Borrow, &[], ty_bool()),
+    ]);
+
     Module {
         items: vec![
             atomic_int_struct, atomic_int_equip,
@@ -545,6 +552,7 @@ fn gen_sync_module() -> Module {
             write_guard_struct, write_guard_equip,
             waitgroup_struct, waitgroup_equip,
             semaphore_struct, semaphore_equip,
+            onceflag_struct, onceflag_equip,
         ],
         span: Span::dummy(),
     }

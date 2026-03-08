@@ -8203,6 +8203,28 @@ static inline void gorget_semaphore_free(GorgetSemaphore** sp) {
     GORGET_FREE(s, sizeof(GorgetSemaphore));
     *sp = NULL;
 }
+
+// ── OnceFlag ──
+// Exactly-once initialization primitive.
+// do_once() returns 1 for exactly one caller (the "winner"), 0 for all others.
+// is_done() returns 1 after the winner has called do_once().
+typedef struct {
+    volatile int state; // 0=init, 1=done
+} GorgetOnceFlag;
+
+static inline GorgetOnceFlag* gorget_onceflag_new(void) {
+    GorgetOnceFlag* f = (GorgetOnceFlag*)GORGET_CALLOC(1, sizeof(GorgetOnceFlag));
+    f->state = 0;
+    return f;
+}
+static inline int gorget_onceflag_do_once(GorgetOnceFlag* f) {
+    int expected = 0;
+    return __atomic_compare_exchange_n(&f->state, &expected, 1,
+                                       0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+}
+static inline int gorget_onceflag_is_done(GorgetOnceFlag* f) {
+    return __atomic_load_n(&f->state, __ATOMIC_ACQUIRE);
+}
 "#;
 
 /// std.thread — Thread[T], thread_spawn, current_thread_id.

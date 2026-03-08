@@ -1149,6 +1149,13 @@ fn lower_struct_literal(
         return FunctionBuilder::copy(dst);
     }
 
+    // OnceFlag() → gorget_onceflag_new()
+    if name == "OnceFlag" && args.is_empty() {
+        let of_type = ctx.type_mapper.lookup_named("OnceFlag").unwrap_or(I64_TYPE);
+        let dst = builder.call_extern("gorget_onceflag_new", vec![], of_type);
+        return FunctionBuilder::copy(dst);
+    }
+
     // Determine the effective type name (mangled if generic)
     let effective_name = if let Some(type_args) = generic_args {
         if !type_args.is_empty() {

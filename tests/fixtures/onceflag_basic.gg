@@ -1,0 +1,30 @@
+from std.sync import OnceFlag, AtomicInt
+from std.time import sleep_ms
+
+int global_counter = 0
+
+async void try_init(OnceFlag flag, AtomicInt counter):
+    if flag.do_once():
+        counter.add(1)
+
+async void main():
+    OnceFlag flag = OnceFlag()
+    AtomicInt counter = AtomicInt(0)
+
+    # Spawn multiple tasks all trying to initialize
+    spawn try_init(flag, counter)
+    spawn try_init(flag, counter)
+    spawn try_init(flag, counter)
+    spawn try_init(flag, counter)
+
+    sleep_ms(100)
+
+    # Exactly one should have incremented
+    print(counter.load())
+
+    # is_done should be true
+    print(flag.is_done())
+
+    # Calling do_once again should return false
+    bool got = flag.do_once()
+    print(got)
