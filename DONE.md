@@ -1,5 +1,13 @@
 # DONE
 
+- [2026-03-09] **feat: `std.signal` module**: Flag-based signal handling — signal_trap, signal_check, signal_wait, signal_ignore, signal_reset, signal_send + POSIX signal constants.
+
+- [2026-03-09] **rename `trap` keyword to `raw`**: Frees `trap` for its natural Unix meaning (signal trapping). `raw expr` captures the full Result without auto-propagation.
+
+- [2026-03-09] **feat: optional parens for nullary enum variants**: `Color.Red` and `.Red` work without parentheses. Resolves inconsistency with bare `None`.
+
+- [2026-03-09] **docs: clarify `with` statement's two forms**: Resource management (`with expr as name:`) vs shared variable access (`with name:`).
+
 - [2026-03-09] **remove `directive name-first`**: Type-first syntax only. Removed from parser, formatter, semantic analysis, tests, and documentation. Deleted name_first.gg fixture.
 
 - [2026-03-09] **remove `directive immutable-by-default`**: Locals are mutable by default with `const` opt-in. Removed from semantic analysis, borrow checker, tests, and documentation.
