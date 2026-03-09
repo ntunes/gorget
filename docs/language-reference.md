@@ -1197,6 +1197,10 @@ Infinite loop. Exit with `break`.
 
 ### 6.14 With Statement
 
+The `with` keyword introduces a scoped block. It has two forms that are distinguished by the presence or absence of `as`:
+
+#### Resource management (`with expr as name:`)
+
 ```ebnf
 with_stmt   = "with" with_binding { "," with_binding } ":" block ;
 with_binding = expr "as" IDENTIFIER ;
@@ -1212,6 +1216,31 @@ with File.open(path) as file:
 ```
 
 For allocator-specific `with` binding semantics (scoped allocation, escape analysis), see `std.alloc` in §15.3.
+
+#### Shared variable access (`with name:`)
+
+```ebnf
+with_shared_stmt = "with" IDENTIFIER { "," IDENTIFIER } ":" block ;
+```
+
+Acquires the synchronization primitive (Mutex, RwLock, or atomic) for a `shared` variable, making its current value available inside the block. The lock is released when the block exits. This is the **only** way to access a shared variable — the compiler rejects bare reads or writes outside a `with` block.
+
+```gorget
+shared int counter = 0
+
+async void main():
+    # ... spawn tasks that modify counter ...
+    with counter:
+        print(counter)      # guaranteed fresh value
+        counter += 1        # safe: lock is held
+    # lock released here
+```
+
+**Freshness, not atomicity.** If the block contains a yield point (`await`, `sleep`, blocking I/O), the lock is released at the yield and reacquired on resumption. The variable is auto-refreshed to the latest value after reacquisition, but any local snapshots taken before the yield may be stale. The compiler warns about common pitfalls — see §7.25 for details on stale-value and check-then-act warnings.
+
+**How to tell the two forms apart.** The `as` keyword is the disambiguator:
+- `with expr as name:` — resource management. Creates a **new** binding from an expression. The expression is evaluated once, and `name` is dropped at block exit.
+- `with name:` — shared access. References an **existing** `shared` variable. Acquires its lock, auto-refreshes on yield, releases at block exit.
 
 ### 6.15 Unsafe Block
 
@@ -5595,7 +5624,8 @@ match_stmt = "match" expr ":" NEWLINE INDENT
 match_item = "case" pattern [ "if" expr ] ":" block
            | "meta" "for" IDENTIFIER { "," IDENTIFIER } "in" expr ":"
              NEWLINE INDENT "case" pattern ":" block DEDENT ;  (* see §19.24 *)
-with_stmt  = "with" with_binding { "," with_binding } ":" block ;
+with_stmt  = "with" with_binding { "," with_binding } ":" block
+           | "with" IDENTIFIER { "," IDENTIFIER } ":" block ;  (* shared variable access *)
 with_binding = expr "as" IDENTIFIER ;
 unsafe_stmt = "unsafe" ":" block ;
 

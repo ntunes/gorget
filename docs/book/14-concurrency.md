@@ -152,6 +152,12 @@ The `with x:` block acquires the lock, makes the current value of `x` available 
 name, then releases the lock when the block exits. There is no way to access a shared
 variable without going through this mechanism — the compiler enforces it.
 
+> **Two forms of `with`.** You may recognize `with` from *[Chapter 11: Ownership](11-ownership.md)*,
+> where `with File.open(path) as f:` manages a scoped resource. The `as` keyword is the
+> disambiguator: `with expr as name:` creates a new binding from an expression and drops it
+> at block exit (resource management), while `with name:` references an existing `shared`
+> variable, acquires its lock, and auto-refreshes the value across yield points.
+
 ### What `with` Guarantees — and What It Does Not
 
 Here is the thing that trips people up: **`with` provides freshness, not atomicity**.

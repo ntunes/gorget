@@ -1,5 +1,15 @@
 # DONE
 
+- [2026-03-09] **remove `directive name-first`**: Type-first syntax only. Removed from parser, formatter, semantic analysis, tests, and documentation. Deleted name_first.gg fixture.
+
+- [2026-03-09] **remove `directive immutable-by-default`**: Locals are mutable by default with `const` opt-in. Removed from semantic analysis, borrow checker, tests, and documentation.
+
+- [2026-03-09] **rename `try` keyword to `trap`**: `trap` intercepts auto-propagation to get the full Result value. Updated across entire compiler, all fixtures, and documentation.
+
+- [2026-03-09] **feat: `catch` expression — error recovery without exposing Result**: `expr catch (e): recovery` — dual of `rethrow`. Added parser, IR lowering, all semantic passes, formatter, and catch_basic.gg fixture.
+
+- [2026-03-09] **rename `consuming` keyword back to `move`**: Aligns with Rust terminology. Updated across 21 files.
+
 - [2026-03-09] **Self-hosting resolver: 545/560 → 549/560 (98.0%), parser: 390/560 → 391/560 (69.8%)**: Fixed select arm variable extraction (save/restore parser position in try_detect_var_decl). Added per-arm scoping via SNamedScope wrappers. Added SNamedScope AST variant + parser detection (Ident+Colon+Newline+Indent) + resolver handling (push_scope/resolve_block/pop_scope). Fixed test_with_clause: token-level with-binding name extraction + ITest AST with 4 fields. Fixed match_option_result: bare Some/Ok/Error without parens now produce PBinding (matches Rust parser). Added EImplicitClosure AST variant + resolver handling + expr_contains_it utility. Added for-else body to SFor AST (5th field) + resolver handling. Fixed parser format.gg for ITest, SNamedScope, EImplicitClosure, SFor.
 
 - [2026-03-09] **Self-hosting resolver: 0/559 → 526/559 (94.1% match rate)**: Fixed systemic "One"/"Numeric" trait registration gap (+445). Removed spurious "List"/"Array" collection types. Added missing keywords to self-hosting lexer/parser (KW_SHARED, KW_META, KW_SELECT, KW_RETHROW, KW_MOD). Implemented `shared` VarDecl parsing with shared-kind field and name-span tracking for correct RES emission (+29). Added `meta` statement skipping at top-level and body level (+18). Added `select` statement body parsing with var-decl extraction from case arms. Extended SVarDecl AST from 4 to 6 fields (added shared_kind and name_span). Fixed bounded generic params (`[Numeric T]` → name is "T" not "Numeric"). Added Mutex/RwLock/Weak/Cell/RefCell type keyword handling. Added `spawn [blocking]` expression parsing. Added `async` modifier skip in equip/trait method bodies. Added bodyless `equip T with Trait` (no colon). Added dot-shorthand `.Variant()` in expressions and patterns. Added qualified `Name.Variant()` in patterns. Tuple destructuring in resolver: `(a, b)` split into individual bindings.
