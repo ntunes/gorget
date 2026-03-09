@@ -274,7 +274,7 @@ pub enum Keyword {
     // Error handling
     Throw,
     Throws,
-    Try,
+    Trap,
     Rethrow,
 
     // Imports
@@ -402,7 +402,7 @@ impl Keyword {
             Keyword::Error => "Error",
             Keyword::Throw => "throw",
             Keyword::Throws => "throws",
-            Keyword::Try => "try",
+            Keyword::Trap => "trap",
             Keyword::Rethrow => "rethrow",
             Keyword::Import => "import",
             Keyword::From => "from",
@@ -503,7 +503,7 @@ impl Keyword {
             "Error" => Some(Keyword::Error),
             "throw" => Some(Keyword::Throw),
             "throws" => Some(Keyword::Throws),
-            "try" => Some(Keyword::Try),
+            "trap" => Some(Keyword::Trap),
             "rethrow" => Some(Keyword::Rethrow),
             "import" => Some(Keyword::Import),
             "from" => Some(Keyword::From),

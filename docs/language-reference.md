@@ -104,7 +104,7 @@ true  false  None  Some  Ok  Error
 **Error handling keywords:**
 
 ```
-throw  throws  try  catch
+throw  throws  trap  catch
 ```
 
 **Import keywords:**
@@ -1458,16 +1458,16 @@ Unwraps the left operand if `Some`; otherwise evaluates the right operand. The r
 String name = user?.name ?? "anonymous"
 ```
 
-### 7.13 Try Expression
+### 7.13 Trap Expression
 
 ```ebnf
-try_expr = "try" expr ;
+trap_expr = "trap" expr ;
 ```
 
 Captures a potentially-throwing call as a `Result[T, E]` instead of auto-propagating:
 
 ```gorget
-auto result = try read_file(path)
+auto result = trap read_file(path)
 match result:
     case Ok(content): print(content)
     case Error(e): print("Error: {e}")
@@ -2094,7 +2094,7 @@ struct Merger:
 
 ## 10. Error Handling
 
-Gorget uses a `throws`/`try`/`throw` model that desugars to `Result[T, E]`.
+Gorget uses a `throws`/`trap`/`throw` model that desugars to `Result[T, E]`.
 
 ### 10.1 Throwing Functions
 
@@ -2118,12 +2118,12 @@ throw ParseError("invalid input")
 
 It is a compile-time error to use `throw` in a function not declared with `throws`.
 
-### 10.3 Try
+### 10.3 Trap
 
-The `try` keyword captures a potentially-failing call as a `Result` value instead of auto-propagating:
+The `trap` keyword captures a potentially-failing call as a `Result` value instead of auto-propagating:
 
 ```gorget
-auto result = try read_file(path)
+auto result = trap read_file(path)
 match result:
     case Ok(content): use(content)
     case Error(e): handle(e)
@@ -5643,7 +5643,7 @@ unsafe_stmt = "unsafe" ":" block ;
 (* ── Expressions ── *)
 expr = literal | IDENTIFIER | path_expr | unary_expr | binary_expr
      | call_expr | method_call | field_access | tuple_access | index_expr
-     | range_expr | optional_chain | default_op | try_expr
+     | range_expr | optional_chain | default_op | trap_expr
      | move_expr | mut_borrow_expr | deref_expr | as_expr | is_expr
      | if_expr | match_expr | do_expr | closure | implicit_closure
      | list_comp | dict_comp | set_comp

@@ -603,7 +603,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case ETry(inner):
             resolve_expr(*inner, &scopes, &ctx)
 
-        case ETryCapture(inner):
+        case ETrapCapture(inner):
             resolve_expr(*inner, &scopes, &ctx)
 
         case EMove(inner):

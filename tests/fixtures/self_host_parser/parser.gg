@@ -113,7 +113,7 @@ const int KW_OK = 34
 const int KW_ERROR = 35
 const int KW_THROW = 36
 const int KW_THROWS = 37
-const int KW_TRY = 38
+const int KW_TRAP = 38
 const int KW_IMPORT = 39
 const int KW_FROM = 40
 const int KW_DIRECTIVE = 41
@@ -392,8 +392,8 @@ int keyword_tag(Token tok):
                     return KW_THROW
                 case KwThrows:
                     return KW_THROWS
-                case KwTry:
-                    return KW_TRY
+                case KwTrap:
+                    return KW_TRAP
                 case KwImport:
                     return KW_IMPORT
                 case KwFrom:
@@ -1945,10 +1945,10 @@ equip Parser:
             return self.parse_match_expr()
 
         # Try expression
-        if self.check_kw(KW_TRY):
+        if self.check_kw(KW_TRAP):
             self.advance()
             SpannedExpr operand = self.parse_expr_bp(60)
-            return SpannedExpr(ETryCapture(Box(operand)), Span(start, operand.span.end))
+            return SpannedExpr(ETrapCapture(Box(operand)), Span(start, operand.span.end))
 
         # Do block expression
         if self.check_kw(KW_DO):

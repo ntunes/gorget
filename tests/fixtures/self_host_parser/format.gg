@@ -309,8 +309,8 @@ str format_expr(SpannedExpr se):
             return result
         case ETry(inner):
             return format_expr(*inner) + "?"
-        case ETryCapture(inner):
-            return "try " + format_expr(*inner)
+        case ETrapCapture(inner):
+            return "trap " + format_expr(*inner)
         case EMove(inner):
             return "!" + format_expr(*inner)
         case EMutableBorrow(inner):

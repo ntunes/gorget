@@ -53,7 +53,7 @@ need prior exposure to follow along.
 
 10. **[Error Handling](10-errors.md)**
     The `throws` model, auto-propagation, `rethrow`, `on error` cleanup,
-    `try` expression, `throws int` on main, error types, panics vs. errors.
+    `trap` expression, `throws int` on main, error types, panics vs. errors.
 
 ### Part III — Ownership
 

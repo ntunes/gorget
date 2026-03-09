@@ -6501,8 +6501,8 @@ fn format_expr_canonical(expr: &Expr) -> String {
                 .collect();
             format!("{}({})", name.node, arg_strs.join(", "))
         }
-        Expr::TryCapture { expr } => {
-            format!("try {}", format_expr_canonical(&expr.node))
+        Expr::TrapCapture { expr } => {
+            format!("trap {}", format_expr_canonical(&expr.node))
         }
         Expr::Move { expr } => {
             format!("!{}", format_expr_canonical(&expr.node))

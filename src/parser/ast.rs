@@ -652,8 +652,8 @@ pub enum Expr {
         expr: Box<Spanned<Expr>>,
     },
 
-    // ── Try capture ──
-    TryCapture {
+    // ── Trap capture ──
+    TrapCapture {
         expr: Box<Spanned<Expr>>,
     },
 

@@ -1991,8 +1991,8 @@ impl Formatter {
                 self.emitter.write("spawn blocking ");
                 self.format_expr(expr);
             }
-            Expr::TryCapture { expr } => {
-                self.emitter.write("try ");
+            Expr::TrapCapture { expr } => {
+                self.emitter.write("trap ");
                 self.format_expr(expr);
             }
             Expr::Is {

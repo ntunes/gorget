@@ -18,19 +18,19 @@ int chain(str s) throws str:
 
 void main():
     # Success: auto-propagation through double_parsed
-    int r1 = try double_parsed("42")
+    int r1 = trap double_parsed("42")
     print(f"{r1}")
 
     # Error: propagated through double_parsed, try zero-defaults
-    int r2 = try double_parsed("abc")
+    int r2 = trap double_parsed("abc")
     print(f"{r2}")
 
     # Success: auto-propagation through add_ten
-    int r3 = try add_ten("42")
+    int r3 = trap add_ten("42")
     print(f"{r3}")
 
     # Multi-step: chain calls two throws functions
-    int r4 = try chain("42")
+    int r4 = trap chain("42")
     print(f"{r4}")
 
     print("done")

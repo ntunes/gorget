@@ -10,7 +10,7 @@ Operators listed from highest precedence (binds tightest) to lowest.
 | 20 | `-` `not` `~` `*` | Unary prefix | Right |
 | 20 | `!` / `move` | Move | Right |
 | 20 | `&` / `mutable` | Mutable borrow | Right |
-| 20 | `try` | Error capture | Right |
+| 20 | `trap` | Error capture | Right |
 | 20 | `spawn` `spawn blocking` | Task creation | Right |
 | 18 | `as` | Type cast | Left |
 | 17 | `*` `/` `%` `mod` `*%` | Multiplicative | Left |
