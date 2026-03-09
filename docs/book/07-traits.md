@@ -219,13 +219,14 @@ equip Inner with Showable:
 struct Outer:
     Inner inner
 
-equip Outer with Showable via inner:
-    pass
+equip Outer with Showable via inner
 ```
 
-`Outer.show()` automatically forwards to `self.inner.show()`. The inner field's type
-must implement the target trait. You can override specific methods while delegating
-the rest:
+No colon, no block, no `pass` — just the declaration. `Outer.show()` automatically
+forwards to `self.inner.show()`. The inner field's type must implement the target
+trait.
+
+You can also provide a block to override specific methods while delegating the rest:
 
 ```gorget
 equip Outer with Showable via inner:
@@ -466,5 +467,5 @@ equip Nested with Default:
 | Default methods | Method body in trait definition | Provide fallback implementation |
 | Trait inheritance | `trait Child extends Parent:` | Require parent's methods too |
 | Trait bounds | `[Trait T]` or `[A & B T]` | Constrain generic type parameters |
-| Delegation | `equip Type with Trait via field:` | Forward to inner field |
+| Delegation | `equip Type with Trait via field` | Forward to inner field |
 | Derive | `@derive(Trait1, Trait2)` | Auto-generate implementations |
