@@ -604,6 +604,55 @@ str type_to_name(SpannedType st):
 # ── Helper: check if keyword is a type keyword ──────────────
 
 
+# Check if an expression contains the implicit `it` parameter.
+# Stops at closure boundaries (it inside a closure belongs to that closure).
+bool expr_contains_it(Expr e):
+    match e:
+        case EIdentifier(name):
+            return name == "it"
+        case EBinaryOp(left, _, right):
+            SpannedExpr l = *left
+            SpannedExpr r = *right
+            return expr_contains_it(l.expr) or expr_contains_it(r.expr)
+        case EUnaryOp(_, operand):
+            SpannedExpr op = *operand
+            return expr_contains_it(op.expr)
+        case ECall(callee, args, _):
+            SpannedExpr c = *callee
+            if expr_contains_it(c.expr):
+                return true
+            int i = 0
+            while i < args.len():
+                SpannedExpr a = args.get(i).unwrap()
+                if expr_contains_it(a.expr):
+                    return true
+                i = i + 1
+            return false
+        case EMethodCall(obj, _, args, _):
+            SpannedExpr o = *obj
+            if expr_contains_it(o.expr):
+                return true
+            int i = 0
+            while i < args.len():
+                SpannedExpr a = args.get(i).unwrap()
+                if expr_contains_it(a.expr):
+                    return true
+                i = i + 1
+            return false
+        case EFieldAccess(obj, _):
+            SpannedExpr o = *obj
+            return expr_contains_it(o.expr)
+        case EIndex(obj, idx):
+            SpannedExpr o = *obj
+            SpannedExpr ix = *idx
+            return expr_contains_it(o.expr) or expr_contains_it(ix.expr)
+        case EClosure(_, _):
+            return false
+        case EImplicitClosure(_):
+            return false
+        else:
+            return false
+
 bool is_type_keyword(int kw):
     if kw == KW_INT:
         return true
@@ -926,6 +975,7 @@ struct Parser:
     Vector[SpannedToken] tokens
     int pos
     Vector[str] errors
+    int call_arg_depth
 
 # ── Parser methods ───────────────────────────────────────────
 
@@ -1356,7 +1406,8 @@ equip Parser:
                         args.push(self.parse_pattern())
                 self.expect_tok(TOK_RPAREN, "expected ')' in constructor pattern")
                 return self.mk_pat(PConstructor(name, args), start)
-            return self.mk_pat(PConstructor(name, Vector[SpannedPattern]()), start)
+            # Bare keyword without parens: treated as binding (matches Rust parser)
+            return self.mk_pat(PBinding(name), start)
 
         self.errors.push("expected pattern")
         self.advance()
@@ -1574,7 +1625,8 @@ equip Parser:
                 self.advance()
                 self.advance()
                 return self.parse_expr()
-        return self.parse_expr()
+        SpannedExpr val = self.parse_expr()
+        return val
 
     # ── Prefix expressions ───────────────────────────────────
 
@@ -2208,11 +2260,10 @@ equip Parser:
         if self.check_kw(KW_SUITE):
             return SItem(self.parse_suite_item())
 
-        # select statement: skip the entire select block
+        # select statement: desugar into while(true) with per-arm scopes
         if self.check_kw(KW_SELECT):
             self.advance()
             self.expect_tok(TOK_COLON, "expected ':' after select")
-            # Parse select body: case arms with var declarations
             self.skip_trivia()
             Vector[Stmt] all_stmts = Vector[Stmt]()
             if self.match_tok(TOK_INDENT):
@@ -2222,21 +2273,25 @@ equip Parser:
                         break
                     if self.check_kw(KW_CASE):
                         self.advance()
-                        # Parse the arm header as a var-decl-like statement
+                        # Collect arm statements (var-decl header + body) in a scoped block
+                        Vector[Stmt] arm_stmts = Vector[Stmt]()
+                        int saved = self.pos
                         if self.try_detect_var_decl():
-                            all_stmts.push(self.parse_var_decl())
+                            self.pos = saved
+                            arm_stmts.push(self.parse_var_decl())
                         else:
                             # Skip to colon
                             while not self.at_end() and not self.check_tok(TOK_COLON) and not self.check_tok(TOK_NEWLINE):
                                 self.advance()
                         if self.check_tok(TOK_COLON):
                             self.advance()
-                        # Parse the arm body
                         Vector[Stmt] arm_body = self.parse_block()
                         int ai = 0
                         while ai < arm_body.len():
-                            all_stmts.push(arm_body.get(ai).unwrap())
+                            arm_stmts.push(arm_body.get(ai).unwrap())
                             ai = ai + 1
+                        # Wrap in named scope for proper scoping (each arm gets its own scope)
+                        all_stmts.push(SNamedScope("_", arm_stmts))
                     else:
                         self.advance()
                     self.skip_newlines()
@@ -2287,6 +2342,26 @@ equip Parser:
         # shared variable declaration: shared [type] name = expr
         if self.check_kw(KW_SHARED):
             return self.parse_shared_var_decl()
+
+        # Named scope: identifier: \n INDENT body DEDENT
+        if self.check_tok(TOK_IDENT):
+            int ns_saved = self.pos
+            bool is_named_scope = false
+            self.advance()
+            if self.check_tok(TOK_COLON):
+                self.advance()
+                if self.check_tok(TOK_NEWLINE):
+                    self.advance()
+                    self.skip_trivia()
+                    if self.check_tok(TOK_INDENT):
+                        is_named_scope = true
+            self.pos = ns_saved
+            if is_named_scope:
+                SpannedToken label_tok = self.advance()
+                str label_name = token_ident(label_tok.lex_token)
+                self.expect_tok(TOK_COLON, "expected ':'")
+                Vector[Stmt] ns_body = self.parse_block()
+                return SNamedScope(label_name, ns_body)
 
         # Try to parse as var decl: Type name = expr
         # We detect this by checking if current position looks like a type followed by an identifier and =
@@ -2355,12 +2430,13 @@ equip Parser:
         SpannedExpr iter = self.parse_expr()
         self.expect_tok(TOK_COLON, "expected ':' after for iterable")
         Vector[Stmt] body = self.parse_block()
-        # Skip optional else: block (for-else)
+        # Parse optional else: block (for-else)
+        Vector[Stmt] else_body = Vector[Stmt]()
         if self.check_kw(KW_ELSE):
             self.advance()
             self.expect_tok(TOK_COLON, "expected ':' after else")
-            self.parse_block()
-        return SFor(pat, iter, body, OWN_BORROW)
+            else_body = self.parse_block()
+        return SFor(pat, iter, body, OWN_BORROW, else_body)
 
     # ── Match statement ──────────────────────────────────────
 
@@ -2935,15 +3011,36 @@ equip Parser:
         self.expect_kw(KW_TEST, "expected 'test'")
         SpannedToken name_tok = self.advance()
         str name = token_string_val(name_tok.lex_token)
-        # Skip optional 'with Expr as name [, Expr as name]*' clause
+        # Parse optional 'with Expr as name [, Expr as name]*' clause
+        # Token-level extraction: scan for `as <ident>` patterns and collect exprs/names
+        Vector[SpannedExpr] with_exprs = Vector[SpannedExpr]()
+        Vector[str] with_names = Vector[str]()
         if self.check_kw(KW_WITH):
             self.advance()
-            # Skip until we reach ':'
+            # Parse each 'expr as name' binding
             while not self.check_tok(TOK_COLON) and not self.at_end():
-                self.advance()
+                SpannedExpr wexpr = self.parse_expr()
+                # parse_expr consumes 'expr as name' as EAs
+                # Extract name by looking at what parse_expr produced
+                str binding_name = "_"
+                match wexpr.expr:
+                    case EAs(_, _):
+                        # The 'as name' was consumed; extract name from the last token
+                        # before current position (the identifier after 'as')
+                        # Since parse_expr already consumed it, peek back
+                        if self.pos > 0:
+                            SpannedToken prev = self.tokens.get(self.pos - 1).unwrap()
+                            if token_tag(prev.lex_token) == TOK_IDENT:
+                                binding_name = token_ident(prev.lex_token)
+                    else:
+                        pass
+                with_exprs.push(wexpr)
+                with_names.push(binding_name)
+                if not self.match_tok(TOK_COMMA):
+                    break
         self.expect_tok(TOK_COLON, "expected ':' after test name")
         Vector[Stmt] body = self.parse_block()
-        return ITest(name, body)
+        return ITest(name, with_exprs, with_names, body)
 
     Item parse_suite_item(&self):
         self.expect_kw(KW_SUITE, "expected 'suite'")
@@ -3051,6 +3148,6 @@ equip Parser:
 
 Module parse_source(str source):
     Vector[SpannedToken] tokens = lex_tokenize(source)
-    Parser p = Parser(tokens, 0, Vector[str]())
+    Parser p = Parser(tokens, 0, Vector[str](), 0)
     Module m = p.parse_module()
     return m

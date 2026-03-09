@@ -65,6 +65,7 @@ enum Expr:
     EIf(Box[SpannedExpr], Vector[Stmt], Vector[ElseBranch])
     EMatch(Box[SpannedExpr], Vector[MatchArm])
     EClosure(Vector[Param], Vector[Stmt])
+    EImplicitClosure(Box[SpannedExpr])
     EArrayLiteral(Vector[SpannedExpr])
     ETupleLiteral(Vector[SpannedExpr])
     EDictLiteral(Vector[SpannedExpr], Vector[SpannedExpr])
@@ -95,13 +96,14 @@ enum Stmt:
     SBreak(Option[SpannedExpr])
     SContinue
     SPass
-    SFor(SpannedPattern, SpannedExpr, Vector[Stmt], int)
+    SFor(SpannedPattern, SpannedExpr, Vector[Stmt], int, Vector[Stmt])
     SWhile(SpannedExpr, Vector[Stmt])
     SLoop(Vector[Stmt])
     SIf(SpannedExpr, Vector[Stmt], Vector[ElseBranch])
     SMatch(SpannedExpr, Vector[MatchArm])
     SWith(SpannedExpr, str, Vector[Stmt])
     SAssert(SpannedExpr, Option[str])
+    SNamedScope(str, Vector[Stmt])
     SItem(Item)
 
 # ── Items ────────────────────────────────────────────────────
@@ -119,7 +121,7 @@ enum Item:
     IConstDecl(SpannedType, str, SpannedExpr)
     IStaticDecl(SpannedType, str, SpannedExpr)
     IExternBlock(Vector[FunctionDef])
-    ITest(str, Vector[Stmt])
+    ITest(str, Vector[SpannedExpr], Vector[str], Vector[Stmt])
     ISuiteSetup(Vector[Stmt])
     ISuiteTeardown(Vector[Stmt])
 

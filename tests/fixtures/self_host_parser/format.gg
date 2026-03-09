@@ -260,6 +260,8 @@ str format_expr(SpannedExpr se):
             result = result + "):"
             result = result + format_block(body)
             return result
+        case EImplicitClosure(inner):
+            return "implicit_closure(" + format_expr(*inner) + ")"
         case EArrayLiteral(elems):
             str result = "["
             int i = 0
@@ -389,7 +391,7 @@ str format_stmt(Stmt s):
             return "continue"
         case SPass:
             return "pass"
-        case SFor(pat, iter, body, own):
+        case SFor(pat, iter, body, own, _):
             return "for " + format_pattern(pat) + " in " + format_expr(iter) + ":" + format_block(body)
         case SWhile(cond, body):
             return "while " + format_expr(cond) + ":" + format_block(body)
@@ -419,6 +421,8 @@ str format_stmt(Stmt s):
             return result
         case SWith(resource, name, body):
             return "with " + format_expr(resource) + " as " + name + ":" + format_block(body)
+        case SNamedScope(label, body):
+            return label + ":" + format_block(body)
         case SAssert(cond, msg):
             str result = "assert " + format_expr(cond)
             match msg:
@@ -491,7 +495,7 @@ str format_item(Item item):
                 result = result + " " + format_function(f) + ";"
                 i = i + 1
             return result
-        case ITest(name, body):
+        case ITest(name, _, _, body):
             return "test \"" + name + "\":" + format_block(body)
         case ISuiteSetup(body):
             return "suite_setup:" + format_block(body)

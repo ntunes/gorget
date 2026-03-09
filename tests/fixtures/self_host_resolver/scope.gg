@@ -183,6 +183,14 @@ equip ScopeTable:
         self.name_is_dummy.push(is_dummy)
         return def_id
 
+    # Allocate a definition without inserting into the current scope's name table.
+    # Used for non-generic enum variants which have def_ids but aren't in scope.
+    int alloc_def(&self, str name, DefKind kind, Span span):
+        int def_id = self.definitions.len()
+        DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, false, false)
+        self.definitions.push(info)
+        return def_id
+
     # Find name entry index in flat table (returns -1 if not found)
     int find_name_entry(self, int scope_id, str name):
         int i = self.name_scope_ids.len() - 1

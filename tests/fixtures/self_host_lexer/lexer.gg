@@ -526,11 +526,17 @@ equip Lexer:
         # Detect prefix using booleans
         bool is_raw = false
         bool is_byte = false
+        bool is_format = false
         if self.lex_peek() == b'r':
             is_raw = true
             self.lex_advance()
         elif self.lex_peek() == b'b':
             is_byte = true
+            self.lex_advance()
+        elif self.lex_peek() == b'f':
+            is_format = true
+            self.lex_advance()
+        elif self.lex_peek() == b'c':
             self.lex_advance()
 
         # Skip opening quote
@@ -573,8 +579,8 @@ equip Lexer:
                         break
                 continue
 
-            # String interpolation: {expr}
-            if self.lex_peek() == b'{' and not is_raw:
+            # String interpolation: {expr} — only in f-strings
+            if self.lex_peek() == b'{' and is_format:
                 # Check for escaped brace: {{
                 if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'{':
                     current_lit = current_lit + "{"
@@ -613,8 +619,8 @@ equip Lexer:
                     self.lex_advance()
                 continue
 
-            # Escaped brace: }}
-            if self.lex_peek() == b'}' and not is_raw:
+            # Escaped brace: }} — only in f-strings
+            if self.lex_peek() == b'}' and is_format:
                 if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'}':
                     current_lit = current_lit + "}"
                     self.lex_pos = self.lex_pos + 2
@@ -912,6 +918,18 @@ equip Lexer:
                 self.lex_scan_string()
                 continue
             if c == b'b' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'"':
+                self.lex_scan_string()
+                continue
+
+            # f-string: f"..." or f'...'
+            if c == b'f' and self.lex_pos + 1 < self.lex_source.byte_len():
+                byte next_c = self.lex_peek_at(1)
+                if next_c == b'"' or next_c == b'\'':
+                    self.lex_scan_string()
+                    continue
+
+            # c-string: c"..."
+            if c == b'c' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'"':
                 self.lex_scan_string()
                 continue
 

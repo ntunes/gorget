@@ -239,10 +239,16 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
 
         case IEnum(e):
             scopes.define(e.name, DkEnum(), Span(0, 0))
+            bool is_generic = e.type_params.len() > 0
             int vi = 0
             while vi < e.variants.len():
                 EnumVariant v = get_variant_at(e.variants, vi)
-                scopes.define(v.name, DkVariant(), Span(0, 0))
+                if is_generic:
+                    # Generic enum: keep variant in scope (bare name works)
+                    scopes.define(v.name, DkVariant(), Span(0, 0))
+                else:
+                    # Non-generic enum: allocate without scope insertion
+                    scopes.alloc_def(v.name, DkVariant(), Span(0, 0))
                 vi = vi + 1
 
         case ITrait(t):
@@ -282,7 +288,7 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
                 scopes.define(f.name, DkFunction(), Span(0, 0))
                 fi = fi + 1
 
-        case ITest(_, _):
+        case ITest(_, _, _, _):
             pass
 
         case ISuiteSetup(_):
@@ -340,8 +346,16 @@ void resolve_item_body(Item item, ScopeTable &scopes, TypeTable &types, ResolveC
         case IStaticDecl(_, _, val):
             resolve_expr(val, &scopes, &ctx)
 
-        case ITest(_, body):
+        case ITest(_, with_exprs, with_names, body):
             scopes.push_scope(SkFunction())
+            int wi = 0
+            while wi < with_exprs.len():
+                SpannedExpr wexpr = with_exprs.get(wi).unwrap()
+                resolve_expr(wexpr, &scopes, &ctx)
+                str wname = with_names.get(wi).unwrap()
+                if wname != "_":
+                    scopes.define(wname, DkVariable(), Span(0, 0))
+                wi = wi + 1
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
 
@@ -464,12 +478,16 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
         case SPass():
             pass
 
-        case SFor(pattern, iterable, body, _):
+        case SFor(pattern, iterable, body, _, else_body):
             resolve_expr(iterable, &scopes, &ctx)
             scopes.push_scope(SkForLoop())
             define_pattern_bindings(pattern, &scopes)
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
+            if else_body.len() > 0:
+                scopes.push_scope(SkBlock())
+                resolve_block(else_body, &scopes, &types, &ctx)
+                scopes.pop_scope()
 
         case SWhile(condition, body):
             scopes.push_scope(SkBlock())
@@ -523,6 +541,11 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             scopes.push_scope(SkBlock())
             resolve_expr(expr, &scopes, &ctx)
             scopes.define(name, DkVariable(), Span(0, 0))
+            resolve_block(body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+        case SNamedScope(_, body):
+            scopes.push_scope(SkBlock())
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
 
@@ -663,6 +686,12 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
 
+        case EImplicitClosure(inner):
+            scopes.push_scope(SkFunction())
+            scopes.define("it", DkVariable(), Span(0, 0))
+            resolve_expr(*inner, &scopes, &ctx)
+            scopes.pop_scope()
+
         case EListComp(comp_expr, var_name, iterable, opt_cond):
             resolve_expr(*iterable, &scopes, &ctx)
             scopes.push_scope(SkForLoop())
@@ -779,12 +808,16 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
         case SPass():
             pass
 
-        case SFor(pattern, iterable, body, _):
+        case SFor(pattern, iterable, body, _, else_body):
             resolve_expr(iterable, &scopes, &ctx)
             scopes.push_scope(SkForLoop())
             define_pattern_bindings(pattern, &scopes)
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
+            if else_body.len() > 0:
+                scopes.push_scope(SkBlock())
+                resolve_block_expr(else_body, &scopes, &ctx)
+                scopes.pop_scope()
 
         case SWhile(condition, body):
             scopes.push_scope(SkBlock())
@@ -827,6 +860,11 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             scopes.push_scope(SkBlock())
             resolve_expr(expr, &scopes, &ctx)
             scopes.define(name, DkVariable(), Span(0, 0))
+            resolve_block_expr(body, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case SNamedScope(_, body):
+            scopes.push_scope(SkBlock())
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
 
