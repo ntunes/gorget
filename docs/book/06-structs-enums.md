@@ -110,23 +110,25 @@ enum Direction:
 
 ### Variant Construction
 
-User-defined enum variants require qualified access:
+User-defined enum variants require qualified access. Parentheses are optional for
+nullary (no-payload) variants:
 
 ```gorget
-Direction d = Direction.North()
+Direction d = Direction.North     # no parens needed for nullary
+Direction e = Direction.North()   # parens also accepted
 ```
 
 ### Dot-Shorthand
 
-When the type is known from context, use `.Variant()`:
+When the type is known from context, use `.Variant`:
 
 ```gorget
-Direction d = .North()        # type known from declaration
-d = .South()                  # type known from variable
+Direction d = .North          # type known from declaration
+d = .South                    # type known from variable
 ```
 
 Dot-shorthand works in declarations, assignments, returns, function arguments,
-and match patterns.
+and match patterns. Parentheses are required only for variants that carry data.
 
 ### Enums with Payloads
 

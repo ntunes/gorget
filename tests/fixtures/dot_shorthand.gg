@@ -5,11 +5,11 @@ enum Color:
 
 void main():
     # VarDecl
-    Color c = .Red()
+    Color c = .Red
     match c:
-        case .Red():
+        case .Red:
             print("red")
-        case .Green():
+        case .Green:
             print("green")
         case .Blue(n):
             print(f"blue {n}")
@@ -21,7 +21,7 @@ void main():
         else:
             print("other")
     # Function arg
-    print_color(.Green())
+    print_color(.Green)
     # Return
     Color r = make_color()
     match r:
@@ -36,7 +36,7 @@ Color make_color():
 
 void print_color(Color c):
     match c:
-        case .Green():
+        case .Green:
             print("fn green")
         else:
             print("fn other")

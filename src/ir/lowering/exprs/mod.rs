@@ -117,6 +117,11 @@ fn lower_expr_inner(
             } else if ctx.fn_sigs.contains_key(name.as_str()) {
                 // Named function reference (for passing as Callable argument)
                 Operand::Constant(Constant::FuncRef(name.clone()))
+            } else if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(name) {
+                // Bare nullary enum variant (e.g., `Red` after glob import)
+                let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
+                let dst = builder.enum_init(&enum_name, &variant_name, type_id, vec![]);
+                FunctionBuilder::copy(dst)
             } else {
                 // Could be a function name or unknown — produce a constant placeholder
                 Operand::Constant(Constant::I64(0))
@@ -1377,6 +1382,23 @@ fn lower_field_access(
     object: &Spanned<Expr>,
     field_name: &str,
 ) -> Operand {
+    // Check for qualified enum variant without parens: Color.Red
+    // If the object is a type name (not a local) and the field is a variant, emit EnumInit.
+    if let Expr::Identifier(name) = &object.node {
+        if ctx.lookup_local(name).is_none() && !ctx.module_constants.contains_key(name) {
+            if let Some(type_id) = ctx.type_mapper.lookup_named(name) {
+                if let Some(type_def) = ctx.type_registry.get_type_def(name) {
+                    if let TypeDefKind::Enum(ref e) = type_def.kind {
+                        if e.variants.iter().any(|v| v.name == field_name) {
+                            let dst = builder.enum_init(name, field_name, type_id, vec![]);
+                            return FunctionBuilder::copy(dst);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // For mut_capture_locals (mutable borrow params), use the pointer directly
     // so field access goes through the pointer (*ptr).field instead of copying
     let obj = if let Expr::Identifier(name) = &object.node {

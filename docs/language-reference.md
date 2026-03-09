@@ -697,12 +697,13 @@ enum Option[T]:
     None
 ```
 
-**Construction:** User-defined enum variants are accessed via qualified syntax `EnumName.Variant()`. Built-in prelude variants (`Ok`, `Error`, `Some`, `None`) are always available bare.
+**Construction:** User-defined enum variants are accessed via qualified syntax `EnumName.Variant(args)`. Parentheses are optional for nullary (no-payload) variants. Built-in prelude variants (`Ok`, `Error`, `Some`, `None`) are always available bare.
 
 ```gorget
-Color c = Color.Red()          # user enum — qualified required
-Option[int] x = Some(42)       # prelude — bare OK
-Result[int, str] r = Ok(42)    # prelude — bare OK
+Color c = Color.Red            # user enum — nullary, no parens needed
+Color d = Color.Red()          # parens also accepted for nullary
+Color e = Color.Custom(1,2,3)  # payload variant — parens required
+Option[int] x = Some(42)      # prelude — bare OK
 ```
 
 **Variant namespacing:** Variants are namespaced under their enum type to prevent name collisions when two enums share variant names. Generic enum variants (e.g., `Maybe[T].Just`) remain bare since they stay in scope.
@@ -710,24 +711,24 @@ Result[int, str] r = Ok(42)    # prelude — bare OK
 ```gorget
 from gg.log import LogLevel, Logger
 
-LogLevel lvl = LogLevel.Info()
+LogLevel lvl = LogLevel.Info
 Result[int, str] err = Error("bad")    # prelude Error — unambiguous
 match lvl:
-    case LogLevel.Info():
+    case LogLevel.Info:
         print("info")
-    case LogLevel.Err():
+    case LogLevel.Err:
         print("error")
 ```
 
-**Dot-shorthand:** When the expected type is known from context (variable declaration, assignment, return, or function parameter), `.Variant()` desugars to `EnumType.Variant()`:
+**Dot-shorthand:** When the expected type is known from context (variable declaration, assignment, return, or function parameter), `.Variant` desugars to `EnumType.Variant`. Parentheses are optional for nullary variants:
 
 ```gorget
-Color c = .Red()               # VarDecl: .Red() → Color.Red()
-c = .Blue(42)                  # Assignment: expected type from c
-return .Green()                # Return: uses declared return type
-print_color(.Green())          # Arg: uses parameter's declared type
+Color c = .Red                 # VarDecl: .Red → Color.Red
+c = .Blue(42)                  # Assignment: payload needs parens
+return .Green                  # Return: uses declared return type
+print_color(.Green)            # Arg: uses parameter's declared type
 match c:
-    case .Red():               # Pattern: scrutinee type is Color
+    case .Red:                 # Pattern: nullary, no parens
         print("red")
     case .Blue(n):
         print("blue {n}")
@@ -738,11 +739,11 @@ match c:
 ```gorget
 from gg.log import LogLevel.*    # imports LogLevel type + all variants bare
 
-LogLevel lvl = Info()            # bare variant via glob import
+LogLevel lvl = Info              # bare nullary variant via glob import
 match lvl:
-    case Info():
+    case Info:
         print("info")
-    case Err():
+    case Err:
         print("err")
 ```
 

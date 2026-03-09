@@ -1,0 +1,47 @@
+enum Color:
+    Red
+    Green
+    Blue
+
+enum Shape:
+    Circle(int)
+    Square
+
+void print_color(Color c):
+    match c:
+        case Red:
+            print("red")
+        case Green:
+            print("green")
+        case Blue:
+            print("blue")
+
+Color make_green():
+    return .Green
+
+void main():
+    # Qualified without parens: Color.Red
+    Color a = Color.Red
+    print_color(a)
+    # Dot-shorthand without parens: .Green
+    Color b = .Green
+    print_color(b)
+    # Assignment with dot-shorthand
+    b = .Blue
+    print_color(b)
+    # Return with dot-shorthand
+    Color c = make_green()
+    print_color(c)
+    # With-parens still works
+    Color d = Color.Blue()
+    print_color(d)
+    Color e = .Red()
+    print_color(e)
+    # Nullary variant with payload sibling
+    Shape s = .Square
+    match s:
+        case Circle(r):
+            print(f"circle {r}")
+        case Square:
+            print("square")
+    print("done")

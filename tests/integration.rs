@@ -127,6 +127,22 @@ fn enums() {
 }
 
 #[test]
+fn enum_nullary_bare() {
+    run_gg(
+        "enum_nullary_bare.gg",
+        "\
+red
+green
+blue
+green
+blue
+red
+square
+done",
+    );
+}
+
+#[test]
 fn dot_shorthand() {
     run_gg(
         "dot_shorthand.gg",
