@@ -1,0 +1,266 @@
+# Appendix B — Built-in Traits Reference
+
+Gorget provides built-in traits for common operations. Types can implement them
+manually with `equip` or automatically with `@derive`.
+
+---
+
+## Display and Equality
+
+### Displayable
+
+```gorget
+trait Displayable:
+    str display(self)
+```
+
+Enables string interpolation (`"{value}"`) and `print`. All primitive types
+implement `Displayable`.
+
+### Equatable
+
+```gorget
+trait Equatable:
+    bool eq(self, Self other)
+```
+
+Enables `==` and `!=` operators. Inequality is derived automatically from `eq`.
+
+### Comparable
+
+```gorget
+trait Comparable:
+    int compare(self, Self other)
+```
+
+Enables `<`, `>`, `<=`, `>=` operators. Returns `-1`, `0`, or `1`.
+
+### Hashable
+
+```gorget
+trait Hashable:
+    int hash(self)
+```
+
+Required for use as `Dict` keys or `Set` elements.
+
+---
+
+## Copying and Cleanup
+
+### Cloneable
+
+```gorget
+trait Cloneable:
+    Self clone(self)
+```
+
+Deep copy. Called explicitly with `.clone()`.
+
+### Drop
+
+```gorget
+trait Drop:
+    void drop(!self)
+```
+
+Resource cleanup. Called automatically when a value goes out of scope.
+The `!self` parameter means `drop` consumes the value.
+
+### Default
+
+```gorget
+trait Default:
+    Self default()
+```
+
+Factory for zero/empty values. `int.default()` is `0`, `str.default()` is `""`.
+
+---
+
+## Arithmetic Operators
+
+Each arithmetic operator maps to a trait:
+
+| Trait | Method | Operator |
+|-------|--------|----------|
+| `Add[Out]` | `Out add(self, Self rhs)` | `+` |
+| `Sub[Out]` | `Out sub(self, Self rhs)` | `-` |
+| `Mul[Out]` | `Out mul(self, Self rhs)` | `*` |
+| `Div[Out]` | `Out div(self, Self rhs)` | `/` |
+| `Rem[Out]` | `Out rem(self, Self rhs)` | `%` |
+| `Mod[Out]` | `Out mod(self, Self rhs)` | `mod` |
+| `Neg[Out]` | `Out neg(self)` | unary `-` |
+
+The `Out` parameter controls the return type. For most types, `Out` equals `Self`.
+
+### Numeric
+
+```gorget
+trait Numeric extends Add, Sub, Mul, Div, Rem, Mod, Neg, Comparable, Default, One
+```
+
+Composite trait for numeric types. All integer and float types implement `Numeric`.
+
+### One
+
+```gorget
+trait One:
+    Self one()
+```
+
+Multiplicative identity factory. `int.one()` is `1`, `float.one()` is `1.0`.
+
+---
+
+## Indexing
+
+### Index[K, V]
+
+```gorget
+trait Index[K, V]:
+    V get(self, K key)
+```
+
+Enables read access with `[]`: `value[key]` calls `get(key)`.
+
+### IndexMut[K, V]
+
+```gorget
+trait IndexMut[K, V]:
+    void set(&self, K key, V value)
+```
+
+Enables write access with `[]=`: `container[key] = value` calls `set(key, value)`.
+Takes `&self` (mutable borrow).
+
+---
+
+## Iteration
+
+### Iterator[T]
+
+```gorget
+trait Iterator[T]:
+    Option[T] next(&self)
+```
+
+The core iteration protocol. Returns `Some(value)` for each element, `None`
+when exhausted. Takes `&self` (mutable borrow) to advance internal state.
+
+### Iterable[T]
+
+```gorget
+trait Iterable[T]:
+    IterType iter(&self)
+```
+
+Creates an iterator. `for x in collection` calls `collection.iter()` to get
+an `Iterator`, then calls `next()` repeatedly.
+
+---
+
+## Conversion
+
+### From[T]
+
+```gorget
+trait From[T]:
+    Self from(T value)
+```
+
+Infallible conversion. Example: `float.from(42)` produces `42.0`.
+
+### TryFrom[T]
+
+```gorget
+trait TryFrom[T]:
+    Result[Self, str] try_from(T value)
+```
+
+Fallible conversion. Returns `Error` if the conversion is invalid.
+
+### Parseable
+
+```gorget
+trait Parseable:
+    Option[Self] parse(str s)
+```
+
+Parse a value from a string. Returns `None` on invalid input.
+
+---
+
+## Size
+
+### Measurable
+
+```gorget
+trait Measurable:
+    int len(self)
+```
+
+Returns the number of elements. Implemented by `Vector`, `Dict`, `Set`, `str`.
+
+---
+
+## Serialization
+
+### Serializable / Deserializable
+
+```gorget
+trait Serializable:
+    str serialize(self)
+
+trait Deserializable:
+    Self deserialize(str data)
+```
+
+JSON serialization. Use `@derive(Serializable, Deserializable)` for automatic
+implementation based on struct fields.
+
+---
+
+## Derivable Traits
+
+The `@derive` attribute generates trait implementations automatically:
+
+```gorget
+@derive(Equatable, Hashable, Displayable, Cloneable)
+struct Point:
+    int x
+    int y
+```
+
+Derivable traits: `Equatable`, `Hashable`, `Displayable`, `Cloneable`,
+`Comparable`, `Default`, `Serializable`, `Deserializable`.
+
+The generated implementation operates field-by-field. For `Equatable`, all fields
+must be equal. For `Hashable`, all fields are combined into the hash. For
+`Displayable`, fields are printed as `TypeName(field1, field2, ...)`.
+
+---
+
+## Quick Reference
+
+| Trait | Method(s) | Enables | Derivable |
+|-------|-----------|---------|:---------:|
+| Displayable | `display` | `"{val}"`, `print` | Yes |
+| Equatable | `eq` | `==`, `!=` | Yes |
+| Comparable | `compare` | `<`, `>`, `<=`, `>=` | Yes |
+| Hashable | `hash` | Dict keys, Set elements | Yes |
+| Cloneable | `clone` | `.clone()` | Yes |
+| Drop | `drop` | Automatic cleanup | No |
+| Default | `default` | `.default()` | Yes |
+| Add/Sub/Mul/Div/Rem/Mod/Neg | operator methods | Arithmetic | No |
+| Numeric | (composite) | Generic numeric code | No |
+| Index[K,V] | `get` | `val[key]` | No |
+| IndexMut[K,V] | `set` | `val[key] = x` | No |
+| Iterator[T] | `next` | Manual iteration | No |
+| Iterable[T] | `iter` | `for x in val` | No |
+| From[T] | `from` | Type conversion | No |
+| TryFrom[T] | `try_from` | Fallible conversion | No |
+| Measurable | `len` | `.len()` | No |
+| Parseable | `parse` | `.parse(str)` | No |
+| Serializable | `serialize` | JSON output | Yes |
+| Deserializable | `deserialize` | JSON input | Yes |
