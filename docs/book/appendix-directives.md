@@ -121,37 +121,6 @@ async void main():
 
 ---
 
-### `directive name-first`
-
-Switch to name-before-type declaration syntax for the entire file. This provides
-a Rust/Python-style syntax alternative.
-
-```gorget
-directive name-first
-
-fn add(a: int, b: int) -> int:
-    return a + b
-
-fn main():
-    let x: int = add(3, 4)
-    print("{x}")
-```
-
-**Comparison:**
-
-| Standard (type-first) | With `directive name-first` |
-|-----------------------|----------------------------|
-| `int x = 5` | `let x: int = 5` |
-| `int add(int a, int b):` | `fn add(a: int, b: int) -> int:` |
-| `str greet(str name):` | `fn greet(name: str) -> str:` |
-
-The AST is identical regardless of syntax mode. Both forms can coexist in
-different files of the same project.
-
-No CLI override — source-only.
-
----
-
 ## CLI Override Rules
 
 When both a source directive and a CLI flag are present, the CLI flag wins:
@@ -178,4 +147,3 @@ for CI, profiling, and debugging.
 | `trace` | — | Yes | Execution tracing |
 | `hot-reload` | — | Yes | Hot code reloading |
 | `scheduler` | `pool`, `thread`, `inline`, `single` | Yes | Async scheduler |
-| `name-first` | — | No | Name-before-type syntax |

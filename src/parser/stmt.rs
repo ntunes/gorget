@@ -77,18 +77,14 @@ impl Parser {
             // const — could be variable declaration
             Token::Keyword(Keyword::Const) => self.parse_const_var_decl(),
 
-            // auto — type-inferred variable declaration (type-first only)
-            Token::Keyword(Keyword::Auto) if !self.name_first => self.parse_auto_var_decl(),
+            // auto — type-inferred variable declaration
+            Token::Keyword(Keyword::Auto) => self.parse_auto_var_decl(),
 
             // mutable — prefix for mutable variable declaration
-            Token::Keyword(Keyword::Mutable) if !self.name_first => self.parse_decl_or_expr_stmt(),
+            Token::Keyword(Keyword::Mutable) => self.parse_decl_or_expr_stmt(),
 
             // Named scope: `identifier: \n    body` — mid-function drop zone.
-            // Must come before name-first mode to avoid misclassifying it as a declaration.
             _ if self.check_identifier_colon_block() => self.parse_named_scope(),
-
-            // In name-first mode: try name-first declaration before falling through
-            _ if self.name_first => self.parse_name_first_decl_or_expr_stmt(),
 
             // Type keyword starting a declaration or expression
             _ if self.is_type_start() => self.parse_decl_or_expr_stmt(),
@@ -508,18 +504,8 @@ impl Parser {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Const)?;
 
-        let (type_, pattern) = if self.name_first {
-            // name-first: `const name: type = expr` (parse_type handles `auto`)
-            let pattern = self.parse_binding_pattern()?;
-            self.expect(&Token::Colon)?;
-            let type_ = self.parse_type()?;
-            (type_, pattern)
-        } else {
-            // type-first: `const type name = expr`
-            let type_ = self.parse_type()?;
-            let pattern = self.parse_binding_pattern()?;
-            (type_, pattern)
-        };
+        let type_ = self.parse_type()?;
+        let pattern = self.parse_binding_pattern()?;
 
         self.expect(&Token::Eq)?;
         let value = self.parse_expr()?;
@@ -555,16 +541,8 @@ impl Parser {
             SharedKind::Auto
         };
 
-        let (type_, pattern) = if self.name_first {
-            let pattern = self.parse_binding_pattern()?;
-            self.expect(&Token::Colon)?;
-            let type_ = self.parse_type()?;
-            (type_, pattern)
-        } else {
-            let type_ = self.parse_type()?;
-            let pattern = self.parse_binding_pattern()?;
-            (type_, pattern)
-        };
+        let type_ = self.parse_type()?;
+        let pattern = self.parse_binding_pattern()?;
 
         self.expect(&Token::Eq)?;
         let value = self.parse_expr()?;
@@ -703,43 +681,6 @@ impl Parser {
         let end = expr.span;
         self.consume_newline();
         Ok(Spanned::new(Stmt::Expr(expr), start.merge(end)))
-    }
-
-    /// Parse a name-first declaration (`name: type = expr`, `mutable name: type = expr`)
-    /// or fall back to expression/assignment statement.
-    fn parse_name_first_decl_or_expr_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
-        let start = self.peek_span();
-
-        // Speculatively try: [mutable] name :
-        if let Some((is_mutable, name)) = self.try_parse(|p| {
-            let is_mutable = if p.check_keyword(Keyword::Mutable) {
-                p.advance();
-                true
-            } else {
-                false
-            };
-
-            if !matches!(p.peek(), Token::Identifier(_)) {
-                return None;
-            }
-            let name = p.expect_identifier().ok()?;
-
-            p.check(&Token::Colon).then(|| {
-                p.advance(); // consume colon
-                (is_mutable, name)
-            })
-        }) {
-            // Committed: parse type = expr (parse_type handles `auto`)
-            let type_ = self.parse_type()?;
-
-            self.expect(&Token::Eq)?;
-            let value = self.parse_expr()?;
-            self.consume_newline();
-            let pattern = Spanned::new(Pattern::Binding(name.node), name.span);
-            Ok(make_var_decl(false, is_mutable, SharedKind::None, type_, pattern, value, start))
-        } else {
-            self.parse_expr_or_assign_stmt()
-        }
     }
 
     /// Parse a `meta if`, `meta for`, or `meta match` statement (delayed compile-time evaluation).

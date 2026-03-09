@@ -1226,17 +1226,7 @@ impl Parser {
             let param_start = self.peek_span();
 
             // Try to parse typed parameter
-            let (type_, ownership, name) = if self.name_first {
-                // name-first: `[&|!]name[: type]`
-                let ownership = self.parse_ownership_modifier();
-                let n = self.expect_identifier()?;
-                let ty = if self.match_token(&Token::Colon) {
-                    Some(self.parse_type()?)
-                } else {
-                    None
-                };
-                (ty, ownership, n)
-            } else if self.is_type_start() {
+            let (type_, ownership, name) = if self.is_type_start() {
                 // type-first: Could be typed parameter `Type name`
                 if let Some(result) = self.try_parse(|p| {
                     let ty = p.parse_type().ok()?;

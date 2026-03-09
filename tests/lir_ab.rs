@@ -158,7 +158,6 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_meta_variant_payloads() { ab_test("meta_variant_payloads.gg"); }
 #[test] fn lir_ab_multiline_strings() { ab_test("multiline_strings.gg"); }
 #[test] fn lir_ab_mutable_borrow_params() { ab_test("mutable_borrow_params.gg"); }
-#[test] fn lir_ab_name_first() { ab_test("name_first.gg"); }
 #[test] fn lir_ab_operator_overload() { ab_test("operator_overload.gg"); }
 #[test] fn lir_ab_operators() { ab_test("operators.gg"); }
 #[test] fn lir_ab_raw_strings() { ab_test("raw_strings.gg"); }
