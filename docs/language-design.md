@@ -42,8 +42,8 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 |---|---|
 | Errors as typed values — `Result[T, E]` and `Option[T]` as first-class builtins | Exceptions and stack unwinding — hidden control flow from callers |
 | Exhaustive pattern matching on error variants — unhandled cases are compile errors | Silent failure (returning false/null/0 with no type-level signal) |
-| Error chaining via `with` blocks — no nested match ladders | Exception hierarchies (Java checked/unchecked split created more ceremony than safety) |
-| `errdefer`-style cleanup — run resource release only on the error path | Panic as default for recoverable errors (missing map key should never crash) |
+| Auto-propagation + `rethrow` escalation — happy path is straight-line code; add context only where needed | Exception hierarchies (Java checked/unchecked split created more ceremony than safety) |
+| `on error` cleanup — run resource release only on the error path | Panic as default for recoverable errors (missing map key should never crash) |
 | Clear semantic split: panics for invariant violations, errors for expected failures | Swallowing errors with `_` or equivalent without explicit acknowledgment |
 | Assertion-first design — asserts active by default, strippable for release | Global error state (errno-style) — non-reentrant and invisible to the type system |
 | Error set inference — compiler tracks possible errors without manual listing | Stringly-typed errors (`throw "something went wrong"`) |
