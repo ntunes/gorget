@@ -39,20 +39,21 @@ need prior exposure to follow along.
 ### Part II — The Type System
 
 7. **[Traits](07-traits.md)**
-   Defining traits, equipping types with traits, default methods, trait bounds,
-   built-in traits (`Displayable`, `Equatable`, `Cloneable`, `Drop`).
+   Defining traits, equipping types with traits, default methods, trait inheritance,
+   trait delegation (`via`), built-in traits, `@derive`.
 
 8. **[Generics](08-generics.md)**
-   Type parameters, trait bounds (inline and `where`), monomorphization,
-   generic structs, generic functions.
+   Type parameters, trait bounds, monomorphization, generic structs, generic
+   functions, generic enums, implementing traits for generic types.
 
 9. **[Option and Result](09-option-result.md)**
-   Null safety with `Option[T]`, error handling with `Result[T, E]`,
-   `unwrap`, `map`, `and_then`, optional chaining (`?.`), default operator (`??`).
+   Null safety with `Option[T]`, error values with `Result[T, E]`, combinators
+   (`map`, `and_then`, `filter`, `flatten`), optional chaining (`?.`), default
+   operator (`??`).
 
 10. **[Error Handling](10-errors.md)**
-    The `throws` model, `throw` statement, auto-propagation, `try` expression,
-    defining error types, when to panic vs. return errors.
+    The `throws` model, auto-propagation, `rethrow`, `on error` cleanup,
+    `try` expression, `throws int` on main, error types, panics vs. errors.
 
 ### Part III — Ownership
 

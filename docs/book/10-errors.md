@@ -15,6 +15,11 @@ Gorget divides failures into two categories:
 
 This chapter covers both, starting with expected failures — the kind that need a design.
 
+The previous chapter introduced `Result[T, E]` and `Option[T]` as data types with methods
+like `map`, `and_then`, and `unwrap_or`. This chapter builds on that foundation with
+Gorget's `throws` model — syntactic sugar that makes the happy path read like straight-line
+code.
+
 ---
 
 ## Throwing and Catching Errors
@@ -89,6 +94,14 @@ This is similar to exceptions in other languages, but with two critical differen
 2. **It's checked.** You cannot call a `throws` function from a non-`throws` function
    without handling the error. The compiler forces the issue.
 
+Auto-propagation also works in functions that explicitly return `Result`:
+
+```gorget
+Result[int, str] double_parsed(str s):
+    int val = parse_int(s)      # auto-propagates Error if parse fails
+    return Ok(val * 2)
+```
+
 ### Catching with `try`
 
 Sometimes you don't want an error to propagate — you want to handle it locally. The
@@ -105,9 +118,8 @@ void main():
 ```
 
 Without `try`, calling a `throws` function from a non-`throws` function is a compile
-error. `try` is the bridge: it converts the call into a value you can inspect. (We'll
-cover `Result` in detail later — for now, just know it's either `Ok(value)` or
-`Error(reason)`.)
+error. `try` is the bridge: it converts the throwing call into a `Result` you can
+inspect with all the methods from the previous chapter.
 
 ### Quick Recovery
 
@@ -215,10 +227,10 @@ Multiple `on error` blocks run in **reverse order** (last declared, first execut
 
 ```gorget
 void setup() throws str:
-    Resource a = acquire_a()?
+    Resource a = acquire_a()
     on error:
         release_a(a)
-    Resource b = acquire_b()?
+    Resource b = acquire_b()
     on error:
         release_b(b)
     use(a, b)
@@ -226,6 +238,28 @@ void setup() throws str:
 
 If `use(a, b)` throws, `release_b` runs first, then `release_a` — matching the
 acquisition order in reverse, just like destructors.
+
+---
+
+## The Escalation Ladder
+
+Gorget's error handling forms a natural progression. Start simple; add complexity only
+where needed:
+
+1. **Auto-propagation** — do nothing. Errors flow through automatically. This is the
+   default and covers most call sites.
+
+2. **`rethrow`** — add context or convert error types in one line. Use when crossing
+   module boundaries or when errors need more information.
+
+3. **`on error`** — add cleanup that only runs on the error path. Use when you've
+   acquired resources that need releasing.
+
+4. **`try`** — drop to full manual control. Capture the `Result` and handle it with
+   pattern matching, combinators, or any logic you need.
+
+Most functions only need step 1. A few need step 2. Steps 3 and 4 appear at natural
+boundaries — module edges, resource management, top-level handlers.
 
 ---
 
@@ -286,10 +320,9 @@ enum DbError:
 
 ---
 
-## Under the Hood: Result and Option
+## throws vs Result — Under the Hood
 
-So far you've been using `throws` and `try` without worrying about what's underneath.
-Here's the secret: `throws` is syntactic sugar. A function declared as:
+`throws` is syntactic sugar for `Result`. A function declared as:
 
 ```gorget
 int parse_port(str input) throws str:
@@ -300,140 +333,15 @@ early return of `Error(...)`. Auto-propagation becomes automatic unwrapping of `
 early return of `Error`. The `try` keyword is the inverse — it wraps the call so you get
 the raw `Result` back.
 
-Understanding `Result` and `Option` directly gives you more control when you need it.
-Most of the time `throws` is all you need, but knowing the underlying types makes you
-fluent in both styles.
+This means `throws` functions and `Result`-returning functions are interchangeable from
+the caller's perspective. Auto-propagation works with both. You can call a library
+function that returns `Result[Config, str]` from a function that `throws str`, and the
+error propagates automatically — no conversion needed.
 
-### Result[T, E] — a Value or an Error
-
-`Result[T, E]` is an enum with two variants:
-
-```gorget
-Result[int, str] success = Ok(42)
-Result[int, str] failure = Error("something went wrong")
-```
-
-`T` is the success type; `E` is the error type. You handle it with pattern matching:
-
-```gorget
-Result[int, str] r = parse_number(input)
-match r:
-    case Ok(value):
-        print("parsed: {value}")
-    case Error(msg):
-        print("error: {msg}")
-```
-
-**Common methods:**
-
-```gorget
-Result[int, str] ok = Ok(10)
-Result[int, str] err = Error("fail")
-
-ok.unwrap()             # 10 — panics if Error
-ok.unwrap_or(0)         # 10 — eager: default always evaluated
-err.unwrap_or(99)       # 99
-err.unwrap_or_else((str e): 0)  # 0 — lazy: closure only called on Error
-
-ok.is_ok()              # true
-err.is_err()            # true
-```
-
-### Auto-Propagation in `Result`-Returning Functions
-
-Functions that explicitly return `Result` also benefit from auto-propagation — the
-compiler unwraps `Result`-typed expressions automatically, just like in `throws` functions:
-
-```gorget
-Result[int, str] double_parsed(str s):
-    int val = parse_int(s)      # auto-propagates Error if parse fails
-    return Ok(val * 2)
-```
-
-If `parse_int` returns an `Error`, the function immediately returns that error. No
-explicit unwrap is needed — the compiler handles it.
-
-**When to use `Result` vs `throws`:** Use `throws` when you're writing application code
-and want clean signatures. Use explicit `Result` returns when you're writing library code
-that needs to be explicit about its return types, or when you want to transform errors
-between different types at each call site.
-
-### Option[T] — a Value That Might Be Absent
-
-Not every "missing value" is an error. Sometimes absence is perfectly normal — a lookup
-that might miss, an optional configuration field, a search that finds nothing.
-`Option[T]` handles this:
-
-```gorget
-Option[int] found = Some(42)
-Option[int] missing = None
-```
-
-Unlike nullable types in other languages, you cannot accidentally use a `None` as if it
-were a value. The compiler forces you to check:
-
-```gorget
-Option[int] result = find_user_age("Alice")
-match result:
-    case Some(age):
-        print("Alice is {age}")
-    case None:
-        print("Alice not found")
-```
-
-**Common methods:**
-
-```gorget
-Option[int] x = Some(42)
-Option[int] y = None
-
-x.unwrap()              # 42 — panics if None
-x.expect("need a value") # 42 — panics with message if None
-y.unwrap_or(0)          # 0 — eager: default always evaluated
-y.unwrap_or_else((): 42) # 42 — lazy: closure only called on None
-x.is_some()             # true
-y.is_none()             # true
-x.map((int n): n * 2)   # Some(84)
-y.map((int n): n * 2)   # None
-```
-
-### Optional Chaining (`?.`)
-
-The `?.` operator short-circuits a chain of operations when any step produces `None`:
-
-```gorget
-Option[str] city = user?.address?.city
-```
-
-If `user` is `None`, the whole expression is `None`. If `user` is `Some` but
-`user.address` is `None`, same thing. Only if every step succeeds do you get `Some(city)`.
-
-Without `?.`, you'd need nested `match` statements:
-
-```gorget
-# Without optional chaining — verbose
-Option[str] city = None
-match user:
-    case Some(u):
-        match u.address:
-            case Some(addr):
-                city = addr.city
-            case None:
-                pass
-    case None:
-        pass
-```
-
-### Default Operator (`??`)
-
-The `??` operator provides a default when an `Option` is `None`. The right-hand side is **lazy** — it is only evaluated when the left-hand side is `None`:
-
-```gorget
-str name = user?.name ?? "anonymous"
-int port = config?.port ?? 8080
-```
-
-This reads naturally: "use this value, or if it's absent, use that default."
+**When to use which:** Use `throws` when you're writing application code and want clean
+signatures. Use explicit `Result` returns when you're writing library code that needs to
+be explicit about its return types, or when you want to use combinators like `map` and
+`and_then` to transform results in a pipeline.
 
 ---
 
@@ -577,11 +485,7 @@ differently.
 | `rethrow expr` | Replace error with a different value | `throws int` main, simple error mapping |
 | `rethrow (T e): expr` | Transform and re-throw with context | Adding context, converting error types |
 | `throws int` on main | Exit code on error | Process-level error handling |
-| `on error: block` | Cleanup on error exit only | Resource cleanup (like Zig's `errdefer`) |
+| `on error: block` | Cleanup on error exit only | Resource cleanup |
 | `try expr` | Catch a throwing call as `Result` | When you want to handle, not propagate |
-| `Result[T, E]` | Value or typed error | Explicit error handling, library APIs |
-| `Option[T]` | Value that might be absent | Lookups, optional fields, parsing |
-| `?.` | Short-circuit on `None` | Chaining optional operations |
-| `??` | Default on `None` (lazy) | Providing fallback values |
 | `assert` | Panic if condition is false | Invariant checks (runs in all builds) |
 | Panic | Crash on programmer error | Bugs, not environmental failures |
