@@ -126,6 +126,19 @@ str format_pattern(SpannedPattern sp):
                 i = i + 1
             result = result + ")"
             return result
+        case PDotShorthand(name, args):
+            if args.len() == 0:
+                return "." + name
+            str result = "." + name + "("
+            int i = 0
+            while i < args.len():
+                if i > 0:
+                    result = result + ", "
+                SpannedPattern a = get_spat_at(args, i)
+                result = result + format_pattern(a)
+                i = i + 1
+            result = result + ")"
+            return result
         case PTuple(elems):
             str result = "("
             int i = 0
@@ -260,8 +273,10 @@ str format_expr(SpannedExpr se):
             result = result + "):"
             result = result + format_block(body)
             return result
+        case EIt():
+            return "it"
         case EImplicitClosure(inner):
-            return "implicit_closure(" + format_expr(*inner) + ")"
+            return format_expr(*inner)
         case EArrayLiteral(elems):
             str result = "["
             int i = 0
@@ -306,6 +321,19 @@ str format_expr(SpannedExpr se):
                     result = result + ", "
                 SpannedExpr v = get_sexpr_at(vals, i)
                 result = result + format_expr(v)
+                i = i + 1
+            result = result + ")"
+            return result
+        case EDotShorthand(name, args):
+            if sexpr_vec_len(args) == 0:
+                return "." + name
+            str result = "." + name + "("
+            int i = 0
+            while i < sexpr_vec_len(args):
+                if i > 0:
+                    result = result + ", "
+                SpannedExpr a = get_sexpr_at(args, i)
+                result = result + format_expr(a)
                 i = i + 1
             result = result + ")"
             return result
@@ -356,6 +384,24 @@ str format_expr(SpannedExpr se):
             return "(" + es + " is " + ps + ")"
         case EDo(body):
             return "do:" + format_block(body)
+        case EAwait(inner):
+            return format_expr(*inner) + ".await()"
+        case ESpawn(inner):
+            return "spawn " + format_expr(*inner)
+        case ESpawnBlocking(inner):
+            return "spawn blocking " + format_expr(*inner)
+        case ERethrow(expr, err_name, err_type, transform):
+            str rhs = format_expr(*expr)
+            match err_name:
+                case Some(name):
+                    SpannedType et = *err_type.unwrap()
+                    rhs = rhs + " rethrow (" + format_type(et) + " " + name + "): "
+                case None:
+                    rhs = rhs + " rethrow "
+            rhs = rhs + format_expr(*transform)
+            return rhs
+        case ECatch(expr, name, recovery):
+            return format_expr(*expr) + " catch (" + name + "): " + format_expr(*recovery)
         else:
             return "?"
 
@@ -391,6 +437,8 @@ str format_stmt(Stmt s):
             return "continue"
         case SPass:
             return "pass"
+        case SMeta:
+            return "meta"
         case SFor(pat, iter, body, own, _):
             return "for " + format_pattern(pat) + " in " + format_expr(iter) + ":" + format_block(body)
         case SWhile(cond, body):
@@ -423,6 +471,21 @@ str format_stmt(Stmt s):
             return "with " + format_expr(resource) + " as " + name + ":" + format_block(body)
         case SNamedScope(label, body):
             return label + ":" + format_block(body)
+        case SSelect(arms):
+            str result = "select:"
+            int i = 0
+            while i < arms.len():
+                SelectArm arm = arms.get(i).unwrap()
+                match arm.op:
+                    case SORecv(name, _, channel):
+                        result = result + " case " + name + " = " + format_expr(channel) + ".recv():"
+                    case SOSend(channel, value):
+                        result = result + " case " + format_expr(channel) + ".send(" + format_expr(value) + "):"
+                result = result + format_block(arm.body)
+                i = i + 1
+            return result
+        case SOnError(body):
+            return "on error:" + format_block(body)
         case SAssert(cond, msg):
             str result = "assert " + format_expr(cond)
             match msg:
@@ -485,8 +548,20 @@ str format_item(Item item):
             return "newtype " + name + "(" + format_type(inner) + ")"
         case IConstDecl(ty, name, val):
             return "const " + format_type(ty) + " " + name + " = " + format_expr(val)
+        case IMetaConst(ty, name, val):
+            return "meta " + format_type(ty) + " " + name + " = " + format_expr(val)
+        case IMetaType(name):
+            return "meta type " + name + " = <rhs>"
+        case IMetaTypeFunc(name):
+            return "meta type " + name + "(...)"
+        case IMetaAssert():
+            return "meta assert ..."
+        case IMetaIf():
+            return "meta if ..."
+        case IMetaLog():
+            return "meta log ..."
         case IStaticDecl(ty, name, val):
-            return format_type(ty) + " " + name + " = " + format_expr(val)
+            return "static " + format_type(ty) + " " + name + " = " + format_expr(val)
         case IExternBlock(fns):
             str result = "extern:"
             int i = 0

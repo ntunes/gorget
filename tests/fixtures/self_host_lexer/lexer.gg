@@ -27,7 +27,7 @@ enum Keyword:
     KwBox  KwRc  KwArc  KwWeak  KwCell  KwRefCell  KwMutex  KwRwLock
     KwMove  KwMutable
     KwTest  KwSuite  KwIt  KwPanic  KwAssert
-    KwShared  KwMeta  KwSelect  KwRethrow  KwMod
+    KwShared  KwMeta  KwSelect  KwRethrow  KwMod  KwCatch  KwOn
 
 # ── String literal types ──────────────────────────────────────
 
@@ -281,6 +281,10 @@ Option[Keyword] keyword_from_str(str s):
         return Some(KwRethrow())
     elif s == "mod":
         return Some(KwMod())
+    elif s == "catch":
+        return Some(KwCatch())
+    elif s == "on":
+        return Some(KwOn())
     return None
 
 # ── Lexer methods ─────────────────────────────────────────────

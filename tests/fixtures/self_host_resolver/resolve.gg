@@ -278,6 +278,19 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
         case IConstDecl(_, name, _):
             scopes.define(name, DkConst(), Span(0, 0))
 
+        case IMetaConst(_, _, _):
+            pass
+        case IMetaType(_):
+            pass
+        case IMetaTypeFunc(_):
+            pass
+        case IMetaAssert():
+            pass
+        case IMetaIf():
+            pass
+        case IMetaLog():
+            pass
+
         case IStaticDecl(_, name, _):
             scopes.define(name, DkStatic(), Span(0, 0))
 
@@ -342,6 +355,19 @@ void resolve_item_body(Item item, ScopeTable &scopes, TypeTable &types, ResolveC
 
         case IConstDecl(_, _, val):
             resolve_expr(val, &scopes, &ctx)
+
+        case IMetaConst(_, _, _):
+            pass
+        case IMetaType(_):
+            pass
+        case IMetaTypeFunc(_):
+            pass
+        case IMetaAssert():
+            pass
+        case IMetaIf():
+            pass
+        case IMetaLog():
+            pass
 
         case IStaticDecl(_, _, val):
             resolve_expr(val, &scopes, &ctx)
@@ -446,8 +472,9 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                     pi = pi + 1
             else:
                 def_id = scopes.define(name, DkVariable(), Span(0, 0))
-            # Mark shared bindings with extra RES entry (matches Rust resolver)
-            if sk > 0 and def_id >= 0 and name_span >= 0:
+            # Emit RES entry for bindings that captured their name span
+            # (shared vars and select recv vars)
+            if def_id >= 0 and name_span >= 0:
                 res_map_set(&ctx, name_span, def_id)
 
         case SExpr(expr):
@@ -545,6 +572,29 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             scopes.pop_scope()
 
         case SNamedScope(_, body):
+            scopes.push_scope(SkBlock())
+            resolve_block(body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+        case SSelect(arms):
+            int si = 0
+            while si < arms.len():
+                SelectArm arm = arms.get(si).unwrap()
+                scopes.push_scope(SkBlock())
+                match arm.op:
+                    case SORecv(name, name_span, channel):
+                        resolve_expr(channel, &scopes, &ctx)
+                        int def_id = scopes.define(name, DkVariable(), Span(0, 0))
+                        if def_id >= 0 and name_span >= 0:
+                            res_map_set(&ctx, name_span, def_id)
+                    case SOSend(channel, value):
+                        resolve_expr(channel, &scopes, &ctx)
+                        resolve_expr(value, &scopes, &ctx)
+                resolve_block(arm.body, &scopes, &types, &ctx)
+                scopes.pop_scope()
+                si = si + 1
+
+        case SOnError(body):
             scopes.push_scope(SkBlock())
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
@@ -676,6 +726,23 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_block_expr(stmts, &scopes, &ctx)
             scopes.pop_scope()
 
+        case EAwait(inner):
+            resolve_expr(*inner, &scopes, &ctx)
+
+        case ESpawn(inner):
+            resolve_expr(*inner, &scopes, &ctx)
+
+        case ESpawnBlocking(inner):
+            resolve_expr(*inner, &scopes, &ctx)
+
+        case ERethrow(expr, _, _, transform):
+            resolve_expr(*expr, &scopes, &ctx)
+            resolve_expr(*transform, &scopes, &ctx)
+
+        case ECatch(expr, _, recovery):
+            resolve_expr(*expr, &scopes, &ctx)
+            resolve_expr(*recovery, &scopes, &ctx)
+
         case EClosure(params, body):
             scopes.push_scope(SkFunction())
             int pi = 0
@@ -685,6 +752,9 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
                 pi = pi + 1
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
+
+        case EIt():
+            pass
 
         case EImplicitClosure(inner):
             scopes.push_scope(SkFunction())
@@ -744,6 +814,13 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             int def_id = scopes.lookup(name)
             if def_id >= 0:
                 res_map_set(&ctx, expr.span.start, def_id)
+            int ai = 0
+            while ai < sexpr_vec_len(args):
+                SpannedExpr arg = get_sexpr_at(args, ai)
+                resolve_expr(arg, &scopes, &ctx)
+                ai = ai + 1
+
+        case EDotShorthand(_, args):
             int ai = 0
             while ai < sexpr_vec_len(args):
                 SpannedExpr arg = get_sexpr_at(args, ai)
@@ -868,6 +945,29 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
 
+        case SSelect(arms):
+            int si = 0
+            while si < arms.len():
+                SelectArm arm = arms.get(si).unwrap()
+                scopes.push_scope(SkBlock())
+                match arm.op:
+                    case SORecv(name, name_span, channel):
+                        resolve_expr(channel, &scopes, &ctx)
+                        int def_id = scopes.define(name, DkVariable(), Span(0, 0))
+                        if def_id >= 0 and name_span >= 0:
+                            res_map_set(&ctx, name_span, def_id)
+                    case SOSend(channel, value):
+                        resolve_expr(channel, &scopes, &ctx)
+                        resolve_expr(value, &scopes, &ctx)
+                resolve_block_expr(arm.body, &scopes, &ctx)
+                scopes.pop_scope()
+                si = si + 1
+
+        case SOnError(body):
+            scopes.push_scope(SkBlock())
+            resolve_block_expr(body, &scopes, &ctx)
+            scopes.pop_scope()
+
         case SAssert(condition, _):
             resolve_expr(condition, &scopes, &ctx)
 
@@ -883,6 +983,13 @@ void define_pattern_bindings(SpannedPattern pattern, ScopeTable &scopes):
             scopes.define(name, DkVariable(), Span(0, 0))
 
         case PConstructor(_, fields):
+            int i = 0
+            while i < spat_vec_len(fields):
+                SpannedPattern field = get_spat_at(fields, i)
+                define_pattern_bindings(field, &scopes)
+                i = i + 1
+
+        case PDotShorthand(_, fields):
             int i = 0
             while i < spat_vec_len(fields):
                 SpannedPattern field = get_spat_at(fields, i)

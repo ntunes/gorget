@@ -40,6 +40,7 @@ enum Pattern:
     PBinding(str)
     PLiteral(SpannedExpr)
     PConstructor(str, Vector[SpannedPattern])
+    PDotShorthand(str, Vector[SpannedPattern])
     PTuple(Vector[SpannedPattern])
     POr(Vector[SpannedPattern])
     PRest
@@ -55,6 +56,7 @@ enum Expr:
     ENoneLiteral
     EIdentifier(str)
     ESelfExpr
+    EIt
     EBinaryOp(Box[SpannedExpr], str, Box[SpannedExpr])
     EUnaryOp(str, Box[SpannedExpr])
     ECall(Box[SpannedExpr], Vector[SpannedExpr], Vector[SpannedType])
@@ -70,6 +72,7 @@ enum Expr:
     ETupleLiteral(Vector[SpannedExpr])
     EDictLiteral(Vector[SpannedExpr], Vector[SpannedExpr])
     EStructLiteral(str, Vector[str], Vector[SpannedExpr])
+    EDotShorthand(str, Vector[SpannedExpr])
     ETry(Box[SpannedExpr])
     ERawCapture(Box[SpannedExpr])
     EMove(Box[SpannedExpr])
@@ -83,6 +86,11 @@ enum Expr:
     EDefaultOp(Box[SpannedExpr], Box[SpannedExpr])
     EIs(Box[SpannedExpr], bool, Box[SpannedPattern])
     EDo(Vector[Stmt])
+    EAwait(Box[SpannedExpr])
+    ESpawn(Box[SpannedExpr])
+    ESpawnBlocking(Box[SpannedExpr])
+    ERethrow(Box[SpannedExpr], Option[str], Option[Box[SpannedType]], Box[SpannedExpr])
+    ECatch(Box[SpannedExpr], str, Box[SpannedExpr])
 
 # ── Statements ───────────────────────────────────────────────
 
@@ -96,6 +104,7 @@ enum Stmt:
     SBreak(Option[SpannedExpr])
     SContinue
     SPass
+    SMeta
     SFor(SpannedPattern, SpannedExpr, Vector[Stmt], int, Vector[Stmt])
     SWhile(SpannedExpr, Vector[Stmt])
     SLoop(Vector[Stmt])
@@ -104,6 +113,8 @@ enum Stmt:
     SWith(SpannedExpr, str, Vector[Stmt])
     SAssert(SpannedExpr, Option[str])
     SNamedScope(str, Vector[Stmt])
+    SSelect(Vector[SelectArm])
+    SOnError(Vector[Stmt])
     SItem(Item)
 
 # ── Items ────────────────────────────────────────────────────
@@ -119,6 +130,12 @@ enum Item:
     ITypeAlias(str, Vector[str], SpannedType)
     INewtype(str, SpannedType)
     IConstDecl(SpannedType, str, SpannedExpr)
+    IMetaConst(SpannedType, str, SpannedExpr)
+    IMetaType(str)
+    IMetaTypeFunc(str)
+    IMetaAssert
+    IMetaIf
+    IMetaLog
     IStaticDecl(SpannedType, str, SpannedExpr)
     IExternBlock(Vector[FunctionDef])
     ITest(str, Vector[SpannedExpr], Vector[str], Vector[Stmt])
@@ -177,6 +194,14 @@ struct ElseBranch:
 struct ImportStmt:
     str module_path
     Vector[str] names
+
+enum SelectOp:
+    SORecv(str, int, SpannedExpr)
+    SOSend(SpannedExpr, SpannedExpr)
+
+struct SelectArm:
+    SelectOp op
+    Vector[Stmt] body
 
 struct Module:
     Vector[Item] items

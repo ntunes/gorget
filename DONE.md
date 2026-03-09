@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-09] **Self-hosting parser: 521→552/558 (93.4%→98.9%)**: Major improvements across the board: (1) `on` keyword as struct field name. (2) Function types in type aliases (`int(int, int)`). (3) Dot-shorthand AST variants (EDotShorthand/PDotShorthand). (4) Qualified pattern paths (`LogLevel.Debug`). (5) Native SSelect AST with SelectArm/SelectOp. (6) Meta item parsing: IMetaConst, IMetaType, IMetaTypeFunc, IMetaAssert, IMetaIf, IMetaLog. (7) Statement-level SMeta with proper body/elif/else consumption. (8) skip_meta_rest helper for nested indent/dedent. (9) peek_ident helper.
+
 - [2026-03-09] **feat: `std.signal` module**: Flag-based signal handling — signal_trap, signal_check, signal_wait, signal_ignore, signal_reset, signal_send + POSIX signal constants.
 
 - [2026-03-09] **rename `trap` keyword to `raw`**: Frees `trap` for its natural Unix meaning (signal trapping). `raw expr` captures the full Result without auto-propagation.
@@ -7,6 +9,7 @@
 - [2026-03-09] **feat: optional parens for nullary enum variants**: `Color.Red` and `.Red` work without parentheses. Resolves inconsistency with bare `None`.
 
 - [2026-03-09] **docs: clarify `with` statement's two forms**: Resource management (`with expr as name:`) vs shared variable access (`with name:`).
+
 
 - [2026-03-09] **remove `directive name-first`**: Type-first syntax only. Removed from parser, formatter, semantic analysis, tests, and documentation. Deleted name_first.gg fixture.
 
@@ -17,6 +20,8 @@
 - [2026-03-09] **feat: `catch` expression — error recovery without exposing Result**: `expr catch (e): recovery` — dual of `rethrow`. Added parser, IR lowering, all semantic passes, formatter, and catch_basic.gg fixture.
 
 - [2026-03-09] **rename `consuming` keyword back to `move`**: Aligns with Rust terminology. Updated across 21 files.
+
+- [2026-03-09] **Self-hosting resolver: 549→551/558 (98.7%), parser: 391→521/558 (93.4%)**: Added EIt AST variant for `it` keyword (no-op in resolver, formats as bare "it"). Added EAwait, ESpawn, ESpawnBlocking AST variants + parser + formatter + resolver handling. Added ERethrow, ECatch expression AST + parser + formatter (infix bp=1/2). Added SOnError statement AST + parser + formatter + resolver. Added KW_CATCH, KW_ON keywords to lexer and parser. Added `mod` keyword binary operator (bp=29/30). Fixed select arm var decl RES entries: parse_select_var_decl captures name_span, resolver emits RES when name_span >= 0 (+3 matches). Fixed IStaticDecl formatter: added missing "static " prefix. Fixed import path parsing for keyword segments (std.async). Broadened type keywords as expressions (int/float/bool/str always produce EIdentifier in expression context). Added async/await/spawn/catch/on/rethrow/mod/select/shared/meta to non_type_keyword_name for method/field name resolution. Prefix `await expr` support.
 
 - [2026-03-09] **Self-hosting resolver: 545/560 → 549/560 (98.0%), parser: 390/560 → 391/560 (69.8%)**: Fixed select arm variable extraction (save/restore parser position in try_detect_var_decl). Added per-arm scoping via SNamedScope wrappers. Added SNamedScope AST variant + parser detection (Ident+Colon+Newline+Indent) + resolver handling (push_scope/resolve_block/pop_scope). Fixed test_with_clause: token-level with-binding name extraction + ITest AST with 4 fields. Fixed match_option_result: bare Some/Ok/Error without parens now produce PBinding (matches Rust parser). Added EImplicitClosure AST variant + resolver handling + expr_contains_it utility. Added for-else body to SFor AST (5th field) + resolver handling. Fixed parser format.gg for ITest, SNamedScope, EImplicitClosure, SFor.
 
