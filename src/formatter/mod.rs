@@ -2039,6 +2039,13 @@ impl Formatter {
                 }
                 self.format_expr(transform);
             }
+            Expr::Catch { expr, error_binding, recovery } => {
+                self.format_expr(expr);
+                self.emitter.write(" catch (");
+                self.emitter.write(&error_binding.node);
+                self.emitter.write("): ");
+                self.format_expr(recovery);
+            }
         }
     }
 

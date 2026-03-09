@@ -1495,6 +1495,10 @@ fn resolve_expr(
             resolve_expr(expr, scopes, errors, resolution_map);
             resolve_expr(transform, scopes, errors, resolution_map);
         }
+        Expr::Catch { expr, recovery, .. } => {
+            resolve_expr(expr, scopes, errors, resolution_map);
+            resolve_expr(recovery, scopes, errors, resolution_map);
+        }
     }
 }
 

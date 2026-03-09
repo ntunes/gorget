@@ -972,6 +972,9 @@ fn lower_expr_inner(
         Expr::Rethrow { expr: inner, error_binding, transform } => {
             lower_rethrow_expr(ctx, builder, inner, error_binding.as_ref(), transform)
         }
+        Expr::Catch { expr: inner, error_binding, recovery } => {
+            lower_catch_expr(ctx, builder, inner, error_binding, recovery)
+        }
     }
 }
 
@@ -1932,6 +1935,74 @@ fn lower_rethrow_expr(
 
     builder.switch_to(merge_bb);
     FunctionBuilder::copy(ok_val)
+}
+
+/// Lower a `catch` expression: `expr catch (name): recovery`.
+/// On Ok: returns the unwrapped Ok value.
+/// On Error: binds error to `name`, evaluates `recovery`, returns that.
+/// The overall expression always succeeds (never throws).
+fn lower_catch_expr(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    inner: &Spanned<Expr>,
+    error_binding: &Spanned<String>,
+    recovery: &Spanned<Expr>,
+) -> Operand {
+    let val = lower_expr(ctx, builder, inner);
+    let val_type = infer_operand_type_full(ctx, &val, builder);
+    let val_local = builder.add_local(val_type, None);
+    builder.assign(Place::local(val_local), val);
+
+    // Look up Ok/Error field types from the Result type definition
+    let (ok_field_type, err_field_type) = extract_result_field_types(ctx, val_type);
+
+    // Check tag: 0 = Ok, 1 = Error
+    let tag = builder.tag_of(FunctionBuilder::copy(val_local));
+    let is_ok = builder.cmp(
+        CmpOp::Eq,
+        I32_TYPE,
+        FunctionBuilder::copy(tag),
+        Operand::Constant(Constant::I32(0)),
+    );
+
+    let ok_bb = builder.new_block();
+    let err_bb = builder.new_block();
+    let merge_bb = builder.new_block();
+
+    // Allocate result local for the merged value (Ok type)
+    let result_local = builder.add_local(ok_field_type, None);
+
+    builder.branch(FunctionBuilder::copy(is_ok), ok_bb, err_bb);
+
+    // Ok path: extract Ok value, store into result
+    builder.switch_to(ok_bb);
+    let ok_val = builder.enum_field_load(
+        Place::local(val_local),
+        "Ok",
+        0,
+        ok_field_type,
+    );
+    builder.assign(Place::local(result_local), FunctionBuilder::copy(ok_val));
+    builder.jump(merge_bb);
+
+    // Error path: bind error, evaluate recovery, store into result
+    builder.switch_to(err_bb);
+    let err_val = builder.enum_field_load(
+        Place::local(val_local),
+        "Error",
+        0,
+        err_field_type,
+    );
+    let err_local = builder.add_local(err_field_type, Some(&error_binding.node));
+    builder.assign(Place::local(err_local), FunctionBuilder::copy(err_val));
+    ctx.register_local(&error_binding.node, err_local, err_field_type);
+
+    let recovery_val = lower_expr(ctx, builder, recovery);
+    builder.assign(Place::local(result_local), recovery_val);
+    builder.jump(merge_bb);
+
+    builder.switch_to(merge_bb);
+    FunctionBuilder::copy(result_local)
 }
 
 /// Lower a block expression — the last expression in the block is the value.

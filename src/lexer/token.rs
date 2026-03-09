@@ -320,6 +320,9 @@ pub enum Keyword {
     Mutex,
     RwLock,
 
+    // Error recovery
+    Catch,
+
     // Ownership keywords
     Move,
     Mutable,
@@ -428,6 +431,7 @@ impl Keyword {
             Keyword::RefCell => "RefCell",
             Keyword::Mutex => "Mutex",
             Keyword::RwLock => "RwLock",
+            Keyword::Catch => "catch",
             Keyword::Move => "move",
             Keyword::Mutable => "mutable",
             Keyword::Test => "test",
@@ -528,6 +532,7 @@ impl Keyword {
             "RefCell" => Some(Keyword::RefCell),
             "Mutex" => Some(Keyword::Mutex),
             "RwLock" => Some(Keyword::RwLock),
+            "catch" => Some(Keyword::Catch),
             "move" => Some(Keyword::Move),
             "mutable" => Some(Keyword::Mutable),
             "test" => Some(Keyword::Test),

@@ -6632,6 +6632,14 @@ fn format_expr_canonical(expr: &Expr) -> String {
                 )
             }
         }
+        Expr::Catch { expr, error_binding, recovery } => {
+            format!(
+                "{} catch ({}): {}",
+                format_expr_canonical(&expr.node),
+                error_binding.node,
+                format_expr_canonical(&recovery.node),
+            )
+        }
     }
 }
 
@@ -9986,4 +9994,17 @@ fn rethrow_non_throws() {
 #[test]
 fn on_error_non_throws() {
     check_gg_fails("on_error_non_throws.gg", "on error` in function that doesn't declare `throws`");
+}
+
+#[test]
+fn catch_basic() {
+    run_gg(
+        "catch_basic.gg",
+        "\
+x:42
+y:-1
+z:-99
+w:0
+done",
+    );
 }

@@ -684,6 +684,10 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
             qualify_expr(expr, vm);
             qualify_expr(transform, vm);
         }
+        Expr::Catch { expr, recovery, .. } => {
+            qualify_expr(expr, vm);
+            qualify_expr(recovery, vm);
+        }
     }
 }
 

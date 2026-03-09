@@ -1627,6 +1627,11 @@ impl<'a> TypeChecker<'a> {
                 }
                 inner_type
             }
+            Expr::Catch { expr: inner, recovery, .. } => {
+                let inner_type = self.infer_expr(inner);
+                self.infer_expr(recovery);
+                inner_type
+            }
         }
     }
 

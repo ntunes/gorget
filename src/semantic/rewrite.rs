@@ -299,6 +299,10 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
             rewrite_expr(expr, res, scopes);
             rewrite_expr(transform, res, scopes);
         }
+        Expr::Catch { expr, recovery, .. } => {
+            rewrite_expr(expr, res, scopes);
+            rewrite_expr(recovery, res, scopes);
+        }
         // Leaf nodes
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::StringLiteral(_) | Expr::NoneLiteral

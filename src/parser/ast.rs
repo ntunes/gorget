@@ -537,6 +537,14 @@ pub enum Expr {
         transform: Box<Spanned<Expr>>,
     },
 
+    // ── Catch (error recovery) ──
+    /// `expr catch (name): recovery_expr`
+    Catch {
+        expr: Box<Spanned<Expr>>,
+        error_binding: Spanned<String>,
+        recovery: Box<Spanned<Expr>>,
+    },
+
     // ── Move (!) ──
     Move {
         expr: Box<Spanned<Expr>>,

@@ -126,8 +126,9 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         Expr::MetaOpInfix { left, right, .. } => contains_it(left) || contains_it(right),
         Expr::MetaOpToken(_) => false,
 
-        // Rethrow
+        // Rethrow / Catch
         Expr::Rethrow { expr, transform, .. } => contains_it(expr) || contains_it(transform),
+        Expr::Catch { expr, recovery, .. } => contains_it(expr) || contains_it(recovery),
 
         // Leaves — no sub-expressions
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
@@ -235,6 +236,8 @@ enum InfixOp {
     MetaOp,
     /// `expr rethrow (Type name): transform` — inline error transform.
     Rethrow,
+    /// `expr catch (name): recovery` — error recovery.
+    Catch,
 }
 
 impl Parser {
@@ -566,6 +569,13 @@ impl Parser {
                 op: InfixOp::Rethrow,
             },
 
+            // catch — error recovery (same precedence as rethrow)
+            Token::Keyword(Keyword::Catch) => InfixBP {
+                left: 1,
+                right: 2,
+                op: InfixOp::Catch,
+            },
+
             // Default operator
             Token::DoubleQuestion => InfixBP {
                 left: 3,
@@ -870,6 +880,31 @@ impl Parser {
                         expr: Box::new(lhs),
                         error_binding,
                         transform: Box::new(transform),
+                    },
+                    start.merge(end),
+                ))
+            }
+            InfixOp::Catch => {
+                self.advance(); // consume `catch`
+                // Always binding form: catch (name): recovery
+                self.expect(&Token::LParen)?;
+                let error_name = self.expect_identifier()?;
+                self.expect(&Token::RParen)?;
+                self.expect(&Token::Colon)?;
+                let recovery = if self.match_token(&Token::Newline) {
+                    self.expect(&Token::Indent)?;
+                    let block = self.parse_block()?;
+                    let end = self.previous_span();
+                    Spanned::new(Expr::Do { body: block }, start.merge(end))
+                } else {
+                    self.parse_expr()?
+                };
+                let end = recovery.span;
+                Ok(Spanned::new(
+                    Expr::Catch {
+                        expr: Box::new(lhs),
+                        error_binding: error_name,
+                        recovery: Box::new(recovery),
                     },
                     start.merge(end),
                 ))

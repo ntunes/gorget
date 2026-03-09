@@ -2079,6 +2079,10 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(expr);
                 self.check_expr(transform);
             }
+            Expr::Catch { expr, recovery, .. } => {
+                self.check_expr(expr);
+                self.check_expr(recovery);
+            }
         }
     }
 

@@ -163,6 +163,34 @@ Config load_with_fallback(str path) throws str:
 Without `try`, the error from `load_config` would auto-propagate. With `try`, you catch
 it locally and decide what to do.
 
+### Recovering from Errors with `catch`
+
+Sometimes you want to recover from an error with a fallback value rather than propagate
+it. The `catch` keyword is the recovery counterpart to `rethrow` — where `rethrow`
+transforms an error and re-throws it, `catch` handles the error and produces a recovery
+value. The overall expression always succeeds:
+
+```gorget
+void main():
+    int port = parse_port(input) catch (e): 8080
+    print("using port {port}")
+```
+
+On success, `parse_port` returns normally and the value passes through. On failure, the
+error is bound to `e` and the recovery expression (`8080`) becomes the value. The
+recovery expression must produce the same type as the success value.
+
+Because `catch` fully handles the error, it does **not** require the enclosing function
+to declare `throws`. You can use it anywhere — including `main` and other non-throwing
+functions:
+
+```gorget
+void main():
+    str content = read_file("config.json") catch (e): "{}"
+    Config cfg = parse_config(content) catch (e): Config.default()
+    serve(cfg)
+```
+
 ### Transforming Errors with `rethrow`
 
 Often you want to add context or convert between error types as an error propagates.
@@ -259,17 +287,20 @@ where needed:
 1. **Auto-propagation** — do nothing. Errors flow through automatically. This is the
    default and covers most call sites.
 
-2. **`rethrow`** — add context or convert error types in one line. Use when crossing
+2. **`catch`** — recover from an error with a fallback value. Use when a sensible
+   default exists and you want to exit error land in one line.
+
+3. **`rethrow`** — add context or convert error types in one line. Use when crossing
    module boundaries or when errors need more information.
 
-3. **`on error`** — add cleanup that only runs on the error path. Use when you've
+4. **`on error`** — add cleanup that only runs on the error path. Use when you've
    acquired resources that need releasing.
 
-4. **`try`** — drop to full manual control. Capture the `Result` and handle it with
+5. **`try`** — drop to full manual control. Capture the `Result` and handle it with
    pattern matching, combinators, or any logic you need.
 
-Most functions only need step 1. A few need step 2. Steps 3 and 4 appear at natural
-boundaries — module edges, resource management, top-level handlers.
+Most functions only need step 1. A few need steps 2 or 3. Steps 4 and 5 appear at
+natural boundaries — module edges, resource management, top-level handlers.
 
 ---
 
@@ -494,6 +525,7 @@ differently.
 | Auto-propagation | Errors propagate without syntax | `throws` or `Result`-returning functions |
 | `rethrow expr` | Replace error with a different value | `throws int` main, simple error mapping |
 | `rethrow (T e): expr` | Transform and re-throw with context | Adding context, converting error types |
+| `catch (e): expr` | Recover from error with fallback | Default values, graceful degradation |
 | `throws int` on main | Exit code on error | Process-level error handling |
 | `on error: block` | Cleanup on error exit only | Resource cleanup |
 | `try expr` | Catch a throwing call as `Result` | When you want to handle, not propagate |

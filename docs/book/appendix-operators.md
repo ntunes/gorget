@@ -27,7 +27,7 @@ Operators listed from highest precedence (binds tightest) to lowest.
 | 6 | `and` | Logical AND | Left |
 | 5 | `or` | Logical OR | Left |
 | 4 | `??` | Default | Right |
-| 3 | `rethrow` | Error transform | Right |
+| 3 | `rethrow` `catch` | Error transform / recovery | Right |
 
 ---
 
@@ -119,6 +119,7 @@ Enable globally with `directive overflow=wrap` or `--overflow=wrap`.
 | `&` | Mutable borrow | `modify(&value)` |
 | `*` | Dereference | `*ptr` (unsafe) |
 | `rethrow` | Error transform | `risky() rethrow (e): wrap(e)` |
+| `catch` | Error recovery | `risky() catch (e): fallback` |
 
 ---
 

@@ -104,7 +104,7 @@ true  false  None  Some  Ok  Error
 **Error handling keywords:**
 
 ```
-throw  throws  try
+throw  throws  try  catch
 ```
 
 **Import keywords:**
@@ -1274,6 +1274,7 @@ From lowest to highest precedence:
 
 | Precedence | Operators / Forms            | Associativity |
 |------------|------------------------------|---------------|
+| 0          | `rethrow` `catch`            | Right         |
 | 1          | `or`                         | Left          |
 | 2          | `and`                        | Left          |
 | 3          | `not`                        | Unary (prefix)|
@@ -2150,6 +2151,27 @@ int load_config(str path) throws ConfigError:
 On success, the expression's value passes through unchanged. On error, the transform expression is evaluated and thrown. In the binding form, the original error is available to the transform; in the bare form, it is discarded.
 
 It is a compile-time error to use `rethrow` in a function not declared with `throws`.
+
+### 10.5 Catch
+
+The `catch` keyword is the recovery counterpart to `rethrow`. Where `rethrow` transforms an error and re-throws it (staying in error land), `catch` recovers from an error by producing a fallback value (exiting error land). The overall expression always succeeds.
+
+**Binding form** — bind the error and compute a recovery value:
+
+```gorget
+void main():
+    int port = parse_port(input) catch (e): 8080
+    print("using port {port}")
+```
+
+```gorget
+void main():
+    int x = risky() catch (e): default_value
+```
+
+On success, the expression's value passes through unchanged. On failure, the error is bound to the identifier and the recovery expression is evaluated. The recovery expression must produce the same type as the success value.
+
+Unlike `rethrow`, `catch` does **not** require the enclosing function to declare `throws` — it fully handles the error, so nothing escapes.
 
 ### 10.6 Throws on Main
 
@@ -5626,7 +5648,10 @@ expr = literal | IDENTIFIER | path_expr | unary_expr | binary_expr
      | if_expr | match_expr | do_expr | closure | implicit_closure
      | list_comp | dict_comp | set_comp
      | array_literal | tuple_literal | dict_literal | struct_literal
-     | await_expr | spawn_expr | "self" | "it" | "(" expr ")" ;
+     | await_expr | spawn_expr | rethrow_expr | catch_expr
+     | "self" | "it" | "(" expr ")" ;
+rethrow_expr = expr "rethrow" ( expr | "(" [ type ] IDENTIFIER ")" ":" expr ) ;
+catch_expr   = expr "catch" "(" IDENTIFIER ")" ":" expr ;
 
 (* ── Patterns ── *)
 pattern = "_" | literal | IDENTIFIER
