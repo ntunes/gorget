@@ -8525,6 +8525,29 @@ done",
 }
 
 #[test]
+fn query_basic() {
+    run_gg(
+        "query_basic.gg",
+        "\
+Alice
+30
+3
+true
+Bob
+Carol
+alice@test.com
+dave@test.com
+1
+New York
+true
+Alicia
+true
+1
+done",
+    );
+}
+
+#[test]
 fn xml_query() {
     run_gg(
         "xml_query.gg",

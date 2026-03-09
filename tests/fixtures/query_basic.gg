@@ -1,0 +1,91 @@
+# Test: gg.query — path query and mutation on Json documents
+#
+# Expected output:
+#   Alice
+#   30
+#   3
+#   true
+#   Bob
+#   Carol
+#   alice@test.com
+#   dave@test.com
+#   1
+#   New York
+#   true
+#   Alicia
+#   true
+#   1
+#   done
+
+from gg.json import Json, json_parse
+from gg.query import query, query_all, query_exists, query_count, query_set, query_delete
+from std.conv import int_to_str
+
+void main():
+    str src = "{\"name\":\"Alice\",\"age\":30,\"address\":{\"city\":\"New York\",\"zip\":\"10001\"},\"scores\":[85,92,78],\"friends\":[{\"name\":\"Bob\",\"age\":25,\"email\":\"alice@test.com\"},{\"name\":\"Carol\",\"age\":35,\"email\":\"carol@test.com\"},{\"name\":\"Dave\",\"age\":28,\"email\":\"dave@test.com\"}]}"
+    Result[Json, str] r = json_parse(src)
+    match r:
+        case Ok(doc):
+            # Simple key lookup
+            Json name_val = query(doc, "name")
+            print(name_val.as_str())
+
+            # Nested key via dot
+            Json age_val = query(doc, "age")
+            print(int_to_str(age_val.as_int()))
+
+            # Array length
+            Json slen = query(doc, "scores.#")
+            print(int_to_str(slen.as_int()))
+
+            # Exists check
+            bool has_city = query_exists(doc, "address.city")
+            if has_city:
+                print("true")
+            else:
+                print("false")
+
+            # Array index
+            Json f0 = query(doc, "friends.0.name")
+            print(f0.as_str())
+            Json f1 = query(doc, "friends.1.name")
+            print(f1.as_str())
+
+            # Recursive descent — find all "email" keys at any depth
+            Vector[Json] emails = query_all(doc, "..email")
+            print(emails.get(0).unwrap().as_str())
+            print(emails.get(2).unwrap().as_str())
+
+            # Filter predicate: friends older than 30
+            Vector[Json] older = query_all(doc, "friends.#(age>30)")
+            print(int_to_str(older.len()))
+
+            # Nested object key
+            Json city = query(doc, "address.city")
+            print(city.as_str())
+
+            # ── Mutation ──────────────────────────────────
+
+            # Set top-level key in-place
+            bool ok = query_set(&doc, "name", Str("Alicia"))
+            if ok:
+                print("true")
+            else:
+                print("false")
+            Json new_name = query(doc, "name")
+            print(new_name.as_str())
+
+            # Delete nested key in-place
+            bool del_ok = query_delete(&doc, "address.zip")
+            if del_ok:
+                print("true")
+            else:
+                print("false")
+
+            # Count remaining address keys (should be 1 — just city)
+            int addr_count = query_count(doc, "address.*")
+            print(int_to_str(addr_count))
+
+            print("done")
+        case Error(e):
+            print("parse error")
