@@ -2166,7 +2166,9 @@ If `main` throws, the process exits with that code. If `main` completes normally
 
 ### 10.5 On Error
 
-The `on error` block registers cleanup code that runs only if the function exits via an error (thrown or auto-propagated):
+The `on error` statement registers cleanup code that runs only if the function exits via an error (thrown or auto-propagated). It has two forms:
+
+**Block form** — for multi-line cleanup:
 
 ```gorget
 File open_and_process(str path) throws str:
@@ -2177,7 +2179,17 @@ File open_and_process(str path) throws str:
     return process(content)
 ```
 
-Multiple `on error` blocks execute in **reverse** (LIFO) order on error paths. They do **not** execute on normal return. This is similar to Zig's `errdefer`.
+**Inline form** — for single-statement cleanup:
+
+```gorget
+File open_and_process(str path) throws str:
+    File f = File.open(path)
+    on error f.close()
+    str content = f.read_all()
+    return process(content)
+```
+
+Multiple `on error` statements execute in **reverse** (LIFO) order on error paths. They do **not** execute on normal return. This is similar to Zig's `errdefer`.
 
 It is a compile-time error to use `on error` in a function not declared with `throws`.
 

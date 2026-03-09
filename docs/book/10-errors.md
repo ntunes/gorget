@@ -223,7 +223,17 @@ File open_and_process(str path) throws str:
 If `read_all()` throws, the `on error` block runs and `f` is closed before the error
 propagates. If everything succeeds, the block is skipped entirely.
 
-Multiple `on error` blocks run in **reverse order** (last declared, first executed):
+For single-statement cleanup, use the **inline form** — no colon, no indented block:
+
+```gorget
+File open_and_process(str path) throws str:
+    File f = File.open(path)
+    on error f.close()
+    str content = f.read_all()
+    return process(content)
+```
+
+Multiple `on error` statements run in **reverse order** (last declared, first executed):
 
 ```gorget
 void setup() throws str:

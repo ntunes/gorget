@@ -137,9 +137,18 @@ impl Parser {
         let start = self.peek_span();
         self.advance(); // consume "on"
         self.advance(); // consume "error"
-        let body = self.parse_block()?;
-        let end = self.previous_span();
-        Ok(Spanned::new(Stmt::OnError { body }, start.merge(end)))
+        if self.check(&Token::Colon) {
+            // Block form: on error:\n    stmts
+            let body = self.parse_block()?;
+            let end = self.previous_span();
+            Ok(Spanned::new(Stmt::OnError { body }, start.merge(end)))
+        } else {
+            // Inline form: on error stmt
+            let stmt = self.parse_stmt()?;
+            let end = stmt.span;
+            let body = Block { stmts: vec![stmt], span: start.merge(end) };
+            Ok(Spanned::new(Stmt::OnError { body }, start.merge(end)))
+        }
     }
 
     fn parse_break_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {

@@ -9952,6 +9952,21 @@ done",
 }
 
 #[test]
+fn on_error_inline() {
+    run_gg(
+        "on_error_inline.gg",
+        "\
+enter
+success
+10
+enter
+cleanup
+0
+done",
+    );
+}
+
+#[test]
 fn on_error_rethrow() {
     run_gg(
         "on_error_rethrow.gg",
