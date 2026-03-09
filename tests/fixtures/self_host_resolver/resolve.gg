@@ -560,6 +560,8 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                 MatchArm arm = get_arm_at(arms, ai)
                 scopes.push_scope(SkBlock())
                 define_pattern_bindings(arm.pattern, &scopes)
+                if has_opt_sexpr(arm.guard):
+                    resolve_expr(unwrap_opt_sexpr(arm.guard), &scopes, &ctx)
                 resolve_block(arm.body, &scopes, &types, &ctx)
                 scopes.pop_scope()
                 ai = ai + 1
@@ -601,6 +603,23 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
 
         case SAssert(condition, _):
             resolve_expr(condition, &scopes, &ctx)
+
+        case SMetaFor(body):
+            scopes.push_scope(SkBlock())
+            resolve_block(body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+        case SMetaIf(then_body, elif_branches):
+            scopes.push_scope(SkBlock())
+            resolve_block(then_body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+            int ei = 0
+            while ei < else_vec_len(elif_branches):
+                ElseBranch branch = get_else_at(elif_branches, ei)
+                scopes.push_scope(SkBlock())
+                resolve_block(branch.body, &scopes, &types, &ctx)
+                scopes.pop_scope()
+                ei = ei + 1
 
         case SItem(item):
             collect_item(item, &scopes, &types)
@@ -712,6 +731,8 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
                 MatchArm arm = get_arm_at(arms, ai)
                 scopes.push_scope(SkBlock())
                 define_pattern_bindings(arm.pattern, &scopes)
+                if has_opt_sexpr(arm.guard):
+                    resolve_expr(unwrap_opt_sexpr(arm.guard), &scopes, &ctx)
                 resolve_block_expr(arm.body, &scopes, &ctx)
                 scopes.pop_scope()
                 ai = ai + 1
@@ -929,6 +950,8 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
                 MatchArm arm = get_arm_at(arms, ai)
                 scopes.push_scope(SkBlock())
                 define_pattern_bindings(arm.pattern, &scopes)
+                if has_opt_sexpr(arm.guard):
+                    resolve_expr(unwrap_opt_sexpr(arm.guard), &scopes, &ctx)
                 resolve_block_expr(arm.body, &scopes, &ctx)
                 scopes.pop_scope()
                 ai = ai + 1
@@ -970,6 +993,23 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
 
         case SAssert(condition, _):
             resolve_expr(condition, &scopes, &ctx)
+
+        case SMetaFor(body):
+            scopes.push_scope(SkBlock())
+            resolve_block_expr(body, &scopes, &ctx)
+            scopes.pop_scope()
+
+        case SMetaIf(then_body, elif_branches):
+            scopes.push_scope(SkBlock())
+            resolve_block_expr(then_body, &scopes, &ctx)
+            scopes.pop_scope()
+            int ei = 0
+            while ei < else_vec_len(elif_branches):
+                ElseBranch branch = get_else_at(elif_branches, ei)
+                scopes.push_scope(SkBlock())
+                resolve_block_expr(branch.body, &scopes, &ctx)
+                scopes.pop_scope()
+                ei = ei + 1
 
         else:
             pass

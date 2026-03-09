@@ -52,9 +52,9 @@
 
 - **Async/await — `await` on vector-indexed tasks with multiple spawn functions**: Type-based await dispatch now works when exactly one function produces tasks of a given type. When multiple functions produce the same `Task__T` type (e.g., two functions both returning `int`), the type-based fallback can't disambiguate. Fix: embed a function dispatch pointer in the `Task__T` struct or use a tag field. [updated: 2026-03-07]
 
-- **Self-hosting parser: 6 remaining mismatches (552/558, 98.9%)**: Remaining: (1) **Float formatting** (2): math_constants, math_trig — C runtime `%g` produces scientific notation (1e+06) vs Rust decimal (1000000.0). (2) **String edge cases** (2): chars (null byte truncation), fstring_basic (f-string kind metadata lost). (3) **Unsupported syntax** (1): bare_tuples. (4) **Meta body leak** (1): meta_variant_payloads. [updated: 2026-03-09]
+- **Self-hosting parser: 4 remaining mismatches (555/559, 99.3%)**: Remaining: (1) **Float formatting** (2): math_constants, math_trig — C runtime `%g` produces scientific notation (1e+06) vs Rust decimal (1000000.0). (2) **String edge cases** (2): chars (null byte truncation), fstring_basic (f-string kind metadata lost). All 4 are hard C runtime limitations, not parser bugs. [updated: 2026-03-09]
 
-- **Self-hosting resolver: 6 remaining mismatches (552/558, 98.9%)**: Remaining: (1) **Meta expansion** (4): field_access, meta_fields, meta_variant_payloads, meta_delayed_basic — fundamental limitation (meta body code not resolvable after skip). (2) **Parser unsupported** (1): bare_tuples. (3) **F-string spans** (1): match_advanced. [updated: 2026-03-09]
+- **Self-hosting resolver: 559/559 (100%) — COMPLETE.** [updated: 2026-03-09]
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 

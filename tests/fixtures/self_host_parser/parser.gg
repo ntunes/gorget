@@ -1107,6 +1107,15 @@ equip Parser:
         while self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COMMENT) or self.check_tok(TOK_DOCCOMMENT):
             self.advance()
 
+    # Skip a meta statement header up to and including the colon and newline.
+    # Used for `meta for ....:` and `meta if ...:` — leaves the cursor at the
+    # start of the indented body (INDENT token).
+    void skip_meta_header(&self):
+        while not self.at_end() and not self.check_tok(TOK_COLON):
+            self.advance()
+        self.expect_tok(TOK_COLON, "expected ':' in meta header")
+        self.expect_tok(TOK_NEWLINE, "expected newline after meta header ':'")
+
     # Skip the rest of a meta item: consume tokens to end of line, then consume
     # any indented body block, plus elif/else continuations.
     void skip_meta_rest(&self):
@@ -2235,19 +2244,20 @@ equip Parser:
             if self.check_kw(KW_CASE):
                 self.advance()
                 SpannedPattern pat = self.parse_pattern()
-                # Skip optional guard: if expr
+                # Parse optional guard: if expr
+                Option[SpannedExpr] guard = None
                 if self.check_kw(KW_IF):
                     self.advance()
-                    self.parse_expr()
+                    guard = Some(self.parse_expr())
                 self.expect_tok(TOK_COLON, "expected ':' after case pattern")
                 Vector[Stmt] arm_body = self.parse_block()
-                arms.push(MatchArm(pat, arm_body))
+                arms.push(MatchArm(pat, guard, arm_body))
             elif self.check_kw(KW_ELSE):
                 self.advance()
                 self.expect_tok(TOK_COLON, "expected ':' after else")
                 Vector[Stmt] else_body = self.parse_block()
                 SpannedPattern wild = SpannedPattern(PWildcard(), Span(start, start))
-                arms.push(MatchArm(wild, else_body))
+                arms.push(MatchArm(wild, None, else_body))
             else:
                 self.errors.push("expected 'case' or 'else' in match")
                 self.advance()
@@ -2286,6 +2296,13 @@ equip Parser:
             if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
                 return SReturn(None)
             SpannedExpr val = self.parse_expr()
+            # Bare tuple return: `return 10, 20` → ETupleLiteral
+            if self.check_tok(TOK_COMMA):
+                Vector[SpannedExpr] elems = Vector[SpannedExpr]()
+                elems.push(val)
+                while self.match_tok(TOK_COMMA):
+                    elems.push(self.parse_expr())
+                val = SpannedExpr(ETupleLiteral(elems), Span(0, 0))
             return SReturn(Some(val))
 
         # break
@@ -2426,11 +2443,33 @@ equip Parser:
                 self.match_tok(TOK_DEDENT)
             return SSelect(arms)
 
-        # meta statements: skip header and body, produce SMeta
+        # meta statements: parse bodies for for/if, skip rest for others
         if self.check_kw(KW_META):
             self.advance()
-            self.skip_meta_rest()
-            return SMeta()
+            if self.check_kw(KW_FOR):
+                # meta for ...: body — skip header to colon, parse body
+                self.skip_meta_header()
+                Vector[Stmt] body = self.parse_block()
+                return SMetaFor(body)
+            elif self.check_kw(KW_IF):
+                # meta if ...: body [elif ...: body]* [else: body]
+                self.skip_meta_header()
+                Vector[Stmt] then_body = self.parse_block()
+                Vector[ElseBranch] branches = Vector[ElseBranch]()
+                while self.check_kw(KW_ELIF):
+                    self.skip_meta_header()
+                    Vector[Stmt] elif_body = self.parse_block()
+                    branches.push(ElseBranch(None, elif_body))
+                if self.check_kw(KW_ELSE):
+                    self.advance()
+                    self.expect_tok(TOK_COLON, "expected ':' after else")
+                    self.expect_tok(TOK_NEWLINE, "expected newline after else ':'")
+                    Vector[Stmt] else_body = self.parse_block()
+                    branches.push(ElseBranch(None, else_body))
+                return SMetaIf(then_body, branches)
+            else:
+                self.skip_meta_rest()
+                return SMeta()
 
         # async — skip the keyword and parse the rest as normal
         if self.check_kw(KW_ASYNC):
@@ -2551,6 +2590,13 @@ equip Parser:
     Stmt parse_for_stmt(&self):
         self.expect_kw(KW_FOR, "expected 'for'")
         SpannedPattern pat = self.parse_pattern()
+        # Bare tuple for pattern: `for a, b in ...` → PTuple
+        if self.check_tok(TOK_COMMA):
+            Vector[SpannedPattern] pats = Vector[SpannedPattern]()
+            pats.push(pat)
+            while self.match_tok(TOK_COMMA):
+                pats.push(self.parse_pattern())
+            pat = SpannedPattern(PTuple(pats), Span(0, 0))
         self.expect_kw(KW_IN, "expected 'in' in for loop")
         SpannedExpr iter = self.parse_expr()
         self.expect_tok(TOK_COLON, "expected ':' after for iterable")
@@ -2580,19 +2626,24 @@ equip Parser:
             if self.check_kw(KW_CASE):
                 self.advance()
                 SpannedPattern pat = self.parse_pattern()
-                # Skip optional guard: if expr
+                # Parse optional guard: if expr
+                Option[SpannedExpr] guard = None
                 if self.check_kw(KW_IF):
                     self.advance()
-                    self.parse_expr()
+                    guard = Some(self.parse_expr())
                 self.expect_tok(TOK_COLON, "expected ':' after case pattern")
                 Vector[Stmt] arm_body = self.parse_block()
-                arms.push(MatchArm(pat, arm_body))
+                arms.push(MatchArm(pat, guard, arm_body))
+            elif self.check_kw(KW_META):
+                # meta for/if inside match — skip entirely
+                self.advance()
+                self.skip_meta_rest()
             elif self.check_kw(KW_ELSE):
                 self.advance()
                 self.expect_tok(TOK_COLON, "expected ':' after else")
                 Vector[Stmt] else_body = self.parse_block()
                 SpannedPattern wild = SpannedPattern(PWildcard(), Span(start, start))
-                arms.push(MatchArm(wild, else_body))
+                arms.push(MatchArm(wild, None, else_body))
             else:
                 self.errors.push("expected 'case' or 'else' in match")
                 self.advance()
@@ -2617,6 +2668,13 @@ equip Parser:
         # Must have an identifier or tuple pattern (for destructuring)
         if self.check_tok(TOK_IDENT):
             self.advance()
+            # Bare tuple destructuring: `auto a, b = expr`
+            if self.check_tok(TOK_COMMA):
+                while self.check_tok(TOK_COMMA):
+                    self.advance()
+                    if self.check_tok(TOK_IDENT):
+                        self.advance()
+                return self.check_tok(TOK_EQ)
             # Must have =
             return self.check_tok(TOK_EQ)
         # Tuple pattern: Type (a, b) = expr
@@ -2688,6 +2746,11 @@ equip Parser:
         # A function looks like: Type name(...):  or  Type name(...) = expr
         if not self.skip_type_lookahead():
             return false
+        # Bare tuple return type: `int, str name(...)` — skip comma-separated types
+        while self.check_tok(TOK_COMMA):
+            self.advance()
+            if not self.skip_type_lookahead():
+                return false
         # Function name can be an identifier or a keyword (e.g., 'from' in trait impl)
         if not self.check_tok(TOK_IDENT) and self.peek_kw() == 0:
             return false
@@ -2725,6 +2788,13 @@ equip Parser:
         else:
             SpannedToken name_tok = self.advance()
             name = token_ident(name_tok.lex_token)
+            # Bare tuple destructuring: `auto a, b = expr`
+            if self.check_tok(TOK_COMMA):
+                name = "(" + name
+                while self.match_tok(TOK_COMMA):
+                    SpannedToken next_tok = self.advance()
+                    name = name + ", " + token_ident(next_tok.lex_token)
+                name = name + ")"
         self.expect_tok(TOK_EQ, "expected '=' in variable declaration")
         SpannedExpr init = self.parse_expr()
         return SVarDecl(ty, name, init, own, 0, -1)
@@ -2801,6 +2871,13 @@ equip Parser:
 
     FunctionDef parse_function_def(&self):
         SpannedType ret_ty = self.parse_type()
+        # Bare tuple return type: `int, str f()` → `(int, str) f()`
+        if self.check_tok(TOK_COMMA):
+            Vector[SpannedType] tuple_types = Vector[SpannedType]()
+            tuple_types.push(ret_ty)
+            while self.match_tok(TOK_COMMA):
+                tuple_types.push(self.parse_type())
+            ret_ty = SpannedType(TTuple(tuple_types), Span(0, 0))
         SpannedToken name_tok = self.advance()
         str name = token_ident(name_tok.lex_token)
         if name == "":

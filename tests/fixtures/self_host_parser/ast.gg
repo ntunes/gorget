@@ -105,6 +105,8 @@ enum Stmt:
     SContinue
     SPass
     SMeta
+    SMetaFor(Vector[Stmt])
+    SMetaIf(Vector[Stmt], Vector[ElseBranch])
     SFor(SpannedPattern, SpannedExpr, Vector[Stmt], int, Vector[Stmt])
     SWhile(SpannedExpr, Vector[Stmt])
     SLoop(Vector[Stmt])
@@ -185,6 +187,7 @@ struct EquipBlock:
 
 struct MatchArm:
     SpannedPattern pattern
+    Option[SpannedExpr] guard
     Vector[Stmt] body
 
 struct ElseBranch:

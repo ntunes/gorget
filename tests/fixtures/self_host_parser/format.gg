@@ -257,7 +257,8 @@ str format_expr(SpannedExpr se):
             int i = 0
             while i < arms.len():
                 MatchArm arm = get_arm_at(arms, i)
-                result = result + " case " + format_pattern(arm.pattern) + ":"
+                str arm_str = " case " + format_pattern(arm.pattern)
+                result = result + arm_str + ":"
                 result = result + format_block(arm.body)
                 i = i + 1
             return result
@@ -439,6 +440,10 @@ str format_stmt(Stmt s):
             return "pass"
         case SMeta:
             return "meta"
+        case SMetaFor(body):
+            return "meta"
+        case SMetaIf(then_body, branches):
+            return "meta"
         case SFor(pat, iter, body, own, _):
             return "for " + format_pattern(pat) + " in " + format_expr(iter) + ":" + format_block(body)
         case SWhile(cond, body):
@@ -463,7 +468,8 @@ str format_stmt(Stmt s):
             int i = 0
             while i < arms.len():
                 MatchArm arm = get_arm_at(arms, i)
-                result = result + " case " + format_pattern(arm.pattern) + ":"
+                str arm_str = " case " + format_pattern(arm.pattern)
+                result = result + arm_str + ":"
                 result = result + format_block(arm.body)
                 i = i + 1
             return result
