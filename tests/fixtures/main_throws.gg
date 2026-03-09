@@ -1,0 +1,9 @@
+int parse_number(str s) throws str:
+    if s == "bad":
+        throw "not a number"
+    return 42
+
+void main() throws int:
+    int n = parse_number("ok") rethrow 1
+    print(n)
+    print("success")

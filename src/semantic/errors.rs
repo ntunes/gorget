@@ -166,6 +166,9 @@ pub enum SemanticErrorKind {
     /// `on error` in non-throwing function.
     OnErrorInNonThrowingFunction,
 
+    /// `main()` can only throw `int` (the process exit code).
+    MainThrowsNonInt,
+
     /// `await` used outside an `async` function.
     AwaitOutsideAsync,
 
@@ -431,6 +434,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::OnErrorInNonThrowingFunction => {
                 write!(f, "`on error` in function that doesn't declare `throws`")
+            }
+            SemanticErrorKind::MainThrowsNonInt => {
+                write!(f, "`main()` can only throw `int` (the process exit code)")
             }
             SemanticErrorKind::AwaitOutsideAsync => {
                 write!(f, "`await` can only be used inside an `async` function")

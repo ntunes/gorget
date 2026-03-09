@@ -4,10 +4,6 @@
 
 - **LIR: Phase 5 — expand A/B test coverage**: 76 fixtures match (13% of ~584). Fixed: StrLit vs Str coercion, FieldPtr bounds-safe fallback, synthetic extern merge, runtime fn declaration skip, struct forward declarations for empty structs, GorgetString→Str arg coercion (partial). Remaining: GorgetString→Str coercion for runtime functions (gorget_str_cat etc.), collection method dispatch, trait object support, generic Option/Result method lowering. [updated: 2026-03-08]
 
-- **Convert stdlib functions from explicit `Result[T, E]` returns to `throws` style**: Functions in `lib/gg/http.gg`, `lib/gg/httpserver.gg`, and similar stdlib modules still return `Result` explicitly. Convert to `throws` to promote the idiomatic error model. [added: 2026-03-09]
-
-- **Function argument auto-propagation**: `foo(risky())` where `foo` expects `int` but `risky()` returns `Result[int, str]` — auto-unwrap at the argument site. Requires checking each call argument's type against the parameter type during IR lowering. [added: 2026-03-09]
-
 ## Medium
 
 - **IR refactor: Continue `exprs/` split — Phase 4**: Phases 1-3 done (8 files, mod.rs 2,515 lines). Remaining: control-flow exprs, struct literals, field access — tightly coupled to `lower_expr_inner`. Diminishing returns. Revisit if mod.rs grows again. [updated: 2026-03-07]

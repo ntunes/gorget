@@ -969,8 +969,8 @@ fn lower_expr_inner(
             // Should have been filtered out at the call site before reaching here.
             panic!("MetaOpToken not filtered out before GIR lowering — call lowering incomplete")
         }
-        Expr::Rethrow { expr: inner, error_type, error_name, transform } => {
-            lower_rethrow_expr(ctx, builder, inner, error_type, error_name, transform)
+        Expr::Rethrow { expr: inner, error_binding, transform } => {
+            lower_rethrow_expr(ctx, builder, inner, error_binding.as_ref(), transform)
         }
     }
 }
@@ -1853,16 +1853,18 @@ pub fn maybe_auto_propagate(
     }
 }
 
-/// Lower a rethrow expression: `expr rethrow (Type name): transform`
+/// Lower a rethrow expression:
+///   `expr rethrow (Type name): transform`  (binding form)
+///   `expr rethrow transform`               (bare form)
 ///
-/// Like `lower_try_expr`, but the error path evaluates a transform expression
-/// (with the original error bound to `name`) and throws that instead.
+/// Like auto-propagation, but the error path evaluates a transform expression
+/// and throws that instead. The binding form makes the original error available
+/// to the transform; the bare form discards it.
 fn lower_rethrow_expr(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     inner: &Spanned<Expr>,
-    _error_type: &Spanned<crate::parser::ast::Type>,
-    error_name: &Spanned<String>,
+    error_binding: Option<&(Spanned<crate::parser::ast::Type>, Spanned<String>)>,
     transform: &Spanned<Expr>,
 ) -> Operand {
     let val = lower_expr(ctx, builder, inner);
@@ -1898,18 +1900,19 @@ fn lower_rethrow_expr(
     );
     builder.jump(merge_bb);
 
-    // Error path: bind error to name, evaluate transform, throw that
+    // Error path: optionally bind error to name, evaluate transform, throw that
     builder.switch_to(err_bb);
-    let err_val = builder.enum_field_load(
-        Place::local(val_local),
-        "Error",
-        0,
-        err_field_type,
-    );
-    // Bind the error value to the named local so transform can reference it
-    let err_local = builder.add_local(err_field_type, Some(&error_name.node));
-    builder.assign(Place::local(err_local), FunctionBuilder::copy(err_val));
-    ctx.register_local(&error_name.node, err_local, err_field_type);
+    if let Some((_error_type, error_name)) = error_binding {
+        let err_val = builder.enum_field_load(
+            Place::local(val_local),
+            "Error",
+            0,
+            err_field_type,
+        );
+        let err_local = builder.add_local(err_field_type, Some(&error_name.node));
+        builder.assign(Place::local(err_local), FunctionBuilder::copy(err_val));
+        ctx.register_local(&error_name.node, err_local, err_field_type);
+    }
 
     // Evaluate the transform expression — this produces the new error value
     let new_err = lower_expr(ctx, builder, transform);

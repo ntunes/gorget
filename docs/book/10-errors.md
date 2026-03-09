@@ -163,12 +163,36 @@ Config load_config(str path) throws ConfigError:
     return cfg
 ```
 
-`rethrow` is a postfix modifier. On success, the expression's value passes through
-unchanged. On error, the original error is bound to the named parameter, the transform
-expression is evaluated, and the result is thrown.
+When you don't need the original error, use the **bare form**:
 
-Without `rethrow`, you would need `try` + `match` + `throw` — seven lines for what
-`rethrow` does in one.
+```gorget
+void main() throws int:
+    Json doc = json_parse(input) rethrow 1
+    Data d = load(doc) rethrow 2
+    process(d)
+```
+
+`rethrow` is a postfix modifier. On success, the expression's value passes through
+unchanged. On error, the transform expression is evaluated and thrown. In the binding
+form `(Type name): expr`, the original error is available to the transform. In the bare
+form, it is discarded.
+
+### `throws int` on Main
+
+`main()` can declare `throws int`, where the thrown integer becomes the process exit
+code:
+
+```gorget
+void main() throws int:
+    Config cfg = load("config.json") rethrow 1
+    serve(cfg)
+    # implicit success → exit 0
+```
+
+If `main` throws, the process exits with that code. If it completes normally, exit 0.
+This is the cleanest way to map application errors to OS exit codes — `rethrow` at each
+call site converts domain errors into the appropriate code. `main` can only throw `int`
+(any other type is a compile error).
 
 ### Error-Path Cleanup with `on error`
 
@@ -177,10 +201,10 @@ example, closing a file you opened before the error occurred:
 
 ```gorget
 File open_and_process(str path) throws str:
-    File f = File.open(path)?
+    File f = File.open(path)
     on error:
         f.close()
-    str content = f.read_all()?
+    str content = f.read_all()
     return process(content)
 ```
 
@@ -548,7 +572,9 @@ differently.
 | `throws E` | Declare a function can fail | Function signature |
 | `throw expr` | Raise an error | Inside `throws` function |
 | Auto-propagation | Errors propagate without syntax | `throws` or `Result`-returning functions |
-| `rethrow (T e): expr` | Transform and re-throw an error | Adding context, converting error types |
+| `rethrow expr` | Replace error with a different value | `throws int` main, simple error mapping |
+| `rethrow (T e): expr` | Transform and re-throw with context | Adding context, converting error types |
+| `throws int` on main | Exit code on error | Process-level error handling |
 | `on error: block` | Cleanup on error exit only | Resource cleanup (like Zig's `errdefer`) |
 | `try expr` | Catch a throwing call as `Result` | When you want to handle, not propagate |
 | `Result[T, E]` | Value or typed error | Explicit error handling, library APIs |

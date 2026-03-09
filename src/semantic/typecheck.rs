@@ -3207,6 +3207,16 @@ impl<'a> TypeChecker<'a> {
         self.current_function_throws = func.throws.is_some();
         self.current_function_is_async = func.qualifiers.is_async;
 
+        // main() can only throw int (the process exit code)
+        if func.name.node == "main" {
+            if let Some(ref throws_type) = func.throws {
+                let is_int = matches!(&throws_type.node, crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int));
+                if !is_int {
+                    self.error(SemanticErrorKind::MainThrowsNonInt, throws_type.span);
+                }
+            }
+        }
+
         // Set trait bounds for the current function (enables transitive bound propagation)
         if let Some(def_id) = self.scopes.lookup(&func.name.node) {
             if let Some(info) = self.function_info.get(&def_id) {

@@ -2130,7 +2130,16 @@ match result:
 
 ### 10.4 Rethrow
 
-The `rethrow` keyword catches an error from a throwing call, transforms it, and re-throws:
+The `rethrow` keyword catches an error from a throwing call, transforms it, and re-throws.
+
+**Bare form** — replace the error without inspecting it:
+
+```gorget
+void main() throws int:
+    Json doc = json_parse(input) rethrow 1
+```
+
+**Binding form** — bind the original error and transform it:
 
 ```gorget
 int load_config(str path) throws ConfigError:
@@ -2138,9 +2147,22 @@ int load_config(str path) throws ConfigError:
     return parse(content) rethrow (str e): ConfigError.Parse(e)
 ```
 
-`rethrow` is a postfix modifier on any expression that may throw. On success, the expression's value passes through unchanged. On error, the error is bound to the named parameter and the transform expression is evaluated and thrown.
+On success, the expression's value passes through unchanged. On error, the transform expression is evaluated and thrown. In the binding form, the original error is available to the transform; in the bare form, it is discarded.
 
 It is a compile-time error to use `rethrow` in a function not declared with `throws`.
+
+### 10.6 Throws on Main
+
+`main()` may declare `throws int`, where the thrown integer becomes the process exit code:
+
+```gorget
+void main() throws int:
+    Data d = load("config.json") rethrow 1
+    process(d)
+    # implicit success → exit 0
+```
+
+If `main` throws, the process exits with that code. If `main` completes normally, the process exits with code 0. It is a compile-time error for `main` to throw any type other than `int`.
 
 ### 10.5 On Error
 

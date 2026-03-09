@@ -841,29 +841,34 @@ impl Parser {
             }
             InfixOp::Rethrow => {
                 self.advance(); // consume `rethrow`
-                // Parse (Type name)
-                self.expect(&Token::LParen)?;
-                let error_type = self.parse_type()?;
-                let error_name = self.expect_identifier()?;
-                self.expect(&Token::RParen)?;
-                self.expect(&Token::Colon)?;
-                // Parse transform expression (single-line or block)
-                let transform = if self.match_token(&Token::Newline) {
-                    // Block form: indented body, last expression is the value
-                    self.expect(&Token::Indent)?;
-                    let block = self.parse_block()?;
-                    let end = self.previous_span();
-                    Spanned::new(Expr::Do { body: block }, start.merge(end))
+                // Check for binding form: rethrow (Type name): expr
+                // vs bare form: rethrow expr
+                let (error_binding, transform) = if self.check(&Token::LParen) {
+                    // Binding form: (Type name): transform
+                    self.expect(&Token::LParen)?;
+                    let error_type = self.parse_type()?;
+                    let error_name = self.expect_identifier()?;
+                    self.expect(&Token::RParen)?;
+                    self.expect(&Token::Colon)?;
+                    let transform = if self.match_token(&Token::Newline) {
+                        self.expect(&Token::Indent)?;
+                        let block = self.parse_block()?;
+                        let end = self.previous_span();
+                        Spanned::new(Expr::Do { body: block }, start.merge(end))
+                    } else {
+                        self.parse_expr()?
+                    };
+                    (Some((error_type, error_name)), transform)
                 } else {
-                    // Single-line expression
-                    self.parse_expr()?
+                    // Bare form: rethrow expr
+                    let transform = self.parse_expr_bp(2)?;
+                    (None, transform)
                 };
                 let end = transform.span;
                 Ok(Spanned::new(
                     Expr::Rethrow {
                         expr: Box::new(lhs),
-                        error_type,
-                        error_name,
+                        error_binding,
                         transform: Box::new(transform),
                     },
                     start.merge(end),

@@ -6615,14 +6615,22 @@ fn format_expr_canonical(expr: &Expr) -> String {
         }
         Expr::MetaOpToken(op) => format!("meta {:?}", op),
         Expr::SpawnBlocking { expr } => format!("spawn blocking {}", format_expr_canonical(&expr.node)),
-        Expr::Rethrow { expr, error_type, error_name, transform } => {
-            format!(
-                "{} rethrow ({} {}): {}",
-                format_expr_canonical(&expr.node),
-                format_type_canonical(&error_type.node),
-                error_name.node,
-                format_expr_canonical(&transform.node),
-            )
+        Expr::Rethrow { expr, error_binding, transform } => {
+            if let Some((error_type, error_name)) = error_binding {
+                format!(
+                    "{} rethrow ({} {}): {}",
+                    format_expr_canonical(&expr.node),
+                    format_type_canonical(&error_type.node),
+                    error_name.node,
+                    format_expr_canonical(&transform.node),
+                )
+            } else {
+                format!(
+                    "{} rethrow {}",
+                    format_expr_canonical(&expr.node),
+                    format_expr_canonical(&transform.node),
+                )
+            }
         }
     }
 }
@@ -9902,6 +9910,28 @@ fn rethrow_basic() {
         "\
 ok:42
 err:load failed: invalid number
+done",
+    );
+}
+
+#[test]
+fn main_throws() {
+    run_gg(
+        "main_throws.gg",
+        "\
+42
+success",
+    );
+}
+
+#[test]
+fn rethrow_bare() {
+    run_gg(
+        "rethrow_bare.gg",
+        "\
+ok:42
+exit:1
+err:wrapped: invalid number
 done",
     );
 }

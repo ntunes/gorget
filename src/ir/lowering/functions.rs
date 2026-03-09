@@ -28,7 +28,7 @@ pub fn lower_function(
     let is_main = name == "main";
 
     // Map return type — use fn_sigs if available (handles `throws` → Result)
-    let return_type = if is_main {
+    let return_type = if is_main && func.throws.is_none() {
         I32_TYPE
     } else if let Some((_, ret_ty)) = ctx.fn_sigs.get(name) {
         *ret_ty
@@ -123,11 +123,23 @@ pub fn lower_function(
             if builder.blocks[last_block_idx].terminator.is_none() {
                 // P2.6: Emit scope drops before implicit return
                 ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
-                if is_main {
+                if is_main && func.throws.is_none() {
                     builder.assign(
                         Place::local(LocalId(0)),
                         FunctionBuilder::const_i32(0),
                     );
+                    builder.ret(FunctionBuilder::copy(LocalId(0)));
+                } else if is_main && func.throws.is_some() {
+                    // throws main: implicit success → Ok(unit) wrapped in Result
+                    let type_name = ctx.type_registry.type_name(return_type)
+                        .unwrap_or_else(|| "Result".to_string());
+                    let ok_val = builder.enum_init(
+                        type_name,
+                        "Ok",
+                        return_type,
+                        vec![FunctionBuilder::const_unit()],
+                    );
+                    builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(ok_val));
                     builder.ret(FunctionBuilder::copy(LocalId(0)));
                 } else if return_type == UNIT_TYPE {
                     builder.ret(FunctionBuilder::const_unit());

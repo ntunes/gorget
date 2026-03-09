@@ -193,10 +193,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
 
     if http_use_tls:
         # ── HTTPS path ───────────────────────────────────────
-        Result[TlsSocket, str] http_tls_cr = tls_connect(http_host, http_port)
-        if http_tls_cr.is_err():
-            return Error(http_tls_cr.unwrap_err())
-        TlsSocket http_tls_conn = http_tls_cr.unwrap()
+        TlsSocket http_tls_conn = tls_connect(http_host, http_port)
 
         http_tls_conn.write_str(http_req)
 
@@ -251,10 +248,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
         return Ok(http_tls_resp)
     else:
         # ── Plain HTTP path ───────────────────────────────────
-        Result[Socket, str] http_plain_cr = socket_connect(http_host, http_port)
-        if http_plain_cr.is_err():
-            return Error(http_plain_cr.unwrap_err())
-        Socket http_plain_conn = http_plain_cr.unwrap()
+        Socket http_plain_conn = socket_connect(http_host, http_port)
 
         http_plain_conn.write_str(http_req)
 
@@ -322,11 +316,7 @@ Result[HttpResponse, str] request(str http_method, str http_url, str http_body, 
     int http_redirects = 0
 
     loop:
-        Result[HttpResponse, str] http_result = http_single(http_cur_method, http_cur_url, http_cur_body, http_hdrs)
-        if http_result.is_err():
-            return http_result
-
-        HttpResponse http_resp = http_result.unwrap()
+        HttpResponse http_resp = http_single(http_cur_method, http_cur_url, http_cur_body, http_hdrs)
         int http_sc = http_resp.status_code
 
         # Not a redirect — return as-is

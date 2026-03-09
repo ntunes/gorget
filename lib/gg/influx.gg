@@ -167,10 +167,7 @@ equip InfluxClient with DbConnection:
         hdrs["Authorization"] = "Token " + self.token
         hdrs["Content-Type"] = "application/vnd.flux"
         hdrs["Accept"] = "application/csv"
-        Result[HttpResponse, str] resp = request("POST", url, query, hdrs)
-        if resp.is_error():
-            return Error(resp.unwrap_error())
-        HttpResponse r = resp.unwrap()
+        HttpResponse r = request("POST", url, query, hdrs)
         if r.status_code != 200:
             return Error("influx query HTTP " + int_to_str(r.status_code) + ": " + r.body_text)
         return _influx_parse_csv(r.body_text)
@@ -184,10 +181,7 @@ equip InfluxClient with DbConnection:
         Dict[str, str] hdrs = Dict[str, str]()
         hdrs["Authorization"] = "Token " + self.token
         hdrs["Content-Type"] = "text/plain; charset=utf-8"
-        Result[HttpResponse, str] resp = request("POST", url, body, hdrs)
-        if resp.is_error():
-            return Error(resp.unwrap_error())
-        HttpResponse r = resp.unwrap()
+        HttpResponse r = request("POST", url, body, hdrs)
         if r.status_code != 204 and r.status_code != 200:
             return Error("influx write HTTP " + int_to_str(r.status_code) + ": " + r.body_text)
         return Ok(0)

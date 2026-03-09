@@ -1,0 +1,36 @@
+int parse_number(str s) throws str:
+    if s == "bad":
+        throw "invalid number"
+    return 42
+
+int load_value(str input) throws int:
+    int n = parse_number(input) rethrow 1
+    return n
+
+int load_with_context(str input) throws str:
+    int n = parse_number(input) rethrow (str e): f"wrapped: {e}"
+    return n
+
+void main():
+    auto r1 = load_value("ok")
+    match r1:
+        case Ok(v):
+            print(f"ok:{v}")
+        case Error(code):
+            print(f"exit:{code}")
+
+    auto r2 = load_value("bad")
+    match r2:
+        case Ok(v):
+            print(f"ok:{v}")
+        case Error(code):
+            print(f"exit:{code}")
+
+    auto r3 = load_with_context("bad")
+    match r3:
+        case Ok(v):
+            print(f"ok:{v}")
+        case Error(e):
+            print(f"err:{e}")
+
+    print("done")

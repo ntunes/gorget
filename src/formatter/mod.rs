@@ -2026,13 +2026,17 @@ impl Formatter {
             Expr::MetaOpToken(op) => {
                 self.emitter.write(&format!("meta {:?}", op).to_lowercase());
             }
-            Expr::Rethrow { expr, error_type, error_name, transform } => {
+            Expr::Rethrow { expr, error_binding, transform } => {
                 self.format_expr(expr);
-                self.emitter.write(" rethrow (");
-                self.format_type(error_type);
-                self.emitter.write(" ");
-                self.emitter.write(&error_name.node);
-                self.emitter.write("): ");
+                if let Some((error_type, error_name)) = error_binding {
+                    self.emitter.write(" rethrow (");
+                    self.format_type(error_type);
+                    self.emitter.write(" ");
+                    self.emitter.write(&error_name.node);
+                    self.emitter.write("): ");
+                } else {
+                    self.emitter.write(" rethrow ");
+                }
                 self.format_expr(transform);
             }
         }

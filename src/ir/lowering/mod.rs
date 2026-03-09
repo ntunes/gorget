@@ -568,7 +568,7 @@ pub fn lower_module(
             let name = &func.name.node;
             let is_main = name == "main";
 
-            let ret_type = if is_main {
+            let ret_type = if is_main && func.throws.is_none() {
                 I32_TYPE
             } else if func.throws.is_some() {
                 // `int foo() throws str` → Result[int, str]

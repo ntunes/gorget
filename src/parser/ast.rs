@@ -529,11 +529,11 @@ pub enum Expr {
     },
 
     // ── Rethrow (inline error transform) ──
-    /// `expr rethrow (Type name): transform_expr`
+    /// `expr rethrow (Type name): transform_expr`  (binding form)
+    /// `expr rethrow transform_expr`               (bare form)
     Rethrow {
         expr: Box<Spanned<Expr>>,
-        error_type: Spanned<Type>,
-        error_name: Spanned<String>,
+        error_binding: Option<(Spanned<Type>, Spanned<String>)>,
         transform: Box<Spanned<Expr>>,
     },
 

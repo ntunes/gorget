@@ -667,11 +667,7 @@ Result[Session, str] connect(str host, int port, str user, str password):
     if user != "":
         resolved_user = user
 
-    Result[Socket, str] sock_result = socket_connect(resolved_host, resolved_port)
-    if sock_result.is_err():
-        return Error("connection failed")
-
-    Socket sock = sock_result.unwrap()
+    Socket sock = socket_connect(resolved_host, resolved_port)
 
     # Dummy cipher/keys for pre-encryption phase
     Vector[uint8] dummy_key = bytes_from_hex("00000000000000000000000000000000")

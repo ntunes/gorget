@@ -1091,19 +1091,23 @@ fn template_type_names(module: &Module) -> Vec<String> {
             names.push(def.name.clone());
             continue;
         }
-        // Detect by structure: field or variant field with UNIT_TYPE
-        match &def.kind {
-            TypeDefKind::Struct(s) => {
-                if s.fields.iter().any(|f| f.type_id == UNIT_TYPE) {
-                    names.push(def.name.clone());
+        // Detect by structure: field or variant field with UNIT_TYPE.
+        // Skip Result__ types — they're always fully monomorphized and may
+        // legitimately contain void (e.g., Result[void, int] from throws-int main).
+        if !def.name.starts_with("Result__") {
+            match &def.kind {
+                TypeDefKind::Struct(s) => {
+                    if s.fields.iter().any(|f| f.type_id == UNIT_TYPE) {
+                        names.push(def.name.clone());
+                    }
                 }
-            }
-            TypeDefKind::Enum(e) => {
-                if e.variants.iter().any(|v| v.fields.iter().any(|f| f.type_id == UNIT_TYPE)) {
-                    names.push(def.name.clone());
+                TypeDefKind::Enum(e) => {
+                    if e.variants.iter().any(|v| v.fields.iter().any(|f| f.type_id == UNIT_TYPE)) {
+                        names.push(def.name.clone());
+                    }
                 }
+                TypeDefKind::Alias(_) => {}
             }
-            TypeDefKind::Alias(_) => {}
         }
     }
     names
@@ -3269,7 +3273,8 @@ fn emit_poll_inst(
                     e.variants.iter().position(|v| &v.name == variant)
                 } else { None })
                 .unwrap_or(0);
-            if fields.is_empty() {
+            let all_unit = !fields.is_empty() && fields.iter().all(|f| matches!(f, Operand::Constant(Constant::Unit)));
+            if fields.is_empty() || all_unit {
                 let _ = writeln!(out, "        {dst_str} = ({type_name}){{.tag = {tag}}};");
             } else {
                 let field_strs = fields.iter()
@@ -4119,8 +4124,9 @@ fn emit_type_definitions(out: &mut String, module: &Module) {
                 out.push_str("    int tag;\n");
                 out.push_str("    union {\n");
                 for variant in &e.variants {
-                    if variant.fields.is_empty() {
-                        // Unit variant — no data
+                    // Skip unit variants and void-only variants (e.g., Ok in Result[void, E])
+                    let has_real_fields = variant.fields.iter().any(|f| f.type_id != UNIT_TYPE);
+                    if variant.fields.is_empty() || !has_real_fields {
                         continue;
                     }
                     let _ = writeln!(out, "        struct {{");
@@ -6090,7 +6096,8 @@ fn emit_instruction(
             } else { (0, vec![]) };
 
             let _ = write!(out, "        _{id} = ({type_name}){{.tag = {tag}", id = dst.0);
-            if !fields.is_empty() {
+            let all_unit = !fields.is_empty() && fields.iter().all(|f| matches!(f, Operand::Constant(Constant::Unit)));
+            if !fields.is_empty() && !all_unit {
                 let _ = write!(out, ", .data.{variant} = {{");
                 for (i, field_val) in fields.iter().enumerate() {
                     if i > 0 {
@@ -6446,8 +6453,13 @@ fn emit_terminator(out: &mut String, term: &Terminator, func: &Function, registr
             if return_is_void {
                 out.push_str("        return;\n");
             } else if is_main {
-                // For main, return _0
-                out.push_str("        return _0;\n");
+                // For throws-int main, _0 is a Result struct — unwrap to exit code
+                let ret_type_name = registry.type_name(func.return_type);
+                if ret_type_name.as_deref().map_or(false, |n| n.starts_with("Result__")) {
+                    out.push_str("        if (_0.tag == 0) { return 0; } else { return _0.data.Error._0; }\n");
+                } else {
+                    out.push_str("        return _0;\n");
+                }
             } else {
                 match value {
                     Operand::Constant(Constant::Unit) => {
