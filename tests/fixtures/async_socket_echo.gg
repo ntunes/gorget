@@ -1,0 +1,25 @@
+# Test: basic async socket echo — server reads a line and echoes it back.
+from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
+from std.time import sleep
+
+async void echo_server(int port):
+    ServerSocket srv = server_socket_bind("127.0.0.1", port).unwrap()
+    Socket conn = srv.accept().unwrap()
+    srv.close()
+    conn.set_timeout(2000)
+    str line = conn.read_line().unwrap()
+    conn.write_str(line + "\n")
+    conn.close()
+
+async void main():
+    int port = 18099
+    Task[void] srv = spawn echo_server(port)
+    sleep(0.05).await()
+
+    Socket c = socket_connect("127.0.0.1", port).unwrap()
+    c.write_str("hello\n")
+    str reply = c.read_line().unwrap()
+    c.close()
+    srv.await()
+    print(f"{reply.len()}")
+    print("got reply")
