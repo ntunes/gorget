@@ -2205,7 +2205,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
             substitute_expr(object, env, type_env);
             substitute_expr(index, env, type_env);
         }
-        Expr::NilCoalescing { lhs, rhs } => {
+        Expr::DefaultOp { lhs, rhs } => {
             substitute_expr(lhs, env, type_env);
             substitute_expr(rhs, env, type_env);
         }

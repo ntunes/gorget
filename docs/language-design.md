@@ -521,7 +521,7 @@ if name is Some(n):
 auto len = user?.name?.len()          # Option[int]
 auto city = user?.address?.city       # Option[String]
 
-# Nil coalescing (??)
+# Default operator (??)
 # Unwraps the Option, or uses the default if None
 String display = user?.name ?? "anonymous"
 int count = map.get(key) ?? 0
@@ -1655,7 +1655,7 @@ void main():
 | 7 | **Indentation** | 4 spaces (enforced by `gg fmt`) |
 | 8 | **Compilation target** | LLVM (Cranelift for debug builds in future) |
 | 9 | **Package management** | Built into `gg` CLI (`gg new`, `gg add`, `gg publish`, etc.) |
-| 10 | **Option handling** | `Option[T]` with rich sugar: `is` pattern matching, `?.` optional chaining, `??` nil coalescing, `.unwrap()`, `.unwrap_or()`, `?` early return |
+| 10 | **Option handling** | `Option[T]` with rich sugar: `is` pattern matching, `?.` optional chaining, `??` default operator, `.unwrap()`, `.unwrap_or()`, `?` early return |
 | 11 | **Tuple syntax** | `(int, str)` — concise, universal |
 | 12 | **Array syntax** | C-style: `int[5]` fixed array, `Vector[int]` growable, `int[]` slice |
 | 13 | **Operator overloading** | Via traits (like Rust) |
@@ -2084,7 +2084,7 @@ int y = v.get(1).unwrap()           # 20
 
 Dict[str, int] m = {"a": 1}
 Option[int] val = m.get("z")        # None (not a panic)
-int fallback = m.get("z") ?? 0      # 0 via nil coalescing
+int fallback = m.get("z") ?? 0      # 0 via default operator
 ```
 
 The guideline: if a caller can reasonably trigger the failure case through normal use (missing key, out-of-bounds index, empty collection), the method must return `Option[T]`. Panics are reserved for logic errors — violations of documented preconditions that indicate a bug in the calling code (e.g., `unwrap()` on `None`, indexing with `[]` out of bounds).

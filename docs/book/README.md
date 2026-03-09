@@ -48,7 +48,7 @@ need prior exposure to follow along.
 
 9. **[Option and Result](09-option-result.md)**
    Null safety with `Option[T]`, error handling with `Result[T, E]`,
-   `unwrap`, `map`, `and_then`, optional chaining (`?.`), nil coalescing (`??`).
+   `unwrap`, `map`, `and_then`, optional chaining (`?.`), default operator (`??`).
 
 10. **[Error Handling](10-errors.md)**
     The `throws` model, `throw` statement, auto-propagation, `try` expression,

@@ -6384,7 +6384,7 @@ fn format_expr_canonical(expr: &Expr) -> String {
             }
             result
         }
-        Expr::NilCoalescing { lhs, rhs } => {
+        Expr::DefaultOp { lhs, rhs } => {
             let ls = format_expr_canonical(&lhs.node);
             let rs = format_expr_canonical(&rhs.node);
             format!("({ls} ?? {rs})")

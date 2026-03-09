@@ -216,7 +216,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
             rewrite_expr(object, res, scopes);
             rewrite_expr(index, res, scopes);
         }
-        Expr::NilCoalescing { lhs, rhs } => {
+        Expr::DefaultOp { lhs, rhs } => {
             rewrite_expr(lhs, res, scopes);
             rewrite_expr(rhs, res, scopes);
         }

@@ -522,8 +522,8 @@ pub enum Expr {
         field: Spanned<String>,
     },
 
-    // ── Nil coalescing (??) ──
-    NilCoalescing {
+    // ── Default operator (??) ──
+    DefaultOp {
         lhs: Box<Spanned<Expr>>,
         rhs: Box<Spanned<Expr>>,
     },

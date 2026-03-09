@@ -1289,7 +1289,7 @@ fn resolve_expr(
             resolve_expr(object, scopes, errors, resolution_map);
         }
 
-        Expr::NilCoalescing { lhs, rhs } => {
+        Expr::DefaultOp { lhs, rhs } => {
             resolve_expr(lhs, scopes, errors, resolution_map);
             resolve_expr(rhs, scopes, errors, resolution_map);
         }

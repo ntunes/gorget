@@ -118,11 +118,11 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
             }
         }
 
-        // ── Optional chaining / nil coalescing ──
+        // ── Optional chaining / default operator ──
         Expr::OptionalChain { object, .. } => {
             v.visit_expr(object);
         }
-        Expr::NilCoalescing { lhs, rhs } => {
+        Expr::DefaultOp { lhs, rhs } => {
             v.visit_expr(lhs);
             v.visit_expr(rhs);
         }

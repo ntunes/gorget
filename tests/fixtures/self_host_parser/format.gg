@@ -344,7 +344,7 @@ str format_expr(SpannedExpr se):
             str lb = r"{"
             str rb = r"}"
             return lb + format_expr(*key) + ": " + format_expr(*val) + " for " + var + " in " + format_expr(*iter) + rb
-        case ENilCoalescing(l, r):
+        case EDefaultOp(l, r):
             return "(" + format_expr(*l) + " ?? " + format_expr(*r) + ")"
         case EIs(expr, negated, pat):
             str es = format_expr(*expr)

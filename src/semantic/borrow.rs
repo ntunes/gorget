@@ -713,8 +713,8 @@ impl<'a> BorrowChecker<'a> {
                 self.compute_expr_origin(inner)
             }
 
-            // NilCoalescing: either branch could provide the result
-            Expr::NilCoalescing { lhs, rhs } => {
+            // Default operator: either branch could provide the result
+            Expr::DefaultOp { lhs, rhs } => {
                 let origins = vec![
                     self.compute_expr_origin(lhs),
                     self.compute_expr_origin(rhs),
@@ -1214,7 +1214,7 @@ impl<'a> BorrowChecker<'a> {
                 None
             }
             Expr::BinaryOp { left, right, .. }
-            | Expr::NilCoalescing { lhs: left, rhs: right } => {
+            | Expr::DefaultOp { lhs: left, rhs: right } => {
                 self.find_shared_ref_in_expr_spanned(left)
                     .or_else(|| self.find_shared_ref_in_expr_spanned(right))
             }
@@ -1299,7 +1299,7 @@ impl<'a> BorrowChecker<'a> {
                 None
             }
             Expr::BinaryOp { left, right, .. }
-            | Expr::NilCoalescing { lhs: left, rhs: right } => {
+            | Expr::DefaultOp { lhs: left, rhs: right } => {
                 self.find_with_tracked_in_condition(left)
                     .or_else(|| self.find_with_tracked_in_condition(right))
             }
@@ -1372,7 +1372,7 @@ impl<'a> BorrowChecker<'a> {
                 None
             }
             Expr::BinaryOp { left, right, .. }
-            | Expr::NilCoalescing { lhs: left, rhs: right } => {
+            | Expr::DefaultOp { lhs: left, rhs: right } => {
                 self.find_stale_in_condition(left)
                     .or_else(|| self.find_stale_in_condition(right))
             }
@@ -1695,7 +1695,7 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(object);
             }
 
-            Expr::NilCoalescing { lhs, rhs } => {
+            Expr::DefaultOp { lhs, rhs } => {
                 self.check_expr(lhs);
                 self.check_expr(rhs);
             }
@@ -4207,7 +4207,7 @@ fn collect_param_indices(
                 result.extend(collect_param_indices(&else_br.node, param_names, aliases, function_info, resolution_map, scopes));
             }
         }
-        Expr::NilCoalescing { lhs, rhs } => {
+        Expr::DefaultOp { lhs, rhs } => {
             result.extend(collect_param_indices(&lhs.node, param_names, aliases, function_info, resolution_map, scopes));
             result.extend(collect_param_indices(&rhs.node, param_names, aliases, function_info, resolution_map, scopes));
         }
@@ -4296,7 +4296,7 @@ fn trace_expr_to_params(
             }
         }
 
-        Expr::NilCoalescing { lhs, rhs } => {
+        Expr::DefaultOp { lhs, rhs } => {
             trace_expr_to_params(lhs, param_names, local_aliases, function_info, resolution_map, scopes, result);
             trace_expr_to_params(rhs, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }

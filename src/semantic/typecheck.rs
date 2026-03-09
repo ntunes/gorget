@@ -1225,7 +1225,7 @@ impl<'a> TypeChecker<'a> {
                 self.types.error_id
             }
 
-            Expr::NilCoalescing { lhs, rhs } => {
+            Expr::DefaultOp { lhs, rhs } => {
                 let _lhs_type = self.infer_expr(lhs);
                 let rhs_type = self.infer_expr(rhs);
                 rhs_type // unwrapped type

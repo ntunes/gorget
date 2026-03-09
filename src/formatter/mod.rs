@@ -1756,7 +1756,7 @@ impl Formatter {
                 self.emitter.write("?.");
                 self.emitter.write(&field.node);
             }
-            Expr::NilCoalescing { lhs, rhs } => {
+            Expr::DefaultOp { lhs, rhs } => {
                 let lhs_s = self.element_to_string(|f| f.format_expr(lhs));
                 let rhs_s = self.element_to_string(|f| f.format_expr(rhs));
                 let nil_doc = doc::group(doc::concat(vec![

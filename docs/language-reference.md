@@ -311,7 +311,7 @@ Both operator and keyword forms are equivalent and may be used interchangeably.
 | Symbol | Name              |
 |--------|-------------------|
 | `?.`   | Optional chaining |
-| `??`   | Nil coalescing    |
+| `??`   | Default operator  |
 
 **Assignment:**
 
@@ -1445,13 +1445,13 @@ Short-circuits to `None` if the receiver is `None`; otherwise accesses the field
 auto city = user?.address?.city    # Option[String]
 ```
 
-### 7.12 Nil Coalescing
+### 7.12 Default Operator
 
 ```ebnf
-nil_coalescing = expr "??" expr ;
+default_op = expr "??" expr ;
 ```
 
-Unwraps the left operand if `Some`; otherwise evaluates to the right operand.
+Unwraps the left operand if `Some`; otherwise evaluates the right operand. The right-hand side is **lazy** — it is only evaluated when the left-hand side is `None`.
 
 ```gorget
 String name = user?.name ?? "anonymous"
@@ -2866,7 +2866,8 @@ Same API as `Dict` but does not preserve insertion order. Use when order is irre
 |---|---|---|
 | `unwrap()` | `→ T` | Extract value (panics if `None`) |
 | `expect(msg)` | `str → T` | Extract value (panics with `msg` if `None`) |
-| `unwrap_or(default)` | `T → T` | Extract value or return default |
+| `unwrap_or(default)` | `T → T` | Extract value or return default (eager) |
+| `unwrap_or_else(f)` | `() → T → T` | Extract value or compute default (lazy) |
 | `is_some()` | `→ bool` | True if `Some` |
 | `is_none()` | `→ bool` | True if `None` |
 | `map(f)` | `(T) → U → Option[U]` | Apply function to inner value |
@@ -2880,7 +2881,8 @@ Same API as `Dict` but does not preserve insertion order. Use when order is irre
 |---|---|---|
 | `unwrap()` | `→ T` | Extract value (panics if `Error`) |
 | `expect(msg)` | `str → T` | Extract value (panics with `msg` if `Error`) |
-| `unwrap_or(default)` | `T → T` | Extract value or return default |
+| `unwrap_or(default)` | `T → T` | Extract value or return default (eager) |
+| `unwrap_or_else(f)` | `(E) → T → T` | Extract value or compute default from error (lazy) |
 | `is_ok()` | `→ bool` | True if `Ok` |
 | `is_err()` | `→ bool` | True if `Error` |
 | `map(f)` | `(T) → U → Result[U, E]` | Apply function to success value |
@@ -5607,7 +5609,7 @@ unsafe_stmt = "unsafe" ":" block ;
 (* ── Expressions ── *)
 expr = literal | IDENTIFIER | path_expr | unary_expr | binary_expr
      | call_expr | method_call | field_access | tuple_access | index_expr
-     | range_expr | optional_chain | nil_coalescing | try_expr
+     | range_expr | optional_chain | default_op | try_expr
      | move_expr | mut_borrow_expr | deref_expr | as_expr | is_expr
      | if_expr | match_expr | do_expr | closure | implicit_closure
      | list_comp | dict_comp | set_comp

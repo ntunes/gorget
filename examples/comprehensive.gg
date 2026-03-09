@@ -124,7 +124,7 @@ void main():
     # Array literal
     auto nums = [1, 2, 3, 4, 5]
 
-    # NOT YET: optional chaining (?.) and nil coalescing (??)
+    # NOT YET: optional chaining (?.) and default operator (??)
     # auto val = a?.b ?? "default"
 
     # Match statement

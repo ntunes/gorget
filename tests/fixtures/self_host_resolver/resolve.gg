@@ -581,7 +581,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             if has_opt_box_sexpr(opt_end):
                 resolve_expr(*unwrap_opt_box_sexpr(opt_end), &scopes, &ctx)
 
-        case ENilCoalescing(lhs, rhs):
+        case EDefaultOp(lhs, rhs):
             resolve_expr(*lhs, &scopes, &ctx)
             resolve_expr(*rhs, &scopes, &ctx)
 

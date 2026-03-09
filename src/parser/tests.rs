@@ -499,12 +499,12 @@ fn test_optional_chaining() {
 }
 
 #[test]
-fn test_nil_coalescing() {
+fn test_default_op() {
     let module = parse("void main():\n    auto x = a ?? b\n");
     if let Item::Function(ref f) = module.items[0].node {
         if let FunctionBody::Block(ref block) = f.body {
             if let Stmt::VarDecl { ref value, .. } = block.stmts[0].node {
-                assert!(matches!(&value.node, Expr::NilCoalescing { .. }));
+                assert!(matches!(&value.node, Expr::DefaultOp { .. }));
             } else {
                 panic!();
             }

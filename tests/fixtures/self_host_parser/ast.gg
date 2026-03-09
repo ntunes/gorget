@@ -79,7 +79,7 @@ enum Expr:
     EListComp(Box[SpannedExpr], str, Box[SpannedExpr], Option[Box[SpannedExpr]])
     ESetComp(Box[SpannedExpr], str, Box[SpannedExpr], Box[SpannedExpr])
     EDictComp(Box[SpannedExpr], Box[SpannedExpr], str, Box[SpannedExpr])
-    ENilCoalescing(Box[SpannedExpr], Box[SpannedExpr])
+    EDefaultOp(Box[SpannedExpr], Box[SpannedExpr])
     EIs(Box[SpannedExpr], bool, Box[SpannedPattern])
     EDo(Vector[Stmt])
 

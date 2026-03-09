@@ -400,7 +400,7 @@ fn lower_expr_inner(
             }
         }
 
-        Expr::NilCoalescing { lhs, rhs } => {
+        Expr::DefaultOp { lhs, rhs } => {
             // lhs ?? rhs: check if lhs is None, if so evaluate rhs
             let lhs_val = lower_expr(ctx, builder, lhs);
             let lhs_type = infer_operand_type_full(ctx, &lhs_val, builder);

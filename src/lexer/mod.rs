@@ -1290,7 +1290,7 @@ mod tests {
     }
 
     #[test]
-    fn test_optional_chaining_and_nil_coalescing() {
+    fn test_optional_chaining_and_default_op() {
         let tokens = lex("a?.b ?? c\n");
         assert_eq!(
             tokens,

@@ -331,8 +331,9 @@ Result[int, str] ok = Ok(10)
 Result[int, str] err = Error("fail")
 
 ok.unwrap()             # 10 — panics if Error
-ok.unwrap_or(0)         # 10
+ok.unwrap_or(0)         # 10 — eager: default always evaluated
 err.unwrap_or(99)       # 99
+err.unwrap_or_else((str e): 0)  # 0 — lazy: closure only called on Error
 
 ok.is_ok()              # true
 err.is_err()            # true
@@ -388,7 +389,8 @@ Option[int] y = None
 
 x.unwrap()              # 42 — panics if None
 x.expect("need a value") # 42 — panics with message if None
-y.unwrap_or(0)          # 0 — default on None
+y.unwrap_or(0)          # 0 — eager: default always evaluated
+y.unwrap_or_else((): 42) # 42 — lazy: closure only called on None
 x.is_some()             # true
 y.is_none()             # true
 x.map((int n): n * 2)   # Some(84)
@@ -422,9 +424,9 @@ match user:
         pass
 ```
 
-### Nil Coalescing (`??`)
+### Default Operator (`??`)
 
-The `??` operator provides a default when an `Option` is `None`:
+The `??` operator provides a default when an `Option` is `None`. The right-hand side is **lazy** — it is only evaluated when the left-hand side is `None`:
 
 ```gorget
 str name = user?.name ?? "anonymous"
@@ -580,6 +582,6 @@ differently.
 | `Result[T, E]` | Value or typed error | Explicit error handling, library APIs |
 | `Option[T]` | Value that might be absent | Lookups, optional fields, parsing |
 | `?.` | Short-circuit on `None` | Chaining optional operations |
-| `??` | Default on `None` | Providing fallback values |
+| `??` | Default on `None` (lazy) | Providing fallback values |
 | `assert` | Panic if condition is false | Invariant checks (runs in all builds) |
 | Panic | Crash on programmer error | Bugs, not environmental failures |

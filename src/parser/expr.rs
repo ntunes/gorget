@@ -42,7 +42,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
 
         // Binary
         Expr::BinaryOp { left, right, .. } => contains_it(left) || contains_it(right),
-        Expr::NilCoalescing { lhs, rhs } => contains_it(lhs) || contains_it(rhs),
+        Expr::DefaultOp { lhs, rhs } => contains_it(lhs) || contains_it(rhs),
 
         // Access
         Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. }
@@ -227,7 +227,7 @@ struct InfixBP {
 #[derive(Debug, Clone, Copy)]
 enum InfixOp {
     Binary(BinaryOp),
-    NilCoalescing,
+    DefaultOp,
     Is,
     IsNot,
     As,
@@ -566,11 +566,11 @@ impl Parser {
                 op: InfixOp::Rethrow,
             },
 
-            // Nil coalescing
+            // Default operator
             Token::DoubleQuestion => InfixBP {
                 left: 3,
                 right: 4,
-                op: InfixOp::NilCoalescing,
+                op: InfixOp::DefaultOp,
             },
 
             // or
@@ -772,12 +772,12 @@ impl Parser {
                     start.merge(end),
                 ))
             }
-            InfixOp::NilCoalescing => {
+            InfixOp::DefaultOp => {
                 self.advance();
                 let rhs = self.parse_expr_bp(ibp.right)?;
                 let end = rhs.span;
                 Ok(Spanned::new(
-                    Expr::NilCoalescing {
+                    Expr::DefaultOp {
                         lhs: Box::new(lhs),
                         rhs: Box::new(rhs),
                     },
