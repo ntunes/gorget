@@ -2212,7 +2212,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
         Expr::Move { expr: inner }
         | Expr::MutableBorrow { expr: inner } | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner } | Expr::Spawn { expr: inner }
-        | Expr::SpawnBlocking { expr: inner } | Expr::TrapCapture { expr: inner } => {
+        | Expr::SpawnBlocking { expr: inner } | Expr::RawCapture { expr: inner } => {
             substitute_expr(inner, env, type_env);
         }
         Expr::If { condition, then_branch, elif_branches, else_branch } => {

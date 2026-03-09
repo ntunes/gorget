@@ -6485,8 +6485,8 @@ fn format_expr_canonical(expr: &Expr) -> String {
                 .collect();
             format!("{}({})", name.node, arg_strs.join(", "))
         }
-        Expr::TrapCapture { expr } => {
-            format!("trap {}", format_expr_canonical(&expr.node))
+        Expr::RawCapture { expr } => {
+            format!("raw {}", format_expr_canonical(&expr.node))
         }
         Expr::Move { expr } => {
             format!("!{}", format_expr_canonical(&expr.node))
@@ -7996,6 +7996,22 @@ fn process_spawn() {
 fn process_pipe() {
     // cat echoes stdin back; write_stdin adds \n, print(out) adds another \n
     run_gg("process_pipe.gg", "hello from gorget\n\n0");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// std.signal integration tests
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn signal_basic() {
+    run_gg(
+        "signal_basic.gg",
+        "\
+no signal yet
+got SIGUSR1
+cleared
+done",
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════

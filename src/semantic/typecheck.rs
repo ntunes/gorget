@@ -1322,7 +1322,7 @@ impl<'a> TypeChecker<'a> {
                 self.types.insert(ResolvedType::Generic(task_def_id, vec![result_type]))
             }
 
-            Expr::TrapCapture { expr: inner } => {
+            Expr::RawCapture { expr: inner } => {
                 self.infer_expr(inner);
                 self.types.error_id // Result[T, E]
             }

@@ -112,30 +112,30 @@ Result[AnnounceInfo, str] p2p_decode_announce_payload(Vector[uint8] payload):
 
 # ── Message Decoding ─────────────────────────────────────────
 
-Result[Message, str] p2p_decode_message(Vector[uint8] raw):
-    if raw.len() < 45:
+Result[Message, str] p2p_decode_message(Vector[uint8] data):
+    if data.len() < 45:
         return Error("packet too short")
 
     # Check magic
-    Vector[uint8] magic = bytes_slice(raw, 0, 4)
+    Vector[uint8] magic = bytes_slice(data, 0, 4)
     str magic_str = bytes_to_str(magic).unwrap()
     if magic_str != "GG01":
         return Error("invalid magic")
 
-    int total_len = bytes_read_u32_be(raw, 4)
-    if raw.len() < total_len:
+    int total_len = bytes_read_u32_be(data, 4)
+    if data.len() < total_len:
         return Error("truncated packet")
 
     # msg_type: single byte at offset 8
-    uint8 type_byte = raw.get(8).unwrap()
+    uint8 type_byte = data.get(8).unwrap()
     int msg_type = type_byte as int
 
-    int nonce = bytes_read_u32_be(raw, 9)
-    Vector[uint8] sender_bytes = bytes_slice(raw, 13, 45)
+    int nonce = bytes_read_u32_be(data, 9)
+    Vector[uint8] sender_bytes = bytes_slice(data, 13, 45)
 
     Vector[uint8] payload = Vector[uint8]()
     if total_len > 45:
-        payload = bytes_slice(raw, 45, total_len)
+        payload = bytes_slice(data, 45, total_len)
 
     return Ok(Message(msg_type, nonce, PeerId(sender_bytes), payload))
 

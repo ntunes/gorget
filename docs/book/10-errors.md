@@ -25,7 +25,7 @@ code.
 ## Throwing and Catching Errors
 
 Gorget's primary error handling mechanism is `throws`. A function that can fail declares it
-in its signature. The caller either lets the error propagate or catches it with `trap`. The
+in its signature. The caller either lets the error propagate or catches it with `raw`. The
 happy path reads like straight-line code.
 
 ### Declaring a Throwing Function
@@ -102,14 +102,14 @@ Result[int, str] double_parsed(str s):
     return Ok(val * 2)
 ```
 
-### Catching with `trap`
+### Catching with `raw`
 
 Sometimes you don't want an error to propagate — you want to handle it locally. The
-`trap` keyword captures a throwing call as a `Result` value:
+`raw` keyword captures a throwing call as a `Result` value:
 
 ```gorget
 void main():
-    Result[int, str] result = trap parse_port("8080")
+    Result[int, str] result = raw parse_port("8080")
     match result:
         case Ok(port):
             print("using port {port}")
@@ -117,8 +117,8 @@ void main():
             print("bad port: {msg}")
 ```
 
-Without `trap`, calling a `throws` function from a non-`throws` function is a compile
-error. `trap` is the bridge: it converts the throwing call into a `Result` you can
+Without `raw`, calling a `throws` function from a non-`throws` function is a compile
+error. `raw` is the bridge: it converts the throwing call into a `Result` you can
 inspect with all the methods from the previous chapter.
 
 ### Quick Recovery
@@ -127,7 +127,7 @@ When you just need a default value if something fails:
 
 ```gorget
 void main():
-    int port = trap parse_port(input).unwrap_or(8080)
+    int port = raw parse_port(input).unwrap_or(8080)
     print("listening on {port}")
 ```
 
@@ -135,7 +135,7 @@ Or with pattern matching for more nuanced recovery:
 
 ```gorget
 void main():
-    auto result = trap connect(host, port)
+    auto result = raw connect(host, port)
     match result:
         case Ok(conn):
             handle(conn)
@@ -146,12 +146,12 @@ void main():
 
 ### Intercepting Errors in a Throwing Function
 
-You can use `trap` inside a `throws` function too, when you want to intercept an error
+You can use `raw` inside a `throws` function too, when you want to intercept an error
 rather than let it propagate:
 
 ```gorget
 Config load_with_fallback(str path) throws str:
-    auto result = trap load_config(path)
+    auto result = raw load_config(path)
     match result:
         case Ok(cfg):
             return cfg
@@ -160,7 +160,7 @@ Config load_with_fallback(str path) throws str:
             return Config.default()
 ```
 
-Without `trap`, the error from `load_config` would auto-propagate. With `trap`, you catch
+Without `raw`, the error from `load_config` would auto-propagate. With `raw`, you catch
 it locally and decide what to do.
 
 ### Recovering from Errors with `catch`
@@ -296,7 +296,7 @@ where needed:
 4. **`on error`** — add cleanup that only runs on the error path. Use when you've
    acquired resources that need releasing.
 
-5. **`trap`** — drop to full manual control. Capture the `Result` and handle it with
+5. **`raw`** — drop to full manual control. Capture the `Result` and handle it with
    pattern matching, combinators, or any logic you need.
 
 Most functions only need step 1. A few need steps 2 or 3. Steps 4 and 5 appear at
@@ -321,7 +321,7 @@ This gives callers the ability to match on the *kind* of error and respond diffe
 
 ```gorget
 void handle_request(str path) throws AppError:
-    auto result = trap load_resource(path)
+    auto result = raw load_resource(path)
     match result:
         case Ok(data):
             respond(data)
@@ -329,7 +329,7 @@ void handle_request(str path) throws AppError:
             respond_404(msg)
         case Error(AppError.Io(msg)):
             # retry once
-            auto retry = trap load_resource(path)
+            auto retry = raw load_resource(path)
             match retry:
                 case Ok(data):
                     respond(data)
@@ -371,7 +371,7 @@ int parse_port(str input) throws str:
 
 compiles to a function that returns `Result[int, str]`. The `throw` keyword becomes an
 early return of `Error(...)`. Auto-propagation becomes automatic unwrapping of `Ok` or
-early return of `Error`. The `trap` keyword is the inverse — it wraps the call so you get
+early return of `Error`. The `raw` keyword is the inverse — it wraps the call so you get
 the raw `Result` back.
 
 This means `throws` functions and `Result`-returning functions are interchangeable from
@@ -451,7 +451,7 @@ Or use wrapping operators for specific expressions: `+%`, `-%`, `*%`.
 
 ## Putting It Together
 
-Here's a realistic example that combines `throws`, `trap`, custom error types, and
+Here's a realistic example that combines `throws`, `raw`, custom error types, and
 `Option`:
 
 ```gorget
@@ -496,7 +496,7 @@ Config load_config(str path) throws ConfigError:
     return parse_config(content)
 
 void main():
-    auto result = trap load_config("app.conf")
+    auto result = raw load_config("app.conf")
     match result:
         case Ok(cfg):
             print("connecting to {cfg.host}:{cfg.port}/{cfg.database}")
@@ -511,7 +511,7 @@ void main():
 
 The structure is clear: `parse_config` throws on any parsing issue with a specific
 reason. `load_config` uses `rethrow` to wrap file I/O errors into the same error type
-in one line. `main` uses `trap` to catch everything and respond to each error kind
+in one line. `main` uses `raw` to catch everything and respond to each error kind
 differently.
 
 ---
@@ -528,6 +528,6 @@ differently.
 | `catch (e): expr` | Recover from error with fallback | Default values, graceful degradation |
 | `throws int` on main | Exit code on error | Process-level error handling |
 | `on error: block` | Cleanup on error exit only | Resource cleanup |
-| `trap expr` | Catch a throwing call as `Result` | When you want to handle, not propagate |
+| `raw expr` | Catch a throwing call as `Result` | When you want to handle, not propagate |
 | `assert` | Panic if condition is false | Invariant checks (runs in all builds) |
 | Panic | Crash on programmer error | Bugs, not environmental failures |

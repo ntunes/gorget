@@ -104,7 +104,7 @@ true  false  None  Some  Ok  Error
 **Error handling keywords:**
 
 ```
-throw  throws  trap  catch
+throw  throws  raw  catch
 ```
 
 **Import keywords:**
@@ -1488,16 +1488,16 @@ Unwraps the left operand if `Some`; otherwise evaluates the right operand. The r
 String name = user?.name ?? "anonymous"
 ```
 
-### 7.13 Trap Expression
+### 7.13 Raw Expression
 
 ```ebnf
-trap_expr = "trap" expr ;
+raw_expr = "raw" expr ;
 ```
 
 Captures a potentially-throwing call as a `Result[T, E]` instead of auto-propagating:
 
 ```gorget
-auto result = trap read_file(path)
+auto result = raw read_file(path)
 match result:
     case Ok(content): print(content)
     case Error(e): print("Error: {e}")
@@ -2124,7 +2124,7 @@ struct Merger:
 
 ## 10. Error Handling
 
-Gorget uses a `throws`/`trap`/`throw` model that desugars to `Result[T, E]`.
+Gorget uses a `throws`/`raw`/`throw` model that desugars to `Result[T, E]`.
 
 ### 10.1 Throwing Functions
 
@@ -2148,12 +2148,12 @@ throw ParseError("invalid input")
 
 It is a compile-time error to use `throw` in a function not declared with `throws`.
 
-### 10.3 Trap
+### 10.3 Raw
 
-The `trap` keyword captures a potentially-failing call as a `Result` value instead of auto-propagating:
+The `raw` keyword captures a potentially-failing call as a `Result` value instead of auto-propagating:
 
 ```gorget
-auto result = trap read_file(path)
+auto result = raw read_file(path)
 match result:
     case Ok(content): use(content)
     case Error(e): handle(e)
@@ -3113,6 +3113,31 @@ match result:
         print(code)        # 0
     case Error(msg):
         print("spawn failed: {msg}")
+```
+
+**`std.signal`** — Signal handling
+
+| Name | Signature | Description |
+|---|---|---|
+| `signal_trap(int sig)` | `void` | Install a handler that sets a flag when `sig` is received |
+| `signal_check(int sig)` | `bool` | Returns true if `sig` was received since last check; clears the flag |
+| `signal_wait()` | `int` | Blocks until any trapped signal arrives; returns the signal number |
+| `signal_ignore(int sig)` | `void` | Set `SIG_IGN` for the signal (silently discard) |
+| `signal_reset(int sig)` | `void` | Restore the default handler for the signal |
+| `signal_send(int pid, int sig)` | `int` | Send a signal to a process (returns 0 on success) |
+
+**Constants:** `SIGHUP` (1), `SIGINT` (2), `SIGQUIT` (3), `SIGABRT` (6), `SIGKILL` (9), `SIGUSR1` (10), `SIGUSR2` (12), `SIGPIPE` (13), `SIGALRM` (14), `SIGTERM` (15), `SIGCHLD` (17).
+
+```gorget
+from std.signal import signal_trap, signal_check, SIGINT, SIGTERM
+
+signal_trap(SIGINT)
+signal_trap(SIGTERM)
+loop:
+    if signal_check(SIGINT) or signal_check(SIGTERM):
+        print("shutting down gracefully")
+        break
+    do_work()
 ```
 
 **`std.sync`** — Synchronization primitives
@@ -5633,7 +5658,7 @@ unsafe_stmt = "unsafe" ":" block ;
 (* ── Expressions ── *)
 expr = literal | IDENTIFIER | path_expr | unary_expr | binary_expr
      | call_expr | method_call | field_access | tuple_access | index_expr
-     | range_expr | optional_chain | default_op | trap_expr
+     | range_expr | optional_chain | default_op | raw_expr
      | move_expr | mut_borrow_expr | deref_expr | as_expr | is_expr
      | if_expr | match_expr | do_expr | closure | implicit_closure
      | list_comp | dict_comp | set_comp

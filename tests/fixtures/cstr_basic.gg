@@ -10,5 +10,5 @@ void main():
     str view = c"coerced to str"
     print(view)
 
-    cstr raw = "str to cstr"
-    print(raw)
+    cstr raw_val = "str to cstr"
+    print(raw_val)

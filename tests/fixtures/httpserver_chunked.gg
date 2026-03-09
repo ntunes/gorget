@@ -54,15 +54,15 @@ async void main():
     Socket conn = cr.unwrap()
 
     # Body = "hello" split into chunk "hell" (4 bytes) and "o" (1 byte)
-    str raw = "POST /echo HTTP/1.1\r\n"
-    raw = raw + "Host: 127.0.0.1\r\n"
-    raw = raw + "Transfer-Encoding: chunked\r\n"
-    raw = raw + "Connection: close\r\n"
-    raw = raw + "\r\n"
-    raw = raw + "4\r\nhell\r\n"
-    raw = raw + "1\r\no\r\n"
-    raw = raw + "0\r\n\r\n"
-    conn.write_str(raw)
+    str req ="POST /echo HTTP/1.1\r\n"
+    req = req +"Host: 127.0.0.1\r\n"
+    req = req +"Transfer-Encoding: chunked\r\n"
+    req = req +"Connection: close\r\n"
+    req = req +"\r\n"
+    req = req +"4\r\nhell\r\n"
+    req = req +"1\r\no\r\n"
+    req = req +"0\r\n\r\n"
+    conn.write_str(req)
 
     # Read response status line
     bool ok_status = false

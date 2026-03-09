@@ -63,7 +63,7 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
                 "fs" | "path" | "os" | "conv" | "io" | "random" | "time"
                 | "collections" | "math" | "fmt" | "process" | "bytes"
                 | "encoding" | "channel" | "alloc" | "term" | "heap" | "datetime"
-                | "sync" | "thread" | "async"),
+                | "sync" | "thread" | "async" | "signal"),
             3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls" | "udp"),
             _ => false,
         },
@@ -99,6 +99,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "sync" => Some(gen_sync_module()),
                 "thread" => Some(gen_thread_module()),
                 "async" => Some(gen_async_module()),
+                "signal" => Some(gen_signal_module()),
                 "term" => None,     // file-based module — loaded via builtin_module_source()
                 "heap" => None,     // file-based module — loaded via builtin_module_source()
                 "datetime" => None, // file-based module — loaded via builtin_module_source()
@@ -367,6 +368,43 @@ fn gen_process_module() -> Module {
             ty_result(ty_process(), ty_str()),
         ))),
         Spanned::dummy(Item::Function(decl_fn("getpid", &[], ty_int()))),
+    ];
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
+fn gen_signal_module() -> Module {
+    let int_const = |name: &str, value: i64| -> Spanned<Item> {
+        Spanned::dummy(Item::ConstDecl(ConstDecl {
+            visibility: Visibility::Public,
+            type_: Spanned::dummy(ty_int()),
+            name: Spanned::dummy(name.to_string()),
+            value: Spanned::dummy(Expr::IntLiteral(value)),
+            span: Span::dummy(),
+        }))
+    };
+    let items = vec![
+        // Signal constants (POSIX standard values)
+        int_const("SIGHUP",  1),
+        int_const("SIGINT",  2),
+        int_const("SIGQUIT", 3),
+        int_const("SIGABRT", 6),
+        int_const("SIGKILL", 9),
+        int_const("SIGUSR1", 10),
+        int_const("SIGUSR2", 12),
+        int_const("SIGPIPE", 13),
+        int_const("SIGALRM", 14),
+        int_const("SIGTERM", 15),
+        int_const("SIGCHLD", 17),
+        // Functions
+        Spanned::dummy(Item::Function(decl_fn("signal_trap", &[("sig", ty_int())], ty_void()))),
+        Spanned::dummy(Item::Function(decl_fn("signal_check", &[("sig", ty_int())], ty_bool()))),
+        Spanned::dummy(Item::Function(decl_fn("signal_wait", &[], ty_int()))),
+        Spanned::dummy(Item::Function(decl_fn("signal_ignore", &[("sig", ty_int())], ty_void()))),
+        Spanned::dummy(Item::Function(decl_fn("signal_reset", &[("sig", ty_int())], ty_void()))),
+        Spanned::dummy(Item::Function(decl_fn("signal_send", &[("pid", ty_int()), ("sig", ty_int())], ty_int()))),
     ];
     Module {
         items,

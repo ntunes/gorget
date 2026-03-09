@@ -242,8 +242,8 @@ fn lower_expr_inner(
             lower_match_expr(ctx, builder, scrutinee, arms, else_arm.as_deref())
         }
 
-        // -- P3.3: Trap/error handling --
-        Expr::TrapCapture { expr: inner } => {
+        // -- P3.3: Raw/error handling --
+        Expr::RawCapture { expr: inner } => {
             // try expr → evaluate, extract Ok value or return zero-default on error
             let val = lower_expr(ctx, builder, inner);
             let val_type = infer_operand_type_full(ctx, &val, builder);

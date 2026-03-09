@@ -837,7 +837,7 @@ if "name" in config:
     print(config["name"])
 
 # Use in match guards and while conditions
-match trap parse(input):
+match raw parse(input):
     case Ok(n) if n in 1..=100: print("valid")
     else: print("out of range")
 ```
@@ -942,7 +942,7 @@ HashSet[int] unique = {x * x for x in 1..=10}
 
 ## 6. Error Handling
 
-### 6.1 The `throws` + `trap` Model
+### 6.1 The `throws` + `raw` Model
 
 Functions that can fail use `throws`. Errors auto-propagate without `?`:
 
@@ -953,9 +953,9 @@ Data process(str path) throws AppError:
     Config config = parse_config(content)     # auto-propagates if error
     return transform(config)
 
-# To handle an error locally, use trap:
+# To handle an error locally, use raw:
 Data safe_process(str path) throws AppError:
-    auto result = trap read_file(path)       # captures Result instead of propagating
+    auto result = raw read_file(path)       # captures Result instead of propagating
     match result:
         case Ok(content): return parse(content)
         case Error(e):
@@ -968,9 +968,9 @@ Record parse_line(str line) throws ParseError:
         throw ParseError("empty line")      # raises error, exits function
     return parse(line)
 
-# Non-throwing functions must trap:
+# Non-throwing functions must use raw:
 void main():
-    match trap process("data.txt"):
+    match raw process("data.txt"):
         case Ok(data): print(data)
         case Error(e): print("Error: {e}")
 ```
@@ -978,7 +978,7 @@ void main():
 **Keywords summary:**
 - `throws` — annotates a function that can fail (on the signature)
 - `throw` — explicitly raises an error (inside a `throws` function)
-- `trap` — captures the result as `Result[T, E]` instead of auto-propagating
+- `raw` — captures the result as `Result[T, E]` instead of auto-propagating
 
 Under the hood, `throws` desugars to `Result`. Both styles available:
 - **throws style**: clean, auto-propagation (most code)
@@ -1017,11 +1017,11 @@ Three layers, from cheap to detailed:
 
 ```gorget
 # Adding context:
-String content = trap read_file(path)
+String content = raw read_file(path)
     .context("loading config from {path}")
 
 # Accessing trace:
-match trap process("data.txt"):
+match raw process("data.txt"):
     case Error(e):
         print(e)           # error message
         print(e.trace())   # propagation trace (debug builds)
@@ -1055,12 +1055,12 @@ void critical_section():
 
 **Rule of thumb:** Can the caller prevent this failure by writing correct code? Yes → panic. No → Result.
 
-**`trap:` as universal escape hatch:** Any panic can be caught as `Result[T, str]` via `trap:` blocks. This means graceful OOM handling is always possible without making every allocation return Result.
+**`raw:` as universal escape hatch:** Any panic can be caught as `Result[T, str]` via `raw:` blocks. This means graceful OOM handling is always possible without making every allocation return Result.
 
 ```gorget
-# OOM panics by default — but trap: catches it
+# OOM panics by default — but raw: catches it
 Result[Vector[int], str] safe_alloc():
-    trap:
+    raw:
         Vector[int] v = Vector[int]()
         v.push(42)
         return v
@@ -1450,9 +1450,9 @@ async void fetch_all():
 auto fetcher = async (str url):
     return http.get(url).await()
 
-# async with error handling (throws + trap)
+# async with error handling (throws + raw)
 async void resilient_fetch(str url):
-    match trap fetch(url).await():
+    match raw fetch(url).await():
         case Ok(data): print(data)
         case Error(e): print("Failed: {e}")
 ```
@@ -1679,7 +1679,7 @@ void main():
 | Lifetimes | Body-inferred + `live` | Signature-only + `'a` | N/A | N/A |
 | Generics | `[T]` | `<T>` | `[T]` | `<T>` |
 | Mutability | Mutable default + `const` | `let` default + `mut` | Default mutable | `final`/`const` |
-| Error handling | `throws` + `trap` | `Result` + `?` | Exceptions | Exceptions |
+| Error handling | `throws` + `raw` | `Result` + `?` | Exceptions | Exceptions |
 | Closures | `(params):` + `it` | `\|params\|` | `lambda` | `->` (Java) |
 | Inheritance | Traits only | Traits only | Classes | Classes |
 
@@ -2640,7 +2640,7 @@ Record parse_line(str line) throws ProcessError:
     if parts.len() != 2:
         throw ProcessError.InvalidFormat("expected 2 fields, got {parts.len()}")
     String name = parts[0].trim().to_string()
-    int value = trap parts[1].trim().parse[int]()
+    int value = raw parts[1].trim().parse[int]()
         .map_err((e): ProcessError.Parse("invalid number: {e}"))
     return Record(name, value)
 
@@ -2659,7 +2659,7 @@ Vector[Record] process_file(Path path) throws ProcessError:
     return records
 
 void main():
-    match trap process_file(Path.new("data.csv")):
+    match raw process_file(Path.new("data.csv")):
         case Ok(records):
             print("Processed {records.len()} records")
             int total = records.iter().map(it.value).sum()

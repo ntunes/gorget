@@ -16,8 +16,8 @@ extern bool __bytes_utf8_valid(Vector[uint8] b64_buf) = "gorget_bytes_utf8_valid
 Result[str, str] bytes_to_str(Vector[uint8] b64_buf):
     if not __bytes_utf8_valid(b64_buf):
         return Error("invalid UTF-8 in byte buffer")
-    str raw = __bytes_to_str_raw(b64_buf)
-    return Ok(raw)
+    str raw_str = __bytes_to_str_raw(b64_buf)
+    return Ok(raw_str)
 
 extern Vector[uint8] bytes_from_hex(str b64_hex) = "gorget_bytes_from_hex"
 extern str bytes_to_hex(Vector[uint8] b64_buf) = "gorget_bytes_to_hex"

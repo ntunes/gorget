@@ -12,8 +12,8 @@ void main():
             bool is_str_type = ts.is_string()
             print(f"{is_str_type}")
 
-            str raw = ts.as_str()
-            bool has_val = raw.len() > 0
+            str raw_val =ts.as_str()
+            bool has_val = raw_val.len() > 0
             print(f"{has_val}")
 
             TomlValue name_val = root.get("name")

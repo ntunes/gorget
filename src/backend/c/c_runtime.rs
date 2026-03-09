@@ -8662,6 +8662,85 @@ static inline GorgetString gorget_process_read_stderr(GorgetProcess* proc) {
 static inline int64_t gorget_getpid(void) {
     return (int64_t)getpid();
 }
+
+// ── Signal Handling ──────────────────────────────────────────
+#include <signal.h>
+
+// Flag array: one volatile flag per signal number.
+// NSIG is POSIX-defined as one more than the highest signal number.
+#ifndef NSIG
+#define NSIG 65
+#endif
+static volatile sig_atomic_t __gorget_signal_flags[NSIG];
+
+// C-level signal handler: sets the flag for the received signal.
+static void __gorget_signal_handler(int sig) {
+    if (sig >= 0 && sig < NSIG) {
+        __gorget_signal_flags[sig] = 1;
+    }
+}
+
+// trap(sig) — install a handler that sets a flag when the signal is received.
+static inline void gorget_signal_trap(int64_t sig) {
+    if (sig < 0 || sig >= NSIG) return;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = __gorget_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction((int)sig, &sa, NULL);
+}
+
+// check(sig) -> bool — returns true if signal was received since last check, clears flag.
+static inline bool gorget_signal_check(int64_t sig) {
+    if (sig < 0 || sig >= NSIG) return false;
+    if (__gorget_signal_flags[sig]) {
+        __gorget_signal_flags[sig] = 0;
+        return true;
+    }
+    return false;
+}
+
+// wait_signal() -> int — block until any trapped signal arrives, return its number.
+static inline int64_t gorget_signal_wait(void) {
+    for (;;) {
+        for (int i = 1; i < NSIG; i++) {
+            if (__gorget_signal_flags[i]) {
+                __gorget_signal_flags[i] = 0;
+                return (int64_t)i;
+            }
+        }
+        // Sleep briefly to avoid busy-waiting, then check again.
+        // pause() would also work but returns -1/EINTR which is fine.
+        pause();
+    }
+}
+
+// ignore(sig) — set SIG_IGN for the given signal.
+static inline void gorget_signal_ignore(int64_t sig) {
+    if (sig < 0 || sig >= NSIG) return;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SIG_IGN;
+    sigemptyset(&sa.sa_mask);
+    sigaction((int)sig, &sa, NULL);
+}
+
+// reset(sig) — restore the default handler for the given signal.
+static inline void gorget_signal_reset(int64_t sig) {
+    if (sig < 0 || sig >= NSIG) return;
+    __gorget_signal_flags[sig] = 0;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SIG_DFL;
+    sigemptyset(&sa.sa_mask);
+    sigaction((int)sig, &sa, NULL);
+}
+
+// send(pid, sig) — send a signal to a process.
+static inline int64_t gorget_signal_send(int64_t pid, int64_t sig) {
+    return (int64_t)kill((pid_t)pid, (int)sig);
+}
 "#;
 
 // ─── SQLite ──────────────────────────────────────────────────

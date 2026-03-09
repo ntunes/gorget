@@ -291,7 +291,7 @@ int parse_port(str input) throws str:
 ```
 
 compiles to a function that returns `Result[int, str]`. The `throw` keyword becomes
-an early return of `Error(...)`. The `trap` keyword captures a throwing call as a
+an early return of `Error(...)`. The `raw` keyword captures a throwing call as a
 raw `Result`.
 
 You don't need to think about this to use `throws` — the next chapter covers that

@@ -1921,8 +1921,8 @@ impl Formatter {
                 self.emitter.write("spawn blocking ");
                 self.format_expr(expr);
             }
-            Expr::TrapCapture { expr } => {
-                self.emitter.write("trap ");
+            Expr::RawCapture { expr } => {
+                self.emitter.write("raw ");
                 self.format_expr(expr);
             }
             Expr::Is {

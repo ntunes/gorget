@@ -1,0 +1,25 @@
+from std.signal import signal_trap, signal_check, signal_send, SIGINT, SIGUSR1
+from std.process import getpid
+
+void main():
+    # Trap SIGUSR1 so we can send it to ourselves
+    signal_trap(SIGUSR1)
+    # No signal yet
+    if signal_check(SIGUSR1):
+        print("unexpected")
+    else:
+        print("no signal yet")
+    # Send SIGUSR1 to ourselves
+    int pid = getpid()
+    signal_send(pid, SIGUSR1)
+    # Now check — should be set
+    if signal_check(SIGUSR1):
+        print("got SIGUSR1")
+    else:
+        print("missed signal")
+    # Flag should be cleared after check
+    if signal_check(SIGUSR1):
+        print("unexpected second signal")
+    else:
+        print("cleared")
+    print("done")

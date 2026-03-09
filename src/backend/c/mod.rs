@@ -113,6 +113,13 @@ fn map_stdlib_name(name: &str) -> &str {
         "Process__close_stdin" => "gorget_process_close_stdin",
         "Process__read_stdout" => "gorget_process_read_stdout",
         "Process__read_stderr" => "gorget_process_read_stderr",
+        // Signal functions (std.signal)
+        "signal_trap" => "gorget_signal_trap",
+        "signal_check" => "gorget_signal_check",
+        "signal_wait" => "gorget_signal_wait",
+        "signal_ignore" => "gorget_signal_ignore",
+        "signal_reset" => "gorget_signal_reset",
+        "signal_send" => "gorget_signal_send",
         // AtomicInt methods
         "AtomicInt__new" => "gorget_atomic_int_new",
         "AtomicInt__load" => "gorget_atomic_int_load",

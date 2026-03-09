@@ -11,10 +11,10 @@ int with_cleanup(int x) throws str:
     return val
 
 void main():
-    int a = trap with_cleanup(5)
+    int a = raw with_cleanup(5)
     print(f"{a}")
 
-    int b = trap with_cleanup(-1)
+    int b = raw with_cleanup(-1)
     print(f"{b}")
 
     print("done")

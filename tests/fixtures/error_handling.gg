@@ -12,23 +12,23 @@ int propagate(int x) throws str:
     return val + 1
 
 void main():
-    # trap capture — success case
-    int a = trap risky(5)
+    # raw capture — success case
+    int a = raw risky(5)
     print(f"{a}")
 
-    # trap capture — error case (returns zero-default)
-    int b = trap risky(-1)
+    # raw capture — error case (returns zero-default)
+    int b = raw risky(-1)
     print(f"{b}")
 
     # throw with a str variable (not a literal)
-    int c = trap throw_var("variable error")
+    int c = raw throw_var("variable error")
     print(f"{c}")
 
     # ? operator propagates errors through wrapper
-    int d = trap propagate(5)
+    int d = raw propagate(5)
     print(f"{d}")
 
-    int e = trap propagate(-1)
+    int e = raw propagate(-1)
     print(f"{e}")
 
     print("done")

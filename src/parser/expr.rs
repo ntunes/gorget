@@ -38,7 +38,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         Expr::UnaryOp { operand, .. } => contains_it(operand),
         Expr::Move { expr } | Expr::MutableBorrow { expr }
         | Expr::Deref { expr } | Expr::Await { expr } | Expr::Spawn { expr }
-        | Expr::SpawnBlocking { expr } | Expr::TrapCapture { expr } => contains_it(expr),
+        | Expr::SpawnBlocking { expr } | Expr::RawCapture { expr } => contains_it(expr),
 
         // Binary
         Expr::BinaryOp { left, right, .. } => contains_it(left) || contains_it(right),
@@ -404,13 +404,13 @@ impl Parser {
                 ))
             }
 
-            // Trap capture
-            Token::Keyword(Keyword::Trap) => {
+            // Raw capture
+            Token::Keyword(Keyword::Raw) => {
                 self.advance();
                 let operand = self.parse_expr_bp(2)?;
                 let end = operand.span;
                 Ok(Spanned::new(
-                    Expr::TrapCapture {
+                    Expr::RawCapture {
                         expr: Box::new(operand),
                     },
                     start.merge(end),
@@ -1668,7 +1668,7 @@ impl Parser {
                 | Token::Keyword(Keyword::Match)
                 | Token::Keyword(Keyword::Do)
                 | Token::Keyword(Keyword::Await)
-                | Token::Keyword(Keyword::Trap)
+                | Token::Keyword(Keyword::Raw)
                 | Token::Keyword(Keyword::Spawn)
                 | Token::Keyword(Keyword::SelfLower)
                 | Token::Keyword(Keyword::It)

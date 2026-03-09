@@ -704,7 +704,7 @@ impl<'a> BorrowChecker<'a> {
             // Transparent wrappers: propagate inner origin
             Expr::Move { expr: inner }
             | Expr::Deref { expr: inner }
-            | Expr::TrapCapture { expr: inner }
+            | Expr::RawCapture { expr: inner }
             | Expr::As { expr: inner, .. } => {
                 self.compute_expr_origin(inner)
             }
@@ -1266,7 +1266,7 @@ impl<'a> BorrowChecker<'a> {
             | Expr::Move { expr: inner }
             | Expr::Deref { expr: inner }
             | Expr::Await { expr: inner }
-            | Expr::TrapCapture { expr: inner }
+            | Expr::RawCapture { expr: inner }
             | Expr::Spawn { expr: inner }
             | Expr::SpawnBlocking { expr: inner }
             | Expr::Is { expr: inner, .. }
@@ -1742,7 +1742,7 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
-            Expr::TrapCapture { expr: inner } => {
+            Expr::RawCapture { expr: inner } => {
                 self.check_expr(inner);
             }
 

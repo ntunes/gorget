@@ -40,17 +40,17 @@ private int hex_to_int(str hex_str):
 
 # ── Entity decoding / encoding ─────────────────────────────
 
-private str decode_entities(str raw):
+private str decode_entities(str raw_text):
     str decoded = ""
     int ei = 0
-    while ei < raw.byte_len():
-        str ec = raw.char_at(ei)
+    while ei < raw_text.byte_len():
+        str ec = raw_text.char_at(ei)
         if ec == '&':
             int semi_pos = ei + 1
-            while semi_pos < raw.byte_len() and raw.char_at(semi_pos) != ';':
+            while semi_pos < raw_text.byte_len() and raw_text.char_at(semi_pos) != ';':
                 semi_pos = semi_pos + 1
-            if semi_pos < raw.byte_len():
-                str entity_name = raw.byte_slice(ei + 1, semi_pos)
+            if semi_pos < raw_text.byte_len():
+                str entity_name = raw_text.byte_slice(ei + 1, semi_pos)
                 if entity_name == "amp":
                     decoded = decoded + "&"
                     ei = semi_pos + 1

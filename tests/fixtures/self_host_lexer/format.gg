@@ -137,8 +137,8 @@ str describe_keyword_canonical(Keyword kw):
             return "kw:throw"
         case KwThrows():
             return "kw:throws"
-        case KwTrap():
-            return "kw:trap"
+        case KwRaw():
+            return "kw:raw"
         case KwImport():
             return "kw:import"
         case KwFrom():
