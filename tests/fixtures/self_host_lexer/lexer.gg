@@ -543,12 +543,13 @@ equip Lexer:
         elif self.lex_peek() == b'c':
             self.lex_advance()
 
-        # Skip opening quote
+        # Capture and skip opening quote (may be " or ')
+        byte quote_char = self.lex_peek()
         self.lex_advance()
 
         # Check for triple-quote
         bool triple = false
-        if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek() == b'"' and self.lex_peek_at(1) == b'"':
+        if quote_char == b'"' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek() == b'"' and self.lex_peek_at(1) == b'"':
             triple = true
             self.lex_pos = self.lex_pos + 2
 
@@ -562,7 +563,7 @@ equip Lexer:
                     self.lex_pos = self.lex_pos + 3
                     break
             else:
-                if self.lex_peek() == b'"':
+                if self.lex_peek() == quote_char:
                     self.lex_advance()
                     break
 

@@ -52,7 +52,7 @@
 
 - **Async/await — `await` on vector-indexed tasks with multiple spawn functions**: Type-based await dispatch now works when exactly one function produces tasks of a given type. When multiple functions produce the same `Task__T` type (e.g., two functions both returning `int`), the type-based fallback can't disambiguate. Fix: embed a function dispatch pointer in the `Task__T` struct or use a tag field. [updated: 2026-03-07]
 
-- **Self-hosting parser: 4 remaining mismatches (555/559, 99.3%)**: Remaining: (1) **Float formatting** (2): math_constants, math_trig — C runtime `%g` produces scientific notation (1e+06) vs Rust decimal (1000000.0). (2) **String edge cases** (2): chars (null byte truncation), fstring_basic (f-string kind metadata lost). All 4 are hard C runtime limitations, not parser bugs. [updated: 2026-03-09]
+- **Self-hosting parser: 1 remaining mismatch (558/559, 99.8%)**: Only `chars.gg` — null byte `\0` truncates C string output. Unfixable without length-prefixed string representation in C runtime. [updated: 2026-03-09]
 
 - **Self-hosting resolver: 559/559 (100%) — COMPLETE.** [updated: 2026-03-09]
 

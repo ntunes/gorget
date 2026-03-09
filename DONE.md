@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-09] **Self-hosting parser: 558/559 (99.8%)**: Fixed f-string single-quote lexing (quote_char tracking in lex_scan_string) and float scientific notation (format_float_decimal converts integer-valued floats via int_to_str instead of %g). Only chars.gg remains (null byte truncation).
+
 - [2026-03-09] **feat: `gg.query` — path query and mutation for Json documents**: gjson-inspired path syntax (dot notation, bracket notation, wildcards, recursive descent, array length, predicates, slicing) + dpath-inspired in-place mutation via `&Json` parameters. Functions: `query`, `query_all`, `query_exists`, `query_count`, `query_set`, `query_delete`. Registered in stdlib.rs as file-based module.
 
 - [2026-03-09] **Self-hosting resolver: 100% (559/559)** and **parser: 555/559 (99.3%)**: (1) Match guards — added `guard` field to MatchArm, parser stores guards, resolver resolves guard exprs (+1 resolver). (2) SMetaFor/SMetaIf AST variants — parse meta for/if bodies as real statements for resolver, output just `meta` in formatter (+3 resolver: field_access, meta_delayed_basic, meta_fields). (3) Meta-in-match — skip `meta for`/`meta if` inside match arm lists instead of leaking template body (+1 parser, +1 resolver: meta_variant_payloads). (4) Bare tuple syntax — return types (`int, int f()`), return exprs (`return 10, 20`), auto destructuring (`auto a, b = f()`), for patterns (`for a, b in pairs`) (+1 parser, +1 resolver: bare_tuples). (5) Function detection lookahead handles comma-separated return types.

@@ -3,7 +3,34 @@
 
 from std.collections import Vector
 from std.conv import int_to_str, float_to_str
+from std.math import floor, abs
 from ast import Module, Item, Stmt, Expr, Type, Pattern, Span, SpannedExpr, SpannedType, SpannedPattern, FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch, Param, ImportStmt
+
+# ── Float formatting (decimal, no scientific notation) ──────────
+# Matches Rust's Display for f64: shortest decimal without e+/e- notation.
+# When %g produces scientific notation (e.g. 1e+06), convert to integer string.
+# For floats that %g renders in decimal, return as-is.
+str format_float_decimal(float f):
+    str s = float_to_str(f)
+    # If no scientific notation, return as-is
+    if not s.contains("e") and not s.contains("E"):
+        return s
+    # Special values
+    if s == "inf" or s == "-inf" or s == "nan":
+        return s
+    # For values that are exactly integers, convert via int
+    # This handles the common case: 1e+06, 3.14159e+06, etc.
+    float a = abs(f)
+    if a == floor(a) and a < 1000000000000000.0:
+        int iv = 0
+        if f >= 0.0:
+            iv = f as int
+        else:
+            iv = (0.0 - (0.0 - f)) as int
+        return int_to_str(iv)
+    # For non-integer values with scientific notation, fall back to %g
+    # (rare in parser canonical output — most large floats are integer-valued)
+    return s
 
 # ── Typed accessors (workaround: pattern-destructured Vectors lose generic type) ──
 
@@ -172,7 +199,7 @@ str format_expr(SpannedExpr se):
         case EIntLiteral(n):
             return int_to_str(n)
         case EFloatLiteral(f):
-            str fs = float_to_str(f)
+            str fs = format_float_decimal(f)
             if not fs.contains(".") and not fs.contains("e") and not fs.contains("E"):
                 return fs + ".0"
             return fs
