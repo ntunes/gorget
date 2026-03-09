@@ -4,6 +4,8 @@
 
 - **LIR: Phase 5 — expand A/B test coverage**: 76 fixtures match (13% of ~584). Fixed: StrLit vs Str coercion, FieldPtr bounds-safe fallback, synthetic extern merge, runtime fn declaration skip, struct forward declarations for empty structs, GorgetString→Str arg coercion (partial). Remaining: GorgetString→Str coercion for runtime functions (gorget_str_cat etc.), collection method dispatch, trait object support, generic Option/Result method lowering. [updated: 2026-03-08]
 
+- **Consider removing `?` operator — full auto-propagation**: Inside `throws` functions, calls to other `throws` functions could auto-propagate without needing `?`. Would simplify the error handling model to just `throws`/`throw`/`try`/`rethrow`/`on error`. Requires: implicit Result unwrapping at assignment sites when LHS type is the Ok type and RHS is Result. [added: 2026-03-09]
+
 ## Medium
 
 - **IR refactor: Continue `exprs/` split — Phase 4**: Phases 1-3 done (8 files, mod.rs 2,515 lines). Remaining: control-flow exprs, struct literals, field access — tightly coupled to `lower_expr_inner`. Diminishing returns. Revisit if mod.rs grows again. [updated: 2026-03-07]

@@ -275,6 +275,7 @@ pub enum Keyword {
     Throw,
     Throws,
     Try,
+    Rethrow,
 
     // Imports
     Import,
@@ -399,6 +400,7 @@ impl Keyword {
             Keyword::Throw => "throw",
             Keyword::Throws => "throws",
             Keyword::Try => "try",
+            Keyword::Rethrow => "rethrow",
             Keyword::Import => "import",
             Keyword::From => "from",
             Keyword::Directive => "directive",
@@ -498,6 +500,7 @@ impl Keyword {
             "throw" => Some(Keyword::Throw),
             "throws" => Some(Keyword::Throws),
             "try" => Some(Keyword::Try),
+            "rethrow" => Some(Keyword::Rethrow),
             "import" => Some(Keyword::Import),
             "from" => Some(Keyword::From),
             "directive" => Some(Keyword::Directive),

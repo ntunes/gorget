@@ -522,6 +522,9 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
                 qualify_expr(arg, vm);
             }
         }
+        Stmt::OnError { body } => {
+            qualify_block(body, vm);
+        }
     }
 }
 
@@ -678,6 +681,10 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
             qualify_expr(right, vm);
         }
         Expr::MetaOpToken(_) => {}
+        Expr::Rethrow { expr, transform, .. } => {
+            qualify_expr(expr, vm);
+            qualify_expr(transform, vm);
+        }
     }
 }
 

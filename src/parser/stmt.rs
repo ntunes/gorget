@@ -40,6 +40,12 @@ impl Parser {
             // Explicit control flow keywords
             Token::Keyword(Keyword::Return) => self.parse_return_stmt(),
             Token::Keyword(Keyword::Throw) => self.parse_throw_stmt(),
+            // "on error:" — contextual keyword (on is an identifier, not a keyword)
+            Token::Identifier(ref s) if s == "on"
+                && matches!(self.peek_ahead(1), Token::Identifier(e) if e == "error") =>
+            {
+                self.parse_on_error_stmt()
+            }
             Token::Keyword(Keyword::Assert) => self.parse_assert_stmt(),
             Token::Keyword(Keyword::Break) => self.parse_break_stmt(),
             Token::Keyword(Keyword::Continue) => {
@@ -125,6 +131,15 @@ impl Parser {
         let end = value.span;
         self.consume_newline();
         Ok(Spanned::new(Stmt::Throw(value), start.merge(end)))
+    }
+
+    fn parse_on_error_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+        let start = self.peek_span();
+        self.advance(); // consume "on"
+        self.advance(); // consume "error"
+        let body = self.parse_block()?;
+        let end = self.previous_span();
+        Ok(Spanned::new(Stmt::OnError { body }, start.merge(end)))
     }
 
     fn parse_break_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {

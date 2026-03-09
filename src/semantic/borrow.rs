@@ -2074,6 +2074,10 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(right);
             }
             Expr::MetaOpToken(_) => {}
+            Expr::Rethrow { expr, transform, .. } => {
+                self.check_expr(expr);
+                self.check_expr(transform);
+            }
         }
     }
 
@@ -2952,6 +2956,9 @@ impl<'a> BorrowChecker<'a> {
 
             Stmt::MetaLog { .. } => {
                 // Compile-time diagnostic — removed before GIR lowering; skip.
+            }
+            Stmt::OnError { body } => {
+                self.check_block(body);
             }
         }
     }

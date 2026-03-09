@@ -151,6 +151,58 @@ Config load_with_fallback(str path) throws str:
 Without `try`, the error from `load_config` would auto-propagate. With `try`, you catch
 it locally and decide what to do.
 
+### Transforming Errors with `rethrow`
+
+Often you want to add context or convert between error types as an error propagates.
+The `rethrow` keyword does this concisely:
+
+```gorget
+Config load_config(str path) throws ConfigError:
+    str content = read_file(path) rethrow (str e): ConfigError.Io(f"reading {path}: {e}")
+    Config cfg = parse(content) rethrow (str e): ConfigError.Parse(e)
+    return cfg
+```
+
+`rethrow` is a postfix modifier. On success, the expression's value passes through
+unchanged. On error, the original error is bound to the named parameter, the transform
+expression is evaluated, and the result is thrown.
+
+Without `rethrow`, you would need `try` + `match` + `throw` — seven lines for what
+`rethrow` does in one.
+
+### Error-Path Cleanup with `on error`
+
+Sometimes you need cleanup code that only runs when a function exits via error — for
+example, closing a file you opened before the error occurred:
+
+```gorget
+File open_and_process(str path) throws str:
+    File f = File.open(path)?
+    on error:
+        f.close()
+    str content = f.read_all()?
+    return process(content)
+```
+
+If `read_all()` throws, the `on error` block runs and `f` is closed before the error
+propagates. If everything succeeds, the block is skipped entirely.
+
+Multiple `on error` blocks run in **reverse order** (last declared, first executed):
+
+```gorget
+void setup() throws str:
+    Resource a = acquire_a()?
+    on error:
+        release_a(a)
+    Resource b = acquire_b()?
+    on error:
+        release_b(b)
+    use(a, b)
+```
+
+If `use(a, b)` throws, `release_b` runs first, then `release_a` — matching the
+acquisition order in reverse, just like destructors.
+
 ---
 
 ## Defining Error Types
@@ -466,12 +518,8 @@ Config parse_config(str content) throws ConfigError:
             throw ConfigError.ParseFailed("invalid port: {port_str}")
 
 Config load_config(str path) throws ConfigError:
-    auto result = try read_file(path)
-    match result:
-        case Ok(content):
-            return parse_config(content)
-        case Error(e):
-            throw ConfigError.FileNotFound(path)
+    str content = read_file(path) rethrow (str e): ConfigError.FileNotFound(path)
+    return parse_config(content)
 
 void main():
     auto result = try load_config("app.conf")
@@ -488,8 +536,9 @@ void main():
 ```
 
 The structure is clear: `parse_config` throws on any parsing issue with a specific
-reason. `load_config` wraps file I/O errors into the same error type. `main` uses `try`
-to catch everything and respond to each error kind differently.
+reason. `load_config` uses `rethrow` to wrap file I/O errors into the same error type
+in one line. `main` uses `try` to catch everything and respond to each error kind
+differently.
 
 ---
 
@@ -500,6 +549,8 @@ to catch everything and respond to each error kind differently.
 | `throws E` | Declare a function can fail | Function signature |
 | `throw expr` | Raise an error | Inside `throws` function |
 | Auto-propagation | Errors propagate without syntax | `throws` calling `throws` |
+| `rethrow (T e): expr` | Transform and re-throw an error | Adding context, converting error types |
+| `on error: block` | Cleanup on error exit only | Resource cleanup (like Zig's `errdefer`) |
 | `try expr` | Catch a throwing call as `Result` | When you want to handle, not propagate |
 | `Result[T, E]` | Value or typed error | Explicit error handling, library APIs |
 | `?` | Propagate error from `Result` | Inside `Result`-returning function |

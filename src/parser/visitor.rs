@@ -263,6 +263,10 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
             v.visit_expr(right);
         }
         Expr::MetaOpToken(_) => {}
+        Expr::Rethrow { expr, transform, .. } => {
+            v.visit_expr(expr);
+            v.visit_expr(transform);
+        }
     }
 }
 
@@ -424,6 +428,9 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
         }
         Stmt::MetaLog { args, .. } => {
             for arg in args { v.visit_expr(arg); }
+        }
+        Stmt::OnError { body } => {
+            v.visit_block(body);
         }
     }
 }

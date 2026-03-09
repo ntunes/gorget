@@ -126,6 +126,9 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         Expr::MetaOpInfix { left, right, .. } => contains_it(left) || contains_it(right),
         Expr::MetaOpToken(_) => false,
 
+        // Rethrow
+        Expr::Rethrow { expr, transform, .. } => contains_it(expr) || contains_it(transform),
+
         // Leaves — no sub-expressions
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::StringLiteral(_) | Expr::NoneLiteral
@@ -207,6 +210,7 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
         Stmt::MetaConst { value, .. } => contains_it(value),
         Stmt::MetaLog { args, .. } => args.iter().any(contains_it),
         Stmt::NamedScope { body, .. } => block_contains_it(body),
+        Stmt::OnError { body } => block_contains_it(body),
     }
 }
 
@@ -229,6 +233,8 @@ enum InfixOp {
     As,
     /// `a meta[op_name] b` — placeholder infix op for meta op templates.
     MetaOp,
+    /// `expr rethrow (Type name): transform` — inline error transform.
+    Rethrow,
 }
 
 impl Parser {
@@ -553,6 +559,13 @@ impl Parser {
                 return None;
             }
 
+            // rethrow — inline error transform (lowest precedence)
+            Token::Keyword(Keyword::Rethrow) => InfixBP {
+                left: 1,
+                right: 2,
+                op: InfixOp::Rethrow,
+            },
+
             // Nil coalescing
             Token::DoubleQuestion => InfixBP {
                 left: 3,
@@ -822,6 +835,36 @@ impl Parser {
                         left: Box::new(lhs),
                         op_name,
                         right: Box::new(rhs),
+                    },
+                    start.merge(end),
+                ))
+            }
+            InfixOp::Rethrow => {
+                self.advance(); // consume `rethrow`
+                // Parse (Type name)
+                self.expect(&Token::LParen)?;
+                let error_type = self.parse_type()?;
+                let error_name = self.expect_identifier()?;
+                self.expect(&Token::RParen)?;
+                self.expect(&Token::Colon)?;
+                // Parse transform expression (single-line or block)
+                let transform = if self.match_token(&Token::Newline) {
+                    // Block form: indented body, last expression is the value
+                    self.expect(&Token::Indent)?;
+                    let block = self.parse_block()?;
+                    let end = self.previous_span();
+                    Spanned::new(Expr::Do { body: block }, start.merge(end))
+                } else {
+                    // Single-line expression
+                    self.parse_expr()?
+                };
+                let end = transform.span;
+                Ok(Spanned::new(
+                    Expr::Rethrow {
+                        expr: Box::new(lhs),
+                        error_type,
+                        error_name,
+                        transform: Box::new(transform),
                     },
                     start.merge(end),
                 ))

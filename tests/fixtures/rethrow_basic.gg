@@ -1,0 +1,25 @@
+int parse_number(str s) throws str:
+    if s == "bad":
+        throw "invalid number"
+    return 42
+
+int load_value(str input) throws str:
+    int n = parse_number(input) rethrow (str e): f"load failed: {e}"
+    return n
+
+void main():
+    auto r1 = load_value("ok")
+    match r1:
+        case Ok(v):
+            print(f"ok:{v}")
+        case Error(e):
+            print(f"err:{e}")
+
+    auto r2 = load_value("bad")
+    match r2:
+        case Ok(v):
+            print(f"ok:{v}")
+        case Error(e):
+            print(f"err:{e}")
+
+    print("done")

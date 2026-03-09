@@ -2129,7 +2129,38 @@ match result:
     case Error(e): handle(e)
 ```
 
-### 10.4 Error Types
+### 10.4 Rethrow
+
+The `rethrow` keyword catches an error from a throwing call, transforms it, and re-throws:
+
+```gorget
+int load_config(str path) throws ConfigError:
+    str content = read_file(path) rethrow (str e): ConfigError.Io(f"loading {path}: {e}")
+    return parse(content) rethrow (str e): ConfigError.Parse(e)
+```
+
+`rethrow` is a postfix modifier on any expression that may throw. On success, the expression's value passes through unchanged. On error, the error is bound to the named parameter and the transform expression is evaluated and thrown.
+
+It is a compile-time error to use `rethrow` in a function not declared with `throws`.
+
+### 10.5 On Error
+
+The `on error` block registers cleanup code that runs only if the function exits via an error (thrown or auto-propagated):
+
+```gorget
+File open_and_process(str path) throws str:
+    File f = File.open(path)?
+    on error:
+        f.close()
+    str content = f.read_all()?
+    return process(content)
+```
+
+Multiple `on error` blocks execute in **reverse** (LIFO) order on error paths. They do **not** execute on normal return. This is similar to Zig's `errdefer`.
+
+It is a compile-time error to use `on error` in a function not declared with `throws`.
+
+### 10.6 Error Types
 
 Error types are typically enums:
 

@@ -1,0 +1,27 @@
+int risky(int x) throws str:
+    if x < 0:
+        throw "negative"
+    return x * 2
+
+int process(int x) throws str:
+    on error:
+        print("cleanup")
+    int val = risky(x) rethrow (str e): f"process: {e}"
+    return val + 1
+
+void main():
+    auto r1 = process(5)
+    match r1:
+        case Ok(v):
+            print(f"ok:{v}")
+        case Error(e):
+            print(f"err:{e}")
+
+    auto r2 = process(-1)
+    match r2:
+        case Ok(v):
+            print(f"ok:{v}")
+        case Error(e):
+            print(f"err:{e}")
+
+    print("done")

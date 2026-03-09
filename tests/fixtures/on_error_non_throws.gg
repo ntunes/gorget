@@ -1,0 +1,7 @@
+void bad():
+    on error:
+        print("cleanup")
+    print("hello")
+
+void main():
+    print("should not compile")

@@ -1143,6 +1143,12 @@ fn resolve_stmt(
         Stmt::MetaLog { .. } => {
             // Args are meta expressions (typename(T), sizeof(T), etc.) — skip resolution.
         }
+
+        Stmt::OnError { body } => {
+            scopes.push_scope(super::scope::ScopeKind::Block);
+            resolve_block(body, scopes, types, errors, resolution_map);
+            scopes.pop_scope();
+        }
     }
 }
 
@@ -1486,6 +1492,10 @@ fn resolve_expr(
             resolve_expr(right, scopes, errors, resolution_map);
         }
         Expr::MetaOpToken(_) => {}
+        Expr::Rethrow { expr, transform, .. } => {
+            resolve_expr(expr, scopes, errors, resolution_map);
+            resolve_expr(transform, scopes, errors, resolution_map);
+        }
     }
 }
 

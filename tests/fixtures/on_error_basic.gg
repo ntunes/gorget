@@ -1,0 +1,21 @@
+int risky(int x) throws str:
+    if x < 0:
+        throw "negative"
+    return x * 2
+
+int with_cleanup(int x) throws str:
+    print("enter")
+    on error:
+        print("cleanup")
+    int val = risky(x)?
+    print("success")
+    return val
+
+void main():
+    int a = try with_cleanup(5)
+    print(f"{a}")
+
+    int b = try with_cleanup(-1)
+    print(f"{b}")
+
+    print("done")

@@ -182,6 +182,9 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
         Stmt::MetaLog { .. } => {
             // Compile-time diagnostic — removed before GIR lowering; skip.
         }
+        Stmt::OnError { body } => {
+            rewrite_block(body, res, scopes);
+        }
     }
 }
 
@@ -292,6 +295,10 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
             rewrite_expr(right, res, scopes);
         }
         Expr::MetaOpToken(_) => {}
+        Expr::Rethrow { expr, transform, .. } => {
+            rewrite_expr(expr, res, scopes);
+            rewrite_expr(transform, res, scopes);
+        }
         // Leaf nodes
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::StringLiteral(_) | Expr::NoneLiteral

@@ -533,6 +533,15 @@ pub enum Expr {
         expr: Box<Spanned<Expr>>,
     },
 
+    // ── Rethrow (inline error transform) ──
+    /// `expr rethrow (Type name): transform_expr`
+    Rethrow {
+        expr: Box<Spanned<Expr>>,
+        error_type: Spanned<Type>,
+        error_name: Spanned<String>,
+        transform: Box<Spanned<Expr>>,
+    },
+
     // ── Move (!) ──
     Move {
         expr: Box<Spanned<Expr>>,
@@ -872,6 +881,11 @@ pub enum Stmt {
 
     /// throw expr
     Throw(Spanned<Expr>),
+
+    /// on error: block
+    OnError {
+        body: Block,
+    },
 
     /// break [expr]
     Break(Option<Spanned<Expr>>),

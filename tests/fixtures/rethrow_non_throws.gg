@@ -1,0 +1,10 @@
+int parse(str s) throws str:
+    throw "fail"
+    return 0
+
+int bad():
+    int n = parse("x") rethrow (str e): "wrapped"
+    return n
+
+void main():
+    print("should not compile")

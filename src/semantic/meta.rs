@@ -1704,6 +1704,7 @@ fn eval_meta_stmt(
         | Stmt::With { .. }
         | Stmt::Unsafe { .. }
         | Stmt::NamedScope { .. }
+        | Stmt::OnError { .. }
         | Stmt::Item(_) => Err(meta_err(
             "this statement type is not supported in compile-time function evaluation",
             stmt_span,
@@ -2156,6 +2157,9 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
         Stmt::MetaConst { value, .. } => {
             substitute_expr(value, env, type_env);
         }
+        Stmt::OnError { body } => {
+            substitute_block(body, env, type_env);
+        }
     }
 }
 
@@ -2296,6 +2300,10 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
             substitute_expr(right, env, type_env);
         }
         Expr::MetaOpToken(_) => {}
+        Expr::Rethrow { expr, transform, .. } => {
+            substitute_expr(expr, env, type_env);
+            substitute_expr(transform, env, type_env);
+        }
         // Leaf nodes — no recursion needed
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::NoneLiteral

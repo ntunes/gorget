@@ -1662,6 +1662,14 @@ impl<'a> TypeChecker<'a> {
                 // Meta op tokens have no runtime value.
                 self.types.void_id
             }
+            Expr::Rethrow { expr: inner, transform, .. } => {
+                let inner_type = self.infer_expr(inner);
+                self.infer_expr(transform);
+                if !self.current_function_throws {
+                    self.error(SemanticErrorKind::RethrowInNonThrowingFunction, expr.span);
+                }
+                inner_type
+            }
         }
     }
 
@@ -2026,6 +2034,12 @@ impl<'a> TypeChecker<'a> {
 
             Stmt::MetaLog { .. } => {
                 // Compile-time diagnostic — removed before GIR lowering; skip.
+            }
+            Stmt::OnError { body } => {
+                if !self.current_function_throws {
+                    self.error(SemanticErrorKind::OnErrorInNonThrowingFunction, stmt.span);
+                }
+                self.check_block(body);
             }
         }
     }

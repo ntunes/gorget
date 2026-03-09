@@ -117,6 +117,27 @@ pub fn lower_stmt(
         // error should have been emitted) — emit nothing.
         Stmt::MetaIf { .. } | Stmt::MetaFor { .. } | Stmt::MetaMatch { .. }
         | Stmt::MetaWhile { .. } | Stmt::MetaConst { .. } | Stmt::MetaLog { .. } => {}
+
+        Stmt::OnError { body } => {
+            // Register the cleanup block — it will be emitted on error paths
+            ctx.on_error_blocks.push(body.clone());
+        }
+    }
+}
+
+/// Emit accumulated `on error` cleanup blocks in LIFO order.
+/// Called on error exit paths (throw, try-error, rethrow-error) BEFORE drop elaboration.
+pub fn emit_on_error_cleanups(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+) {
+    if ctx.on_error_blocks.is_empty() {
+        return;
+    }
+    // Clone the blocks to avoid borrow conflicts (lowering each block borrows ctx mutably)
+    let blocks: Vec<_> = ctx.on_error_blocks.iter().rev().cloned().collect();
+    for block in &blocks {
+        lower_block(ctx, builder, block);
     }
 }
 
@@ -725,6 +746,7 @@ fn lower_throw(
                 builder.enum_init(type_name, "Error", result_type, vec![val])
             };
         builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_dst));
+        emit_on_error_cleanups(ctx, builder);
         ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, DropScopeKind::Function, None);
         builder.ret(FunctionBuilder::copy(LocalId(0)));
     } else {

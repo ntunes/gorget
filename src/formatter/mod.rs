@@ -1500,6 +1500,13 @@ impl Formatter {
                 self.format_block_stmts(body);
                 self.emitter.dedent();
             }
+            Stmt::OnError { body } => {
+                self.emitter.write("on error:");
+                self.emitter.newline();
+                self.emitter.indent();
+                self.format_block_stmts(body);
+                self.emitter.dedent();
+            }
         }
     }
 
@@ -2022,6 +2029,15 @@ impl Formatter {
             }
             Expr::MetaOpToken(op) => {
                 self.emitter.write(&format!("meta {:?}", op).to_lowercase());
+            }
+            Expr::Rethrow { expr, error_type, error_name, transform } => {
+                self.format_expr(expr);
+                self.emitter.write(" rethrow (");
+                self.format_type(error_type);
+                self.emitter.write(" ");
+                self.emitter.write(&error_name.node);
+                self.emitter.write("): ");
+                self.format_expr(transform);
             }
         }
     }

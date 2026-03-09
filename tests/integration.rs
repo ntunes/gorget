@@ -6618,6 +6618,15 @@ fn format_expr_canonical(expr: &Expr) -> String {
         }
         Expr::MetaOpToken(op) => format!("meta {:?}", op),
         Expr::SpawnBlocking { expr } => format!("spawn blocking {}", format_expr_canonical(&expr.node)),
+        Expr::Rethrow { expr, error_type, error_name, transform } => {
+            format!(
+                "{} rethrow ({} {}): {}",
+                format_expr_canonical(&expr.node),
+                format_type_canonical(&error_type.node),
+                error_name.node,
+                format_expr_canonical(&transform.node),
+            )
+        }
     }
 }
 
@@ -6787,6 +6796,10 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
         Stmt::NamedScope { name, body } => {
             let body = format_block_canonical(&body.stmts);
             format!("{}:{}", name.node, body)
+        }
+        Stmt::OnError { body } => {
+            let body = format_block_canonical(&body.stmts);
+            format!("on error:{}", body)
         }
     }
 }
@@ -9883,4 +9896,52 @@ fn stress_shared_channel_semaphore() {
     // Semaphore: buffered channel limits concurrency to 3 across 12 workers.
     // All 12 complete; shared completed counter = 12.
     run_gg("stress_shared_channel_semaphore.gg", "12");
+}
+
+#[test]
+fn rethrow_basic() {
+    run_gg(
+        "rethrow_basic.gg",
+        "\
+ok:42
+err:load failed: invalid number
+done",
+    );
+}
+
+#[test]
+fn on_error_basic() {
+    run_gg(
+        "on_error_basic.gg",
+        "\
+enter
+success
+10
+enter
+cleanup
+0
+done",
+    );
+}
+
+#[test]
+fn on_error_rethrow() {
+    run_gg(
+        "on_error_rethrow.gg",
+        "\
+ok:11
+cleanup
+err:process: negative
+done",
+    );
+}
+
+#[test]
+fn rethrow_non_throws() {
+    check_gg_fails("rethrow_non_throws.gg", "rethrow in function that doesn't declare `throws`");
+}
+
+#[test]
+fn on_error_non_throws() {
+    check_gg_fails("on_error_non_throws.gg", "on error` in function that doesn't declare `throws`");
 }

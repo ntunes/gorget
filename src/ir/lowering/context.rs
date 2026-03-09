@@ -184,6 +184,8 @@ pub struct LoweringContext<'a> {
     /// Maps the with-binding local → the shared facade local it mirrors.
     /// After each await, the shared var is re-read into the binding local.
     pub with_shared_refresh: Vec<(LocalId, LocalId)>,
+    /// Accumulated `on error:` cleanup blocks. Emitted in LIFO order on error paths.
+    pub on_error_blocks: Vec<crate::parser::ast::Block>,
 }
 
 
@@ -219,6 +221,7 @@ impl<'a> LoweringContext<'a> {
             global_type_names: FxHashMap::default(),
             gir_equip_methods: rustc_hash::FxHashSet::default(),
             with_shared_refresh: Vec::new(),
+            on_error_blocks: Vec::new(),
         }
     }
 

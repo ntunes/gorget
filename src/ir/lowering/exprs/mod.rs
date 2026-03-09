@@ -973,6 +973,9 @@ fn lower_expr_inner(
             // Should have been filtered out at the call site before reaching here.
             panic!("MetaOpToken not filtered out before GIR lowering — call lowering incomplete")
         }
+        Expr::Rethrow { expr: inner, error_type, error_name, transform } => {
+            lower_rethrow_expr(ctx, builder, inner, error_type, error_name, transform)
+        }
     }
 }
 
@@ -1793,6 +1796,100 @@ fn lower_try_expr(
     } else {
         builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_val));
     }
+    super::stmts::emit_on_error_cleanups(ctx, builder);
+    ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, super::drops::DropScopeKind::Function, None);
+    builder.ret(FunctionBuilder::copy(LocalId(0)));
+
+    builder.switch_to(merge_bb);
+    FunctionBuilder::copy(ok_val)
+}
+
+/// Lower a rethrow expression: `expr rethrow (Type name): transform`
+///
+/// Like `lower_try_expr`, but the error path evaluates a transform expression
+/// (with the original error bound to `name`) and throws that instead.
+fn lower_rethrow_expr(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    inner: &Spanned<Expr>,
+    _error_type: &Spanned<crate::parser::ast::Type>,
+    error_name: &Spanned<String>,
+    transform: &Spanned<Expr>,
+) -> Operand {
+    let val = lower_expr(ctx, builder, inner);
+    let val_type = infer_operand_type_full(ctx, &val, builder);
+    let val_local = builder.add_local(val_type, None);
+    builder.assign(Place::local(val_local), val);
+
+    // Look up Ok/Error field types from the Result type definition
+    let (ok_field_type, err_field_type) = {
+        let type_name = ctx.type_registry.type_name(val_type);
+        if let Some(ref name) = type_name {
+            if let Some(td) = ctx.type_registry.get_type_def(name) {
+                if let crate::ir::types::TypeDefKind::Enum(ref e) = td.kind {
+                    let ok_ty = e.variants.iter().find(|v| v.name == "Ok")
+                        .and_then(|v| v.fields.first().map(|f| f.type_id))
+                        .unwrap_or(I64_TYPE);
+                    let err_ty = e.variants.iter().find(|v| v.name == "Error")
+                        .and_then(|v| v.fields.first().map(|f| f.type_id))
+                        .unwrap_or(I64_TYPE);
+                    (ok_ty, err_ty)
+                } else { (I64_TYPE, I64_TYPE) }
+            } else { (I64_TYPE, I64_TYPE) }
+        } else { (I64_TYPE, I64_TYPE) }
+    };
+
+    // Check tag: 0 = Ok, 1 = Error
+    let tag = builder.tag_of(FunctionBuilder::copy(val_local));
+    let is_ok = builder.cmp(
+        CmpOp::Eq,
+        I32_TYPE,
+        FunctionBuilder::copy(tag),
+        Operand::Constant(Constant::I32(0)),
+    );
+
+    let ok_bb = builder.new_block();
+    let err_bb = builder.new_block();
+    let merge_bb = builder.new_block();
+
+    builder.branch(FunctionBuilder::copy(is_ok), ok_bb, err_bb);
+
+    // Ok path: extract Ok value (identical to lower_try_expr)
+    builder.switch_to(ok_bb);
+    let ok_val = builder.enum_field_load(
+        Place::local(val_local),
+        "Ok",
+        0,
+        ok_field_type,
+    );
+    builder.jump(merge_bb);
+
+    // Error path: bind error to name, evaluate transform, throw that
+    builder.switch_to(err_bb);
+    let err_val = builder.enum_field_load(
+        Place::local(val_local),
+        "Error",
+        0,
+        err_field_type,
+    );
+    // Bind the error value to the named local so transform can reference it
+    let err_local = builder.add_local(err_field_type, Some(&error_name.node));
+    builder.assign(Place::local(err_local), FunctionBuilder::copy(err_val));
+    ctx.register_local(&error_name.node, err_local, err_field_type);
+
+    // Evaluate the transform expression — this produces the new error value
+    let new_err = lower_expr(ctx, builder, transform);
+
+    // Wrap the transformed error in the current function's Result.Error and return
+    if let Some(result_type) = ctx.current_throws_result_type {
+        let type_name = ctx.type_registry.type_name(result_type).unwrap_or_else(|| "Result".to_string());
+        let err_dst = builder.enum_init(type_name, "Error", result_type, vec![new_err]);
+        builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_dst));
+    } else {
+        builder.assign(Place::local(LocalId(0)), new_err);
+    }
+    // Emit on_error cleanups before drops
+    super::stmts::emit_on_error_cleanups(ctx, builder);
     ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, super::drops::DropScopeKind::Function, None);
     builder.ret(FunctionBuilder::copy(LocalId(0)));
 

@@ -160,6 +160,12 @@ pub enum SemanticErrorKind {
     /// Throw in non-throwing function.
     ThrowInNonThrowingFunction,
 
+    /// `rethrow` in non-throwing function.
+    RethrowInNonThrowingFunction,
+
+    /// `on error` in non-throwing function.
+    OnErrorInNonThrowingFunction,
+
     /// `?` on Result in a function that doesn't return Result.
     TryOnResultInNonResultFunction,
 
@@ -422,6 +428,12 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::ThrowInNonThrowingFunction => {
                 write!(f, "throw in function that doesn't declare `throws`")
+            }
+            SemanticErrorKind::RethrowInNonThrowingFunction => {
+                write!(f, "rethrow in function that doesn't declare `throws`")
+            }
+            SemanticErrorKind::OnErrorInNonThrowingFunction => {
+                write!(f, "`on error` in function that doesn't declare `throws`")
             }
             SemanticErrorKind::TryOnResultInNonResultFunction => {
                 write!(f, "`?` on Result requires enclosing function to return Result")
