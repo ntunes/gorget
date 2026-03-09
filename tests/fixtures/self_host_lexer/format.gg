@@ -203,6 +203,16 @@ str describe_keyword_canonical(Keyword kw):
             return "kw:panic"
         case KwAssert():
             return "kw:assert"
+        case KwShared():
+            return "kw:shared"
+        case KwMeta():
+            return "kw:meta"
+        case KwSelect():
+            return "kw:select"
+        case KwRethrow():
+            return "kw:rethrow"
+        case KwMod():
+            return "kw:mod"
     return "kw:unknown"
 
 str describe_string_canonical(StringLiteral slit):

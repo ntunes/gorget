@@ -86,7 +86,7 @@ enum Expr:
 # ── Statements ───────────────────────────────────────────────
 
 enum Stmt:
-    SVarDecl(SpannedType, str, SpannedExpr, int)
+    SVarDecl(SpannedType, str, SpannedExpr, int, int, int)
     SAssign(SpannedExpr, SpannedExpr)
     SCompoundAssign(SpannedExpr, str, SpannedExpr)
     SExpr(SpannedExpr)

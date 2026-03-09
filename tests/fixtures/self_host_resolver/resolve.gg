@@ -175,6 +175,8 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     trait_names.push("TryFrom")
     trait_names.push("Measurable")
     trait_names.push("Parseable")
+    trait_names.push("One")
+    trait_names.push("Numeric")
     int ti = 0
     while ti < trait_names.len():
         str tname = get_str_at(trait_names, ti)
@@ -187,8 +189,6 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     # Register built-in collection types as Import placeholders
     Vector[str] col_names = Vector[str]()
     col_names.push("Vector")
-    col_names.push("List")
-    col_names.push("Array")
     col_names.push("Dict")
     col_names.push("HashMap")
     col_names.push("Set")
@@ -417,9 +417,24 @@ void resolve_block(Vector[Stmt] stmts, ScopeTable &scopes, TypeTable &types, Res
 
 void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match stmt:
-        case SVarDecl(var_type, name, value, ownership):
+        case SVarDecl(var_type, name, value, ownership, sk, name_span):
             resolve_expr(value, &scopes, &ctx)
-            scopes.define(name, DkVariable(), Span(0, 0))
+            int def_id = -1
+            # Tuple destructuring: "(a, b, c)" — define each binding individually
+            if name.starts_with("(") and name.ends_with(")"):
+                str inner = name.substring(1, name.len() - 1)
+                Vector[str] parts = inner.split(", ")
+                int pi = 0
+                while pi < parts.len():
+                    str part = parts.get(pi).unwrap()
+                    if part != "_":
+                        def_id = scopes.define(part, DkVariable(), Span(0, 0))
+                    pi = pi + 1
+            else:
+                def_id = scopes.define(name, DkVariable(), Span(0, 0))
+            # Mark shared bindings with extra RES entry (matches Rust resolver)
+            if sk > 0 and def_id >= 0 and name_span >= 0:
+                res_map_set(&ctx, name_span, def_id)
 
         case SExpr(expr):
             resolve_expr(expr, &scopes, &ctx)
@@ -719,9 +734,22 @@ void resolve_block_expr(Vector[Stmt] stmts, ScopeTable &scopes, ResolveContext &
 
 void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
     match stmt:
-        case SVarDecl(var_type, name, value, ownership):
+        case SVarDecl(var_type, name, value, ownership, sk, name_span):
             resolve_expr(value, &scopes, &ctx)
-            scopes.define(name, DkVariable(), Span(0, 0))
+            int def_id = -1
+            if name.starts_with("(") and name.ends_with(")"):
+                str inner = name.substring(1, name.len() - 1)
+                Vector[str] parts = inner.split(", ")
+                int pi = 0
+                while pi < parts.len():
+                    str part = parts.get(pi).unwrap()
+                    if part != "_":
+                        def_id = scopes.define(part, DkVariable(), Span(0, 0))
+                    pi = pi + 1
+            else:
+                def_id = scopes.define(name, DkVariable(), Span(0, 0))
+            if sk > 0 and def_id >= 0 and name_span >= 0:
+                res_map_set(&ctx, name_span, def_id)
 
         case SExpr(expr):
             resolve_expr(expr, &scopes, &ctx)

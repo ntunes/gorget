@@ -361,7 +361,7 @@ str format_expr(SpannedExpr se):
 
 str format_stmt(Stmt s):
     match s:
-        case SVarDecl(ty, name, init, own):
+        case SVarDecl(ty, name, init, own, sk, name_span):
             str ts = format_type(ty)
             str is_ = format_expr(init)
             return ts + " " + name + " = " + is_
