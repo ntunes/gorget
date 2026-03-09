@@ -144,7 +144,7 @@ const int KW_DO = 65
 const int KW_VIA = 66
 const int KW_WHERE = 67
 const int KW_EXTENDS = 68
-const int KW_CONSUMING = 69
+const int KW_MOVE = 69
 const int KW_MUTABLE = 70
 const int KW_ASSERT = 71
 const int KW_CONST = 72
@@ -447,8 +447,8 @@ int keyword_tag(Token tok):
                     return KW_WHERE
                 case KwExtends:
                     return KW_EXTENDS
-                case KwConsuming:
-                    return KW_CONSUMING
+                case KwMove:
+                    return KW_MOVE
                 case KwMutable:
                     return KW_MUTABLE
                 case KwAssert:
@@ -496,7 +496,7 @@ int keyword_tag(Token tok):
 # parse_expr() consumes 'expr as name' as EAs(expr, type);
 # extract the inner expression and binding name.
 
-Stmt decompose_with_stmt(SpannedExpr consuming full_expr, Vector[Stmt] consuming body):
+Stmt decompose_with_stmt(SpannedExpr move full_expr, Vector[Stmt] move body):
     match full_expr.expr:
         case EAs(inner_expr, cast_ty):
             str name = ""
@@ -1125,7 +1125,7 @@ equip Parser:
 
     SpannedType parse_function_type(&self, SpannedType ret_ty, int start):
         # Function type: RetType(Param1, Param2, ...)
-        # Params can have ownership markers: &Type, !Type, consuming Type, mutable Type
+        # Params can have ownership markers: &Type, !Type, move Type, mutable Type
         self.expect_tok(TOK_LPAREN, "expected '(' for function type")
         Vector[SpannedType] param_types = Vector[SpannedType]()
         Vector[int] ownerships = Vector[int]()
@@ -1487,10 +1487,10 @@ equip Parser:
         return args
 
     void skip_ownership_markers(&self):
-        # Skip &, !, consuming, mutable before args
+        # Skip &, !, move, mutable before args
         if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG):
             self.advance()
-        elif self.check_kw(KW_CONSUMING) or self.check_kw(KW_MUTABLE):
+        elif self.check_kw(KW_MOVE) or self.check_kw(KW_MUTABLE):
             self.advance()
 
     SpannedExpr parse_call_arg(&self):
@@ -1697,10 +1697,10 @@ equip Parser:
             SpannedExpr operand = self.parse_expr_bp(60)
             return SpannedExpr(EUnaryOp("not", Box(operand)), Span(start, operand.span.end))
 
-        # Unary bang (move) — but !(params): is a consuming closure, format without !
+        # Unary bang (move) — but !(params): is a move closure, format without !
         if ptag == TOK_BANG:
             self.advance()
-            # Check for consuming closure: !(params): body
+            # Check for move closure: !(params): body
             if self.check_tok(TOK_LPAREN):
                 int saved_move = self.pos
                 bool is_closure = self.try_detect_closure()
@@ -1710,8 +1710,8 @@ equip Parser:
             SpannedExpr operand = self.parse_expr_bp(60)
             return SpannedExpr(EMove(Box(operand)), Span(start, operand.span.end))
 
-        # consuming keyword as move (same as !)
-        if self.check_kw(KW_CONSUMING):
+        # move keyword as move (same as !)
+        if self.check_kw(KW_MOVE):
             self.advance()
             if self.check_tok(TOK_LPAREN):
                 int saved_move2 = self.pos
@@ -2441,7 +2441,7 @@ equip Parser:
                 SpannedType self_ty = SpannedType(TSelf(), self.current_span())
                 return Param(self_ty, "self", OWN_MOVE)
 
-        if self.check_kw(KW_CONSUMING):
+        if self.check_kw(KW_MOVE):
             own = OWN_MOVE
             self.advance()
         elif self.check_kw(KW_MUTABLE):
@@ -2462,7 +2462,7 @@ equip Parser:
         elif self.check_tok(TOK_AMP):
             own = OWN_MUTABLE
             self.advance()
-        elif self.check_kw(KW_CONSUMING):
+        elif self.check_kw(KW_MOVE):
             own = OWN_MOVE
             self.advance()
         elif self.check_kw(KW_MUTABLE):

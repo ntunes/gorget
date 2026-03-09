@@ -223,9 +223,9 @@ fn test_mutable_self_param() {
 }
 
 #[test]
-fn test_consuming_self_param() {
-    // consuming self should be equivalent to !self
-    let module = parse("equip Foo:\n    void c(consuming self):\n        pass\n");
+fn test_move_self_param() {
+    // move self should be equivalent to !self
+    let module = parse("equip Foo:\n    void c(move self):\n        pass\n");
     if let Item::Equip(ref imp) = module.items[0].node {
         let param = &imp.items[0].node.params[0].node;
         assert_eq!(param.ownership, Ownership::Move);
@@ -235,9 +235,9 @@ fn test_consuming_self_param() {
 }
 
 #[test]
-fn test_consuming_param() {
-    // consuming keyword on regular param should be equivalent to !
-    let module = parse("void take(String consuming s):\n    pass\n");
+fn test_move_param() {
+    // move keyword on regular param should be equivalent to !
+    let module = parse("void take(String move s):\n    pass\n");
     if let Item::Function(ref f) = module.items[0].node {
         assert_eq!(f.params[0].node.ownership, Ownership::Move);
     } else {

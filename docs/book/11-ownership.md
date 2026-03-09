@@ -59,10 +59,10 @@ Message copy = !msg    # msg is moved to copy
 # msg is now invalid
 ```
 
-The keyword form `consuming` is equivalent:
+The keyword form `move` is equivalent:
 
 ```gorget
-Message copy = consuming msg
+Message copy = move msg
 ```
 
 ### Move in Function Calls
@@ -228,7 +228,7 @@ If any branch moves a variable, the compiler treats it as moved after the branch
 | Concept | Syntax | Meaning |
 |---------|--------|---------|
 | Copy type | `int b = a` | Implicit copy, both valid |
-| Move | `!expr` or `consuming expr` | Transfer ownership |
+| Move | `!expr` or `move expr` | Transfer ownership |
 | Move parameter | `void f(!Type name)` | Function takes ownership |
 | Use after move | — | Compile error |
 | Drop | `equip T with Drop: void drop(!self)` | Cleanup on scope exit |

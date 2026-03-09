@@ -2,7 +2,7 @@ struct Point:
     int x
     int y
 
-void consume(String consuming s):
+void consume(String move s):
     print(f"{s}")
 
 void borrow_it(String mutable s):
@@ -18,15 +18,15 @@ void main():
     print(f"{a}")
     print(f"{b}")
 
-    # Structs use move semantics with `consuming` keyword
+    # Structs use move semantics with `move` keyword
     Point p = Point(1, 2)
-    Point q = consuming p
+    Point q = move p
     print(f"{q.x}")
     print(f"{q.y}")
 
     # Move ownership with keyword
     String s1 = "moved"
-    consume(consuming s1)
+    consume(move s1)
 
     # Mutable borrow with keyword
     String s2 = "borrowed"

@@ -18,7 +18,7 @@ equip CsvParser:
 
     void fail(&self, str msg):
         if self.err == "":
-            self.err = consuming msg
+            self.err = move msg
 
     bool at_end(self) = self.pos >= self.input.byte_len()
 

@@ -33,7 +33,7 @@ equip YamlParser:
 
     void fail(&self, str msg):
         if self.yaml_err == "":
-            self.yaml_err = consuming msg
+            self.yaml_err = move msg
 
     bool at_end(self) = self.yaml_pos >= self.yaml_input.byte_len()
 

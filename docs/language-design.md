@@ -641,7 +641,7 @@ equip Point:
     void translate(&self, float dx, float dy): # mutable borrow
         self.x += dx
         self.y += dy
-    String into_string(!self):                 # consuming (takes ownership)
+    String into_string(!self):                 # move (takes ownership)
         return "({self.x}, {self.y})"
     static Point origin():                     # no self (static)
         return Point(0.0, 0.0)

@@ -189,8 +189,8 @@ str describe_keyword_canonical(Keyword kw):
             return "kw:Mutex"
         case KwRwLock():
             return "kw:RwLock"
-        case KwConsuming():
-            return "kw:consuming"
+        case KwMove():
+            return "kw:move"
         case KwMutable():
             return "kw:mutable"
         case KwTest():

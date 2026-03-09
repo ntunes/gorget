@@ -3187,12 +3187,12 @@ impl<'a> BorrowChecker<'a> {
                 let expected_str = match expected {
                     Ownership::Borrow => "borrow (bare)",
                     Ownership::MutableBorrow => "mutable borrow (& or mutable)",
-                    Ownership::Move => "consume (! or consuming)",
+                    Ownership::Move => "consume (! or move)",
                 };
                 let found_str = match found {
                     Ownership::Borrow => "borrow (bare)",
                     Ownership::MutableBorrow => "mutable borrow (& or mutable)",
-                    Ownership::Move => "consume (! or consuming)",
+                    Ownership::Move => "consume (! or move)",
                 };
                 self.error(
                     SemanticErrorKind::OwnershipMismatch {

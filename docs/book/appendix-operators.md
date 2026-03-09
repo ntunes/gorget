@@ -8,7 +8,7 @@ Operators listed from highest precedence (binds tightest) to lowest.
 |:----------:|-----------|----------|:-------------:|
 | 20 | `.` `?.` `[]` `()` `.0` `.1` ... | Postfix / access | Left |
 | 20 | `-` `not` `~` `*` | Unary prefix | Right |
-| 20 | `!` / `consuming` | Move | Right |
+| 20 | `!` / `move` | Move | Right |
 | 20 | `&` / `mutable` | Mutable borrow | Right |
 | 20 | `try` | Error capture | Right |
 | 20 | `spawn` `spawn blocking` | Task creation | Right |

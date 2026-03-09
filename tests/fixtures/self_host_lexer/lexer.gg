@@ -25,7 +25,7 @@ enum Keyword:
     KwUnsafe  KwExtern
     KwSelfLower  KwSelfUpper
     KwBox  KwRc  KwArc  KwWeak  KwCell  KwRefCell  KwMutex  KwRwLock
-    KwConsuming  KwMutable
+    KwMove  KwMutable
     KwTest  KwSuite  KwIt  KwPanic  KwAssert
 
 # ── String literal types ──────────────────────────────────────
@@ -256,8 +256,8 @@ Option[Keyword] keyword_from_str(str s):
         return Some(KwMutex())
     elif s == "RwLock":
         return Some(KwRwLock())
-    elif s == "consuming":
-        return Some(KwConsuming())
+    elif s == "move":
+        return Some(KwMove())
     elif s == "mutable":
         return Some(KwMutable())
     elif s == "test":

@@ -148,7 +148,7 @@ equip XmlParser:
 
     void fail(&self, str msg):
         if self.err == "":
-            self.err = consuming msg
+            self.err = move msg
 
     str peek(self):
         if self.pos < self.xml_input.byte_len():
