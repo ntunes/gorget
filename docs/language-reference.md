@@ -3957,7 +3957,6 @@ void main():
 | `OwnershipMismatch`          | Call-site annotation doesn't match param declaration |
 | `NonPrintableInterpolation`  | Non-primitive type in string interpolation            |
 | `UnknownDirective`           | Unrecognized directive name                          |
-| `AssignmentToImmutable`      | Assignment to a non-`mutable` variable under `immutable-by-default` |
 | `AssignmentToConst`          | Assignment to a `const` binding (always an error)    |
 
 ### 16.3 Directives
@@ -3984,7 +3983,6 @@ value     = IDENT ;
 |------------------------------------|-----------------------|-------------------------------------------|
 | `directive strip-asserts`          | `--strip-asserts`     | Remove all `assert` statements from build |
 | `directive overflow=wrap`          | `--overflow=wrap`     | Enable wrapping arithmetic (no overflow panic) |
-| `directive immutable-by-default`   | *(none)*              | Make plain variables immutable; use `mutable` to opt in |
 | `directive name-first`             | *(none)*              | Enable Rust/Python-style name-before-type declaration syntax |
 | `directive trace`                  | `--trace`             | Enable execution tracing for testing      |
 | `directive hot-reload`             | `--hot-reload`        | Enable hot code reload mode               |
@@ -4025,19 +4023,6 @@ When `directive name-first` is present, all declarations use name-before-type sy
 
 The directive is per-file — stdlib modules and other files without the directive continue using type-first syntax. The AST is identical regardless of syntax mode.
 
-#### Immutable-by-Default
-
-When `directive immutable-by-default` is present, Gorget enforces three tiers of variable mutability:
-
-| Tier       | Declaration                 | Behavior                                      |
-|------------|-----------------------------|-----------------------------------------------|
-| `const`    | `const int x = 5`          | Compile-time constant. Reassignment is always an error. |
-| plain      | `int x = 5`                | Runtime immutable. Reassignment is a semantic error under the directive. |
-| `mutable`  | `mutable int x = 5`        | Fully mutable. Reassignment is allowed.       |
-
-The `mutable` keyword can also precede `auto`: `mutable auto x = compute()`.
-
-Without the directive, all variables are mutable by default (backwards compatible with existing code).
 
 **Note:** `const` assignment is always rejected regardless of the directive. This directive is recommended for safety-critical projects where mutation should be explicit.
 

@@ -80,7 +80,7 @@ impl Parser {
             // auto — type-inferred variable declaration (type-first only)
             Token::Keyword(Keyword::Auto) if !self.name_first => self.parse_auto_var_decl(),
 
-            // mutable — prefix for mutable variable declaration under immutable-by-default
+            // mutable — prefix for mutable variable declaration
             Token::Keyword(Keyword::Mutable) if !self.name_first => self.parse_decl_or_expr_stmt(),
 
             // Named scope: `identifier: \n    body` — mid-function drop zone.

@@ -262,9 +262,6 @@ pub enum SemanticErrorKind {
     /// `@derive(From)` requires exactly one field (newtype pattern).
     DeriveFromRequiresSingleField { type_name: String },
 
-    /// Assignment to an immutable variable (under `directive immutable-by-default`).
-    AssignmentToImmutable { name: String },
-
     /// Assignment to a const binding (always an error).
     AssignmentToConst { name: String },
 
@@ -549,9 +546,6 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::DeriveFromRequiresSingleField { type_name } => {
                 write!(f, "`@derive(From)` on `{type_name}` requires exactly one field")
-            }
-            SemanticErrorKind::AssignmentToImmutable { name } => {
-                write!(f, "cannot assign to immutable variable `{name}` (add `mutable` to declaration)")
             }
             SemanticErrorKind::AssignmentToConst { name } => {
                 write!(f, "cannot assign to constant `{name}`")

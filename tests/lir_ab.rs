@@ -108,7 +108,6 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_type_alias() { ab_test("type_alias.gg"); }
 #[test] fn lir_ab_embed_file() { ab_test("embed_file.gg"); }
 #[test] fn lir_ab_assert_basic() { ab_test("assert_basic.gg"); }
-#[test] fn lir_ab_immutable_by_default() { ab_test("immutable_by_default.gg"); }
 #[test] fn lir_ab_use_strip_asserts() { ab_test("use_strip_asserts.gg"); }
 #[test] fn lir_ab_meta_fn_basic() { ab_test("meta_fn_basic.gg"); }
 #[test] fn lir_ab_meta_fn_loops() { ab_test("meta_fn_loops.gg"); }

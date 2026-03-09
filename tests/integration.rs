@@ -2323,24 +2323,6 @@ fn check_gg_fails(fixture: &str, expected_stderr: &str) {
     );
 }
 
-#[test]
-fn immutable_by_default() {
-    run_gg(
-        "immutable_by_default.gg",
-        "\
-20
-40
-50",
-    );
-}
-
-#[test]
-fn immutable_by_default_error() {
-    check_gg_fails(
-        "immutable_by_default_error.gg",
-        "cannot assign to immutable variable `x`",
-    );
-}
 
 #[test]
 fn const_assign_error() {

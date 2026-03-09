@@ -152,34 +152,6 @@ No CLI override — source-only.
 
 ---
 
-### `directive immutable-by-default`
-
-Make plain variables immutable. Mutation requires the `mutable` keyword.
-
-```gorget
-directive immutable-by-default
-
-void main():
-    int x = 5          # immutable
-    mutable int y = 0  # mutable
-    y += 1              # ok
-    x += 1              # compile error: x is immutable
-```
-
-**Three-tier mutability with this directive:**
-
-| Declaration | Mutable? |
-|-------------|----------|
-| `const x = 5` | Never (compile-time constant) |
-| `int x = 5` | No (immutable binding) |
-| `mutable int x = 5` | Yes |
-
-Without this directive, all non-`const` variables are mutable by default.
-
-No CLI override — source-only.
-
----
-
 ## CLI Override Rules
 
 When both a source directive and a CLI flag are present, the CLI flag wins:
@@ -207,4 +179,3 @@ for CI, profiling, and debugging.
 | `hot-reload` | — | Yes | Hot code reloading |
 | `scheduler` | `pool`, `thread`, `inline`, `single` | Yes | Async scheduler |
 | `name-first` | — | No | Name-before-type syntax |
-| `immutable-by-default` | — | No | Immutable variables |

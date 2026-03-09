@@ -338,8 +338,6 @@ struct BorrowChecker<'a> {
     /// Variables declared while arena_depth > 0 that hold non-Copy types.
     /// These must not escape the arena scope.
     arena_scoped_vars: FxHashSet<DefId>,
-    /// Whether the file has `directive immutable-by-default`.
-    immutable_by_default: bool,
     /// Expression type map from the type checker (for lifetime tracking).
     _expr_types: &'a FxHashMap<Span, TypeId>,
     /// Current function's body scope (for scope-aware variable lookup).
@@ -448,7 +446,6 @@ impl<'a> BorrowChecker<'a> {
         resolution_map: &'a ResolutionMap,
         function_info: &'a FxHashMap<DefId, FunctionInfo>,
         function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
-        immutable_by_default: bool,
         expr_types: &'a FxHashMap<Span, TypeId>,
         method_resolutions: &'a FxHashMap<usize, DefId>,
         ref_type_structs: FxHashSet<DefId>,
@@ -466,7 +463,6 @@ impl<'a> BorrowChecker<'a> {
             loop_local_defs: Vec::new(),
             arena_depth: 0,
             arena_scoped_vars: FxHashSet::default(),
-            immutable_by_default,
             _expr_types: expr_types,
             current_fn_scope: None,
             method_resolutions,
@@ -2379,14 +2375,6 @@ impl<'a> BorrowChecker<'a> {
                                     SemanticErrorKind::AssignmentToConst { name: def.name.clone() },
                                     target.span,
                                 );
-                            } else if self.immutable_by_default
-                                && !def.is_mutable
-                                && def.kind == DefKind::Variable
-                            {
-                                self.error(
-                                    SemanticErrorKind::AssignmentToImmutable { name: def.name.clone() },
-                                    target.span,
-                                );
                             }
                             // B5: MutCallable aliasing — writing to a variable while it is
                             // mutably captured by a live closure is unsound.
@@ -2482,14 +2470,6 @@ impl<'a> BorrowChecker<'a> {
                         if def.kind == DefKind::Const {
                             self.error(
                                 SemanticErrorKind::AssignmentToConst { name: def.name.clone() },
-                                target.span,
-                            );
-                        } else if self.immutable_by_default
-                            && !def.is_mutable
-                            && def.kind == DefKind::Variable
-                        {
-                            self.error(
-                                SemanticErrorKind::AssignmentToImmutable { name: def.name.clone() },
                                 target.span,
                             );
                         }
@@ -4402,7 +4382,6 @@ pub fn check_module(
     resolution_map: &ResolutionMap,
     function_info: &mut FxHashMap<DefId, FunctionInfo>,
     function_body_scopes: &FxHashMap<(String, usize), ScopeId>,
-    immutable_by_default: bool,
     expr_types: &FxHashMap<Span, TypeId>,
     method_resolutions: &FxHashMap<usize, DefId>,
     errors: &mut Vec<SemanticError>,
@@ -4417,7 +4396,7 @@ pub fn check_module(
     // Pass 5b: full borrow check with origin tracking
     let mut checker = BorrowChecker::new(
         scopes, types, resolution_map, function_info, function_body_scopes,
-        immutable_by_default, expr_types,
+        expr_types,
         method_resolutions, ref_type_structs, struct_field_ref_flags,
     );
 
