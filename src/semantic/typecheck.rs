@@ -1231,49 +1231,6 @@ impl<'a> TypeChecker<'a> {
                 rhs_type // unwrapped type
             }
 
-            Expr::Try { expr: inner } => {
-                let inner_type = self.infer_expr(inner);
-                let resolved = self.resolve_type(inner_type);
-
-                // Try to determine if inner expression has Result type.
-                // First check if infer_expr returned a concrete Result type.
-                // If not (returns error_id), try to look up the callee's return type
-                // from function_info (since function call inference is limited).
-                let result_type = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
-                    let name = self.scopes.get_def(def_id).name.clone();
-                    if name == "Result" && args.len() == 2 {
-                        Some((resolved, args))
-                    } else {
-                        None
-                    }
-                } else {
-                    // Fallback: check callee's return type for Call expressions
-                    self.try_resolve_call_result_type(inner)
-                };
-
-                if let Some((type_id, args)) = result_type {
-                    // Record the inner expression type for codegen
-                    self.expr_types.insert(inner.span, type_id);
-                    // Validate that the enclosing function returns Result[_, E]
-                    if let Some(ret_type) = self.current_return_type {
-                        let resolved_ret = self.resolve_type(ret_type);
-                        if let ResolvedType::Generic(ret_def_id, ret_args) = self.types.get(resolved_ret).clone() {
-                            let ret_name = self.scopes.get_def(ret_def_id).name.clone();
-                            if ret_name == "Result" && ret_args.len() == 2 {
-                                // Unify error types
-                                self.unify(args[1], ret_args[1], expr.span);
-                                return args[0]; // T
-                            }
-                        }
-                        // Enclosing function doesn't return Result
-                        self.error(SemanticErrorKind::TryOnResultInNonResultFunction, expr.span);
-                        return args[0];
-                    }
-                    return args[0]; // No return type context
-                }
-                self.types.error_id // fallback for non-Result ?
-            }
-
             Expr::Move { expr: inner }
             | Expr::MutableBorrow { expr: inner } => {
                 self.infer_expr(inner) // ownership modifiers don't change the type
@@ -1710,7 +1667,9 @@ impl<'a> TypeChecker<'a> {
                         if let Some(declared_type) = declared_type {
                             // Allow assigning array literals to collection types
                             // (e.g. Vector[int] v = [1, 2, 3])
-                            if !self.is_collection_assignment(declared_type, value_type) {
+                            if !self.is_collection_assignment(declared_type, value_type)
+                                && !self.is_auto_propagation_compatible(declared_type, value_type)
+                            {
                                 self.unify(declared_type, value_type, value.span);
                             }
                             self.validate_closure_arg_kind(declared_type, value);
@@ -1760,7 +1719,9 @@ impl<'a> TypeChecker<'a> {
                 self.decl_type_hint = Some(target_type);
                 let value_type = self.infer_expr(value);
                 self.decl_type_hint = prev_hint;
-                self.unify(target_type, value_type, value.span);
+                if !self.is_auto_propagation_compatible(target_type, value_type) {
+                    self.unify(target_type, value_type, value.span);
+                }
             }
 
             Stmt::CompoundAssign { target, value, .. } => {
@@ -2353,6 +2314,51 @@ impl<'a> TypeChecker<'a> {
         false
     }
 
+    /// Check if auto-propagation allows assigning a `Result[T, E]` value to a `T`-typed
+    /// destination. Requires the current function to be a propagation context (has `throws`
+    /// or returns `Result`).
+    fn is_auto_propagation_compatible(&self, declared: TypeId, value: TypeId) -> bool {
+        // Check if value type is Result[T, E]
+        let value_resolved = self.resolve_type(value);
+        let (ok_type, _err_type) = if let ResolvedType::Generic(def_id, ref args) = self.types.get(value_resolved).clone() {
+            let name = self.scopes.get_def(def_id).name.clone();
+            if name == "Result" && args.len() == 2 {
+                (args[0], args[1])
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        };
+
+        // Check if declared type matches the Ok type
+        let declared_resolved = self.resolve_type(declared);
+        let ok_resolved = self.resolve_type(ok_type);
+        if declared_resolved != ok_resolved {
+            // Also accept if declared resolves to error_id (inference)
+            if declared_resolved != self.types.error_id {
+                return false;
+            }
+        }
+
+        // Check if current function can propagate errors
+        if self.current_function_throws {
+            return true;
+        }
+        // Check if return type is Result
+        if let Some(ret_type) = self.current_return_type {
+            let ret_resolved = self.resolve_type(ret_type);
+            if let ResolvedType::Generic(ret_def_id, _) = self.types.get(ret_resolved) {
+                let ret_name = &self.scopes.get_def(*ret_def_id).name;
+                if ret_name == "Result" {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
     /// Infer the return type of closure-taking methods like .map(), .and_then(), .or_else()
     /// on Option[T] and Result[T,E]. Returns None if this isn't such a method.
     fn infer_closure_method_type(
@@ -2640,31 +2646,8 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    /// Try to determine if a Call expression returns a Result type by looking up
-    /// the callee's FunctionInfo. Returns Some((result_type_id, [T, E])) if found.
-    fn try_resolve_call_result_type(&self, expr: &Spanned<Expr>) -> Option<(TypeId, Vec<TypeId>)> {
-        if let Expr::Call { callee, .. } = &expr.node {
-            if let Expr::Identifier(cname) = &callee.node {
-                if let Some(def_id) = self.resolve_name(callee.span.start, cname) {
-                    if let Some(info) = self.function_info.get(&def_id) {
-                        if let Some(ret_type_id) = info.return_type_id {
-                            let resolved = self.resolve_type(ret_type_id);
-                            if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
-                                let name = self.scopes.get_def(def_id).name.clone();
-                                if name == "Result" && args.len() == 2 {
-                                    return Some((resolved, args));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
     /// Try to determine if a Call expression returns a generic type with the given name
-    /// by looking up the callee's FunctionInfo. Generalized version of `try_resolve_call_result_type`.
+    /// by looking up the callee's FunctionInfo.
     fn try_resolve_call_generic_type(
         &self, expr: &Spanned<Expr>, type_name: &str, expected_args: usize,
     ) -> Option<(TypeId, Vec<TypeId>)> {

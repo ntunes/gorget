@@ -621,8 +621,7 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
         }
         Expr::Block(block) => qualify_block(block, vm),
         Expr::Do { body } => qualify_block(body, vm),
-        Expr::Try { expr: inner }
-        | Expr::Move { expr: inner }
+        Expr::Move { expr: inner }
         | Expr::MutableBorrow { expr: inner }
         | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner }

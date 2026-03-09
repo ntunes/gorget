@@ -200,7 +200,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
 
         http_tls_conn.write_str(http_req)
 
-        str http_tls_sl = http_tls_conn.read_line()?
+        str http_tls_sl = http_tls_conn.read_line()
         Option[int] http_tls_sp1 = http_tls_sl.index_of(" ")
         int http_tls_code = 0
         if http_tls_sp1.is_some():
@@ -219,7 +219,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
         Dict[str, str] http_tls_hdrs = Dict[str, str]()
         bool http_tls_ih = true
         while http_tls_ih:
-            str http_tls_hl = http_tls_conn.read_line()?
+            str http_tls_hl = http_tls_conn.read_line()
             if http_tls_hl == "":
                 http_tls_ih = false
             else:
@@ -258,7 +258,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
 
         http_plain_conn.write_str(http_req)
 
-        str http_plain_sl = http_plain_conn.read_line()?
+        str http_plain_sl = http_plain_conn.read_line()
         Option[int] http_plain_sp1 = http_plain_sl.index_of(" ")
         int http_plain_code = 0
         if http_plain_sp1.is_some():
@@ -277,7 +277,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
         Dict[str, str] http_plain_hdrs = Dict[str, str]()
         bool http_plain_ih = true
         while http_plain_ih:
-            str http_plain_hl = http_plain_conn.read_line()?
+            str http_plain_hl = http_plain_conn.read_line()
             if http_plain_hl == "":
                 http_plain_ih = false
             else:

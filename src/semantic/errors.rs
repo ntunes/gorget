@@ -166,9 +166,6 @@ pub enum SemanticErrorKind {
     /// `on error` in non-throwing function.
     OnErrorInNonThrowingFunction,
 
-    /// `?` on Result in a function that doesn't return Result.
-    TryOnResultInNonResultFunction,
-
     /// `await` used outside an `async` function.
     AwaitOutsideAsync,
 
@@ -434,9 +431,6 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::OnErrorInNonThrowingFunction => {
                 write!(f, "`on error` in function that doesn't declare `throws`")
-            }
-            SemanticErrorKind::TryOnResultInNonResultFunction => {
-                write!(f, "`?` on Result requires enclosing function to return Result")
             }
             SemanticErrorKind::AwaitOutsideAsync => {
                 write!(f, "`await` can only be used inside an `async` function")

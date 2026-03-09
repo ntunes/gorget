@@ -314,25 +314,24 @@ ok.is_ok()              # true
 err.is_err()            # true
 ```
 
-### The `?` Operator
+### Auto-Propagation in `Result`-Returning Functions
 
-When you're writing a function that returns `Result` directly (rather than using
-`throws`), the `?` operator propagates errors:
+Functions that explicitly return `Result` also benefit from auto-propagation — the
+compiler unwraps `Result`-typed expressions automatically, just like in `throws` functions:
 
 ```gorget
 Result[int, str] double_parsed(str s):
-    int val = parse_int(s)?     # if Error, return it immediately
+    int val = parse_int(s)      # auto-propagates Error if parse fails
     return Ok(val * 2)
 ```
 
-The `?` unwraps the `Result` — if it's `Ok`, you get the value; if it's `Error`, the
-function returns that error immediately. This is the explicit form of what `throws` does
-automatically.
+If `parse_int` returns an `Error`, the function immediately returns that error. No
+explicit unwrap is needed — the compiler handles it.
 
-**When to use `?` vs `throws`:** Use `throws` when you're writing application code and
-want clean signatures. Use `Result` with `?` when you're writing library code that needs
-to be explicit about its return types, or when you want to transform errors between
-different types at each call site.
+**When to use `Result` vs `throws`:** Use `throws` when you're writing application code
+and want clean signatures. Use explicit `Result` returns when you're writing library code
+that needs to be explicit about its return types, or when you want to transform errors
+between different types at each call site.
 
 ### Option[T] — a Value That Might Be Absent
 
@@ -548,12 +547,11 @@ differently.
 |-----------|---------|-------------|
 | `throws E` | Declare a function can fail | Function signature |
 | `throw expr` | Raise an error | Inside `throws` function |
-| Auto-propagation | Errors propagate without syntax | `throws` calling `throws` |
+| Auto-propagation | Errors propagate without syntax | `throws` or `Result`-returning functions |
 | `rethrow (T e): expr` | Transform and re-throw an error | Adding context, converting error types |
 | `on error: block` | Cleanup on error exit only | Resource cleanup (like Zig's `errdefer`) |
 | `try expr` | Catch a throwing call as `Result` | When you want to handle, not propagate |
 | `Result[T, E]` | Value or typed error | Explicit error handling, library APIs |
-| `?` | Propagate error from `Result` | Inside `Result`-returning function |
 | `Option[T]` | Value that might be absent | Lookups, optional fields, parsing |
 | `?.` | Short-circuit on `None` | Chaining optional operations |
 | `??` | Default on `None` | Providing fallback values |

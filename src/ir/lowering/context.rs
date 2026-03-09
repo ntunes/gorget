@@ -326,6 +326,17 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// Extract the Ok type from a Result TypeId, if it is a Result type.
+    pub fn unwrap_result_ok_type(&self, result_type: TypeId) -> Option<TypeId> {
+        let name = self.type_registry.type_name(result_type)?;
+        if !name.starts_with("Result__") { return None; }
+        let td = self.type_registry.get_type_def(&name)?;
+        if let TypeDefKind::Enum(e) = &td.kind {
+            e.variants.iter().find(|v| v.name == "Ok")
+                .and_then(|v| v.fields.first().map(|f| f.type_id))
+        } else { None }
+    }
+
     /// Infer a GIR type from a literal expression (for `auto` declarations).
     fn infer_type_from_expr(&self, expr: &Expr) -> TypeId {
         match expr {
@@ -348,7 +359,14 @@ impl<'a> LoweringContext<'a> {
                 // Look up the function return type
                 if let Expr::Identifier(name) = &callee.node {
                     if let Some((_, ret_ty)) = self.fn_sigs.get(name.as_str()) {
-                        return *ret_ty;
+                        let ret_ty = *ret_ty;
+                        // In a propagation context, auto-unwrap Result to its Ok type
+                        if self.current_throws_result_type.is_some() {
+                            if let Some(ok_ty) = self.unwrap_result_ok_type(ret_ty) {
+                                return ok_ty;
+                            }
+                        }
+                        return ret_ty;
                     }
                     // Check if it's an enum variant constructor
                     if let Some((enum_name, _)) = self.enum_variants.get(name.as_str()) {

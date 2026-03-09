@@ -238,10 +238,6 @@ fn lower_expr_inner(
         }
 
         // -- P3.3: Try/error handling --
-        Expr::Try { expr: inner } => {
-            lower_try_expr(ctx, builder, inner)
-        }
-
         Expr::TryCapture { expr: inner } => {
             // try expr → evaluate, extract Ok value or return zero-default on error
             let val = lower_expr(ctx, builder, inner);
@@ -1715,34 +1711,21 @@ fn lower_match_expr(
     FunctionBuilder::copy(result_local)
 }
 
-/// Lower a try expression (`expr?`) on a Result type.
-fn lower_try_expr(
+/// Emit Result unwrap with error propagation.
+/// Takes an already-lowered Result operand, branches on tag:
+///   Ok → returns extracted Ok value
+///   Error → emits on_error cleanups, early-exit drops, returns error
+pub fn emit_result_auto_propagate(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
-    inner: &Spanned<Expr>,
+    result_operand: Operand,
+    result_type: TypeId,
 ) -> Operand {
-    let val = lower_expr(ctx, builder, inner);
-    let val_type = infer_operand_type_full(ctx, &val, builder);
-    let val_local = builder.add_local(val_type, None);
-    builder.assign(Place::local(val_local), val);
+    let val_local = builder.add_local(result_type, None);
+    builder.assign(Place::local(val_local), result_operand);
 
     // Look up Ok/Error field types from the Result type definition
-    let (ok_field_type, err_field_type) = {
-        let type_name = ctx.type_registry.type_name(val_type);
-        if let Some(ref name) = type_name {
-            if let Some(td) = ctx.type_registry.get_type_def(name) {
-                if let crate::ir::types::TypeDefKind::Enum(ref e) = td.kind {
-                    let ok_ty = e.variants.iter().find(|v| v.name == "Ok")
-                        .and_then(|v| v.fields.first().map(|f| f.type_id))
-                        .unwrap_or(I64_TYPE);
-                    let err_ty = e.variants.iter().find(|v| v.name == "Error")
-                        .and_then(|v| v.fields.first().map(|f| f.type_id))
-                        .unwrap_or(I64_TYPE);
-                    (ok_ty, err_ty)
-                } else { (I64_TYPE, I64_TYPE) }
-            } else { (I64_TYPE, I64_TYPE) }
-        } else { (I64_TYPE, I64_TYPE) }
-    };
+    let (ok_field_type, err_field_type) = extract_result_field_types(ctx, result_type);
 
     // Check tag: 0 = Ok, 1 = Error
     let tag = builder.tag_of(FunctionBuilder::copy(val_local));
@@ -1778,8 +1761,6 @@ fn lower_try_expr(
         err_field_type,
     );
     // Re-wrap error in the *current* function's Result type and return.
-    // Check `current_throws_result_type` first (for `throws` functions),
-    // then check the function's return place (for explicit Result return types).
     let fn_result_type = ctx.current_throws_result_type.or_else(|| {
         let ret_type = builder.locals[0].type_id;
         let type_name = ctx.type_registry.type_name(ret_type)?;
@@ -1789,9 +1770,9 @@ fn lower_try_expr(
             None
         }
     });
-    if let Some(result_type) = fn_result_type {
-        let type_name = ctx.type_registry.type_name(result_type).unwrap_or_else(|| "Result".to_string());
-        let err_dst = builder.enum_init(type_name, "Error", result_type, vec![FunctionBuilder::copy(err_val)]);
+    if let Some(fn_res_type) = fn_result_type {
+        let type_name = ctx.type_registry.type_name(fn_res_type).unwrap_or_else(|| "Result".to_string());
+        let err_dst = builder.enum_init(type_name, "Error", fn_res_type, vec![FunctionBuilder::copy(err_val)]);
         builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_dst));
     } else {
         builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_val));
@@ -1802,6 +1783,74 @@ fn lower_try_expr(
 
     builder.switch_to(merge_bb);
     FunctionBuilder::copy(ok_val)
+}
+
+/// Extract Ok and Error field types from a Result type definition.
+fn extract_result_field_types(ctx: &LoweringContext, result_type: TypeId) -> (TypeId, TypeId) {
+    let type_name = ctx.type_registry.type_name(result_type);
+    if let Some(ref name) = type_name {
+        if let Some(td) = ctx.type_registry.get_type_def(name) {
+            if let crate::ir::types::TypeDefKind::Enum(ref e) = td.kind {
+                let ok_ty = e.variants.iter().find(|v| v.name == "Ok")
+                    .and_then(|v| v.fields.first().map(|f| f.type_id))
+                    .unwrap_or(I64_TYPE);
+                let err_ty = e.variants.iter().find(|v| v.name == "Error")
+                    .and_then(|v| v.fields.first().map(|f| f.type_id))
+                    .unwrap_or(I64_TYPE);
+                return (ok_ty, err_ty);
+            }
+        }
+    }
+    (I64_TYPE, I64_TYPE)
+}
+
+/// Check if a type is a Result type and the current function can propagate errors.
+/// Returns the Result TypeId if auto-propagation should occur.
+///
+/// Triggers when:
+/// 1. The operand type is `Result__*`, AND
+/// 2. The current function can propagate: has `throws` OR returns `Result`
+pub fn should_auto_propagate(ctx: &LoweringContext, builder: &FunctionBuilder, type_id: TypeId) -> Option<TypeId> {
+    let type_name = ctx.type_registry.type_name(type_id)?;
+    if !type_name.starts_with("Result__") {
+        return None;
+    }
+    // Check if current function can propagate
+    if ctx.current_throws_result_type.is_some() {
+        return Some(type_id);
+    }
+    let ret_type = builder.locals[0].type_id;
+    let ret_name = ctx.type_registry.type_name(ret_type)?;
+    if ret_name.starts_with("Result__") {
+        return Some(type_id);
+    }
+    None
+}
+
+/// If operand is Result-typed and current function can propagate, auto-unwrap.
+/// Otherwise return operand unchanged.
+///
+/// Skips auto-propagation when the expected destination type is itself a Result
+/// (e.g., `Result[int, str] r = risky()` should keep the Result).
+pub fn maybe_auto_propagate(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    operand: Operand,
+) -> Operand {
+    // If the destination expects a Result, don't unwrap
+    if let Some(expected) = ctx.expected_type {
+        if let Some(name) = ctx.type_registry.type_name(expected) {
+            if name.starts_with("Result__") {
+                return operand;
+            }
+        }
+    }
+    let op_type = infer_operand_type_full(ctx, &operand, builder);
+    if let Some(result_type) = should_auto_propagate(ctx, builder, op_type) {
+        emit_result_auto_propagate(ctx, builder, operand, result_type)
+    } else {
+        operand
+    }
 }
 
 /// Lower a rethrow expression: `expr rethrow (Type name): transform`
@@ -1822,22 +1871,7 @@ fn lower_rethrow_expr(
     builder.assign(Place::local(val_local), val);
 
     // Look up Ok/Error field types from the Result type definition
-    let (ok_field_type, err_field_type) = {
-        let type_name = ctx.type_registry.type_name(val_type);
-        if let Some(ref name) = type_name {
-            if let Some(td) = ctx.type_registry.get_type_def(name) {
-                if let crate::ir::types::TypeDefKind::Enum(ref e) = td.kind {
-                    let ok_ty = e.variants.iter().find(|v| v.name == "Ok")
-                        .and_then(|v| v.fields.first().map(|f| f.type_id))
-                        .unwrap_or(I64_TYPE);
-                    let err_ty = e.variants.iter().find(|v| v.name == "Error")
-                        .and_then(|v| v.fields.first().map(|f| f.type_id))
-                        .unwrap_or(I64_TYPE);
-                    (ok_ty, err_ty)
-                } else { (I64_TYPE, I64_TYPE) }
-            } else { (I64_TYPE, I64_TYPE) }
-        } else { (I64_TYPE, I64_TYPE) }
-    };
+    let (ok_field_type, err_field_type) = extract_result_field_types(ctx, val_type);
 
     // Check tag: 0 = Ok, 1 = Error
     let tag = builder.tag_of(FunctionBuilder::copy(val_local));

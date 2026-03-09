@@ -1294,8 +1294,7 @@ fn resolve_expr(
             resolve_expr(rhs, scopes, errors, resolution_map);
         }
 
-        Expr::Try { expr: inner }
-        | Expr::Move { expr: inner }
+        Expr::Move { expr: inner }
         | Expr::MutableBorrow { expr: inner }
         | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner }

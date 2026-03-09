@@ -8,7 +8,8 @@ use crate::span::Spanned;
 
 use super::super::context::{LoweringContext, SharedLocalKind};
 use super::super::exprs::{
-    lower_expr, infer_operand_type_full, guard_inner_suffix, emit_guard_get_ptr,
+    lower_expr, infer_operand_type_full, maybe_auto_propagate,
+    guard_inner_suffix, emit_guard_get_ptr,
     emit_shared_mutex_lock_get, emit_shared_mutex_lock_set,
     atomic_type_name_for, emit_atomic_load, emit_atomic_store,
     emit_rwlock_write_get, emit_rwlock_write_set, emit_rwlock_write_finish,
@@ -66,6 +67,9 @@ pub(super) fn lower_assign(
                 let prev_expected = ctx.expected_type;
                 ctx.expected_type = Some(type_id);
                 let operand = lower_expr(ctx, builder, value);
+                // Auto-propagate: if RHS is Result-typed but target is not, unwrap
+                // NOTE: must run before restoring expected_type so the guard sees type_id.
+                let operand = maybe_auto_propagate(ctx, builder, operand);
                 ctx.expected_type = prev_expected;
                 // P2.6: Drop old value AFTER computing new value, BEFORE assigning
                 if needs_drop {

@@ -186,7 +186,7 @@ str http_server_read_body_chunked_tls(TlsSocket &conn):
 
 Result[HttpRequest, str] http_server_parse_request(Socket &conn, int max_body_bytes = 16777216):
     # Request line: "METHOD /path?query HTTP/1.1"
-    str req_line = conn.read_line()?
+    str req_line = conn.read_line()
 
     Option[int] sp1_opt = req_line.index_of(" ")
     if sp1_opt.is_none():
@@ -221,7 +221,7 @@ Result[HttpRequest, str] http_server_parse_request(Socket &conn, int max_body_by
     Dict[str, str] req_headers = Dict[str, str]()
     bool reading_headers = true
     while reading_headers:
-        str hdr_line = conn.read_line()?
+        str hdr_line = conn.read_line()
         if hdr_line == "":
             reading_headers = false
         else:
@@ -356,7 +356,7 @@ async void http_server_handle_conn_ka_limited(Socket conn, Callable[HttpServerRe
 
 # Parse an HTTP/1.1 request from a TLS socket (identical logic to plain-TCP version).
 Result[HttpRequest, str] http_server_parse_request_tls(TlsSocket &conn, int max_body_bytes = 16777216):
-    str req_line = conn.read_line()?
+    str req_line = conn.read_line()
 
     Option[int] sp1_opt = req_line.index_of(" ")
     if sp1_opt.is_none():
@@ -389,7 +389,7 @@ Result[HttpRequest, str] http_server_parse_request_tls(TlsSocket &conn, int max_
     Dict[str, str] req_headers = Dict[str, str]()
     bool reading_headers = true
     while reading_headers:
-        str hdr_line = conn.read_line()?
+        str hdr_line = conn.read_line()
         if hdr_line == "":
             reading_headers = false
         else:

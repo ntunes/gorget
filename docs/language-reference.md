@@ -312,7 +312,6 @@ Both operator and keyword forms are equivalent and may be used interchangeably.
 |--------|-------------------|
 | `?.`   | Optional chaining |
 | `??`   | Nil coalescing    |
-| `?`    | Try / early return |
 
 **Assignment:**
 
@@ -2106,7 +2105,7 @@ Data process(str path) throws AppError:
     return transform(content)
 ```
 
-Inside a `throws` function, calls to other `throws` functions **auto-propagate** errors — if the callee fails, the caller immediately returns the error. No `?` operator is needed.
+Inside a `throws` function (or any function returning `Result`), calls to other throwing or `Result`-returning functions **auto-propagate** errors — if the callee fails, the caller immediately returns the error. No explicit unwrapping is needed; the compiler inserts the unwrap automatically.
 
 ### 10.2 Throw
 
@@ -2149,10 +2148,10 @@ The `on error` block registers cleanup code that runs only if the function exits
 
 ```gorget
 File open_and_process(str path) throws str:
-    File f = File.open(path)?
+    File f = File.open(path)
     on error:
         f.close()
-    str content = f.read_all()?
+    str content = f.read_all()
     return process(content)
 ```
 

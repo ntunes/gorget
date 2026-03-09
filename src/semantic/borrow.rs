@@ -386,6 +386,8 @@ struct BorrowChecker<'a> {
 
     /// Whether the current function is `async`.
     current_function_is_async: bool,
+    /// Whether the current function has `throws`.
+    current_function_throws: bool,
     /// Variables with non-static borrow origins that were Live before an `await`.
     /// Using these after the await triggers BorrowAcrossAwait.
     await_invalidated: FxHashSet<DefId>,
@@ -479,6 +481,7 @@ impl<'a> BorrowChecker<'a> {
             diverged: false,
             in_return_expr: false,
             current_function_is_async: false,
+            current_function_throws: false,
             await_invalidated: FxHashSet::default(),
             closure_capture_sets: FxHashMap::default(),
             pending_capture_set: None,
@@ -705,7 +708,6 @@ impl<'a> BorrowChecker<'a> {
             // Transparent wrappers: propagate inner origin
             Expr::Move { expr: inner }
             | Expr::Deref { expr: inner }
-            | Expr::Try { expr: inner }
             | Expr::TryCapture { expr: inner }
             | Expr::As { expr: inner, .. } => {
                 self.compute_expr_origin(inner)
@@ -1268,7 +1270,6 @@ impl<'a> BorrowChecker<'a> {
             | Expr::Move { expr: inner }
             | Expr::Deref { expr: inner }
             | Expr::Await { expr: inner }
-            | Expr::Try { expr: inner }
             | Expr::TryCapture { expr: inner }
             | Expr::Spawn { expr: inner }
             | Expr::SpawnBlocking { expr: inner }
@@ -1745,7 +1746,7 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
-            Expr::Try { expr: inner } | Expr::TryCapture { expr: inner } => {
+            Expr::TryCapture { expr: inner } => {
                 self.check_expr(inner);
             }
 
@@ -2191,7 +2192,11 @@ impl<'a> BorrowChecker<'a> {
                             self.var_origins.insert(def_id, origin);
 
                             // Phase 6: Detect binding a ref type to a temporary
-                            if self.is_temporary_borrow(value) {
+                            // Skip when auto-propagation applies: the Ok value is moved
+                            // out of the Result wrapper, not borrowed from it.
+                            if self.is_temporary_borrow(value)
+                                && !self.is_auto_propagated_call(value)
+                            {
                                 let callee_name = match &value.node {
                                     Expr::Call { callee, .. } => Self::extract_callee_name(callee),
                                     Expr::MethodCall { receiver, method, .. } => {
@@ -3445,6 +3450,44 @@ impl<'a> BorrowChecker<'a> {
             && info.return_borrows_from.is_empty()
     }
 
+    /// Check if a call expression will be auto-propagated: the function returns
+    /// `Result[T, E]` and we're in a propagation context (throws or returns Result).
+    /// In this case the Ok value is moved out of the Result — not borrowed from it —
+    /// so `TemporaryBorrow` should not fire.
+    fn is_auto_propagated_call(&self, value: &Spanned<Expr>) -> bool {
+        let def_id = match &value.node {
+            Expr::Call { callee, .. } => self.resolve_callee_def_id(callee),
+            Expr::MethodCall { method, .. } => self.method_resolutions.get(&method.span.start).copied(),
+            _ => None,
+        };
+        let Some(def_id) = def_id else { return false };
+        let Some(info) = self.function_info.get(&def_id) else { return false };
+        // Check if the function returns a Result type
+        let Some(ret_type_id) = info.return_type_id else { return false };
+        let resolved = self.types.get(ret_type_id);
+        let is_result = if let ResolvedType::Generic(gdef, args) = resolved {
+            self.scopes.get_def(*gdef).name == "Result" && args.len() == 2
+        } else {
+            false
+        };
+        if !is_result && !info.throws {
+            return false;
+        }
+        // Check if current function is a propagation context
+        self.current_function_throws || self.current_function_returns_result()
+    }
+
+    /// Check if the current function returns a Result type.
+    fn current_function_returns_result(&self) -> bool {
+        let Some(ret_type) = self.current_return_type_id else { return false };
+        let resolved = self.types.get(ret_type);
+        if let ResolvedType::Generic(def_id, args) = resolved {
+            self.scopes.get_def(*def_id).name == "Result" && args.len() == 2
+        } else {
+            false
+        }
+    }
+
     /// Check if a call/method-call expression returns a temporary.
     /// Binding a reference type to such a value is an error
     /// because the temporary will be dropped immediately.
@@ -3519,6 +3562,7 @@ impl<'a> BorrowChecker<'a> {
         self.current_param_def_ids.clear();
         self.active_outlives.clear();
         self.current_function_is_async = func.qualifiers.is_async;
+        self.current_function_throws = func.throws.is_some();
         self.await_invalidated.clear();
         self.shared_derived.clear();
         self.stale_shared_derived.clear();
@@ -4167,7 +4211,7 @@ fn collect_param_indices(
             result.extend(collect_param_indices(&lhs.node, param_names, aliases, function_info, resolution_map, scopes));
             result.extend(collect_param_indices(&rhs.node, param_names, aliases, function_info, resolution_map, scopes));
         }
-        Expr::Move { expr: inner } | Expr::Deref { expr: inner } | Expr::Try { expr: inner } => {
+        Expr::Move { expr: inner } | Expr::Deref { expr: inner } => {
             result.extend(collect_param_indices(&inner.node, param_names, aliases, function_info, resolution_map, scopes));
         }
         _ => {}
@@ -4257,7 +4301,7 @@ fn trace_expr_to_params(
             trace_expr_to_params(rhs, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
 
-        Expr::Move { expr: inner } | Expr::Deref { expr: inner } | Expr::Try { expr: inner } => {
+        Expr::Move { expr: inner } | Expr::Deref { expr: inner } => {
             trace_expr_to_params(inner, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
 

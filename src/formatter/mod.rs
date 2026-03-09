@@ -1768,10 +1768,6 @@ impl Formatter {
                 ]));
                 self.write_doc(&nil_doc);
             }
-            Expr::Try { expr } => {
-                self.format_expr(expr);
-                self.emitter.write("?");
-            }
             Expr::Move { expr } => {
                 self.emitter.write("!");
                 self.format_expr(expr);

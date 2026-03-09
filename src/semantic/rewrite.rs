@@ -220,7 +220,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
             rewrite_expr(lhs, res, scopes);
             rewrite_expr(rhs, res, scopes);
         }
-        Expr::Try { expr: inner } | Expr::Move { expr: inner }
+        Expr::Move { expr: inner }
         | Expr::MutableBorrow { expr: inner } | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner } | Expr::Spawn { expr: inner }
         | Expr::SpawnBlocking { expr: inner } | Expr::TryCapture { expr: inner } => {

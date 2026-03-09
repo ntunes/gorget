@@ -239,7 +239,7 @@ fn fixup_calls_in_expr(
                 fixup_calls_in_expr(e, fixups);
             }
         }
-        Expr::Try { expr: inner } | Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
+        Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
         | Expr::Deref { expr: inner } | Expr::Await { expr: inner, .. } | Expr::Spawn { expr: inner, .. }
         | Expr::SpawnBlocking { expr: inner, .. } => {
             fixup_calls_in_expr(inner, fixups);
@@ -2209,7 +2209,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
             substitute_expr(lhs, env, type_env);
             substitute_expr(rhs, env, type_env);
         }
-        Expr::Try { expr: inner } | Expr::Move { expr: inner }
+        Expr::Move { expr: inner }
         | Expr::MutableBorrow { expr: inner } | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner } | Expr::Spawn { expr: inner }
         | Expr::SpawnBlocking { expr: inner } | Expr::TryCapture { expr: inner } => {

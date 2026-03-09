@@ -36,7 +36,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
 
         // Unary
         Expr::UnaryOp { operand, .. } => contains_it(operand),
-        Expr::Try { expr } | Expr::Move { expr } | Expr::MutableBorrow { expr }
+        Expr::Move { expr } | Expr::MutableBorrow { expr }
         | Expr::Deref { expr } | Expr::Await { expr } | Expr::Spawn { expr }
         | Expr::SpawnBlocking { expr } | Expr::TryCapture { expr } => contains_it(expr),
 
@@ -884,8 +884,6 @@ impl Parser {
             Token::LBracket => Some(35),
             // Function call
             Token::LParen => Some(35),
-            // Try operator
-            Token::Question => Some(34),
             // Range operators
             Token::DotDot | Token::DotDotEq => Some(23),
             _ => None,
@@ -1036,17 +1034,6 @@ impl Parser {
                         callee: Box::new(lhs),
                         generic_args: None,
                         args,
-                    },
-                    start.merge(end),
-                ))
-            }
-
-            Token::Question => {
-                self.advance();
-                let end = self.previous_span();
-                Ok(Spanned::new(
-                    Expr::Try {
-                        expr: Box::new(lhs),
                     },
                     start.merge(end),
                 ))

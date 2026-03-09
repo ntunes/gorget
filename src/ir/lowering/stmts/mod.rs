@@ -13,7 +13,7 @@ use crate::span::Spanned;
 
 use super::context::{LoweringContext, SharedLocalInfo, SharedLocalKind};
 use super::drops::DropScopeKind;
-use super::exprs::{lower_expr, infer_operand_type_full};
+use super::exprs::{lower_expr, infer_operand_type_full, maybe_auto_propagate};
 
 /// Lower a block of statements.
 pub fn lower_block(
@@ -57,7 +57,10 @@ pub fn lower_stmt(
         Stmt::Return(expr) => lower_return(ctx, builder, expr.as_ref()),
 
         Stmt::Expr(expr) => {
-            lower_expr(ctx, builder, expr);
+            let val = lower_expr(ctx, builder, expr);
+            // Auto-propagate: if the expression returns Result in a propagation
+            // context, unwrap it so errors aren't silently swallowed.
+            let _ = maybe_auto_propagate(ctx, builder, val);
         }
 
         Stmt::Pass => {
@@ -182,6 +185,10 @@ fn lower_var_decl(
             let prev_expected = ctx.expected_type;
             ctx.expected_type = Some(gir_type);
             let operand = lower_expr(ctx, builder, value);
+            // Auto-propagate: if operand is Result-typed but the declared type is not Result,
+            // unwrap it (propagating errors) so the binding gets the Ok value.
+            // NOTE: must run before restoring expected_type so the guard sees gir_type.
+            let operand = maybe_auto_propagate(ctx, builder, operand);
             ctx.expected_type = prev_expected;
             // If this was a Spawn expression, register the task local → spawned fn mapping
             if let Some(fn_name) = ctx.spawn.pending_fn.take() {
@@ -493,6 +500,14 @@ fn lower_return(
         let ret_type = builder.locals[0].type_id;
         ctx.expected_type = Some(ret_type);
         let operand = lower_expr(ctx, builder, expr);
+        // Auto-propagate: if returning a Result value from a throws function,
+        // unwrap so the Ok-wrapping below works on the inner value.
+        // NOTE: must run before restoring expected_type so the guard sees ret_type.
+        let operand = if !is_explicit_result_variant {
+            maybe_auto_propagate(ctx, builder, operand)
+        } else {
+            operand
+        };
         ctx.expected_type = prev_expected;
         // Identify the local being returned (to exclude from drops — it's being moved out)
         let returned_local = match &operand {

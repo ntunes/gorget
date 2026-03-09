@@ -1234,8 +1234,8 @@ val",
 }
 
 #[test]
-fn result_question_operator() {
-    run_gg("result_question.gg", "84\n-1\nis error\n52\ndone");
+fn result_propagation() {
+    run_gg("result_propagation.gg", "84\n0\n52\n126\ndone");
 }
 
 #[test]
@@ -6500,9 +6500,6 @@ fn format_expr_canonical(expr: &Expr) -> String {
                 .map(|a| format_expr_canonical(&a.node))
                 .collect();
             format!("{}({})", name.node, arg_strs.join(", "))
-        }
-        Expr::Try { expr } => {
-            format!("{}?", format_expr_canonical(&expr.node))
         }
         Expr::TryCapture { expr } => {
             format!("try {}", format_expr_canonical(&expr.node))

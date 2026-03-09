@@ -648,7 +648,7 @@ fn field_read_decl(name: &str, type_name: &str) -> String {
         }
         "bool" => format!("bool {name} = de.read_bool()"),
         "str" | "String" => format!("str {name} = de.read_str()"),
-        _ => format!("{type_name} {name} = deserialize_{type_name}(de)?"),
+        _ => format!("{type_name} {name} = deserialize_{type_name}(de)"),
     }
 }
 
@@ -1475,7 +1475,7 @@ void main():
             "",
             &[("label", "str"), ("user", "User")],
         );
-        assert!(src.contains("User user = deserialize_User(de)?"));
+        assert!(src.contains("User user = deserialize_User(de)"));
     }
 
     #[test]
@@ -1493,7 +1493,7 @@ void main():
             field_read_decl("x", "float32"),
             "float x_raw = de.read_float()\n    float32 x = x_raw as float32"
         );
-        assert_eq!(field_read_decl("x", "User"), "User x = deserialize_User(de)?");
+        assert_eq!(field_read_decl("x", "User"), "User x = deserialize_User(de)");
     }
 
     #[test]

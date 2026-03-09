@@ -528,11 +528,6 @@ pub enum Expr {
         rhs: Box<Spanned<Expr>>,
     },
 
-    // ── Try/early return (?) ──
-    Try {
-        expr: Box<Spanned<Expr>>,
-    },
-
     // ── Rethrow (inline error transform) ──
     /// `expr rethrow (Type name): transform_expr`
     Rethrow {
