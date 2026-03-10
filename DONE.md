@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-10] **Vector.zip() C backend codegen**: Implemented `zip` for vectors — `a.zip(b)` returns `Vector[(A, B)]`. IR lowering: registers `Tuple__A__B` struct and `Vector__Tuple__A__B` type, infers correct return type from argument types. C backend: inline loop iterates both arrays to `min(len)`, builds tuple structs, pushes to result. Handles same-type pairs (`(int, int)`) and mixed-type pairs (`(int, str)`). Shorter vector truncates. Added `find_tuple_type_split` helper for parsing tuple type names.
+
 - [2026-03-10] **Higher-order methods with named function refs**: `v.map(double)` generated invalid `void*__call(...)`. Added `extract_callable` helper that detects `Constant::FuncRef` operands and calls the `__adapt_FUNCNAME` adapter directly with NULL env, vs normal `ClosureType__call(&closure, ...)` for closure structs. Updated all 10 higher-order handlers: filter, map, fold, reduce, any, all, each/for_each, flat_map, find, count. Added test_higher_order_named_fn.gg fixture covering map, filter, fold, reduce, any, all, each, flat_map with bare function references.
 
 - [2026-03-10] **Self-hosting type checker: 581/592 (98.1%) — match pattern binding fix**: Phase 13: `resolve_variant_field_types` looked up qualified variant names ("Color.Blue") but variant field types were stored under simple names ("Blue"). Fixed by stripping the dot-prefix before lookup, mirroring Rust's `path.last()`. Fixed 3 mismatches: derive.gg, derive_hashable.gg, serializable.gg. Score: 578/592 → 581/592 (+3 exact).

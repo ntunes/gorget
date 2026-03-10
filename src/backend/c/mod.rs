@@ -7382,7 +7382,7 @@ fn try_emit_higher_order_method(
 ) -> Option<String> {
     // Parse: Vector__ElemType__method or Type__method
     let method = extract_trailing_method(func_name, "");
-    if !matches!(method, "filter" | "map" | "flat_map" | "fold" | "reduce" | "enumerate" | "any" | "all" | "each" | "for_each" | "find" | "count" | "get_or_put" | "keys" | "values") {
+    if !matches!(method, "filter" | "map" | "flat_map" | "fold" | "reduce" | "enumerate" | "any" | "all" | "each" | "for_each" | "find" | "count" | "get_or_put" | "keys" | "values" | "zip") {
         return None;
     }
     // Don't treat Option/Result/Regex/Match methods as collection higher-order methods.
@@ -7632,6 +7632,43 @@ fn try_emit_higher_order_method(
                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                 {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
                 gorget_array_push(&__result, &__elem); \
+                }} __result; }});");
+        }
+        "zip" => {
+            // zip: args[0] = &self_vec, args[1] = other_vec
+            // Returns Vector[(A, B)] — iterate both to min(len), build tuple structs
+            if args.len() < 2 { return None; }
+            let d = match dst { Some(d) => d, None => return None };
+            let other_val = format_operand(&args[1], func, registry);
+            // Get the tuple type from the destination local's IR type (not C type, which may be erased)
+            let dst_type_id = func.locals[d.0 as usize].type_id;
+            let dst_ir_name = if let Some(crate::ir::types::GirType::Named(name)) = registry.get(dst_type_id) {
+                name.clone()
+            } else {
+                String::new()
+            };
+            let tuple_type = if let Some(inner) = dst_ir_name.strip_prefix("Vector__") {
+                inner.to_string()
+            } else {
+                format!("Tuple__{elem_type}__int64_t")
+            };
+            // Extract _0 and _1 types from the tuple type name (Tuple__A__B)
+            let (first_type, second_type) = if let Some(rest) = tuple_type.strip_prefix("Tuple__") {
+                find_tuple_type_split(rest)
+                    .unwrap_or((elem_type.clone(), "int64_t".to_string()))
+            } else {
+                (elem_type.clone(), "int64_t".to_string())
+            };
+            use std::fmt::Write;
+            let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __a = {coll_val}; \
+                GorgetArray __b = {other_val}; \
+                size_t __min = __a.len < __b.len ? __a.len : __b.len; \
+                GorgetArray __result = gorget_array_new(sizeof({tuple_type})); \
+                for (size_t __i = 0; __i < __min; __i++) {{ \
+                {tuple_type} __t; \
+                __t._0 = GORGET_ARRAY_AT({first_type}, __a, __i); \
+                __t._1 = GORGET_ARRAY_AT({second_type}, __b, __i); \
+                gorget_array_push(&__result, &__t); \
                 }} __result; }});");
         }
         "any" => {
@@ -10872,6 +10909,29 @@ fn extract_element_type_from_collection(type_name: &str) -> Option<String> {
         if let Some(pos) = rest.find("__") {
             return Some(rest[pos + 2..].to_string());
         }
+    }
+    None
+}
+
+/// Split a two-element tuple type's inner portion into its component types.
+/// E.g., "int64_t__Str" → Some(("int64_t", "Str")),
+///       "Str__int64_t" → Some(("Str", "int64_t")),
+///       "int64_t__int64_t" → Some(("int64_t", "int64_t"))
+/// Handles multi-segment type names like "int64_t" by trying each __ split position.
+fn find_tuple_type_split(rest: &str) -> Option<(String, String)> {
+    // Try each __ position as a split point.
+    // A valid split produces two non-empty type names.
+    let mut pos = 0;
+    while let Some(idx) = rest[pos..].find("__") {
+        let split = pos + idx;
+        let first = &rest[..split];
+        let second = &rest[split + 2..];
+        if !first.is_empty() && !second.is_empty() {
+            // Heuristic: a valid C type name either starts with a letter/underscore
+            // or is a known primitive. Accept the first valid split.
+            return Some((first.to_string(), second.to_string()));
+        }
+        pos = split + 2;
     }
     None
 }

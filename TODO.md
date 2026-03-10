@@ -2,8 +2,6 @@
 
 ## High
 
-- **Vector.zip() not in C backend**: Has IR type inference but no C backend codegen. Needs tuple return type `Vector[(T, U)]` which isn't supported by current type system. [added: 2026-03-10]
-
 - **LIR: Phase 5 — expand A/B test coverage**: 76 fixtures match (13% of ~584). Fixed: StrLit vs Str coercion, FieldPtr bounds-safe fallback, synthetic extern merge, runtime fn declaration skip, struct forward declarations for empty structs, GorgetString→Str arg coercion (partial). Remaining: GorgetString→Str coercion for runtime functions (gorget_str_cat etc.), collection method dispatch, trait object support, generic Option/Result method lowering. [updated: 2026-03-08]
 
 ## Medium

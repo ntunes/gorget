@@ -1,0 +1,38 @@
+from std.collections import Vector
+
+void main():
+    Vector[int] a = Vector[int]()
+    a.push(1)
+    a.push(2)
+    a.push(3)
+
+    Vector[str] b = Vector[str]()
+    b.push("x")
+    b.push("y")
+    b.push("z")
+
+    # zip two vectors of same length
+    Vector[(int, str)] zipped = a.zip(b)
+    print(f"{zipped.len()}")
+
+    # access tuple fields
+    for (num, letter) in zipped:
+        print(f"{num}:{letter}")
+
+    # zip with different lengths (shorter truncates)
+    Vector[int] short = Vector[int]()
+    short.push(10)
+    short.push(20)
+    Vector[(int, str)] partial = short.zip(b)
+    print(f"{partial.len()}")
+    for (n, s) in partial:
+        print(f"{n}:{s}")
+
+    # zip two int vectors
+    Vector[int] c = Vector[int]()
+    c.push(100)
+    c.push(200)
+    Vector[(int, int)] pairs = a.zip(c)
+    print(f"{pairs.len()}")
+    for (x, y) in pairs:
+        print(f"{x}+{y}")

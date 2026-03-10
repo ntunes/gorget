@@ -11131,3 +11131,21 @@ fn test_higher_order_named_fn() {
 10",
     );
 }
+
+#[test]
+fn test_vector_zip() {
+    run_gg(
+        "test_vector_zip.gg",
+        "\
+3
+1:x
+2:y
+3:z
+2
+10:x
+20:y
+2
+1+100
+2+200",
+    );
+}

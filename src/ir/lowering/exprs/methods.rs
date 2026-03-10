@@ -1291,6 +1291,30 @@ pub(super) fn lower_method_call(
             .collect();
         call_args.extend(lowered_method_args.iter().cloned());
 
+        // For Vector.zip(other_vec), register tuple and result vector types
+        if method_name == "zip" && type_name.starts_with("Vector__") {
+            let self_elem = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
+            // Get the other vector's element type from the first explicit arg
+            let other_elem_name = if let Some(arg_op) = lowered_method_args.first() {
+                if let Operand::Copy(p) | Operand::Move(p) = arg_op {
+                    let type_id = builder.locals[p.local.0 as usize].type_id;
+                    let type_str = crate::ir::types::format_type_for_mangle(type_id, &ctx.type_registry);
+                    type_str.strip_prefix("Vector__").unwrap_or(&type_str).to_string()
+                } else { "int64_t".to_string() }
+            } else { "int64_t".to_string() };
+            // Register the tuple type
+            let self_type = resolve_inner_type(ctx, self_elem);
+            let other_type = resolve_inner_type(ctx, &other_elem_name);
+            let tuple_type_id = register_tuple_type(ctx, &[self_type, other_type]);
+            let tuple_name = ctx.type_name_for_id(tuple_type_id).unwrap_or("int64_t").to_string();
+            // Register Vector[Tuple] type
+            let vec_name = format!("Vector__{tuple_name}");
+            if ctx.lookup_type_by_name(&vec_name).is_none() {
+                let vec_type = ctx.type_registry.insert(crate::ir::types::GirType::Named(vec_name.clone()));
+                ctx.type_mapper.register_named(vec_name, vec_type);
+            }
+        }
+
         // For Vector.get() / .first() / .last() / .pop(), auto-register Option[T] and override return type
         let fn_sig_ret = ctx.fn_sigs.get(&effective_name).map(|(_, ret)| *ret);
         if matches!(method_name, "get" | "first" | "last" | "remove" | "pop")
@@ -1358,6 +1382,21 @@ pub(super) fn lower_method_call(
             } else {
                 ret
             }
+        } else if method_name == "zip" && type_name.starts_with("Vector__") {
+            // zip return type: look up the Vector__Tuple__A__B type we just registered
+            let self_elem = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
+            let other_elem_name = if let Some(arg_op) = lowered_method_args.first() {
+                if let Operand::Copy(p) | Operand::Move(p) = arg_op {
+                    let type_id = builder.locals[p.local.0 as usize].type_id;
+                    let type_str = crate::ir::types::format_type_for_mangle(type_id, &ctx.type_registry);
+                    type_str.strip_prefix("Vector__").unwrap_or(&type_str).to_string()
+                } else { "int64_t".to_string() }
+            } else { "int64_t".to_string() };
+            let tuple_name = format!("Tuple__{self_elem}__{other_elem_name}");
+            let vec_name = format!("Vector__{tuple_name}");
+            ctx.lookup_type_by_name(&vec_name)
+                .or_else(|| ctx.lookup_type_by_name("GorgetArray"))
+                .unwrap_or(I64_TYPE)
         } else {
             // Infer return type for known collection/runtime methods
             infer_collection_method_return_type(ctx, &type_name, method_name)
