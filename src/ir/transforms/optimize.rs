@@ -380,6 +380,7 @@ fn substitute_operands(inst: &mut Instruction, known: &std::collections::HashMap
             sub(allocator);
         }
         Instruction::PushAllocator { allocator } => sub(allocator),
+        Instruction::GlobalAssign { value, .. } => sub(value),
         // Instructions without operands that can be substituted
         _ => {}
     }
@@ -1530,6 +1531,7 @@ fn collect_read_locals(inst: &Instruction) -> Vec<u32> {
             push_operand_reads(&mut reads, allocator);
         }
         Instruction::PushAllocator { allocator } => { push_operand_reads(&mut reads, allocator); }
+        Instruction::GlobalAssign { value, .. } => { push_operand_reads(&mut reads, value); }
         Instruction::PopAllocator | Instruction::Nop
         | Instruction::InlineC { .. } | Instruction::LoadThreadLocal { .. } => {}
     }
@@ -2006,6 +2008,7 @@ fn mark_instruction_locals(inst: &Instruction, referenced: &mut [bool]) {
             }
         }
         Instruction::PushAllocator { allocator } => mark_operand(allocator, referenced),
+        Instruction::GlobalAssign { value, .. } => mark_operand(value, referenced),
         Instruction::PopAllocator => {}
         Instruction::LoadThreadLocal { dst, .. } => mark_local(dst.0, referenced),
     }
@@ -2143,6 +2146,7 @@ fn remap_instruction_locals(inst: &mut Instruction, remap: &[u32]) {
         }
         Instruction::InlineC { .. } => {} // InlineC uses raw strings — can't remap
         Instruction::PushAllocator { allocator } => remap_operand(allocator, remap),
+        Instruction::GlobalAssign { value, .. } => remap_operand(value, remap),
         Instruction::PopAllocator => {}
         Instruction::LoadThreadLocal { dst, .. } => remap_local(dst, remap),
     }

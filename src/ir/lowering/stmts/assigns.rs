@@ -85,6 +85,10 @@ pub(super) fn lower_assign(
                 } else {
                     builder.assign(Place::local(local_id), operand);
                 }
+            } else if ctx.global_names.contains(name.as_str()) {
+                // Module-level static variable — emit GlobalAssign
+                let operand = lower_expr(ctx, builder, value);
+                builder.global_assign(name.clone(), operand);
             }
         }
         Expr::FieldAccess { object, field } => {
@@ -516,6 +520,33 @@ pub(super) fn lower_compound_assign(
                 Place::local(local_id)
             };
             builder.assign(dst, FunctionBuilder::copy(tmp));
+        } else if ctx.global_names.contains(name.as_str()) {
+            // Module-level static variable — read via GlobalRef, compute, write via GlobalAssign
+            let cur_val = Operand::Constant(Constant::GlobalRef(name.clone()));
+            let rhs = lower_expr(ctx, builder, value);
+            // Determine a type for the binop — look up from global_type_names
+            let value_type = ctx.global_type_names.get(name)
+                .and_then(|tn| ctx.type_mapper.lookup_named(tn))
+                .unwrap_or(I64_TYPE);
+            let gir_op = match op {
+                ast::BinaryOp::Add => BinOp::Add,
+                ast::BinaryOp::Sub => BinOp::Sub,
+                ast::BinaryOp::Mul => BinOp::Mul,
+                ast::BinaryOp::Div => BinOp::Div,
+                ast::BinaryOp::Rem => BinOp::Rem,
+                ast::BinaryOp::Mod => BinOp::Mod,
+                ast::BinaryOp::AddWrap => BinOp::AddWrap,
+                ast::BinaryOp::SubWrap => BinOp::SubWrap,
+                ast::BinaryOp::MulWrap => BinOp::MulWrap,
+                ast::BinaryOp::BitAnd => BinOp::BitAnd,
+                ast::BinaryOp::BitOr => BinOp::BitOr,
+                ast::BinaryOp::BitXor => BinOp::BitXor,
+                ast::BinaryOp::Shl => BinOp::Shl,
+                ast::BinaryOp::Shr => BinOp::Shr,
+                _ => BinOp::Add,
+            };
+            let tmp = builder.bin_op(gir_op, value_type, cur_val, rhs);
+            builder.global_assign(name.clone(), FunctionBuilder::copy(tmp));
         }
     }
 }

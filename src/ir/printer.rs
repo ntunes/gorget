@@ -492,6 +492,9 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
         Instruction::InlineC { code } => {
             write!(out, "inline_c {code:?}").unwrap();
         }
+        Instruction::GlobalAssign { name, value } => {
+            write!(out, "global_assign {name} = {}", format_operand(value, reg)).unwrap();
+        }
         Instruction::Nop => {
             write!(out, "nop").unwrap();
         }

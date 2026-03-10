@@ -824,6 +824,10 @@ impl<'a> FuncLowering<'a> {
                 });
             }
 
+            Instruction::GlobalAssign { .. } => {
+                // GlobalAssign is handled by the C backend directly; skip in LIR.
+            }
+
             Instruction::Nop => {
                 self.lir_func.block_mut(bb).insts.push(Inst::Nop);
             }

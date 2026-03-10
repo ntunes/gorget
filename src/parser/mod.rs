@@ -367,12 +367,14 @@ impl Parser {
         }
 
         // Parse visibility — public by default; `private` makes the item module-private.
-        // The `public` keyword is accepted for backward compatibility but is a no-op.
-        let visibility = if self.match_keyword(Keyword::Private) {
-            Visibility::Private
+        // Exception: `static` declarations are private by default (use `public static` to export).
+        // The `public` keyword is accepted for explicitness on other items.
+        let (visibility, explicit_visibility) = if self.match_keyword(Keyword::Private) {
+            (Visibility::Private, true)
+        } else if self.match_keyword(Keyword::Public) {
+            (Visibility::Public, true)
         } else {
-            let _ = self.match_keyword(Keyword::Public); // consume optional `public`
-            Visibility::Public
+            (Visibility::Public, false)
         };
 
         // Determine item kind
@@ -431,7 +433,9 @@ impl Parser {
                 }
             }
             Token::Keyword(Keyword::Static) => {
-                let decl = self.parse_static_decl(visibility)?;
+                // Static declarations are private by default
+                let vis = if explicit_visibility { visibility } else { Visibility::Private };
+                let decl = self.parse_static_decl(vis)?;
                 let span = start.merge(decl.span);
                 Ok(Spanned::new(Item::StaticDecl(decl), span))
             }
@@ -464,7 +468,9 @@ impl Parser {
             // Exception: `TypeName varname = expr` is a module-level variable declaration.
             _ => {
                 if self.looks_like_module_var_decl() {
-                    let decl = self.parse_module_var_decl(visibility)?;
+                    // Module-level var decls are implicitly static — private by default
+                    let vis = if explicit_visibility { visibility } else { Visibility::Private };
+                    let decl = self.parse_module_var_decl(vis)?;
                     let span = start.merge(decl.span);
                     Ok(Spanned::new(Item::StaticDecl(decl), span))
                 } else {

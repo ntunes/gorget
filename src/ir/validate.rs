@@ -400,6 +400,9 @@ fn check_instruction_locals(
         Instruction::PushAllocator { allocator } => {
             check_operand_locals(allocator, max, ctx, errors);
         }
+        Instruction::GlobalAssign { value, .. } => {
+            check_operand_locals(value, max, ctx, errors);
+        }
         Instruction::PopAllocator | Instruction::Nop | Instruction::InlineC { .. } => {}
     }
 }
@@ -764,6 +767,9 @@ fn collect_read_locals_for_validate(inst: &Instruction) -> Vec<u32> {
             push_op(&mut reads, allocator);
         }
         Instruction::PushAllocator { allocator } => { push_op(&mut reads, allocator); }
+        Instruction::GlobalAssign { value, .. } => {
+            push_op(&mut reads, value);
+        }
         Instruction::PopAllocator | Instruction::Nop
         | Instruction::InlineC { .. } | Instruction::LoadThreadLocal { .. } => {}
     }

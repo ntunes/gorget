@@ -883,16 +883,17 @@ The inner value is accessed via `.0`.
 
 ```ebnf
 const_decl  = [ "public" ] "const" type IDENTIFIER "=" expr NEWLINE ;
-static_decl = [ "public" ] "static" type IDENTIFIER "=" expr NEWLINE ;
+static_decl = [ "public" | "private" ] "static" type IDENTIFIER "=" expr NEWLINE ;
 ```
 
-- `const`: compile-time constant. Inlined at every use site.
-- `static`: runtime value with global lifetime. One instance per program.
+- `const`: compile-time constant. Inlined at every use site. Public by default.
+- `static`: runtime value with global lifetime. One instance per program. **Private by default** — only accessible within the declaring module. Use `public static` to export.
 
 ```gorget
 const int MAX_SIZE = 1024
 const float PI = 3.14159265358979
-static int COUNTER = 0
+static int counter = 0              # private to this module
+public static int shared_counter = 0  # accessible to importers
 ```
 
 ### 5.10 Extern Blocks
@@ -2333,15 +2334,19 @@ Gorget uses monomorphization: each unique combination of generic type arguments 
 ## 12. Visibility
 
 ```ebnf
-visibility = [ "public" ] ;
+visibility = "public" | "private" ;
 ```
 
 Two levels:
 
 | Level     | Keyword    | Visible to                     |
 |-----------|------------|--------------------------------|
-| Private   | *(none)*   | Same module only               |
 | Public    | `public`   | All modules                    |
+| Private   | `private`  | Same module only               |
+
+**Defaults:** Most items (functions, structs, enums, traits, constants) are **public by default**. Two exceptions are **private by default**:
+- **`static` declarations** — mutable module-level state should be explicitly exported
+- **struct fields** — internal layout is an implementation detail
 
 Applicable to: functions, structs, struct fields, enums, traits, constants, statics.
 
@@ -2349,7 +2354,10 @@ Applicable to: functions, structs, struct fields, enums, traits, constants, stat
 public struct Point:
     public float x
     public float y
-    float internal_id     # private
+    float internal_id           # private (fields default)
+
+static int counter = 0          # private (statics default)
+public static int shared = 0    # explicitly public
 ```
 
 ---

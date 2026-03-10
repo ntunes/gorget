@@ -1,0 +1,27 @@
+# Test that static variable mutation works correctly.
+
+static int counter = 0
+
+void increment():
+    counter = counter + 1
+
+void add(int n):
+    counter += n
+
+int get_counter():
+    return counter
+
+void set_counter(int val):
+    counter = val
+
+void main():
+    print(get_counter())
+    increment()
+    print(get_counter())
+    increment()
+    increment()
+    print(get_counter())
+    add(10)
+    print(get_counter())
+    set_counter(42)
+    print(get_counter())

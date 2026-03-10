@@ -2855,6 +2855,13 @@ fn emit_poll_inst(
     match inst {
         Instruction::Nop => {}
 
+        Instruction::GlobalAssign { name, value } => {
+            if !matches!(value, Operand::Constant(Constant::Unit)) {
+                let val_str = fmt_operand_poll(value, func, registry);
+                let _ = writeln!(out, "        {name} = {val_str};");
+            }
+        }
+
         Instruction::Assign { dst, value } => {
             if matches!(value, Operand::Constant(Constant::Unit)) {
                 // Skip unit assignments (void destination)
@@ -6436,6 +6443,13 @@ fn emit_instruction(
 
         Instruction::InlineC { code } => {
             let _ = writeln!(out, "        {code}");
+        }
+
+        Instruction::GlobalAssign { name, value } => {
+            if !matches!(value, Operand::Constant(Constant::Unit)) {
+                let val_str = format_operand(value, func, registry);
+                let _ = writeln!(out, "        {name} = {val_str};");
+            }
         }
 
         Instruction::Nop => {

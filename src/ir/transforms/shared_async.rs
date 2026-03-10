@@ -675,6 +675,9 @@ fn remap_instruction(instr: &mut Instruction, map: &FxHashMap<LocalId, LocalId>)
             remap_operand(allocator, map);
         }
         Instruction::PopAllocator => {}
+        Instruction::GlobalAssign { value, .. } => {
+            remap_operand(value, map);
+        }
         Instruction::InlineC { .. } => {}
         Instruction::Nop => {}
     }

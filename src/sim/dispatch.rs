@@ -1386,6 +1386,10 @@ impl<'m> Interpreter<'m> {
                 // All patterns assign to _X from _Y (dict/set local) and optional _Z (index).
                 self.eval_inline_c(locals, code)?;
             }
+
+            Instruction::GlobalAssign { .. } => {
+                // Global assignments are not executed in the simulator.
+            }
         }
 
         // P4c: mark the instruction's destination local as initialized, regardless of instruction type.

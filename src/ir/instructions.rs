@@ -79,6 +79,11 @@ pub enum Instruction {
         dst: Place,
         value: Operand,
     },
+    /// Assign to a module-level static variable (global).
+    GlobalAssign {
+        name: String,
+        value: Operand,
+    },
     FieldLoad {
         dst: LocalId,
         base: Place,

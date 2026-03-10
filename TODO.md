@@ -6,6 +6,8 @@
 
 ## Medium
 
+- **`shared static` support**: `public static shared int counter = 0` — thread-safe module-level statics. Requires adding `SharedKind` field to `StaticDecl`, atomic/mutex global codegen in C backend (atomic globals, constructor-initialized mutexes), and wiring lock/unlock into `GlobalAssign` emission. Workaround: use explicit `Mutex[int]` or `Atomic[int]` as the static type. [added: 2026-03-10]
+
 - **IR refactor: Continue `exprs/` split — Phase 4**: Phases 1-3 done (8 files, mod.rs 2,515 lines). Remaining: control-flow exprs, struct literals, field access — tightly coupled to `lower_expr_inner`. Diminishing returns. Revisit if mod.rs grows again. [updated: 2026-03-07]
 
 - **IR refactor: Continue `LoweringContext` decomposition (Phase 3)**: Phases 1-2 done. 24 fields remain. fn_sigs has 116 uses — high churn for modest readability gain. Diminishing returns. [updated: 2026-03-07]
@@ -58,7 +60,6 @@
 
 - **Self-hosting type checker: 362/560 (64.6%)**: Phase 1 complete — function signatures, params, explicit VarDecls (subtree scope lookup), equip methods (self-type resolution). Remaining mismatches: (1) `auto`/inferred variables need expression type inference (~75 fixtures), (2) equip method def_id differences cause line count offsets (~43 fixtures), (3) generic type params resolve to `<error>` (~15 fixtures), (4) `meta` functions have extra TYPE lines vs Rust's monomorphized output, (5) type alias def_id offset. Next: expression type inference (Phase 2). [added: 2026-03-10]
 
-- **Compiler bug: `static` variable mutation ignored in C codegen**: `static int x = 0` + function `set_x(int v): x = v` generates empty function body in C. The assignment to the static is silently dropped. Workaround: store mutable state in struct fields passed by `&self`/`&ref` instead. [added: 2026-03-10]
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 

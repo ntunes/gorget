@@ -210,7 +210,12 @@ pub fn infer_operand_type(ctx: &LoweringContext, operand: &Operand) -> TypeId {
             Constant::Unit => UNIT_TYPE,
             Constant::SizeOf(_) => U64_TYPE,
             Constant::FuncRef(_) => UNIT_TYPE, // treated as void* at call site
-            Constant::GlobalRef(_) => UNIT_TYPE, // type looked up from global table at call site
+            Constant::GlobalRef(name) => {
+                // Look up type from global_type_names → type_mapper
+                ctx.global_type_names.get(name)
+                    .and_then(|tn| ctx.type_mapper.lookup_named(tn))
+                    .unwrap_or(I64_TYPE)
+            }
         },
     }
 }

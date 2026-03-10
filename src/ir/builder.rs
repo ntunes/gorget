@@ -188,6 +188,10 @@ impl FunctionBuilder {
         self.emit(Instruction::Assign { dst, value });
     }
 
+    pub fn global_assign(&mut self, name: String, value: Operand) {
+        self.emit(Instruction::GlobalAssign { name, value });
+    }
+
     pub fn field_load(&mut self, base: Place, field: u32, type_id: TypeId) -> LocalId {
         self.emit_with_temp(type_id, |dst| Instruction::FieldLoad { dst, base, field })
     }
