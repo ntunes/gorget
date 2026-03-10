@@ -8009,6 +8009,7 @@ enum InlineMethod {
     SetUnion,
     SetIntersection,
     SetDifference,
+    SetSymmetricDifference,
     /// Dict update/get_or
     DictUpdate,
     DictGetOr,
@@ -8972,6 +8973,7 @@ fn try_inline_method(func_name: &str) -> Option<InlineMethod> {
             "union" => Some(InlineMethod::SetUnion),
             "intersection" => Some(InlineMethod::SetIntersection),
             "difference" => Some(InlineMethod::SetDifference),
+            "symmetric_difference" => Some(InlineMethod::SetSymmetricDifference),
             "is_subset" => Some(InlineMethod::SetIsSubset),
             "is_superset" => Some(InlineMethod::SetIsSuperset),
             _ => None,
@@ -9354,6 +9356,27 @@ fn emit_inline_method(
                     if ({self_str}.states[__i] == 1) {{ \
                     const void* __k = (char*){self_str}.keys + __i * {self_str}.key_size; \
                     if (!gorget_set_contains(&{other}, __k)) gorget_set_add(&_{id}, __k); \
+                    }} }}",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::SetSymmetricDifference => {
+            if let Some(dst_id) = dst {
+                let other = if args.len() > 1 {
+                    format_operand(&args[1], func, registry)
+                } else { "/*no other*/".to_string() };
+                let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _ = writeln!(out,
+                    "        _{id} = gorget_set_new({self_str}.key_size); \
+                    for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
+                    if ({self_str}.states[__i] == 1) {{ \
+                    const void* __k = (char*){self_str}.keys + __i * {self_str}.key_size; \
+                    if (!gorget_set_contains(&{other}, __k)) gorget_set_add(&_{id}, __k); \
+                    }} }} \
+                    for (size_t __i = 0; __i < {other}.cap; __i++) {{ \
+                    if ({other}.states[__i] == 1) {{ \
+                    const void* __k = (char*){other}.keys + __i * {other}.key_size; \
+                    if (!gorget_set_contains(&{self_str}, __k)) gorget_set_add(&_{id}, __k); \
                     }} }}",
                     id = dst_id.0);
             }

@@ -69,3 +69,12 @@ void main():
     # --- get_or ---
     print(f"{m3.get_or("x", 99)}")
     print(f"{m3.get_or("missing", 99)}")
+
+    # --- get_or_put ---
+    HashMap[str, int] m4 = HashMap[str, int]()
+    int v1 = m4.get_or_put("new", 50)
+    print(f"{v1}")
+    print(f"{m4.len()}")
+    int v2 = m4.get_or_put("new", 99)
+    print(f"{v2}")
+    print(f"{m4.len()}")

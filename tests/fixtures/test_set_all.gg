@@ -60,6 +60,13 @@ void main():
     print(f"{diff_ba.len()}")
     print(f"{diff_ba.contains(4)}")
 
+    # symmetric_difference
+    Set[int] sym = a.symmetric_difference(b)
+    print(f"{sym.len()}")
+    print(f"{sym.contains(1)}")
+    print(f"{sym.contains(4)}")
+    print(f"{sym.contains(2)}")
+
     # --- is_subset / is_superset ---
     Set[int] sub = Set[int]()
     sub.add(1)

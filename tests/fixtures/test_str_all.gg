@@ -58,9 +58,23 @@ void main():
     print(hi.pad_right(5, '.'))
     print(hi.pad_right(2, '.'))
 
+    # --- byte_len / byte_at / char_at / find ---
+    print(f"{s.byte_len()}")
+    print(f"{"hello".byte_len()}")
+    uint8 b0 = s.byte_at(0)
+    print(f"{b0}")
+    str ch0 = s.char_at(0)
+    print(ch0)
+    str ch4 = s.char_at(4)
+    print(ch4)
+    print(f"{s.find("world").unwrap()}")
+    print(f"{s.find("xyz").is_none()}")
+
     # --- Slicing ---
     str sub = s.substring(0, 5)
     print(sub)
+    str bsl = s.byte_slice(0, 5)
+    print(bsl)
     str ch = s[0]
     print(ch)
 
