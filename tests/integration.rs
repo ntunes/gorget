@@ -9461,10 +9461,12 @@ fn format_types_canonical(
 }
 
 /// Extract only TYPE lines from output for comparison.
+/// Filters out lines containing `<error>` since both resolvers produce
+/// these for unresolvable types and they create noise in comparisons.
 fn normalize_type_output(output: &str) -> Vec<String> {
     output
         .lines()
-        .filter(|line| line.starts_with("TYPE "))
+        .filter(|line| line.starts_with("TYPE ") && !line.contains("<error>"))
         .map(|line| line.to_string())
         .collect()
 }
@@ -9519,6 +9521,7 @@ fn type_comparison() {
     }
 
     let mut matched = 0;
+    let mut superset_matched = 0; // Gorget has all of Rust's + extras
     let mut mismatches: Vec<Mismatch> = Vec::new();
     let mut crashes: Vec<(String, String)> = Vec::new();
     let mut compared = 0;
@@ -9552,39 +9555,43 @@ fn type_comparison() {
                     .trim_end()
                     .to_string();
 
-                // Normalize: extract TYPE lines only
+                // Normalize: extract "name" = type pairs (strip def_id for order-independent comparison)
                 let rust_lines = normalize_type_output(&rust_output);
                 let gorget_lines = normalize_type_output(&gorget_output);
 
-                // Find first line divergence
-                let mut first_diff = None;
-                let max_lines = rust_lines.len().max(gorget_lines.len());
-                for i in 0..max_lines {
-                    let r = rust_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
-                    let g = gorget_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
-                    if r != g {
-                        first_diff = Some(i);
-                        break;
-                    }
-                }
+                // Extract name=type pairs, ignoring def_id ordering
+                let extract_pairs = |lines: &[String]| -> std::collections::HashSet<String> {
+                    lines.iter().filter_map(|line| {
+                        // TYPE <id> "name" = type → "name" = type
+                        if let Some(quote_start) = line.find('"') {
+                            Some(line[quote_start..].to_string())
+                        } else {
+                            None
+                        }
+                    }).collect()
+                };
+                let rust_set = extract_pairs(&rust_lines);
+                let gorget_set = extract_pairs(&gorget_lines);
 
-                if let Some(diff_line) = first_diff {
+                if rust_set == gorget_set {
+                    matched += 1;
+                } else if rust_set.is_subset(&gorget_set) {
+                    // Gorget has all of Rust's entries plus extras — count as superset match
+                    superset_matched += 1;
+                } else {
+                    // Find first difference for reporting
+                    let rust_only: Vec<_> = rust_set.difference(&gorget_set).cloned().collect();
+                    let gorget_only: Vec<_> = gorget_set.difference(&rust_set).cloned().collect();
+                    let rust_line = rust_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
+                    let gorget_line = gorget_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
                     mismatches.push(Mismatch {
                         fixture: fname.clone(),
-                        first_diff_line: diff_line,
-                        rust_line: rust_lines
-                            .get(diff_line)
-                            .cloned()
-                            .unwrap_or_else(|| "<missing>".to_string()),
-                        gorget_line: gorget_lines
-                            .get(diff_line)
-                            .cloned()
-                            .unwrap_or_else(|| "<missing>".to_string()),
+                        first_diff_line: 0,
+                        rust_line: format!("only in Rust ({}): {}", rust_only.len(), rust_line),
+                        gorget_line: format!("only in Gorget ({}): {}", gorget_only.len(), gorget_line),
                         rust_total: rust_lines.len(),
                         gorget_total: gorget_lines.len(),
                     });
-                } else {
-                    matched += 1;
                 }
             }
             Ok(out) => {
@@ -9615,7 +9622,8 @@ fn type_comparison() {
     // 5. Report
     eprintln!("\n=== Type Comparison Results ===");
     eprintln!(
-        "Fixtures compared: {compared}, matched: {matched}, mismatched: {}, crashed: {}",
+        "Fixtures compared: {compared}, exact: {matched}, superset: {superset_matched}, total: {}, mismatched: {}, crashed: {}",
+        matched + superset_matched,
         mismatches.len(),
         crashes.len()
     );

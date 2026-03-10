@@ -1,0 +1,419 @@
+# Expression type inference for auto/inferred variable declarations.
+# Given an expression and scope context, returns a type_id or NO_TYPE.
+
+from std.collections import Vector, Dict
+from ast import SpannedExpr, SpannedType, Span, Type, Expr, Param, Stmt
+from ast import EIntLiteral, EFloatLiteral, EBoolLiteral, EStringLiteral
+from ast import ECharLiteral, ENoneLiteral, EIdentifier, ESelfExpr
+from ast import EBinaryOp, EUnaryOp, ECall, EMethodCall, EFieldAccess
+from ast import EIndex, EClosure, EArrayLiteral, ETupleLiteral
+from ast import EStructLiteral, EDotShorthand, ETry, EAs, EMove
+from ast import EMutableBorrow, EDeref, EIs, EAwait, ESpawn
+from ast import EDictLiteral, ERawCapture, EDefaultOp, EBlock
+from ids import NO_DEF, NO_TYPE
+from scope import ScopeTable, DefKind, DefInfo
+from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
+from scope import DkVariable, DkConst, DkStatic
+from types import TypeTable, ResolvedType, get_stype_at, get_rtype_at, get_int_at
+from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
+from types import RTTuple, RTArray, RTSlice, RTError, RTNever
+from types import ast_type_to_resolved
+from resolve import ResolveContext
+
+# ── Statement return type inference (for closure bodies) ──────
+
+int infer_stmt_return_type(Stmt s, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
+    match s:
+        case SExpr(sexpr):
+            return infer_expr_type(sexpr, scopes, &types, ctx)
+        case SReturn(opt_expr):
+            match opt_expr:
+                case Some(sexpr):
+                    return infer_expr_type(sexpr, scopes, &types, ctx)
+                case None:
+                    return types.void_id
+        else:
+            return types.void_id
+    return types.void_id
+
+# ── Expression type inference ──────────────────────────────────
+
+int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
+    Expr e = sexpr.expr
+    int span_start = sexpr.span.start
+
+    match e:
+        case EIntLiteral(n):
+            return types.int_id
+
+        case EFloatLiteral(f):
+            return types.float_id
+
+        case EBoolLiteral(b):
+            return types.bool_id
+
+        case EStringLiteral(s):
+            return types.string_id
+
+        case ECharLiteral(c):
+            return types.char_id
+
+        case ENoneLiteral():
+            return types.error_id
+
+        case ESelfExpr():
+            if types.self_type_id >= 0:
+                return types.self_type_id
+            return types.error_id
+
+        case EIdentifier(name):
+            # Look up via resolution map
+            if ctx.resolution_map.contains(span_start):
+                int def_id = ctx.resolution_map.get(span_start).unwrap()
+                DefInfo d = scopes.get_def(def_id)
+                if d.type_id >= 0:
+                    return d.type_id
+                # If it's a struct/enum name used as constructor, return defined type
+                bool is_type = false
+                match d.kind:
+                    case DkStruct():
+                        is_type = true
+                    case DkEnum():
+                        is_type = true
+                    else:
+                        pass
+                if is_type:
+                    return types.defined_id(def_id)
+            return NO_TYPE
+
+        case ECall(callee, args, targs):
+            # Infer callee type, extract return type from RTFunction
+            int callee_type = infer_expr_type(SpannedExpr((*callee).expr, (*callee).span), scopes, &types, ctx)
+            if callee_type >= 0 and callee_type < types.types.len():
+                ResolvedType ct = get_rtype_at(types.types, callee_type)
+                match ct:
+                    case RTFunction(params, ownerships, ret_id):
+                        return ret_id
+                    case RTDefined(def_id):
+                        # Constructor call — returns the defined type
+                        return callee_type
+                    case RTGeneric(def_id, type_args):
+                        # Generic constructor — return the generic type
+                        return callee_type
+                    else:
+                        pass
+            # Check if callee is an identifier we can look up directly
+            match (*callee).expr:
+                case EIdentifier(name):
+                    if ctx.resolution_map.contains((*callee).span.start):
+                        int def_id = ctx.resolution_map.get((*callee).span.start).unwrap()
+                        DefInfo d = scopes.get_def(def_id)
+                        bool is_struct = false
+                        match d.kind:
+                            case DkStruct():
+                                is_struct = true
+                            else:
+                                pass
+                        if is_struct:
+                            return types.defined_id(def_id)
+                        bool is_enum = false
+                        match d.kind:
+                            case DkEnum():
+                                is_enum = true
+                            case DkVariant():
+                                is_enum = true
+                            else:
+                                pass
+                        if is_enum:
+                            return types.defined_id(def_id)
+                else:
+                    pass
+            return NO_TYPE
+
+        case EStructLiteral(name, field_names, field_values):
+            # Look up struct by name
+            int def_id = scopes.lookup(name)
+            if def_id >= 0:
+                return types.defined_id(def_id)
+            return NO_TYPE
+
+        case EDotShorthand(variant_name, args):
+            # .Variant() — type comes from context, not inferable standalone
+            return NO_TYPE
+
+        case EBinaryOp(left, op, right):
+            # Comparison/logical operators return bool
+            if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "in":
+                return types.bool_id
+            # Arithmetic/bitwise: return type of left operand
+            int lt = infer_expr_type(SpannedExpr((*left).expr, (*left).span), scopes, &types, ctx)
+            return lt
+
+        case EUnaryOp(op, operand):
+            if op == "not":
+                return types.bool_id
+            # neg, bitnot, deref: return operand type
+            int ot = infer_expr_type(SpannedExpr((*operand).expr, (*operand).span), scopes, &types, ctx)
+            return ot
+
+        case EFieldAccess(obj, field_name):
+            # Would need struct field type lookup — skip for now
+            return NO_TYPE
+
+        case EMethodCall(obj, method_name, args, targs):
+            # Infer return type from well-known methods
+            if method_name == "len" or method_name == "count":
+                return types.int_id
+            if method_name == "to_string" or method_name == "to_str" or method_name == "trim" or method_name == "lower" or method_name == "upper" or method_name == "strip" or method_name == "replace" or method_name == "join" or method_name == "repeat" or method_name == "slice" or method_name == "substr" or method_name == "format":
+                return types.string_id
+            if method_name == "split":
+                int vec_def = scopes.lookup("Vector")
+                if vec_def >= 0:
+                    Vector[int] vec_args = Vector[int]()
+                    vec_args.push(types.string_id)
+                    return types.add_type(RTGeneric(vec_def, vec_args))
+            if method_name == "is_empty" or method_name == "contains" or method_name == "starts_with" or method_name == "ends_with":
+                return types.bool_id
+            # .unwrap() returns the inner type of Option[T] or Result[T,E]
+            if method_name == "unwrap" or method_name == "unwrap_or":
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                if obj_type >= 0 and obj_type < types.types.len():
+                    ResolvedType ort = get_rtype_at(types.types, obj_type)
+                    match ort:
+                        case RTGeneric(def_id, type_args):
+                            DefInfo d = scopes.get_def(def_id)
+                            if d.name == "Option" or d.name == "Result":
+                                if type_args.len() >= 1:
+                                    return get_int_at(type_args, 0)
+                        else:
+                            pass
+            # .get(i) on Vector[T] → Option[T]; on Dict[K,V] → Option[V]
+            if method_name == "get":
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                if obj_type >= 0 and obj_type < types.types.len():
+                    ResolvedType ort = get_rtype_at(types.types, obj_type)
+                    match ort:
+                        case RTGeneric(def_id, type_args):
+                            DefInfo d = scopes.get_def(def_id)
+                            if d.name == "Vector" or d.name == "Set" or d.name == "HashSet":
+                                if type_args.len() >= 1:
+                                    # Returns Option[T]
+                                    int option_def = scopes.lookup("Option")
+                                    if option_def >= 0:
+                                        Vector[int] opt_args = Vector[int]()
+                                        opt_args.push(get_int_at(type_args, 0))
+                                        return types.add_type(RTGeneric(option_def, opt_args))
+                            if d.name == "Dict" or d.name == "HashMap":
+                                if type_args.len() >= 2:
+                                    int option_def = scopes.lookup("Option")
+                                    if option_def >= 0:
+                                        Vector[int] opt_args = Vector[int]()
+                                        opt_args.push(get_int_at(type_args, 1))
+                                        return types.add_type(RTGeneric(option_def, opt_args))
+                        else:
+                            pass
+            # .keys() / .values() on Dict[K,V] → Vector[K] / Vector[V]
+            if method_name == "keys":
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                if obj_type >= 0 and obj_type < types.types.len():
+                    ResolvedType ort = get_rtype_at(types.types, obj_type)
+                    match ort:
+                        case RTGeneric(def_id, type_args):
+                            DefInfo d = scopes.get_def(def_id)
+                            if (d.name == "Dict" or d.name == "HashMap") and type_args.len() >= 1:
+                                int vec_def = scopes.lookup("Vector")
+                                if vec_def >= 0:
+                                    Vector[int] vec_args = Vector[int]()
+                                    vec_args.push(get_int_at(type_args, 0))
+                                    return types.add_type(RTGeneric(vec_def, vec_args))
+                        else:
+                            pass
+            if method_name == "values":
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                if obj_type >= 0 and obj_type < types.types.len():
+                    ResolvedType ort = get_rtype_at(types.types, obj_type)
+                    match ort:
+                        case RTGeneric(def_id, type_args):
+                            DefInfo d = scopes.get_def(def_id)
+                            if (d.name == "Dict" or d.name == "HashMap") and type_args.len() >= 2:
+                                int vec_def = scopes.lookup("Vector")
+                                if vec_def >= 0:
+                                    Vector[int] vec_args = Vector[int]()
+                                    vec_args.push(get_int_at(type_args, 1))
+                                    return types.add_type(RTGeneric(vec_def, vec_args))
+                        else:
+                            pass
+            # .items() on Dict → Vector[(K,V)]
+            if method_name == "items":
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                if obj_type >= 0 and obj_type < types.types.len():
+                    ResolvedType ort = get_rtype_at(types.types, obj_type)
+                    match ort:
+                        case RTGeneric(def_id, type_args):
+                            DefInfo d = scopes.get_def(def_id)
+                            if (d.name == "Dict" or d.name == "HashMap") and type_args.len() >= 2:
+                                Vector[int] tuple_elems = Vector[int]()
+                                tuple_elems.push(get_int_at(type_args, 0))
+                                tuple_elems.push(get_int_at(type_args, 1))
+                                int tuple_type = types.add_type(RTTuple(tuple_elems))
+                                int vec_def = scopes.lookup("Vector")
+                                if vec_def >= 0:
+                                    Vector[int] vec_args = Vector[int]()
+                                    vec_args.push(tuple_type)
+                                    return types.add_type(RTGeneric(vec_def, vec_args))
+                        else:
+                            pass
+            # .clone() / .copy() / .sorted() / .reversed() returns the same type
+            if method_name == "clone" or method_name == "copy" or method_name == "sorted" or method_name == "reversed" or method_name == "filter":
+                return infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+            # .fold(init, fn) returns the init type
+            if method_name == "fold" or method_name == "reduce":
+                if args.len() >= 1:
+                    SpannedExpr init_arg = args.get(0).unwrap()
+                    return infer_expr_type(init_arg, scopes, &types, ctx)
+            # .pop() on Vector[T] → Option[T]
+            if method_name == "pop":
+                int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                if obj_type >= 0 and obj_type < types.types.len():
+                    ResolvedType ort = get_rtype_at(types.types, obj_type)
+                    match ort:
+                        case RTGeneric(def_id, type_args):
+                            DefInfo d = scopes.get_def(def_id)
+                            if d.name == "Vector" and type_args.len() >= 1:
+                                int option_def = scopes.lookup("Option")
+                                if option_def >= 0:
+                                    Vector[int] opt_args = Vector[int]()
+                                    opt_args.push(get_int_at(type_args, 0))
+                                    return types.add_type(RTGeneric(option_def, opt_args))
+                        else:
+                            pass
+            return NO_TYPE
+
+        case EIndex(obj, index):
+            # Indexing: Vector[T][i] → T, Dict[K,V][k] → V
+            int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+            if obj_type >= 0 and obj_type < types.types.len():
+                ResolvedType ort = get_rtype_at(types.types, obj_type)
+                match ort:
+                    case RTGeneric(def_id, type_args):
+                        DefInfo d = scopes.get_def(def_id)
+                        if d.name == "Vector" and type_args.len() >= 1:
+                            return get_int_at(type_args, 0)
+                        if (d.name == "Dict" or d.name == "HashMap") and type_args.len() >= 2:
+                            return get_int_at(type_args, 1)
+                    case RTArray(elem_id, size):
+                        return elem_id
+                    case RTSlice(elem_id):
+                        return elem_id
+                    else:
+                        pass
+                # str indexing → str
+                match ort:
+                    case RTPrimitive(name):
+                        if name == "str" or name == "String":
+                            return types.string_id
+                    else:
+                        pass
+            return NO_TYPE
+
+        case EArrayLiteral(elements):
+            # Array type from first element
+            if elements.len() > 0:
+                SpannedExpr first = elements.get(0).unwrap()
+                int elem_type = infer_expr_type(first, scopes, &types, ctx)
+                if elem_type >= 0:
+                    return types.add_type(RTArray(elem_type, elements.len()))
+            return NO_TYPE
+
+        case ETupleLiteral(elements):
+            Vector[int] elem_ids = Vector[int]()
+            int i = 0
+            while i < elements.len():
+                SpannedExpr elem = elements.get(i).unwrap()
+                int et = infer_expr_type(elem, scopes, &types, ctx)
+                elem_ids.push(et)
+                i = i + 1
+            return types.add_type(RTTuple(elem_ids))
+
+        case EDictLiteral(keys, values):
+            # Infer Dict[K, V] from first key-value pair
+            if keys.len() > 0 and values.len() > 0:
+                SpannedExpr first_key = keys.get(0).unwrap()
+                SpannedExpr first_val = values.get(0).unwrap()
+                int key_type = infer_expr_type(first_key, scopes, &types, ctx)
+                int val_type = infer_expr_type(first_val, scopes, &types, ctx)
+                if key_type >= 0 and val_type >= 0:
+                    # Look up Dict def
+                    int dict_def = scopes.lookup("Dict")
+                    if dict_def >= 0:
+                        Vector[int] type_args = Vector[int]()
+                        type_args.push(key_type)
+                        type_args.push(val_type)
+                        return types.add_type(RTGeneric(dict_def, type_args))
+            return NO_TYPE
+
+        case EClosure(params, body):
+            # Closure type inference would need full body analysis
+            return NO_TYPE
+
+        case ETry(inner):
+            # try expr — unwraps Result[T,E] → T, Option[T] → T
+            int inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            if inner_type >= 0 and inner_type < types.types.len():
+                ResolvedType irt = get_rtype_at(types.types, inner_type)
+                match irt:
+                    case RTGeneric(def_id, type_args):
+                        DefInfo d = scopes.get_def(def_id)
+                        if (d.name == "Result" or d.name == "Option") and type_args.len() >= 1:
+                            return get_int_at(type_args, 0)
+                    else:
+                        pass
+            return NO_TYPE
+
+        case EAs(inner, target_type):
+            # Cast: result is the target type
+            return ast_type_to_resolved((*target_type).ty, (*target_type).span, scopes, &types)
+
+        case EMove(inner):
+            int it = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            return it
+
+        case EMutableBorrow(inner):
+            int it = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            return it
+
+        case EDeref(inner):
+            int it = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            return it
+
+        case ERawCapture(inner):
+            int it = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            return it
+
+        case EIs(inner, negated, pattern):
+            return types.bool_id
+
+        case EAwait(inner):
+            # await returns the task's result type — skip
+            return NO_TYPE
+
+        case ESpawn(inner):
+            # spawn returns Task[T] — skip
+            return NO_TYPE
+
+        case EDefaultOp(left, right):
+            # a ?? b — return type of right (the fallback/unwrapped type)
+            int rt = infer_expr_type(SpannedExpr((*right).expr, (*right).span), scopes, &types, ctx)
+            return rt
+
+        case EBlock(body_stmts):
+            # do: block — type is the type of the last expression
+            if body_stmts.len() > 0:
+                Stmt last = body_stmts.get(body_stmts.len() - 1).unwrap()
+                return infer_stmt_return_type(last, scopes, &types, ctx)
+            return NO_TYPE
+
+        else:
+            return NO_TYPE
+
+    return NO_TYPE

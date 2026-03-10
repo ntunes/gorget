@@ -51,6 +51,7 @@ struct TypeTable:
     int error_id
     int never_id
     int self_type_id
+    Dict[str, int] variant_field_types
 
 equip TypeTable:
 
@@ -75,7 +76,7 @@ equip TypeTable:
         types.push(RTError())
         # 8: never
         types.push(RTNever())
-        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1)
+        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[str, int]())
 
     int add_type(&self, ResolvedType ty):
         int id = self.types.len()

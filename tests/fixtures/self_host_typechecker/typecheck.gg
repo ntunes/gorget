@@ -2,21 +2,36 @@
 # Walks the AST after name resolution and assigns type IDs to definitions
 # based on their declared types.
 #
-# Phase 1 (this file): function signatures and explicit VarDecl types.
-# Does NOT do type inference, expression typing, or constraint solving.
+# Phase 1: function signatures and explicit VarDecl types.
+# Phase 2: expression type inference for auto/inferred variables.
 
 from std.collections import Vector, Dict
 from ast import Module, Item, Stmt, Param, FunctionDef, StructDef, EnumDef
 from ast import EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch
-from ast import SpannedExpr, SpannedType, SpannedPattern, Span, Type, Expr
+from ast import SpannedExpr, SpannedType, SpannedPattern, Span, Type, Expr, Pattern
+from ast import EMethodCall, EBinaryOp, EIs
 from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo, ScopeKind
 from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
 from scope import DkVariable, DkConst, DkStatic, DkGenericParam
 from scope import get_def_at
 from types import TypeTable, ResolvedType, ast_type_to_resolved, get_stype_at
-from types import RTFunction, RTVoid
+from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
+from types import RTTuple, RTArray, RTSlice, get_rtype_at, get_int_at
 from resolve import ResolveContext
+from infer import infer_expr_type
+
+# ── Option helpers ──────────────────────────────────────────
+
+bool has_opt_sexpr(Option[SpannedExpr] opt):
+    match opt:
+        case Some(_):
+            return true
+        case None:
+            return false
+
+SpannedExpr unwrap_opt_sexpr(Option[SpannedExpr] opt):
+    return opt.unwrap()
 
 # ── Typed accessors ─────────────────────────────────────────
 
@@ -103,6 +118,200 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
     if has_body_scope:
         type_check_stmts(func.body, body_scope, &scopes, &types, ctx)
 
+# ── Pattern type assignment ────────────────────────────────
+# Recursively assigns types to pattern bindings based on a scrutinee type.
+
+SpannedPattern get_spat_at(Vector[SpannedPattern] v, int i):
+    return v.get(i).unwrap()
+
+int spat_vec_len(Vector[SpannedPattern] v):
+    return v.len()
+
+void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_id, ScopeTable &scopes, TypeTable &types):
+    match pattern.pat:
+        case PBinding(name):
+            int def_id = scopes.lookup_in_subtree(scope_id, name)
+            if def_id >= 0:
+                DefInfo d = scopes.get_def(def_id)
+                # Only assign to variable bindings (not variant names, structs, etc.)
+                bool is_variable = false
+                match d.kind:
+                    case DkVariable():
+                        is_variable = true
+                    else:
+                        pass
+                if is_variable and d.type_id < 0:
+                    scopes.set_def_type(def_id, scrutinee_type)
+
+        case PConstructor(variant_name, fields):
+            # Resolve variant payload types from the scrutinee type
+            Vector[int] field_types = resolve_variant_field_types(scrutinee_type, variant_name, scopes, types)
+            int i = 0
+            while i < spat_vec_len(fields):
+                SpannedPattern field = get_spat_at(fields, i)
+                int ft = -1
+                if i < field_types.len():
+                    ft = get_int_at(field_types, i)
+                if ft >= 0:
+                    assign_pattern_types(field, ft, scope_id, &scopes, &types)
+                i = i + 1
+
+        case PDotShorthand(variant_name, fields):
+            Vector[int] field_types = resolve_variant_field_types(scrutinee_type, variant_name, scopes, types)
+            int i = 0
+            while i < spat_vec_len(fields):
+                SpannedPattern field = get_spat_at(fields, i)
+                int ft = -1
+                if i < field_types.len():
+                    ft = get_int_at(field_types, i)
+                if ft >= 0:
+                    assign_pattern_types(field, ft, scope_id, &scopes, &types)
+                i = i + 1
+
+        case PTuple(elements):
+            # Destructure tuple type
+            if scrutinee_type >= 0 and scrutinee_type < types.types.len():
+                ResolvedType rt = get_rtype_at(types.types, scrutinee_type)
+                match rt:
+                    case RTTuple(elem_ids):
+                        int i = 0
+                        while i < spat_vec_len(elements):
+                            SpannedPattern elem = get_spat_at(elements, i)
+                            int et = -1
+                            if i < elem_ids.len():
+                                et = get_int_at(elem_ids, i)
+                            if et >= 0:
+                                assign_pattern_types(elem, et, scope_id, &scopes, &types)
+                            i = i + 1
+                    else:
+                        pass
+
+        else:
+            pass
+
+# ── Resolve variant field types from a scrutinee type ─────
+
+Vector[int] resolve_variant_field_types(int scrutinee_type, str variant_name, ScopeTable scopes, TypeTable types):
+    Vector[int] result = Vector[int]()
+    if scrutinee_type < 0 or scrutinee_type >= types.types.len():
+        return result
+
+    ResolvedType rt = get_rtype_at(types.types, scrutinee_type)
+
+    # Handle Option[T]: Some(val) → T, None → nothing
+    # Handle Result[T, E]: Ok(val) → T, Error(e) → E
+    match rt:
+        case RTGeneric(def_id, type_args):
+            DefInfo d = scopes.get_def(def_id)
+            if d.name == "Option":
+                if variant_name == "Some" and type_args.len() >= 1:
+                    result.push(get_int_at(type_args, 0))
+            elif d.name == "Result":
+                if variant_name == "Ok" and type_args.len() >= 1:
+                    result.push(get_int_at(type_args, 0))
+                elif variant_name == "Error" and type_args.len() >= 2:
+                    result.push(get_int_at(type_args, 1))
+            else:
+                # User-defined generic enum — try to look up variant
+                # For now, just return the first type arg as a rough approximation
+                if type_args.len() >= 1:
+                    result.push(get_int_at(type_args, 0))
+
+        case RTDefined(def_id):
+            # User-defined enum — look up variant field types from type table
+            if types.variant_field_types.contains(variant_name):
+                int vft = types.variant_field_types.get(variant_name).unwrap()
+                # Check if it's a tuple — if so, return individual fields
+                if vft >= 0 and vft < types.types.len():
+                    ResolvedType vrt = get_rtype_at(types.types, vft)
+                    match vrt:
+                        case RTTuple(elems):
+                            int ei = 0
+                            while ei < elems.len():
+                                result.push(get_int_at(elems, ei))
+                                ei = ei + 1
+                            return result
+                        else:
+                            pass
+                result.push(vft)
+                return result
+        else:
+            pass
+
+    return result
+
+# ── Extract element type from iterable type ───────────────
+
+int extract_element_type(int iterable_type, ScopeTable scopes, TypeTable types):
+    if iterable_type < 0 or iterable_type >= types.types.len():
+        return -1
+
+    ResolvedType rt = get_rtype_at(types.types, iterable_type)
+
+    # str iteration → str (character iteration)
+    match rt:
+        case RTPrimitive(name):
+            if name == "str" or name == "String":
+                return types.string_id
+            return -1
+        else:
+            pass
+
+    # Generic collections: Vector[T], Set[T], HashSet[T] → T
+    match rt:
+        case RTGeneric(def_id, type_args):
+            DefInfo d = scopes.get_def(def_id)
+            if d.name == "Vector" or d.name == "Set" or d.name == "HashSet":
+                if type_args.len() >= 1:
+                    return get_int_at(type_args, 0)
+            return -1
+
+        case RTArray(elem_id, size):
+            return elem_id
+
+        case RTSlice(elem_id):
+            return elem_id
+
+        else:
+            pass
+
+    return -1
+
+# ── Assign is-pattern types from if/while conditions ──────
+
+void assign_is_condition_types(SpannedExpr expr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    match expr.expr:
+        case EBinaryOp(left, op, right):
+            if op == "and":
+                assign_is_condition_types(*left, scope_id, &scopes, &types, ctx)
+                assign_is_condition_types(*right, scope_id, &scopes, &types, ctx)
+                return
+
+        case EIs(inner, negated, pattern):
+            if not negated:
+                int scrut_type = infer_expr_type(*inner, scopes, &types, ctx)
+                if scrut_type >= 0:
+                    assign_pattern_types(*pattern, scrut_type, scope_id, &scopes, &types)
+                return
+
+        else:
+            pass
+
+# ── Check if an expression contains is-patterns ──────────
+
+bool has_is_patterns(Expr e):
+    match e:
+        case EIs(_, negated, _):
+            if not negated:
+                return true
+            return false
+        case EBinaryOp(left, op, right):
+            if op == "and":
+                return has_is_patterns((*left).expr) or has_is_patterns((*right).expr)
+        else:
+            pass
+    return false
+
 # ── Type-check statements (looking for VarDecl with explicit types) ──
 
 void type_check_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
@@ -115,45 +324,90 @@ void type_check_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, Type
 void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
     match s:
         case SVarDecl(stype, name, init_expr, line, col, flags):
-            # Only assign type if not TInferred
             bool is_inferred = false
             match stype.ty:
                 case TInferred():
                     is_inferred = true
                 else:
                     pass
+            int var_type_id = -1
             if not is_inferred:
-                int var_type_id = ast_type_to_resolved(stype.ty, stype.span, scopes, &types)
-                # Search for the variable def in this scope or any child scope
+                var_type_id = ast_type_to_resolved(stype.ty, stype.span, scopes, &types)
+            else:
+                # Phase 2: infer type from initializer expression
+                var_type_id = infer_expr_type(init_expr, scopes, &types, ctx)
+            if var_type_id >= 0:
                 int var_def = scopes.lookup_in_subtree(scope_id, name)
                 if var_def >= 0:
                     scopes.set_def_type(var_def, var_type_id)
 
         case SIf(cond, body, else_branches):
+            # Assign types to is-pattern bindings in the condition
+            if has_is_patterns(cond.expr):
+                assign_is_condition_types(cond, scope_id, &scopes, &types, ctx)
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
             int ei = 0
             while ei < else_branches.len():
                 ElseBranch eb = else_branches.get(ei).unwrap()
+                if has_opt_sexpr(eb.condition):
+                    SpannedExpr econd = unwrap_opt_sexpr(eb.condition)
+                    if has_is_patterns(econd.expr):
+                        assign_is_condition_types(econd, scope_id, &scopes, &types, ctx)
                 type_check_stmts(eb.body, scope_id, &scopes, &types, ctx)
                 ei = ei + 1
 
         case SFor(pat, iter_expr, body, flags, else_body):
+            # Infer iterable type and assign element type to loop variable
+            int iter_type = infer_expr_type(iter_expr, scopes, &types, ctx)
+            # Check for .enumerate() — assign (int, T) to tuple pattern
+            bool is_enumerate = false
+            match iter_expr.expr:
+                case EMethodCall(obj, method_name, args, targs):
+                    if method_name == "enumerate":
+                        is_enumerate = true
+                        int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+                        int elem_type = extract_element_type(obj_type, scopes, types)
+                        if elem_type >= 0:
+                            # Create (int, T) tuple type
+                            Vector[int] tuple_elems = Vector[int]()
+                            tuple_elems.push(types.int_id)
+                            tuple_elems.push(elem_type)
+                            int tuple_type = types.add_type(RTTuple(tuple_elems))
+                            assign_pattern_types(pat, tuple_type, scope_id, &scopes, &types)
+                else:
+                    pass
+            if not is_enumerate:
+                int elem_type = extract_element_type(iter_type, scopes, types)
+                if elem_type >= 0:
+                    assign_pattern_types(pat, elem_type, scope_id, &scopes, &types)
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
 
         case SWhile(cond, body):
+            if has_is_patterns(cond.expr):
+                assign_is_condition_types(cond, scope_id, &scopes, &types, ctx)
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
 
         case SLoop(body):
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
 
         case SMatch(expr, arms):
+            # Infer scrutinee type and assign to pattern bindings
+            int scrutinee_type = infer_expr_type(expr, scopes, &types, ctx)
             int ai = 0
             while ai < arms.len():
                 MatchArm arm = arms.get(ai).unwrap()
+                if scrutinee_type >= 0:
+                    assign_pattern_types(arm.pattern, scrutinee_type, scope_id, &scopes, &types)
                 type_check_stmts(arm.body, scope_id, &scopes, &types, ctx)
                 ai = ai + 1
 
         case SWith(expr, name, body):
+            type_check_stmts(body, scope_id, &scopes, &types, ctx)
+
+        case SNamedScope(name, body):
+            type_check_stmts(body, scope_id, &scopes, &types, ctx)
+
+        case SOnError(body):
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
 
         case SItem(item):
@@ -177,8 +431,27 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
             pass
 
         case IEnum(edef):
-            # Variant payload types — skip for now
-            pass
+            # Register variant payload types in the type table's variant map
+            int vi = 0
+            while vi < edef.variants.len():
+                EnumVariant var = get_variant_at(edef.variants, vi)
+                if var.fields.len() > 0:
+                    if var.fields.len() == 1:
+                        SpannedType ft = get_stype_at(var.fields, 0)
+                        int field_type_id = ast_type_to_resolved(ft.ty, ft.span, scopes, &types)
+                        types.variant_field_types.put(var.name, field_type_id)
+                    else:
+                        # Multi-field variant: create tuple type
+                        Vector[int] field_ids = Vector[int]()
+                        int fi = 0
+                        while fi < var.fields.len():
+                            SpannedType ft = get_stype_at(var.fields, fi)
+                            int ftid = ast_type_to_resolved(ft.ty, ft.span, scopes, &types)
+                            field_ids.push(ftid)
+                            fi = fi + 1
+                        int tuple_tid = types.add_type(RTTuple(field_ids))
+                        types.variant_field_types.put(var.name, tuple_tid)
+                vi = vi + 1
 
         case IEquip(eqblk):
             # Resolve the equip target type for self/&self params
@@ -221,6 +494,10 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 int static_def = scopes.lookup_in_scope(scope_id, name)
                 if static_def >= 0:
                     scopes.set_def_type(static_def, static_type_id)
+
+        case ITest(name, attrs, tags, body):
+            # Walk test body for VarDecl types
+            type_check_stmts(body, scope_id, &scopes, &types, ctx)
 
         else:
             pass
