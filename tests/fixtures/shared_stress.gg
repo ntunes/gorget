@@ -11,25 +11,15 @@ async void main():
     shared int counter = 0
     int batch = 0
     while batch < 100:
-        Task[void] t0 = spawn increment(&counter)
-        Task[void] t1 = spawn increment(&counter)
-        Task[void] t2 = spawn increment(&counter)
-        Task[void] t3 = spawn increment(&counter)
-        Task[void] t4 = spawn increment(&counter)
-        Task[void] t5 = spawn increment(&counter)
-        Task[void] t6 = spawn increment(&counter)
-        Task[void] t7 = spawn increment(&counter)
-        Task[void] t8 = spawn increment(&counter)
-        Task[void] t9 = spawn increment(&counter)
-        t0.await()
-        t1.await()
-        t2.await()
-        t3.await()
-        t4.await()
-        t5.await()
-        t6.await()
-        t7.await()
-        t8.await()
-        t9.await()
+        Vector[Task[void]] tasks = Vector[Task[void]]()
+        int i = 0
+        while i < 10:
+            tasks.push(move spawn increment(&counter))
+            i = i + 1
+        int j = 0
+        while j < 10:
+            Task[void] t = tasks.remove(0).unwrap()
+            t.await()
+            j = j + 1
         batch = batch + 1
     print(int_to_str(counter))

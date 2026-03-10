@@ -528,24 +528,20 @@ fn lower_expr_inner(
         // In synchronous GIR mode for non-task expressions, just lower the inner expression.
         Expr::Await { expr } => {
             let inner = lower_expr(ctx, builder, expr);
-            // Direct local lookup (simple `await task` case)
-            let task_local = if let Operand::Copy(ref place) | Operand::Move(ref place) = inner {
-                if place.projections.is_empty() {
-                    ctx.spawn.result_locals.get(&place.local).cloned()
-                        .map(|fn_name| (Some(place.local), fn_name))
-                } else {
-                    None
-                }
-            } else {
-                None
+            // Extract receiver local before inner is consumed by the call.
+            let inner_local = match &inner {
+                Operand::Copy(place) | Operand::Move(place)
+                    if place.projections.is_empty() => Some(place.local),
+                _ => None,
             };
+            // Direct local lookup (simple `await task` case)
+            let task_local = inner_local.and_then(|lid| {
+                ctx.spawn.result_locals.get(&lid).cloned()
+                    .map(|fn_name| (Some(lid), fn_name))
+            });
             // Fallback: type-based lookup for indexed tasks (e.g., `await tasks[j]`)
             let resolved = task_local.or_else(|| {
-                let type_id = if let Operand::Copy(ref place) | Operand::Move(ref place) = inner {
-                    Some(builder.locals[place.local.0 as usize].type_id)
-                } else {
-                    None
-                };
+                let type_id = inner_local.map(|lid| builder.locals[lid.0 as usize].type_id);
                 type_id.and_then(|tid| {
                     ctx.spawn.task_type_fns.get(&tid).and_then(|fns| {
                         if fns.len() == 1 { Some((None, fns[0].clone())) } else { None }
@@ -567,7 +563,10 @@ fn lower_expr_inner(
                 };
 
                 // Zero out the Task local after await to prevent double-join in drop.
-                if let Some(local_id) = maybe_local_id {
+                // For direct spawn results, maybe_local_id is Some. For tasks from
+                // other sources (e.g. Vector.remove().unwrap()), use inner_local.
+                let zero_local = maybe_local_id.or(inner_local);
+                if let Some(local_id) = zero_local {
                     builder.move_zero(Place::local(local_id));
                     ctx.drops.mark_moved(local_id);
                 }

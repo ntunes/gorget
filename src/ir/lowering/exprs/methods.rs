@@ -261,6 +261,12 @@ pub(super) fn lower_method_call(
                 .map(|(_, r)| *r)
                 .unwrap_or(UNIT_TYPE);
             let await_fn = format!("__gorget_await_{fn_name}");
+            // Extract receiver local before recv is consumed by the call.
+            let recv_local = match &recv {
+                Operand::Copy(place) | Operand::Move(place)
+                    if place.projections.is_empty() => Some(place.local),
+                _ => None,
+            };
             let result = if ret_type == UNIT_TYPE {
                 builder.call_void(&await_fn, vec![recv]);
                 Operand::Constant(Constant::Unit)
@@ -269,7 +275,11 @@ pub(super) fn lower_method_call(
                 FunctionBuilder::copy(dst)
             };
             // Zero out the Task local after await to prevent double-join in drop.
-            if let Some(local_id) = maybe_local_id {
+            // For direct spawn locals, maybe_local_id is Some. For type-based
+            // fallback (e.g. task from Vector.remove().unwrap()), use the
+            // receiver local extracted above.
+            let zero_local = maybe_local_id.or(recv_local);
+            if let Some(local_id) = zero_local {
                 builder.move_zero(Place::local(local_id));
                 ctx.drops.mark_moved(local_id);
             }
