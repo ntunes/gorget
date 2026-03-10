@@ -1293,6 +1293,68 @@ void crunch(str data):
 
 Variables declared *outside* the named scope and read or borrowed *inside* are perfectly valid — they outlive the scope by definition.
 
+### 6.17 Assert
+
+```ebnf
+assert_stmt = "assert" expr [ "," expr ] NEWLINE ;
+```
+
+`assert` checks a condition and panics with a diagnostic message if it fails. **Assertions are always enabled** — they are never stripped in release builds.
+
+```gorget
+void process(Vector[int] data):
+    assert data.len() > 0, "data must not be empty"
+    assert is_sorted(data)
+```
+
+When the condition is a binary comparison (`==`, `!=`, `<`, `>`, `<=`, `>=`), the compiler captures both operand values and includes them in the failure message:
+
+```
+assertion failed: left == right
+  left:  42
+  right: 43
+```
+
+This introspection works for all types that implement `Formatter` — primitives, strings, enums, and structs. No `assert_eq` or specialized assertion functions are needed.
+
+If a custom message is provided (second argument), it replaces the generated diagnostic.
+
+For expensive invariant checks that should not run in production, wrap them in a `@[debug_only]` function:
+
+```gorget
+@[debug_only]
+void check_tree_invariants(Tree t):
+    assert t.is_balanced()
+    assert t.size() == t.count_nodes()
+```
+
+### 6.18 Assert Return (Postconditions)
+
+```ebnf
+assert_return_stmt = "assert" "return" expr NEWLINE ;
+```
+
+`assert return` declares a postcondition: a property that the function's return value must satisfy. The compiler inserts the check before every `return` statement in the function body.
+
+```gorget
+int clamp(int value, int lo, int hi):
+    assert lo <= hi                    # precondition
+    assert return >= lo                # postcondition
+    assert return <= hi                # postcondition
+
+    if value < lo: return lo
+    if value > hi: return hi
+    return value
+```
+
+At each `return` site, the compiler binds `return` to the return value and evaluates the postcondition assertions. If any postcondition fails, the function panics before returning.
+
+**Rules:**
+- `assert return` is invalid in `void` functions (compile error).
+- For tuple returns, `return` refers to the whole tuple: `assert return.0 <= return.1`.
+- Postconditions use the same always-on / `@[debug_only]` semantics as regular `assert`.
+- `assert return` statements must appear before any non-assert statement in the function body (alongside precondition asserts).
+
 ---
 
 ## 7. Expressions
@@ -4128,7 +4190,7 @@ The Gorget compiler is invoked as `gg` with the following commands:
 
 ## 18. Testing
 
-Gorget has a built-in test framework. Test files use `test` blocks instead of `main()`.
+Gorget has a built-in test framework. Test files use `test` blocks instead of `main()`. The framework uses existing language features wherever possible — `meta for` for parameterized tests, `with` + `Drop` for fixtures, `assert` for contracts — rather than adding dedicated testing DSL.
 
 ### 18.1 Test Blocks
 
@@ -4143,23 +4205,24 @@ test "string equality":
 
 Run with `gg test <file>`. Each test runs in isolation — assertion failures are caught and reported without terminating the process.
 
-#### `with` Clause
+#### Scoped Resources
 
-Tests can declare scoped resources using a `with` clause. Resources are created before the test body, available as named bindings, and automatically cleaned up after the test — even if the test fails via assertion.
+Tests use the standard `with` statement inside the test body for scoped resource management. Resources are automatically cleaned up when the `with` block exits — even if the test fails via assertion.
 
 ```gorget
-# Single resource
-test "reads file" with File.open("data.txt") as f:
-    auto content = f.read_all().unwrap()
-    assert content == "expected"
+test "reads file":
+    with File.open("data.txt") as f:
+        auto content = f.read_all().unwrap()
+        assert content == "expected"
 
-# Multiple resources (comma-separated)
-test "copies data" with Resource("a") as a, Resource("b") as b:
-    assert a.name == "a"
-    assert b.name == "b"
+test "copies data":
+    with Resource("a") as a:
+        with Resource("b") as b:
+            assert a.name == "a"
+            assert b.name == "b"
 ```
 
-If a with-binding's type implements the `Drop` trait, its `drop()` method is called on both the success and failure paths.
+If the binding's type implements the `Drop` trait, its `drop()` method is called on both the success and failure paths. This is the same `with` statement used everywhere else in the language (§6.14) — no special test syntax.
 
 ### 18.2 Suite Setup and Teardown
 
@@ -4208,6 +4271,24 @@ test "assert with message match":
 ```
 
 A `@should_panic` test passes if the test body panics (e.g., via a failed assertion or runtime error). If a string argument is provided, the panic message must contain that substring for the test to pass.
+
+### 18.5.1 `@skip`
+
+Tests can be marked as skipped with a reason:
+
+```gorget
+@skip("not implemented yet")
+test "future feature":
+    assert false
+```
+
+Skipped tests are reported but not executed:
+
+```
+  test: future feature ... SKIP (not implemented yet)
+```
+
+Skipped tests count separately from passed and failed in the summary.
 
 ### 18.6 Console Output
 
@@ -4292,7 +4373,40 @@ void main():
 
 Semantic analysis (type checking, name resolution) runs on all code regardless of command, so a broken test will be caught during `gg build`.
 
-### 18.10 Constraints
+### 18.10 Parameterized Tests via `meta for`
+
+Instead of dedicated parameterized test syntax, use `meta for` to generate test blocks at compile time:
+
+```gorget
+meta for name, a, b, expected in [
+    ["positives", 1, 2, 3],
+    ["zeros", 0, 0, 0],
+    ["negatives", -1, 1, 0],
+]:
+    test "addition - {name}":
+        assert a + b == expected
+```
+
+This expands to three independent `test` blocks. Each has its own name, pass/fail status, and timing. No special runner infrastructure is needed.
+
+Single-parameter:
+
+```gorget
+meta for n in [1, 2, 3, 4, 5]:
+    test "square of {n}":
+        assert n * n > 0
+```
+
+Composes with resource bindings:
+
+```gorget
+meta for query, expected in [["SELECT 1", 1], ["SELECT 2", 2]]:
+    test "query {query}":
+        with make_test_db() as db:
+            assert db.query_int(query) == expected
+```
+
+### 18.11 Constraints
 
 - At most one `suite setup` and one `suite teardown` per file.
 

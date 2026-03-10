@@ -2212,8 +2212,15 @@ Note: `static` is a separate concept (§5.9 of the language reference) — a glo
 
 ## 29. Testing (Built-in, First-Class)
 
+Gorget's test framework is built into the language and compiler. The design philosophy:
+
+- **Zero new concepts where existing features suffice.** Parameterized tests, fixtures, and contracts are all expressed through features that already exist (`meta for`, `with` + `Drop`, `assert`).
+- **Always-on assertions.** `assert` is never stripped in release builds. If a condition is worth checking, it's worth checking in production. Debug-only assertions create a false sense of safety.
+- **Smart `assert` over assertion libraries.** A single `assert` with compile-time expression decomposition replaces `assert_eq`, `assert_ne`, `assert_contains`, `assert_gt`, and every other assertion variant. The compiler shows both values on failure automatically.
+
+### 29.1 Test Blocks
+
 ```gorget
-# Unit tests live alongside the code (like Rust)
 test "addition":
     assert add(2, 3) == 5
     assert add(2, 3) != 6
@@ -2222,42 +2229,195 @@ test "addition":
 @should_panic("division by zero")
 test "division by zero":
     divide(1, 0)
-
-# Test with setup
-test "user creation":
-    auto db = TestDb.new()
-    auto user = db.create_user("Alice", 30)
-    assert user.name == "Alice"
-    assert user.id > 0
-
-# Documentation tests (code in doc comments is compiled & run)
-# *Not yet implemented*
-#/ Returns the larger of two values.
-#/
-#/ ```
-#/ assert max(3, 5) == 5
-#/ assert max(10, 2) == 10
-#/ ```
-T max[Comparable T](T a, T b):
-    if a > b: a else: b
-
-# Benchmarks — *Not yet implemented*
-# @bench
-# void bench_sort(Bencher &b):
-#     b.iter(():
-#         auto data = random_vec(10000)
-#         data.sort()
-#     )
 ```
 
-Note: `assert_eq` and `assert_ne` are *not yet implemented*. Use `assert a == b` and `assert a != b` instead.
+Tests coexist with `main()` in the same file. `gg test` compiles the test runner; `gg build` ignores test blocks entirely.
+
+### 29.2 Smart Assert (Expression Introspection)
+
+A plain `assert` with a comparison automatically captures and displays both sides on failure:
+
+```gorget
+test "string operations":
+    str result = greet("world")
+    assert result == "hello world"
+```
+
+On failure:
+```
+  test: string operations ... FAIL (0ms)
+    assertion failed: left == right
+      left:  "hello, world"
+      right: "hello world"
+```
+
+This works for all types that implement `Formatter` — primitives, strings, enums, structs. No `assert_eq` needed. The compiler rewrites `assert a == b` at the IR level to capture sub-expression values before comparing. This is the pytest/Swift Testing approach, implemented at compile time via Gorget's existing infrastructure.
+
+For non-comparison assertions, the condition expression is included in the failure message:
+
+```gorget
+assert items.len() > 0, "data must not be empty"   # custom message
+assert is_sorted(data)                               # shows "assertion failed"
+```
+
+### 29.3 Postconditions (`assert return`)
+
+Functions can assert properties of their return value. `assert return` checks the condition at every `return` site:
+
+```gorget
+int binary_search(List[int] data, int target):
+    assert data.len() > 0             # precondition — checked on entry
+    assert is_sorted(data)            # precondition — checked on entry
+    assert return >= -1               # postcondition — checked at every return
+    assert return < data.len()        # postcondition — checked at every return
+
+    # ... body ...
+    return idx
+```
+
+- Preconditions: regular `assert` statements before any non-assert code.
+- Postconditions: `assert return <expr>` — the compiler inserts the check before each `return` statement, with `return` bound to the return value.
+- Both are always-on `assert` — they respect `@[debug_only]` and `directive strip-asserts` for hot paths.
+- `assert return` is invalid in `void` functions (compile error).
+- For tuple returns, `return` is the whole tuple: `assert return.0 <= return.1`.
+
+No new keywords. `assert` and `return` are both existing keywords.
+
+### 29.4 Scoped Resources (`with` Clause)
+
+Tests use the standard `with` statement to bind resources that are automatically cleaned up via `Drop`:
+
+```gorget
+test "reads file":
+    with File.open("data.txt") as f:
+        auto content = f.read_all().unwrap()
+        assert content == "expected"
+        # f.drop() called automatically on both success and failure
+```
+
+For reusable setup, use factory functions:
+
+```gorget
+Database make_test_db():
+    Database d = Database.open(":memory:")
+    d.migrate()
+    return d
+
+test "insert":
+    with make_test_db() as db:
+        db.exec("INSERT INTO t VALUES (1)")
+        assert db.count("t") == 1
+```
+
+### 29.5 Parameterized Tests via `meta for`
+
+Instead of dedicated parameterized test syntax, use `meta for` to generate test blocks at compile time:
+
+```gorget
+meta for name, a, b, expected in [
+    ["positives", 1, 2, 3],
+    ["zeros", 0, 0, 0],
+    ["negatives", -1, 1, 0],
+]:
+    test "addition - {name}":
+        assert a + b == expected
+```
+
+This expands to three independent `test` blocks at compile time. Each has its own name, its own pass/fail, its own timing. No special runner infrastructure.
+
+Single-parameter variant:
+
+```gorget
+meta for n in [1, 2, 3, 4, 5]:
+    test "square of {n}":
+        assert n * n > 0
+```
+
+Composes with resource bindings:
+
+```gorget
+meta for query, expected in [["SELECT 1", 1], ["SELECT 2", 2]]:
+    test "query {query}":
+        with make_test_db() as db:
+            assert db.query_int(query) == expected
+```
+
+### 29.6 Suite Setup and Teardown
+
+```gorget
+suite setup:
+    print("before all tests")
+
+suite teardown:
+    print("after all tests")
+```
+
+One of each per file. Panics in setup/teardown are fatal.
+
+### 29.7 Tags, Filtering, and Skip
+
+```gorget
+@tag("smoke")
+test "quick check":
+    assert true
+
+@tag("slow")
+test "long computation":
+    assert true
+
+@skip("not implemented yet")
+test "future feature":
+    assert false
+```
 
 ```bash
-# Run tests
-gg test
+gg test file.gg --tag smoke            # only tagged tests
+gg test file.gg --exclude-tag slow     # skip tagged tests
+gg test file.gg --filter "fibonacci"   # name substring
+```
 
-# Run specific test
-gg test --filter addition
+### 29.8 Benchmarks — *Not yet implemented*
+
+```gorget
+bench "vector sort":
+    Vector[int] data = random_vec(10000)
+    data.sort()
+```
+
+```bash
+gg test --bench                        # run benchmarks
+```
+
+### 29.9 How Familiar Patterns Map to Gorget
+
+Developers coming from other test frameworks will look for features that Gorget handles differently. This table shows how:
+
+| Other frameworks | Gorget equivalent |
+|---|---|
+| **`assert_eq(a, b)` / `assertEqual`** (pytest, JUnit, Rust) | `assert a == b` — smart assert shows both values on failure. One `assert` replaces all assertion variants. |
+| **`@pytest.mark.parametrize` / `test.each` / `@ParameterizedTest`** (pytest, Jest, JUnit) | `meta for` generating `test` blocks. Each row becomes an independent test at compile time. Full control over test names. |
+| **Fixtures with DI** (pytest `@pytest.fixture`, yield-based setup/teardown) | `with Expr as name` inside test body + `Drop` trait for per-test resources. Factory functions for reuse. `suite setup`/`suite teardown` for shared state. |
+| **`beforeEach` / `afterEach` / `setUp` / `tearDown`** (Jest, JUnit, unittest) | `with` block inside test body handles setup+teardown in one place. `Drop` guarantees cleanup. No split setup/teardown pairs. |
+| **`require` / `ensure` / contracts** (D, Eiffel) | `assert` for preconditions (at function top). `assert return` for postconditions. No new keywords — same `assert` used everywhere. |
+| **`#[should_panic]`** (Rust) | `@should_panic` / `@should_panic("message substring")`. |
+| **`@pytest.mark.skip` / `@Disabled` / `@ignore`** (pytest, JUnit, Rust) | `@skip("reason")`. |
+| **Snapshot testing** (`toMatchSnapshot`, `insta`) | Not yet implemented. Planned as stdlib module with `assert_snapshot` + `gg test --update-snapshots`. |
+| **Property-based testing** (Hypothesis, QuickCheck, proptest) | Not yet implemented. Planned as stdlib module with generator combinators. |
+| **Doctests** (Rust, Elixir, Python) | Not yet implemented. Planned: code examples in `#/` doc comments compiled and run as tests. |
+| **Mocking / stubbing** (Mockito, jest.mock, unittest.mock) | Use trait-based dependency injection + simple test implementations. No mocking framework — design for testability instead. |
+| **`describe` / `it` nesting** (Jest, Mocha, RSpec) | Flat `test` blocks. Use naming conventions for grouping: `test "parser - handles empty input"`. Tags for categorization. |
+| **Test classes / `TestCase` inheritance** (JUnit 4, unittest) | Not needed. Tests are top-level `test` blocks. No classes, no inheritance, no boilerplate. |
+| **`conftest.py` / shared fixture files** (pytest) | Import factory functions from a shared module. Explicit imports, no magic discovery. |
+| **Keyword-driven tests** (Robot Framework) | Write Gorget functions as high-level "keywords." The language itself is the keyword library — no separate DSL layer. |
+
+```bash
+gg test                            # run all tests
+gg test --filter "parse*"          # name filter
+gg test --tag slow                 # tag inclusion
+gg test --exclude-tag network      # tag exclusion
+gg test --bench                    # run benchmarks (planned)
+gg test --format junit-xml         # CI output (planned)
+gg test --timeout 30s              # per-test timeout (planned)
 ```
 
 ---
