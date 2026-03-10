@@ -4,6 +4,14 @@
 
 - **LIR: Phase 5 — expand A/B test coverage**: 76 fixtures match (13% of ~584). Fixed: StrLit vs Str coercion, FieldPtr bounds-safe fallback, synthetic extern merge, runtime fn declaration skip, struct forward declarations for empty structs, GorgetString→Str arg coercion (partial). Remaining: GorgetString→Str coercion for runtime functions (gorget_str_cat etc.), collection method dispatch, trait object support, generic Option/Result method lowering. [updated: 2026-03-08]
 
+- **Codegen bug: global variable mutation in async/coroutine context**: Assigning to global `int` variables (e.g., `next_id = next_id + 1`) inside handler functions called from async server has no effect — the global retains its initial value. Discovered in Kestrel (gorget-db). [added: 2026-03-10]
+
+- **Codegen bug: passing Json/Dict through function calls in coroutine context**: When an async server handler calls a separate function that receives `Json` or `Dict` parameters, the data arrives corrupted (empty). Inlining the same code directly into the handler works. Likely the coroutine state frame doesn't correctly save/restore complex enum/collection arguments across yield points. Discovered in Kestrel. [added: 2026-03-10]
+
+- **Codegen bug: global Dict/Vector initialization segfaults**: `Dict[str, Json] store = Dict[str, Json]()` as a module-level global causes segfault at startup. Simple types (`int`, `Json`) work. Nested `Dict[str, Dict[str, Json]]` also segfaults. [added: 2026-03-10]
+
+- **Codegen bug: `&T` params on global variables**: When a global `Json db` is passed as a `&Json` parameter, codegen emits the value instead of a pointer, causing C type errors. Workaround: copy to local first. [added: 2026-03-10]
+
 ## Medium
 
 - **`shared static` support**: `public static shared int counter = 0` — thread-safe module-level statics. Requires adding `SharedKind` field to `StaticDecl`, atomic/mutex global codegen in C backend (atomic globals, constructor-initialized mutexes), and wiring lock/unlock into `GlobalAssign` emission. Workaround: use explicit `Mutex[int]` or `Atomic[int]` as the static type. [added: 2026-03-10]
