@@ -101,7 +101,9 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
         case EBoolLiteral(b):
             return types.bool_id
 
-        case EStringLiteral(s):
+        case EStringLiteral(s, has_interp):
+            if has_interp:
+                return types.owned_string_id
             return types.string_id
 
         case ECharLiteral(c):

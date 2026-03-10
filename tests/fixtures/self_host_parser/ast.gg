@@ -51,7 +51,7 @@ enum Expr:
     EIntLiteral(int)
     EFloatLiteral(float)
     EBoolLiteral(bool)
-    EStringLiteral(str)
+    EStringLiteral(str, bool)
     ECharLiteral(str)
     ENoneLiteral
     EIdentifier(str)

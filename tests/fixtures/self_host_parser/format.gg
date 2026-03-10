@@ -207,7 +207,7 @@ str format_expr(SpannedExpr se):
             if b:
                 return "true"
             return "false"
-        case EStringLiteral(s):
+        case EStringLiteral(s, _):
             return "\"" + s + "\""
         case ECharLiteral(c):
             if c.len() == 0:

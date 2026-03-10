@@ -653,7 +653,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             pass
         case ESelfExpr():
             pass
-        case EStringLiteral(_):
+        case EStringLiteral(_, _):
             pass
 
         case EIdentifier(name):

@@ -60,7 +60,7 @@
 
 - **Self-hosting resolver: 592/592 (100%) — COMPLETE.** [updated: 2026-03-10]
 
-- **Self-hosting type checker: 581/592 (98.1%) — exact: 557, superset: 24**: Phases 1-13 complete. Phase 13: qualified variant name fix in match pattern binding. Remaining 11 mismatches: generic type param in equip (derive_generic.gg), closures (closures.gg), conv_stdlib (1), field_access (1), httpserver (2), bench (1), string_format (1), test_vector_all (1), generic_callable_ref (1). [updated: 2026-03-10]
+- **Self-hosting type checker: 584/593 (98.5%) — exact: 560, superset: 24**: Phases 1-14 complete. Phase 14: bench body scope + f-string→String type. Remaining 9 mismatches: closures (closures.gg), derive_generic (1), conv_stdlib (1), field_access (1), httpserver (2), test_vector_all (1), generic_callable_ref (1), try_from_trait (1). [updated: 2026-03-10]
 
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]

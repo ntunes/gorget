@@ -580,6 +580,22 @@ str token_string_val(Token tok):
         else:
             return ""
 
+bool token_has_interpolation(Token tok):
+    match tok:
+        case TkString(slit):
+            int i = 0
+            while i < slit.lex_segments.len():
+                StringSegment seg = slit.lex_segments.get(i).unwrap()
+                match seg:
+                    case SegInterpolation(_):
+                        return true
+                    else:
+                        pass
+                i = i + 1
+            return false
+        else:
+            return false
+
 str token_char_val(Token tok):
     match tok:
         else:
@@ -1387,7 +1403,7 @@ equip Parser:
         if self.check_tok(TOK_STRING):
             SpannedToken t = self.advance()
             str val = token_string_val(t.lex_token)
-            SpannedExpr lit = SpannedExpr(EStringLiteral(val), Span(t.lex_start, t.lex_end))
+            SpannedExpr lit = SpannedExpr(EStringLiteral(val, token_has_interpolation(t.lex_token)), Span(t.lex_start, t.lex_end))
             return self.mk_pat(PLiteral(lit), start)
 
         if self.check_kw(KW_TRUE):
@@ -1900,7 +1916,7 @@ equip Parser:
         # String literal
         if ptag == TOK_STRING:
             SpannedToken t = self.advance()
-            return SpannedExpr(EStringLiteral(token_string_val(t.lex_token)), Span(t.lex_start, t.lex_end))
+            return SpannedExpr(EStringLiteral(token_string_val(t.lex_token), token_has_interpolation(t.lex_token)), Span(t.lex_start, t.lex_end))
 
         # Bool literal
         if ptag == TOK_BOOL:

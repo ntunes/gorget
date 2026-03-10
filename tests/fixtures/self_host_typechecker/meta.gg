@@ -118,7 +118,7 @@ void expand_meta_types(Module &m, TypeTable &types):
                     bool_consts[mc_name] = eval_bool(mc_expr.expr, &bool_consts)
                 elif type_name == "str":
                     match mc_expr.expr:
-                        case EStringLiteral(s):
+                        case EStringLiteral(s, _):
                             str_consts[mc_name] = s
                         else:
                             pass
