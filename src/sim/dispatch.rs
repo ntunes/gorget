@@ -485,6 +485,10 @@ impl<'m> Interpreter<'m> {
                 // Look up the global variable value in the interpreter's global store.
                 self.globals.get(name).cloned().unwrap_or(Value::Unit)
             }
+            Constant::GlobalRefPtr(name) => {
+                // Pointer to global — in the simulator, return the value (no true pointers).
+                self.globals.get(name).cloned().unwrap_or(Value::Unit)
+            }
         }
     }
 

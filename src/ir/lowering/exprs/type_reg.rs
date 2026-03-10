@@ -216,6 +216,13 @@ pub fn infer_operand_type(ctx: &LoweringContext, operand: &Operand) -> TypeId {
                     .and_then(|tn| ctx.type_mapper.lookup_named(tn))
                     .unwrap_or(I64_TYPE)
             }
+            Constant::GlobalRefPtr(name) => {
+                // Pointer to global: return the base type (the C backend emits `&name`
+                // so the pointer semantics are handled at the backend level).
+                ctx.global_type_names.get(name)
+                    .and_then(|tn| ctx.type_mapper.lookup_named(tn))
+                    .unwrap_or(I64_TYPE)
+            }
         },
     }
 }

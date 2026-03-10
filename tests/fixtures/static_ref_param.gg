@@ -1,0 +1,18 @@
+# Test that static variables can be passed as &T parameters.
+
+from std.conv import int_to_str
+
+static int value = 0
+
+void set_to(int &x, int n):
+    x = n
+
+int read_it(int &x):
+    return x
+
+void main():
+    print(int_to_str(value))
+    set_to(&value, 42)
+    print(int_to_str(value))
+    set_to(&value, 100)
+    print(int_to_str(read_it(&value)))

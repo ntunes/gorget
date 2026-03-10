@@ -42,6 +42,10 @@ pub(super) fn lower_call_arg(
     let val = lower_expr(ctx, builder, &arg.node.value);
     match arg.node.ownership {
         Ownership::MutableBorrow => {
+            // GlobalRef → GlobalRefPtr: emit &global_name directly.
+            if let Operand::Constant(Constant::GlobalRef(name)) = &val {
+                return Operand::Constant(Constant::GlobalRefPtr(name.clone()));
+            }
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 let local_type = if (place.local.0 as usize) < builder.locals.len() {
                     builder.locals[place.local.0 as usize].type_id
@@ -57,6 +61,10 @@ pub(super) fn lower_call_arg(
         }
         Ownership::Borrow if callee_expects_auto_borrow => {
             // Auto-borrow Move-type values: pass as pointer, not by value.
+            // GlobalRef → GlobalRefPtr: emit &global_name directly.
+            if let Operand::Constant(Constant::GlobalRef(name)) = &val {
+                return Operand::Constant(Constant::GlobalRefPtr(name.clone()));
+            }
             // For Copy/Move operands of plain locals, borrow in place.
             // For constants or complex expressions, materialize into a temp first.
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {

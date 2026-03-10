@@ -69,6 +69,9 @@ pub enum Constant {
     /// Reference to a named global variable (module-level static).
     /// Emitted as the variable name directly in C.
     GlobalRef(String),
+    /// Pointer to a named global variable (&global).
+    /// Emitted as `&variable_name` in C.
+    GlobalRefPtr(String),
 }
 
 /// Instructions that don't transfer control flow.

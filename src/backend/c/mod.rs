@@ -10245,6 +10245,10 @@ fn format_constant(constant: &Constant, _func: &Function, _registry: &TypeRegist
             // Reference to a module-level static variable — emit the variable name directly.
             name.clone()
         }
+        Constant::GlobalRefPtr(name) => {
+            // Pointer to a module-level static variable — emit &name.
+            format!("&{name}")
+        }
     }
 }
 

@@ -629,6 +629,7 @@ fn format_constant(c: &Constant) -> String {
         Constant::SizeOf(type_id) => format!("sizeof(Type{})", type_id.0),
         Constant::FuncRef(name) => format!("@{}", name),
         Constant::GlobalRef(name) => format!("global:{}", name),
+        Constant::GlobalRefPtr(name) => format!("&global:{}", name),
     }
 }
 

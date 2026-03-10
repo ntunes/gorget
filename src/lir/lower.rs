@@ -1155,7 +1155,7 @@ impl<'a> FuncLowering<'a> {
                     Inst::IConst { dst, ty: LirType::I64, value: 0 }
                 }
             }
-            Constant::GlobalRef(name) => {
+            Constant::GlobalRef(name) | Constant::GlobalRefPtr(name) => {
                 // Look up the global. For now emit a placeholder.
                 let _ = name;
                 Inst::NullPtr { dst }
@@ -1185,7 +1185,7 @@ impl<'a> FuncLowering<'a> {
                 | Constant::SizeOf(_) => LirType::I64,
                 Constant::F32(_) | Constant::F64(_) => LirType::F64,
                 Constant::Bool(_) => LirType::Bool,
-                Constant::Str(_) | Constant::Null | Constant::FuncRef(_) | Constant::GlobalRef(_) => LirType::Ptr,
+                Constant::Str(_) | Constant::Null | Constant::FuncRef(_) | Constant::GlobalRef(_) | Constant::GlobalRefPtr(_) => LirType::Ptr,
                 Constant::Unit => LirType::Void,
             },
         }

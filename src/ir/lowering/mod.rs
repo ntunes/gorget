@@ -1302,6 +1302,17 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
     use crate::ir::GlobalInit;
     use crate::parser::ast::Expr;
 
+    // Handle primitive-type statics with literal initializers.
+    match expr {
+        Expr::IntLiteral(n) if *n != 0 => return GlobalInit::RuntimeCall(n.to_string()),
+        Expr::FloatLiteral(f) if *f != 0.0 => return GlobalInit::RuntimeCall(format!("{f}")),
+        Expr::BoolLiteral(true) => return GlobalInit::RuntimeCall("true".to_string()),
+        Expr::BoolLiteral(false) | Expr::IntLiteral(_) | Expr::FloatLiteral(_) => {
+            return GlobalInit::Zeroed;
+        }
+        _ => {} // Fall through to Named type handling below
+    }
+
     // Extract the type name (ignoring generic args) for dispatch
     let type_name = match ty {
         crate::parser::ast::Type::Named { name, .. } => name.node.as_str(),
@@ -1355,6 +1366,32 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
             let v = literal_args.first().cloned().unwrap_or_else(|| "0".to_string());
             format!("RWLock__{elem_c}__new({v})")
         }
+        // Collections: Dict, HashMap, Vector need runtime heap allocation.
+        "Dict" if callee_name == "Dict" => {
+            let key_c = generic_elem_c_type(ty);
+            if key_c == "Str" {
+                // String-keyed dict uses the optimized str constructor
+                let val_c = generic_nth_c_type(ty, 1);
+                format!("gorget_dict_new_str(sizeof({val_c}))")
+            } else {
+                let val_c = generic_nth_c_type(ty, 1);
+                format!("gorget_dict_new(sizeof({key_c}), sizeof({val_c}))")
+            }
+        }
+        "HashMap" if callee_name == "HashMap" => {
+            let key_c = generic_elem_c_type(ty);
+            if key_c == "Str" {
+                let val_c = generic_nth_c_type(ty, 1);
+                format!("gorget_map_new_str(sizeof({val_c}))")
+            } else {
+                let val_c = generic_nth_c_type(ty, 1);
+                format!("gorget_map_new(sizeof({key_c}), sizeof({val_c}))")
+            }
+        }
+        "Vector" if callee_name == "Vector" => {
+            let elem_c = generic_elem_c_type(ty);
+            format!("gorget_array_new(sizeof({elem_c}))")
+        }
         _ => return GlobalInit::Zeroed,
     };
 
@@ -1371,6 +1408,28 @@ fn eval_literal_arg(expr: &crate::parser::ast::Expr) -> String {
         Expr::StringLiteral(s) => format!("\"{}\"", s.as_plain_text()),
         _ => "0".to_string(),
     }
+}
+
+/// Extract the Nth generic argument's C type name (0-indexed).
+fn generic_nth_c_type(ty: &crate::parser::ast::Type, n: usize) -> String {
+    use crate::parser::ast::{PrimitiveType, Type};
+    if let Type::Named { generic_args, .. } = ty {
+        if let Some(arg) = generic_args.get(n) {
+            return match &arg.node {
+                Type::Primitive(p) => match p {
+                    PrimitiveType::Int | PrimitiveType::Int64 => "int64_t".to_string(),
+                    PrimitiveType::Float | PrimitiveType::Float64 => "double".to_string(),
+                    PrimitiveType::Bool  => "bool".to_string(),
+                    PrimitiveType::Str   => "Str".to_string(),
+                    PrimitiveType::Uint8 => "uint8_t".to_string(),
+                    _ => "int64_t".to_string(),
+                },
+                Type::Named { name, .. } => name.node.clone(),
+                _ => "int64_t".to_string(),
+            };
+        }
+    }
+    "int64_t".to_string()
 }
 
 /// Extract the C element type name from a generic type like `Mutex[int]`.

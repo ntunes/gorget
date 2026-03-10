@@ -1,0 +1,19 @@
+# Test that static Dict and Vector variables are properly initialized
+# (require runtime constructors, not zero-init).
+
+from std.conv import int_to_str
+
+static Dict[str, int] scores = Dict[str, int]()
+static Vector[int] numbers = Vector[int]()
+
+void main():
+    scores.put("alice", 100)
+    scores.put("bob", 85)
+    numbers.push(10)
+    numbers.push(20)
+    numbers.push(30)
+    print(int_to_str(scores.get("alice").unwrap()))
+    print(int_to_str(scores.get("bob").unwrap()))
+    print(int_to_str(numbers.len()))
+    print(int_to_str(numbers.get(0).unwrap()))
+    print(int_to_str(numbers.get(2).unwrap()))

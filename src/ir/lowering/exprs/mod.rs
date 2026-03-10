@@ -201,6 +201,10 @@ fn lower_expr_inner(
                 }
             }
             let val = lower_expr(ctx, builder, inner);
+            // GlobalRef → GlobalRefPtr: emit &global_name directly.
+            if let Operand::Constant(Constant::GlobalRef(name)) = &val {
+                return Operand::Constant(Constant::GlobalRefPtr(name.clone()));
+            }
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 let local_type = if (place.local.0 as usize) < builder.locals.len() {
                     builder.locals[place.local.0 as usize].type_id

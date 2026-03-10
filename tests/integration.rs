@@ -10321,3 +10321,40 @@ w:0
 done",
     );
 }
+
+#[test]
+fn static_mutation() {
+    run_gg(
+        "static_mutation.gg",
+        "\
+0
+1
+3
+13
+42",
+    );
+}
+
+#[test]
+fn static_collection() {
+    run_gg(
+        "static_collection.gg",
+        "\
+100
+85
+3
+10
+30",
+    );
+}
+
+#[test]
+fn static_ref_param() {
+    run_gg(
+        "static_ref_param.gg",
+        "\
+0
+42
+100",
+    );
+}
