@@ -10699,6 +10699,8 @@ true
 true
 true
 false
+true
+false
 2
 false
 10
@@ -10794,6 +10796,7 @@ hello world!
 line1line2
 
 12
+true
 0
 true
 HELLO WORLD
@@ -10957,6 +10960,17 @@ fn test_collections_nested() {
 true
 5
 6
+true
+2
+2
+1
+2
+3
+2
+2
+2
+3
+1
 true
 0
 done",

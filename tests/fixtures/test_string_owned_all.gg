@@ -21,8 +21,10 @@ void main():
     ml.push_line("line2")
     print(ml.str())
 
-    # --- len after push ---
+    # --- len / capacity after push ---
     print(f"{s.len()}")
+    int cap = s.capacity()
+    print(f"{cap >= s.len()}")
 
     # --- clear ---
     s.clear()

@@ -23,6 +23,10 @@ void main():
     print(f"{m.contains("a")}")
     print(f"{m.contains("z")}")
 
+    # --- has (alias) ---
+    print(f"{m.has("a")}")
+    print(f"{m.has("z")}")
+
     # --- remove ---
     m.remove("b")
     print(f"{m.len()}")
