@@ -2227,11 +2227,13 @@ fn resolve_inner_type(ctx: &mut LoweringContext, inner_name: &str) -> TypeId {
             if let Some(id) = ctx.type_mapper.lookup_named(name) {
                 return id;
             }
-            // Collection types (Vector__X, Dict__X__Y, etc.) might not be registered yet —
+            // Collection/compound types might not be registered yet —
             // register them on-the-fly as Named types so the C backend can emit the right typedef.
             if name.starts_with("Vector__") || name.starts_with("Dict__")
                 || name.starts_with("HashMap__") || name.starts_with("Set__")
                 || name.starts_with("HashSet__")
+                || name.starts_with("Task__") || name.starts_with("Tuple__")
+                || name.starts_with("Channel__")
             {
                 let type_id = ctx.type_registry.insert(GirType::Named(name.to_string()));
                 ctx.type_mapper.register_named(name.to_string(), type_id);

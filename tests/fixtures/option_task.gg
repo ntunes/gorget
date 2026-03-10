@@ -1,0 +1,34 @@
+async void noop():
+    pass
+
+async void main():
+    # Option[Task[void]] via get(), pop(), first(), last()
+    Vector[Task[void]] tasks = Vector[Task[void]]()
+    tasks.push(move spawn noop())
+    tasks.push(move spawn noop())
+    tasks.push(move spawn noop())
+
+    Option[Task[void]] first = tasks.get(0)
+    print(f"{first.is_some()}")
+
+    Option[Task[void]] oob = tasks.get(99)
+    print(f"{oob.is_none()}")
+
+    Option[Task[void]] popped = tasks.pop()
+    print(f"{popped.is_some()}")
+
+    Option[Task[void]] f = tasks.first()
+    print(f"{f.is_some()}")
+
+    Option[Task[void]] l = tasks.last()
+    print(f"{l.is_some()}")
+
+    print(f"{tasks.len()}")
+
+    # Await via remove().unwrap()
+    Task[void] t0 = tasks.remove(0).unwrap()
+    Task[void] t1 = tasks.remove(0).unwrap()
+    t0.await()
+    t1.await()
+    popped.unwrap().await()
+    print("done")

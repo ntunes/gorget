@@ -11149,3 +11149,18 @@ fn test_vector_zip() {
 2+200",
     );
 }
+
+#[test]
+fn option_task() {
+    run_gg(
+        "option_task.gg",
+        "\
+true
+true
+true
+true
+true
+2
+done",
+    );
+}

@@ -140,6 +140,14 @@ impl TypeMapper {
                             make_opaque_type_def(n, CopySemantics::Move, DropStrategy::None)
                         });
                     }
+                    // Task[T] — hand-emitted by C backend.  Register only a Named
+                    // GirType (no TypeDef) so that containers like Option[Task[void]]
+                    // get a real inner TypeId instead of UNIT_TYPE.
+                    if base == "Task" {
+                        let type_id = registry.insert(GirType::Named(mangled.clone()));
+                        self.named_types.insert(mangled, type_id);
+                        return type_id;
+                    }
                     // Callable/MutCallable/ConsumeCallable generics: return a FnPtr TypeId
                     // so locals declared as Callable[T(P)] get GorgetClosure C type and
                     // use __gorget_closure_call_N dispatch.
@@ -449,7 +457,9 @@ fn register_builtin_option(
     type_args: &[crate::span::Spanned<ast::Type>],
     mangled_name: &str,
 ) {
-    let inner_type = mapper.map_ast_type(&type_args[0].node);
+    // Use map_ast_type_mut to ensure generic inner types (like Task[void])
+    // get registered so the Option TypeDef references a valid TypeId.
+    let inner_type = mapper.map_ast_type_mut(&type_args[0].node, registry);
     let type_def = TypeDef {
         name: mangled_name.to_string(),
         kind: TypeDefKind::Enum(EnumDef {

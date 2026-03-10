@@ -1783,6 +1783,23 @@ fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
         }
     }
 
+    // Also scan function locals and type defs for Task__T types that may not
+    // appear in spawned_fns (e.g., closure spawns, Option[Task[T]] wrapping).
+    for func in &module.functions {
+        for local in &func.locals {
+            if let Some(crate::ir::types::GirType::Named(name)) = module.type_registry.get(local.type_id) {
+                if name.starts_with("Task__") && !task_ret_c_types.contains(&name) {
+                    task_ret_c_types.push(name.clone());
+                }
+            }
+        }
+    }
+    for type_def in module.type_registry.type_defs() {
+        if type_def.name.starts_with("Task__") && !task_ret_c_types.contains(&type_def.name) {
+            task_ret_c_types.push(type_def.name.clone());
+        }
+    }
+
     if !task_ret_c_types.is_empty() {
         out.push_str("/* ── Task structs ── */\n");
         for task_name in &task_ret_c_types {

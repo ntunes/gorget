@@ -611,6 +611,13 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
                         return type_id;
                     }
                 }
+                // Known void builtins not in fn_sigs
+                if matches!(name.as_str(),
+                    "print" | "println" | "eprint" | "eprintln" | "assert"
+                    | "panic" | "exit" | "sleep" | "sleep_ms"
+                ) {
+                    return UNIT_TYPE;
+                }
             }
             // None() call
             if matches!(callee.node, Expr::NoneLiteral) {

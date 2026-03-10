@@ -52,8 +52,6 @@
 
 - **Coroutine codegen — remaining gaps**: Collection method dispatch, Result/Option wrapping, type overrides, sleep-in-loop state allocation, and mixed yield kinds (Sleep+MutexLock) now work in coroutine poll functions (2026-03-10). Remaining: higher-order methods (filter/map/fold), inline methods (pop/sort), and complex collection dispatch patterns not yet tested in coroutine context. [updated: 2026-03-10]
 
-- **Option[Task[T]] type not emitted**: `Option[Task[int]]` / `Option[Task[void]]` C type definitions are not generated. `Vector[Task[T]].get()` and `.remove()` return `Option[T]`, but the Option specialization for Task types is missing from the type emission pass. Workaround: use `.remove(i).unwrap()` which bypasses the Option type. [added: 2026-03-10]
-
 - **Async/await — `await` on vector-indexed tasks with multiple spawn functions**: Type-based await dispatch now works when exactly one function produces tasks of a given type. When multiple functions produce the same `Task__T` type (e.g., two functions both returning `int`), the type-based fallback can't disambiguate. Fix: embed a function dispatch pointer in the `Task__T` struct or use a tag field. [updated: 2026-03-07]
 
 - **Self-hosting parser: 5 remaining mismatches (587/592, 99.2%)**: `chars.gg` — null byte `\0` truncates C stdout. `assert_return_*.gg` (3) — self-hosted parser doesn't handle `assert return` keyword. `snapshot_basic.gg` — snapshot name strings parsed as empty. [updated: 2026-03-10]
