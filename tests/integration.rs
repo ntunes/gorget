@@ -7898,6 +7898,16 @@ fn shared_stress_yield() {
 }
 
 #[test]
+fn shared_sleep_loop() {
+    run_gg("shared_sleep_loop.gg", "5");
+}
+
+#[test]
+fn vector_task_get() {
+    run_gg("vector_task_get.gg", "3");
+}
+
+#[test]
 fn shared_closure_capture_error() {
     check_gg_fails("shared_closure_capture_error.gg", "cannot capture shared variable");
 }

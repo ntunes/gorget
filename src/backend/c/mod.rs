@@ -3350,23 +3350,39 @@ fn emit_poll_inst(
 }
 
 /// Assign state IDs to basic blocks.
-/// Each BB gets 1 + 2*N state IDs where N = number of awaits in that BB.
-/// (Each await requires a pre-await state and a post-await/resume state.)
+/// Each BB gets 1 + N + S state IDs where N = number of yields and S = number of
+/// "split" transitions (retry-kind yield immediately following a non-retry yield).
+/// The split requires an extra intermediate state to avoid re-executing the previous
+/// yield's resume code when the retry re-enters.
 fn coroutine_state_ids(func: &Function) -> Vec<u32> {
     let mut ids = Vec::with_capacity(func.blocks.len());
     let mut next = 0u32;
     for bb in &func.blocks {
         ids.push(next);
-        // Count true yield points (await, sleep, lock); blocking calls are inline.
-        let yield_count = bb.instructions.iter()
-            .filter(|i| {
-                let kind = classify_yield(i, func);
-                matches!(kind, Some(YieldKind::Await | YieldKind::Sleep | YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv | YieldKind::SocketRead | YieldKind::SocketWrite | YieldKind::SocketAccept | YieldKind::SocketConnect))
+        // Collect yield kinds in order (excluding Blocking which is inline).
+        let yield_kinds: Vec<YieldKind> = bb.instructions.iter()
+            .filter_map(|i| {
+                let kind = classify_yield(i, func)?;
+                if kind == YieldKind::Blocking { return None; }
+                Some(kind)
             })
+            .collect();
+        let yield_count = yield_kinds.len() as u32;
+        // Count extra states from needs_split: retry-kind yield after non-retry yield.
+        let split_count = yield_kinds.windows(2)
+            .filter(|pair| is_retry_yield_kind(pair[1]) && !is_retry_yield_kind(pair[0]))
             .count() as u32;
-        next += 1 + yield_count;
+        next += 1 + yield_count + split_count;
     }
     ids
+}
+
+/// Returns true for yield kinds that retry in-place (poll pattern) rather than
+/// advancing state before yielding.
+fn is_retry_yield_kind(kind: YieldKind) -> bool {
+    matches!(kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite
+        | YieldKind::ChannelSend | YieldKind::ChannelRecv
+        | YieldKind::SocketRead | YieldKind::SocketWrite | YieldKind::SocketAccept | YieldKind::SocketConnect)
 }
 
 /// Emit a coroutine terminator (the last thing in a state — sets next state and continues).
@@ -3505,11 +3521,8 @@ fn emit_coroutine(
                 // Determine if this retry-in-place yield follows a non-retry yield.
                 // If so, we need an extra state to avoid re-executing the previous
                 // yield's resume code (e.g., await free) when the retry re-enters.
-                let is_retry = matches!(yield_kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv | YieldKind::SocketRead | YieldKind::SocketWrite | YieldKind::SocketAccept | YieldKind::SocketConnect);
-                let prev_was_non_retry = yield_idx > 0 && {
-                    let prev_kind = yield_positions[yield_idx - 1].1;
-                    !matches!(prev_kind, YieldKind::MutexLock | YieldKind::RwLockRead | YieldKind::RwLockWrite | YieldKind::ChannelSend | YieldKind::ChannelRecv | YieldKind::SocketRead | YieldKind::SocketWrite | YieldKind::SocketAccept | YieldKind::SocketConnect)
-                };
+                let is_retry = is_retry_yield_kind(yield_kind);
+                let prev_was_non_retry = yield_idx > 0 && !is_retry_yield_kind(yield_positions[yield_idx - 1].1);
                 let needs_split = is_retry && prev_was_non_retry;
 
                 let _ = writeln!(out, "    case {current_state}: {{");
@@ -3560,6 +3573,7 @@ fn emit_coroutine(
                     current_state += 1;
                     let _ = writeln!(out, "        f->__state = {current_state};");
                     out.push_str("    }\n");
+                    out.push_str("    __attribute__((fallthrough));\n");
                     let _ = writeln!(out, "    case {current_state}: {{");
                 }
 
@@ -9551,7 +9565,16 @@ fn emit_collection_method_call(
                 // Struct or primitive element: collect field clone operations
                 let mut clone_ops: Vec<String> = Vec::new();
                 collect_clone_ops(elem_c_type, "__elem", &mut clone_ops, registry);
-                if clone_ops.is_empty() {
+                if clone_ops.is_empty() && needs_drop_by_name(elem_c_type, registry) {
+                    // Move-out: element type has drop glue but no cloneable fields (e.g. Task).
+                    // Copy the value out and zero the source slot to prevent double-free.
+                    let _ = writeln!(out, "        _{id} = ({{ int64_t __gi = {idx_str}; GorgetArray __gr_src = {self_val}; {option_type} __gr; \
+                        if (__gi >= 0 && (size_t)__gi < __gr_src.len) {{ {elem_c_type} __elem = *({elem_c_type}*)gorget_array_get(&__gr_src, (size_t)__gi); \
+                        memset(gorget_array_get(&__gr_src, (size_t)__gi), 0, sizeof({elem_c_type})); \
+                        __gr = ({option_type}){{.tag = 0, .data.Some = {{__elem}}}}; }} \
+                        else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
+                        id = dst_id.0);
+                } else if clone_ops.is_empty() {
                     // Simple shallow copy (no droppable fields)
                     let _ = writeln!(out, "        _{id} = ({{ int64_t __gi = {idx_str}; GorgetArray __gr_src = {self_val}; {option_type} __gr; \
                         if (__gi >= 0 && (size_t)__gi < __gr_src.len) {{ __gr = ({option_type}){{.tag = 0, .data.Some = {{*({elem_c_type}*)gorget_array_get(&__gr_src, (size_t)__gi)}}}}; }} \
@@ -9600,6 +9623,14 @@ fn emit_collection_method_call(
             if elem_c_type == "GorgetArray" {
                 let _ = writeln!(out, "        _{id} = ({{ GorgetArray __gr_src = {self_val}; {option_type} __gr; \
                     if (__gr_src.len > 0) {{ GorgetArray __elem = gorget_array_clone((GorgetArray*)gorget_array_get(&__gr_src, (size_t)({idx_expr}))); \
+                    __gr = ({option_type}){{.tag = 0, .data.Some = {{__elem}}}}; }} \
+                    else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
+                    id = dst_id.0);
+            } else if clone_ops.is_empty() && needs_drop_by_name(elem_c_type, registry) {
+                // Move-out for types with drop glue but no cloneable fields (e.g. Task)
+                let _ = writeln!(out, "        _{id} = ({{ GorgetArray __gr_src = {self_val}; {option_type} __gr; \
+                    if (__gr_src.len > 0) {{ {elem_c_type} __elem = *({elem_c_type}*)gorget_array_get(&__gr_src, (size_t)({idx_expr})); \
+                    memset(gorget_array_get(&__gr_src, (size_t)({idx_expr})), 0, sizeof({elem_c_type})); \
                     __gr = ({option_type}){{.tag = 0, .data.Some = {{__elem}}}}; }} \
                     else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
                     id = dst_id.0);

@@ -1,0 +1,22 @@
+# Test: Vector[Task[void]] with move semantics.
+# Uses remove().unwrap() to take tasks out of the vector and await them.
+
+from std.conv import int_to_str
+
+int counter = 0
+
+async void increment():
+    counter = counter + 1
+
+async void main():
+    Vector[Task[void]] tasks = Vector[Task[void]]()
+    tasks.push(move spawn increment())
+    tasks.push(move spawn increment())
+    tasks.push(move spawn increment())
+    Task[void] t2 = tasks.remove(2).unwrap()
+    Task[void] t1 = tasks.remove(1).unwrap()
+    Task[void] t0 = tasks.remove(0).unwrap()
+    t0.await()
+    t1.await()
+    t2.await()
+    print(int_to_str(counter))

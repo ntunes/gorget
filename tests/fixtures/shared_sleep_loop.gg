@@ -1,0 +1,19 @@
+# Test: sleep inside a loop with shared params.
+# Exercises the coroutine state machine with mixed yield kinds
+# (Sleep + MutexLock reacquire) inside a loop body.
+
+from std.async import sleep
+from std.conv import int_to_str
+
+async void worker(int &counter, int n):
+    int i = 0
+    while i < n:
+        counter = counter + 1
+        sleep(1)
+        i = i + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x, 5)
+    t.await()
+    print(int_to_str(x))
