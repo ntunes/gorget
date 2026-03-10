@@ -9551,12 +9551,10 @@ fn format_types_canonical(
 }
 
 /// Extract only TYPE lines from output for comparison.
-/// Filters out lines containing `<error>` since both resolvers produce
-/// these for unresolvable types and they create noise in comparisons.
 fn normalize_type_output(output: &str) -> Vec<String> {
     output
         .lines()
-        .filter(|line| line.starts_with("TYPE ") && !line.contains("<error>"))
+        .filter(|line| line.starts_with("TYPE "))
         .map(|line| line.to_string())
         .collect()
 }

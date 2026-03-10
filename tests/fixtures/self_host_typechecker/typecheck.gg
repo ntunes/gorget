@@ -804,6 +804,9 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
             # Walk test body for VarDecl types
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
 
+        case IBench(name, body):
+            type_check_stmts(body, scope_id, &scopes, &types, ctx)
+
         else:
             pass
 

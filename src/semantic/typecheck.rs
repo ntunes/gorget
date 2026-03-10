@@ -1019,6 +1019,12 @@ impl<'a> TypeChecker<'a> {
                         for arg in args {
                             self.infer_expr(&arg.node.value);
                         }
+                        // Known void-returning builtins: return void instead of error
+                        if let Expr::Identifier(cname) = &callee.node {
+                            if matches!(cname.as_str(), "print" | "assert" | "panic") {
+                                return self.types.void_id;
+                            }
+                        }
                         self.types.error_id
                     }
                     ResolvedType::Defined(def_id) => {
@@ -1297,10 +1303,18 @@ impl<'a> TypeChecker<'a> {
                     let task_def_id = self.scopes.lookup("Task").expect("Task not registered");
                     self.types.insert(ResolvedType::Generic(task_def_id, vec![args[0]]))
                 } else {
-                    if inner_type != self.types.error_id {
-                        self.error(SemanticErrorKind::SpawnNonFuture, expr.span);
+                    // Allow spawning closure/function calls that return non-Future types.
+                    // The backend wraps these in an async context automatically.
+                    let is_call = matches!(&inner.node, Expr::Call { .. });
+                    if is_call && inner_type != self.types.error_id {
+                        let task_def_id = self.scopes.lookup("Task").expect("Task not registered");
+                        self.types.insert(ResolvedType::Generic(task_def_id, vec![inner_type]))
+                    } else {
+                        if inner_type != self.types.error_id {
+                            self.error(SemanticErrorKind::SpawnNonFuture, expr.span);
+                        }
+                        self.types.error_id
                     }
-                    self.types.error_id
                 }
             }
 
