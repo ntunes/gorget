@@ -13,11 +13,11 @@ void main():
     m.put("c", 3)
     print(f"{m.len()}")
 
-    # --- get (existing keys) ---
+    # --- get (returns Option) ---
     print(f"{m.get("a").unwrap()}")
     print(f"{m.get("b").unwrap()}")
     print(f"{m.get("c").unwrap()}")
-    # NOTE: m.get("z") on missing key segfaults — codegen lacks null-check (TODO)
+    print(f"{m.get("z").is_none()}")
 
     # --- contains ---
     print(f"{m.contains("a")}")

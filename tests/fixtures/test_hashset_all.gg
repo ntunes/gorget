@@ -1,10 +1,9 @@
-# Comprehensive Set[int] method coverage (order-independent)
-# HashSet tests — using Set[int] (HashSet is an alias with same hash-based behavior)
-from std.collections import Set
+# Comprehensive HashSet[int] method coverage (order-independent)
+from std.collections import HashSet
 
 void main():
     # --- Construction ---
-    Set[int] s = Set[int]()
+    HashSet[int] s = HashSet[int]()
     print(f"{s.len()}")
     print(f"{s.is_empty()}")
 
@@ -29,40 +28,40 @@ void main():
     print(f"{s.len()}")
 
     # --- clear ---
-    Set[int] s2 = Set[int]()
+    HashSet[int] s2 = HashSet[int]()
     s2.add(10)
     s2.clear()
     print(f"{s2.len()}")
     print(f"{s2.is_empty()}")
 
     # --- Set algebra ---
-    Set[int] a = Set[int]()
+    HashSet[int] a = HashSet[int]()
     a.add(1)
     a.add(2)
     a.add(3)
-    Set[int] b = Set[int]()
+    HashSet[int] b = HashSet[int]()
     b.add(2)
     b.add(3)
     b.add(4)
 
     # union
-    Set[int] u = a.union(b)
+    HashSet[int] u = a.union(b)
     print(f"{u.len()}")
 
     # intersection
-    Set[int] inter = a.intersection(b)
+    HashSet[int] inter = a.intersection(b)
     print(f"{inter.len()}")
 
     # difference (asymmetric)
-    Set[int] diff_ab = a.difference(b)
+    HashSet[int] diff_ab = a.difference(b)
     print(f"{diff_ab.len()}")
     print(f"{diff_ab.contains(1)}")
-    Set[int] diff_ba = b.difference(a)
+    HashSet[int] diff_ba = b.difference(a)
     print(f"{diff_ba.len()}")
     print(f"{diff_ba.contains(4)}")
 
     # --- is_subset / is_superset ---
-    Set[int] sub = Set[int]()
+    HashSet[int] sub = HashSet[int]()
     sub.add(1)
     sub.add(2)
     print(f"{sub.is_subset(a)}")
@@ -74,13 +73,13 @@ void main():
     print(f"{sub.is_superset(a)}")
 
     # --- Edge cases ---
-    Set[int] empty = Set[int]()
-    Set[int] u_empty = a.union(empty)
+    HashSet[int] empty = HashSet[int]()
+    HashSet[int] u_empty = a.union(empty)
     print(f"{u_empty.len()}")
-    Set[int] disjoint = Set[int]()
+    HashSet[int] disjoint = HashSet[int]()
     disjoint.add(10)
     disjoint.add(20)
-    Set[int] i_dis = a.intersection(disjoint)
+    HashSet[int] i_dis = a.intersection(disjoint)
     print(f"{i_dis.len()}")
 
     # --- fold (order-independent sum) ---
@@ -88,5 +87,5 @@ void main():
     print(f"{total}")
 
     # --- filter ---
-    Set[int] evens = a.filter((int x): x % 2 == 0)
+    HashSet[int] evens = a.filter((int x): x % 2 == 0)
     print(f"{evens.len()}")

@@ -4603,7 +4603,7 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
 /// Map a collection type name to its C runtime type.
 fn collection_type_alias(name: &str) -> Option<&'static str> {
     if name.starts_with("Vector__") { return Some("GorgetArray"); }
-    if name.starts_with("Set__") { return Some("GorgetSet"); }
+    if name.starts_with("Set__") || name.starts_with("HashSet__") { return Some("GorgetSet"); }
     // Dict and HashMap both map to GorgetMap in the runtime
     if name.starts_with("Dict__") || name.starts_with("HashMap__") {
         return Some("GorgetMap");
@@ -7225,6 +7225,14 @@ fn infer_method_return_type(name: &str) -> Option<&'static str> {
                       || type_prefix.starts_with("Set__") || type_prefix.starts_with("HashSet__") => {
                 return Some("bool");
             }
+            // Dict/HashMap.get returns Option[V]
+            "get" if type_prefix.starts_with("Dict__") || type_prefix.starts_with("HashMap__") => {
+                if let Some(elem) = extract_element_type_from_collection(type_prefix) {
+                    let option_type = format!("Option__{elem}");
+                    return Some(Box::leak(option_type.into_boxed_str()));
+                }
+                return None;
+            }
             // Methods that return the element type — extract from collection name
             "get" | "at" => {
                 if let Some(elem) = extract_element_type_from_collection(type_prefix) {
@@ -8078,9 +8086,10 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
         };
     }
 
-    // Try Set (GorgetSet) patterns
-    if func_name.starts_with("Set__") {
-        let method = extract_trailing_method(func_name, "Set__");
+    // Try Set / HashSet (GorgetSet) patterns
+    if func_name.starts_with("Set__") || func_name.starts_with("HashSet__") {
+        let prefix = if func_name.starts_with("HashSet__") { "HashSet__" } else { "Set__" };
+        let method = extract_trailing_method(func_name, prefix);
         return match method {
             "add" => Some(CollectionMethodCall {
                 runtime_fn: "gorget_set_add", pass_by_ptr: true,
@@ -8126,8 +8135,8 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
                 ..Default::default()
             }),
             "get" => Some(CollectionMethodCall {
-                runtime_fn: "gorget_map_get", pass_by_ptr: true,
-                has_return: true, needs_deref_cast: true, field_access: None,
+                runtime_fn: "__INLINE_MAP_GET__", pass_by_ptr: true,
+                has_return: true, needs_deref_cast: false, field_access: None,
                 ..Default::default()
             }),
             "contains" | "has" => Some(CollectionMethodCall {
@@ -8361,8 +8370,8 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
                 ..Default::default()
             }),
             "get" => Some(CollectionMethodCall {
-                runtime_fn: "gorget_map_get", pass_by_ptr: true,
-                has_return: true, needs_deref_cast: true, field_access: None,
+                runtime_fn: "__INLINE_MAP_GET__", pass_by_ptr: true,
+                has_return: true, needs_deref_cast: false, field_access: None,
                 ..Default::default()
             }),
             "contains" | "has" => Some(CollectionMethodCall {
@@ -8879,7 +8888,8 @@ fn try_inline_method(func_name: &str) -> Option<InlineMethod> {
     }
     // Set operations
     if func_name.starts_with("Set__") || func_name.starts_with("HashSet__") {
-        let method = extract_trailing_method(func_name, "Set__");
+        let set_prefix = if func_name.starts_with("HashSet__") { "HashSet__" } else { "Set__" };
+        let method = extract_trailing_method(func_name, set_prefix);
         return match method {
             "union" => Some(InlineMethod::SetUnion),
             "intersection" => Some(InlineMethod::SetIntersection),
@@ -9681,6 +9691,58 @@ fn emit_collection_method_call(
                         id = dst_id.0);
                 }
             }
+        }
+        return;
+    }
+    if rewrite.runtime_fn == "__INLINE_MAP_GET__" {
+        // Dict/HashMap.get(key) → Option[V] with NULL check
+        let self_val = deref_self(&self_str, self_ptr);
+        if let Some(dst_id) = dst {
+            let option_type = if let Some(ov) = type_overrides.get(&(dst_id.0 as usize)) {
+                ov.clone()
+            } else {
+                format_type(func.locals[dst_id.0 as usize].type_id, registry)
+            };
+            let elem_c_type = option_type.strip_prefix("Option__").unwrap_or("int64_t");
+            // Build key argument — pass by pointer for gorget_map_get
+            let key_arg = if args.len() > 1 {
+                let val = format_operand(&args[1], func, registry);
+                match &args[1] {
+                    Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                        format!("&{val}")
+                    }
+                    Operand::Constant(Constant::Str(s)) => {
+                        format!("&(Str){{ .data = \"{}\", .len = {} }}",
+                            escape_c_string(s), s.len())
+                    }
+                    _ => {
+                        // Determine type for compound literal
+                        let arg_type = match &args[1] {
+                            Operand::Copy(p) | Operand::Move(p) => {
+                                let idx = p.local.0 as usize;
+                                if idx < func.locals.len() {
+                                    format_type(func.locals[idx].type_id, registry)
+                                } else { "int64_t".to_string() }
+                            }
+                            Operand::Constant(c) => match c {
+                                Constant::I64(_) => "int64_t".to_string(),
+                                Constant::F64(_) => "double".to_string(),
+                                Constant::Bool(_) => "bool".to_string(),
+                                _ => "int64_t".to_string(),
+                            },
+                        };
+                        format!("&({arg_type}){{{val}}}")
+                    }
+                }
+            } else {
+                "NULL".to_string()
+            };
+            // gorget_map_get returns void* (NULL if key not found)
+            let _ = writeln!(out,
+                "        _{id} = ({{ void* __mv = gorget_map_get(&{self_val}, {key_arg}); \
+                {option_type} __mr; if (__mv != NULL) {{ __mr = ({option_type}){{.tag = 0, .data.Some = {{*({elem_c_type}*)__mv}}}}; }} \
+                else {{ __mr = ({option_type}){{.tag = 1}}; }} __mr; }});",
+                id = dst_id.0);
         }
         return;
     }

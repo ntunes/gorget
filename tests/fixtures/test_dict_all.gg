@@ -17,9 +17,9 @@ void main():
     d.set("d", 4)
     print(f"{d.len()}")
 
-    # --- get (existing key) ---
+    # --- get (returns Option) ---
     print(f"{d.get("a").unwrap()}")
-    # NOTE: d.get("z") on missing key segfaults — Dict.get() codegen lacks null-check (TODO)
+    print(f"{d.get("z").is_none()}")
 
     # --- contains ---
     print(f"{d.contains("a")}")

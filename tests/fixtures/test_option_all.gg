@@ -50,16 +50,13 @@ void main():
     print(f"{some.or_else((): Some(77)).unwrap()}")
     print(f"{none.or_else((): Some(77)).unwrap()}")
 
-    # --- flatten ---
+    # --- flatten (chained) ---
     Option[Option[int]] nested = Some(Some(100))
-    Option[int] flat1 = nested.flatten()
-    print(f"{flat1.unwrap()}")
+    print(f"{nested.flatten().unwrap()}")
     Option[Option[int]] none_outer = None()
-    Option[int] flat2 = none_outer.flatten()
-    print(f"{flat2.is_none()}")
+    print(f"{none_outer.flatten().is_none()}")
     Option[Option[int]] some_none = Some(None())
-    Option[int] flat3 = some_none.flatten()
-    print(f"{flat3.is_none()}")
+    print(f"{some_none.flatten().is_none()}")
 
     # --- Chaining ---
     int result = some.filter((int x): x > 40).map((int x): x * 2).unwrap_or(0)

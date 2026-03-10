@@ -1303,6 +1303,22 @@ pub(super) fn lower_method_call(
                 ctx.ensure_option_type_registered(&option_name, inner_type);
             }
         }
+        // For Dict/HashMap.get(), auto-register Option[V] so get returns Option
+        if method_name == "get"
+            && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__"))
+        {
+            let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
+            if let Some(rest) = type_name.strip_prefix(prefix) {
+                if let Some(pos) = rest.find("__") {
+                    let val_name = &rest[pos + 2..];
+                    let option_name = format!("Option__{val_name}");
+                    if ctx.lookup_type_by_name(&option_name).is_none() {
+                        let inner_type = resolve_inner_type(ctx, val_name);
+                        ctx.ensure_option_type_registered(&option_name, inner_type);
+                    }
+                }
+            }
+        }
         // For index_of/find on strings/collections (NOT Regex), register Option[int] return type
         let is_regex_receiver = type_name == "Regex" || type_name == "GorgetRegex";
         if matches!(method_name, "index_of" | "find") && !is_regex_receiver {
@@ -1319,6 +1335,18 @@ pub(super) fn lower_method_call(
                 let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
                 let option_name = format!("Option__{elem_type_name}");
                 ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
+            } else if method_name == "get"
+                && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__"))
+            {
+                // Dict/HashMap.get() returns Option[V]
+                let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
+                if let Some(rest) = type_name.strip_prefix(prefix) {
+                    if let Some(pos) = rest.find("__") {
+                        let val_name = &rest[pos + 2..];
+                        let option_name = format!("Option__{val_name}");
+                        ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
+                    } else { ret }
+                } else { ret }
             } else if method_name == "remove"
                 && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__")
                     || type_name.starts_with("Set__") || type_name.starts_with("HashSet__"))
@@ -1387,7 +1415,7 @@ fn infer_collection_method_return_type(
 ) -> TypeId {
     let is_vector = type_name.starts_with("Vector__") || type_name == "GorgetArray";
     let is_dict = type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") || type_name == "GorgetMap";
-    let is_set = type_name.starts_with("Set__") || type_name == "GorgetSet";
+    let is_set = type_name.starts_with("Set__") || type_name.starts_with("HashSet__") || type_name == "GorgetSet";
     let is_string = type_name == "Str" || type_name == "GorgetString";
 
     // Channel.recv() → element type (Channel__T → T)
@@ -1430,8 +1458,18 @@ fn infer_collection_method_return_type(
             let option_name = format!("Option__{elem_type_name}");
             ctx.lookup_type_by_name(&option_name).unwrap_or(I64_TYPE)
         }
-        // Dict/HashMap.get / get_or / get_or_put → value type (I64_TYPE as default)
-        "get" |
+        // Dict/HashMap.get → Option[V] (safe access with NULL check)
+        "get" if is_dict => {
+            let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
+            if let Some(rest) = type_name.strip_prefix(prefix) {
+                if let Some(pos) = rest.find("__") {
+                    let val_name = &rest[pos + 2..];
+                    let option_name = format!("Option__{val_name}");
+                    ctx.lookup_type_by_name(&option_name).unwrap_or(I64_TYPE)
+                } else { I64_TYPE }
+            } else { I64_TYPE }
+        }
+        // Dict/HashMap.get_or / get_or_put → value type (I64_TYPE as default)
         "get_or" | "get_or_put" if is_dict => I64_TYPE,
         // Vector.clone / .sorted / .slice → same collection type
         "clone" | "sorted" | "slice" if is_vector => {
@@ -1552,6 +1590,15 @@ fn infer_collection_method_return_type(
         "remove" if is_dict => BOOL_TYPE,
         // Set.add → void (was incorrectly handled)
         "add" if is_set => UNIT_TYPE,
+        // Option.flatten() → strips one nesting level: Option[Option[T]] → Option[T]
+        "flatten" if type_name.starts_with("Option__Option__") => {
+            let inner_option = &type_name["Option__".len()..]; // "Option__T"
+            if let Some(type_id) = ctx.lookup_type_by_name(inner_option) {
+                type_id
+            } else {
+                UNIT_TYPE
+            }
+        }
         // Option/Result combinator methods that return the same Option/Result type
         "map" | "and_then" | "or_else" | "or" | "flatten" | "filter"
             if type_name.starts_with("Option__") || type_name.starts_with("Result__") =>

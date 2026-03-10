@@ -2,11 +2,6 @@
 
 ## High
 
-- **Dict/HashMap.get() segfaults on missing keys**: `gorget_map_get()` returns NULL for missing keys, but the C backend dereferences without null-checking: `*(T*)gorget_map_get(...)`. Fix: Dict.get() should return `Option[V]` at both IR and C levels. Attempted full fix but reverted — IR-level Option registration cascades into broken type emission for nested generic values (e.g., `Dict[str, Vector[int]]` creates malformed `Option__Vector`). Needs: (1) fix type emission for nested generic Option types, (2) re-apply Dict.get() → Option IR override. Workaround: check `d.contains(key)` before `d.get(key)`. [added: 2026-03-10]
-
-- **HashSet codegen: type not emitted**: `HashSet[int]` registered in stdlib but C backend doesn't emit typedef for `HashSet__int64_t`. `Set[int]` works correctly. Either map `HashSet` → `Set` in IR or add typedef emission. [added: 2026-03-10]
-
-- **Option.flatten().unwrap() chained type mismatch**: Chaining `.flatten().unwrap()` on `Option[Option[int]]` causes C type mismatch — flatten result and unwrap result both get `Option[int]` type. Works when split into separate statements. [added: 2026-03-10]
 
 - **LIR: Phase 5 — expand A/B test coverage**: 76 fixtures match (13% of ~584). Fixed: StrLit vs Str coercion, FieldPtr bounds-safe fallback, synthetic extern merge, runtime fn declaration skip, struct forward declarations for empty structs, GorgetString→Str arg coercion (partial). Remaining: GorgetString→Str coercion for runtime functions (gorget_str_cat etc.), collection method dispatch, trait object support, generic Option/Result method lowering. [updated: 2026-03-08]
 
