@@ -1,0 +1,6 @@
+# Sentinel constants for DefId, TypeId, and ScopeId.
+# In the self-hosting resolver, IDs are plain ints (no newtype wrappers).
+
+const int NO_DEF = -1
+const int NO_TYPE = -1
+const int NO_SCOPE = -1

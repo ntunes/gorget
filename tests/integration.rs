@@ -9324,6 +9324,296 @@ fn resolver_comparison() {
     eprintln!("\n================================\n");
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Type Comparison Helpers
+// ═══════════════════════════════════════════════════════════════
+
+fn describe_type_canonical(
+    type_id: gorget::semantic::ids::TypeId,
+    scopes: &gorget::semantic::scope::ScopeTable,
+    types: &gorget::semantic::types::TypeTable,
+) -> String {
+    use gorget::semantic::types::ResolvedType;
+
+    match types.get(type_id) {
+        ResolvedType::Primitive(_) => types.display(type_id),
+        ResolvedType::Defined(def_id) => scopes.get_def(*def_id).name.clone(),
+        ResolvedType::Generic(def_id, args) => {
+            let name = scopes.get_def(*def_id).name.clone();
+            // Unwrap Future[T] → T (async wrapping not tracked by self-hosting checker)
+            if name == "Future" && args.len() == 1 {
+                return describe_type_canonical(args[0], scopes, types);
+            }
+            let arg_strs: Vec<_> = args
+                .iter()
+                .map(|a| describe_type_canonical(*a, scopes, types))
+                .collect();
+            format!("{}[{}]", name, arg_strs.join(", "))
+        }
+        ResolvedType::Tuple(elems) => {
+            let parts: Vec<_> = elems
+                .iter()
+                .map(|e| describe_type_canonical(*e, scopes, types))
+                .collect();
+            format!("({})", parts.join(", "))
+        }
+        ResolvedType::Array(elem, size) => {
+            format!("[{}; {}]", describe_type_canonical(*elem, scopes, types), size)
+        }
+        ResolvedType::Slice(elem) => {
+            format!("[{}]", describe_type_canonical(*elem, scopes, types))
+        }
+        ResolvedType::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            let param_strs: Vec<_> = params
+                .iter()
+                .map(|p| describe_type_canonical(*p, scopes, types))
+                .collect();
+            format!(
+                "{}({})",
+                describe_type_canonical(*return_type, scopes, types),
+                param_strs.join(", ")
+            )
+        }
+        ResolvedType::TraitObject(def_id) => {
+            format!("Box[{}]", scopes.get_def(*def_id).name)
+        }
+        ResolvedType::CallableTrait(inner) => {
+            format!("Callable[{}]", describe_type_canonical(*inner, scopes, types))
+        }
+        ResolvedType::MutCallableTrait(inner) => {
+            format!(
+                "MutCallable[{}]",
+                describe_type_canonical(*inner, scopes, types)
+            )
+        }
+        ResolvedType::ConsumeCallableTrait(inner) => {
+            format!(
+                "ConsumeCallable[{}]",
+                describe_type_canonical(*inner, scopes, types)
+            )
+        }
+        ResolvedType::BoxedCallable { kind, inner } => {
+            format!(
+                "Box[{}[{}]]",
+                kind.name(),
+                describe_type_canonical(*inner, scopes, types)
+            )
+        }
+        ResolvedType::Var(n) => format!("?{n}"),
+        ResolvedType::Error => "<error>".to_string(),
+        ResolvedType::Void => "void".to_string(),
+        ResolvedType::Never => "never".to_string(),
+    }
+}
+
+fn format_types_canonical(
+    scopes: &gorget::semantic::scope::ScopeTable,
+    types: &gorget::semantic::types::TypeTable,
+) -> String {
+    use gorget::semantic::ids::DefId;
+
+    let mut lines = Vec::new();
+    for i in 0..scopes.def_count() {
+        let def = scopes.get_def(DefId(i as u32));
+        if let Some(tid) = def.type_id {
+            let type_str = describe_type_canonical(tid, scopes, types);
+            lines.push(format!("TYPE {} \"{}\" = {}", i, def.name, type_str));
+        }
+    }
+    lines.join("\n")
+}
+
+/// Extract only TYPE lines from output for comparison.
+fn normalize_type_output(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter(|line| line.starts_with("TYPE "))
+        .map(|line| line.to_string())
+        .collect()
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Type Comparison Test
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn type_comparison() {
+    use gorget::parser::Parser;
+
+    // 1. Build the Gorget typechecker driver
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let driver_dir = manifest_dir
+        .join("tests/fixtures")
+        .join("self_host_typechecker");
+    let driver_main = driver_dir.join("driver.gg");
+
+    if !driver_main.exists() {
+        eprintln!("\n=== Type Comparison Results ===");
+        eprintln!("SKIP: self_host_typechecker/driver.gg not found");
+        eprintln!("\n================================\n");
+        return;
+    }
+
+    let (driver_exe, driver_c) = build_gg_dir("self_host_typechecker", "driver.gg");
+
+    // 2. Discover all top-level .gg fixture files
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+    let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&fixtures_dir)
+        .expect("failed to read fixtures dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |ext| ext == "gg"))
+        .collect();
+    fixtures.sort();
+
+    assert!(
+        !fixtures.is_empty(),
+        "No .gg fixtures found in {}",
+        fixtures_dir.display()
+    );
+
+    struct Mismatch {
+        fixture: String,
+        first_diff_line: usize,
+        rust_line: String,
+        gorget_line: String,
+        rust_total: usize,
+        gorget_total: usize,
+    }
+
+    let mut matched = 0;
+    let mut mismatches: Vec<Mismatch> = Vec::new();
+    let mut crashes: Vec<(String, String)> = Vec::new();
+    let mut compared = 0;
+
+    // 3. For each fixture, compare Rust vs Gorget type output
+    for fixture in &fixtures {
+        let source = match std::fs::read_to_string(fixture) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "  SKIP {}: read error: {e}",
+                    fixture.file_name().unwrap().to_string_lossy()
+                );
+                continue;
+            }
+        };
+
+        // Rust side: parse, full semantic analysis, format types canonically
+        let mut parser = Parser::new(&source);
+        let mut module = parser.parse_module();
+        let result = gorget::semantic::analyze(&mut module, &[]);
+        let rust_output = format_types_canonical(&result.scopes, &result.types);
+        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
+
+        // Gorget side: run the driver binary
+        let output = Command::new(&driver_exe).arg(fixture).output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let gorget_output = String::from_utf8_lossy(&out.stdout)
+                    .trim_end()
+                    .to_string();
+
+                // Normalize: extract TYPE lines only
+                let rust_lines = normalize_type_output(&rust_output);
+                let gorget_lines = normalize_type_output(&gorget_output);
+
+                // Find first line divergence
+                let mut first_diff = None;
+                let max_lines = rust_lines.len().max(gorget_lines.len());
+                for i in 0..max_lines {
+                    let r = rust_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+                    let g = gorget_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+                    if r != g {
+                        first_diff = Some(i);
+                        break;
+                    }
+                }
+
+                if let Some(diff_line) = first_diff {
+                    mismatches.push(Mismatch {
+                        fixture: fname.clone(),
+                        first_diff_line: diff_line,
+                        rust_line: rust_lines
+                            .get(diff_line)
+                            .cloned()
+                            .unwrap_or_else(|| "<missing>".to_string()),
+                        gorget_line: gorget_lines
+                            .get(diff_line)
+                            .cloned()
+                            .unwrap_or_else(|| "<missing>".to_string()),
+                        rust_total: rust_lines.len(),
+                        gorget_total: gorget_lines.len(),
+                    });
+                } else {
+                    matched += 1;
+                }
+            }
+            Ok(out) => {
+                let name = fixture
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                crashes.push((name, stderr));
+            }
+            Err(e) => {
+                let name = fixture
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                crashes.push((name, format!("exec error: {e}")));
+            }
+        }
+        compared += 1;
+    }
+
+    // 4. Cleanup
+    let _ = std::fs::remove_file(&driver_c);
+    let _ = std::fs::remove_file(&driver_exe);
+
+    // 5. Report
+    eprintln!("\n=== Type Comparison Results ===");
+    eprintln!(
+        "Fixtures compared: {compared}, matched: {matched}, mismatched: {}, crashed: {}",
+        mismatches.len(),
+        crashes.len()
+    );
+
+    if !crashes.is_empty() {
+        eprintln!("\n--- Crashes ({}) ---", crashes.len());
+        for (name, err) in &crashes {
+            let first_line = err.lines().next().unwrap_or("(no stderr)");
+            eprintln!("  {name}: {first_line}");
+        }
+    }
+
+    if !mismatches.is_empty() {
+        eprintln!("\n--- Mismatches ({}) ---", mismatches.len());
+        for m in mismatches.iter().take(200) {
+            eprintln!(
+                "\n  {} (line {}, rust={} gorget={} lines)",
+                m.fixture, m.first_diff_line, m.rust_total, m.gorget_total
+            );
+            eprintln!("    Rust:   {}", m.rust_line);
+            eprintln!("    Gorget: {}", m.gorget_line);
+        }
+        if mismatches.len() > 30 {
+            eprintln!("\n  ... and {} more", mismatches.len() - 30);
+        }
+    }
+
+    // Diagnostic test — always passes. Mismatches guide development.
+    eprintln!("\n================================\n");
+}
+
 // Numeric trait integration tests
 
 #[test]

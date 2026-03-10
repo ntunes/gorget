@@ -1,5 +1,9 @@
 # DONE
 
+- [2026-03-10] **Self-hosting type checker: 362/560 (64.6%)**: Built comparison test infrastructure (Rust `describe_type_canonical` + `format_types_canonical` in integration.rs). Aligned output formats (name inclusion, Array/Slice/TraitObject/Var notation, Future unwrap). Fixed self-type resolution via TypeTable field (workaround for static mutation bug). Added `lookup_in_subtree` for nested scope variable discovery. Set module scope before type checking. Discovered static variable mutation codegen bug.
+
+- [2026-03-09] **Self-hosting type checker scaffold**: Created `tests/fixtures/self_host_typechecker/` with `typecheck.gg` (AST-walking type assignment for function signatures, params, explicit VarDecls, equip methods, const/static decls), `format_types.gg` (canonical TYPE line output), `driver.gg` (parse-resolve-typecheck pipeline). Added `set_def_type` method to both resolver and typechecker scope.gg. Phase 1: assigns declared types only — no inference, expression typing, or constraint solving.
+
 - [2026-03-09] **Self-hosting parser: 558/559 (99.8%)**: Fixed f-string single-quote lexing (quote_char tracking in lex_scan_string) and float scientific notation (format_float_decimal converts integer-valued floats via int_to_str instead of %g). Only chars.gg remains (null byte truncation).
 
 - [2026-03-09] **feat: `gg.jsonpath` — path query and mutation for Json documents**: gjson-inspired path syntax (dot notation, bracket notation, wildcards, recursive descent, array length, predicates, slicing) + dpath-inspired in-place mutation via `&Json` parameters. Functions: `query`, `get`, `get_all`, `exists`, `count`, `set`, `delete`. Registered in stdlib.rs as file-based module.

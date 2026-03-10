@@ -1,0 +1,108 @@
+# Canonical output formatter for type-checking results.
+# Produces deterministic TYPE lines for definitions that have assigned types.
+#
+# Output format (sorted by def_id):
+#   TYPE <def_id> "<name>" = <type_description>
+
+from std.collections import Vector
+from std.conv import int_to_str
+from scope import ScopeTable, DefInfo, DefKind, get_def_at
+from types import TypeTable, ResolvedType, get_rtype_at, get_int_at
+from ids import NO_DEF, NO_TYPE
+
+# ── Describe a resolved type as a human-readable string ────
+
+str describe_type(int type_id, ScopeTable scopes, TypeTable types):
+    ResolvedType rt = types.get(type_id)
+    match rt:
+        case RTPrimitive(name):
+            return name
+        case RTDefined(def_id):
+            DefInfo d = scopes.get_def(def_id)
+            return d.name
+        case RTGeneric(def_id, args):
+            DefInfo d = scopes.get_def(def_id)
+            str result = d.name + "["
+            int i = 0
+            while i < args.len():
+                if i > 0:
+                    result = result + ", "
+                int arg_id = get_int_at(args, i)
+                result = result + describe_type(arg_id, scopes, types)
+                i = i + 1
+            result = result + "]"
+            return result
+        case RTTuple(elems):
+            str result = "("
+            int i = 0
+            while i < elems.len():
+                if i > 0:
+                    result = result + ", "
+                int elem_id = get_int_at(elems, i)
+                result = result + describe_type(elem_id, scopes, types)
+                i = i + 1
+            result = result + ")"
+            return result
+        case RTArray(elem_id, size):
+            return "[" + describe_type(elem_id, scopes, types) + "; " + int_to_str(size) + "]"
+        case RTSlice(elem_id):
+            return "[" + describe_type(elem_id, scopes, types) + "]"
+        case RTFunction(params, ownerships, ret_id):
+            str ret_str = describe_type(ret_id, scopes, types)
+            str result = ret_str + "("
+            int i = 0
+            while i < params.len():
+                if i > 0:
+                    result = result + ", "
+                int p_id = get_int_at(params, i)
+                result = result + describe_type(p_id, scopes, types)
+                i = i + 1
+            result = result + ")"
+            return result
+        case RTTraitObject(def_id):
+            DefInfo d = scopes.get_def(def_id)
+            return "Box[" + d.name + "]"
+        case RTCallableTrait(func_id):
+            return "Callable[" + describe_type(func_id, scopes, types) + "]"
+        case RTMutCallableTrait(func_id):
+            return "MutCallable[" + describe_type(func_id, scopes, types) + "]"
+        case RTConsumeCallableTrait(func_id):
+            return "ConsumeCallable[" + describe_type(func_id, scopes, types) + "]"
+        case RTVar(id):
+            return "?" + int_to_str(id)
+        case RTError():
+            return "<error>"
+        case RTVoid():
+            return "void"
+        case RTNever():
+            return "never"
+
+# ── Format TYPE lines for all defs with assigned types ─────
+
+str format_types(ScopeTable scopes, TypeTable types):
+    Vector[str] lines = Vector[str]()
+    int i = 0
+    while i < scopes.def_count():
+        DefInfo d = scopes.get_def(i)
+        if d.type_id >= 0:
+            str type_str = describe_type(d.type_id, scopes, types)
+            str line = "TYPE " + int_to_str(i) + " " + quote(d.name) + " = " + type_str
+            lines.push(line)
+        i = i + 1
+    return join_lines(lines)
+
+# ── Helpers ─────────────────────────────────────────────────
+
+str quote(str s):
+    str dq = "\""
+    return dq + s + dq
+
+str join_lines(Vector[str] lines):
+    if lines.len() == 0:
+        return ""
+    str result = lines.get(0).unwrap()
+    int i = 1
+    while i < lines.len():
+        result = result + "\n" + lines.get(i).unwrap()
+        i = i + 1
+    return result

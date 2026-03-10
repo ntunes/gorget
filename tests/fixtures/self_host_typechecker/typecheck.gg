@@ -1,0 +1,239 @@
+# Minimal type checker for the self-hosting Gorget compiler.
+# Walks the AST after name resolution and assigns type IDs to definitions
+# based on their declared types.
+#
+# Phase 1 (this file): function signatures and explicit VarDecl types.
+# Does NOT do type inference, expression typing, or constraint solving.
+
+from std.collections import Vector, Dict
+from ast import Module, Item, Stmt, Param, FunctionDef, StructDef, EnumDef
+from ast import EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch
+from ast import SpannedExpr, SpannedType, SpannedPattern, Span, Type, Expr
+from ids import NO_DEF, NO_TYPE
+from scope import ScopeTable, DefKind, DefInfo, ScopeKind
+from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
+from scope import DkVariable, DkConst, DkStatic, DkGenericParam
+from scope import get_def_at
+from types import TypeTable, ResolvedType, ast_type_to_resolved, get_stype_at
+from types import RTFunction, RTVoid
+from resolve import ResolveContext
+
+# ── Typed accessors ─────────────────────────────────────────
+
+Item get_item_at(Vector[Item] v, int i):
+    return v.get(i).unwrap()
+
+Param get_param_at(Vector[Param] v, int i):
+    return v.get(i).unwrap()
+
+Stmt get_stmt_at(Vector[Stmt] v, int i):
+    return v.get(i).unwrap()
+
+FunctionDef get_fndef_at(Vector[FunctionDef] v, int i):
+    return v.get(i).unwrap()
+
+EnumVariant get_variant_at(Vector[EnumVariant] v, int i):
+    return v.get(i).unwrap()
+
+# ── Fallback def lookup by name ──────────────────────────────
+# Scans all definitions for a matching name (and optionally DkFunction kind).
+# Returns the first match or NO_DEF.
+
+int find_def_by_name(ScopeTable scopes, str name, bool require_function):
+    int i = 0
+    while i < scopes.def_count():
+        DefInfo d = scopes.get_def(i)
+        if d.name == name:
+            if not require_function:
+                return i
+            bool is_fn = false
+            match d.kind:
+                case DkFunction():
+                    is_fn = true
+                else:
+                    pass
+            if is_fn:
+                return i
+        i = i + 1
+    return NO_DEF
+
+# ── Type-check a function definition ────────────────────────
+
+void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    # Look up the function's body scope from the resolve context
+    int body_scope = NO_DEF
+    bool has_body_scope = false
+    if ctx.function_body_scopes.contains(func.name):
+        body_scope = ctx.function_body_scopes.get(func.name).unwrap()
+        has_body_scope = true
+
+    # Resolve return type
+    int ret_id = ast_type_to_resolved(func.return_type.ty, func.return_type.span, scopes, &types)
+
+    # Resolve parameter types and assign type IDs to param defs
+    Vector[int] param_type_ids = Vector[int]()
+    Vector[int] param_ownerships = Vector[int]()
+    int pi = 0
+    while pi < func.params.len():
+        Param p = get_param_at(func.params, pi)
+        int p_type_id = ast_type_to_resolved(p.param_type.ty, p.param_type.span, scopes, &types)
+        param_type_ids.push(p_type_id)
+        param_ownerships.push(p.ownership)
+        # Look up param def in the function body scope
+        if has_body_scope:
+            int param_def = scopes.lookup_in_scope(body_scope, p.param_name)
+            if param_def >= 0:
+                scopes.set_def_type(param_def, p_type_id)
+        pi = pi + 1
+
+    # Build RTFunction type for the function itself
+    int fn_type_id = types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
+
+    # Find function's def_id in the parent scope and assign type.
+    # Try direct scope lookup first; fall back to scanning all defs
+    # (needed for equip methods where collect_top_level and resolve_bodies
+    # use different equip scope IDs).
+    int fn_def = scopes.lookup_in_scope(parent_scope, func.name)
+    if fn_def < 0:
+        fn_def = find_def_by_name(scopes, func.name, true)
+    if fn_def >= 0:
+        scopes.set_def_type(fn_def, fn_type_id)
+
+    # Walk body for VarDecl types
+    if has_body_scope:
+        type_check_stmts(func.body, body_scope, &scopes, &types, ctx)
+
+# ── Type-check statements (looking for VarDecl with explicit types) ──
+
+void type_check_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    int i = 0
+    while i < stmts.len():
+        Stmt s = get_stmt_at(stmts, i)
+        type_check_stmt(s, scope_id, &scopes, &types, ctx)
+        i = i + 1
+
+void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    match s:
+        case SVarDecl(stype, name, init_expr, line, col, flags):
+            # Only assign type if not TInferred
+            bool is_inferred = false
+            match stype.ty:
+                case TInferred():
+                    is_inferred = true
+                else:
+                    pass
+            if not is_inferred:
+                int var_type_id = ast_type_to_resolved(stype.ty, stype.span, scopes, &types)
+                # Search for the variable def in this scope or any child scope
+                int var_def = scopes.lookup_in_subtree(scope_id, name)
+                if var_def >= 0:
+                    scopes.set_def_type(var_def, var_type_id)
+
+        case SIf(cond, body, else_branches):
+            type_check_stmts(body, scope_id, &scopes, &types, ctx)
+            int ei = 0
+            while ei < else_branches.len():
+                ElseBranch eb = else_branches.get(ei).unwrap()
+                type_check_stmts(eb.body, scope_id, &scopes, &types, ctx)
+                ei = ei + 1
+
+        case SFor(pat, iter_expr, body, flags, else_body):
+            type_check_stmts(body, scope_id, &scopes, &types, ctx)
+
+        case SWhile(cond, body):
+            type_check_stmts(body, scope_id, &scopes, &types, ctx)
+
+        case SLoop(body):
+            type_check_stmts(body, scope_id, &scopes, &types, ctx)
+
+        case SMatch(expr, arms):
+            int ai = 0
+            while ai < arms.len():
+                MatchArm arm = arms.get(ai).unwrap()
+                type_check_stmts(arm.body, scope_id, &scopes, &types, ctx)
+                ai = ai + 1
+
+        case SWith(expr, name, body):
+            type_check_stmts(body, scope_id, &scopes, &types, ctx)
+
+        case SItem(item):
+            type_check_item(item, scope_id, &scopes, &types, ctx)
+
+        else:
+            pass
+
+# ── Type-check a single item ───────────────────────────────
+
+void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    match item:
+        case IFunction(func):
+            type_check_function(func, scope_id, &scopes, &types, ctx)
+
+        case IStruct(sdef):
+            # Look up the struct's scope to find field defs
+            # Fields are defined as alloc_def (not in name table), so we
+            # iterate defs to find fields by matching struct name scope.
+            # For now, skip struct field typing (fields need struct scope).
+            pass
+
+        case IEnum(edef):
+            # Variant payload types — skip for now
+            pass
+
+        case IEquip(eqblk):
+            # Resolve the equip target type for self/&self params
+            int self_tid = ast_type_to_resolved(eqblk.target.ty, eqblk.target.span, scopes, &types)
+            types.self_type_id = self_tid
+            # Equip methods are defined in the equip scope.
+            int mi = 0
+            while mi < eqblk.methods.len():
+                FunctionDef method = get_fndef_at(eqblk.methods, mi)
+                int equip_scope = scope_id
+                if ctx.function_body_scopes.contains(method.name):
+                    int msid = ctx.function_body_scopes.get(method.name).unwrap()
+                    equip_scope = scopes.scope_parent(msid)
+                type_check_function(method, equip_scope, &scopes, &types, ctx)
+                mi = mi + 1
+            types.self_type_id = -1
+
+        case IConstDecl(stype, name, init_expr):
+            bool is_inferred = false
+            match stype.ty:
+                case TInferred():
+                    is_inferred = true
+                else:
+                    pass
+            if not is_inferred:
+                int const_type_id = ast_type_to_resolved(stype.ty, stype.span, scopes, &types)
+                int const_def = scopes.lookup_in_scope(scope_id, name)
+                if const_def >= 0:
+                    scopes.set_def_type(const_def, const_type_id)
+
+        case IStaticDecl(stype, name, init_expr):
+            bool is_inferred = false
+            match stype.ty:
+                case TInferred():
+                    is_inferred = true
+                else:
+                    pass
+            if not is_inferred:
+                int static_type_id = ast_type_to_resolved(stype.ty, stype.span, scopes, &types)
+                int static_def = scopes.lookup_in_scope(scope_id, name)
+                if static_def >= 0:
+                    scopes.set_def_type(static_def, static_type_id)
+
+        else:
+            pass
+
+# ── Public entry point ──────────────────────────────────────
+
+void type_check_module(Module module, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    # Module-level items are in scope 0 (root)
+    int module_scope = 0
+    # Set current scope so scope.lookup() works from module level
+    scopes.set_current(module_scope)
+    int i = 0
+    while i < module.items.len():
+        Item item = get_item_at(module.items, i)
+        type_check_item(item, module_scope, &scopes, &types, ctx)
+        i = i + 1
