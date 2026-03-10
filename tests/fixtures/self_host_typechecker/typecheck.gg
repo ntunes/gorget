@@ -9,7 +9,8 @@ from std.collections import Vector, Dict
 from ast import Module, Item, Stmt, Param, FunctionDef, StructDef, EnumDef
 from ast import EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch
 from ast import SpannedExpr, SpannedType, SpannedPattern, Span, Type, Expr, Pattern
-from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, EAs, SelectArm, SORecv
+from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, EAs, EIdentifier, SelectArm, SORecv
+from ast import SExpr, SVarDecl, SReturn
 from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo, ScopeKind, SkEquipBlock, SkFunction
 from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
@@ -17,10 +18,10 @@ from scope import DkVariable, DkConst, DkStatic, DkGenericParam
 from scope import get_def_at, get_scope_at, Scope
 from types import TypeTable, ResolvedType, ast_type_to_resolved, get_stype_at
 from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
-from types import RTTuple, RTArray, RTSlice, get_rtype_at, get_int_at
+from types import RTTuple, RTArray, RTSlice, RTError, RTVar, get_rtype_at, get_int_at
 from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
 from resolve import ResolveContext
-from infer import infer_expr_type
+from infer import infer_expr_type, infer_closure_return_type
 
 # ── Option helpers ──────────────────────────────────────────
 
@@ -556,6 +557,176 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
         else:
             pass
 
+# ── Rebuild closure variable type from now-typed params ───────
+# After walk_expr_closures assigns types to closure param defs,
+# rebuild the RTFunction type for the auto-variable holding the closure.
+
+void rebuild_closure_var_type(str var_name, Vector[Param] cl_params, Vector[Stmt] cl_body, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    # Find each param def that has a type var assigned (from walk_expr_closures)
+    Vector[int] param_type_ids = Vector[int]()
+    Vector[int] param_ownerships = Vector[int]()
+    Vector[int] param_def_ids = Vector[int]()
+    Dict[str, int] param_types = Dict[str, int]()
+    int pi = 0
+    while pi < cl_params.len():
+        Param p = get_param_at(cl_params, pi)
+        # Find the param def with a type-var type (distinguishes from earlier same-name defs)
+        int p_def = find_typevar_def(scope_id, p.param_name, &scopes, &types)
+        int p_tid = types.error_id
+        if p_def >= 0:
+            DefInfo pd = scopes.get_def(p_def)
+            if pd.type_id >= 0:
+                p_tid = pd.type_id
+        param_type_ids.push(p_tid)
+        param_ownerships.push(p.ownership)
+        param_def_ids.push(p_def)
+        param_types.put(p.param_name, p_tid)
+        pi = pi + 1
+    # Infer return type from closure body with typed params
+    int ret_id = types.void_id
+    if cl_body.len() > 0:
+        Stmt last = cl_body.get(cl_body.len() - 1).unwrap()
+        int inferred_ret = infer_closure_return_type(last, param_types, scopes, &types, ctx)
+        if inferred_ret >= 0:
+            ret_id = inferred_ret
+    # Build the new function type and update the variable
+    int fn_type = types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
+    int var_def = scopes.lookup_in_subtree(scope_id, var_name)
+    if var_def >= 0:
+        scopes.set_def_type(var_def, fn_type)
+
+int find_typevar_def(int scope_id, str name, ScopeTable &scopes, TypeTable &types):
+    # Find a def named `name` in the subtree that has a type-var type
+    int i = 0
+    while i < scopes.def_count():
+        DefInfo d = scopes.get_def(i)
+        if d.name == name and d.type_id >= 0:
+            ResolvedType rt = get_rtype_at(types.types, d.type_id)
+            match rt:
+                case RTVar(_):
+                    if scopes.is_descendant_of(d.scope_id, scope_id):
+                        return i
+                else:
+                    pass
+        i = i + 1
+    return -1
+
+# ── Call-site closure type var resolution ─────────────────────
+# After type_check_stmts, scan for calls like `add(3, 4)` where the callee
+# has type vars in its function type. Propagate concrete arg types back.
+
+void resolve_closure_types_from_calls(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    int i = 0
+    while i < stmts.len():
+        Stmt s = get_stmt_at(stmts, i)
+        resolve_call_in_stmt(s, scope_id, &scopes, &types, ctx)
+        i = i + 1
+
+void resolve_call_in_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    match s:
+        case SExpr(sexpr):
+            resolve_call_in_expr(sexpr, scope_id, &scopes, &types, ctx)
+        case SVarDecl(_, _, init_expr, _, _, _):
+            resolve_call_in_expr(init_expr, scope_id, &scopes, &types, ctx)
+        else:
+            pass
+
+void resolve_call_in_expr(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    match sexpr.expr:
+        case ECall(callee, args, targs):
+            # Check if callee is an identifier with a function type containing type vars
+            match (*callee).expr:
+                case EIdentifier(name):
+                    int callee_def = scopes.lookup_in_subtree(scope_id, name)
+                    if callee_def >= 0:
+                        DefInfo cd = scopes.get_def(callee_def)
+                        if cd.type_id >= 0:
+                            ResolvedType fn_rt = get_rtype_at(types.types, cd.type_id)
+                            match fn_rt:
+                                case RTFunction(param_tids, ownerships, ret_id):
+                                    bool has_var = false
+                                    int vi = 0
+                                    while vi < param_tids.len():
+                                        int ptid = get_int_at(param_tids, vi)
+                                        ResolvedType prt = get_rtype_at(types.types, ptid)
+                                        match prt:
+                                            case RTVar(_):
+                                                has_var = true
+                                            else:
+                                                pass
+                                        vi = vi + 1
+                                    if has_var and args.len() == param_tids.len():
+                                        # Build mapping from type var → concrete type
+                                        Dict[int, int] var_map = Dict[int, int]()
+                                        Vector[int] new_params = Vector[int]()
+                                        int ai = 0
+                                        while ai < args.len():
+                                            int old_ptid = get_int_at(param_tids, ai)
+                                            ResolvedType old_prt = get_rtype_at(types.types, old_ptid)
+                                            match old_prt:
+                                                case RTVar(var_id):
+                                                    SpannedExpr arg = args.get(ai).unwrap()
+                                                    int arg_type = infer_expr_type(arg, scopes, &types, ctx)
+                                                    if arg_type >= 0 and arg_type != types.error_id:
+                                                        new_params.push(arg_type)
+                                                        var_map[var_id] = arg_type
+                                                    else:
+                                                        new_params.push(old_ptid)
+                                                else:
+                                                    new_params.push(old_ptid)
+                                            ai = ai + 1
+                                        # Resolve return type: if it's a type var, map it
+                                        int new_ret = ret_id
+                                        ResolvedType ret_rt = get_rtype_at(types.types, ret_id)
+                                        match ret_rt:
+                                            case RTVar(var_id):
+                                                if var_map.contains(var_id):
+                                                    new_ret = var_map.get(var_id).unwrap()
+                                            else:
+                                                pass
+                                        # If return type is still unresolved but params are
+                                        # now concrete, infer from the first concrete param
+                                        # (heuristic for a + b where a, b are same type)
+                                        if new_ret == ret_id:
+                                            ResolvedType nr = get_rtype_at(types.types, new_ret)
+                                            match nr:
+                                                case RTVar(_):
+                                                    if new_params.len() > 0:
+                                                        new_ret = get_int_at(new_params, 0)
+                                                case RTError():
+                                                    if new_params.len() > 0:
+                                                        new_ret = get_int_at(new_params, 0)
+                                                else:
+                                                    pass
+                                        # Update function type and param defs
+                                        int new_fn_type = types.add_type(RTFunction(new_params, ownerships, new_ret))
+                                        scopes.set_def_type(callee_def, new_fn_type)
+                                        # Also update param defs with concrete types
+                                        int pi = 0
+                                        while pi < new_params.len():
+                                            int np_tid = get_int_at(new_params, pi)
+                                            int old_ptid = get_int_at(param_tids, pi)
+                                            if np_tid != old_ptid:
+                                                # Find the param def that has the old type var
+                                                # and update it to the concrete type
+                                                resolve_param_type_var(old_ptid, np_tid, scope_id, &scopes, &types)
+                                            pi = pi + 1
+                                else:
+                                    pass
+                else:
+                    pass
+        else:
+            pass
+
+void resolve_param_type_var(int old_type_id, int new_type_id, int scope_id, ScopeTable &scopes, TypeTable &types):
+    # Find any def in the subtree with type_id == old_type_id and update it
+    int i = 0
+    while i < scopes.def_count():
+        DefInfo d = scopes.get_def(i)
+        if d.type_id == old_type_id:
+            scopes.set_def_type(i, new_type_id)
+        i = i + 1
+
 # ── Type-check statements (looking for VarDecl with explicit types) ──
 
 void type_check_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
@@ -564,6 +735,8 @@ void type_check_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, Type
         Stmt s = get_stmt_at(stmts, i)
         type_check_stmt(s, scope_id, &scopes, &types, ctx)
         i = i + 1
+    # Second pass: propagate call-site argument types to closure type vars
+    resolve_closure_types_from_calls(stmts, scope_id, &scopes, &types, ctx)
 
 void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
     match s:
@@ -587,6 +760,28 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             # Walk initializer for closures and block expressions
             # Pass expected type so untyped closure params can be inferred
             walk_expr_closures_with_type(init_expr, var_type_id, scope_id, &scopes, &types, ctx)
+            # Rebuild closure function type if it has errors (untyped params)
+            if is_inferred and var_type_id >= 0:
+                bool has_errors = false
+                ResolvedType vrt = get_rtype_at(types.types, var_type_id)
+                match vrt:
+                    case RTFunction(fn_params, _, fn_ret):
+                        int fi = 0
+                        while fi < fn_params.len():
+                            int fp_tid = get_int_at(fn_params, fi)
+                            if fp_tid == types.error_id:
+                                has_errors = true
+                            fi = fi + 1
+                        if fn_ret == types.error_id:
+                            has_errors = true
+                    else:
+                        pass
+                if has_errors:
+                    match init_expr.expr:
+                        case EClosure(cl_params, cl_body):
+                            rebuild_closure_var_type(name, cl_params, cl_body, scope_id, &scopes, &types, ctx)
+                        else:
+                            pass
 
         case SIf(cond, body, else_branches):
             # Assign types to is-pattern bindings in the condition

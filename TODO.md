@@ -57,7 +57,7 @@
 
 - **Self-hosting resolver: 592/592 (100%) — COMPLETE.** [updated: 2026-03-10]
 
-- **Self-hosting type checker: 592/594 (99.7%) — exact: 566, superset: 26**: Phases 1-16 complete. Phase 16: generic equip params, .parse() inference, closure param typing with type vars + call-site propagation. Remaining 2 mismatches: closures.gg (bidirectional type inference for `auto add = (a, b): a + b`), field_access.gg (meta for body walking — needs compile-time expansion). [updated: 2026-03-10]
+- **Self-hosting type checker: 594/595 (99.8%) — exact: 567, superset: 27**: Phases 1-17 complete. Phase 17: bidirectional closure type inference — rebuild closure var types from param defs, call-site back-propagation for type vars. Remaining 1 mismatch: field_access.gg (meta for body walking — `field_set` assigns produce `"v" = str` bindings that need compile-time expansion). [updated: 2026-03-10]
 
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
