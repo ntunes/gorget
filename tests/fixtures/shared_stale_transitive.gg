@@ -2,6 +2,8 @@
 # int val = x (direct), int doubled = val * 2 (transitive via val),
 # then using doubled in a condition after await should warn.
 
+directive scheduler=single
+
 async void worker(int &counter):
     counter = counter + 1
 

@@ -52,6 +52,10 @@
 
 - **Coroutine codegen — remaining gaps**: Collection method dispatch, Result/Option wrapping, and type overrides now work in coroutine poll functions (2026-03-08). Remaining: higher-order methods (filter/map/fold), inline methods (pop/sort), and complex collection dispatch patterns not yet tested in coroutine context. [updated: 2026-03-08]
 
+- **Coroutine codegen bug: `sleep` inside loop generates duplicate case values**: `sleep(1)` inside a `while` loop in a coroutine poll function emits duplicate `case N:` labels in the state machine switch, causing C compilation failure (`duplicate case value`). The yield-point numbering doesn't account for the loop re-entering the same yield. Discovered in shared_stress_yield test. [added: 2026-03-10]
+
+- **Codegen bug: Vector of Task causes double free**: `Vector[Task[void]]` with pushed tasks causes `free(): double free detected in tcache 2` at runtime. Likely the Task drop glue runs both when the Vector element is dropped and when the task is awaited/completed. Discovered in shared_stress test (workaround: individual task variables). [added: 2026-03-10]
+
 - **Async/await — `await` on vector-indexed tasks with multiple spawn functions**: Type-based await dispatch now works when exactly one function produces tasks of a given type. When multiple functions produce the same `Task__T` type (e.g., two functions both returning `int`), the type-based fallback can't disambiguate. Fix: embed a function dispatch pointer in the `Task__T` struct or use a tag field. [updated: 2026-03-07]
 
 - **Self-hosting parser: 1 remaining mismatch (558/559, 99.8%)**: Only `chars.gg` — null byte `\0` truncates C string output. Unfixable without length-prefixed string representation in C runtime. [updated: 2026-03-09]

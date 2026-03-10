@@ -3,6 +3,8 @@
 # the local in a while condition after the await, should warn.
 # The warning is non-fatal — program still compiles and runs.
 
+directive scheduler=single
+
 async void worker(int &counter):
     counter = counter + 1
 

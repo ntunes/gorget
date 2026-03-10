@@ -1,0 +1,35 @@
+# Stress test: 1000 increments across 100 batches of 10 concurrent workers.
+# Under correct Shared[Mutex[T]] synchronization, the final value must be
+# exactly 1000. Any data race would cause a lost update.
+
+from std.conv import int_to_str
+
+async void increment(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int counter = 0
+    int batch = 0
+    while batch < 100:
+        Task[void] t0 = spawn increment(&counter)
+        Task[void] t1 = spawn increment(&counter)
+        Task[void] t2 = spawn increment(&counter)
+        Task[void] t3 = spawn increment(&counter)
+        Task[void] t4 = spawn increment(&counter)
+        Task[void] t5 = spawn increment(&counter)
+        Task[void] t6 = spawn increment(&counter)
+        Task[void] t7 = spawn increment(&counter)
+        Task[void] t8 = spawn increment(&counter)
+        Task[void] t9 = spawn increment(&counter)
+        t0.await()
+        t1.await()
+        t2.await()
+        t3.await()
+        t4.await()
+        t5.await()
+        t6.await()
+        t7.await()
+        t8.await()
+        t9.await()
+        batch = batch + 1
+    print(int_to_str(counter))

@@ -2,6 +2,8 @@
 # int val = some_fn(x) should be tainted by shared x,
 # and using val in a condition after await should warn.
 
+directive scheduler=single
+
 int double(int n):
     return n * 2
 

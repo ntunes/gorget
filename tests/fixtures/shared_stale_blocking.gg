@@ -3,6 +3,8 @@
 # then using the local in a branch condition after the call, should warn.
 # The warning is non-fatal — program still compiles and runs.
 
+directive scheduler=single
+
 from std.async import sleep
 
 async void worker(int &counter):

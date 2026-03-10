@@ -7888,6 +7888,16 @@ fn shared_nested_spawn() {
 }
 
 #[test]
+fn shared_stress() {
+    run_gg("shared_stress.gg", "1000");
+}
+
+#[test]
+fn shared_stress_yield() {
+    run_gg("shared_stress_yield.gg", "1000");
+}
+
+#[test]
 fn shared_closure_capture_error() {
     check_gg_fails("shared_closure_capture_error.gg", "cannot capture shared variable");
 }

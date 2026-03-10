@@ -3,6 +3,8 @@
 # back to a shared variable after the yield, is a lost update.
 # The warning is non-fatal — program still compiles and runs.
 
+directive scheduler=single
+
 from std.async import sleep
 
 async void worker(int &counter):

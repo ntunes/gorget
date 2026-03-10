@@ -3,6 +3,8 @@
 # and using pair.0 in a condition after await should warn
 # (via transitive: pair is tainted, pair.0 inherits taint).
 
+directive scheduler=single
+
 async void worker(int &counter):
     counter = counter + 1
 

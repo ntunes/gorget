@@ -2,6 +2,8 @@
 # Reading shared var before await, then reassigning the local after await,
 # should NOT produce a stale-condition warning.
 
+directive scheduler=single
+
 from std.async import sleep
 
 async void worker(int &counter):
