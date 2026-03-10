@@ -2436,9 +2436,12 @@ gg test                            # run all tests
 gg test --filter "parse*"          # name filter
 gg test --tag slow                 # tag inclusion
 gg test --exclude-tag network      # tag exclusion
-gg test --bench                    # run benchmarks (planned)
+gg test --bench                    # run benchmarks
+gg test --timeout 30s              # global timeout (5s, 500ms, 5000)
+gg test --parallel 4               # N worker processes
+gg test --failed-only              # re-run only failed tests
+gg test --failed-first             # run failed tests first
 gg test --format junit-xml         # CI output (planned)
-gg test --timeout 30s              # per-test timeout (planned)
 ```
 
 ---

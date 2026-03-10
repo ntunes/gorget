@@ -4182,6 +4182,10 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `--exclude-tag <name>` | Skip tests with this tag (repeatable; exclusion wins) |
 | `--filter <substr>`  | Only run tests whose name contains `<substr>`           |
 | `--bench`            | Run benchmarks instead of tests                         |
+| `--timeout <value>`  | Global test timeout (`5s`, `500ms`, or `5000` for ms)   |
+| `--parallel <N>`     | Run tests across N worker processes                     |
+| `--failed-only`      | Re-run only previously failed tests                     |
+| `--failed-first`     | Run previously failed tests first, then the rest        |
 | `--hot-reload`       | Enable hot code reload (builds host + guest shared library) |
 | `--shared [-o file]` | Build as a shared library (`.dylib`/`.so`)              |
 | `--show-borrows`     | Print inferred borrow analysis for all functions (diagnostic) |
@@ -4290,6 +4294,52 @@ Skipped tests are reported but not executed:
 ```
 
 Skipped tests count separately from passed and failed in the summary.
+
+### 18.5.2 `@timeout`
+
+Set a per-test timeout in milliseconds:
+
+```gorget
+@timeout("500")
+test "must complete quickly":
+    int result = expensive_computation()
+    assert result > 0
+```
+
+If the test exceeds the timeout, it is interrupted and reported as a failure:
+
+```
+  test: must complete quickly ... FAIL: timed out after 500ms (501ms)
+```
+
+The `--timeout` CLI flag sets a global default for all tests. Per-test `@timeout` overrides the global value.
+
+```bash
+gg test file.gg --timeout 5s       # 5 seconds
+gg test file.gg --timeout 500ms    # 500 milliseconds
+gg test file.gg --timeout 5000     # 5000 milliseconds (bare number)
+```
+
+### 18.5.3 Parallel Execution
+
+Run tests across multiple worker processes:
+
+```bash
+gg test file.gg --parallel 4
+```
+
+Tests are distributed using stride-based scheduling: worker `i` runs tests `i`, `i+N`, `i+2N`, etc. Each worker produces its own output. Result files are merged after all workers complete.
+
+### 18.5.4 Re-run Strategies
+
+Test results are persisted to `.gorget/<name>.test-results.json`. Two re-run modes use these results:
+
+```bash
+gg test file.gg --failed-only     # Only run previously failed tests
+gg test file.gg --failed-first    # Run failed tests first, then the rest
+```
+
+`--failed-only` filters the test suite to only previously-failed tests. `--failed-first` reorders the test suite so previously-failed tests execute first, then the remaining tests in their original order. Both modes read the results file from the previous run.
 
 ### 18.6 Console Output
 

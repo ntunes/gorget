@@ -39,6 +39,10 @@ pub struct LoweringOptions {
     pub test_exclude_tags: Vec<String>,
     /// Only run tests whose display name contains this substring.
     pub test_name_filter: Option<String>,
+    /// Global default timeout in milliseconds for all tests (from `--timeout`).
+    pub default_timeout_ms: Option<u64>,
+    /// Names of previously-failed tests to run first (for `--failed-first`).
+    pub failed_first_names: Vec<String>,
     /// Enable trace instrumentation and write events to this file path.
     pub trace_filename: Option<String>,
     /// Enable hot-reload mode (directive hot-reload or --hot-reload flag).
@@ -1502,9 +1506,16 @@ fn lower_test_items(
 
     /// Check whether a test should run given the filtering options.
     fn should_run_test(test_def: &ast::TestDef, options: &LoweringOptions) -> bool {
-        // Name filter: skip if test name doesn't contain the substring.
+        // Name filter: skip if test name doesn't match.
+        // Pipe-separated values (from --last-failed) use exact matching;
+        // a single value uses substring matching.
         if let Some(ref filter) = options.test_name_filter {
-            if !test_def.name.node.contains(filter.as_str()) {
+            if filter.contains('|') {
+                // Exact match against any of the pipe-separated names
+                if !filter.split('|').any(|name| name == test_def.name.node) {
+                    return false;
+                }
+            } else if !test_def.name.node.contains(filter.as_str()) {
                 return false;
             }
         }
@@ -1608,6 +1619,16 @@ fn lower_test_items(
                     if let AttributeArg::StringLiteral(s) = arg { Some(s.clone()) } else { None }
                 });
 
+            // Extract @timeout metadata — per-test timeout in milliseconds
+            let timeout_ms: Option<u64> = test_def.attributes.iter()
+                .find(|a| a.node.name.node == "timeout")
+                .and_then(|a| a.node.args.first())
+                .and_then(|arg| match arg {
+                    AttributeArg::StringLiteral(s) => s.parse::<u64>().ok(),
+                    _ => None,
+                })
+                .or(options.default_timeout_ms);
+
             // Skipped tests: register metadata only, don't lower body
             if skipped {
                 module.runtime.test_fns.push(TestFnInfo {
@@ -1617,6 +1638,7 @@ fn lower_test_items(
                     expected_panic_msg,
                     skipped: true,
                     skip_reason,
+                    timeout_ms: None,
                 });
                 continue;
             }
@@ -1646,8 +1668,17 @@ fn lower_test_items(
                 expected_panic_msg,
                 skipped: false,
                 skip_reason: None,
+                timeout_ms,
             });
         }
+    }
+
+    // --failed-first: reorder so previously-failed tests run first
+    if !options.failed_first_names.is_empty() {
+        let failed_set: std::collections::HashSet<&str> = options.failed_first_names.iter().map(|s| s.as_str()).collect();
+        module.runtime.test_fns.sort_by_key(|t| {
+            if failed_set.contains(t.display_name.as_str()) { 0 } else { 1 }
+        });
     }
 }
 

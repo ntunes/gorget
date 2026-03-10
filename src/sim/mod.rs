@@ -146,6 +146,7 @@ fn run_test_suite(interp: &mut Interpreter) -> i32 {
 
     let mut passed = 0i32;
     let mut failed = 0i32;
+    let mut results: Vec<(&str, &str)> = Vec::new(); // (name, status)
 
     // Suite setup (if present)
     if interp.module.runtime.has_suite_setup {
@@ -173,6 +174,7 @@ fn run_test_suite(interp: &mut Interpreter) -> i32 {
                 "SKIP\n".to_string()
             };
             interp.stdout.extend_from_slice(msg.as_bytes());
+            results.push((&info.display_name, "skip"));
             continue;
         }
 
@@ -181,6 +183,17 @@ fn run_test_suite(interp: &mut Interpreter) -> i32 {
         let result = interp.call_function(&info.fn_name, vec![], 0);
 
         let elapsed_ms = start.elapsed().as_millis();
+
+        // Timeout check: if elapsed exceeds timeout_ms, treat as failure
+        if let Some(timeout) = info.timeout_ms {
+            if elapsed_ms >= timeout as u128 {
+                failed += 1;
+                let line = format!("FAIL: timed out after {timeout}ms ({elapsed_ms}ms)\n");
+                interp.stdout.extend_from_slice(line.as_bytes());
+                results.push((&info.display_name, "fail"));
+                continue;
+            }
+        }
 
         if info.should_panic {
             // should_panic test: pass if it panicked, fail if it succeeded

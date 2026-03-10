@@ -944,6 +944,7 @@ fn generate_hot_reload_split(module: &Module, full_c: &str, hr_opts: Option<&Hot
 fn emit_test_runner_main(out: &mut String, module: &Module) {
     let test_fns = &module.runtime.test_fns;
     let tracing = module.runtime.trace_filename.is_some();
+    let has_any_timeout = test_fns.iter().any(|t| t.timeout_ms.is_some());
     let _ = writeln!(out, "int main(int argc, char** argv) {{");
     let _ = writeln!(out, "    gorget_init_args(argc, argv);");
     if let Some(ref trace_path) = module.runtime.trace_filename {
@@ -953,14 +954,37 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
     let _ = writeln!(out, "    int __test_passed = 0, __test_failed = 0, __test_skipped = 0;");
     let _ = writeln!(out, "    struct timespec __total_start, __total_end;");
     let _ = writeln!(out, "    clock_gettime(CLOCK_MONOTONIC, &__total_start);");
-    let _ = writeln!(out, "    printf(\"Running {} tests...\\n\");", test_fns.len());
+
+    // Parallel support: GORGET_PARALLEL_ID and GORGET_PARALLEL_TOTAL env vars
+    let _ = writeln!(out, "    int __par_id = -1, __par_total = 0;");
+    let _ = writeln!(out, "    const char* __par_id_env = getenv(\"GORGET_PARALLEL_ID\");");
+    let _ = writeln!(out, "    const char* __par_total_env = getenv(\"GORGET_PARALLEL_TOTAL\");");
+    let _ = writeln!(out, "    if (__par_id_env && __par_total_env) {{ __par_id = atoi(__par_id_env); __par_total = atoi(__par_total_env); }}");
+
+    // Result file support: GORGET_TEST_RESULTS env var
+    let _ = writeln!(out, "    const char* __results_path = getenv(\"GORGET_TEST_RESULTS\");");
+
+    // Count non-skipped, non-parallel-filtered tests for header
+    let _ = writeln!(out, "    int __test_total = {};", test_fns.len());
+    let _ = writeln!(out, "    if (__par_total > 0) {{");
+    let _ = writeln!(out, "        __test_total = 0;");
+    let _ = writeln!(out, "        for (int __i = 0; __i < {}; __i++) if (__i % __par_total == __par_id) __test_total++;", test_fns.len());
+    let _ = writeln!(out, "    }}");
+    let _ = writeln!(out, "    printf(\"Running %d tests...\\n\", __test_total);");
 
     if module.runtime.has_suite_setup {
         let _ = writeln!(out, "    __suite_setup();");
     }
 
-    for info in test_fns {
+    // Track results for result file: 0=skip, 1=pass, 2=fail
+    let _ = writeln!(out, "    int __results[{}];", test_fns.len());
+    let _ = writeln!(out, "    memset(__results, 0, sizeof(__results));");
+
+    for (idx, info) in test_fns.iter().enumerate() {
         let escaped = info.display_name.replace('\\', "\\\\").replace('"', "\\\"");
+
+        // Parallel: skip tests not assigned to this worker
+        let _ = writeln!(out, "    if (__par_total > 0 && ({idx} % __par_total != __par_id)) goto __test_done_{idx};");
 
         // Skipped tests: report and continue without executing
         if info.skipped {
@@ -975,79 +999,110 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
             if tracing {
                 let _ = writeln!(out, "    if (__gorget_trace_fp) fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_end\\\",\\\"name\\\":\\\"{escaped}\\\",\\\"status\\\":\\\"skip\\\"}}\\n\");");
             }
-            continue;
+            let _ = writeln!(out, "    goto __test_done_{idx};");
         }
 
-        let fn_name = &info.fn_name;
-        let _ = writeln!(out, "    printf(\"  test: {escaped} ... \");");
-        let _ = writeln!(out, "    fflush(stdout);");
-        if tracing {
-            let _ = writeln!(out, "    if (__gorget_trace_fp) fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_start\\\",\\\"name\\\":\\\"{escaped}\\\"}}\\n\");");
-        }
-        let _ = writeln!(out, "    {{");
-        let _ = writeln!(out, "        __gorget_in_test = 1;");
-        let _ = writeln!(out, "        __gorget_test_fail_msg = NULL;");
-        let _ = writeln!(out, "        int __cleanup_mark = __gorget_cleanup_top;");
-        let _ = writeln!(out, "        struct timespec __t_start, __t_end;");
-        let _ = writeln!(out, "        clock_gettime(CLOCK_MONOTONIC, &__t_start);");
+        if !info.skipped {
+            let fn_name = &info.fn_name;
+            let _ = writeln!(out, "    printf(\"  test: {escaped} ... \");");
+            let _ = writeln!(out, "    fflush(stdout);");
+            if tracing {
+                let _ = writeln!(out, "    if (__gorget_trace_fp) fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_start\\\",\\\"name\\\":\\\"{escaped}\\\"}}\\n\");");
+            }
+            let _ = writeln!(out, "    {{");
+            let _ = writeln!(out, "        __gorget_in_test = 1;");
+            let _ = writeln!(out, "        __gorget_test_fail_msg = NULL;");
+            let _ = writeln!(out, "        __gorget_test_timed_out = 0;");
+            let _ = writeln!(out, "        int __cleanup_mark = __gorget_cleanup_top;");
+            let _ = writeln!(out, "        struct timespec __t_start, __t_end;");
+            let _ = writeln!(out, "        clock_gettime(CLOCK_MONOTONIC, &__t_start);");
 
-        // Tell gorget_panic() where to start running cleanup on panic.
-        // gorget_panic() calls __gorget_cleanup_run(__gorget_test_cleanup_mark) BEFORE
-        // longjmp, while the test function's stack frame is still valid.
-        let _ = writeln!(out, "        __gorget_test_cleanup_mark = __cleanup_mark;");
-        let _ = writeln!(out, "        if (setjmp(__gorget_test_jmp) == 0) {{");
-        let _ = writeln!(out, "            {fn_name}();");
-        // On normal exit: reset cleanup stack WITHOUT running (entries already dropped by test fn).
-        let _ = writeln!(out, "            __gorget_cleanup_top = __cleanup_mark;");
-        let _ = writeln!(out, "        }}");
-        // On panic (longjmp): gorget_panic already ran cleanup. This is now a no-op.
-        let _ = writeln!(out, "        __gorget_cleanup_run(__cleanup_mark);");
-        let _ = writeln!(out, "        __gorget_in_test = 0;");
+            let _ = writeln!(out, "        __gorget_test_cleanup_mark = __cleanup_mark;");
 
-        let _ = writeln!(out, "        clock_gettime(CLOCK_MONOTONIC, &__t_end);");
-        let _ = writeln!(out, "        long __t_ms = (__t_end.tv_sec - __t_start.tv_sec) * 1000 + (__t_end.tv_nsec - __t_start.tv_nsec) / 1000000;");
-        if tracing {
-            let _ = writeln!(out, "        int __test_trace_ok = 0;");
-        }
+            // Set timeout if configured
+            if let Some(ms) = info.timeout_ms {
+                let _ = writeln!(out, "        __gorget_set_timeout({ms}L);");
+            }
 
-        if info.should_panic {
-            if let Some(ref msg) = info.expected_panic_msg {
-                let escaped_msg = msg.replace('\\', "\\\\").replace('"', "\\\"");
-                let _ = writeln!(out, "        if (__gorget_test_fail_msg && strstr(__gorget_test_fail_msg, \"{escaped_msg}\")) {{");
-                let _ = writeln!(out, "            __test_passed++;");
-                if tracing { let _ = writeln!(out, "            __test_trace_ok = 1;"); }
-                let _ = writeln!(out, "            printf(\"PASS (%ldms)\\n\", __t_ms);");
-                let _ = writeln!(out, "        }} else if (__gorget_test_fail_msg) {{");
-                let _ = writeln!(out, "            __test_failed++;");
-                let _ = writeln!(out, "            printf(\"FAIL: expected panic containing \\\"{escaped_msg}\\\", got: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);");
-                let _ = writeln!(out, "        }} else {{");
-                let _ = writeln!(out, "            __test_failed++;");
-                let _ = writeln!(out, "            printf(\"FAIL: expected panic but test passed (%ldms)\\n\", __t_ms);");
-                let _ = writeln!(out, "        }}");
+            let _ = writeln!(out, "        int __jmp_val = setjmp(__gorget_test_jmp);");
+            let _ = writeln!(out, "        if (__jmp_val == 0) {{");
+            let _ = writeln!(out, "            {fn_name}();");
+            let _ = writeln!(out, "            __gorget_cleanup_top = __cleanup_mark;");
+            let _ = writeln!(out, "        }}");
+
+            // Cancel timeout
+            if info.timeout_ms.is_some() {
+                let _ = writeln!(out, "        __gorget_cancel_timeout();");
+            }
+
+            // On timeout (jmp_val==2): cleanup was NOT run by signal handler, run it now
+            // On panic (jmp_val==1): gorget_panic already ran cleanup, this is a no-op
+            let _ = writeln!(out, "        __gorget_cleanup_run(__cleanup_mark);");
+            let _ = writeln!(out, "        __gorget_in_test = 0;");
+
+            let _ = writeln!(out, "        clock_gettime(CLOCK_MONOTONIC, &__t_end);");
+            let _ = writeln!(out, "        long __t_ms = (__t_end.tv_sec - __t_start.tv_sec) * 1000 + (__t_end.tv_nsec - __t_start.tv_nsec) / 1000000;");
+            if tracing {
+                let _ = writeln!(out, "        int __test_trace_ok = 0;");
+            }
+
+            // Timeout always fails, regardless of @should_panic
+            if has_any_timeout {
+                let _ = writeln!(out, "        if (__gorget_test_timed_out) {{");
+                if let Some(ms) = info.timeout_ms {
+                    let _ = writeln!(out, "            __test_failed++;");
+                    let _ = writeln!(out, "            __results[{idx}] = 2;");
+                    let _ = writeln!(out, "            printf(\"FAIL: timed out after {ms}ms (%ldms)\\n\", __t_ms);");
+                } else {
+                    // No timeout on this test but another test has one — unreachable but handle gracefully
+                    let _ = writeln!(out, "            __test_failed++;");
+                    let _ = writeln!(out, "            __results[{idx}] = 2;");
+                    let _ = writeln!(out, "            printf(\"FAIL: timed out (%ldms)\\n\", __t_ms);");
+                }
+                let _ = writeln!(out, "        }} else");
+            }
+
+            if info.should_panic {
+                if let Some(ref msg) = info.expected_panic_msg {
+                    let escaped_msg = msg.replace('\\', "\\\\").replace('"', "\\\"");
+                    let _ = writeln!(out, "        if (__gorget_test_fail_msg && strstr(__gorget_test_fail_msg, \"{escaped_msg}\")) {{");
+                    let _ = writeln!(out, "            __test_passed++; __results[{idx}] = 1;");
+                    if tracing { let _ = writeln!(out, "            __test_trace_ok = 1;"); }
+                    let _ = writeln!(out, "            printf(\"PASS (%ldms)\\n\", __t_ms);");
+                    let _ = writeln!(out, "        }} else if (__gorget_test_fail_msg) {{");
+                    let _ = writeln!(out, "            __test_failed++; __results[{idx}] = 2;");
+                    let _ = writeln!(out, "            printf(\"FAIL: expected panic containing \\\"{escaped_msg}\\\", got: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);");
+                    let _ = writeln!(out, "        }} else {{");
+                    let _ = writeln!(out, "            __test_failed++; __results[{idx}] = 2;");
+                    let _ = writeln!(out, "            printf(\"FAIL: expected panic but test passed (%ldms)\\n\", __t_ms);");
+                    let _ = writeln!(out, "        }}");
+                } else {
+                    let _ = writeln!(out, "        if (__gorget_test_fail_msg) {{");
+                    let _ = writeln!(out, "            __test_passed++; __results[{idx}] = 1;");
+                    if tracing { let _ = writeln!(out, "            __test_trace_ok = 1;"); }
+                    let _ = writeln!(out, "            printf(\"PASS (%ldms)\\n\", __t_ms);");
+                    let _ = writeln!(out, "        }} else {{");
+                    let _ = writeln!(out, "            __test_failed++; __results[{idx}] = 2;");
+                    let _ = writeln!(out, "            printf(\"FAIL: expected panic but test passed (%ldms)\\n\", __t_ms);");
+                    let _ = writeln!(out, "        }}");
+                }
             } else {
-                let _ = writeln!(out, "        if (__gorget_test_fail_msg) {{");
-                let _ = writeln!(out, "            __test_passed++;");
+                let _ = writeln!(out, "        if (!__gorget_test_fail_msg) {{");
+                let _ = writeln!(out, "            __test_passed++; __results[{idx}] = 1;");
                 if tracing { let _ = writeln!(out, "            __test_trace_ok = 1;"); }
                 let _ = writeln!(out, "            printf(\"PASS (%ldms)\\n\", __t_ms);");
                 let _ = writeln!(out, "        }} else {{");
-                let _ = writeln!(out, "            __test_failed++;");
-                let _ = writeln!(out, "            printf(\"FAIL: expected panic but test passed (%ldms)\\n\", __t_ms);");
+                let _ = writeln!(out, "            __test_failed++; __results[{idx}] = 2;");
+                let _ = writeln!(out, "            printf(\"FAIL: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);");
                 let _ = writeln!(out, "        }}");
             }
-        } else {
-            let _ = writeln!(out, "        if (!__gorget_test_fail_msg) {{");
-            let _ = writeln!(out, "            __test_passed++;");
-            if tracing { let _ = writeln!(out, "            __test_trace_ok = 1;"); }
-            let _ = writeln!(out, "            printf(\"PASS (%ldms)\\n\", __t_ms);");
-            let _ = writeln!(out, "        }} else {{");
-            let _ = writeln!(out, "            __test_failed++;");
-            let _ = writeln!(out, "            printf(\"FAIL: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);");
-            let _ = writeln!(out, "        }}");
+            if tracing {
+                let _ = writeln!(out, "        if (__gorget_trace_fp) fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_end\\\",\\\"name\\\":\\\"{escaped}\\\",\\\"status\\\":\\\"%s\\\",\\\"duration_ms\\\":%ld}}\\n\", __test_trace_ok ? \"pass\" : \"fail\", __t_ms);");
+            }
+            let _ = writeln!(out, "    }}");
         }
-        if tracing {
-            let _ = writeln!(out, "        if (__gorget_trace_fp) fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_end\\\",\\\"name\\\":\\\"{escaped}\\\",\\\"status\\\":\\\"%s\\\",\\\"duration_ms\\\":%ld}}\\n\", __test_trace_ok ? \"pass\" : \"fail\", __t_ms);");
-        }
-        let _ = writeln!(out, "    }}");
+
+        let _ = writeln!(out, "    __test_done_{idx}:;");
     }
 
     if module.runtime.has_suite_teardown {
@@ -1058,6 +1113,22 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
     let _ = writeln!(out, "    long __total_ms = (__total_end.tv_sec - __total_start.tv_sec) * 1000 + (__total_end.tv_nsec - __total_start.tv_nsec) / 1000000;");
     let _ = writeln!(out, "    if (__test_skipped > 0) printf(\"\\n%d passed, %d failed, %d skipped (%ldms)\\n\", __test_passed, __test_failed, __test_skipped, __total_ms);");
     let _ = writeln!(out, "    else printf(\"\\n%d passed, %d failed (%ldms)\\n\", __test_passed, __test_failed, __total_ms);");
+
+    // Write results file if GORGET_TEST_RESULTS is set
+    let _ = writeln!(out, "    if (__results_path) {{");
+    let _ = writeln!(out, "        FILE* __rf = fopen(__results_path, \"w\");");
+    let _ = writeln!(out, "        if (__rf) {{");
+    let _ = writeln!(out, "            fprintf(__rf, \"{{\\\"results\\\":[\\n\");");
+    for (idx, info) in test_fns.iter().enumerate() {
+        let escaped = info.display_name.replace('\\', "\\\\").replace('"', "\\\"");
+        let comma = if idx + 1 < test_fns.len() { "," } else { "" };
+        let _ = writeln!(out, "            fprintf(__rf, \"  {{\\\"name\\\":\\\"{escaped}\\\",\\\"status\\\":\\\"%s\\\"}}{comma}\\n\", __results[{idx}] == 1 ? \"pass\" : __results[{idx}] == 2 ? \"fail\" : \"skip\");");
+    }
+    let _ = writeln!(out, "            fprintf(__rf, \"]}}\\n\");");
+    let _ = writeln!(out, "            fclose(__rf);");
+    let _ = writeln!(out, "        }}");
+    let _ = writeln!(out, "    }}");
+
     let _ = writeln!(out, "    return __test_failed > 0 ? 1 : 0;");
     let _ = writeln!(out, "}}");
 }

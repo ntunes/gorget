@@ -1467,12 +1467,17 @@ fn main() {
             }
         }
         "test" => {
-            // Collect --tag, --exclude-tag, --filter, --report values
+            // Collect --tag, --exclude-tag, --filter, --report, --bench, --timeout,
+            // --parallel, --failed-only, --failed-first values
             let mut test_tags = Vec::new();
             let mut test_exclude_tags = Vec::new();
             let mut test_name_filter: Option<String> = None;
             let mut report_html = false;
             let mut bench_mode = false;
+            let mut timeout_ms: Option<u64> = None;
+            let mut parallel: Option<usize> = None;
+            let mut failed_only = false;
+            let mut failed_first = false;
             let mut i = 0;
             while i < args.len() {
                 if args[i] == "--tag" && i + 1 < args.len() {
@@ -1502,6 +1507,24 @@ fn main() {
                 } else if args[i] == "--bench" {
                     bench_mode = true;
                     i += 1;
+                } else if args[i] == "--timeout" && i + 1 < args.len() {
+                    timeout_ms = parse_timeout_value(&args[i + 1]);
+                    i += 2;
+                } else if args[i].starts_with("--timeout=") {
+                    timeout_ms = parse_timeout_value(&args[i]["--timeout=".len()..]);
+                    i += 1;
+                } else if args[i] == "--parallel" && i + 1 < args.len() {
+                    parallel = args[i + 1].parse::<usize>().ok();
+                    i += 2;
+                } else if args[i].starts_with("--parallel=") {
+                    parallel = args[i]["--parallel=".len()..].parse::<usize>().ok();
+                    i += 1;
+                } else if args[i] == "--failed-only" {
+                    failed_only = true;
+                    i += 1;
+                } else if args[i] == "--failed-first" {
+                    failed_first = true;
+                    i += 1;
                 } else {
                     i += 1;
                 }
@@ -1523,12 +1546,37 @@ fn main() {
             } else {
                 None
             };
+
+            // Results file for --failed-only / --failed-first persistence
+            let results_dir = Path::new(filename).parent().unwrap_or(Path::new(".")).join(".gorget");
+            let stem = Path::new(filename).file_stem().and_then(|s| s.to_str()).unwrap_or("test");
+            let results_path = results_dir.join(format!("{stem}.test-results.json"));
+
+            // Read previous results for --failed-only / --failed-first
+            let prev_failed_names = if failed_only || failed_first {
+                read_failed_test_names(&results_path)
+            } else {
+                Vec::new()
+            };
+
+            // --failed-only: filter to only previously failed tests
+            let effective_filter = if failed_only && !prev_failed_names.is_empty() {
+                // Use a special filter that matches any of the failed names
+                // We'll pass them via test_name_filter as pipe-separated exact names
+                Some(prev_failed_names.join("|"))
+            } else {
+                test_name_filter.clone()
+            };
+
+            let failed_first_names = if failed_first { prev_failed_names.clone() } else { Vec::new() };
             let lowering_opts = gorget::ir::lowering::LoweringOptions {
                 test_mode: true,
                 bench_mode,
                 test_tags: test_tags.clone(),
                 test_exclude_tags: test_exclude_tags.clone(),
-                test_name_filter: test_name_filter.clone(),
+                test_name_filter: effective_filter,
+                default_timeout_ms: timeout_ms,
+                failed_first_names,
                 trace_filename,
                 sanitize, scheduler_mode,
                 ..Default::default()
@@ -1538,7 +1586,42 @@ fn main() {
                     eprintln!("{e}");
                     process::exit(1);
                 });
+
+            // Ensure .gorget/ directory exists for results file
+            let _ = std::fs::create_dir_all(&results_dir);
+
+            if let Some(n) = parallel {
+                // Parallel execution: spawn N worker processes
+                let n = n.max(1);
+                let mut children = Vec::new();
+                for worker_id in 0..n {
+                    let child = Command::new(&exe_path)
+                        .env("GORGET_PARALLEL_ID", worker_id.to_string())
+                        .env("GORGET_PARALLEL_TOTAL", n.to_string())
+                        .env("GORGET_TEST_RESULTS", worker_results_path(&results_path, worker_id).display().to_string())
+                        .spawn()
+                        .unwrap_or_else(|e| {
+                            eprintln!("Failed to spawn worker {worker_id}: {e}");
+                            process::exit(1);
+                        });
+                    children.push(child);
+                }
+                let mut any_failed = false;
+                for mut child in children {
+                    let status = child.wait().unwrap_or_else(|e| {
+                        eprintln!("Failed to wait for worker: {e}");
+                        process::exit(1);
+                    });
+                    if !status.success() { any_failed = true; }
+                }
+                // Merge worker result files
+                merge_parallel_results(&results_path, n);
+                process::exit(if any_failed { 1 } else { 0 });
+            }
+
+            // Sequential execution (default)
             let status = Command::new(&exe_path)
+                .env("GORGET_TEST_RESULTS", results_path.display().to_string())
                 .status()
                 .unwrap_or_else(|e| {
                     eprintln!("Failed to execute {}: {e}", exe_path.display());
@@ -1686,4 +1769,97 @@ fn main() {
             process::exit(1);
         }
     }
+}
+
+/// Parse a timeout value like "5s", "5000ms", or "5000" (bare number = milliseconds).
+fn parse_timeout_value(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if let Some(secs) = s.strip_suffix('s') {
+        if let Some(ms_str) = secs.strip_suffix('m') {
+            // "5000ms" -> strip "ms" suffix
+            ms_str.trim().parse::<u64>().ok()
+        } else {
+            // "5s" -> seconds to milliseconds
+            secs.trim().parse::<u64>().ok().map(|v| v * 1000)
+        }
+    } else {
+        // bare number = milliseconds
+        s.parse::<u64>().ok()
+    }
+}
+
+/// Read previously failed test names from a JSON results file.
+/// The file format is: `{"results":[{"name":"...","status":"pass"|"fail"|"skip"}, ...]}`
+fn read_failed_test_names(path: &Path) -> Vec<String> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let mut names = Vec::new();
+    // Find each {"name":"...","status":"fail"} entry
+    // Simple approach: find all "status":"fail" entries and extract the preceding "name"
+    let mut search_from = 0;
+    while let Some(pos) = contents[search_from..].find("\"status\":\"fail\"") {
+        let abs_pos = search_from + pos;
+        // Look backwards for "name":"..." in the same object
+        let obj_start = contents[..abs_pos].rfind('{').unwrap_or(0);
+        let obj_slice = &contents[obj_start..abs_pos];
+        if let Some(name_pos) = obj_slice.find("\"name\":\"") {
+            let name_start = name_pos + "\"name\":\"".len();
+            if let Some(name_end) = obj_slice[name_start..].find('"') {
+                names.push(obj_slice[name_start..name_start + name_end].to_string());
+            }
+        }
+        search_from = abs_pos + 1;
+    }
+    names
+}
+
+/// Merge per-worker result files into a single results file.
+fn merge_parallel_results(results_path: &Path, n: usize) {
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for worker_id in 0..n {
+        let worker_path = worker_results_path(results_path, worker_id);
+        if let Ok(contents) = std::fs::read_to_string(&worker_path) {
+            // Parse each {"name":"...","status":"..."} entry
+            let mut search_from = 0;
+            while let Some(pos) = contents[search_from..].find("\"name\":\"") {
+                let abs_pos = search_from + pos;
+                let name_start = abs_pos + "\"name\":\"".len();
+                if let Some(name_end) = contents[name_start..].find('"') {
+                    let name = contents[name_start..name_start + name_end].to_string();
+                    // Find the status for this entry
+                    let rest = &contents[name_start + name_end..];
+                    if let Some(status_pos) = rest.find("\"status\":\"") {
+                        let s_start = status_pos + "\"status\":\"".len();
+                        if let Some(s_end) = rest[s_start..].find('"') {
+                            let status = rest[s_start..s_start + s_end].to_string();
+                            entries.push((name, status));
+                        }
+                    }
+                    search_from = name_start + name_end + 1;
+                } else {
+                    break;
+                }
+            }
+            // Clean up worker file
+            let _ = std::fs::remove_file(&worker_path);
+        }
+    }
+    // Write merged results in the same array format
+    if !entries.is_empty() {
+        let items: Vec<String> = entries.iter()
+            .map(|(name, status)| format!("  {{\"name\":\"{name}\",\"status\":\"{status}\"}}"))
+            .collect();
+        let json = format!("{{\"results\":[\n{}\n]}}\n", items.join(",\n"));
+        let _ = std::fs::write(results_path, json);
+    }
+}
+
+/// Get the per-worker results file path (sibling of the main results file).
+fn worker_results_path(results_path: &Path, worker_id: usize) -> PathBuf {
+    let stem = results_path.file_stem().and_then(|s| s.to_str()).unwrap_or("results");
+    let ext = results_path.extension().and_then(|s| s.to_str()).unwrap_or("json");
+    let parent = results_path.parent().unwrap_or(Path::new("."));
+    parent.join(format!("{stem}.worker{worker_id}.{ext}"))
 }

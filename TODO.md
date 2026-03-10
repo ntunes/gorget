@@ -134,7 +134,6 @@
 
 - **`gg sim` data race detection**: Single-threaded deterministic model + weak memory exploration for detecting races in multi-threaded programs. Requires work-stealing executor + weak memory models. [added: 2026-03-05]
 
-- **`gg sim bench`**: Interpret benchmarks under the simulator (with warmup). Phase 2+ extension from sim.md design. Useful for detecting memory/aliasing issues in performance-critical code. [added: 2026-03-05]
 
 - **`uuid_parse(str) -> Result[UUID, str]`**: Parse UUID strings in the standard `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` format. `UUID` would be a struct `{ uint64_t hi; uint64_t lo; }` with `to_string()` and `eq()` equip. C backend via sscanf or manual hex parsing. [added: 2026-03-02]
 
@@ -174,7 +173,7 @@
 
 - **File system utilities (`std.io.fs`)**: temp directory management, content assertions. [added: 2026-02-14]
 
-- **`--parallel` test execution**: run tests concurrently. [added: 2026-02-14]
+- **`--parallel` test execution: V2 improvements**: Current: CLI-level process parallelism with stride-based distribution. Future: shared-memory approach for better load balancing, progress reporting across workers. [updated: 2026-03-10]
 
 - **`directive test_suite "name"`**: suite naming for report grouping. [added: 2026-02-14]
 

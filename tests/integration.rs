@@ -4145,6 +4145,20 @@ fn test_timing_in_output() {
     );
 }
 
+#[test]
+fn test_timeout_attribute() {
+    run_gg_test(
+        "test_timeout.gg",
+        &[
+            "Running 2 tests",
+            "fast test ... PASS",
+            "slow test ... FAIL: timed out after 100ms",
+            "1 passed, 1 failed",
+        ],
+        false,
+    );
+}
+
 // ── Report tests ─────────────────────────────────────────────
 
 #[test]

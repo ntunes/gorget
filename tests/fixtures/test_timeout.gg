@@ -1,0 +1,11 @@
+@timeout("100")
+test "fast test":
+    assert 1 + 1 == 2
+
+@timeout("100")
+test "slow test":
+    # Busy loop to trigger timeout
+    int i = 0
+    while i < 1000000000:
+        i = i + 1
+    assert true

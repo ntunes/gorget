@@ -2264,6 +2264,31 @@ static inline void gorget_panic(const char* msg) {
     fprintf(stderr, "gorget: panic: %s\n", msg);
     exit(1);
 }
+
+// ── Timeout support (SIGALRM + setitimer) ────────────────────
+#include <signal.h>
+#include <sys/time.h>
+static volatile int __gorget_test_timed_out = 0;
+static void __gorget_timeout_handler(int sig) {
+    (void)sig;
+    __gorget_test_timed_out = 1;
+    __gorget_test_fail_msg = "test timed out";
+    // Do NOT run cleanup here (signal handler context). The post-setjmp code handles it.
+    longjmp(__gorget_test_jmp, 2);
+}
+static inline void __gorget_set_timeout(long ms) {
+    __gorget_test_timed_out = 0;
+    struct sigaction sa = {0};
+    sa.sa_handler = __gorget_timeout_handler;
+    sigaction(SIGALRM, &sa, NULL);
+    struct itimerval tv = {{0,0}, {ms / 1000, (ms % 1000) * 1000}};
+    setitimer(ITIMER_REAL, &tv, NULL);
+}
+static inline void __gorget_cancel_timeout(void) {
+    struct itimerval off = {{0,0}, {0,0}};
+    setitimer(ITIMER_REAL, &off, NULL);
+    signal(SIGALRM, SIG_DFL);
+}
 "#;
 
 /// Async runtime constants (polling protocol).

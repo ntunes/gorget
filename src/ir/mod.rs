@@ -39,6 +39,8 @@ pub struct TestFnInfo {
     pub skipped: bool,
     /// Skip reason (from `@skip("reason")`).
     pub skip_reason: Option<String>,
+    /// Per-test timeout in milliseconds (from `@timeout(5000)` or global `--timeout`).
+    pub timeout_ms: Option<u64>,
 }
 
 /// Metadata for a single benchmark function.
