@@ -1,7 +1,15 @@
-# Test that global float variables print correctly (not as garbage int).
-from std.conv import float_to_str
+# Test global variable initializers: positive, zero, and negative literals.
+from std.conv import float_to_str, int_to_str
 
 float pi = 3.14
+float zero = 0.0
+float negative = -42.5
+int izero = 0
+int ineg = -7
 
 void main():
     print(float_to_str(pi))
+    print(float_to_str(zero))
+    print(float_to_str(negative))
+    print(int_to_str(izero))
+    print(int_to_str(ineg))

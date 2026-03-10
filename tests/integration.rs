@@ -1184,7 +1184,15 @@ fn nested_generics() {
 
 #[test]
 fn global_float() {
-    run_gg("global_float.gg", "3.14");
+    run_gg(
+        "global_float.gg",
+        "\
+3.14
+0
+-42.5
+0
+-7",
+    );
 }
 
 #[test]

@@ -1324,11 +1324,21 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
 
     // Handle primitive-type statics with literal initializers.
     match expr {
-        Expr::IntLiteral(n) if *n != 0 => return GlobalInit::RuntimeCall(n.to_string()),
-        Expr::FloatLiteral(f) if *f != 0.0 => return GlobalInit::RuntimeCall(format!("{f}")),
-        Expr::BoolLiteral(true) => return GlobalInit::RuntimeCall("true".to_string()),
-        Expr::BoolLiteral(false) | Expr::IntLiteral(_) | Expr::FloatLiteral(_) => {
-            return GlobalInit::Zeroed;
+        Expr::IntLiteral(n) => return GlobalInit::RuntimeCall(n.to_string()),
+        Expr::FloatLiteral(f) => return GlobalInit::RuntimeCall(format!("{f}")),
+        Expr::BoolLiteral(b) => return GlobalInit::RuntimeCall(if *b { "true" } else { "false" }.to_string()),
+        Expr::StringLiteral(_) => {
+            // String globals need the allocator runtime initialized first;
+            // handled via RuntimeCall from the Named-type / constructor path.
+            // Plain string literals as static initializers are not yet supported.
+        }
+        // Negative literals: parsed as UnaryOp { op: Neg, operand: IntLiteral/FloatLiteral }
+        Expr::UnaryOp { op: crate::parser::ast::UnaryOp::Neg, operand } => {
+            match &operand.node {
+                Expr::IntLiteral(n) => return GlobalInit::RuntimeCall(format!("-{n}")),
+                Expr::FloatLiteral(f) => return GlobalInit::RuntimeCall(format!("-{f}")),
+                _ => {}
+            }
         }
         _ => {} // Fall through to Named type handling below
     }
