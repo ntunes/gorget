@@ -134,7 +134,7 @@ enum Item:
     INewtype(str, SpannedType)
     IConstDecl(SpannedType, str, SpannedExpr)
     IMetaConst(SpannedType, str, SpannedExpr)
-    IMetaType(str)
+    IMetaType(str, MetaTypeRhs)
     IMetaTypeFunc(str)
     IMetaAssert
     IMetaIf
@@ -145,6 +145,14 @@ enum Item:
     IBench(str, Vector[Stmt])
     ISuiteSetup(Vector[Stmt])
     ISuiteTeardown(Vector[Stmt])
+
+# ── Meta type RHS ────────────────────────────────────────────
+
+enum MetaTypeRhs:
+    MtrPlain(SpannedType)
+    MtrConditional(SpannedType, str, SpannedType)
+    MtrCall(str, Vector[SpannedExpr])
+    MtrUnresolved
 
 # ── Supporting structures ────────────────────────────────────
 

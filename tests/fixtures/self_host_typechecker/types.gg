@@ -55,6 +55,7 @@ struct TypeTable:
     Dict[str, int] variant_field_types
     int last_equip_scope
     int equip_def_index
+    Dict[str, str] meta_aliases
 
 equip TypeTable:
 
@@ -79,7 +80,7 @@ equip TypeTable:
         types.push(RTError())
         # 8: never
         types.push(RTNever())
-        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[str, int](), 0, 0)
+        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[str, int](), 0, 0, Dict[str, str]())
 
     int add_type(&self, ResolvedType ty):
         int id = self.types.len()
@@ -218,6 +219,28 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                                 pass
                     return types.add_type(RTGeneric(def_id, resolved_args))
                 # Not a type
+                return types.error_id
+            # Check meta type aliases before giving up
+            if types.meta_aliases.contains(name):
+                str alias_target = types.meta_aliases[name]
+                # Check if target is a primitive type
+                if alias_target == "int" or alias_target == "float" or alias_target == "bool" or alias_target == "str" or alias_target == "char" or alias_target == "String" or alias_target == "int8" or alias_target == "int16" or alias_target == "int32" or alias_target == "int64" or alias_target == "uint8" or alias_target == "uint16" or alias_target == "uint32" or alias_target == "uint64" or alias_target == "float32" or alias_target == "float64" or alias_target == "cstr":
+                    if generic_args.len() == 0:
+                        return types.primitive_id(alias_target)
+                    return types.error_id
+                # Target is a named type — look it up in scope
+                int alias_def = scopes.lookup(alias_target)
+                if alias_def >= 0:
+                    if generic_args.len() == 0:
+                        return types.defined_id(alias_def)
+                    Vector[int] resolved_args = Vector[int]()
+                    int j = 0
+                    while j < generic_args.len():
+                        SpannedType arg = get_stype_at(generic_args, j)
+                        int arg_id = ast_type_to_resolved(arg.ty, arg.span, scopes, &types)
+                        resolved_args.push(arg_id)
+                        j = j + 1
+                    return types.add_type(RTGeneric(alias_def, resolved_args))
                 return types.error_id
             # Unknown type
             return types.error_id

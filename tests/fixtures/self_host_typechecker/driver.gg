@@ -11,6 +11,7 @@ from resolve import resolve_module, ResolveContext
 from typecheck import type_check_module
 from format_types import format_types
 from derive import expand_derives
+from meta import expand_meta_types
 from std.fs import read_file
 from std.os import args
 from std.collections import Vector
@@ -24,6 +25,7 @@ void main():
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()
     TypeTable types = TypeTable.new_type_table()
+    expand_meta_types(&m, &types)
     ResolveContext ctx = resolve_module(m, &scopes, &types)
     type_check_module(m, &scopes, &types, ctx)
     print(format_types(scopes, types))

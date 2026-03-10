@@ -3432,8 +3432,49 @@ equip Parser:
                     str mt_name = token_ident(mt_name_tok.lex_token)
                     if self.check_tok(TOK_LPAREN):
                         items.push(IMetaTypeFunc(mt_name))
+                    elif self.check_tok(TOK_EQ):
+                        self.advance()  # skip '='
+                        # Try to parse RHS: type, type if cond else type, or call(args)
+                        int mt_saved = self.pos
+                        bool mt_is_call = false
+                        # Check for call form: ident(args)
+                        if self.check_tok(TOK_IDENT) or self.peek_kw() > 0:
+                            int mt_peek = self.pos
+                            self.advance()  # skip callee name
+                            if self.check_tok(TOK_LPAREN):
+                                mt_is_call = true
+                            self.pos = mt_peek
+                        if mt_is_call:
+                            str mt_callee = ""
+                            if self.check_tok(TOK_IDENT):
+                                SpannedToken ct = self.advance()
+                                mt_callee = token_ident(ct.lex_token)
+                            elif self.peek_kw() > 0:
+                                SpannedToken ct = self.advance()
+                                mt_callee = non_type_keyword_name(keyword_tag(ct.lex_token))
+                            self.match_tok(TOK_LPAREN)
+                            Vector[SpannedExpr] mt_call_args = Vector[SpannedExpr]()
+                            while not self.check_tok(TOK_RPAREN) and not self.at_end():
+                                mt_call_args.push(self.parse_expr())
+                                if self.check_tok(TOK_COMMA):
+                                    self.advance()
+                            self.match_tok(TOK_RPAREN)
+                            items.push(IMetaType(mt_name, MtrCall(mt_callee, mt_call_args)))
+                        else:
+                            SpannedType mt_rhs = self.parse_type()
+                            if self.check_kw(KW_IF):
+                                self.advance()  # skip 'if'
+                                str mt_cond = ""
+                                if self.check_tok(TOK_IDENT):
+                                    SpannedToken cond_tok = self.advance()
+                                    mt_cond = token_ident(cond_tok.lex_token)
+                                self.expect_kw(KW_ELSE, "expected 'else'")
+                                SpannedType mt_else = self.parse_type()
+                                items.push(IMetaType(mt_name, MtrConditional(mt_rhs, mt_cond, mt_else)))
+                            else:
+                                items.push(IMetaType(mt_name, MtrPlain(mt_rhs)))
                     else:
-                        items.push(IMetaType(mt_name))
+                        items.push(IMetaType(mt_name, MtrUnresolved()))
                     parsed_meta_item = true
                 # meta Type name = expr (meta const)
                 elif not self.check_kw(KW_FOR) and not self.check_kw(KW_WHILE) and not self.check_kw(KW_MATCH) and not self.check_tok(TOK_NEWLINE) and not self.at_end():

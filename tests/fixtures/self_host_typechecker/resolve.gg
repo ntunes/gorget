@@ -285,7 +285,7 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
 
         case IMetaConst(_, _, _):
             pass
-        case IMetaType(_):
+        case IMetaType(_, _):
             pass
         case IMetaTypeFunc(_):
             pass
@@ -363,7 +363,7 @@ void resolve_item_body(Item item, ScopeTable &scopes, TypeTable &types, ResolveC
 
         case IMetaConst(_, _, _):
             pass
-        case IMetaType(_):
+        case IMetaType(_, _):
             pass
         case IMetaTypeFunc(_):
             pass

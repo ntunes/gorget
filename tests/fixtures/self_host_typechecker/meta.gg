@@ -1,0 +1,182 @@
+# Meta type alias expansion for the self-hosted type checker.
+# Evaluates meta const values and resolves meta type aliases so that
+# the type checker can resolve types like `Num` (alias for `int`).
+
+from ast import Module, Item, IMetaConst, IMetaType, IMetaTypeFunc
+from ast import MetaTypeRhs, MtrPlain, MtrConditional, MtrCall, MtrUnresolved
+from ast import SpannedType, Type, TPrimitive, TNamed, SpannedExpr, Expr
+from ast import EIntLiteral, EFloatLiteral, EBoolLiteral, EStringLiteral
+from ast import EIdentifier, EBinaryOp, EUnaryOp, ECall
+from types import TypeTable
+from std.collections import Vector, Dict
+
+# ── Constant expression evaluator ─────────────────────────────
+
+# Evaluate a meta const expression to an int value.
+# Returns (value, ok).
+int eval_int(Expr e, Dict[str, int] &int_env):
+    match e:
+        case EIntLiteral(n):
+            return n
+        case EIdentifier(name):
+            if int_env.contains(name):
+                return int_env[name]
+            return 0
+        case EBinaryOp(left, op, right):
+            int lv = eval_int((*left).expr, &int_env)
+            int rv = eval_int((*right).expr, &int_env)
+            if op == "+":
+                return lv + rv
+            elif op == "-":
+                return lv - rv
+            elif op == "*":
+                return lv * rv
+            elif op == "/":
+                if rv != 0:
+                    return lv / rv
+                return 0
+            elif op == "%":
+                if rv != 0:
+                    return lv % rv
+                return 0
+            return 0
+        case EUnaryOp(op, operand):
+            int v = eval_int((*operand).expr, &int_env)
+            if op == "-":
+                return 0 - v
+            return v
+        else:
+            return 0
+
+# Evaluate a meta const expression to a bool value.
+bool eval_bool(Expr e, Dict[str, bool] &bool_env):
+    match e:
+        case EBoolLiteral(b):
+            return b
+        case EIdentifier(name):
+            if bool_env.contains(name):
+                return bool_env[name]
+            return false
+        else:
+            return false
+
+# ── Type name extraction ──────────────────────────────────────
+
+# Extract the canonical type name string from a SpannedType.
+# For primitives, returns the primitive name. For named types without
+# generic args, returns the type name. Returns "" on failure.
+str meta_type_to_name(Type ty):
+    match ty:
+        case TPrimitive(name):
+            return name
+        case TNamed(name, args):
+            if args.len() == 0:
+                return name
+            return ""
+        else:
+            return ""
+
+# ── Meta type function evaluator ──────────────────────────────
+
+# Evaluate a call to a meta type function like sized_int(8).
+# Returns the resolved type name or "" on failure.
+str eval_type_func_call(str callee, Vector[SpannedExpr] &call_args,
+                        Dict[str, int] &int_env):
+    # Currently handles well-known type functions
+    if callee == "sized_int" and call_args.len() == 1:
+        SpannedExpr arg0 = call_args.get(0).unwrap()
+        int bits = eval_int(arg0.expr, &int_env)
+        if bits <= 8:
+            return "int8"
+        elif bits <= 16:
+            return "int16"
+        elif bits <= 32:
+            return "int32"
+        else:
+            return "int64"
+    elif callee == "arch_word_bits":
+        return "int64"
+    return ""
+
+# ── Main expansion entry point ────────────────────────────────
+
+void expand_meta_types(Module &m, TypeTable &types):
+    # Pass 1: collect meta const values
+    Dict[str, int] int_consts = Dict[str, int]()
+    Dict[str, bool] bool_consts = Dict[str, bool]()
+    Dict[str, str] str_consts = Dict[str, str]()
+
+    int i = 0
+    while i < m.items.len():
+        Item item = m.items.get(i).unwrap()
+        match item:
+            case IMetaConst(mc_type, mc_name, mc_expr):
+                str type_name = meta_type_to_name(mc_type.ty)
+                if type_name == "int":
+                    int_consts[mc_name] = eval_int(mc_expr.expr, &int_consts)
+                elif type_name == "bool":
+                    bool_consts[mc_name] = eval_bool(mc_expr.expr, &bool_consts)
+                elif type_name == "str":
+                    match mc_expr.expr:
+                        case EStringLiteral(s):
+                            str_consts[mc_name] = s
+                        else:
+                            pass
+            else:
+                pass
+        i = i + 1
+
+    # Add platform builtins
+    int_consts["arch_word_bits"] = 64
+
+    # Pass 2: resolve meta type aliases
+    i = 0
+    while i < m.items.len():
+        Item item = m.items.get(i).unwrap()
+        match item:
+            case IMetaType(mt_name, mt_rhs):
+                match mt_rhs:
+                    case MtrPlain(rhs_type):
+                        str target = meta_type_to_name(rhs_type.ty)
+                        if target != "":
+                            types.meta_aliases[mt_name] = target
+                    case MtrConditional(then_type, cond_name, else_type):
+                        bool cond_val = false
+                        if bool_consts.contains(cond_name):
+                            cond_val = bool_consts[cond_name]
+                        if cond_val:
+                            str target = meta_type_to_name(then_type.ty)
+                            if target != "":
+                                types.meta_aliases[mt_name] = target
+                        else:
+                            str target = meta_type_to_name(else_type.ty)
+                            if target != "":
+                                types.meta_aliases[mt_name] = target
+                    case MtrCall(callee, call_args):
+                        # Evaluate the call args, handling arch_word_bits() etc.
+                        Vector[SpannedExpr] resolved_args = Vector[SpannedExpr]()
+                        int j = 0
+                        while j < call_args.len():
+                            SpannedExpr arg = call_args.get(j).unwrap()
+                            # If arg is a call to a builtin like arch_word_bits()
+                            match arg.expr:
+                                case ECall(callee_expr, inner_args, _):
+                                    match (*callee_expr).expr:
+                                        case EIdentifier(fn_name):
+                                            if fn_name == "arch_word_bits" and inner_args.len() == 0:
+                                                resolved_args.push(SpannedExpr(EIntLiteral(64), arg.span))
+                                            else:
+                                                resolved_args.push(arg)
+                                        else:
+                                            resolved_args.push(arg)
+                                else:
+                                    resolved_args.push(arg)
+                            j = j + 1
+                        str result = eval_type_func_call(callee, &resolved_args, &int_consts)
+                        if result != "":
+                            types.meta_aliases[mt_name] = result
+                    case MtrUnresolved():
+                        pass
+            else:
+                pass
+        i = i + 1

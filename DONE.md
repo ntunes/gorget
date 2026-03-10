@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-10] **Self-hosting type checker: 578/592 (97.6%) — meta type alias expansion**: Phase 12: added `MetaTypeRhs` enum (Plain/Conditional/Call/Unresolved) to shared AST, meta type RHS parsing in parser.gg, new `meta.gg` module with constant expression evaluator and type alias resolver (handles plain aliases, conditional `if/else` types, and `sized_int`-style type function calls). Added `meta_aliases` field to TypeTable with fallback lookup in `ast_type_to_resolved`. Fixed all 3 meta mismatches: meta_basic.gg, meta_conditional_types.gg, meta_type_func.gg. Score: 575/592 → 578/592 (+3 exact). Parser 587/592 and resolver 592/592 unaffected.
+
 - [2026-03-10] **`field_set(obj, fname, value)` meta builtin**: Write counterpart to `field_value`. Rewrites to `obj.fname = value` assignment at compile time. Works in both direct literal form and inside `meta for` generic bodies. Rewrite sites: meta.rs (substitute_stmt), rewrite.rs (rewrite_stmt), resolve.rs. Test fixture: field_access.gg. Docs: language-reference.md section 19.16, book/17-meta.md, AGENTS.md.
 
 - [2026-03-10] **Vector.flat_map() C backend codegen**: Added `flat_map` handler to `try_emit_higher_order_method` — iterates source, calls closure (which returns a Vector), concatenates all inner vectors into result. Added test with `expand_int` helper. Discovered: bare function references (`v.map(fn)`) generate invalid `void*__call()` — closures work (`v.map((int x): fn(x))`). Logged to TODO.

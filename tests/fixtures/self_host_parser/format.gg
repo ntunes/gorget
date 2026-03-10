@@ -585,7 +585,7 @@ str format_item(Item item):
             return "const " + format_type(ty) + " " + name + " = " + format_expr(val)
         case IMetaConst(ty, name, val):
             return "meta " + format_type(ty) + " " + name + " = " + format_expr(val)
-        case IMetaType(name):
+        case IMetaType(name, rhs):
             return "meta type " + name + " = <rhs>"
         case IMetaTypeFunc(name):
             return "meta type " + name + "(...)"

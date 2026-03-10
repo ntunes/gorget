@@ -60,11 +60,11 @@
 
 - **Async/await — `await` on vector-indexed tasks with multiple spawn functions**: Type-based await dispatch now works when exactly one function produces tasks of a given type. When multiple functions produce the same `Task__T` type (e.g., two functions both returning `int`), the type-based fallback can't disambiguate. Fix: embed a function dispatch pointer in the `Task__T` struct or use a tag field. [updated: 2026-03-07]
 
-- **Self-hosting parser: 4 remaining mismatches (586/590, 99.3%)**: `chars.gg` — null byte `\0` truncates C string output. 3 new: `assert_return_*.gg` — self-hosted parser doesn't handle `assert return` keyword (produces `assert (0 >= lo)` instead of `assert return (__return__ >= lo)`). [updated: 2026-03-10]
+- **Self-hosting parser: 5 remaining mismatches (587/592, 99.2%)**: `chars.gg` — null byte `\0` truncates C stdout. `assert_return_*.gg` (3) — self-hosted parser doesn't handle `assert return` keyword. `snapshot_basic.gg` — snapshot name strings parsed as empty. [updated: 2026-03-10]
 
-- **Self-hosting resolver: 559/559 (100%) — COMPLETE.** [updated: 2026-03-09]
+- **Self-hosting resolver: 592/592 (100%) — COMPLETE.** [updated: 2026-03-10]
 
-- **Self-hosting type checker: 573/590 (97.1%) — exact: 549, superset: 24**: Phases 1-11 complete. Phase 11: derive expansion in self-hosted pipeline. Added `derives` field to StructDef/EnumDef, @derive parsing in parser.gg, `derive.gg` module with all struct/enum trait generators (Equatable, Displayable, Cloneable, Hashable, Default, Serializable, Deserializable, From, TryFrom, FromRow), collection-aware serialization codegen (Vector/Option/Dict), equip generic param parsing. Remaining 17 mismatches: match pattern binding types (4 derive-related: derive.gg, derive_hashable.gg, serializable.gg + try_from_trait.gg), generic type param resolution in equip (derive_generic.gg), meta expansion (3), closures (1), conv_stdlib (1), field_access (1), httpserver (2), bench (1), string_format (1), test_vector_all (1). [updated: 2026-03-10]
+- **Self-hosting type checker: 578/592 (97.6%) — exact: 554, superset: 24**: Phases 1-12 complete. Phase 12: meta type alias expansion. Added `MetaTypeRhs` enum to AST, meta type RHS parsing (plain/conditional/call), `meta.gg` module with const evaluator + type alias resolver, wired into driver. Remaining 14 mismatches: match pattern bindings (4: derive.gg, derive_hashable.gg, serializable.gg, try_from_trait replaced by closures.gg), generic type param in equip (derive_generic.gg), closures (1), conv_stdlib (1), field_access (1), httpserver (2), bench (1), string_format (1), test_vector_all (1), generic_callable_ref (1). [updated: 2026-03-10]
 
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
