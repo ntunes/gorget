@@ -164,6 +164,10 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                     case DkTrait():
                         is_type_def = true
                     case DkTypeAlias():
+                        # If the alias has been resolved, return the underlying type
+                        DefInfo alias_d = scopes.get_def(def_id)
+                        if alias_d.type_id >= 0:
+                            return alias_d.type_id
                         is_type_def = true
                     case DkNewtype():
                         is_type_def = true

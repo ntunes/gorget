@@ -9,7 +9,7 @@ from std.collections import Vector, Dict
 from ast import Module, Item, Stmt, Param, FunctionDef, StructDef, EnumDef
 from ast import EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch
 from ast import SpannedExpr, SpannedType, SpannedPattern, Span, Type, Expr, Pattern
-from ast import EMethodCall, EBinaryOp, EIs
+from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, SelectArm, SORecv
 from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo, ScopeKind
 from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
@@ -18,6 +18,7 @@ from scope import get_def_at
 from types import TypeTable, ResolvedType, ast_type_to_resolved, get_stype_at
 from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
 from types import RTTuple, RTArray, RTSlice, get_rtype_at, get_int_at
+from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait
 from resolve import ResolveContext
 from infer import infer_expr_type
 
@@ -312,6 +313,97 @@ bool has_is_patterns(Expr e):
             pass
     return false
 
+# ── Walk closures in expressions ──────────────────────────
+# Finds closure expressions and assigns types to their parameters and bodies.
+
+void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    match sexpr.expr:
+        case EClosure(params, body):
+            # Extract param types from expected_type if it's RTFunction
+            Vector[int] expected_params = Vector[int]()
+            if expected_type >= 0 and expected_type < types.types.len():
+                ResolvedType ert = get_rtype_at(types.types, expected_type)
+                match ert:
+                    case RTFunction(ptypes, _, _):
+                        expected_params = ptypes
+                    case RTCallableTrait(inner_fn):
+                        if inner_fn >= 0 and inner_fn < types.types.len():
+                            ResolvedType ifn = get_rtype_at(types.types, inner_fn)
+                            match ifn:
+                                case RTFunction(ptypes, _, _):
+                                    expected_params = ptypes
+                                else:
+                                    pass
+                    case RTMutCallableTrait(inner_fn):
+                        if inner_fn >= 0 and inner_fn < types.types.len():
+                            ResolvedType ifn = get_rtype_at(types.types, inner_fn)
+                            match ifn:
+                                case RTFunction(ptypes, _, _):
+                                    expected_params = ptypes
+                                else:
+                                    pass
+                    case RTConsumeCallableTrait(inner_fn):
+                        if inner_fn >= 0 and inner_fn < types.types.len():
+                            ResolvedType ifn = get_rtype_at(types.types, inner_fn)
+                            match ifn:
+                                case RTFunction(ptypes, _, _):
+                                    expected_params = ptypes
+                                else:
+                                    pass
+                    else:
+                        pass
+            # Assign types to closure parameters
+            int pi = 0
+            while pi < params.len():
+                Param p = get_param_at(params, pi)
+                int p_type_id = ast_type_to_resolved(p.param_type.ty, p.param_type.span, scopes, &types)
+                # If the param type is <error> or void (inferred), use expected type
+                if (p_type_id < 0 or p_type_id == types.error_id or p_type_id == types.void_id) and pi < expected_params.len():
+                    p_type_id = get_int_at(expected_params, pi)
+                if p_type_id >= 0 and p_type_id != types.error_id:
+                    int param_def = scopes.lookup_in_subtree(scope_id, p.param_name)
+                    if param_def >= 0:
+                        scopes.set_def_type(param_def, p_type_id)
+                pi = pi + 1
+            # Walk closure body for VarDecls and nested closures
+            type_check_stmts(body, scope_id, &scopes, &types, ctx)
+        else:
+            walk_expr_closures_inner(sexpr, scope_id, &scopes, &types, ctx)
+
+void walk_expr_closures(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    walk_expr_closures_with_type(sexpr, -1, scope_id, &scopes, &types, ctx)
+
+void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+    match sexpr.expr:
+        case ECall(callee, args, targs):
+            walk_expr_closures(*callee, scope_id, &scopes, &types, ctx)
+            int ai = 0
+            while ai < args.len():
+                SpannedExpr arg = args.get(ai).unwrap()
+                walk_expr_closures(arg, scope_id, &scopes, &types, ctx)
+                ai = ai + 1
+
+        case EMethodCall(obj, method_name, args, targs):
+            walk_expr_closures(*obj, scope_id, &scopes, &types, ctx)
+            int ai = 0
+            while ai < args.len():
+                SpannedExpr arg = args.get(ai).unwrap()
+                walk_expr_closures(arg, scope_id, &scopes, &types, ctx)
+                ai = ai + 1
+
+        case EBinaryOp(left, op, right):
+            walk_expr_closures(*left, scope_id, &scopes, &types, ctx)
+            walk_expr_closures(*right, scope_id, &scopes, &types, ctx)
+
+        case EBlock(body_stmts):
+            type_check_stmts(body_stmts, scope_id, &scopes, &types, ctx)
+
+        case EDo(body_stmts):
+            type_check_stmts(body_stmts, scope_id, &scopes, &types, ctx)
+
+        else:
+            pass
+
 # ── Type-check statements (looking for VarDecl with explicit types) ──
 
 void type_check_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
@@ -340,6 +432,9 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                 int var_def = scopes.lookup_in_subtree(scope_id, name)
                 if var_def >= 0:
                     scopes.set_def_type(var_def, var_type_id)
+            # Walk initializer for closures and block expressions
+            # Pass expected type so untyped closure params can be inferred
+            walk_expr_closures_with_type(init_expr, var_type_id, scope_id, &scopes, &types, ctx)
 
         case SIf(cond, body, else_branches):
             # Assign types to is-pattern bindings in the condition
@@ -402,6 +497,12 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                 ai = ai + 1
 
         case SWith(expr, name, body):
+            # Infer the type of the with binding (e.g., `with Resource() as r`)
+            int with_type = infer_expr_type(expr, scopes, &types, ctx)
+            if with_type >= 0:
+                int with_def = scopes.lookup_in_subtree(scope_id, name)
+                if with_def >= 0:
+                    scopes.set_def_type(with_def, with_type)
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
 
         case SNamedScope(name, body):
@@ -409,6 +510,41 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
 
         case SOnError(body):
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
+
+        case SExpr(sexpr):
+            walk_expr_closures(sexpr, scope_id, &scopes, &types, ctx)
+
+        case SAssign(target, value):
+            walk_expr_closures(value, scope_id, &scopes, &types, ctx)
+
+        case SReturn(opt_expr):
+            if has_opt_sexpr(opt_expr):
+                walk_expr_closures(unwrap_opt_sexpr(opt_expr), scope_id, &scopes, &types, ctx)
+
+        case SSelect(arms):
+            int si = 0
+            while si < arms.len():
+                SelectArm arm = arms.get(si).unwrap()
+                # Type the recv binding from channel element type
+                match arm.op:
+                    case SORecv(name, ch_idx, ch_expr):
+                        int ch_type = infer_expr_type(ch_expr, scopes, &types, ctx)
+                        if ch_type >= 0 and ch_type < types.types.len():
+                            ResolvedType ch_rt = get_rtype_at(types.types, ch_type)
+                            match ch_rt:
+                                case RTGeneric(def_id, type_args):
+                                    DefInfo d = scopes.get_def(def_id)
+                                    if (d.name == "Channel" or d.name == "SharedChannel") and type_args.len() >= 1:
+                                        int elem_type = get_int_at(type_args, 0)
+                                        int recv_def = scopes.lookup_in_subtree(scope_id, name)
+                                        if recv_def >= 0:
+                                            scopes.set_def_type(recv_def, elem_type)
+                                else:
+                                    pass
+                    else:
+                        pass
+                type_check_stmts(arm.body, scope_id, &scopes, &types, ctx)
+                si = si + 1
 
         case SItem(item):
             type_check_item(item, scope_id, &scopes, &types, ctx)
@@ -424,11 +560,16 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
             type_check_function(func, scope_id, &scopes, &types, ctx)
 
         case IStruct(sdef):
-            # Look up the struct's scope to find field defs
-            # Fields are defined as alloc_def (not in name table), so we
-            # iterate defs to find fields by matching struct name scope.
-            # For now, skip struct field typing (fields need struct scope).
-            pass
+            # Build a field type lookup table for EFieldAccess inference.
+            # Store struct_name.field_name → type_id in variant_field_types dict.
+            int fi = 0
+            while fi < sdef.fields.len():
+                Param field = get_param_at(sdef.fields, fi)
+                int field_type_id = ast_type_to_resolved(field.param_type.ty, field.param_type.span, scopes, &types)
+                if field_type_id >= 0:
+                    str key = sdef.name + "." + field.param_name
+                    types.variant_field_types.put(key, field_type_id)
+                fi = fi + 1
 
         case IEnum(edef):
             # Register variant payload types in the type table's variant map
@@ -476,11 +617,23 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                     is_inferred = true
                 else:
                     pass
+            int const_type_id = -1
             if not is_inferred:
-                int const_type_id = ast_type_to_resolved(stype.ty, stype.span, scopes, &types)
+                const_type_id = ast_type_to_resolved(stype.ty, stype.span, scopes, &types)
+            else:
+                const_type_id = infer_expr_type(init_expr, scopes, &types, ctx)
+            if const_type_id >= 0:
                 int const_def = scopes.lookup_in_scope(scope_id, name)
+                if const_def < 0:
+                    const_def = scopes.lookup_in_subtree(scope_id, name)
                 if const_def >= 0:
                     scopes.set_def_type(const_def, const_type_id)
+
+        case ITypeAlias(name, type_params, underlying):
+            int alias_type_id = ast_type_to_resolved(underlying.ty, underlying.span, scopes, &types)
+            int alias_def = scopes.lookup_in_scope(scope_id, name)
+            if alias_def >= 0:
+                scopes.set_def_type(alias_def, alias_type_id)
 
         case IStaticDecl(stype, name, init_expr):
             bool is_inferred = false
@@ -489,9 +642,15 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                     is_inferred = true
                 else:
                     pass
+            int static_type_id = -1
             if not is_inferred:
-                int static_type_id = ast_type_to_resolved(stype.ty, stype.span, scopes, &types)
+                static_type_id = ast_type_to_resolved(stype.ty, stype.span, scopes, &types)
+            else:
+                static_type_id = infer_expr_type(init_expr, scopes, &types, ctx)
+            if static_type_id >= 0:
                 int static_def = scopes.lookup_in_scope(scope_id, name)
+                if static_def < 0:
+                    static_def = scopes.lookup_in_subtree(scope_id, name)
                 if static_def >= 0:
                     scopes.set_def_type(static_def, static_type_id)
 

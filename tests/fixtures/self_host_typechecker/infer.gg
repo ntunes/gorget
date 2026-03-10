@@ -9,7 +9,7 @@ from ast import EBinaryOp, EUnaryOp, ECall, EMethodCall, EFieldAccess
 from ast import EIndex, EClosure, EArrayLiteral, ETupleLiteral
 from ast import EStructLiteral, EDotShorthand, ETry, EAs, EMove
 from ast import EMutableBorrow, EDeref, EIs, EAwait, ESpawn
-from ast import EDictLiteral, ERawCapture, EDefaultOp, EBlock
+from ast import EDictLiteral, ERawCapture, EDefaultOp, EBlock, EDo
 from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo
 from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
@@ -30,6 +30,55 @@ int infer_stmt_return_type(Stmt s, ScopeTable scopes, TypeTable &types, ResolveC
             match opt_expr:
                 case Some(sexpr):
                     return infer_expr_type(sexpr, scopes, &types, ctx)
+                case None:
+                    return types.void_id
+        else:
+            return types.void_id
+    return types.void_id
+
+# ── Closure return type inference ──────────────────────────────
+# Infers a closure's return type using param_types map for local bindings.
+
+int infer_closure_expr_type(SpannedExpr sexpr, Dict[str, int] param_types, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
+    match sexpr.expr:
+        case EIdentifier(name):
+            # Check param_types first
+            if param_types.contains(name):
+                return param_types.get(name).unwrap()
+            # Fall through to normal inference
+            return infer_expr_type(sexpr, scopes, &types, ctx)
+
+        case EBinaryOp(left, op, right):
+            if op == "==" or op == "!=" or op == "<" or op == ">" or op == "<=" or op == ">=" or op == "and" or op == "or" or op == "in":
+                return types.bool_id
+            int lt = infer_closure_expr_type(*left, param_types, scopes, &types, ctx)
+            if lt >= 0:
+                return lt
+            return infer_closure_expr_type(*right, param_types, scopes, &types, ctx)
+
+        case EUnaryOp(op, operand):
+            if op == "not":
+                return types.bool_id
+            return infer_closure_expr_type(*operand, param_types, scopes, &types, ctx)
+
+        case ECall(callee, args, targs):
+            return infer_expr_type(sexpr, scopes, &types, ctx)
+
+        case EMethodCall(obj, method_name, args, targs):
+            return infer_expr_type(sexpr, scopes, &types, ctx)
+
+        else:
+            return infer_expr_type(sexpr, scopes, &types, ctx)
+    return types.void_id
+
+int infer_closure_return_type(Stmt s, Dict[str, int] param_types, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
+    match s:
+        case SExpr(sexpr):
+            return infer_closure_expr_type(sexpr, param_types, scopes, &types, ctx)
+        case SReturn(opt_expr):
+            match opt_expr:
+                case Some(sexpr):
+                    return infer_closure_expr_type(sexpr, param_types, scopes, &types, ctx)
                 case None:
                     return types.void_id
         else:
@@ -157,7 +206,18 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             return ot
 
         case EFieldAccess(obj, field_name):
-            # Would need struct field type lookup — skip for now
+            # Look up struct field type from the field types table
+            int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+            if obj_type >= 0 and obj_type < types.types.len():
+                ResolvedType ort = get_rtype_at(types.types, obj_type)
+                match ort:
+                    case RTDefined(def_id):
+                        DefInfo d = scopes.get_def(def_id)
+                        str key = d.name + "." + field_name
+                        if types.variant_field_types.contains(key):
+                            return types.variant_field_types.get(key).unwrap()
+                    else:
+                        pass
             return NO_TYPE
 
         case EMethodCall(obj, method_name, args, targs):
@@ -353,8 +413,27 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             return NO_TYPE
 
         case EClosure(params, body):
-            # Closure type inference would need full body analysis
-            return NO_TYPE
+            # Build RTFunction from closure params and infer return type from body
+            Vector[int] param_type_ids = Vector[int]()
+            Vector[int] param_ownerships = Vector[int]()
+            # Build param name → type map for local inference
+            Dict[str, int] param_types = Dict[str, int]()
+            int pi = 0
+            while pi < params.len():
+                Param p = params.get(pi).unwrap()
+                int p_type_id = ast_type_to_resolved(p.param_type.ty, p.param_type.span, scopes, &types)
+                param_type_ids.push(p_type_id)
+                param_ownerships.push(p.ownership)
+                param_types.put(p.param_name, p_type_id)
+                pi = pi + 1
+            # Infer return type from last statement in body
+            int ret_id = types.void_id
+            if body.len() > 0:
+                Stmt last = body.get(body.len() - 1).unwrap()
+                int inferred_ret = infer_closure_return_type(last, param_types, scopes, &types, ctx)
+                if inferred_ret >= 0:
+                    ret_id = inferred_ret
+            return types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
 
         case ETry(inner):
             # try expr — unwraps Result[T,E] → T, Option[T] → T
@@ -408,6 +487,12 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
 
         case EBlock(body_stmts):
             # do: block — type is the type of the last expression
+            if body_stmts.len() > 0:
+                Stmt last = body_stmts.get(body_stmts.len() - 1).unwrap()
+                return infer_stmt_return_type(last, scopes, &types, ctx)
+            return NO_TYPE
+
+        case EDo(body_stmts):
             if body_stmts.len() > 0:
                 Stmt last = body_stmts.get(body_stmts.len() - 1).unwrap()
                 return infer_stmt_return_type(last, scopes, &types, ctx)
