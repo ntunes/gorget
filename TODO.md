@@ -64,7 +64,7 @@
 
 - **Self-hosting resolver: 592/592 (100%) — COMPLETE.** [updated: 2026-03-10]
 
-- **Self-hosting type checker: 578/592 (97.6%) — exact: 554, superset: 24**: Phases 1-12 complete. Phase 12: meta type alias expansion. Added `MetaTypeRhs` enum to AST, meta type RHS parsing (plain/conditional/call), `meta.gg` module with const evaluator + type alias resolver, wired into driver. Remaining 14 mismatches: match pattern bindings (4: derive.gg, derive_hashable.gg, serializable.gg, try_from_trait replaced by closures.gg), generic type param in equip (derive_generic.gg), closures (1), conv_stdlib (1), field_access (1), httpserver (2), bench (1), string_format (1), test_vector_all (1), generic_callable_ref (1). [updated: 2026-03-10]
+- **Self-hosting type checker: 581/592 (98.1%) — exact: 557, superset: 24**: Phases 1-13 complete. Phase 13: qualified variant name fix in match pattern binding. Remaining 11 mismatches: generic type param in equip (derive_generic.gg), closures (closures.gg), conv_stdlib (1), field_access (1), httpserver (2), bench (1), string_format (1), test_vector_all (1), generic_callable_ref (1). [updated: 2026-03-10]
 
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]

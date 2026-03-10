@@ -309,6 +309,22 @@ Vector[int] resolve_variant_field_types(int scrutinee_type, str variant_name, Sc
     if scrutinee_type < 0 or scrutinee_type >= types.types.len():
         return result
 
+    # Strip qualified prefix: "Color.Blue" → "Blue"
+    str lookup_name = variant_name
+    int dot_pos = -1
+    int ci = 0
+    while ci < variant_name.len():
+        if variant_name.char_at(ci) == ".":
+            dot_pos = ci
+        ci = ci + 1
+    if dot_pos >= 0:
+        str after_dot = ""
+        int di = dot_pos + 1
+        while di < variant_name.len():
+            after_dot = after_dot + variant_name.char_at(di)
+            di = di + 1
+        lookup_name = after_dot
+
     ResolvedType rt = get_rtype_at(types.types, scrutinee_type)
 
     # Handle Option[T]: Some(val) → T, None → nothing
@@ -317,12 +333,12 @@ Vector[int] resolve_variant_field_types(int scrutinee_type, str variant_name, Sc
         case RTGeneric(def_id, type_args):
             DefInfo d = scopes.get_def(def_id)
             if d.name == "Option":
-                if variant_name == "Some" and type_args.len() >= 1:
+                if lookup_name == "Some" and type_args.len() >= 1:
                     result.push(get_int_at(type_args, 0))
             elif d.name == "Result":
-                if variant_name == "Ok" and type_args.len() >= 1:
+                if lookup_name == "Ok" and type_args.len() >= 1:
                     result.push(get_int_at(type_args, 0))
-                elif variant_name == "Error" and type_args.len() >= 2:
+                elif lookup_name == "Error" and type_args.len() >= 2:
                     result.push(get_int_at(type_args, 1))
             else:
                 # User-defined generic enum — try to look up variant
@@ -332,8 +348,8 @@ Vector[int] resolve_variant_field_types(int scrutinee_type, str variant_name, Sc
 
         case RTDefined(def_id):
             # User-defined enum — look up variant field types from type table
-            if types.variant_field_types.contains(variant_name):
-                int vft = types.variant_field_types.get(variant_name).unwrap()
+            if types.variant_field_types.contains(lookup_name):
+                int vft = types.variant_field_types.get(lookup_name).unwrap()
                 # Check if it's a tuple — if so, return individual fields
                 if vft >= 0 and vft < types.types.len():
                     ResolvedType vrt = get_rtype_at(types.types, vft)
