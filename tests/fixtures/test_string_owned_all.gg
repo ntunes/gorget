@@ -1,0 +1,67 @@
+# Comprehensive String (owned) method coverage
+from std.conv import int_to_str
+
+void main():
+    # --- Construction ---
+    String s = String()
+    print(f"{s.len()}")
+    print(f"{s.is_empty()}")
+
+    # --- push ---
+    s.push("hello")
+    s.push(" world")
+    print(s.str())
+
+    # --- push_char ---
+    s.push_char('!')
+    print(s.str())
+
+    # --- push_line ---
+    String ml = String("line1")
+    ml.push_line("line2")
+    print(ml.str())
+
+    # --- len after push ---
+    print(f"{s.len()}")
+
+    # --- clear ---
+    s.clear()
+    print(f"{s.len()}")
+    print(f"{s.is_empty()}")
+
+    # --- to_upper / to_lower ---
+    String mixed = String("Hello World")
+    String upper = mixed.to_upper()
+    print(upper.str())
+    String lower = mixed.to_lower()
+    print(lower.str())
+
+    # --- trim ---
+    str padded = "  hi  "
+    String trimmed = padded.trim()
+    print(trimmed)
+
+    # --- contains ---
+    str src = "hello world"
+    print(f"{src.contains("world")}")
+    print(f"{src.contains("xyz")}")
+
+    # --- starts_with / ends_with ---
+    print(f"{src.starts_with("hello")}")
+    print(f"{src.starts_with("world")}")
+    print(f"{src.ends_with("world")}")
+    print(f"{src.ends_with("hello")}")
+
+    # --- replace ---
+    str replaced = src.replace("hello", "hi")
+    print(replaced)
+
+    # --- Edge cases ---
+    # push empty string
+    String edge = String("abc")
+    edge.push("")
+    print(edge.str())
+    # clear empty
+    String empty2 = String()
+    empty2.clear()
+    print(f"{empty2.len()}")

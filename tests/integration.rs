@@ -10548,3 +10548,400 @@ fn bench_basic() {
         ],
     );
 }
+
+#[test]
+fn test_vector_all() {
+    run_gg(
+        "test_vector_all.gg",
+        "\
+0
+true
+3
+1
+3
+true
+10
+true
+false
+0
+true
+10
+20
+2
+3
+10
+true
+3
+true
+5
+7
+true
+true
+0
+true
+0
+1
+3
+4
+3
+4
+4
+2
+2
+3
+0
+1
+2
+3
+2
+5
+8
+5
+3
+2
+1
+30
+10
+3
+1
+-1
+2
+2
+4
+0
+2
+8
+10
+42
+10
+1
+0
+0
+1
+0
+1
+0:10
+1:20
+2:30",
+    );
+}
+
+#[test]
+fn test_dict_all() {
+    run_gg(
+        "test_dict_all.gg",
+        "\
+0
+true
+3
+4
+1
+true
+false
+true
+true
+false
+3
+0
+true
+0
+3
+x
+y
+z
+60
+3
+x
+10
+0
+0
+3
+1
+20
+30
+1
+99
+30
+50
+4
+2
+60",
+    );
+}
+
+#[test]
+fn test_hashmap_all() {
+    run_gg(
+        "test_hashmap_all.gg",
+        "\
+0
+true
+3
+1
+2
+3
+true
+false
+2
+false
+10
+0
+true
+60
+3
+60
+3
+2
+10
+99",
+    );
+}
+
+#[test]
+fn test_set_all() {
+    run_gg(
+        "test_set_all.gg",
+        "\
+0
+true
+3
+3
+true
+false
+true
+false
+2
+0
+true
+4
+2
+1
+true
+1
+true
+true
+false
+true
+true
+false
+3
+0
+1
+6",
+    );
+}
+
+#[test]
+fn test_hashset_all() {
+    run_gg(
+        "test_hashset_all.gg",
+        "\
+0
+true
+3
+3
+true
+false
+true
+false
+2
+0
+true
+4
+2
+1
+true
+1
+true
+true
+false
+true
+true
+false
+3
+0
+6
+1",
+    );
+}
+
+#[test]
+fn test_string_owned_all() {
+    run_gg(
+        "test_string_owned_all.gg",
+        "\
+0
+true
+hello world
+hello world!
+line1line2
+
+12
+0
+true
+HELLO WORLD
+hello world
+hi
+true
+false
+true
+false
+true
+false
+hi world
+abc
+0",
+    );
+}
+
+#[test]
+fn test_str_all() {
+    run_gg(
+        "test_str_all.gg",
+        "\
+11
+true
+false
+6
+true
+true
+false
+3
+true
+false
+true
+false
+HELLO WORLD
+hello world
+hello world
+hello gorget
+hahaha
+x
+
+hello
+hello
+[hello  ]
+[  hello]
+abc
+world
+hello world
+config
+config.toml
+00042
+42
+hi...
+hi
+hello
+h
+3
+a,b,c
+3
+3
+3
+a
+c
+true
+false
+false
+true
+false
+true
+false
+true
+false
+true
+false
+true
+false
+true
+false
+true
+true",
+    );
+}
+
+#[test]
+fn test_option_all() {
+    run_gg(
+        "test_option_all.gg",
+        "\
+42
+42
+true
+false
+false
+true
+42
+99
+42
+99
+84
+true
+42
+true
+43
+true
+42
+77
+42
+77
+100
+true
+true
+84
+0",
+    );
+}
+
+#[test]
+fn test_result_all() {
+    run_gg(
+        "test_result_all.gg",
+        "\
+10
+10
+true
+false
+false
+true
+10
+99
+fail
+10
+99
+20
+true
+mapped
+10
+11
+true
+10
+77
+21",
+    );
+}
+
+#[test]
+fn test_collections_nested() {
+    run_gg(
+        "test_collections_nested.gg",
+        "\
+2
+1
+2
+3
+4
+0
+0
+1
+1
+3
+60
+true
+5
+6
+true
+0
+done",
+    );
+}

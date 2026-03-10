@@ -1,0 +1,107 @@
+# Comprehensive str method coverage
+from std.collections import Vector
+
+void main():
+    # --- Core ---
+    str s = "hello world"
+    print(f"{s.len()}")
+    str empty = ""
+    print(f"{empty.is_empty()}")
+    print(f"{s.is_empty()}")
+
+    # --- Search ---
+    print(f"{s.index_of("world").unwrap()}")
+    print(f"{s.index_of("xyz").is_none()}")
+    print(f"{s.contains("hello")}")
+    print(f"{s.contains("xyz")}")
+    print(f"{s.count("l")}")
+    print(f"{s.starts_with("hello")}")
+    print(f"{s.starts_with("world")}")
+    print(f"{s.ends_with("world")}")
+    print(f"{s.ends_with("hello")}")
+
+    # --- Transform ---
+    str mixed = "Hello World"
+    print(mixed.to_upper())
+    print(mixed.to_lower())
+    str no_match = s.replace("xyz", "abc")
+    print(no_match)
+    str rep = s.replace("world", "gorget")
+    print(rep)
+    print("ha".repeat(3))
+    print("x".repeat(1))
+    print("x".repeat(0))
+
+    # --- Trim / Strip ---
+    str ws = "  hello  "
+    print(ws.trim())
+    print(ws.strip())
+    print(f"[{ws.lstrip()}]")
+    print(f"[{ws.rstrip()}]")
+    # no whitespace
+    str clean = "abc"
+    print(clean.trim())
+
+    # --- Prefix / Suffix ---
+    str pf = "hello world"
+    print(pf.removeprefix("hello "))
+    print(pf.removeprefix("xyz"))
+    str sf = "config.toml"
+    print(sf.removesuffix(".toml"))
+    print(sf.removesuffix(".json"))
+
+    # --- Padding ---
+    str num = "42"
+    print(num.pad_left(5, '0'))
+    print(num.pad_left(2, '0'))
+    str hi = "hi"
+    print(hi.pad_right(5, '.'))
+    print(hi.pad_right(2, '.'))
+
+    # --- Slicing ---
+    str sub = s.substring(0, 5)
+    print(sub)
+    str ch = s[0]
+    print(ch)
+
+    # --- Split / Join ---
+    str csv = "a,b,c"
+    Vector[str] parts = csv.split(",")
+    print(f"{parts.len()}")
+    str joined = ",".join(parts)
+    print(joined)
+
+    # --- Iterators ---
+    str abc = "abc"
+    Vector[uint8] bs = abc.bytes()
+    print(f"{bs.len()}")
+    Vector[int] cps = abc.codepoints()
+    print(f"{cps.len()}")
+    Vector[str] chs = abc.chars()
+    print(f"{chs.len()}")
+    print(f"{chs.get(0).unwrap()}")
+    print(f"{chs.get(2).unwrap()}")
+
+    # --- Predicates ---
+    print(f"{"abc".is_alpha()}")
+    print(f"{"ab1".is_alpha()}")
+    print(f"{"".is_alpha()}")
+    print(f"{"123".is_digit()}")
+    print(f"{"12a".is_digit()}")
+    print(f"{"abc123".is_alphanumeric()}")
+    print(f"{"abc!".is_alphanumeric()}")
+    str ws2 = " \t"
+    print(f"{ws2.is_whitespace()}")
+    print(f"{" a".is_whitespace()}")
+    print(f"{"ABC".is_upper()}")
+    print(f"{"ABc".is_upper()}")
+    print(f"{"abc".is_lower()}")
+    print(f"{"aBc".is_lower()}")
+    print(f"{"0123abcdef".is_hex_digit()}")
+    print(f"{"xyz".is_hex_digit()}")
+    print(f"{"hello".is_ascii()}")
+
+    # --- hash (same string same hash) ---
+    int h1 = "test".hash()
+    int h2 = "test".hash()
+    print(f"{h1 == h2}")

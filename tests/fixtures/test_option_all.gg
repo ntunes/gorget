@@ -1,0 +1,68 @@
+# Comprehensive Option[T] method coverage
+
+void main():
+    # --- Construction ---
+    Option[int] some = Some(42)
+    Option[int] none = None()
+
+    # --- unwrap / expect ---
+    print(f"{some.unwrap()}")
+    print(f"{some.expect("should have value")}")
+
+    # --- is_some / is_none ---
+    print(f"{some.is_some()}")
+    print(f"{some.is_none()}")
+    print(f"{none.is_some()}")
+    print(f"{none.is_none()}")
+
+    # --- unwrap_or ---
+    print(f"{some.unwrap_or(0)}")
+    print(f"{none.unwrap_or(99)}")
+
+    # --- unwrap_or_else ---
+    print(f"{some.unwrap_or_else((): 0)}")
+    print(f"{none.unwrap_or_else((): 99)}")
+
+    # --- map ---
+    Option[int] doubled = some.map((int x): x * 2)
+    print(f"{doubled.unwrap()}")
+    Option[int] mapped_none = none.map((int x): x * 2)
+    print(f"{mapped_none.is_none()}")
+
+    # --- filter ---
+    Option[int] passes = some.filter((int x): x > 40)
+    print(f"{passes.unwrap()}")
+    Option[int] fails = some.filter((int x): x > 50)
+    print(f"{fails.is_none()}")
+
+    # --- and_then ---
+    Option[int] chained = some.and_then((int x): Some(x + 1))
+    print(f"{chained.unwrap()}")
+    Option[int] chain_none = none.and_then((int x): Some(x + 1))
+    print(f"{chain_none.is_none()}")
+
+    # --- or ---
+    Option[int] alt = Some(77)
+    print(f"{some.or(alt).unwrap()}")
+    print(f"{none.or(alt).unwrap()}")
+
+    # --- or_else ---
+    print(f"{some.or_else((): Some(77)).unwrap()}")
+    print(f"{none.or_else((): Some(77)).unwrap()}")
+
+    # --- flatten ---
+    Option[Option[int]] nested = Some(Some(100))
+    Option[int] flat1 = nested.flatten()
+    print(f"{flat1.unwrap()}")
+    Option[Option[int]] none_outer = None()
+    Option[int] flat2 = none_outer.flatten()
+    print(f"{flat2.is_none()}")
+    Option[Option[int]] some_none = Some(None())
+    Option[int] flat3 = some_none.flatten()
+    print(f"{flat3.is_none()}")
+
+    # --- Chaining ---
+    int result = some.filter((int x): x > 40).map((int x): x * 2).unwrap_or(0)
+    print(f"{result}")
+    int result2 = some.filter((int x): x > 50).map((int x): x * 2).unwrap_or(0)
+    print(f"{result2}")

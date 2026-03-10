@@ -7212,8 +7212,8 @@ fn infer_method_return_type(name: &str) -> Option<&'static str> {
         let type_prefix = &name[..pos];
         // Collection method return types
         match method {
-            // Vector.get / .first / .last / .remove return Option[T]
-            "get" | "first" | "last" | "remove" if type_prefix.starts_with("Vector") => {
+            // Vector.get / .first / .last / .remove / .pop return Option[T]
+            "get" | "first" | "last" | "remove" | "pop" if type_prefix.starts_with("Vector") => {
                 if let Some(elem) = extract_element_type_from_collection(type_prefix) {
                     let option_type = format!("Option__{elem}");
                     return Some(Box::leak(option_type.into_boxed_str()));
@@ -7226,7 +7226,7 @@ fn infer_method_return_type(name: &str) -> Option<&'static str> {
                 return Some("bool");
             }
             // Methods that return the element type — extract from collection name
-            "pop" | "get" | "at" => {
+            "get" | "at" => {
                 if let Some(elem) = extract_element_type_from_collection(type_prefix) {
                     return Some(Box::leak(elem.into_boxed_str()));
                 }
@@ -8385,6 +8385,11 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
                 has_return: false, needs_deref_cast: false, field_access: None,
                 ..Default::default()
             }),
+            "is_empty" => Some(CollectionMethodCall {
+                runtime_fn: "", pass_by_ptr: false,
+                has_return: true, needs_deref_cast: false, field_access: Some("count == 0"),
+                ..Default::default()
+            }),
             _ => None,
         };
     }
@@ -8969,11 +8974,17 @@ fn emit_inline_method(
 
     match method {
         InlineMethod::Pop => {
-            // pop: *(T*)(arr.data + arr.elem_size * --arr.len)
+            // pop: returns Option[T] — Some(last_elem) if non-empty, None if empty
             if let Some(dst_id) = dst {
-                let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let option_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                // Extract the element type from the Option type name (e.g. Option__int64_t → int64_t)
+                let elem_c_type = option_type.strip_prefix("Option__")
+                    .unwrap_or("int64_t");
                 let _ = writeln!(out,
-                    "        _{id} = *({c_type}*)((char*){self_str}.data + {self_str}.elem_size * --{self_str}.len);",
+                    "        _{id} = ({{ {option_type} __pr; if ({self_str}.len > 0) {{ \
+                    {elem_c_type} __elem = *({elem_c_type}*)((char*){self_str}.data + {self_str}.elem_size * --{self_str}.len); \
+                    __pr = ({option_type}){{.tag = 0, .data.Some = {{__elem}}}}; }} \
+                    else {{ __pr = ({option_type}){{.tag = 1}}; }} __pr; }});",
                     id = dst_id.0);
             }
         }

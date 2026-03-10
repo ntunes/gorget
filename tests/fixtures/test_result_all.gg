@@ -1,0 +1,54 @@
+# Comprehensive Result[T, E] method coverage
+
+void main():
+    # --- Construction ---
+    Result[int, str] ok = Ok(10)
+    Result[int, str] err = Error("fail")
+
+    # --- unwrap / expect ---
+    print(f"{ok.unwrap()}")
+    print(f"{ok.expect("should be ok")}")
+
+    # --- is_ok / is_err ---
+    print(f"{ok.is_ok()}")
+    print(f"{ok.is_err()}")
+    print(f"{err.is_ok()}")
+    print(f"{err.is_err()}")
+
+    # --- unwrap_or ---
+    print(f"{ok.unwrap_or(0)}")
+    print(f"{err.unwrap_or(99)}")
+
+    # --- unwrap_err ---
+    print(err.unwrap_err())
+
+    # --- unwrap_or_else ---
+    print(f"{ok.unwrap_or_else((str e): 0)}")
+    print(f"{err.unwrap_or_else((str e): 99)}")
+
+    # --- map ---
+    Result[int, str] doubled = ok.map((int x): x * 2)
+    print(f"{doubled.unwrap()}")
+    Result[int, str] mapped_err = err.map((int x): x * 2)
+    print(f"{mapped_err.is_err()}")
+
+    # --- map_err ---
+    Result[int, str] err_mapped = err.map_err((str e): "mapped")
+    print(err_mapped.unwrap_err())
+    Result[int, str] ok_map_err = ok.map_err((str e): "nope")
+    print(f"{ok_map_err.unwrap()}")
+
+    # --- and_then ---
+    Result[int, str] chained = ok.and_then((int x): Ok(x + 1))
+    print(f"{chained.unwrap()}")
+    Result[int, str] chain_to_err = ok.and_then((int x): Error("oops"))
+    print(f"{chain_to_err.is_err()}")
+
+    # --- or ---
+    Result[int, str] alt = Ok(77)
+    print(f"{ok.or(alt).unwrap()}")
+    print(f"{err.or(alt).unwrap()}")
+
+    # --- Chaining ---
+    int result = ok.map((int x): x * 2).and_then((int x): Ok(x + 1)).unwrap_or(0)
+    print(f"{result}")

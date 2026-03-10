@@ -1,0 +1,106 @@
+# Comprehensive Dict[str, int] method coverage
+from std.collections import Dict, Vector
+
+void main():
+    # --- Construction ---
+    Dict[str, int] d = Dict[str, int]()
+    print(f"{d.len()}")
+    print(f"{d.is_empty()}")
+
+    # --- put ---
+    d.put("a", 1)
+    d.put("b", 2)
+    d.put("c", 3)
+    print(f"{d.len()}")
+
+    # --- set (alias for put) ---
+    d.set("d", 4)
+    print(f"{d.len()}")
+
+    # --- get (existing key) ---
+    print(f"{d.get("a").unwrap()}")
+    # NOTE: d.get("z") on missing key segfaults — Dict.get() codegen lacks null-check (TODO)
+
+    # --- contains ---
+    print(f"{d.contains("a")}")
+    print(f"{d.contains("z")}")
+
+    # --- has (alias) ---
+    print(f"{d.has("b")}")
+
+    # --- remove ---
+    bool rem1 = d.remove("b")
+    print(f"{rem1}")
+    bool rem2 = d.remove("z")
+    print(f"{rem2}")
+    print(f"{d.len()}")
+
+    # --- clear ---
+    Dict[str, int] d2 = Dict[str, int]()
+    d2.put("x", 1)
+    d2.clear()
+    print(f"{d2.len()}")
+    print(f"{d2.is_empty()}")
+    # clear empty (no crash)
+    d2.clear()
+    print(f"{d2.len()}")
+
+    # --- keys / values (insertion order) ---
+    Dict[str, int] d3 = Dict[str, int]()
+    d3.put("x", 10)
+    d3.put("y", 20)
+    d3.put("z", 30)
+    Vector[str] ks = d3.keys()
+    print(f"{ks.len()}")
+    print(f"{ks.get(0).unwrap()}")
+    print(f"{ks.get(1).unwrap()}")
+    print(f"{ks.get(2).unwrap()}")
+    Vector[int] vs = d3.values()
+    int val_sum = vs.fold(0, (int acc, int x): acc + x)
+    print(f"{val_sum}")
+
+    # --- items ---
+    Vector[(str, int)] items = d3.items()
+    print(f"{items.len()}")
+    auto first = items.get(0).unwrap()
+    print(f"{first.0}")
+    print(f"{first.1}")
+
+    # --- keys/values on empty ---
+    Dict[str, int] ed = Dict[str, int]()
+    Vector[str] ek = ed.keys()
+    Vector[int] ev = ed.values()
+    print(f"{ek.len()}")
+    print(f"{ev.len()}")
+
+    # --- update ---
+    Dict[str, int] u1 = Dict[str, int]()
+    u1.put("a", 1)
+    u1.put("b", 2)
+    Dict[str, int] u2 = Dict[str, int]()
+    u2.put("b", 20)
+    u2.put("c", 30)
+    u1.update(u2)
+    print(f"{u1.len()}")
+    print(f"{u1.get("a").unwrap()}")
+    print(f"{u1.get("b").unwrap()}")
+    print(f"{u1.get("c").unwrap()}")
+
+    # --- get_or ---
+    print(f"{u1.get_or("a", 99)}")
+    print(f"{u1.get_or("z", 99)}")
+
+    # --- get_or_put ---
+    int gop1 = u1.get_or_put("c", 50)
+    print(f"{gop1}")
+    int gop2 = u1.get_or_put("new", 50)
+    print(f"{gop2}")
+    print(f"{u1.len()}")
+
+    # --- filter ---
+    Dict[str, int] filtered = d3.filter((str k, int v): v > 15)
+    print(f"{filtered.len()}")
+
+    # --- fold ---
+    int total = d3.fold(0, (int acc, str k, int v): acc + v)
+    print(f"{total}")

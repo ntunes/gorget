@@ -1291,9 +1291,9 @@ pub(super) fn lower_method_call(
             .collect();
         call_args.extend(lowered_method_args.iter().cloned());
 
-        // For Vector.get() / .first() / .last(), auto-register Option[T] and override return type
+        // For Vector.get() / .first() / .last() / .pop(), auto-register Option[T] and override return type
         let fn_sig_ret = ctx.fn_sigs.get(&effective_name).map(|(_, ret)| *ret);
-        if matches!(method_name, "get" | "first" | "last" | "remove")
+        if matches!(method_name, "get" | "first" | "last" | "remove" | "pop")
             && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
         {
             let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
@@ -1312,8 +1312,8 @@ pub(super) fn lower_method_call(
             }
         }
         let ret_type = if let Some(ret) = fn_sig_ret {
-            // Vector.get() / .first() / .last() return Option[T], not T — override fn_sigs
-            if matches!(method_name, "get" | "first" | "last" | "remove")
+            // Vector.get() / .first() / .last() / .pop() return Option[T], not T — override fn_sigs
+            if matches!(method_name, "get" | "first" | "last" | "remove" | "pop")
                 && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
             {
                 let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
@@ -1423,17 +1423,16 @@ fn infer_collection_method_return_type(
         | "has" | "contains_key" | "has_key" => {
             BOOL_TYPE
         }
-        // Vector.get / .first / .last / .remove → Option[T] (bounds-checked safe access)
-        "get" | "first" | "last" | "remove" if is_vector => {
+        // Vector.get / .first / .last / .remove / .pop → Option[T] (bounds-checked safe access)
+        "get" | "first" | "last" | "remove" | "pop" if is_vector => {
             let elem_type_name = type_name.strip_prefix("Vector__")
                 .unwrap_or("int64_t");
             let option_name = format!("Option__{elem_type_name}");
             ctx.lookup_type_by_name(&option_name).unwrap_or(I64_TYPE)
         }
         // Dict/HashMap.get / get_or / get_or_put → value type (I64_TYPE as default)
-        "get" | "get_or" | "get_or_put" if is_dict => I64_TYPE,
-        // Vector.pop → element type
-        "pop" if is_vector => I64_TYPE,
+        "get" |
+        "get_or" | "get_or_put" if is_dict => I64_TYPE,
         // Vector.clone / .sorted / .slice → same collection type
         "clone" | "sorted" | "slice" if is_vector => {
             if let Some(type_id) = ctx.lookup_type_by_name(type_name) {

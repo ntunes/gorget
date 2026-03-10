@@ -1,0 +1,58 @@
+# Nested collections: structs in collections, basic nesting
+from std.collections import Vector, Dict
+
+struct Point:
+    int x
+    int y
+
+void main():
+    # --- Vector of struct ---
+    Vector[Point] points = Vector[Point]()
+    points.push(Point(1, 2))
+    points.push(Point(3, 4))
+    print(f"{points.len()}")
+    Point p0 = points.get(0).unwrap()
+    print(f"{p0.x}")
+    print(f"{p0.y}")
+    Point p1 = points.get(1).unwrap()
+    print(f"{p1.x}")
+    print(f"{p1.y}")
+
+    # --- Dict[str, Point] ---
+    Dict[str, Point] named_points = Dict[str, Point]()
+    named_points.put("origin", Point(0, 0))
+    named_points.put("unit", Point(1, 1))
+    Point origin = named_points.get("origin").unwrap()
+    print(f"{origin.x}")
+    print(f"{origin.y}")
+    Point unit = named_points.get("unit").unwrap()
+    print(f"{unit.x}")
+    print(f"{unit.y}")
+
+    # --- Dict[str, int] iteration ---
+    Dict[str, int] scores = Dict[str, int]()
+    scores.put("a", 10)
+    scores.put("b", 20)
+    scores.put("c", 30)
+    Vector[str] keys = scores.keys()
+    print(f"{keys.len()}")
+    Vector[int] vals = scores.values()
+    int total = vals.fold(0, (int acc, int x): acc + x)
+    print(f"{total}")
+
+    # --- Option with struct ---
+    Option[Point] some_pt = Some(Point(5, 6))
+    print(f"{some_pt.is_some()}")
+    Point pt = some_pt.unwrap()
+    print(f"{pt.x}")
+    print(f"{pt.y}")
+    Option[Point] no_pt = None()
+    print(f"{no_pt.is_none()}")
+
+    # --- Vector clear (drop correctness) ---
+    Vector[Point] pts = Vector[Point]()
+    pts.push(Point(1, 1))
+    pts.push(Point(2, 2))
+    pts.clear()
+    print(f"{pts.len()}")
+    print("done")

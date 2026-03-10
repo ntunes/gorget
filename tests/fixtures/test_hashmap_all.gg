@@ -1,0 +1,67 @@
+# Comprehensive HashMap[str, int] method coverage (order-independent)
+from std.collections import HashMap
+
+void main():
+    # --- Construction ---
+    HashMap[str, int] m = HashMap[str, int]()
+    print(f"{m.len()}")
+    print(f"{m.is_empty()}")
+
+    # --- put ---
+    m.put("a", 1)
+    m.put("b", 2)
+    m.put("c", 3)
+    print(f"{m.len()}")
+
+    # --- get (existing keys) ---
+    print(f"{m.get("a").unwrap()}")
+    print(f"{m.get("b").unwrap()}")
+    print(f"{m.get("c").unwrap()}")
+    # NOTE: m.get("z") on missing key segfaults — codegen lacks null-check (TODO)
+
+    # --- contains ---
+    print(f"{m.contains("a")}")
+    print(f"{m.contains("z")}")
+
+    # --- remove ---
+    m.remove("b")
+    print(f"{m.len()}")
+    print(f"{m.contains("b")}")
+
+    # --- put overwrite ---
+    m.put("a", 10)
+    print(f"{m.get("a").unwrap()}")
+
+    # --- clear ---
+    HashMap[str, int] m2 = HashMap[str, int]()
+    m2.put("x", 1)
+    m2.clear()
+    print(f"{m2.len()}")
+    print(f"{m2.is_empty()}")
+
+    # --- fold (order-independent sum) ---
+    HashMap[str, int] m3 = HashMap[str, int]()
+    m3.put("x", 10)
+    m3.put("y", 20)
+    m3.put("z", 30)
+    int total = m3.fold(0, (int acc, str k, int v): acc + v)
+    print(f"{total}")
+
+    # --- keys / values (verify count, order-independent) ---
+    Vector[str] ks = m3.keys()
+    print(f"{ks.len()}")
+    Vector[int] vs = m3.values()
+    int val_sum = vs.fold(0, (int acc, int x): acc + x)
+    print(f"{val_sum}")
+
+    # --- items (verify count) ---
+    Vector[(str, int)] items = m3.items()
+    print(f"{items.len()}")
+
+    # --- filter ---
+    HashMap[str, int] big = m3.filter((str k, int v): v > 15)
+    print(f"{big.len()}")
+
+    # --- get_or ---
+    print(f"{m3.get_or("x", 99)}")
+    print(f"{m3.get_or("missing", 99)}")
