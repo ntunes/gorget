@@ -1,0 +1,60 @@
+from std.async import sleep
+
+# Test collection methods inside coroutine (async function with internal await).
+# Higher-order methods (filter/map/fold) and inline methods (pop/sort)
+# must correctly use frame-field access (f->_N) in the poll function.
+
+async int compute(Vector[int] data):
+    sleep(1)
+
+    # Higher-order: filter
+    Vector[int] evens = data.filter((x): x % 2 == 0)
+    print(evens.len())
+
+    # Higher-order: map
+    Vector[int] doubled = data.map((x): x * 2)
+    print(doubled[0])
+    print(doubled[1])
+    print(doubled[2])
+
+    # Higher-order: fold
+    int total = data.fold(0, (acc, x): acc + x)
+    print(total)
+
+    # Higher-order: any / all
+    bool has_even = data.any((x): x % 2 == 0)
+    print(has_even)
+    bool all_pos = data.all((x): x > 0)
+    print(all_pos)
+
+    # Inline: pop
+    Vector[int] v2 = Vector[int]()
+    v2.push(10)
+    v2.push(20)
+    Option[int] popped = v2.pop()
+    print(popped.unwrap())
+
+    # Inline: sort
+    Vector[int] unsorted = Vector[int]()
+    unsorted.push(3)
+    unsorted.push(1)
+    unsorted.push(2)
+    unsorted.sort()
+    print(unsorted[0])
+    print(unsorted[1])
+    print(unsorted[2])
+
+    # Inline: contains
+    print(data.contains(2))
+
+    return total
+
+async void main():
+    Vector[int] nums = Vector[int]()
+    nums.push(1)
+    nums.push(2)
+    nums.push(3)
+
+    Task[int] t = spawn compute(nums)
+    int result = t.await()
+    print(f"result={result}")

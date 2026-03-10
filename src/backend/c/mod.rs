@@ -3161,25 +3161,57 @@ fn emit_poll_inst(
             // Map GIR stdlib names to C runtime names
             let c_fn_mapped = map_stdlib_name(call_fn);
             let was_mapped = c_fn_mapped != call_fn;
+            // ── Collection constructor: Vector__T__new(), Dict__K__V__new(), etc.
+            if !was_mapped && is_collection_constructor(call_fn) {
+                if let Some(dst_id) = dst {
+                    let poll_dst = format!("f->_{}", dst_id.0);
+                    if let Some(code) = emit_collection_constructor_to(call_fn, &poll_dst) {
+                        out.push_str(&code);
+                    } else {
+                        let type_name = call_fn.strip_suffix("__new").unwrap_or(call_fn);
+                        let ct = collection_type_alias(type_name).unwrap_or(type_name);
+                        let _ = writeln!(out, "        {poll_dst} = ({ct}){{0}};");
+                    }
+                }
+                return None;
+            }
+            // ── Inline methods in poll context: pop, sort, sorted, reversed, unique
+            if !was_mapped {
+                if let Some(inline) = try_inline_method(call_fn) {
+                    emit_poll_inline_method(out, &inline, dst, args, func, registry, call_fn, type_overrides);
+                    return None;
+                }
+            }
+            // ── Higher-order collection methods in poll context: filter, map, fold, any, all, etc.
+            if !was_mapped {
+                if let Some(code) = try_emit_poll_higher_order_method(call_fn, dst, args, func, registry, type_overrides, _module) {
+                    out.push_str(&code);
+                    return None;
+                }
+            }
             // Collection method rewriting (Str__starts_with → gorget_str_starts_with, etc.)
             if !was_mapped {
                 if let Some(rewrite) = try_rewrite_collection_method(call_fn) {
                     if !rewrite.runtime_fn.is_empty() {
                         // Emit collection method call in poll context
-                        // Self arg: if pass_by_ptr, pass as pointer; otherwise deref
                         let mut arg_parts: Vec<String> = Vec::new();
                         for (i, arg) in args.iter().enumerate() {
                             if i == 0 {
-                                // Self argument
+                                // Self argument: pass by pointer or value
                                 let self_str = fmt_operand_poll(arg, func, registry);
+                                let is_ptr = if let Operand::Copy(p) | Operand::Move(p) = arg {
+                                    let ct = effective_c_type(p.local.0 as usize, func, registry, type_overrides);
+                                    ct.ends_with('*')
+                                } else { false };
                                 if rewrite.pass_by_ptr {
-                                    arg_parts.push(self_str);
+                                    // Runtime fn expects a pointer; take address if self is a value
+                                    if is_ptr {
+                                        arg_parts.push(self_str);
+                                    } else {
+                                        arg_parts.push(format!("&{self_str}"));
+                                    }
                                 } else {
-                                    // Deref if self is a pointer
-                                    let is_ptr = if let Operand::Copy(p) | Operand::Move(p) = arg {
-                                        let ct = effective_c_type(p.local.0 as usize, func, registry, type_overrides);
-                                        ct.ends_with('*')
-                                    } else { false };
+                                    // Runtime fn expects value; deref if self is a pointer
                                     if is_ptr {
                                         arg_parts.push(format!("(*{self_str})"));
                                     } else {
@@ -3187,8 +3219,49 @@ fn emit_poll_inst(
                                     }
                                 }
                             } else {
-                                arg_parts.push(fmt_operand_poll_as_str(arg, func, registry));
+                                // Non-self args: if pass_by_ptr, wrap in compound literal for void* params
+                                let val = fmt_operand_poll(arg, func, registry);
+                                let should_ptr = rewrite.pass_by_ptr;
+                                if should_ptr {
+                                    match arg {
+                                        Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                                            arg_parts.push(format!("&{val}"));
+                                        }
+                                        _ => {
+                                            // Constant or projected — use compound literal
+                                            let arg_type = match arg {
+                                                Operand::Copy(p) | Operand::Move(p) => {
+                                                    let idx = p.local.0 as usize;
+                                                    if idx < func.locals.len() {
+                                                        format_type(func.locals[idx].type_id, registry)
+                                                    } else { "int64_t".to_string() }
+                                                }
+                                                Operand::Constant(c) => match c {
+                                                    Constant::I64(_) => "int64_t".to_string(),
+                                                    Constant::I32(_) => "int32_t".to_string(),
+                                                    Constant::F64(_) => "double".to_string(),
+                                                    Constant::Bool(_) => "bool".to_string(),
+                                                    Constant::Str(_) => "Str".to_string(),
+                                                    _ => "int64_t".to_string(),
+                                                },
+                                            };
+                                            if let Operand::Constant(Constant::Str(s)) = arg {
+                                                let escaped = escape_c_string(s);
+                                                arg_parts.push(format!("&(Str){{ .data = \"{escaped}\", .len = {} }}", s.len()));
+                                            } else {
+                                                arg_parts.push(format!("&({arg_type}){{{val}}}"));
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    arg_parts.push(fmt_operand_poll_as_str(arg, func, registry));
+                                }
                             }
+                        }
+                        // Append sizeof(element) for contains/index_of
+                        if rewrite.needs_elem_size {
+                            let elem_c_type = extract_collection_elem_type(call_fn);
+                            arg_parts.push(format!("sizeof({elem_c_type})"));
                         }
                         let args_str = arg_parts.join(", ");
                         if let Some(ref fa) = rewrite.field_access {
@@ -3293,6 +3366,111 @@ fn emit_poll_inst(
                     }
                 }
                 return None;
+            }
+            // ── Collection constructor in poll context (CallExtern)
+            if is_collection_constructor(call_fn) {
+                if let Some(dst_id) = dst {
+                    let poll_dst = format!("f->_{}", dst_id.0);
+                    if let Some(code) = emit_collection_constructor_to(call_fn, &poll_dst) {
+                        out.push_str(&code);
+                    } else {
+                        let type_name = call_fn.strip_suffix("__new").unwrap_or(call_fn);
+                        let ct = collection_type_alias(type_name).unwrap_or(type_name);
+                        let _ = writeln!(out, "        {poll_dst} = ({ct}){{0}};");
+                    }
+                }
+                return None;
+            }
+            // ── Inline methods in poll context (CallExtern)
+            if let Some(inline) = try_inline_method(call_fn) {
+                emit_poll_inline_method(out, &inline, dst, args, func, registry, call_fn, type_overrides);
+                return None;
+            }
+            // ── Higher-order collection methods in poll context (CallExtern)
+            if let Some(code) = try_emit_poll_higher_order_method(call_fn, dst, args, func, registry, type_overrides, _module) {
+                out.push_str(&code);
+                return None;
+            }
+            // ── Collection method rewriting in poll context (CallExtern)
+            if let Some(rewrite) = try_rewrite_collection_method(call_fn) {
+                if !rewrite.runtime_fn.is_empty() {
+                    let mut arg_parts: Vec<String> = Vec::new();
+                    for (i, arg) in args.iter().enumerate() {
+                        if i == 0 {
+                            let self_str = fmt_operand_poll(arg, func, registry);
+                            let is_ptr = if let Operand::Copy(p) | Operand::Move(p) = arg {
+                                let ct = effective_c_type(p.local.0 as usize, func, registry, type_overrides);
+                                ct.ends_with('*')
+                            } else { false };
+                            if rewrite.pass_by_ptr {
+                                if is_ptr { arg_parts.push(self_str); }
+                                else { arg_parts.push(format!("&{self_str}")); }
+                            } else {
+                                if is_ptr { arg_parts.push(format!("(*{self_str})")); }
+                                else { arg_parts.push(self_str); }
+                            }
+                        } else {
+                            let val = fmt_operand_poll(arg, func, registry);
+                            if rewrite.pass_by_ptr {
+                                match arg {
+                                    Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                                        arg_parts.push(format!("&{val}"));
+                                    }
+                                    _ => {
+                                        let arg_type = match arg {
+                                            Operand::Copy(p) | Operand::Move(p) => {
+                                                let idx = p.local.0 as usize;
+                                                if idx < func.locals.len() { format_type(func.locals[idx].type_id, registry) }
+                                                else { "int64_t".to_string() }
+                                            }
+                                            Operand::Constant(c) => match c {
+                                                Constant::I64(_) => "int64_t".to_string(),
+                                                Constant::I32(_) => "int32_t".to_string(),
+                                                Constant::F64(_) => "double".to_string(),
+                                                Constant::Bool(_) => "bool".to_string(),
+                                                Constant::Str(_) => "Str".to_string(),
+                                                _ => "int64_t".to_string(),
+                                            },
+                                        };
+                                        if let Operand::Constant(Constant::Str(s)) = arg {
+                                            let escaped = escape_c_string(s);
+                                            arg_parts.push(format!("&(Str){{ .data = \"{escaped}\", .len = {} }}", s.len()));
+                                        } else {
+                                            arg_parts.push(format!("&({arg_type}){{{val}}}"));
+                                        }
+                                    }
+                                }
+                            } else {
+                                arg_parts.push(fmt_operand_poll_as_str(arg, func, registry));
+                            }
+                        }
+                    }
+                    if rewrite.needs_elem_size {
+                        let elem_c_type = extract_collection_elem_type(call_fn);
+                        arg_parts.push(format!("sizeof({elem_c_type})"));
+                    }
+                    let args_str = arg_parts.join(", ");
+                    if let Some(ref fa) = rewrite.field_access {
+                        if let Some(dst_id) = dst {
+                            let self_str = if !args.is_empty() {
+                                fmt_operand_poll(&args[0], func, registry)
+                            } else { String::new() };
+                            let is_ptr = if let Some(Operand::Copy(p) | Operand::Move(p)) = args.first() {
+                                let ct = effective_c_type(p.local.0 as usize, func, registry, type_overrides);
+                                ct.ends_with('*')
+                            } else { false };
+                            let deref = if is_ptr { format!("(*{self_str})") } else { self_str };
+                            let _ = writeln!(out, "        f->_{} = {deref}.{fa};", dst_id.0);
+                        }
+                    } else if rewrite.has_return {
+                        if let Some(dst_id) = dst {
+                            let _ = writeln!(out, "        f->_{} = {}({args_str});", dst_id.0, rewrite.runtime_fn);
+                        }
+                    } else {
+                        let _ = writeln!(out, "        {}({args_str});", rewrite.runtime_fn);
+                    }
+                    return None;
+                }
             }
             let is_printf = call_fn == "printf" || call_fn == "fprintf" || call_fn == "sprintf"
                 || call_fn == "gorget_string_format";
@@ -3633,13 +3811,31 @@ fn emit_coroutine(
     let task_name = if is_void { "Task__void".to_string() } else { format!("Task__{ret_c}") };
     let frame_name = format!("__Frame_{fn_name}");
     let state_ids = coroutine_state_ids(func);
-    let type_overrides = compute_type_overrides(func, registry, module);
+    let mut type_overrides = compute_type_overrides(func, registry, module);
+
+    // Parameter locals (indices 1..=N) are stored by value in the coroutine frame,
+    // even though the function signature passes collections by MutPtr.
+    // Override their effective C type to the value type (strip pointer suffix).
+    let num_params = params.len();
+    for idx in 1..=num_params {
+        if idx < func.locals.len() {
+            let c_type = if let Some(ovr) = type_overrides.get(&idx) {
+                ovr.clone()
+            } else {
+                format_type(func.locals[idx].type_id, registry)
+            };
+            if let Some(stripped) = c_type.strip_suffix('*') {
+                type_overrides.insert(idx, stripped.to_string());
+            }
+        }
+    }
 
     // ── 1. Frame struct ─────────────────────────────────────────────────────
     let _ = writeln!(out, "typedef struct {frame_name} {{");
     out.push_str("    GorgetTask base; /* must be first */\n");
     out.push_str("    int __state;\n");
-    // All locals (including _0 = return place, _1.._N = params + user vars)
+    // All locals (including _0 = return place, _1.._N = params + user vars).
+    // Type overrides already have parameter locals stripped of pointer suffix.
     for (idx, local) in func.locals.iter().enumerate() {
         let c_type = if let Some(ovr) = type_overrides.get(&idx) {
             ovr.clone()
@@ -7941,35 +8137,38 @@ fn is_collection_constructor(name: &str) -> bool {
 /// Emit a collection constructor call, returning the C code string.
 /// Returns `Some(code)` if this is a known collection type, `None` otherwise.
 fn emit_collection_constructor(name: &str, dst_id: u32) -> Option<String> {
+    emit_collection_constructor_to(name, &format!("_{dst_id}"))
+}
+
+/// Emit a collection constructor, assigning to the given destination expression
+/// (e.g. `_5` for normal context, `f->_5` for poll context).
+fn emit_collection_constructor_to(name: &str, dst: &str) -> Option<String> {
     let type_name = name.strip_suffix("__new").unwrap_or(name);
     let c_type = collection_type_alias(type_name);
 
     match c_type {
         Some("GorgetArray") => {
             let elem_c_type = extract_collection_elem_type(name);
-            Some(format!("        _{dst_id} = gorget_array_new(sizeof({elem_c_type}));\n"))
+            Some(format!("        {dst} = gorget_array_new(sizeof({elem_c_type}));\n"))
         }
         Some("GorgetMap") => {
-            // Extract key and value types from Dict__K__V or HashMap__K__V
             let (key_type, val_type) = extract_map_kv_types(type_name);
-            // Normalize runtime type names (e.g. Callable__* → GorgetClosure)
             let val_type = runtime_type_name(val_type).unwrap_or(val_type);
             let key_type = runtime_type_name(key_type).unwrap_or(key_type);
-            // Use Str-aware constructors for Str keys (content-based hash/compare)
             if key_type == "Str" {
                 let ctor = if type_name.starts_with("Dict__") { "gorget_dict_new_str" } else { "gorget_map_new_str" };
-                Some(format!("        _{dst_id} = {ctor}(sizeof({val_type}));\n"))
+                Some(format!("        {dst} = {ctor}(sizeof({val_type}));\n"))
             } else {
                 let ctor = if type_name.starts_with("Dict__") { "gorget_dict_new" } else { "gorget_map_new" };
-                Some(format!("        _{dst_id} = {ctor}(sizeof({key_type}), sizeof({val_type}));\n"))
+                Some(format!("        {dst} = {ctor}(sizeof({key_type}), sizeof({val_type}));\n"))
             }
         }
         Some("GorgetSet") => {
             let elem_c_type = extract_collection_elem_type(name);
-            Some(format!("        _{dst_id} = gorget_set_new(sizeof({elem_c_type}));\n"))
+            Some(format!("        {dst} = gorget_set_new(sizeof({elem_c_type}));\n"))
         }
         _ if type_name == "String" => {
-            Some(format!("        _{dst_id} = gorget_string_new(\"\");\n"))
+            Some(format!("        {dst} = gorget_string_new(\"\");\n"))
         }
         _ => None,
     }
@@ -8015,6 +8214,648 @@ fn looks_like_c_type(s: &str) -> bool {
         | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t"
         | "double" | "float" | "bool" | "Str" | "GorgetString"
     ) || s.starts_with(|c: char| c.is_uppercase())
+}
+
+/// Emit inline method in poll (coroutine) context. Uses `f->_N` frame field access
+/// instead of `_N` local variable access.
+fn emit_poll_inline_method(
+    out: &mut String,
+    method: &InlineMethod,
+    dst: &Option<LocalId>,
+    args: &[Operand],
+    func: &Function,
+    registry: &TypeRegistry,
+    func_name: &str,
+    type_overrides: &std::collections::HashMap<usize, String>,
+) {
+    use std::fmt::Write;
+    let self_raw = if !args.is_empty() {
+        fmt_operand_poll(&args[0], func, registry)
+    } else {
+        "/*no self*/".to_string()
+    };
+    let self_ptr = is_self_pointer(args, func, registry);
+    let self_str = deref_self(&self_raw, self_ptr);
+
+    match method {
+        InlineMethod::Pop => {
+            if let Some(dst_id) = dst {
+                let option_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let elem_c_type = option_type.strip_prefix("Option__").unwrap_or("int64_t");
+                let _ = writeln!(out,
+                    "        f->_{id} = ({{ {option_type} __pr; if ({self_str}.len > 0) {{ \
+                    {elem_c_type} __elem = *({elem_c_type}*)((char*){self_str}.data + {self_str}.elem_size * --{self_str}.len); \
+                    __pr = ({option_type}){{.tag = 0, .data.Some = {{__elem}}}}; }} \
+                    else {{ __pr = ({option_type}){{.tag = 1}}; }} __pr; }});",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::Sort => {
+            let _ = writeln!(out,
+                "        qsort({self_str}.data, {self_str}.len, {self_str}.elem_size, gorget_generic_compare);");
+        }
+        InlineMethod::Sorted => {
+            if let Some(dst_id) = dst {
+                let self_addr = addr_self(&self_raw, self_ptr);
+                let _ = writeln!(out,
+                    "        f->_{id} = gorget_array_clone({self_addr}); \
+                    qsort(f->_{id}.data, f->_{id}.len, f->_{id}.elem_size, gorget_generic_compare);",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::Reversed => {
+            if let Some(dst_id) = dst {
+                let self_addr = addr_self(&self_raw, self_ptr);
+                let _ = writeln!(out,
+                    "        f->_{id} = gorget_array_clone({self_addr}); \
+                    gorget_array_reverse(&f->_{id});",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::Unique => {
+            if let Some(dst_id) = dst {
+                let self_addr = addr_self(&self_raw, self_ptr);
+                let _ = writeln!(out,
+                    "        f->_{id} = gorget_array_clone({self_addr}); \
+                    qsort(f->_{id}.data, f->_{id}.len, f->_{id}.elem_size, gorget_generic_compare); \
+                    gorget_array_dedup(&f->_{id});",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::OptionUnwrap => {
+            let type_name = extract_type_from_method_call(func_name);
+            if let Some(dst_id) = dst {
+                let _ = writeln!(out,
+                    "        f->_{id} = ({{ {type_name} __opt = {self_str}; \
+                    if (__opt.tag != 0) {{ fprintf(stderr, \"unwrap called on None\\n\"); exit(1); }} \
+                    __opt.data.Some._0; }});",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::OptionIsSome => {
+            if let Some(dst_id) = dst {
+                let _ = writeln!(out, "        f->_{id} = ({self_str}.tag == 0);", id = dst_id.0);
+            }
+        }
+        InlineMethod::OptionIsNone => {
+            if let Some(dst_id) = dst {
+                let _ = writeln!(out, "        f->_{id} = ({self_str}.tag != 0);", id = dst_id.0);
+            }
+        }
+        InlineMethod::OptionUnwrapOr => {
+            if let Some(dst_id) = dst {
+                let default = if args.len() > 1 {
+                    fmt_operand_poll(&args[1], func, registry)
+                } else { "0".to_string() };
+                let _ = writeln!(out,
+                    "        f->_{id} = ({self_str}.tag == 0) ? {self_str}.data.Some._0 : {default};",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::OptionExpect => {
+            let type_name = extract_type_from_method_call(func_name);
+            let msg = if args.len() > 1 {
+                fmt_operand_poll(&args[1], func, registry)
+            } else { "\"expect failed\"".to_string() };
+            if let Some(dst_id) = dst {
+                if msg.starts_with('"') {
+                    let _ = writeln!(out,
+                        "        f->_{id} = ({{ {type_name} __opt = {self_str}; \
+                        if (__opt.tag != 0) {{ fprintf(stderr, \"%s\\n\", {msg}); exit(1); }} \
+                        __opt.data.Some._0; }});",
+                        id = dst_id.0);
+                } else {
+                    let _ = writeln!(out,
+                        "        f->_{id} = ({{ {type_name} __opt = {self_str}; \
+                        if (__opt.tag != 0) {{ fprintf(stderr, \"%.*s\\n\", (int){msg}.len, {msg}.data); exit(1); }} \
+                        __opt.data.Some._0; }});",
+                        id = dst_id.0);
+                }
+            }
+        }
+        InlineMethod::OptionAndThen => {
+            let type_name = extract_type_from_method_call(func_name);
+            if let Some(dst_id) = dst {
+                if args.len() > 1 {
+                    let closure = fmt_operand_poll(&args[1], func, registry);
+                    let closure_type = match &args[1] {
+                        Operand::Copy(p) | Operand::Move(p) =>
+                            effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+                        _ => "void*".to_string(),
+                    };
+                    let call_fn = format!("{closure_type}__call");
+                    let _ = writeln!(out,
+                        "        f->_{id} = ({{ {type_name} __opt = {self_str}; {type_name} __res; \
+                        if (__opt.tag == 0) {{ __res = {call_fn}(&{closure}, __opt.data.Some._0); }} \
+                        else {{ __res.tag = 1; }} __res; }});",
+                        id = dst_id.0);
+                }
+            }
+        }
+        InlineMethod::OptionMap => {
+            let _type_name = extract_type_from_method_call(func_name);
+            if let Some(dst_id) = dst {
+                if args.len() > 1 {
+                    let closure = fmt_operand_poll(&args[1], func, registry);
+                    let closure_type = match &args[1] {
+                        Operand::Copy(p) | Operand::Move(p) =>
+                            effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+                        _ => "void*".to_string(),
+                    };
+                    let call_fn = format!("{closure_type}__call");
+                    let dst_c = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                    let _ = writeln!(out,
+                        "        f->_{id} = ({{ {dst_c} __res; \
+                        if ({self_str}.tag == 0) {{ __res.tag = 0; __res.data.Some._0 = {call_fn}(&{closure}, {self_str}.data.Some._0); }} \
+                        else {{ __res.tag = 1; }} __res; }});",
+                        id = dst_id.0);
+                }
+            }
+        }
+        InlineMethod::OptionFilter => {
+            let type_name = extract_type_from_method_call(func_name);
+            if let Some(dst_id) = dst {
+                if args.len() > 1 {
+                    let closure = fmt_operand_poll(&args[1], func, registry);
+                    let closure_type = match &args[1] {
+                        Operand::Copy(p) | Operand::Move(p) =>
+                            effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+                        _ => "void*".to_string(),
+                    };
+                    let call_fn = format!("{closure_type}__call");
+                    let _ = writeln!(out,
+                        "        f->_{id} = ({{ {type_name} __opt = {self_str}; {type_name} __res; \
+                        if (__opt.tag == 0 && {call_fn}(&{closure}, __opt.data.Some._0)) {{ __res = __opt; }} \
+                        else {{ __res.tag = 1; }} __res; }});",
+                        id = dst_id.0);
+                }
+            }
+        }
+        InlineMethod::OptionOr => {
+            if let Some(dst_id) = dst {
+                let other = if args.len() > 1 {
+                    fmt_operand_poll(&args[1], func, registry)
+                } else { format!("({{ }})")  };
+                let _ = writeln!(out,
+                    "        f->_{id} = ({self_str}.tag == 0) ? {self_str} : {other};",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::OptionOrElse => {
+            let type_name = extract_type_from_method_call(func_name);
+            if let Some(dst_id) = dst {
+                if args.len() > 1 {
+                    let closure = fmt_operand_poll(&args[1], func, registry);
+                    let closure_type = match &args[1] {
+                        Operand::Copy(p) | Operand::Move(p) =>
+                            effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+                        _ => "void*".to_string(),
+                    };
+                    let call_fn = format!("{closure_type}__call");
+                    let _ = writeln!(out,
+                        "        f->_{id} = ({{ {type_name} __res; \
+                        if ({self_str}.tag == 0) {{ __res = {self_str}; }} \
+                        else {{ __res = {call_fn}(&{closure}); }} __res; }});",
+                        id = dst_id.0);
+                }
+            }
+        }
+        InlineMethod::OptionUnwrapOrElse => {
+            if let Some(dst_id) = dst {
+                if args.len() > 1 {
+                    let closure = fmt_operand_poll(&args[1], func, registry);
+                    let closure_type = match &args[1] {
+                        Operand::Copy(p) | Operand::Move(p) =>
+                            effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+                        _ => "void*".to_string(),
+                    };
+                    let call_fn = format!("{closure_type}__call");
+                    let _ = writeln!(out,
+                        "        f->_{id} = ({self_str}.tag == 0) ? {self_str}.data.Some._0 : {call_fn}(&{closure});",
+                        id = dst_id.0);
+                }
+            }
+        }
+        InlineMethod::OptionFlatten => {
+            if let Some(dst_id) = dst {
+                let dst_c = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _ = writeln!(out,
+                    "        f->_{id} = ({{ {dst_c} __res; \
+                    if ({self_str}.tag == 0) {{ __res = {self_str}.data.Some._0; }} \
+                    else {{ __res.tag = 1; }} __res; }});",
+                    id = dst_id.0);
+            }
+        }
+        // Result methods
+        InlineMethod::ResultUnwrap => {
+            let rtype = extract_type_from_method_call(func_name);
+            if let Some(dst_id) = dst {
+                let _ = writeln!(out,
+                    "        f->_{id} = ({{ {rtype} __r = {self_str}; \
+                    if (__r.tag != 0) {{ fprintf(stderr, \"unwrap called on Error\\n\"); exit(1); }} \
+                    __r.data.Ok._0; }});",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::ResultExpect => {
+            let type_name = extract_type_from_method_call(func_name);
+            let msg = if args.len() > 1 {
+                fmt_operand_poll(&args[1], func, registry)
+            } else { "\"expect failed\"".to_string() };
+            if let Some(dst_id) = dst {
+                if msg.starts_with('"') {
+                    let _ = writeln!(out,
+                        "        f->_{id} = ({{ {type_name} __r = {self_str}; \
+                        if (__r.tag != 0) {{ fprintf(stderr, \"%s\\n\", {msg}); exit(1); }} \
+                        __r.data.Ok._0; }});",
+                        id = dst_id.0);
+                } else {
+                    let _ = writeln!(out,
+                        "        f->_{id} = ({{ {type_name} __r = {self_str}; \
+                        if (__r.tag != 0) {{ fprintf(stderr, \"%.*s\\n\", (int){msg}.len, {msg}.data); exit(1); }} \
+                        __r.data.Ok._0; }});",
+                        id = dst_id.0);
+                }
+            }
+        }
+        InlineMethod::ResultIsOk => {
+            if let Some(dst_id) = dst {
+                let _ = writeln!(out, "        f->_{id} = ({self_str}.tag == 0);", id = dst_id.0);
+            }
+        }
+        InlineMethod::ResultIsErr => {
+            if let Some(dst_id) = dst {
+                let _ = writeln!(out, "        f->_{id} = ({self_str}.tag != 0);", id = dst_id.0);
+            }
+        }
+        InlineMethod::ResultUnwrapOr => {
+            if let Some(dst_id) = dst {
+                let default = if args.len() > 1 {
+                    fmt_operand_poll(&args[1], func, registry)
+                } else { "0".to_string() };
+                let _ = writeln!(out,
+                    "        f->_{id} = ({self_str}.tag == 0) ? {self_str}.data.Ok._0 : {default};",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::ResultUnwrapErr => {
+            let type_name = extract_type_from_method_call(func_name);
+            if let Some(dst_id) = dst {
+                let _ = writeln!(out,
+                    "        f->_{id} = ({{ {type_name} __r = {self_str}; \
+                    if (__r.tag == 0) {{ fprintf(stderr, \"unwrap_err on Ok\\n\"); exit(1); }} \
+                    __r.data.Error._0; }});",
+                    id = dst_id.0);
+            }
+        }
+        InlineMethod::ResultMap | InlineMethod::ResultAndThen | InlineMethod::ResultMapErr
+        | InlineMethod::ResultOr | InlineMethod::ResultUnwrapOrElse => {
+            // These are less commonly used in coroutines — fall through to regular handler
+            // by emitting the non-poll version (using format_operand would produce wrong output,
+            // but these methods are rare enough in async code to defer proper handling)
+            let _ = writeln!(out, "        /* TODO: Result method {func_name} in poll context */");
+        }
+        // Set operations
+        InlineMethod::SetUnion | InlineMethod::SetIntersection | InlineMethod::SetDifference
+        | InlineMethod::SetSymmetricDifference | InlineMethod::SetIsSubset | InlineMethod::SetIsSuperset => {
+            // Delegate to non-poll emit_inline_method temporarily
+            let _ = writeln!(out, "        /* TODO: Set operation {func_name} in poll context */");
+        }
+        // Dict methods
+        InlineMethod::DictKeys | InlineMethod::DictValues | InlineMethod::DictItems
+        | InlineMethod::DictUpdate | InlineMethod::DictGetOr => {
+            let _ = writeln!(out, "        /* TODO: Dict method {func_name} in poll context */");
+        }
+    }
+}
+
+/// Emit higher-order collection methods (filter, map, fold, any, all, etc.)
+/// in coroutine poll context, using frame field access (`f->_N`).
+fn try_emit_poll_higher_order_method(
+    func_name: &str,
+    dst: &Option<LocalId>,
+    args: &[Operand],
+    func: &Function,
+    registry: &TypeRegistry,
+    type_overrides: &std::collections::HashMap<usize, String>,
+    module: &Module,
+) -> Option<String> {
+    let method = extract_trailing_method(func_name, "");
+    if !matches!(method, "filter" | "map" | "flat_map" | "fold" | "reduce"
+        | "enumerate" | "any" | "all" | "each" | "for_each" | "find" | "count"
+        | "get_or_put" | "keys" | "values" | "zip") {
+        return None;
+    }
+    if func_name.starts_with("Option__") || func_name.starts_with("Result__")
+        || func_name.starts_with("Regex__") || func_name.starts_with("Match__")
+    {
+        return None;
+    }
+    if args.is_empty() { return None; }
+
+    // If the module already has a GIR-emitted function with this name, skip inline generation
+    if module.functions.iter().any(|f| f.name == func_name) {
+        return None;
+    }
+
+    let coll_ref = fmt_operand_poll(&args[0], func, registry);
+    let coll_type = match &args[0] {
+        Operand::Copy(p) | Operand::Move(p) =>
+            effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+        _ => return None,
+    };
+
+    let bare_type = coll_type.strip_suffix('*').unwrap_or(&coll_type);
+    let bare_type = bare_type.strip_prefix("const ").unwrap_or(bare_type);
+
+    let is_dict = func_name.starts_with("Dict__") || func_name.starts_with("HashMap__")
+        || bare_type.starts_with("Dict__") || bare_type.starts_with("HashMap__")
+        || bare_type == "GorgetDict" || bare_type == "GorgetMap";
+    let is_ordered_dict = func_name.starts_with("Dict__")
+        || bare_type.starts_with("Dict__") || bare_type == "GorgetDict";
+    let is_set = bare_type.starts_with("GorgetSet") || bare_type.starts_with("Set__")
+        || bare_type.starts_with("HashSet__");
+
+    let elem_type = if let Some(elem) = extract_element_type_from_collection(bare_type) {
+        elem
+    } else if let Some(elem) = extract_element_type_from_method_name(func_name) {
+        elem
+    } else {
+        "int64_t".to_string()
+    };
+
+    let (dict_key_type, dict_val_type) = if is_dict {
+        let key = extract_map_key_type(func_name).unwrap_or("int64_t").to_string();
+        let val = {
+            let type_part = func_name.strip_prefix("Dict__")
+                .or_else(|| func_name.strip_prefix("HashMap__"))
+                .unwrap_or(func_name);
+            if let Some(after_key) = type_part.strip_prefix(&format!("{key}__")) {
+                if let Some(pos) = after_key.rfind("__") {
+                    let suffix = &after_key[pos + 2..];
+                    if !suffix.is_empty() && suffix.starts_with(|c: char| c.is_lowercase()) {
+                        after_key[..pos].to_string()
+                    } else {
+                        after_key.to_string()
+                    }
+                } else {
+                    after_key.to_string()
+                }
+            } else {
+                elem_type.clone()
+            }
+        };
+        (key, val)
+    } else {
+        (String::new(), String::new())
+    };
+
+    let coll_val = if coll_type.ends_with('*') {
+        format!("(*{coll_ref})")
+    } else {
+        coll_ref.clone()
+    };
+
+    let dst_str = if let Some(d) = dst {
+        format!("f->_{}", d.0)
+    } else {
+        String::new()
+    };
+
+    let extract_callable_poll = |arg: &Operand| -> (String, String, String) {
+        if let Operand::Constant(crate::ir::instructions::Constant::FuncRef(name)) = arg {
+            let c_name = mangle_name(name);
+            let adapter = format!("__adapt_{c_name}");
+            return (adapter, "NULL".to_string(), "void*".to_string());
+        }
+        let closure = fmt_operand_poll(arg, func, registry);
+        let closure_type = match arg {
+            Operand::Copy(p) | Operand::Move(p) =>
+                effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+            _ => "void*".to_string(),
+        };
+        let call_fn = format!("{closure_type}__call");
+        let closure_ref = format!("&{closure}");
+        (call_fn, closure_ref, closure_type)
+    };
+
+    let mut out = String::new();
+    use std::fmt::Write;
+
+    match method {
+        "filter" => {
+            if args.len() < 2 { return None; }
+            let (call_fn, closure_ref, _) = extract_callable_poll(&args[1]);
+            if is_dict {
+                let dict_c_type = if bare_type.starts_with("Dict__") { "GorgetDict" } else { "GorgetMap" };
+                let iter_loop = if is_ordered_dict {
+                    format!("for (size_t __oi = 0; __oi < __src.order_len; __oi++) {{ \
+                    size_t __i = __src.order[__oi]; \
+                    if (__src.states[__i] != 1) continue;")
+                } else {
+                    format!("for (size_t __i = 0; __i < __src.cap; __i++) {{ \
+                    if (__src.states[__i] != 1) continue;")
+                };
+                let ctor = if dict_key_type == "Str" {
+                    if is_ordered_dict { "gorget_dict_new_str" } else { "gorget_map_new_str" }
+                } else {
+                    if is_ordered_dict { "gorget_dict_new" } else { "gorget_map_new" }
+                };
+                let ctor_args = if dict_key_type == "Str" {
+                    format!("sizeof({dict_val_type})")
+                } else {
+                    format!("sizeof({dict_key_type}), sizeof({dict_val_type})")
+                };
+                let _ = writeln!(out, "        {dst_str} = ({{ GorgetMap __src = {coll_val}; \
+                    {dict_c_type} __result = {ctor}({ctor_args}); \
+                    {iter_loop} \
+                    {dict_key_type} __key = *({dict_key_type}*)((char*)__src.keys + __i * __src.key_size); \
+                    {dict_val_type} __val = *({dict_val_type}*)((char*)__src.values + __i * __src.val_size); \
+                    if ({call_fn}({closure_ref}, __key, __val)) gorget_map_put(&__result, &__key, &__val); \
+                    }} __result; }});");
+            } else if is_set {
+                let _ = writeln!(out, "        {dst_str} = ({{ GorgetSet __src = {coll_val}; \
+                    GorgetSet __result = gorget_set_new(sizeof({elem_type})); \
+                    for (size_t __i = 0; __i < __src.cap; __i++) {{ \
+                    if (__src.states[__i] != 1) continue; \
+                    {elem_type} __elem = *({elem_type}*)((char*)__src.keys + __i * __src.key_size); \
+                    if ({call_fn}({closure_ref}, __elem)) gorget_set_add(&__result, &__elem); \
+                    }} __result; }});");
+            } else {
+                let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
+                    GorgetArray __result = gorget_array_new(sizeof({elem_type})); \
+                    for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                    {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                    if ({call_fn}({closure_ref}, __elem)) gorget_array_push(&__result, &__elem); \
+                    }} __result; }});");
+            }
+        }
+        "map" => {
+            if args.len() < 2 { return None; }
+            let (call_fn, closure_ref, _) = extract_callable_poll(&args[1]);
+            let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
+                {elem_type} __first_elem = GORGET_ARRAY_AT({elem_type}, __src, 0); \
+                __typeof__({call_fn}({closure_ref}, __first_elem)) __map_out; \
+                GorgetArray __result = gorget_array_new(sizeof(__map_out)); \
+                for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                __map_out = {call_fn}({closure_ref}, __elem); \
+                gorget_array_push(&__result, &__map_out); \
+                }} __result; }});");
+        }
+        "fold" => {
+            if args.len() < 3 { return None; }
+            let init_val = fmt_operand_poll(&args[1], func, registry);
+            let (call_fn, closure_ref, _) = extract_callable_poll(&args[2]);
+            if is_dict {
+                let iter_loop = if is_ordered_dict {
+                    format!("for (size_t __oi = 0; __oi < __src.order_len; __oi++) {{ \
+                    size_t __i = __src.order[__oi]; \
+                    if (__src.states[__i] != 1) continue;")
+                } else {
+                    format!("for (size_t __i = 0; __i < __src.cap; __i++) {{ \
+                    if (__src.states[__i] != 1) continue;")
+                };
+                let acc_type = match &args[1] {
+                    Operand::Copy(p) | Operand::Move(p) =>
+                        effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+                    Operand::Constant(Constant::I64(_)) => "int64_t".to_string(),
+                    Operand::Constant(Constant::F64(_)) => "double".to_string(),
+                    _ => "int64_t".to_string(),
+                };
+                let _ = writeln!(out, "        {dst_str} = ({{ GorgetMap __src = {coll_val}; \
+                    {acc_type} __acc = {init_val}; \
+                    {iter_loop} \
+                    {dict_key_type} __key = *({dict_key_type}*)((char*)__src.keys + __i * __src.key_size); \
+                    {dict_val_type} __val = *({dict_val_type}*)((char*)__src.values + __i * __src.val_size); \
+                    __acc = {call_fn}({closure_ref}, __acc, __key, __val); \
+                    }} __acc; }});");
+            } else if is_set {
+                let acc_type = match &args[1] {
+                    Operand::Copy(p) | Operand::Move(p) =>
+                        effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+                    Operand::Constant(Constant::I64(_)) => "int64_t".to_string(),
+                    Operand::Constant(Constant::F64(_)) => "double".to_string(),
+                    _ => "int64_t".to_string(),
+                };
+                let _ = writeln!(out, "        {dst_str} = ({{ GorgetSet __src = {coll_val}; \
+                    {acc_type} __acc = {init_val}; \
+                    for (size_t __i = 0; __i < __src.cap; __i++) {{ \
+                    if (__src.states[__i] != 1) continue; \
+                    {elem_type} __elem = *({elem_type}*)((char*)__src.keys + __i * __src.key_size); \
+                    __acc = {call_fn}({closure_ref}, __acc, __elem); \
+                    }} __acc; }});");
+            } else {
+                let acc_type = match &args[1] {
+                    Operand::Copy(p) | Operand::Move(p) =>
+                        effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+                    Operand::Constant(Constant::I64(_)) => "int64_t".to_string(),
+                    Operand::Constant(Constant::F64(_)) => "double".to_string(),
+                    _ => "int64_t".to_string(),
+                };
+                let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
+                    {acc_type} __acc = {init_val}; \
+                    for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                    {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                    __acc = {call_fn}({closure_ref}, __acc, __elem); \
+                    }} __acc; }});");
+            }
+        }
+        "any" => {
+            if args.len() < 2 { return None; }
+            let (call_fn, closure_ref, _) = extract_callable_poll(&args[1]);
+            if is_set {
+                let _ = writeln!(out, "        {dst_str} = ({{ GorgetSet __src = {coll_val}; bool __any_result = false; \
+                    for (size_t __i = 0; __i < __src.cap; __i++) {{ \
+                    if (__src.states[__i] != 1) continue; \
+                    {elem_type} __elem = *({elem_type}*)((char*)__src.keys + __i * __src.key_size); \
+                    if ({call_fn}({closure_ref}, __elem)) {{ __any_result = true; break; }} \
+                    }} __any_result; }});");
+            } else {
+                let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; bool __any_result = false; \
+                    for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                    {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                    if ({call_fn}({closure_ref}, __elem)) {{ __any_result = true; break; }} \
+                    }} __any_result; }});");
+            }
+        }
+        "all" => {
+            if args.len() < 2 { return None; }
+            let (call_fn, closure_ref, _) = extract_callable_poll(&args[1]);
+            if is_set {
+                let _ = writeln!(out, "        {dst_str} = ({{ GorgetSet __src = {coll_val}; bool __all_result = true; \
+                    for (size_t __i = 0; __i < __src.cap; __i++) {{ \
+                    if (__src.states[__i] != 1) continue; \
+                    {elem_type} __elem = *({elem_type}*)((char*)__src.keys + __i * __src.key_size); \
+                    if (!{call_fn}({closure_ref}, __elem)) {{ __all_result = false; break; }} \
+                    }} __all_result; }});");
+            } else {
+                let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; bool __all_result = true; \
+                    for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                    {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                    if (!{call_fn}({closure_ref}, __elem)) {{ __all_result = false; break; }} \
+                    }} __all_result; }});");
+            }
+        }
+        "each" | "for_each" => {
+            if args.len() < 2 { return None; }
+            let (call_fn, closure_ref, _) = extract_callable_poll(&args[1]);
+            let _ = writeln!(out, "        {{ GorgetArray __src = {coll_val}; \
+                for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                {call_fn}({closure_ref}, __elem); \
+                }} }}");
+        }
+        "reduce" => {
+            if args.len() < 2 { return None; }
+            let (call_fn, closure_ref, _) = extract_callable_poll(&args[1]);
+            let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
+                {elem_type} __acc = GORGET_ARRAY_AT({elem_type}, __src, 0); \
+                for (size_t __i = 1; __i < __src.len; __i++) {{ \
+                {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                __acc = {call_fn}({closure_ref}, __acc, __elem); \
+                }} __acc; }});");
+        }
+        "enumerate" => {
+            if args.len() < 2 { return None; }
+            let (call_fn, closure_ref, _) = extract_callable_poll(&args[1]);
+            let _ = writeln!(out, "        {{ GorgetArray __src = {coll_val}; \
+                for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                {call_fn}({closure_ref}, (int64_t)__i, __elem); \
+                }} }}");
+        }
+        "find" => {
+            if args.len() < 2 { return None; }
+            let (call_fn, closure_ref, _) = extract_callable_poll(&args[1]);
+            if let Some(dst_id) = dst {
+                let opt_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let _ = writeln!(out, "        f->_{id} = ({{ GorgetArray __src = {coll_val}; \
+                    {opt_type} __fr; __fr.tag = 1; \
+                    for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                    {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                    if ({call_fn}({closure_ref}, __elem)) {{ __fr.tag = 0; __fr.data.Some._0 = __elem; break; }} \
+                    }} __fr; }});",
+                    id = dst_id.0);
+            }
+        }
+        "count" => {
+            if args.len() < 2 { return None; }
+            let (call_fn, closure_ref, _) = extract_callable_poll(&args[1]);
+            let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; int64_t __cnt = 0; \
+                for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                if ({call_fn}({closure_ref}, __elem)) __cnt++; \
+                }} __cnt; }});");
+        }
+        "keys" | "values" | "items" | "get_or_put" | "flat_map" | "zip" => {
+            // These are less common in coroutines; return None to fall through to generic call
+            return None;
+        }
+        _ => return None,
+    }
+
+    Some(out)
 }
 
 /// Inline method emit types for methods that don't map to a single runtime function.

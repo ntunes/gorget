@@ -11164,3 +11164,24 @@ true
 done",
     );
 }
+
+#[test]
+fn coroutine_collections() {
+    run_gg(
+        "coroutine_collections.gg",
+        "\
+1
+2
+4
+6
+6
+true
+true
+20
+1
+2
+3
+true
+result=6",
+    );
+}
