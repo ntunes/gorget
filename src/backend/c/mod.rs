@@ -7478,19 +7478,36 @@ fn try_emit_higher_order_method(
         String::new()
     };
 
+    // Helper: extract call function name and closure operand for higher-order method args.
+    // For closure structs: call_fn = "ClosureType__call", closure_ref = "&closure_local"
+    // For named function refs (FuncRef): call_fn = "__adapt_funcname", closure_ref = "NULL"
+    //   (the adapter has the same (void* env, params...) ABI as closure __call)
+    let extract_callable = |arg: &Operand| -> (String, String, String) {
+        // Check for named function reference first
+        if let Operand::Constant(crate::ir::instructions::Constant::FuncRef(name)) = arg {
+            let c_name = mangle_name(name);
+            let adapter = format!("__adapt_{c_name}");
+            let closure_ref = "NULL".to_string();
+            return (adapter, closure_ref, "void*".to_string());
+        }
+        let closure = format_operand(arg, func, registry);
+        let closure_type = match arg {
+            Operand::Copy(p) | Operand::Move(p) =>
+                effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+            _ => "void*".to_string(),
+        };
+        let call_fn = format!("{closure_type}__call");
+        let closure_ref = format!("&{closure}");
+        (call_fn, closure_ref, closure_type)
+    };
+
     let mut out = String::new();
 
     match method {
         "filter" => {
             // args: [collection_ref, closure]
             if args.len() < 2 { return None; }
-            let closure = format_operand(&args[1], func, registry);
-            let closure_type = match &args[1] {
-                Operand::Copy(p) | Operand::Move(p) =>
-                    effective_c_type(p.local.0 as usize, func, registry, type_overrides),
-                _ => "void*".to_string(),
-            };
-            let call_fn = format!("{closure_type}__call");
+            let (call_fn, closure_ref, _closure_type) = extract_callable(&args[1]);
             use std::fmt::Write;
             if is_dict {
                 // Dict/HashMap filter: iterate entries, pass (key, value) to closure, build new map
@@ -7518,7 +7535,7 @@ fn try_emit_higher_order_method(
                     {iter_loop} \
                     {dict_key_type} __key = *({dict_key_type}*)((char*)__src.keys + __i * __src.key_size); \
                     {dict_val_type} __val = *({dict_val_type}*)((char*)__src.values + __i * __src.val_size); \
-                    if ({call_fn}(&{closure}, __key, __val)) gorget_map_put(&__result, &__key, &__val); \
+                    if ({call_fn}({closure_ref}, __key, __val)) gorget_map_put(&__result, &__key, &__val); \
                     }} __result; }});");
             } else if is_set {
                 // Set filter: iterate by hash-table states, create new set
@@ -7527,35 +7544,29 @@ fn try_emit_higher_order_method(
                     for (size_t __i = 0; __i < __src.cap; __i++) {{ \
                     if (__src.states[__i] != 1) continue; \
                     {elem_type} __elem = *({elem_type}*)((char*)__src.keys + __i * __src.key_size); \
-                    if ({call_fn}(&{closure}, __elem)) gorget_set_add(&__result, &__elem); \
+                    if ({call_fn}({closure_ref}, __elem)) gorget_set_add(&__result, &__elem); \
                     }} __result; }});");
             } else {
                 let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
                     GorgetArray __result = gorget_array_new(sizeof({elem_type})); \
                     for (size_t __i = 0; __i < __src.len; __i++) {{ \
                     {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
-                    if ({call_fn}(&{closure}, __elem)) gorget_array_push(&__result, &__elem); \
+                    if ({call_fn}({closure_ref}, __elem)) gorget_array_push(&__result, &__elem); \
                     }} __result; }});");
             }
         }
         "map" => {
             if args.len() < 2 { return None; }
-            let closure = format_operand(&args[1], func, registry);
-            let closure_type = match &args[1] {
-                Operand::Copy(p) | Operand::Move(p) =>
-                    effective_c_type(p.local.0 as usize, func, registry, type_overrides),
-                _ => "void*".to_string(),
-            };
-            let call_fn = format!("{closure_type}__call");
+            let (call_fn, closure_ref, _closure_type) = extract_callable(&args[1]);
             // For map, output type might differ from input. Use __typeof__ to infer.
             use std::fmt::Write;
             let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
                 {elem_type} __first_elem = GORGET_ARRAY_AT({elem_type}, __src, 0); \
-                __typeof__({call_fn}(&{closure}, __first_elem)) __map_out; \
+                __typeof__({call_fn}({closure_ref}, __first_elem)) __map_out; \
                 GorgetArray __result = gorget_array_new(sizeof(__map_out)); \
                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                 {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
-                __map_out = {call_fn}(&{closure}, __elem); \
+                __map_out = {call_fn}({closure_ref}, __elem); \
                 gorget_array_push(&__result, &__map_out); \
                 }} __result; }});");
         }
@@ -7563,13 +7574,7 @@ fn try_emit_higher_order_method(
             // args: [collection_ref, init_value, closure]
             if args.len() < 3 { return None; }
             let init = format_operand(&args[1], func, registry);
-            let closure = format_operand(&args[2], func, registry);
-            let closure_type = match &args[2] {
-                Operand::Copy(p) | Operand::Move(p) =>
-                    effective_c_type(p.local.0 as usize, func, registry, type_overrides),
-                _ => "void*".to_string(),
-            };
-            let call_fn = format!("{closure_type}__call");
+            let (call_fn, closure_ref, _closure_type) = extract_callable(&args[2]);
             let acc_type = effective_c_type(dst.unwrap().0 as usize, func, registry, type_overrides);
             use std::fmt::Write;
             if is_dict {
@@ -7587,7 +7592,7 @@ fn try_emit_higher_order_method(
                     {iter_loop} \
                     {dict_key_type} __key = *({dict_key_type}*)((char*)__src.keys + __i * __src.key_size); \
                     {dict_val_type} __val = *({dict_val_type}*)((char*)__src.values + __i * __src.val_size); \
-                    __acc = {call_fn}(&{closure}, __acc, __key, __val); \
+                    __acc = {call_fn}({closure_ref}, __acc, __key, __val); \
                     }} __acc; }});");
             } else if is_set {
                 let _ = writeln!(out, "        {dst_str} = ({{ GorgetSet __src = {coll_val}; \
@@ -7595,33 +7600,27 @@ fn try_emit_higher_order_method(
                     for (size_t __i = 0; __i < __src.cap; __i++) {{ \
                     if (__src.states[__i] != 1) continue; \
                     {elem_type} __elem = *({elem_type}*)((char*)__src.keys + __i * __src.key_size); \
-                    __acc = {call_fn}(&{closure}, __acc, __elem); \
+                    __acc = {call_fn}({closure_ref}, __acc, __elem); \
                     }} __acc; }});");
             } else {
                 let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
                     {acc_type} __acc = {init}; \
                     for (size_t __i = 0; __i < __src.len; __i++) {{ \
                     {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
-                    __acc = {call_fn}(&{closure}, __acc, __elem); \
+                    __acc = {call_fn}({closure_ref}, __acc, __elem); \
                     }} __acc; }});");
             }
         }
         "reduce" => {
             if args.len() < 2 { return None; }
-            let closure = format_operand(&args[1], func, registry);
-            let closure_type = match &args[1] {
-                Operand::Copy(p) | Operand::Move(p) =>
-                    effective_c_type(p.local.0 as usize, func, registry, type_overrides),
-                _ => "void*".to_string(),
-            };
-            let call_fn = format!("{closure_type}__call");
+            let (call_fn, closure_ref, _closure_type) = extract_callable(&args[1]);
             use std::fmt::Write;
             let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
                 if (__src.len == 0) gorget_panic(\"reduce() called on empty array\"); \
                 {elem_type} __acc = GORGET_ARRAY_AT({elem_type}, __src, 0); \
                 for (size_t __i = 1; __i < __src.len; __i++) {{ \
                 {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
-                __acc = {call_fn}(&{closure}, __acc, __elem); \
+                __acc = {call_fn}({closure_ref}, __acc, __elem); \
                 }} __acc; }});");
         }
         "enumerate" => {
@@ -7637,70 +7636,46 @@ fn try_emit_higher_order_method(
         }
         "any" => {
             if args.len() < 2 { return None; }
-            let closure = format_operand(&args[1], func, registry);
-            let closure_type = match &args[1] {
-                Operand::Copy(p) | Operand::Move(p) =>
-                    effective_c_type(p.local.0 as usize, func, registry, type_overrides),
-                _ => "void*".to_string(),
-            };
-            let call_fn = format!("{closure_type}__call");
+            let (call_fn, closure_ref, _closure_type) = extract_callable(&args[1]);
             use std::fmt::Write;
             let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
                 bool __any_result = false; \
                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                 {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
-                if ({call_fn}(&{closure}, __elem)) {{ __any_result = true; break; }} \
+                if ({call_fn}({closure_ref}, __elem)) {{ __any_result = true; break; }} \
                 }} __any_result; }});");
         }
         "all" => {
             if args.len() < 2 { return None; }
-            let closure = format_operand(&args[1], func, registry);
-            let closure_type = match &args[1] {
-                Operand::Copy(p) | Operand::Move(p) =>
-                    effective_c_type(p.local.0 as usize, func, registry, type_overrides),
-                _ => "void*".to_string(),
-            };
-            let call_fn = format!("{closure_type}__call");
+            let (call_fn, closure_ref, _closure_type) = extract_callable(&args[1]);
             use std::fmt::Write;
             let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
                 bool __all_result = true; \
                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                 {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
-                if (!{call_fn}(&{closure}, __elem)) {{ __all_result = false; break; }} \
+                if (!{call_fn}({closure_ref}, __elem)) {{ __all_result = false; break; }} \
                 }} __all_result; }});");
         }
         "each" | "for_each" => {
             if args.len() < 2 { return None; }
-            let closure = format_operand(&args[1], func, registry);
-            let closure_type = match &args[1] {
-                Operand::Copy(p) | Operand::Move(p) =>
-                    effective_c_type(p.local.0 as usize, func, registry, type_overrides),
-                _ => "void*".to_string(),
-            };
-            let call_fn = format!("{closure_type}__call");
+            let (call_fn, closure_ref, _closure_type) = extract_callable(&args[1]);
             use std::fmt::Write;
             let _ = writeln!(out, "        {{ GorgetArray __src = {coll_val}; \
                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                 {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
-                {call_fn}(&{closure}, __elem); \
+                {call_fn}({closure_ref}, __elem); \
                 }} }}");
         }
         "flat_map" => {
             // flat_map: closure returns a Vector, concatenate all results
             if args.len() < 2 { return None; }
-            let closure = format_operand(&args[1], func, registry);
-            let closure_type = match &args[1] {
-                Operand::Copy(p) | Operand::Move(p) =>
-                    effective_c_type(p.local.0 as usize, func, registry, type_overrides),
-                _ => "void*".to_string(),
-            };
-            let call_fn = format!("{closure_type}__call");
+            let (call_fn, closure_ref, _closure_type) = extract_callable(&args[1]);
             use std::fmt::Write;
             let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
                 GorgetArray __result = gorget_array_new(sizeof({elem_type})); \
                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                 {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
-                GorgetArray __inner = {call_fn}(&{closure}, __elem); \
+                GorgetArray __inner = {call_fn}({closure_ref}, __elem); \
                 for (size_t __j = 0; __j < __inner.len; __j++) {{ \
                 {elem_type} __ie = GORGET_ARRAY_AT({elem_type}, __inner, __j); \
                 gorget_array_push(&__result, &__ie); \
@@ -7709,13 +7684,7 @@ fn try_emit_higher_order_method(
         }
         "find" => {
             if args.len() < 2 { return None; }
-            let closure = format_operand(&args[1], func, registry);
-            let closure_type = match &args[1] {
-                Operand::Copy(p) | Operand::Move(p) =>
-                    effective_c_type(p.local.0 as usize, func, registry, type_overrides),
-                _ => "void*".to_string(),
-            };
-            let call_fn = format!("{closure_type}__call");
+            let (call_fn, closure_ref, _closure_type) = extract_callable(&args[1]);
             // find returns Option[T]
             let option_type = format!("Option__{elem_type}");
             use std::fmt::Write;
@@ -7723,24 +7692,18 @@ fn try_emit_higher_order_method(
                 {option_type} __find_result = {{ .tag = 1 }}; \
                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                 {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
-                if ({call_fn}(&{closure}, __elem)) {{ __find_result.tag = 0; __find_result.data.Some._0 = __elem; break; }} \
+                if ({call_fn}({closure_ref}, __elem)) {{ __find_result.tag = 0; __find_result.data.Some._0 = __elem; break; }} \
                 }} __find_result; }});");
         }
         "count" => {
             if args.len() < 2 { return None; }
-            let closure = format_operand(&args[1], func, registry);
-            let closure_type = match &args[1] {
-                Operand::Copy(p) | Operand::Move(p) =>
-                    effective_c_type(p.local.0 as usize, func, registry, type_overrides),
-                _ => "void*".to_string(),
-            };
-            let call_fn = format!("{closure_type}__call");
+            let (call_fn, closure_ref, _closure_type) = extract_callable(&args[1]);
             use std::fmt::Write;
             let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
                 int64_t __count = 0; \
                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                 {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
-                if ({call_fn}(&{closure}, __elem)) __count++; \
+                if ({call_fn}({closure_ref}, __elem)) __count++; \
                 }} __count; }});");
         }
         "get_or_put" => {

@@ -1,0 +1,62 @@
+from std.collections import Vector
+
+int double(int x):
+    return x * 2
+
+bool is_even(int x):
+    return x % 2 == 0
+
+int add(int a, int b):
+    return a + b
+
+void print_val(int x):
+    print(f"{x}")
+
+Vector[int] expand(int x):
+    Vector[int] r = Vector[int]()
+    r.push(x)
+    r.push(x * 10)
+    return r
+
+void main():
+    Vector[int] nums = Vector[int]()
+    nums.push(1)
+    nums.push(2)
+    nums.push(3)
+    nums.push(4)
+
+    # map with named function
+    Vector[int] doubled = nums.map(double)
+    print(f"{doubled.get(0).unwrap()}")
+    print(f"{doubled.get(1).unwrap()}")
+    print(f"{doubled.get(2).unwrap()}")
+    print(f"{doubled.get(3).unwrap()}")
+
+    # filter with named function
+    Vector[int] evens = nums.filter(is_even)
+    print(f"{evens.len()}")
+    print(f"{evens.get(0).unwrap()}")
+    print(f"{evens.get(1).unwrap()}")
+
+    # fold with named function
+    int total = nums.fold(0, add)
+    print(f"{total}")
+
+    # reduce with named function
+    int reduced = nums.reduce(add)
+    print(f"{reduced}")
+
+    # any with named function
+    print(f"{nums.any(is_even)}")
+
+    # all with named function
+    print(f"{nums.all(is_even)}")
+
+    # each with named function
+    nums.each(print_val)
+
+    # flat_map with named function
+    Vector[int] flat = nums.flat_map(expand)
+    print(f"{flat.len()}")
+    print(f"{flat.get(0).unwrap()}")
+    print(f"{flat.get(1).unwrap()}")

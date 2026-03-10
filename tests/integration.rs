@@ -11105,3 +11105,29 @@ fn test_snapshot_save_and_diff() {
     // Clean up
     let _ = std::fs::remove_dir_all(&snapshot_dir);
 }
+
+#[test]
+fn test_higher_order_named_fn() {
+    run_gg(
+        "test_higher_order_named_fn.gg",
+        "\
+2
+4
+6
+8
+2
+2
+4
+10
+10
+1
+0
+1
+2
+3
+4
+8
+1
+10",
+    );
+}
