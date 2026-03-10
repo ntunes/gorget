@@ -10047,6 +10047,11 @@ fn field_access() {
 x=3,y=7
 name=alice,health=100,alive=true
 10
+42
+99
+0
+0
+10
 done",
     );
 }

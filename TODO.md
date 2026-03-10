@@ -60,8 +60,6 @@
 
 - **Async/await — `await` on vector-indexed tasks with multiple spawn functions**: Type-based await dispatch now works when exactly one function produces tasks of a given type. When multiple functions produce the same `Task__T` type (e.g., two functions both returning `int`), the type-based fallback can't disambiguate. Fix: embed a function dispatch pointer in the `Task__T` struct or use a tag field. [updated: 2026-03-07]
 
-- **`field_set(obj, fname, value)` meta builtin**: Write counterpart to `field_value` (read). Zig equivalent: `@field(result, name) = value`. Would make Cloneable and Default fully meta-driven instead of requiring literal field enumeration in derive generators. [added: 2026-03-10]
-
 - **Self-hosting parser: 4 remaining mismatches (586/590, 99.3%)**: `chars.gg` — null byte `\0` truncates C string output. 3 new: `assert_return_*.gg` — self-hosted parser doesn't handle `assert return` keyword (produces `assert (0 >= lo)` instead of `assert return (__return__ >= lo)`). [updated: 2026-03-10]
 
 - **Self-hosting resolver: 559/559 (100%) — COMPLETE.** [updated: 2026-03-09]

@@ -7,20 +7,20 @@ struct Player:
     int health
     bool alive
 
-# Generic debug serializer
+# Generic debug serializer using field_get
 str to_debug[T](T val):
     str out = ""
     meta for fname, ftype in fields(T):
         if out != "":
             out = out + ","
         meta if ftype == "int":
-            int v = field_value(val, fname)
+            int v = field_get(val, fname)
             out = out + f"{fname}={v}"
         elif ftype == "str":
-            str v = field_value(val, fname)
+            str v = field_get(val, fname)
             out = out + f"{fname}={v}"
         elif ftype == "bool":
-            bool v = field_value(val, fname)
+            bool v = field_get(val, fname)
             out = out + f"{fname}={v}"
     return out
 
@@ -29,14 +29,20 @@ int sum_int_fields[T](T val):
     int total = 0
     meta for fname, ftype in fields(T):
         meta if ftype == "int":
-            total += field_value(val, fname)
+            total += field_get(val, fname)
     return total
 
+# Generic zero-fill using field_set
+void zero_int_fields[T](T &val):
+    meta for fname, ftype in fields(T):
+        meta if ftype == "int":
+            field_set(val, fname, 0)
+
 void main():
-    # Direct literal field access
+    # Direct literal field_get
     auto p = Point(10, 20)
-    int xval = field_value(p, "x")
-    int yval = field_value(p, "y")
+    int xval = field_get(p, "x")
+    int yval = field_get(p, "y")
     print(xval)
     print(yval)
     # Generic serializer
@@ -44,4 +50,18 @@ void main():
     print(to_debug[Player](Player("alice", 100, true)))
     # Generic sum
     print(sum_int_fields[Point](Point(4, 6)))
+    # Direct literal field_set
+    Point q = Point(100, 200)
+    field_set(q, "x", 42)
+    field_set(q, "y", 99)
+    print(q.x)
+    print(q.y)
+    # Generic zero-fill
+    Point r = Point(5, 10)
+    zero_int_fields[Point](&r)
+    print(r.x)
+    print(r.y)
+    # Backward compat: field_value still works
+    int old = field_value(p, "x")
+    print(old)
     print("done")

@@ -2050,7 +2050,36 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
             substitute_type(type_, type_env);
             substitute_expr(value, env, type_env);
         }
-        Stmt::Expr(expr) => substitute_expr(expr, env, type_env),
+        Stmt::Expr(expr) => {
+            substitute_expr(expr, env, type_env);
+            // Post-substitution: rewrite field_set(obj, "field", value) → obj.field = value
+            if let Expr::Call { ref callee, ref args, .. } = expr.node {
+                if let Expr::Identifier(ref cname) = callee.node {
+                    if cname == "field_set" && args.len() == 3 {
+                        if let Expr::StringLiteral(ref s) = args[1].node.value.node {
+                            if !s.has_interpolation() {
+                                let field_name: String = s.segments.iter()
+                                    .filter_map(|seg| if let StringSegment::Literal(l) = seg { Some(l.as_str()) } else { None })
+                                    .collect();
+                                if !field_name.is_empty() {
+                                    let obj_expr = args[0].node.value.clone();
+                                    let val_expr = args[2].node.value.clone();
+                                    let field_span = args[1].node.value.span;
+                                    let target = Spanned::new(Expr::FieldAccess {
+                                        object: Box::new(obj_expr),
+                                        field: Spanned::new(field_name, field_span),
+                                    }, expr.span);
+                                    *stmt = Stmt::Assign {
+                                        target,
+                                        value: val_expr,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Stmt::Assign { target, value } => {
             substitute_expr(target, env, type_env);
             substitute_expr(value, env, type_env);
@@ -2365,11 +2394,11 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
         }
     }
 
-    // Post-recursion: rewrite field_value(val, "field") → val.field
+    // Post-recursion: rewrite field_get/field_value(val, "field") → val.field
     // After substitution, the second arg should now be a plain string literal.
     if let Expr::Call { ref callee, ref args, .. } = expr.node {
         if let Expr::Identifier(ref cname) = callee.node {
-            if cname == "field_value" && args.len() == 2 {
+            if (cname == "field_get" || cname == "field_value") && args.len() == 2 {
                 if let Expr::StringLiteral(ref s) = args[1].node.value.node {
                     if !s.has_interpolation() {
                         let field_name: String = s.segments.iter()
@@ -3046,11 +3075,19 @@ fn eval_delayed_expr(
                                 &format!("enum_from_ordinal: unknown type `{type_name}`"), span)),
                         }
                     }
-                    "field_value" => {
+                    "field_get" | "field_value" => {
                         return Err(meta_err(
-                            "field_value() accesses a runtime struct field and cannot be used as a \
+                            "field_get() accesses a runtime struct field and cannot be used as a \
                              compile-time meta const; use it directly in a runtime statement: \
-                             `auto v = field_value(val, fname)` or inline: `print(\"{field_value(val, fname)}\")`",
+                             `auto v = field_get(val, fname)` or inline: `print(\"{field_get(val, fname)}\")`",
+                            span,
+                        ));
+                    }
+                    "field_set" => {
+                        return Err(meta_err(
+                            "field_set() assigns a runtime struct field and cannot be used as a \
+                             compile-time meta const; use it directly in a runtime statement: \
+                             `field_set(obj, fname, value)`",
                             span,
                         ));
                     }

@@ -84,7 +84,36 @@ fn rewrite_block(block: &mut Block, res: &ResolutionMap, scopes: &ScopeTable) {
 fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
     match stmt {
         Stmt::VarDecl { value, .. } => rewrite_expr(value, res, scopes),
-        Stmt::Expr(expr) => rewrite_expr(expr, res, scopes),
+        Stmt::Expr(expr) => {
+            rewrite_expr(expr, res, scopes);
+            // Rewrite field_set(obj, "field", value) → obj.field = value
+            if let Expr::Call { ref callee, ref args, .. } = expr.node {
+                if let Expr::Identifier(ref cname) = callee.node {
+                    if cname == "field_set" && args.len() == 3 {
+                        if let Expr::StringLiteral(ref s) = args[1].node.value.node {
+                            if !s.has_interpolation() {
+                                let field_name: String = s.segments.iter()
+                                    .filter_map(|seg| if let StringSegment::Literal(l) = seg { Some(l.as_str()) } else { None })
+                                    .collect();
+                                if !field_name.is_empty() {
+                                    let obj_expr = args[0].node.value.clone();
+                                    let val_expr = args[2].node.value.clone();
+                                    let field_span = args[1].node.value.span;
+                                    let target = Spanned::new(Expr::FieldAccess {
+                                        object: Box::new(obj_expr),
+                                        field: Spanned::new(field_name, field_span),
+                                    }, expr.span);
+                                    *stmt = Stmt::Assign {
+                                        target,
+                                        value: val_expr,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Stmt::Assign { target, value } => {
             rewrite_expr(target, res, scopes);
             rewrite_expr(value, res, scopes);
@@ -312,10 +341,10 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
         | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } | Expr::It => {}
     }
 
-    // Rewrite field_value(val, "field") → val.field (for literal usage outside meta for)
+    // Rewrite field_get/field_value(val, "field") → val.field (for literal usage outside meta for)
     if let Expr::Call { ref callee, ref args, .. } = expr.node {
         if let Expr::Identifier(ref cname) = callee.node {
-            if cname == "field_value" && args.len() == 2 {
+            if (cname == "field_get" || cname == "field_value") && args.len() == 2 {
                 if let Expr::StringLiteral(ref s) = args[1].node.value.node {
                     if !s.has_interpolation() {
                         let field_name: String = s.segments.iter()

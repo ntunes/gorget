@@ -5128,11 +5128,13 @@ name. Use `ftype`, `ty`, `field_type`, or any other non-keyword identifier.
 
 ---
 
-### 19.15 `field_value(val, fname)` — Compile-Time Field Access
+### 19.15 `field_get(val, fname)` — Compile-Time Field Read
 
-`field_value(val, fname)` reads a struct field whose name is known at compile time. It is a
-**source-to-source rewrite** — the compiler transforms `field_value(val, "x")` into `val.x`
+`field_get(val, fname)` reads a struct field whose name is known at compile time. It is a
+**source-to-source rewrite** — the compiler transforms `field_get(val, "x")` into `val.x`
 (field access) before type-checking and code generation. No new runtime overhead is introduced.
+
+> **Alias:** `field_value` is accepted as a backward-compatible alias for `field_get`.
 
 **Two usage forms:**
 
@@ -5142,33 +5144,54 @@ str to_debug[T](T val):
     str out = ""
     meta for fname, ftype in fields(T):
         meta if ftype == "int":
-            int v = field_value(val, fname)   # fname is substituted to "x", "y", ... per iteration
+            int v = field_get(val, fname)   # fname is substituted to "x", "y", ... per iteration
             out = out + "{fname}={v}"
     return out
 
 # Form 2 — direct string literal
 auto p = Point(10, 20)
-int xval = field_value(p, "x")   # same as p.x
-int yval = field_value(p, "y")   # same as p.y
+int xval = field_get(p, "x")   # same as p.x
+int yval = field_get(p, "y")   # same as p.y
 ```
 
 **How it works:**
 
 In Form 1, `fname` is a meta-loop variable that gets substituted to a string literal (`"x"`,
-`"y"`, …) for each loop iteration. The compiler then rewrites `field_value(val, "x")` to `val.x`
+`"y"`, …) for each loop iteration. The compiler then rewrites `field_get(val, "x")` to `val.x`
 before type-checking.
 
 In Form 2, the second argument is already a string literal at compile time. The rewrite pass
 (which runs after name resolution) converts it to the equivalent field access.
 
-**Cannot use in `meta const`:** `field_value` produces a *runtime* value, not a compile-time
+**Cannot use in `meta const`:** `field_get` produces a *runtime* value, not a compile-time
 meta constant. Using it in a `meta const` definition emits a compile error:
 
 ```gorget
-meta const bad = field_value(p, "x")  # error: field_value() is a runtime expression
+meta const bad = field_get(p, "x")  # error: field_get() is a runtime expression
 ```
 
-**Generic serializer example:**
+### 19.16 `field_set(obj, fname, value)` — Compile-Time Field Write
+
+`field_set(obj, fname, value)` assigns to a struct field whose name is known at compile time.
+Like `field_get`, it is a **source-to-source rewrite** — the compiler transforms
+`field_set(obj, "x", 42)` into `obj.x = 42` (field assignment) before type-checking.
+
+```gorget
+# Form 1 — meta-loop variable
+void zero_int_fields[T](T &val):
+    meta for fname, ftype in fields(T):
+        meta if ftype == "int":
+            field_set(val, fname, 0)
+
+# Form 2 — direct string literal
+Point p = Point(1, 2)
+field_set(p, "x", 42)   # same as p.x = 42
+```
+
+`field_set` must appear as a statement (not inside an expression). It cannot be used in
+`meta const` definitions.
+
+**Generic field-get and field-set example:**
 
 ```gorget
 str to_debug[T](T val):
@@ -5177,13 +5200,13 @@ str to_debug[T](T val):
         if out != "":
             out = out + ","
         meta if ftype == "int":
-            int v = field_value(val, fname)
+            int v = field_get(val, fname)
             out = out + "{fname}={v}"
         elif ftype == "str":
-            str v = field_value(val, fname)
+            str v = field_get(val, fname)
             out = out + "{fname}={v}"
         elif ftype == "bool":
-            bool v = field_value(val, fname)
+            bool v = field_get(val, fname)
             out = out + "{fname}={v}"
     return out
 
@@ -5192,7 +5215,7 @@ int sum_int_fields[T](T val):
     int total = 0
     meta for fname, ftype in fields(T):
         meta if ftype == "int":
-            total += field_value(val, fname)
+            total += field_get(val, fname)
     return total
 ```
 

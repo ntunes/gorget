@@ -1233,15 +1233,21 @@ fn resolve_expr(
         }
 
         Expr::Call { callee, args, .. } => {
-            // field_value(obj, fname) is a compile-time rewrite builtin.
-            // The callee is not a real function and the second arg is a meta-loop variable
-            // (e.g. `fname`) or a string literal — not a runtime identifier. Skip their
-            // resolution to avoid spurious "undefined name" errors; the actual rewrite
-            // to FieldAccess happens during meta substitution or the rewrite pass.
+            // field_get/field_value(obj, fname) and field_set(obj, fname, value) are
+            // compile-time rewrite builtins. The callee is not a real function and the
+            // field-name arg is a meta-loop variable or string literal — not a runtime
+            // identifier. Skip their resolution to avoid spurious "undefined name" errors;
+            // the actual rewrite happens during meta substitution or the rewrite pass.
             if let Expr::Identifier(cname) = &callee.node {
-                if cname == "field_value" && args.len() == 2 {
+                if (cname == "field_get" || cname == "field_value") && args.len() == 2 {
                     // Only resolve arg0 (the object expression).
                     resolve_expr(&args[0].node.value, scopes, errors, resolution_map);
+                    return;
+                }
+                if cname == "field_set" && args.len() == 3 {
+                    // Resolve arg0 (the object) and arg2 (the value). Skip arg1 (field name).
+                    resolve_expr(&args[0].node.value, scopes, errors, resolution_map);
+                    resolve_expr(&args[2].node.value, scopes, errors, resolution_map);
                     return;
                 }
                 // make_variant(T, "Variant") is a compile-time rewrite builtin.

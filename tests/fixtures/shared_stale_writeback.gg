@@ -13,7 +13,7 @@ async void worker(int &counter):
 async void main():
     shared int x = 0
     Task[void] t = spawn worker(&x)
-    int snapshot = x
+    int snap = x
     t.await()
-    x = snapshot
+    x = snap
     print(x)
