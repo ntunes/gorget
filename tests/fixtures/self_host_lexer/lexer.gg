@@ -26,7 +26,7 @@ enum Keyword:
     KwSelfLower  KwSelfUpper
     KwBox  KwRc  KwArc  KwWeak  KwCell  KwRefCell  KwMutex  KwRwLock
     KwMove  KwMutable
-    KwTest  KwSuite  KwIt  KwPanic  KwAssert
+    KwTest  KwSuite  KwBench  KwIt  KwPanic  KwAssert
     KwShared  KwMeta  KwSelect  KwRethrow  KwMod  KwCatch  KwOn
 
 # ── String literal types ──────────────────────────────────────
@@ -265,6 +265,8 @@ Option[Keyword] keyword_from_str(str s):
         return Some(KwTest())
     elif s == "suite":
         return Some(KwSuite())
+    elif s == "bench":
+        return Some(KwBench())
     elif s == "it":
         return Some(KwIt())
     elif s == "panic":

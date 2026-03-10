@@ -165,6 +165,30 @@ impl Parser {
     fn parse_assert_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Assert)?;
+
+        // `assert return <expr>` — postcondition
+        if self.check(&Token::Keyword(Keyword::Return)) {
+            let ret_span = self.peek_span();
+            self.advance(); // consume `return`
+            // Build a synthetic identifier for the return value
+            let return_ident = Spanned::new(
+                Expr::Identifier("__return__".to_string()),
+                ret_span,
+            );
+            // Parse the rest as an infix continuation (e.g., `>= 0`)
+            let condition = self.parse_expr_with_lhs(return_ident)?;
+
+            let message = if self.match_token(&Token::Comma) {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+
+            let end = self.previous_span();
+            self.consume_newline();
+            return Ok(Spanned::new(Stmt::AssertReturn { condition, message }, start.merge(end)));
+        }
+
         let condition = self.parse_expr()?;
 
         let message = if self.match_token(&Token::Comma) {

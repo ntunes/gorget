@@ -105,6 +105,12 @@ pub fn lower_stmt(
 
         Stmt::Assert { condition, message } => lower_assert(ctx, builder, condition, message.as_ref()),
 
+        Stmt::AssertReturn { condition, message } => {
+            if !ctx.strip_asserts {
+                ctx.postconditions.push((condition.clone(), message.clone()));
+            }
+        }
+
         Stmt::With { bindings, body } => lower_with(ctx, builder, bindings, body),
 
         Stmt::Unsafe { body } => lower_block(ctx, builder, body),
@@ -536,6 +542,9 @@ fn lower_return(
         } else {
             builder.assign(Place::local(LocalId(0)), operand);
         }
+        // Postcondition checks: `assert return <expr>` — check before returning
+        emit_postcondition_checks(ctx, builder);
+
         // P2.6: Emit cleanup drops for all scopes being exited
         // Exclude the local being returned (it's moved into _0, not consumed)
         ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, DropScopeKind::Function, returned_local);
@@ -544,6 +553,26 @@ fn lower_return(
         // P2.6: Emit cleanup drops for all scopes being exited
         ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, DropScopeKind::Function, None);
         builder.ret(FunctionBuilder::const_unit());
+    }
+}
+
+/// Emit postcondition checks (`assert return`) at a return site.
+/// Temporarily registers `__return__` as a local alias for `LocalId(0)` (the return slot),
+/// then lowers each accumulated postcondition as a regular assert.
+fn emit_postcondition_checks(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+) {
+    if ctx.postconditions.is_empty() {
+        return;
+    }
+    // Register __return__ → _0 so the postcondition expression can reference the return value
+    let ret_type = builder.locals[0].type_id;
+    ctx.register_local("__return__", LocalId(0), ret_type);
+
+    let postconditions = ctx.postconditions.clone();
+    for (condition, message) in &postconditions {
+        lower_assert(ctx, builder, condition, message.as_ref());
     }
 }
 
@@ -787,34 +816,41 @@ fn lower_assert(
     }
 
     // For binary comparison conditions without a custom message, emit a rich diagnostic
-    // that includes the actual left/right values (like `assert 1 == 2` → shows "left: 1, right: 2").
-    // Only applies to primitive numeric/bool types — strings and structs fall through to the
-    // simple path (they need special comparison logic via gorget_str_eq, etc.).
+    // that includes the actual left/right values. Works for all types: primitives, strings,
+    // and any named type with an eq/display method.
     if message.is_none() {
         if let Expr::BinaryOp { left, op, right } = &condition.node {
-            if let Some((op_str, cmp_op)) = comparison_op_info(*op) {
+            if let Some((op_str, _)) = comparison_op_info(*op) {
                 let lhs_op = lower_expr(ctx, builder, left);
                 let rhs_op = lower_expr(ctx, builder, right);
                 let lhs_type = infer_operand_type_full(ctx, &lhs_op, builder);
                 let rhs_type = infer_operand_type_full(ctx, &rhs_op, builder);
 
-                if is_primitive_type_for_assert(lhs_type) && is_primitive_type_for_assert(rhs_type) {
-                    let cond_local = builder.cmp(cmp_op, lhs_type, lhs_op.clone(), rhs_op.clone());
+                // Store in locals so values survive across basic blocks
+                let lhs_local = builder.add_local(lhs_type, None);
+                builder.assign(Place::local(lhs_local), lhs_op);
+                let rhs_local = builder.add_local(rhs_type, None);
+                builder.assign(Place::local(rhs_local), rhs_op);
 
-                    let pass_bb = builder.new_block();
-                    let fail_bb = builder.new_block();
-                    builder.branch(Operand::Copy(Place::local(cond_local)), pass_bb, fail_bb);
-                    builder.switch_to(fail_bb);
+                // Emit type-appropriate comparison
+                let cond_local = emit_assert_comparison(
+                    ctx, builder, lhs_local, lhs_type, rhs_local, rhs_type, *op,
+                );
 
-                    let (lhs_fmt, lhs_arg) = assert_printf_info(&lhs_op, lhs_type);
-                    let (rhs_fmt, rhs_arg) = assert_printf_info(&rhs_op, rhs_type);
-                    builder.inline_c(format!(
-                        "gorget_panic(gorget_format(\"assertion failed: left {op_str} right\\n  left:  {lhs_fmt}\\n  right: {rhs_fmt}\", {lhs_arg}, {rhs_arg}));"
-                    ));
-                    builder.unreachable();
-                    builder.switch_to(pass_bb);
-                    return;
-                }
+                let pass_bb = builder.new_block();
+                let fail_bb = builder.new_block();
+                builder.branch(Operand::Copy(Place::local(cond_local)), pass_bb, fail_bb);
+                builder.switch_to(fail_bb);
+
+                // Format both values for the diagnostic message
+                let (lhs_fmt, lhs_arg) = assert_format_info_rich(ctx, builder, lhs_local, lhs_type);
+                let (rhs_fmt, rhs_arg) = assert_format_info_rich(ctx, builder, rhs_local, rhs_type);
+                builder.inline_c(format!(
+                    "gorget_panic(gorget_format(\"assertion failed: left {op_str} right\\n  left:  {lhs_fmt}\\n  right: {rhs_fmt}\", {lhs_arg}, {rhs_arg}));"
+                ));
+                builder.unreachable();
+                builder.switch_to(pass_bb);
+                return;
             }
         }
     }
@@ -849,6 +885,175 @@ fn lower_assert(
     builder.switch_to(pass_bb);
 }
 
+/// Emit a comparison appropriate for the operand types. Returns a LocalId holding the bool result.
+/// Handles primitives (IR cmp), strings (gorget_str_eq/cmp), and named types (Type__eq/compare).
+fn emit_assert_comparison(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    lhs_local: LocalId,
+    lhs_type: TypeId,
+    rhs_local: LocalId,
+    _rhs_type: TypeId,
+    op: BinaryOp,
+) -> LocalId {
+    let is_string = lhs_type == ctx.type_mapper.str_type
+        || lhs_type == ctx.type_mapper.owned_string_type;
+
+    // String comparison via runtime functions
+    if is_string {
+        if matches!(op, BinaryOp::Eq | BinaryOp::Neq) {
+            let result = builder.call_extern(
+                "gorget_str_eq",
+                vec![FunctionBuilder::copy(lhs_local), FunctionBuilder::copy(rhs_local)],
+                BOOL_TYPE,
+            );
+            if op == BinaryOp::Neq {
+                return builder.un_op(UnOp::Not, BOOL_TYPE, FunctionBuilder::copy(result));
+            }
+            return result;
+        }
+        // Ordering comparisons: gorget_str_cmp returns int, compare with 0
+        let cmp_result = builder.call_extern(
+            "gorget_str_cmp",
+            vec![FunctionBuilder::copy(lhs_local), FunctionBuilder::copy(rhs_local)],
+            I64_TYPE,
+        );
+        let cmp_op = match op {
+            BinaryOp::Lt => CmpOp::Lt,
+            BinaryOp::Gt => CmpOp::Gt,
+            BinaryOp::LtEq => CmpOp::Le,
+            BinaryOp::GtEq => CmpOp::Ge,
+            _ => unreachable!(),
+        };
+        return builder.cmp(
+            cmp_op, I64_TYPE,
+            FunctionBuilder::copy(cmp_result),
+            Operand::Constant(Constant::I64(0)),
+        );
+    }
+
+    // Named types: dispatch to Type__eq / Type__compare if available
+    if let Some(GirType::Named(ref type_name)) = ctx.type_registry.get(lhs_type).cloned() {
+        if matches!(op, BinaryOp::Eq | BinaryOp::Neq) {
+            let eq_method = format!("{type_name}__eq");
+            if ctx.fn_sigs.contains_key(&eq_method) {
+                let self_ptr_type = ctx.register_ptr_type(lhs_type);
+                let self_ptr = builder.add_local(self_ptr_type, None);
+                builder.emit_borrow(self_ptr, Place::local(lhs_local));
+                let result = builder.call(
+                    eq_method,
+                    vec![FunctionBuilder::copy(self_ptr), FunctionBuilder::copy(rhs_local)],
+                    BOOL_TYPE,
+                );
+                if op == BinaryOp::Neq {
+                    return builder.un_op(UnOp::Not, BOOL_TYPE, FunctionBuilder::copy(result));
+                }
+                return result;
+            }
+        }
+        if matches!(op, BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq) {
+            let compare_method = format!("{type_name}__compare");
+            let has_compare = ctx.fn_sigs.contains_key(&compare_method)
+                || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{type_name}__compare")));
+            if has_compare {
+                let effective_name = if ctx.fn_sigs.contains_key(&compare_method) {
+                    compare_method
+                } else {
+                    ctx.fn_sigs.keys()
+                        .find(|k| k.ends_with(&format!("_for_{type_name}__compare")))
+                        .cloned()
+                        .unwrap_or(compare_method)
+                };
+                let self_ptr_type = ctx.register_ptr_type(lhs_type);
+                let self_ptr = builder.add_local(self_ptr_type, None);
+                builder.emit_borrow(self_ptr, Place::local(lhs_local));
+                let cmp_result = builder.call(
+                    effective_name,
+                    vec![FunctionBuilder::copy(self_ptr), FunctionBuilder::copy(rhs_local)],
+                    I64_TYPE,
+                );
+                let cmp_op = match op {
+                    BinaryOp::Lt => CmpOp::Lt,
+                    BinaryOp::Gt => CmpOp::Gt,
+                    BinaryOp::LtEq => CmpOp::Le,
+                    BinaryOp::GtEq => CmpOp::Ge,
+                    _ => unreachable!(),
+                };
+                return builder.cmp(
+                    cmp_op, I64_TYPE,
+                    FunctionBuilder::copy(cmp_result),
+                    Operand::Constant(Constant::I64(0)),
+                );
+            }
+        }
+    }
+
+    // Fallback: primitive IR comparison
+    let cmp_op = comparison_op_info(op).map(|(_, c)| c).unwrap_or(CmpOp::Eq);
+    builder.cmp(cmp_op, lhs_type, FunctionBuilder::copy(lhs_local), FunctionBuilder::copy(rhs_local))
+}
+
+/// Return (printf_format_spec, c_args_expression) for an assert diagnostic value.
+/// Handles all types: primitives, strings, and named types with display methods.
+fn assert_format_info_rich(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    local: LocalId,
+    type_id: TypeId,
+) -> (String, String) {
+    let c_expr = format!("_{}", local.0);
+
+    // Primitive types: direct printf formatting
+    if is_primitive_type_for_assert(type_id) {
+        if type_id == F64_TYPE || type_id == F32_TYPE {
+            return ("%g".to_string(), format!("(double){c_expr}"));
+        } else if type_id == BOOL_TYPE {
+            return ("%s".to_string(), format!("({c_expr}) ? \"true\" : \"false\""));
+        } else {
+            return ("%lld".to_string(), format!("(long long)({c_expr})"));
+        }
+    }
+
+    // String types: show the string value via %.*s
+    if type_id == ctx.type_mapper.str_type || type_id == ctx.type_mapper.owned_string_type {
+        return ("%.*s".to_string(), format!("(int){c_expr}.len, {c_expr}.data"));
+    }
+
+    // Named types: call display method if available
+    if let Some(GirType::Named(ref type_name)) = ctx.type_registry.get(type_id).cloned() {
+        let display_method = format!("{type_name}__display");
+        let has_display = ctx.fn_sigs.contains_key(&display_method)
+            || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{type_name}__display")));
+        if has_display {
+            let effective_method = if ctx.fn_sigs.contains_key(&display_method) {
+                display_method
+            } else {
+                ctx.fn_sigs.keys()
+                    .find(|k| k.ends_with(&format!("_for_{type_name}__display")))
+                    .cloned()
+                    .unwrap_or(display_method)
+            };
+            // Call Type__display(&val) → Str, then format via %.*s
+            let self_type = ctx.register_ptr_type(type_id);
+            let self_ptr = builder.add_local(self_type, None);
+            builder.emit_borrow(self_ptr, Place::local(local));
+            let str_type = ctx.type_mapper.str_type;
+            let result = builder.call(
+                effective_method,
+                vec![FunctionBuilder::copy(self_ptr)],
+                str_type,
+            );
+            let result_c = format!("_{}", result.0);
+            return ("%.*s".to_string(), format!("(int){result_c}.len, {result_c}.data"));
+        }
+        // Named type without display — show type name
+        return ("%s".to_string(), format!("\"<{type_name}>\""));
+    }
+
+    // Opaque fallback
+    ("%s".to_string(), "\"<opaque>\"".to_string())
+}
+
 /// Return `(op_str, CmpOp)` for a comparison BinaryOp, or None for non-comparison ops.
 fn comparison_op_info(op: BinaryOp) -> Option<(&'static str, CmpOp)> {
     match op {
@@ -870,48 +1075,6 @@ fn is_primitive_type_for_assert(type_id: TypeId) -> bool {
         U64_TYPE | U32_TYPE | U16_TYPE | U8_TYPE |
         F64_TYPE | F32_TYPE | BOOL_TYPE
     )
-}
-
-/// Return `(printf_format_spec, c_expression)` for an assert diagnostic operand.
-/// Only called for primitive types (guaranteed by is_primitive_type_for_assert).
-fn assert_printf_info(op: &Operand, type_id: TypeId) -> (String, String) {
-    let c_expr = operand_to_c_str(op);
-    if type_id == F64_TYPE || type_id == F32_TYPE {
-        ("%g".to_string(), format!("(double){c_expr}"))
-    } else if type_id == BOOL_TYPE {
-        ("%s".to_string(), format!("({c_expr}) ? \"true\" : \"false\""))
-    } else {
-        // All integer types: treat as int64_t
-        ("%lld".to_string(), format!("(long long)({c_expr})"))
-    }
-}
-
-/// Convert a GIR operand to its C expression string (for embedding in InlineC).
-fn operand_to_c_str(op: &Operand) -> String {
-    match op {
-        Operand::Copy(place) | Operand::Move(place) => {
-            let mut s = format!("_{}", place.local.0);
-            for proj in &place.projections {
-                match proj {
-                    Projection::Deref => s = format!("(*{s})"),
-                    Projection::Field(i) => s = format!("{s}.__field_{i}"),
-                    _ => {}
-                }
-            }
-            s
-        }
-        Operand::Constant(c) => match c {
-            Constant::I64(n) => format!("{n}LL"),
-            Constant::I32(n) => n.to_string(),
-            Constant::F64(f) => format!("{f}"),
-            Constant::Bool(b) => if *b { "1".to_string() } else { "0".to_string() },
-            Constant::Str(s) => {
-                let escaped = s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
-                format!("\"{}\"", escaped)
-            }
-            _ => "0".to_string(),
-        },
-    }
 }
 
 /// Generate a static assertion failure message for an assertion condition.

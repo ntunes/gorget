@@ -100,15 +100,8 @@
 - **SSH library enhancements**: Public key authentication (IdentityFile), host key verification against known_hosts, ProxyJump/ProxyCommand support from ssh_config. [added: 2026-02-15]
 
 
-- **Rich assert for all types**: Extend assert introspection (currently primitives only) to strings, enums, and structs. Types implementing `Formatter` should have their values captured and displayed on comparison failure. See language-design.md §29.2. [added: 2026-03-10]
 
-- **`assert return` (postconditions)**: Implement `assert return <expr>` — compiler inserts postcondition checks before every `return` site. `return` is bound to the return value. Invalid in void functions. See language-reference.md §6.18. [added: 2026-03-10]
 
-- **`@skip("reason")` test attribute**: Parse `@skip` attribute on test blocks. Skipped tests are reported but not executed. Update test runner codegen and console output. [added: 2026-03-10]
-
-- **Remove `with` clause from test declaration syntax**: The `test "name" with Expr as x:` syntax is deprecated in favor of `with` blocks inside the test body. Remove `with_bindings` from `TestDef` AST, parsing in `parse_test_def`, and wiring across 13 files (resolve, typecheck, rewrite, meta, borrow, IR lowering, C backend, simulator). Rewrite `test_with_clause.gg` fixtures to use body-level `with` blocks. [added: 2026-03-10]
-
-- **Benchmarks (`bench` blocks)**: Implement `bench "name":` blocks and `gg test --bench`. Automatic iteration, timing, statistical output. See language-design.md §29.8. [added: 2026-03-10]
 
 - **Demand-driven refinement for borrow analysis**: When `return_borrows_from` conservatively unions multiple branches (e.g., function returns from two branches with different parameter origins), this can cause false positives at specific call sites. Per-call-site re-analysis would only activate when the conservative summary causes a rejection, then trace the specific call arguments through the callee body. Currently zero false positives across 466 unit + 228 integration tests — implement when actual false-positive reports arise. [added: 2026-02-18]
 

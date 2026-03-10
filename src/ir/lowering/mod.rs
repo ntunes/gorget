@@ -8,7 +8,6 @@ pub mod stmts;
 pub mod traits;
 pub mod types;
 
-use crate::ir::instructions::Operand;
 use crate::ir::types::*;
 use crate::ir::{ExternDecl, Module};
 use crate::parser::ast::{self, FunctionBody, Item};
@@ -32,6 +31,8 @@ pub struct LoweringOptions {
     pub overflow_checked: bool,
     /// When true, lower test items even when a `main()` exists (for `gg test`).
     pub test_mode: bool,
+    /// When true, lower bench items instead of test items (for `gg test --bench`).
+    pub bench_mode: bool,
     /// Only run tests whose tags include one of these (empty = run all).
     pub test_tags: Vec<String>,
     /// Skip tests whose tags include any of these.
@@ -901,8 +902,12 @@ pub fn lower_module(
     // Lower test items: each test becomes a void function, then generate test runner main.
     // In test_mode (gg test), run even when a main() exists — the C backend will skip it.
     let has_tests = ast_module.items.iter().any(|item| matches!(&item.node, Item::Test(_)));
+    let has_benches = ast_module.items.iter().any(|item| matches!(&item.node, Item::Bench(_)));
     let has_main = ast_module.items.iter().any(|item| matches!(&item.node, Item::Function(f) if f.name.node == "main"));
-    if has_tests && (options.test_mode || !has_main) {
+    if options.bench_mode && has_benches {
+        lower_bench_items(&mut ctx, &mut module, ast_module, options);
+        module.runtime.is_test_module = true;
+    } else if has_tests && (options.test_mode || !has_main) {
         lower_test_items(&mut ctx, &mut module, ast_module, options);
         // Mark module as a test module so the C backend always emits a test runner,
         // even when all tests were filtered out (e.g., --tag X --exclude-tag X → 0 tests).
@@ -1593,90 +1598,33 @@ fn lower_test_items(
                     if let AttributeArg::StringLiteral(s) = arg { Some(s.clone()) } else { None }
                 });
 
-            // Lower with-bindings as separate init functions + pointer parameters.
-            // This ensures that with-binding storage lives in the TEST RUNNER's stack frame
-            // (not the test function's frame), so drops work correctly even when
-            // gorget_panic() calls longjmp() back to the test runner's setjmp.
-            let mut with_binding_infos: Vec<crate::ir::TestWithBinding> = Vec::new();
-            let mut wb_param_types: Vec<TypeId> = Vec::new();
-            let mut wb_ptr_types: Vec<TypeId> = Vec::new();
+            // Extract @skip metadata — skipped tests are reported but not executed
+            let skipped = test_def.attributes.iter()
+                .any(|a| a.node.name.node == "skip");
+            let skip_reason: Option<String> = test_def.attributes.iter()
+                .find(|a| a.node.name.node == "skip")
+                .and_then(|a| a.node.args.first())
+                .and_then(|arg| {
+                    if let AttributeArg::StringLiteral(s) = arg { Some(s.clone()) } else { None }
+                });
 
-            for (wb_idx, binding) in test_def.with_bindings.iter().enumerate() {
-                let init_fn_name = format!("__test_{idx}_wb_{wb_idx}_init");
-
-                // Create init function: lowers the initializer and returns the value.
-                // The value is MOVED out (not dropped by this function).
-                {
-                    // We don't know the return type yet, use UNIT_TYPE as placeholder.
-                    let mut ib = FunctionBuilder::new(&init_fn_name, UNIT_TYPE, &[]);
-                    ctx.clear_locals();
-                    ctx.drops.push_scope(drops::DropScopeKind::Function);
-                    let operand = exprs::lower_expr(ctx, &mut ib, &binding.expr);
-                    let gir_type = stmts::infer_operand_type_with_builder(ctx, &operand, &ib);
-                    // Store the value in a local. The local is the value we will return.
-                    let local_id = ib.add_local(gir_type, Some("__wb_val"));
-                    ctx.drops.register_local(local_id, gir_type, &ctx.type_registry);
-                    ib.assign(crate::ir::instructions::Place::local(local_id), operand);
-                    // Fix up return type and the return place type now that we know it.
-                    ib.return_type = gir_type;
-                    ib.locals[0].type_id = gir_type; // _0 is the return place
-                    // Drop everything in scope EXCEPT local_id — it's being moved out.
-                    // Using emit_early_exit_drops mirrors how lower_return handles exclusion.
-                    ctx.drops.emit_early_exit_drops(&mut ib, &ctx.type_registry, drops::DropScopeKind::Function, Some(local_id));
-                    ctx.drops.pop_scope_no_emit();
-                    ib.ret(Operand::Move(crate::ir::instructions::Place::local(local_id)));
-                    let init_fn = ib.build();
-                    let actual_type = init_fn.return_type;
-
-                    // Create a MutPtr type for the test function parameter.
-                    let ptr_type = ctx.type_registry.insert(crate::ir::types::GirType::MutPtr(actual_type));
-                    wb_param_types.push(actual_type);
-                    wb_ptr_types.push(ptr_type);
-                    with_binding_infos.push(crate::ir::TestWithBinding {
-                        var_name: binding.name.node.clone(),
-                        init_fn_name: init_fn_name.clone(),
-                        type_id: actual_type,
-                    });
-                    module.functions.push(init_fn);
-                }
-
-                // Restore for next iteration
-                ctx.clear_locals();
+            // Skipped tests: register metadata only, don't lower body
+            if skipped {
+                module.runtime.test_fns.push(TestFnInfo {
+                    fn_name: String::new(),
+                    display_name: test_name,
+                    should_panic,
+                    expected_panic_msg,
+                    skipped: true,
+                    skip_reason,
+                });
+                continue;
             }
 
-            // Build the test function. If there are with-bindings, it takes MutPtr parameters.
-            let param_specs: Vec<(TypeId, Option<&str>)> = wb_ptr_types.iter()
-                .map(|&t| (t, None))
-                .collect();
-
-            let mut builder = FunctionBuilder::new(&fn_name, UNIT_TYPE, &param_specs);
+            // Build the test function (no parameters — with-bindings use body-level `with` blocks).
+            let mut builder = FunctionBuilder::new(&fn_name, UNIT_TYPE, &[]);
             ctx.clear_locals();
             ctx.drops.push_scope(drops::DropScopeKind::Function);
-
-            // Register with-binding pointer parameters and expose them as dereferences.
-            // In the test body, `r` refers to `*__wb_ptr_0` (the pointer param).
-            // We register `r` as a local that IS the pointer param, type = T (not *T),
-            // by storing it in a deref local.
-            for (wb_idx, binding_info) in with_binding_infos.iter().enumerate() {
-                // The pointer parameter is local _1, _2, ... (after _0 = return place).
-                // FunctionBuilder params are locals 1..=n.
-                let ptr_local_id = crate::ir::types::LocalId((wb_idx + 1) as u32);
-                let ptr_type = wb_ptr_types[wb_idx];
-                // Dereference: create a local for the dereferenced value
-                let val_local_id = builder.add_local(wb_param_types[wb_idx], Some(&binding_info.var_name));
-                // Emit load: val = *ptr
-                builder.assign(
-                    crate::ir::instructions::Place::local(val_local_id),
-                    Operand::Copy(crate::ir::instructions::Place {
-                        local: ptr_local_id,
-                        projections: vec![crate::ir::instructions::Projection::Deref],
-                    }),
-                );
-                ctx.register_local(&binding_info.var_name, val_local_id, wb_param_types[wb_idx]);
-                // DO NOT register with drop elaborator — with-bindings are dropped by
-                // the test runner via the cleanup stack, not the test function's scope exit.
-                let _ = ptr_type; // suppress unused warning
-            }
 
             stmts::lower_block(ctx, &mut builder, &test_def.body);
 
@@ -1696,7 +1644,55 @@ fn lower_test_items(
                 display_name: test_name,
                 should_panic,
                 expected_panic_msg,
-                with_bindings: with_binding_infos,
+                skipped: false,
+                skip_reason: None,
+            });
+        }
+    }
+}
+
+/// Lower bench items into benchmark functions.
+fn lower_bench_items(
+    ctx: &mut LoweringContext,
+    module: &mut Module,
+    ast_module: &ast::Module,
+    options: &LoweringOptions,
+) {
+    use crate::ir::builder::FunctionBuilder;
+    use crate::ir::BenchFnInfo;
+
+    for (idx, item) in ast_module.items.iter().enumerate() {
+        if let Item::Bench(bench_def) = &item.node {
+            // Apply name filter if present
+            if let Some(ref filter) = options.test_name_filter {
+                if !bench_def.name.node.contains(filter.as_str()) {
+                    continue;
+                }
+            }
+
+            let fn_name = format!("__bench_{idx}");
+            let bench_name = bench_def.name.node.clone();
+
+            let mut builder = FunctionBuilder::new(&fn_name, UNIT_TYPE, &[]);
+            ctx.clear_locals();
+            ctx.drops.push_scope(drops::DropScopeKind::Function);
+
+            stmts::lower_block(ctx, &mut builder, &bench_def.body);
+
+            let last_block_idx = builder.current_block.0 as usize;
+            if builder.blocks[last_block_idx].terminator.is_none() {
+                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+                builder.ret(FunctionBuilder::const_unit());
+            } else {
+                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            }
+
+            let mut bench_fn = builder.build();
+            bench_fn.is_test_fn = true; // enable cleanup stack
+            module.functions.push(bench_fn);
+            module.runtime.bench_fns.push(BenchFnInfo {
+                fn_name,
+                display_name: bench_name,
             });
         }
     }

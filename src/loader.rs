@@ -389,10 +389,10 @@ fn qualify_item(item: &mut Item, vm: &HashMap<String, String>) {
         Item::ConstDecl(c) => qualify_expr(&mut c.value, vm),
         Item::StaticDecl(s) => qualify_expr(&mut s.value, vm),
         Item::Test(t) => {
-            for binding in &mut t.with_bindings {
-                qualify_expr(&mut binding.expr, vm);
-            }
             qualify_block(&mut t.body, vm);
+        }
+        Item::Bench(b) => {
+            qualify_block(&mut b.body, vm);
         }
         Item::SuiteSetup(s) => qualify_block(&mut s.body, vm),
         Item::SuiteTeardown(s) => qualify_block(&mut s.body, vm),
@@ -478,7 +478,7 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
             for b in bindings { qualify_expr(&mut b.expr, vm); }
             qualify_block(body, vm);
         }
-        Stmt::Assert { condition, message } => {
+        Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
             qualify_expr(condition, vm);
             if let Some(m) = message { qualify_expr(m, vm); }
         }

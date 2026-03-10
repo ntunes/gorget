@@ -1,0 +1,10 @@
+@derive(Equatable, Displayable)
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void main():
+    Color a = Color.Red()
+    Color b = Color.Blue()
+    assert a == b

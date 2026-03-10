@@ -382,6 +382,10 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
         Stmt::Assert {
             condition,
             message,
+        }
+        | Stmt::AssertReturn {
+            condition,
+            message,
         } => {
             v.visit_expr(condition);
             if let Some(msg) = message {

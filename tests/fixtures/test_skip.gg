@@ -1,0 +1,13 @@
+test "passes":
+    assert 1 + 1 == 2
+
+@skip("not implemented yet")
+test "skipped with reason":
+    assert false
+
+@skip
+test "skipped without reason":
+    assert false
+
+test "also passes":
+    assert true

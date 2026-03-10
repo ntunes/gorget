@@ -382,7 +382,7 @@ impl GenericCollector {
             Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
                 self.scan_block(body);
             }
-            Stmt::Assert { condition, message } => {
+            Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
                 self.scan_expr(condition);
                 if let Some(msg) = message {
                     self.scan_expr(msg);

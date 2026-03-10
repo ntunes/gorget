@@ -1,0 +1,10 @@
+int my_abs(int x):
+    assert return >= 0, "abs must return non-negative"
+    if x < 0:
+        return -x
+    return x
+
+void main():
+    print(my_abs(-5))
+    print(my_abs(3))
+    print(my_abs(0))

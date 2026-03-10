@@ -6,12 +6,16 @@ equip Resource with Drop:
         str n = self.name
         print(f"dropping {n}")
 
-test "single with" with Resource("alpha") as r:
-    assert r.name == "alpha"
+test "single with":
+    with Resource("alpha") as r:
+        assert r.name == "alpha"
 
-test "with cleanup on failure" with Resource("beta") as r:
-    assert 1 == 2
+test "with cleanup on failure":
+    with Resource("beta") as r:
+        assert 1 == 2
 
-test "multiple with" with Resource("gamma") as a, Resource("delta") as b:
-    assert a.name == "gamma"
-    assert b.name == "delta"
+test "multiple with":
+    with Resource("gamma") as a:
+        with Resource("delta") as b:
+            assert a.name == "gamma"
+            assert b.name == "delta"

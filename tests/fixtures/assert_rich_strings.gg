@@ -1,0 +1,9 @@
+void main():
+    str a = "hello"
+    str b = "hello"
+    assert a == b
+    assert "abc" < "def"
+    assert "xyz" > "abc"
+    assert "aaa" <= "aab"
+    assert "zzz" >= "zzz"
+    print("string asserts passed")

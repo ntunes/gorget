@@ -1,0 +1,4 @@
+void main():
+    str a = "hello"
+    str b = "world"
+    assert a == b

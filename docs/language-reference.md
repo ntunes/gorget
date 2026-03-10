@@ -4181,6 +4181,7 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `--tag <name>`       | Only run tests matching this tag (repeatable)           |
 | `--exclude-tag <name>` | Skip tests with this tag (repeatable; exclusion wins) |
 | `--filter <substr>`  | Only run tests whose name contains `<substr>`           |
+| `--bench`            | Run benchmarks instead of tests                         |
 | `--hot-reload`       | Enable hot code reload (builds host + guest shared library) |
 | `--shared [-o file]` | Build as a shared library (`.dylib`/`.so`)              |
 | `--show-borrows`     | Print inferred borrow analysis for all functions (diagnostic) |
@@ -4409,6 +4410,32 @@ meta for query, expected in [["SELECT 1", 1], ["SELECT 2", 2]]:
 ### 18.11 Constraints
 
 - At most one `suite setup` and one `suite teardown` per file.
+
+### 18.10 Benchmarks
+
+```gorget
+bench "addition":
+    int x = 1 + 2
+
+bench "string concat":
+    str s = "hello" + " world"
+```
+
+Run with `gg test --bench <file>`. Each bench block is:
+1. Warmed up (3 iterations).
+2. Auto-calibrated — iterations double from 100 until total >= 1 second.
+3. Reported — iterations and average time per iteration (auto-scaled to ns, us, ms, or s).
+
+```
+Running 2 benchmarks...
+
+  bench: addition ... 400000000 iters, 3 ns/iter
+  bench: string concat ... 64000000 iters, 19 ns/iter
+
+2 benchmarks complete.
+```
+
+The `--filter` flag works for benchmarks: `gg test --bench --filter "sort" file.gg`.
 
 ---
 

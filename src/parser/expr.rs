@@ -187,7 +187,7 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
             bindings.iter().any(|b| contains_it(&b.expr))
                 || block_contains_it(body)
         }
-        Stmt::Assert { condition, message } => {
+        Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
             contains_it(condition) || message.as_ref().is_some_and(contains_it)
         }
         Stmt::Item(_) => false,
@@ -246,9 +246,19 @@ impl Parser {
         self.parse_expr_bp(0)
     }
 
+    /// Parse an expression starting from a given LHS (for `assert return` where `return` is the LHS).
+    pub fn parse_expr_with_lhs(&mut self, lhs: Spanned<Expr>) -> Result<Spanned<Expr>, ParseError> {
+        self.parse_expr_bp_with_lhs(0, lhs)
+    }
+
     /// Parse an expression with minimum binding power (Pratt parser).
     fn parse_expr_bp(&mut self, min_bp: u8) -> Result<Spanned<Expr>, ParseError> {
-        let mut lhs = self.parse_prefix()?;
+        let lhs = self.parse_prefix()?;
+        self.parse_expr_bp_with_lhs(min_bp, lhs)
+    }
+
+    /// Pratt parser infix/postfix loop from a given LHS.
+    fn parse_expr_bp_with_lhs(&mut self, min_bp: u8, mut lhs: Spanned<Expr>) -> Result<Spanned<Expr>, ParseError> {
 
         loop {
             // Check for postfix operators

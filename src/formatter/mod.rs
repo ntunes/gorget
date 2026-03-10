@@ -280,6 +280,7 @@ impl Formatter {
                 self.emitter.newline();
             }
             Item::Test(t) => self.format_test(t),
+            Item::Bench(b) => self.format_bench(b),
             Item::SuiteSetup(s) => self.format_suite_setup(s),
             Item::SuiteTeardown(s) => self.format_suite_teardown(s),
             Item::MetaConst(mc) => {
@@ -398,6 +399,18 @@ impl Formatter {
         self.emitter.newline();
         self.emitter.indent();
         self.format_block_stmts(&t.body);
+        self.emitter.dedent();
+    }
+
+    fn format_bench(&mut self, b: &BenchDef) {
+        self.format_doc_comment(&b.doc_comment);
+        self.format_attributes(&b.attributes);
+        self.emitter.write("bench \"");
+        self.emitter.write(&b.name.node);
+        self.emitter.write("\":");
+        self.emitter.newline();
+        self.emitter.indent();
+        self.format_block_stmts(&b.body);
         self.emitter.dedent();
     }
 
@@ -1328,6 +1341,15 @@ impl Formatter {
                 }
                 self.emitter.newline();
             }
+            Stmt::AssertReturn { condition, message } => {
+                self.emitter.write("assert return");
+                self.format_assert_return_expr(condition);
+                if let Some(msg) = message {
+                    self.emitter.write(", ");
+                    self.format_expr(msg);
+                }
+                self.emitter.newline();
+            }
             Stmt::Item(item) => {
                 let spanned = Spanned::new(*item.clone(), stmt.span);
                 self.format_item(&spanned);
@@ -1581,6 +1603,24 @@ impl Formatter {
     }
 
     // ── Expressions ─────────────────────────────────────────
+
+    /// Format an expression for `assert return`, replacing `__return__` with `return`.
+    fn format_assert_return_expr(&mut self, expr: &Spanned<Expr>) {
+        match &expr.node {
+            Expr::Identifier(name) if name == "__return__" => {
+                // __return__ is represented by the `return` keyword already
+                // written by the AssertReturn handler — emit nothing here.
+            }
+            Expr::BinaryOp { left, op, right } => {
+                self.format_assert_return_expr(left);
+                self.emitter.write(" ");
+                self.emitter.write(binary_op_str(*op));
+                self.emitter.write(" ");
+                self.format_assert_return_expr(right);
+            }
+            _ => self.format_expr(expr),
+        }
+    }
 
     fn format_expr(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {

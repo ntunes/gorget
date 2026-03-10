@@ -141,6 +141,7 @@ enum Item:
     IStaticDecl(SpannedType, str, SpannedExpr)
     IExternBlock(Vector[FunctionDef])
     ITest(str, Vector[SpannedExpr], Vector[str], Vector[Stmt])
+    IBench(str, Vector[Stmt])
     ISuiteSetup(Vector[Stmt])
     ISuiteTeardown(Vector[Stmt])
 

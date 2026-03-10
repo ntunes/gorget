@@ -186,6 +186,9 @@ pub struct LoweringContext<'a> {
     pub with_shared_refresh: Vec<(LocalId, LocalId)>,
     /// Accumulated `on error:` cleanup blocks. Emitted in LIFO order on error paths.
     pub on_error_blocks: Vec<crate::parser::ast::Block>,
+    /// Accumulated `assert return` postcondition expressions.
+    /// Checked at every `return` site before the value is returned.
+    pub postconditions: Vec<(crate::span::Spanned<crate::parser::ast::Expr>, Option<crate::span::Spanned<crate::parser::ast::Expr>>)>,
 }
 
 
@@ -222,6 +225,7 @@ impl<'a> LoweringContext<'a> {
             gir_equip_methods: rustc_hash::FxHashSet::default(),
             with_shared_refresh: Vec::new(),
             on_error_blocks: Vec::new(),
+            postconditions: Vec::new(),
         }
     }
 
@@ -296,6 +300,7 @@ impl<'a> LoweringContext<'a> {
         self.spawn.pending_fn = None;
         self.shared.locals.clear();
         self.with_shared_refresh.clear();
+        self.postconditions.clear();
     }
 
     /// Take the locals map, leaving it empty. Used for save/restore during async variant generation.

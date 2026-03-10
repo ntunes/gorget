@@ -304,6 +304,9 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
         case ITest(_, _, _, _):
             pass
 
+        case IBench(_, _):
+            pass
+
         case ISuiteSetup(_):
             pass
 
@@ -382,6 +385,11 @@ void resolve_item_body(Item item, ScopeTable &scopes, TypeTable &types, ResolveC
                 if wname != "_":
                     scopes.define(wname, DkVariable(), Span(0, 0))
                 wi = wi + 1
+            resolve_block(body, &scopes, &types, &ctx)
+            scopes.pop_scope()
+
+        case IBench(_, body):
+            scopes.push_scope(SkFunction())
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
 

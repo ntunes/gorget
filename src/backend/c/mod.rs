@@ -485,7 +485,7 @@ fn generate_c_impl(module: &Module, hr_opts: Option<&HotReloadOpts>) -> GirCodeg
     // Full runtime preamble (provides Str, GorgetString, GorgetArray, etc.)
     out.push_str(c_runtime::RUNTIME_PREAMBLE);
     // Use test panic handler if module has test functions (or is in test mode).
-    if module.runtime.test_fns.is_empty() && !module.runtime.is_test_module {
+    if module.runtime.test_fns.is_empty() && module.runtime.bench_fns.is_empty() && !module.runtime.is_test_module {
         out.push_str(c_runtime::PANIC_NORMAL);
     } else {
         out.push_str(c_runtime::PANIC_TEST);
@@ -780,12 +780,12 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
 
     // ── Function Definitions ──
     out.push_str("// ── Function Definitions ──\n");
-    let has_test_runner = !module.runtime.test_fns.is_empty() || module.runtime.is_test_module;
+    let has_test_runner = !module.runtime.test_fns.is_empty() || !module.runtime.bench_fns.is_empty() || module.runtime.is_test_module;
     for func in &module.functions {
         if is_template_function(&func.name, &skip_names) {
             continue;
         }
-        // Skip user main() when test runner will provide main()
+        // Skip user main() when test/bench runner will provide main()
         if has_test_runner && func.name == "main" {
             continue;
         }
@@ -793,8 +793,10 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         out.push('\n');
     }
 
-    // Test runner main (if test functions were registered, or forced by test_mode).
-    if !module.runtime.test_fns.is_empty() || module.runtime.is_test_module {
+    // Test/bench runner main.
+    if !module.runtime.bench_fns.is_empty() {
+        emit_bench_runner_main(&mut out, module);
+    } else if !module.runtime.test_fns.is_empty() || module.runtime.is_test_module {
         emit_test_runner_main(&mut out, module);
     }
 
@@ -941,7 +943,6 @@ fn generate_hot_reload_split(module: &Module, full_c: &str, hr_opts: Option<&Hot
 /// Emit a test runner main() with timing, @should_panic support, and suite setup/teardown.
 fn emit_test_runner_main(out: &mut String, module: &Module) {
     let test_fns = &module.runtime.test_fns;
-    let registry = &module.type_registry;
     let tracing = module.runtime.trace_filename.is_some();
     let _ = writeln!(out, "int main(int argc, char** argv) {{");
     let _ = writeln!(out, "    gorget_init_args(argc, argv);");
@@ -949,7 +950,7 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
         let escaped = trace_path.replace('\\', "\\\\").replace('"', "\\\"");
         let _ = writeln!(out, "    __gorget_trace_init(\"{escaped}\");");
     }
-    let _ = writeln!(out, "    int __test_passed = 0, __test_failed = 0;");
+    let _ = writeln!(out, "    int __test_passed = 0, __test_failed = 0, __test_skipped = 0;");
     let _ = writeln!(out, "    struct timespec __total_start, __total_end;");
     let _ = writeln!(out, "    clock_gettime(CLOCK_MONOTONIC, &__total_start);");
     let _ = writeln!(out, "    printf(\"Running {} tests...\\n\");", test_fns.len());
@@ -959,8 +960,25 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
     }
 
     for info in test_fns {
-        let fn_name = &info.fn_name;
         let escaped = info.display_name.replace('\\', "\\\\").replace('"', "\\\"");
+
+        // Skipped tests: report and continue without executing
+        if info.skipped {
+            let _ = writeln!(out, "    printf(\"  test: {escaped} ... \");");
+            if let Some(ref reason) = info.skip_reason {
+                let escaped_reason = reason.replace('\\', "\\\\").replace('"', "\\\"");
+                let _ = writeln!(out, "    printf(\"SKIP ({escaped_reason})\\n\");");
+            } else {
+                let _ = writeln!(out, "    printf(\"SKIP\\n\");");
+            }
+            let _ = writeln!(out, "    __test_skipped++;");
+            if tracing {
+                let _ = writeln!(out, "    if (__gorget_trace_fp) fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_end\\\",\\\"name\\\":\\\"{escaped}\\\",\\\"status\\\":\\\"skip\\\"}}\\n\");");
+            }
+            continue;
+        }
+
+        let fn_name = &info.fn_name;
         let _ = writeln!(out, "    printf(\"  test: {escaped} ... \");");
         let _ = writeln!(out, "    fflush(stdout);");
         if tracing {
@@ -973,50 +991,18 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
         let _ = writeln!(out, "        struct timespec __t_start, __t_end;");
         let _ = writeln!(out, "        clock_gettime(CLOCK_MONOTONIC, &__t_start);");
 
-        // Declare and initialize with-bindings in the test runner's stack frame.
-        // This ensures they're alive (and dropped) even when the test panics via longjmp.
-        for (wb_idx, wb) in info.with_bindings.iter().enumerate() {
-            let c_type = format_type(wb.type_id, registry);
-            let init_fn = &wb.init_fn_name;
-            let _ = writeln!(out, "        {c_type} __wb_{wb_idx} = {init_fn}();");
-        }
-
-        // Build the argument list: &__wb_0, &__wb_1, ...
-        let wb_args: String = (0..info.with_bindings.len())
-            .map(|i| format!("&__wb_{i}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-
         // Tell gorget_panic() where to start running cleanup on panic.
         // gorget_panic() calls __gorget_cleanup_run(__gorget_test_cleanup_mark) BEFORE
         // longjmp, while the test function's stack frame is still valid.
-        // This ensures stack-allocated test-body locals are dropped with valid pointers.
         let _ = writeln!(out, "        __gorget_test_cleanup_mark = __cleanup_mark;");
         let _ = writeln!(out, "        if (setjmp(__gorget_test_jmp) == 0) {{");
-        let _ = writeln!(out, "            {fn_name}({wb_args});");
+        let _ = writeln!(out, "            {fn_name}();");
         // On normal exit: reset cleanup stack WITHOUT running (entries already dropped by test fn).
         let _ = writeln!(out, "            __gorget_cleanup_top = __cleanup_mark;");
         let _ = writeln!(out, "        }}");
         // On panic (longjmp): gorget_panic already ran cleanup. This is now a no-op.
         let _ = writeln!(out, "        __gorget_cleanup_run(__cleanup_mark);");
         let _ = writeln!(out, "        __gorget_in_test = 0;");
-
-        // Drop with-bindings in LIFO order (reverse of initialization).
-        for wb_idx in (0..info.with_bindings.len()).rev() {
-            let wb = &info.with_bindings[wb_idx];
-            if let Some(type_name) = gir_type_name(wb.type_id, registry) {
-                if needs_drop_by_name(&type_name, registry) {
-                    emit_drop_for_type_via_ptr(
-                        out,
-                        &format!("&__wb_{wb_idx}"),
-                        &type_name,
-                        registry,
-                        "        ",
-                        0,
-                    );
-                }
-            }
-        }
 
         let _ = writeln!(out, "        clock_gettime(CLOCK_MONOTONIC, &__t_end);");
         let _ = writeln!(out, "        long __t_ms = (__t_end.tv_sec - __t_start.tv_sec) * 1000 + (__t_end.tv_nsec - __t_start.tv_nsec) / 1000000;");
@@ -1070,8 +1056,97 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
 
     let _ = writeln!(out, "    clock_gettime(CLOCK_MONOTONIC, &__total_end);");
     let _ = writeln!(out, "    long __total_ms = (__total_end.tv_sec - __total_start.tv_sec) * 1000 + (__total_end.tv_nsec - __total_start.tv_nsec) / 1000000;");
-    let _ = writeln!(out, "    printf(\"\\n%d passed, %d failed (%ldms)\\n\", __test_passed, __test_failed, __total_ms);");
+    let _ = writeln!(out, "    if (__test_skipped > 0) printf(\"\\n%d passed, %d failed, %d skipped (%ldms)\\n\", __test_passed, __test_failed, __test_skipped, __total_ms);");
+    let _ = writeln!(out, "    else printf(\"\\n%d passed, %d failed (%ldms)\\n\", __test_passed, __test_failed, __total_ms);");
     let _ = writeln!(out, "    return __test_failed > 0 ? 1 : 0;");
+    let _ = writeln!(out, "}}");
+}
+
+/// Emit a benchmark runner main() with warmup, auto-calibrated iterations, and statistics.
+fn emit_bench_runner_main(out: &mut String, module: &Module) {
+    let bench_fns = &module.runtime.bench_fns;
+    let _ = writeln!(out, "int main(int argc, char** argv) {{");
+    let _ = writeln!(out, "    gorget_init_args(argc, argv);");
+    let _ = writeln!(out, "    printf(\"Running {} benchmarks...\\n\\n\");", bench_fns.len());
+
+    if module.runtime.has_suite_setup {
+        let _ = writeln!(out, "    __suite_setup();");
+    }
+
+    for info in bench_fns {
+        let escaped = info.display_name.replace('\\', "\\\\").replace('"', "\\\"");
+        let fn_name = &info.fn_name;
+
+        let _ = writeln!(out, "    {{");
+        let _ = writeln!(out, "        // Bench: {escaped}");
+        let _ = writeln!(out, "        __gorget_in_test = 1;");
+        let _ = writeln!(out, "        __gorget_test_fail_msg = NULL;");
+        let _ = writeln!(out, "        int __cleanup_mark = __gorget_cleanup_top;");
+
+        // Warmup: 3 iterations
+        let _ = writeln!(out, "        for (int __w = 0; __w < 3; __w++) {{");
+        let _ = writeln!(out, "            __gorget_test_cleanup_mark = __gorget_cleanup_top;");
+        let _ = writeln!(out, "            if (setjmp(__gorget_test_jmp) == 0) {{");
+        let _ = writeln!(out, "                {fn_name}();");
+        let _ = writeln!(out, "                __gorget_cleanup_top = __cleanup_mark;");
+        let _ = writeln!(out, "            }} else {{");
+        let _ = writeln!(out, "                __gorget_cleanup_run(__cleanup_mark);");
+        let _ = writeln!(out, "                printf(\"  bench: {escaped} ... FAIL (panic during warmup)\\n\");");
+        let _ = writeln!(out, "                __gorget_in_test = 0;");
+        let _ = writeln!(out, "                goto __bench_next_{};", info.fn_name);
+        let _ = writeln!(out, "            }}");
+        let _ = writeln!(out, "        }}");
+
+        // Auto-calibrate: start with 100 iterations, double until >= 1 second
+        let _ = writeln!(out, "        long __iters = 100;");
+        let _ = writeln!(out, "        struct timespec __cal_start, __cal_end;");
+        let _ = writeln!(out, "        for (;;) {{");
+        let _ = writeln!(out, "            clock_gettime(CLOCK_MONOTONIC, &__cal_start);");
+        let _ = writeln!(out, "            for (long __i = 0; __i < __iters; __i++) {{");
+        let _ = writeln!(out, "                __gorget_test_cleanup_mark = __gorget_cleanup_top;");
+        let _ = writeln!(out, "                if (setjmp(__gorget_test_jmp) == 0) {{");
+        let _ = writeln!(out, "                    {fn_name}();");
+        let _ = writeln!(out, "                    __gorget_cleanup_top = __cleanup_mark;");
+        let _ = writeln!(out, "                }} else {{");
+        let _ = writeln!(out, "                    __gorget_cleanup_run(__cleanup_mark);");
+        let _ = writeln!(out, "                    printf(\"  bench: {escaped} ... FAIL (panic during measurement)\\n\");");
+        let _ = writeln!(out, "                    __gorget_in_test = 0;");
+        let _ = writeln!(out, "                    goto __bench_next_{};", info.fn_name);
+        let _ = writeln!(out, "                }}");
+        let _ = writeln!(out, "            }}");
+        let _ = writeln!(out, "            clock_gettime(CLOCK_MONOTONIC, &__cal_end);");
+        let _ = writeln!(out, "            long __cal_ns = (__cal_end.tv_sec - __cal_start.tv_sec) * 1000000000L + (__cal_end.tv_nsec - __cal_start.tv_nsec);");
+        let _ = writeln!(out, "            if (__cal_ns >= 1000000000L) break;"); // >= 1 second
+        let _ = writeln!(out, "            if (__cal_ns < 10000000L) __iters *= 100;"); // < 10ms, scale up fast
+        let _ = writeln!(out, "            else __iters *= 2;");
+        let _ = writeln!(out, "        }}");
+
+        // Compute stats from the calibration run
+        let _ = writeln!(out, "        long __total_ns = (__cal_end.tv_sec - __cal_start.tv_sec) * 1000000000L + (__cal_end.tv_nsec - __cal_start.tv_nsec);");
+        let _ = writeln!(out, "        double __avg_ns = (double)__total_ns / (double)__iters;");
+
+        // Format output
+        let _ = writeln!(out, "        if (__avg_ns < 1000.0) {{");
+        let _ = writeln!(out, "            printf(\"  bench: {escaped} ... %ld iters, %.0f ns/iter\\n\", __iters, __avg_ns);");
+        let _ = writeln!(out, "        }} else if (__avg_ns < 1000000.0) {{");
+        let _ = writeln!(out, "            printf(\"  bench: {escaped} ... %ld iters, %.2f us/iter\\n\", __iters, __avg_ns / 1000.0);");
+        let _ = writeln!(out, "        }} else if (__avg_ns < 1000000000.0) {{");
+        let _ = writeln!(out, "            printf(\"  bench: {escaped} ... %ld iters, %.2f ms/iter\\n\", __iters, __avg_ns / 1000000.0);");
+        let _ = writeln!(out, "        }} else {{");
+        let _ = writeln!(out, "            printf(\"  bench: {escaped} ... %ld iters, %.2f s/iter\\n\", __iters, __avg_ns / 1000000000.0);");
+        let _ = writeln!(out, "        }}");
+
+        let _ = writeln!(out, "        __gorget_in_test = 0;");
+        let _ = writeln!(out, "        __bench_next_{}:;", info.fn_name);
+        let _ = writeln!(out, "    }}");
+    }
+
+    if module.runtime.has_suite_teardown {
+        let _ = writeln!(out, "    __suite_teardown();");
+    }
+
+    let _ = writeln!(out, "    printf(\"\\n{} benchmarks complete.\\n\");", bench_fns.len());
+    let _ = writeln!(out, "    return 0;");
     let _ = writeln!(out, "}}");
 }
 

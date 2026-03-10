@@ -1,0 +1,10 @@
+@derive(Equatable, Displayable)
+struct Point:
+    int x
+    int y
+
+void main():
+    Point p1 = Point(1, 2)
+    Point p2 = Point(1, 2)
+    assert p1 == p2
+    print("struct asserts passed")

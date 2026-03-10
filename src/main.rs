@@ -1472,6 +1472,7 @@ fn main() {
             let mut test_exclude_tags = Vec::new();
             let mut test_name_filter: Option<String> = None;
             let mut report_html = false;
+            let mut bench_mode = false;
             let mut i = 0;
             while i < args.len() {
                 if args[i] == "--tag" && i + 1 < args.len() {
@@ -1498,6 +1499,9 @@ fn main() {
                 } else if args[i] == "--report=html" {
                     report_html = true;
                     i += 1;
+                } else if args[i] == "--bench" {
+                    bench_mode = true;
+                    i += 1;
                 } else {
                     i += 1;
                 }
@@ -1521,6 +1525,7 @@ fn main() {
             };
             let lowering_opts = gorget::ir::lowering::LoweringOptions {
                 test_mode: true,
+                bench_mode,
                 test_tags: test_tags.clone(),
                 test_exclude_tags: test_exclude_tags.clone(),
                 test_name_filter: test_name_filter.clone(),
@@ -1579,6 +1584,7 @@ fn main() {
             // GIR interpreter: lex → parse → semantic analysis → GIR lowering → interpret
             // Sub-subcommand: `gg sim test <file>` activates test mode.
             let is_test_mode = args.iter().skip(2).any(|a| a == "test");
+            let is_bench_mode = args.iter().any(|a| a == "--bench");
 
             let mut parser = gorget::parser::Parser::new(&source);
             let module = parser.parse_module();
@@ -1649,6 +1655,7 @@ fn main() {
             let overflow_checked = args.iter().any(|a| a == "--overflow=checked");
             let lowering_opts = gorget::ir::lowering::LoweringOptions {
                 test_mode: is_test_mode,
+                bench_mode: is_bench_mode,
                 test_tags,
                 test_exclude_tags,
                 test_name_filter,

@@ -1,0 +1,7 @@
+int bad_clamp(int value, int lo, int hi):
+    assert return >= lo
+    assert return <= hi
+    return value
+
+void main():
+    print(bad_clamp(50, 0, 10))

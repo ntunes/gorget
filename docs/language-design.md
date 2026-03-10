@@ -2376,17 +2376,38 @@ gg test file.gg --exclude-tag slow     # skip tagged tests
 gg test file.gg --filter "fibonacci"   # name substring
 ```
 
-### 29.8 Benchmarks — *Not yet implemented*
+### 29.8 Benchmarks
 
 ```gorget
 bench "vector sort":
     Vector[int] data = random_vec(10000)
     data.sort()
+
+bench "string concat":
+    str s = "hello" + " world"
 ```
 
 ```bash
-gg test --bench                        # run benchmarks
+gg test --bench file.gg                # run benchmarks
+gg test --bench --filter "sort"        # filter by name
 ```
+
+Benchmark execution:
+1. **Warmup** — 3 iterations to stabilize caches and JIT
+2. **Auto-calibrate** — start at 100 iterations, double until total time >= 1 second
+3. **Report** — iterations, average time per iteration (auto-scaled: ns, us, ms, s)
+
+Output:
+```
+Running 2 benchmarks...
+
+  bench: vector sort ... 1200 iters, 832.50 us/iter
+  bench: string concat ... 64000000 iters, 19 ns/iter
+
+2 benchmarks complete.
+```
+
+Benchmarks use the same body syntax as tests. Suite setup/teardown runs before/after the bench suite. The `--filter` flag works for benchmarks too.
 
 ### 29.9 How Familiar Patterns Map to Gorget
 

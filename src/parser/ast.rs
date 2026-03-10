@@ -50,6 +50,7 @@ pub enum Item {
     ExternBlock(ExternBlock),
     Directive(Directive),
     Test(TestDef),
+    Bench(BenchDef),
     SuiteSetup(SuiteSetup),
     SuiteTeardown(SuiteTeardown),
     MetaConst(MetaConst),
@@ -86,7 +87,6 @@ pub struct Directive {
 pub struct TestDef {
     pub attributes: Vec<Spanned<Attribute>>,
     pub name: Spanned<String>,
-    pub with_bindings: Vec<WithBinding>,
     pub body: Block,
     pub doc_comment: Option<String>,
     pub span: Span,
@@ -101,6 +101,15 @@ pub struct SuiteSetup {
 #[derive(Debug, Clone)]
 pub struct SuiteTeardown {
     pub body: Block,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct BenchDef {
+    pub attributes: Vec<Spanned<Attribute>>,
+    pub name: Spanned<String>,
+    pub body: Block,
+    pub doc_comment: Option<String>,
     pub span: Span,
 }
 
@@ -963,6 +972,13 @@ pub enum Stmt {
 
     /// assert condition [, message]
     Assert {
+        condition: Spanned<Expr>,
+        message: Option<Spanned<Expr>>,
+    },
+
+    /// assert return <condition> [, message] — postcondition checked at every return site.
+    /// `return` in the condition binds to the return value (represented as `Expr::Identifier("__return__")`).
+    AssertReturn {
         condition: Spanned<Expr>,
         message: Option<Spanned<Expr>>,
     },

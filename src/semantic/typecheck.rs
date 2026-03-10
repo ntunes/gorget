@@ -1769,6 +1769,12 @@ impl<'a> TypeChecker<'a> {
                     self.infer_expr(msg);
                 }
             }
+            Stmt::AssertReturn { condition, message } => {
+                self.infer_expr(condition);
+                if let Some(msg) = message {
+                    self.infer_expr(msg);
+                }
+            }
 
             Stmt::Continue | Stmt::Pass => {}
 
@@ -3397,13 +3403,13 @@ pub fn check_module(
             Item::Test(t) => {
                 checker.current_return_type = Some(checker.types.void_id);
                 checker.current_function_throws = false;
-                for binding in &t.with_bindings {
-                    let value_type = checker.infer_expr(&binding.expr);
-                    if let Some(def_id) = checker.scopes.lookup_def_by_span(&binding.name.node, binding.name.span) {
-                        checker.scopes.get_def_mut(def_id).type_id = Some(value_type);
-                    }
-                }
                 checker.check_block(&t.body);
+                checker.current_return_type = None;
+            }
+            Item::Bench(b) => {
+                checker.current_return_type = Some(checker.types.void_id);
+                checker.current_function_throws = false;
+                checker.check_block(&b.body);
                 checker.current_return_type = None;
             }
             Item::SuiteSetup(s) => {

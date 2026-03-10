@@ -1,0 +1,11 @@
+@derive(Equatable, Displayable)
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void main():
+    Color a = Color.Red()
+    Color b = Color.Red()
+    assert a == b
+    print("enum asserts passed")

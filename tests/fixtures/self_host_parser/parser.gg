@@ -171,6 +171,7 @@ const int KW_RETHROW = 92
 const int KW_MOD = 93
 const int KW_CATCH = 94
 const int KW_ON = 95
+const int KW_BENCH = 96
 
 # ── Ownership constants ─────────────────────────────────────
 
@@ -490,6 +491,8 @@ int keyword_tag(Token tok):
                     return KW_TEST
                 case KwSuite:
                     return KW_SUITE
+                case KwBench:
+                    return KW_BENCH
                 case KwIt:
                     return KW_IT
                 case KwPanic:
@@ -2416,6 +2419,8 @@ equip Parser:
             return SItem(self.parse_extern_block())
         if self.check_kw(KW_TEST):
             return SItem(self.parse_test_item())
+        if self.check_kw(KW_BENCH):
+            return SItem(self.parse_bench_item())
         if self.check_kw(KW_SUITE):
             return SItem(self.parse_suite_item())
 
@@ -3298,6 +3303,14 @@ equip Parser:
         Vector[Stmt] body = self.parse_block()
         return ITest(name, with_exprs, with_names, body)
 
+    Item parse_bench_item(&self):
+        self.expect_kw(KW_BENCH, "expected 'bench'")
+        SpannedToken name_tok = self.advance()
+        str name = token_string_val(name_tok.lex_token)
+        self.expect_tok(TOK_COLON, "expected ':' after bench name")
+        Vector[Stmt] body = self.parse_block()
+        return IBench(name, body)
+
     Item parse_suite_item(&self):
         self.expect_kw(KW_SUITE, "expected 'suite'")
         SpannedToken sub_tok = self.advance()
@@ -3359,6 +3372,8 @@ equip Parser:
                 items.push(self.parse_extern_block())
             elif self.check_kw(KW_TEST):
                 items.push(self.parse_test_item())
+            elif self.check_kw(KW_BENCH):
+                items.push(self.parse_bench_item())
             elif self.check_kw(KW_SUITE):
                 items.push(self.parse_suite_item())
             elif self.check_kw(KW_ASYNC):

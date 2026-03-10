@@ -605,6 +605,8 @@ str format_item(Item item):
             return result
         case ITest(name, _, _, body):
             return "test \"" + name + "\":" + format_block(body)
+        case IBench(name, body):
+            return "bench \"" + name + "\":" + format_block(body)
         case ISuiteSetup(body):
             return "suite_setup:" + format_block(body)
         case ISuiteTeardown(body):

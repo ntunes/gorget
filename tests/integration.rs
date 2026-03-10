@@ -2056,6 +2056,51 @@ fn assert_fails() {
 }
 
 #[test]
+fn assert_rich_strings() {
+    run_gg("assert_rich_strings.gg", "string asserts passed");
+}
+
+#[test]
+fn assert_rich_string_fail() {
+    run_gg_panics("assert_rich_string_fail.gg", "assertion failed: left == right\n  left:  hello\n  right: world");
+}
+
+#[test]
+fn assert_rich_struct() {
+    run_gg("assert_rich_struct.gg", "struct asserts passed");
+}
+
+#[test]
+fn assert_rich_struct_fail() {
+    run_gg_panics("assert_rich_struct_fail.gg", "assertion failed: left == right\n  left:  Point(x=1, y=2)\n  right: Point(x=3, y=4)");
+}
+
+#[test]
+fn assert_rich_enum() {
+    run_gg("assert_rich_enum.gg", "enum asserts passed");
+}
+
+#[test]
+fn assert_rich_enum_fail() {
+    run_gg_panics("assert_rich_enum_fail.gg", "assertion failed: left == right\n  left:  Red()\n  right: Blue()");
+}
+
+#[test]
+fn assert_return_basic() {
+    run_gg("assert_return_basic.gg", "5\n0\n10");
+}
+
+#[test]
+fn assert_return_msg() {
+    run_gg("assert_return_msg.gg", "5\n3\n0");
+}
+
+#[test]
+fn assert_return_fail() {
+    run_gg_panics("assert_return_fail.gg", "assertion failed: left <= right\n  left:  50\n  right: 10");
+}
+
+#[test]
 fn bounds_check() {
     run_gg("bounds_check.gg", "true\n20\ntrue\ntrue\n");
 }
@@ -4060,6 +4105,22 @@ fn test_should_panic() {
     run_gg_test(
         "test_should_panic.gg",
         &["Running 3 tests", "3 passed, 0 failed", "PASS"],
+        true,
+    );
+}
+
+#[test]
+fn test_skip_attribute() {
+    run_gg_test(
+        "test_skip.gg",
+        &[
+            "Running 4 tests",
+            "passes ... PASS",
+            "skipped with reason ... SKIP (not implemented yet)",
+            "skipped without reason ... SKIP",
+            "also passes ... PASS",
+            "2 passed, 0 failed, 2 skipped",
+        ],
         true,
     );
 }
@@ -6790,6 +6851,18 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
                 format!("assert {cond}")
             }
         }
+        Stmt::AssertReturn { condition, message } => {
+            let cond = format_expr_canonical(&condition.node);
+            if let Some(msg) = message {
+                let msg_text = match &msg.node {
+                    Expr::StringLiteral(slit) => flatten_string_literal(slit),
+                    other => format_expr_canonical(other),
+                };
+                format!("assert return {cond}, \"{msg_text}\"")
+            } else {
+                format!("assert return {cond}")
+            }
+        }
         Stmt::Select { arms, else_arm } => {
             let mut s = "select:".to_string();
             for arm in arms {
@@ -7058,6 +7131,10 @@ fn format_item_canonical(item: &Item) -> String {
         Item::Test(td) => {
             let body = format_block_canonical(&td.body.stmts);
             format!("test \"{}\":{body}", td.name.node)
+        }
+        Item::Bench(bd) => {
+            let body = format_block_canonical(&bd.body.stmts);
+            format!("bench \"{}\":{body}", bd.name.node)
         }
         Item::SuiteSetup(ss) => {
             let body = format_block_canonical(&ss.body.stmts);
@@ -10410,5 +10487,64 @@ fn static_ref_param() {
 0
 42
 100",
+    );
+}
+
+// ── Benchmark tests ──────────────────────────────────────────
+
+/// Run `gg test --bench <fixture>` and check expected stdout fragments.
+fn run_gg_bench(fixture: &str, expected_fragments: &[&str]) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(stem);
+
+    let output = Command::new(env!("CARGO"))
+        .args(&["run", "--quiet", "--", "test", "--bench", fixture_path.to_str().unwrap()])
+        .output()
+        .expect("failed to run cargo");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for fragment in expected_fragments {
+        assert!(
+            stdout.contains(fragment),
+            "Expected fragment {fragment:?} not found in bench output:\n{stdout}\nstderr: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    assert!(
+        output.status.success(),
+        "Expected success for bench {fixture} but got {:?}\nstdout: {stdout}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
+#[test]
+fn bench_basic() {
+    run_gg_bench(
+        "bench_basic.gg",
+        &[
+            "Running 2 benchmarks",
+            "bench: addition",
+            "iters",
+            "ns/iter",
+            "bench: string concat",
+            "2 benchmarks complete",
+        ],
     );
 }

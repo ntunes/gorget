@@ -1,0 +1,14 @@
+int clamp(int value, int lo, int hi):
+    assert lo <= hi
+    assert return >= lo
+    assert return <= hi
+    if value < lo:
+        return lo
+    if value > hi:
+        return hi
+    return value
+
+void main():
+    print(clamp(5, 0, 10))
+    print(clamp(-5, 0, 10))
+    print(clamp(15, 0, 10))

@@ -35,10 +35,10 @@ fn rewrite_item(item: &mut Item, res: &ResolutionMap, scopes: &ScopeTable) {
         Item::ConstDecl(c) => rewrite_expr(&mut c.value, res, scopes),
         Item::StaticDecl(s) => rewrite_expr(&mut s.value, res, scopes),
         Item::Test(t) => {
-            for binding in &mut t.with_bindings {
-                rewrite_expr(&mut binding.expr, res, scopes);
-            }
             rewrite_block(&mut t.body, res, scopes);
+        }
+        Item::Bench(b) => {
+            rewrite_block(&mut b.body, res, scopes);
         }
         Item::SuiteSetup(s) => rewrite_block(&mut s.body, res, scopes),
         Item::SuiteTeardown(s) => rewrite_block(&mut s.body, res, scopes),
@@ -146,7 +146,7 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
         }
         Stmt::Unsafe { body } => rewrite_block(body, res, scopes),
         Stmt::NamedScope { body, .. } => rewrite_block(body, res, scopes),
-        Stmt::Assert { condition, message } => {
+        Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
             rewrite_expr(condition, res, scopes);
             if let Some(msg) = message { rewrite_expr(msg, res, scopes); }
         }

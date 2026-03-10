@@ -976,32 +976,6 @@ fn test_parse_test_with_tag() {
     }
 }
 
-#[test]
-fn test_parse_test_with_clause() {
-    let module = parse("test \"reads file\" with File.open(\"data.txt\") as f:\n    assert true\n");
-    assert_eq!(module.items.len(), 1);
-    if let Item::Test(ref t) = module.items[0].node {
-        assert_eq!(t.name.node, "reads file");
-        assert_eq!(t.with_bindings.len(), 1);
-        assert_eq!(t.with_bindings[0].name.node, "f");
-    } else {
-        panic!("Expected Test, got {:?}", module.items[0].node);
-    }
-}
-
-#[test]
-fn test_parse_test_with_clause_multiple() {
-    let module = parse("test \"multi\" with Resource(\"a\") as a, Resource(\"b\") as b:\n    assert true\n");
-    assert_eq!(module.items.len(), 1);
-    if let Item::Test(ref t) = module.items[0].node {
-        assert_eq!(t.name.node, "multi");
-        assert_eq!(t.with_bindings.len(), 2);
-        assert_eq!(t.with_bindings[0].name.node, "a");
-        assert_eq!(t.with_bindings[1].name.node, "b");
-    } else {
-        panic!("Expected Test, got {:?}", module.items[0].node);
-    }
-}
 
 #[test]
 fn test_parse_suite_setup() {

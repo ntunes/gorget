@@ -117,6 +117,7 @@ fn fixup_constructor_calls_in_item(
             }
         }
         Item::Test(t) => fixup_calls_in_block(&mut t.body.stmts, fixups),
+        Item::Bench(b) => fixup_calls_in_block(&mut b.body.stmts, fixups),
         Item::Module { items, .. } => {
             for si in items {
                 fixup_constructor_calls_in_item(&mut si.node, fixups);
@@ -1680,7 +1681,7 @@ fn eval_meta_stmt(
             }
         }
 
-        Stmt::Assert { condition, message } => {
+        Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
             match eval_expr(&condition.node, env, ctx, condition.span)? {
                 MetaValue::Bool(true) => Ok(MetaControlFlow::Continue),
                 MetaValue::Bool(false) => {
@@ -1870,10 +1871,10 @@ fn substitute_item(item: &mut Item, env: &FxHashMap<String, MetaValue>, type_env
             }
         }
         Item::Test(t) => {
-            for binding in &mut t.with_bindings {
-                substitute_expr(&mut binding.expr, env, type_env);
-            }
             substitute_block(&mut t.body, env, type_env);
+        }
+        Item::Bench(b) => {
+            substitute_block(&mut b.body, env, type_env);
         }
         Item::SuiteSetup(s) => substitute_block(&mut s.body, env, type_env),
         Item::SuiteTeardown(s) => substitute_block(&mut s.body, env, type_env),
@@ -2120,7 +2121,7 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
         }
         Stmt::Unsafe { body } => substitute_block(body, env, type_env),
         Stmt::NamedScope { body, .. } => substitute_block(body, env, type_env),
-        Stmt::Assert { condition, message } => {
+        Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
             substitute_expr(condition, env, type_env);
             if let Some(msg) = message { substitute_expr(msg, env, type_env); }
         }

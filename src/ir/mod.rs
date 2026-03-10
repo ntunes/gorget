@@ -24,17 +24,6 @@ pub enum SchedulerMode {
     Single,
 }
 
-/// A single `with X as y` binding in a test, for the C backend to generate setup code.
-#[derive(Debug, Clone)]
-pub struct TestWithBinding {
-    /// Variable name as used in the test body (e.g. `r`).
-    pub var_name: String,
-    /// GIR function that creates and returns the binding value (no Drop registered).
-    pub init_fn_name: String,
-    /// GIR type of the binding.
-    pub type_id: TypeId,
-}
-
 /// Metadata for a single test function, used by the C backend to generate the test runner.
 #[derive(Debug, Clone)]
 pub struct TestFnInfo {
@@ -46,9 +35,19 @@ pub struct TestFnInfo {
     pub should_panic: bool,
     /// Expected panic message substring (from `@should_panic("msg")`).
     pub expected_panic_msg: Option<String>,
-    /// With-bindings for this test (empty when no `with X as y` clause).
-    /// The test function takes pointer parameters for each binding (in order).
-    pub with_bindings: Vec<TestWithBinding>,
+    /// True when `@skip` attribute is present — test is reported but not executed.
+    pub skipped: bool,
+    /// Skip reason (from `@skip("reason")`).
+    pub skip_reason: Option<String>,
+}
+
+/// Metadata for a single benchmark function.
+#[derive(Debug, Clone)]
+pub struct BenchFnInfo {
+    /// GIR function name (e.g. `__bench_0`).
+    pub fn_name: String,
+    /// Human-readable benchmark name (e.g. `"vector sort"`).
+    pub display_name: String,
 }
 
 /// Backend-specific runtime feature flags and type lists.
@@ -107,6 +106,8 @@ pub struct RuntimeFeatures {
     pub has_suite_setup: bool,
     /// True when a `suite teardown:` block was lowered.
     pub has_suite_teardown: bool,
+    /// Benchmark functions registered for the bench runner.
+    pub bench_fns: Vec<BenchFnInfo>,
 
     // ── Codegen hints ──────────────────────────────────────────────
     /// When true, arithmetic wraps on overflow instead of aborting.

@@ -545,8 +545,8 @@ fn collect_item(
             // Directives are handled during codegen, not name resolution.
         }
 
-        Item::Test(_) | Item::SuiteSetup(_) | Item::SuiteTeardown(_) => {
-            // Test items don't define top-level names.
+        Item::Test(_) | Item::Bench(_) | Item::SuiteSetup(_) | Item::SuiteTeardown(_) => {
+            // Test/bench items don't define top-level names.
         }
 
         Item::MetaConst(_) | Item::MetaType(_) | Item::MetaTypeFunc(_)
@@ -689,18 +689,12 @@ fn resolve_item_body(
         }
         Item::Test(t) => {
             scopes.push_scope(super::scope::ScopeKind::Function);
-            for binding in &t.with_bindings {
-                resolve_expr(&binding.expr, scopes, errors, resolution_map);
-                if let Err(e) = scopes.define_with_mutability(
-                    binding.name.node.clone(),
-                    DefKind::Variable,
-                    binding.name.span,
-                    false,
-                ) {
-                    errors.push(e);
-                }
-            }
             resolve_block(&t.body, scopes, types, errors, resolution_map);
+            scopes.pop_scope();
+        }
+        Item::Bench(b) => {
+            scopes.push_scope(super::scope::ScopeKind::Function);
+            resolve_block(&b.body, scopes, types, errors, resolution_map);
             scopes.pop_scope();
         }
         Item::SuiteSetup(s) => {
@@ -1079,6 +1073,12 @@ fn resolve_stmt(
                 resolve_expr(msg, scopes, errors, resolution_map);
             }
         }
+        Stmt::AssertReturn { condition, message } => {
+            resolve_expr(condition, scopes, errors, resolution_map);
+            if let Some(msg) = message {
+                resolve_expr(msg, scopes, errors, resolution_map);
+            }
+        }
 
         Stmt::Item(item) => {
             // Nested item definitions
@@ -1184,8 +1184,9 @@ fn resolve_expr(
                     resolution_map.insert(expr.span.start, def_id);
                 }
                 None => {
-                    // Don't error on built-in functions like `print`
-                    if !is_builtin(name) {
+                    // Don't error on built-in functions like `print`, or synthetic
+                    // identifiers like `__return__` (bound during IR lowering).
+                    if !is_builtin(name) && name != "__return__" {
                         errors.push(SemanticError {
                             kind: SemanticErrorKind::UndefinedName {
                                 name: name.clone(),

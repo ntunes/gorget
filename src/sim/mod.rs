@@ -47,6 +47,11 @@ pub fn interpret(module: &Module, source_path: &str, config: &SimConfig) -> i32 
     let mut interp = Interpreter::new(module, config);
     interp.init_globals();
 
+    // If the module has bench functions, run them.
+    if !module.runtime.bench_fns.is_empty() {
+        return run_bench_suite(&mut interp);
+    }
+
     // If the module has test functions, run them as the test runner would.
     if !module.runtime.test_fns.is_empty() || module.runtime.is_test_module {
         return run_test_suite(&mut interp);
@@ -160,39 +165,20 @@ fn run_test_suite(interp: &mut Interpreter) -> i32 {
         let label = format!("  test: {} ... ", info.display_name);
         interp.stdout.extend_from_slice(label.as_bytes());
 
+        // Skipped tests: report and continue
+        if info.skipped {
+            let msg = if let Some(ref reason) = info.skip_reason {
+                format!("SKIP ({reason})\n")
+            } else {
+                "SKIP\n".to_string()
+            };
+            interp.stdout.extend_from_slice(msg.as_bytes());
+            continue;
+        }
+
         let start = std::time::Instant::now();
 
-        // Build with-binding args: call each binding's init_fn_name, store on heap,
-        // pass MutPtr to the test function as its parameters.
-        let mut test_args: Vec<Value> = Vec::new();
-        let mut binding_addrs: Vec<usize> = Vec::new();
-        let mut binding_error: Option<SimError> = None;
-        for binding in &info.with_bindings {
-            match interp.call_function(&binding.init_fn_name, vec![], 0) {
-                Ok(val) => {
-                    let addr = interp.heap_alloc(val);
-                    binding_addrs.push(addr);
-                    test_args.push(Value::MutPtr(addr));
-                }
-                Err(e) => { binding_error = Some(e); break; }
-            }
-        }
-        let result = if let Some(e) = binding_error {
-            Err(e)
-        } else {
-            interp.call_function(&info.fn_name, test_args, 0)
-        };
-
-        // Drop with-bindings in reverse order (mirrors C test runner's Resource__drop(&__wb_N)).
-        // This fires after the test function completes (or panics) but BEFORE printing PASS/FAIL.
-        // Only drop if it's not an Exit (which would terminate the whole process).
-        let is_exit = matches!(&result, Err(crate::sim::SimError::Exit(_)));
-        if !is_exit {
-            for addr in binding_addrs.iter().rev() {
-                let val = interp.heap_read(*addr).cloned().unwrap_or(Value::Unit);
-                let _ = interp.run_drop_value(&val, 0);
-            }
-        }
+        let result = interp.call_function(&info.fn_name, vec![], 0);
 
         let elapsed_ms = start.elapsed().as_millis();
 
@@ -317,6 +303,96 @@ fn run_test_suite(interp: &mut Interpreter) -> i32 {
     flush_output(&interp.stdout, &interp.stderr);
 
     if failed > 0 { 1 } else { 0 }
+}
+
+/// Run a benchmark suite under the simulator.
+fn run_bench_suite(interp: &mut Interpreter) -> i32 {
+    let bench_fns = interp.module.runtime.bench_fns.clone();
+    let n = bench_fns.len();
+    let header = format!("Running {n} benchmarks...\n\n");
+    interp.stdout.extend_from_slice(header.as_bytes());
+
+    if interp.module.runtime.has_suite_setup {
+        let _ = interp.call_function("__suite_setup", vec![], 0);
+        flush_output(&interp.stdout, &interp.stderr);
+        interp.stdout.clear();
+        interp.stderr.clear();
+    }
+
+    for info in &bench_fns {
+        interp.call_stack.clear();
+        interp.last_error_backtrace = None;
+        interp.last_error_span = None;
+
+        // Warmup: 3 iterations
+        for _ in 0..3 {
+            if let Err(e) = interp.call_function(&info.fn_name, vec![], 0) {
+                let msg = format!("  bench: {} ... FAIL ({e})\n", info.display_name);
+                interp.stdout.extend_from_slice(msg.as_bytes());
+                flush_output(&interp.stdout, &interp.stderr);
+                interp.stdout.clear();
+                interp.stderr.clear();
+                continue;
+            }
+        }
+
+        // Auto-calibrate: start with 100 iterations, double until >= 1 second
+        let mut iters = 100u64;
+        let total_ns;
+        loop {
+            let start = std::time::Instant::now();
+            let mut panicked = false;
+            for _ in 0..iters {
+                if let Err(e) = interp.call_function(&info.fn_name, vec![], 0) {
+                    let msg = format!("  bench: {} ... FAIL ({e})\n", info.display_name);
+                    interp.stdout.extend_from_slice(msg.as_bytes());
+                    panicked = true;
+                    break;
+                }
+            }
+            if panicked { total_ns = 0; break; }
+            let elapsed = start.elapsed().as_nanos();
+            if elapsed >= 1_000_000_000 {
+                total_ns = elapsed;
+                break;
+            }
+            if elapsed < 10_000_000 {
+                iters *= 100;
+            } else {
+                iters *= 2;
+            }
+        }
+
+        if total_ns == 0 { continue; }
+
+        let avg_ns = total_ns as f64 / iters as f64;
+        let line = if avg_ns < 1000.0 {
+            format!("  bench: {} ... {} iters, {:.0} ns/iter\n", info.display_name, iters, avg_ns)
+        } else if avg_ns < 1_000_000.0 {
+            format!("  bench: {} ... {} iters, {:.2} us/iter\n", info.display_name, iters, avg_ns / 1000.0)
+        } else if avg_ns < 1_000_000_000.0 {
+            format!("  bench: {} ... {} iters, {:.2} ms/iter\n", info.display_name, iters, avg_ns / 1_000_000.0)
+        } else {
+            format!("  bench: {} ... {} iters, {:.2} s/iter\n", info.display_name, iters, avg_ns / 1_000_000_000.0)
+        };
+        interp.stdout.extend_from_slice(line.as_bytes());
+    }
+
+    if interp.module.runtime.has_suite_teardown {
+        flush_output(&interp.stdout, &interp.stderr);
+        interp.stdout.clear();
+        interp.stderr.clear();
+        let _ = interp.call_function("__suite_teardown", vec![], 0);
+        flush_output(&interp.stdout, &interp.stderr);
+        interp.stdout.clear();
+        interp.stderr.clear();
+    }
+
+    let summary = format!("\n{n} benchmarks complete.\n");
+    interp.stdout.extend_from_slice(summary.as_bytes());
+    flush_output(&interp.stdout, &interp.stderr);
+
+    0
 }
 
 /// Run a regular (non-test) program's main() and return exit code.
