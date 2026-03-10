@@ -114,6 +114,7 @@ enum Stmt:
     SMatch(SpannedExpr, Vector[MatchArm])
     SWith(SpannedExpr, str, Vector[Stmt])
     SAssert(SpannedExpr, Option[str])
+    SAssertReturn(SpannedExpr, Option[str])
     SNamedScope(str, Vector[Stmt])
     SSelect(Vector[SelectArm])
     SOnError(Vector[Stmt])

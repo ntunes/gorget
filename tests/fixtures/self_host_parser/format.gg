@@ -527,6 +527,14 @@ str format_stmt(Stmt s):
                 else:
                     pass
             return result
+        case SAssertReturn(cond, msg):
+            str result = "assert return " + format_expr(cond)
+            match msg:
+                case Some(m):
+                    result = result + ", \"" + m + "\""
+                else:
+                    pass
+            return result
         case SItem(item):
             return format_item(item)
         case SSnapshot(name, _, value):

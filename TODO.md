@@ -53,7 +53,7 @@
 
 - **Async/await — `await` on vector-indexed tasks with multiple spawn functions**: Type-based await dispatch now works when exactly one function produces tasks of a given type. When multiple functions produce the same `Task__T` type (e.g., two functions both returning `int`), the type-based fallback can't disambiguate. Fix: embed a function dispatch pointer in the `Task__T` struct or use a tag field. [updated: 2026-03-07]
 
-- **Self-hosting parser: 5 remaining mismatches (587/592, 99.2%)**: `chars.gg` — null byte `\0` truncates C stdout. `assert_return_*.gg` (3) — self-hosted parser doesn't handle `assert return` keyword. `snapshot_basic.gg` — snapshot name strings parsed as empty. [updated: 2026-03-10]
+- **Self-hosting parser: 595/596 (99.8%)**: Only `chars.gg` remains — null byte `\0` truncates C stdout (unfixable without length-prefixed strings). [updated: 2026-03-10]
 
 - **Self-hosting resolver: 592/592 (100%) — COMPLETE.** [updated: 2026-03-10]
 

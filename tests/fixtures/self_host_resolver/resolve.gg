@@ -612,6 +612,9 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
         case SAssert(condition, _):
             resolve_expr(condition, &scopes, &ctx)
 
+        case SAssertReturn(condition, _):
+            resolve_expr(condition, &scopes, &ctx)
+
         case SMetaFor(body):
             scopes.push_scope(SkBlock())
             resolve_block(body, &scopes, &types, &ctx)
@@ -1003,6 +1006,9 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             scopes.pop_scope()
 
         case SAssert(condition, _):
+            resolve_expr(condition, &scopes, &ctx)
+
+        case SAssertReturn(condition, _):
             resolve_expr(condition, &scopes, &ctx)
 
         case SMetaFor(body):

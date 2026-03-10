@@ -1521,8 +1521,14 @@ equip Parser:
     SpannedExpr parse_expr(&self):
         return self.parse_expr_bp(0)
 
+    SpannedExpr parse_expr_with_lhs(&self, SpannedExpr lhs):
+        return self.parse_expr_bp_with_lhs(0, lhs)
+
     SpannedExpr parse_expr_bp(&self, int min_bp):
         SpannedExpr lhs = self.parse_prefix()
+        return self.parse_expr_bp_with_lhs(min_bp, lhs)
+
+    SpannedExpr parse_expr_bp_with_lhs(&self, int min_bp, SpannedExpr lhs):
 
         while not self.at_end():
             # Postfix: field access, method call, index, function call, ?, as
@@ -2353,9 +2359,22 @@ equip Parser:
             SpannedExpr val = self.parse_expr()
             return SThrow(val)
 
-        # assert
+        # assert / assert return
         if self.check_kw(KW_ASSERT):
             self.advance()
+            # assert return __return__ <op> <expr>
+            if self.check_kw(KW_RETURN):
+                int ret_start = self.peek().lex_start
+                self.advance()
+                SpannedExpr ret_ident = SpannedExpr(EIdentifier("__return__"), Span(ret_start, ret_start + 6))
+                SpannedExpr cond = self.parse_expr_with_lhs(ret_ident)
+                Option[str] msg = None
+                if self.match_tok(TOK_COMMA):
+                    if self.check_tok(TOK_STRING):
+                        SpannedToken mt = self.advance()
+                        Option[str] some_msg = Some(token_string_val(mt.lex_token))
+                        msg = !some_msg
+                return SAssertReturn(cond, msg)
             SpannedExpr cond = self.parse_expr()
             Option[str] msg = None
             if self.match_tok(TOK_COMMA):
@@ -2368,9 +2387,12 @@ equip Parser:
         # snapshot "name" expr
         if self.check_kw(KW_SNAPSHOT):
             self.advance()
-            SpannedToken snap_name_tok = self.expect_tok(TOK_STRING, "expected string after 'snapshot'")
-            str snap_name = token_string_val(snap_name_tok.lex_token)
-            int snap_name_span = snap_name_tok.span
+            str snap_name = ""
+            int snap_name_span = 0
+            if self.check_tok(TOK_STRING):
+                SpannedToken snap_name_tok = self.advance()
+                snap_name = token_string_val(snap_name_tok.lex_token)
+                snap_name_span = snap_name_tok.span
             SpannedExpr snap_val = self.parse_expr()
             return SSnapshot(snap_name, snap_name_span, snap_val)
 
