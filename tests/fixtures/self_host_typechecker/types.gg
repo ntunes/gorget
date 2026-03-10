@@ -54,6 +54,7 @@ struct TypeTable:
     int self_type_id
     Dict[str, int] variant_field_types
     int last_equip_scope
+    int equip_def_index
 
 equip TypeTable:
 
@@ -78,7 +79,7 @@ equip TypeTable:
         types.push(RTError())
         # 8: never
         types.push(RTNever())
-        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[str, int](), 0)
+        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[str, int](), 0, 0)
 
     int add_type(&self, ResolvedType ty):
         int id = self.types.len()
@@ -249,7 +250,8 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
             return types.add_type(RTFunction(param_ids, param_ownerships, ret_id))
 
         case TSelf():
-            # Rust's ast_type_to_resolved always returns error_id for Self
+            if types.self_type_id >= 0:
+                return types.self_type_id
             return types.error_id
 
         case TInferred():

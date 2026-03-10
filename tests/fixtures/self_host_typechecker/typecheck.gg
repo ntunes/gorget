@@ -137,11 +137,50 @@ int find_next_equip_scope(int parent_scope, int after_scope, ScopeTable scopes):
         sid = sid + 1
     return -1
 
+# ── Find the Nth pass-1 equip scope (contains method defs) ──
+# Pass-1 scopes are created during collect_top_level and contain method defs.
+# Pass-2 scopes are created during resolve_bodies and contain SkFunction children.
+# The Nth equip block in the AST corresponds to the Nth pass-1 scope.
+
+int find_nth_def_equip_scope(int n, int parent_scope, ScopeTable scopes):
+    int count = 0
+    int sid = 0
+    while sid < scopes.scope_count():
+        Scope s = get_scope_at(scopes.scopes, sid)
+        if s.parent == parent_scope:
+            bool is_equip = false
+            match s.kind:
+                case SkEquipBlock():
+                    is_equip = true
+                else:
+                    pass
+            if is_equip:
+                # Check it does NOT have SkFunction children (pass-1 scope)
+                bool has_fn_child = false
+                int csid = sid + 1
+                while csid < scopes.scope_count():
+                    Scope cs = get_scope_at(scopes.scopes, csid)
+                    if cs.parent == sid:
+                        match cs.kind:
+                            case SkFunction():
+                                has_fn_child = true
+                            else:
+                                pass
+                    if cs.parent < sid:
+                        csid = scopes.scope_count()
+                    csid = csid + 1
+                if not has_fn_child:
+                    if count == n:
+                        return sid
+                    count = count + 1
+        sid = sid + 1
+    return -1
+
 # ── Type-check a function definition ────────────────────────
 
-void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext ctx, bool is_equip_method):
-    # Generic functions or equip methods: skip signature registration but still walk body
-    bool skip_sig = func.type_params.len() > 0 or is_equip_method
+void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext ctx, int def_scope):
+    # Generic functions: skip signature registration but still walk body
+    bool skip_sig = func.type_params.len() > 0
     # Look up the function's body scope from the resolve context
     int body_scope = find_body_scope(func.name, parent_scope, scopes, ctx)
     bool has_body_scope = body_scope >= 0
@@ -175,10 +214,14 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
     # Find function's def_id in the parent scope and assign type.
     # Skip generic functions — type params not in scope at module level.
     if not skip_sig:
-        # Try direct scope lookup first; fall back to scanning all defs
-        # (needed for equip methods where collect_top_level and resolve_bodies
-        # use different equip scope IDs).
-        int fn_def = scopes.lookup_in_scope(parent_scope, func.name)
+        int fn_def = -1
+        # For equip methods, look up in the def scope (pass-1 equip scope)
+        if def_scope >= 0:
+            fn_def = scopes.lookup_in_scope(def_scope, func.name)
+        # Try parent scope next
+        if fn_def < 0:
+            fn_def = scopes.lookup_in_scope(parent_scope, func.name)
+        # Fall back to scanning all defs
         if fn_def < 0:
             fn_def = find_def_by_name(scopes, func.name, true)
         if fn_def >= 0:
@@ -634,7 +677,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
 void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
     match item:
         case IFunction(func):
-            type_check_function(func, scope_id, &scopes, &types, ctx, false)
+            type_check_function(func, scope_id, &scopes, &types, ctx, -1)
 
         case IStruct(sdef):
             # Build a field type lookup table for EFieldAccess inference.
@@ -682,10 +725,16 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 types.last_equip_scope = equip_scope
             else:
                 equip_scope = scope_id
+            # Find the pass-1 equip scope (contains method def definitions)
+            # Use equip_def_index to pair pass-1 with pass-2 by order.
+            int def_scope = find_nth_def_equip_scope(types.equip_def_index, scope_id, scopes)
+            types.equip_def_index = types.equip_def_index + 1
+            if def_scope < 0:
+                def_scope = equip_scope
             int mi = 0
             while mi < eqblk.methods.len():
                 FunctionDef method = get_fndef_at(eqblk.methods, mi)
-                type_check_function(method, equip_scope, &scopes, &types, ctx, true)
+                type_check_function(method, equip_scope, &scopes, &types, ctx, def_scope)
                 mi = mi + 1
             types.self_type_id = -1
 

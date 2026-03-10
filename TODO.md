@@ -66,7 +66,7 @@
 
 - **Self-hosting resolver: 559/559 (100%) — COMPLETE.** [updated: 2026-03-09]
 
-- **Self-hosting type checker: 549/568 (96.7%) — exact: 520, superset: 29**: Phases 1-8 complete — all from previous + cstr primitive handling, equip body scope collision fix (parallel vectors), equip scope pass-1/pass-2 disambiguation, parent scope fallback for shadowed identifiers, test with-clause EAs unwrapping, RTBoxedCallable variant, generic function skip, equip method signature skip, Self type → error_id matching Rust. Remaining 19 mismatches: derive expansion (6), meta expansion (4), type variable inference (2), untyped closure inference (1), static method calls (1), f-string String type (1), pattern binding from derive bodies (4). All remaining require fundamental new capabilities (derive/meta expansion, unification). [updated: 2026-03-10]
+- **Self-hosting type checker: 555/580 (95.7%) — exact: 526, superset: 29**: Phases 1-9 complete. Rust checker improved: Self param resolution, equip method signature registration (span fallback). Gorget checker improved: pass-1/pass-2 equip scope index pairing for correct method def lookup. Remaining 25 mismatches: derive expansion (10), meta expansion (4), bench blocks (1), type variable inference (2), untyped closure inference (1), static method calls (1), f-string String type (1), pattern bindings (5). All require fundamental new capabilities (derive/meta expansion, unification, new block types). [updated: 2026-03-10]
 
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]

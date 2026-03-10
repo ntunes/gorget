@@ -3152,7 +3152,11 @@ impl<'a> TypeChecker<'a> {
 
         let def_id = match self.scopes.lookup(&func.name.node) {
             Some(id) => id,
-            None => return,
+            // Equip method defs live in child scopes — fall back to span lookup
+            None => match self.scopes.lookup_def_by_span(&func.name.node, func.name.span) {
+                Some(id) => id,
+                None => return,
+            },
         };
 
         // Only process Function defs
@@ -3179,6 +3183,16 @@ impl<'a> TypeChecker<'a> {
                 self.types,
             )
             .unwrap_or(self.types.error_id);
+            // Self-typed params: use the equip target type instead of error_id
+            let type_id = if type_id == self.types.error_id {
+                if matches!(&param.node.type_.node, crate::parser::ast::Type::SelfType) {
+                    self.current_self_type.unwrap_or(type_id)
+                } else {
+                    type_id
+                }
+            } else {
+                type_id
+            };
             param_types.push(type_id);
         }
 
@@ -3243,6 +3257,16 @@ impl<'a> TypeChecker<'a> {
                 self.scopes,
                 self.types,
             ) {
+                // Self-typed params: use the equip target type instead of error_id
+                let type_id = if type_id == self.types.error_id {
+                    if matches!(&param.node.type_.node, crate::parser::ast::Type::SelfType) {
+                        self.current_self_type.unwrap_or(type_id)
+                    } else {
+                        type_id
+                    }
+                } else {
+                    type_id
+                };
                 if let Some(def_id) = self.scopes.lookup_def_by_span(
                     &param.node.name.node,
                     param.node.name.span,
@@ -3351,9 +3375,17 @@ pub fn check_module(
                         }
                     }
                 }
+                // Set current_self_type so Self params resolve to the equip target
+                checker.current_self_type = types::ast_type_to_resolved(
+                    &impl_block.type_.node,
+                    impl_block.type_.span,
+                    checker.scopes,
+                    checker.types,
+                ).ok();
                 for method in &impl_block.items {
                     checker.register_function_signature(&method.node);
                 }
+                checker.current_self_type = None;
                 if has_generics {
                     checker.scopes.pop_scope();
                 }
