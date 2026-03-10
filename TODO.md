@@ -120,8 +120,6 @@
 
 - **ECS iter() copies entire entity_ids vector**: `SparseSet[T].iter()` allocates a fresh `Vector[Entity]` and copies all entity IDs. O(n) allocation just to start iteration. Language limitation: `SparseSetIter` can't hold a reference (no lifetime-annotated struct fields). Could improve with index+length snapshot if struct references become available. [added: 2026-02-22]
 
-- **Codegen bug: Dict.remove() / Vector.remove() return type mismatch**: When `Dict[str, Json].remove(key)` is called, the codegen assigns the return value (`bool`) to a local typed as `Json` (the Dict's value type), causing C compilation error "incompatible types when assigning to type 'Json' from type '_Bool'". The issue is in collection method return type mapping — `remove` for Dict returns bool but the codegen infers the value type. Workaround in gg.jsonpath: rebuild the collection without the key instead of calling remove. [added: 2026-03-09]
-
 - **gg.jsonpath Phase 2 — function argument auto-propagation**: `query_all(doc, "friends.#(age>30).name")` — chaining filter + key access in a single path. Currently filter returns matching objects but subsequent segments after filter aren't applied. Need to feed filter results back into the segment pipeline. [added: 2026-03-09]
 
 - **gg.xpath — XPath-style queries for XmlNode**: Move `find`/`find_all` from `gg.xml` to `gg.xpath`. Add path query support consistent with `gg.jsonpath` interface. [added: 2026-03-09]

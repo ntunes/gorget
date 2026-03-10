@@ -7137,16 +7137,21 @@ fn infer_method_return_type(name: &str) -> Option<&'static str> {
         let type_prefix = &name[..pos];
         // Collection method return types
         match method {
-            // Vector.get / .first / .last return Option[T] (bounds-checked safe access)
-            "get" | "first" | "last" if type_prefix.starts_with("Vector") => {
+            // Vector.get / .first / .last / .remove return Option[T]
+            "get" | "first" | "last" | "remove" if type_prefix.starts_with("Vector") => {
                 if let Some(elem) = extract_element_type_from_collection(type_prefix) {
                     let option_type = format!("Option__{elem}");
                     return Some(Box::leak(option_type.into_boxed_str()));
                 }
                 return None;
             }
+            // Dict/Set.remove returns bool
+            "remove" if type_prefix.starts_with("Dict__") || type_prefix.starts_with("HashMap__")
+                      || type_prefix.starts_with("Set__") || type_prefix.starts_with("HashSet__") => {
+                return Some("bool");
+            }
             // Methods that return the element type — extract from collection name
-            "pop" | "remove" | "get" | "at" => {
+            "pop" | "get" | "at" => {
                 if let Some(elem) = extract_element_type_from_collection(type_prefix) {
                     return Some(Box::leak(elem.into_boxed_str()));
                 }
@@ -9651,18 +9656,36 @@ fn emit_collection_method_call(
         return;
     }
     if rewrite.runtime_fn == "__INLINE_ARRAY_REMOVE__" {
-        // Vector.remove(idx) → get element at idx, then remove, return element
+        // Vector.remove(idx) → Option[T]: bounds-check, extract element, shift array
         let arr_ref = addr_self(&self_str, self_ptr);
+        let self_val = deref_self(&self_str, self_ptr);
         let idx_str = if args.len() > 1 {
             format_operand(&args[1], func, registry)
         } else {
             "0".to_string()
         };
         if let Some(dst_id) = dst {
-            let c_type = collection_element_c_type(func, dst_id.0 as usize, registry, original_name, type_overrides);
-            let _ = writeln!(out, "        _{id} = *({c_type}*)gorget_array_get({arr_ref}, {idx_str});",
+            let option_type = format_type(func.locals[dst_id.0 as usize].type_id, registry);
+            let inner_type_str = option_type.strip_prefix("Option__").unwrap_or("");
+            let elem_c_type: &str =
+                if inner_type_str.starts_with("Vector__") || inner_type_str.starts_with("List__") {
+                    "GorgetArray"
+                } else if inner_type_str.starts_with("Dict__") || inner_type_str.starts_with("HashMap__") {
+                    "GorgetMap"
+                } else if inner_type_str.starts_with("Set__") || inner_type_str.starts_with("HashSet__") {
+                    "GorgetSet"
+                } else if !inner_type_str.is_empty() {
+                    inner_type_str
+                } else {
+                    extract_collection_elem_type(original_name)
+                };
+            // Bounds check, extract element, then remove (shift) — element must be read before removal
+            let _ = writeln!(out, "        _{id} = ({{ int64_t __gi = {idx_str}; GorgetArray __gr_src = {self_val}; {option_type} __gr; \
+                if (__gi >= 0 && (size_t)__gi < __gr_src.len) {{ {elem_c_type} __elem = *({elem_c_type}*)gorget_array_get(&__gr_src, (size_t)__gi); \
+                gorget_array_remove({arr_ref}, (size_t)__gi); \
+                __gr = ({option_type}){{.tag = 0, .data.Some = {{__elem}}}}; }} \
+                else {{ __gr = ({option_type}){{.tag = 1}}; }} __gr; }});",
                 id = dst_id.0);
-            let _ = writeln!(out, "        gorget_array_remove({arr_ref}, {idx_str});");
         } else {
             let _ = writeln!(out, "        gorget_array_remove({arr_ref}, {idx_str});");
         }

@@ -1293,7 +1293,7 @@ pub(super) fn lower_method_call(
 
         // For Vector.get() / .first() / .last(), auto-register Option[T] and override return type
         let fn_sig_ret = ctx.fn_sigs.get(&effective_name).map(|(_, ret)| *ret);
-        if matches!(method_name, "get" | "first" | "last")
+        if matches!(method_name, "get" | "first" | "last" | "remove")
             && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
         {
             let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
@@ -1313,12 +1313,17 @@ pub(super) fn lower_method_call(
         }
         let ret_type = if let Some(ret) = fn_sig_ret {
             // Vector.get() / .first() / .last() return Option[T], not T — override fn_sigs
-            if matches!(method_name, "get" | "first" | "last")
+            if matches!(method_name, "get" | "first" | "last" | "remove")
                 && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
             {
                 let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
                 let option_name = format!("Option__{elem_type_name}");
                 ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
+            } else if method_name == "remove"
+                && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__")
+                    || type_name.starts_with("Set__") || type_name.starts_with("HashSet__"))
+            {
+                BOOL_TYPE
             } else if matches!(method_name, "index_of" | "find") && !is_regex_receiver {
                 // Only override to Option__int64_t for collection/string find, NOT Regex.find()
                 ctx.lookup_type_by_name("Option__int64_t").unwrap_or(ret)
@@ -1418,8 +1423,8 @@ fn infer_collection_method_return_type(
         | "has" | "contains_key" | "has_key" => {
             BOOL_TYPE
         }
-        // Vector.get / .first / .last → Option[T] (bounds-checked safe access)
-        "get" | "first" | "last" if is_vector => {
+        // Vector.get / .first / .last / .remove → Option[T] (bounds-checked safe access)
+        "get" | "first" | "last" | "remove" if is_vector => {
             let elem_type_name = type_name.strip_prefix("Vector__")
                 .unwrap_or("int64_t");
             let option_name = format!("Option__{elem_type_name}");
@@ -1542,8 +1547,6 @@ fn infer_collection_method_return_type(
                 ctx.lookup_type_by_name("GorgetArray").unwrap_or(I64_TYPE)
             }
         }
-        // Vector.remove → element type (for Option wrapping, unwrap is pass-through on non-Option)
-        "remove" if is_vector => I64_TYPE,
         // Set.remove → bool
         "remove" if is_set => BOOL_TYPE,
         // Dict/HashMap.remove → bool

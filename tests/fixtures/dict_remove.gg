@@ -1,0 +1,15 @@
+# Test Dict.remove() returns bool and correctly removes entries.
+from std.conv import int_to_str
+
+void main():
+    Dict[str, int] d = Dict[str, int]()
+    d.put("a", 1)
+    d.put("b", 2)
+    d.put("c", 3)
+    print(int_to_str(d.len()))
+    bool removed = d.remove("b")
+    print(int_to_str(removed as int))
+    print(int_to_str(d.len()))
+    bool not_found = d.remove("z")
+    print(int_to_str(not_found as int))
+    print(int_to_str(d.len()))

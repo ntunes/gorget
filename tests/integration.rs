@@ -1359,6 +1359,19 @@ hash ok",
 }
 
 #[test]
+fn dict_remove() {
+    run_gg(
+        "dict_remove.gg",
+        "\
+3
+1
+2
+0
+2",
+    );
+}
+
+#[test]
 fn default_trait() {
     run_gg(
         "default_trait.gg",
