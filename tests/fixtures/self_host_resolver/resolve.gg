@@ -633,6 +633,9 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             collect_item(item, &scopes, &types)
             resolve_item_body(item, &scopes, &types, &ctx)
 
+        case SSnapshot(_, _, value):
+            resolve_expr(value, &scopes, &ctx)
+
 
 # ── Expression resolution ───────────────────────────────────
 
@@ -1018,6 +1021,9 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
                 resolve_block_expr(branch.body, &scopes, &ctx)
                 scopes.pop_scope()
                 ei = ei + 1
+
+        case SSnapshot(_, _, value):
+            resolve_expr(value, &scopes, &ctx)
 
         else:
             pass

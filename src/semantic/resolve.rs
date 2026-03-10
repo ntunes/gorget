@@ -1080,6 +1080,10 @@ fn resolve_stmt(
             }
         }
 
+        Stmt::Snapshot { value, .. } => {
+            resolve_expr(value, scopes, errors, resolution_map);
+        }
+
         Stmt::Item(item) => {
             // Nested item definitions
             let mut ctx = ResolveContext::new();

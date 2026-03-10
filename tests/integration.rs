@@ -6877,6 +6877,9 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
                 format!("assert return {cond}")
             }
         }
+        Stmt::Snapshot { name, value } => {
+            format!("snapshot \"{}\" {}", name.node, format_expr_canonical(&value.node))
+        }
         Stmt::Select { arms, else_arm } => {
             let mut s = "select:".to_string();
             for arm in arms {
@@ -10958,4 +10961,101 @@ true
 0
 done",
     );
+}
+
+// ── Snapshot tests ──────────────────────────────────────────
+
+#[test]
+fn test_snapshot_save_and_diff() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/snapshot_basic.gg");
+    let dir = fixture_path.parent().unwrap();
+    let snapshot_dir = dir.join(".gorget/snapshots/snapshot_basic");
+
+    // Clean up any leftover snapshots
+    let _ = std::fs::remove_dir_all(&snapshot_dir);
+
+    // 1. Save snapshot "v1"
+    let run = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "test"])
+        .arg(&fixture_path)
+        .args(["--snapshot", "save", "v1"])
+        .output()
+        .expect("failed to run gg test --snapshot save v1");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        run.status.success(),
+        "snapshot save v1 failed:\nstdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert!(stdout.contains("Snapshot 'v1' saved"), "Expected save confirmation, got:\n{stdout}");
+
+    // 2. Verify JSON file exists and has correct structure
+    let v1_path = snapshot_dir.join("v1.json");
+    assert!(v1_path.exists(), "v1.json should exist");
+    let v1_content = std::fs::read_to_string(&v1_path).unwrap();
+    assert!(v1_content.contains("\"version\": \"v1\""), "Should contain version");
+    assert!(v1_content.contains("\"result\": 5"), "Should contain result: 5");
+    assert!(v1_content.contains("\"doubled\": 10"), "Should contain doubled: 10");
+    assert!(v1_content.contains("\"greeting\": \"hello world\""), "Should contain greeting");
+
+    // 3. Save another snapshot (same values) as "v2"
+    let run = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "test"])
+        .arg(&fixture_path)
+        .args(["--snapshot", "save", "v2"])
+        .output()
+        .expect("failed to run gg test --snapshot save v2");
+    assert!(run.status.success(), "snapshot save v2 failed");
+
+    // 4. Diff v1 vs v2 — should be identical (exit 0)
+    let run = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "test"])
+        .arg(&fixture_path)
+        .args(["--snapshot", "diff", "v1", "v2"])
+        .output()
+        .expect("failed to run gg test --snapshot diff");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(run.status.success(), "diff of identical snapshots should exit 0");
+    assert!(stdout.contains("(identical)"), "Should show identical:\n{stdout}");
+
+    // 5. List snapshots
+    let run = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "test"])
+        .arg(&fixture_path)
+        .args(["--snapshot", "list"])
+        .output()
+        .expect("failed to run gg test --snapshot list");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(stdout.contains("v1"), "List should include v1");
+    assert!(stdout.contains("v2"), "List should include v2");
+
+    // 6. Show a snapshot
+    let run = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "test"])
+        .arg(&fixture_path)
+        .args(["--snapshot", "show", "v1"])
+        .output()
+        .expect("failed to run gg test --snapshot show");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(stdout.contains("\"result\": 5"), "Show should display snapshot content");
+
+    // 7. Delete a snapshot
+    let run = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "test"])
+        .arg(&fixture_path)
+        .args(["--snapshot", "delete", "v2"])
+        .output()
+        .expect("failed to run gg test --snapshot delete");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(stdout.contains("Deleted snapshot 'v2'"), "Should confirm deletion");
+    assert!(!snapshot_dir.join("v2.json").exists(), "v2.json should be deleted");
+
+    // Clean up
+    let _ = std::fs::remove_dir_all(&snapshot_dir);
 }

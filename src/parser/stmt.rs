@@ -47,6 +47,7 @@ impl Parser {
                 self.parse_on_error_stmt()
             }
             Token::Keyword(Keyword::Assert) => self.parse_assert_stmt(),
+            Token::Keyword(Keyword::Snapshot) => self.parse_snapshot_stmt(),
             Token::Keyword(Keyword::Break) => self.parse_break_stmt(),
             Token::Keyword(Keyword::Continue) => {
                 self.advance();
@@ -200,6 +201,17 @@ impl Parser {
         let end = self.previous_span();
         self.consume_newline();
         Ok(Spanned::new(Stmt::Assert { condition, message }, start.merge(end)))
+    }
+
+    fn parse_snapshot_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+        let start = self.peek_span();
+        self.expect_keyword(Keyword::Snapshot)?;
+
+        let name = self.expect_plain_string()?;
+        let value = self.parse_expr()?;
+        let end = self.previous_span();
+        self.consume_newline();
+        Ok(Spanned::new(Stmt::Snapshot { name, value }, start.merge(end)))
     }
 
     fn parse_if_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {

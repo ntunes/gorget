@@ -1,0 +1,8 @@
+test "arithmetic":
+    int x = 2 + 3
+    snapshot "result" x
+    snapshot "doubled" x * 2
+
+test "strings":
+    str greeting = "hello world"
+    snapshot "greeting" greeting

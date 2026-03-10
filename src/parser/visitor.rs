@@ -392,6 +392,9 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
                 v.visit_expr(msg);
             }
         }
+        Stmt::Snapshot { value, .. } => {
+            v.visit_expr(value);
+        }
         Stmt::Item(_) => {
             // Nested items are not walked — they are separate compilation units.
         }

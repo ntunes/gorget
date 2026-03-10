@@ -4186,6 +4186,7 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `--parallel <N>`     | Run tests across N worker processes                     |
 | `--failed-only`      | Re-run only previously failed tests                     |
 | `--failed-first`     | Run previously failed tests first, then the rest        |
+| `--snapshot <cmd>`   | Snapshot subcommand: `save`, `diff`, `list`, `show`, `delete` |
 | `--hot-reload`       | Enable hot code reload (builds host + guest shared library) |
 | `--shared [-o file]` | Build as a shared library (`.dylib`/`.so`)              |
 | `--show-borrows`     | Print inferred borrow analysis for all functions (diagnostic) |
@@ -4340,6 +4341,42 @@ gg test file.gg --failed-first    # Run failed tests first, then the rest
 ```
 
 `--failed-only` filters the test suite to only previously-failed tests. `--failed-first` reorders the test suite so previously-failed tests execute first, then the remaining tests in their original order. Both modes read the results file from the previous run.
+
+### 18.5.5 Snapshots
+
+The `snapshot` statement captures a named value during a test run for later comparison:
+
+```gorget
+test "config serialization":
+    auto cfg = Config("prod", 8080)
+    snapshot "config" cfg.to_str()
+
+test "fibonacci sequence":
+    List[int] results = List[int]()
+    for i in range(10):
+        results.push(fib(i))
+    snapshot "fib_10" results
+```
+
+**Rules:**
+
+- `snapshot` is only valid inside `test` blocks.
+- The expression must be a primitive type (`int`, `float`, `str`, `bool`) or a type that implements `Serializable`.
+- Each snapshot is identified by its name string. Names must be unique within a test block.
+
+**CLI commands:**
+
+```bash
+gg test file.gg --snapshot save "v1"          # run tests, save all snapshots under version "v1"
+gg test file.gg --snapshot diff "v1" "v2"     # compare two saved versions
+gg test file.gg --snapshot list               # list all saved versions
+gg test file.gg --snapshot show "v1"          # print snapshot contents
+gg test file.gg --snapshot delete "v1"        # remove a saved version
+```
+
+**Storage:** Snapshots are persisted to `.gorget/snapshots/<file_stem>/<version>.json`. Each version file contains a JSON object mapping snapshot names to their serialized values.
+
+**Diff behavior:** `--snapshot diff` exits with code 0 if the two versions are identical, or code 1 if they differ. This makes it suitable for CI pipelines — a non-zero exit fails the build when snapshots diverge unexpectedly.
 
 ### 18.6 Console Output
 

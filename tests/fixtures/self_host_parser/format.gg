@@ -529,6 +529,8 @@ str format_stmt(Stmt s):
             return result
         case SItem(item):
             return format_item(item)
+        case SSnapshot(name, _, value):
+            return "snapshot \"" + name + "\" " + format_expr(value)
         else:
             return "?"
 

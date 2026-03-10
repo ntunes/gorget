@@ -964,6 +964,9 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
     // Result file support: GORGET_TEST_RESULTS env var
     let _ = writeln!(out, "    const char* __results_path = getenv(\"GORGET_TEST_RESULTS\");");
 
+    // Snapshot capture: open file if GORGET_SNAPSHOT_PATH is set
+    let _ = writeln!(out, "    __gorget_snapshot_open();");
+
     // Count non-skipped, non-parallel-filtered tests for header
     let _ = writeln!(out, "    int __test_total = {};", test_fns.len());
     let _ = writeln!(out, "    if (__par_total > 0) {{");
@@ -1013,6 +1016,7 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
             let _ = writeln!(out, "        __gorget_in_test = 1;");
             let _ = writeln!(out, "        __gorget_test_fail_msg = NULL;");
             let _ = writeln!(out, "        __gorget_test_timed_out = 0;");
+            let _ = writeln!(out, "        __gorget_current_test = \"{escaped}\";");
             let _ = writeln!(out, "        int __cleanup_mark = __gorget_cleanup_top;");
             let _ = writeln!(out, "        struct timespec __t_start, __t_end;");
             let _ = writeln!(out, "        clock_gettime(CLOCK_MONOTONIC, &__t_start);");
@@ -1128,6 +1132,9 @@ fn emit_test_runner_main(out: &mut String, module: &Module) {
     let _ = writeln!(out, "            fclose(__rf);");
     let _ = writeln!(out, "        }}");
     let _ = writeln!(out, "    }}");
+
+    // Close snapshot file if open
+    let _ = writeln!(out, "    __gorget_snapshot_close();");
 
     let _ = writeln!(out, "    return __test_failed > 0 ? 1 : 0;");
     let _ = writeln!(out, "}}");

@@ -482,6 +482,9 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
             qualify_expr(condition, vm);
             if let Some(m) = message { qualify_expr(m, vm); }
         }
+        Stmt::Snapshot { value, .. } => {
+            qualify_expr(value, vm);
+        }
         Stmt::Unsafe { body } => qualify_block(body, vm),
         Stmt::NamedScope { body, .. } => qualify_block(body, vm),
         Stmt::Item(_) | Stmt::Select { .. } => {}

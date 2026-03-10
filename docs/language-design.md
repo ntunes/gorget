@@ -2422,7 +2422,7 @@ Developers coming from other test frameworks will look for features that Gorget 
 | **`require` / `ensure` / contracts** (D, Eiffel) | `assert` for preconditions (at function top). `assert return` for postconditions. No new keywords — same `assert` used everywhere. |
 | **`#[should_panic]`** (Rust) | `@should_panic` / `@should_panic("message substring")`. |
 | **`@pytest.mark.skip` / `@Disabled` / `@ignore`** (pytest, JUnit, Rust) | `@skip("reason")`. |
-| **Snapshot testing** (`toMatchSnapshot`, `insta`) | Not yet implemented. Planned as stdlib module with `assert_snapshot` + `gg test --update-snapshots`. |
+| **Snapshot testing** (`toMatchSnapshot`, `insta`) | `snapshot "name" expr` inside test blocks. `gg test --snapshot save "v1"` to capture, `--snapshot diff "v1" "v2"` to compare. Stored in `.gorget/snapshots/`. |
 | **Property-based testing** (Hypothesis, QuickCheck, proptest) | Not yet implemented. Planned as stdlib module with generator combinators. |
 | **Doctests** (Rust, Elixir, Python) | Not yet implemented. Planned: code examples in `#/` doc comments compiled and run as tests. |
 | **Mocking / stubbing** (Mockito, jest.mock, unittest.mock) | Use trait-based dependency injection + simple test implementations. No mocking framework — design for testability instead. |
@@ -2442,6 +2442,11 @@ gg test --parallel 4               # N worker processes
 gg test --failed-only              # re-run only failed tests
 gg test --failed-first             # run failed tests first
 gg test --format junit-xml         # CI output (planned)
+gg test --snapshot save "v1"       # save snapshot version
+gg test --snapshot diff "v1" "v2"  # diff two versions (exit 0=same, 1=different)
+gg test --snapshot list            # list saved versions
+gg test --snapshot show "v1"       # print snapshot contents
+gg test --snapshot delete "v1"     # remove a saved version
 ```
 
 ---

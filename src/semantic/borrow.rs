@@ -2910,6 +2910,10 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
+            Stmt::Snapshot { value, .. } => {
+                self.check_expr(value);
+            }
+
             Stmt::Item(_) => {}
 
             Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {

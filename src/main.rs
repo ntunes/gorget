@@ -1478,6 +1478,8 @@ fn main() {
             let mut parallel: Option<usize> = None;
             let mut failed_only = false;
             let mut failed_first = false;
+            let mut snapshot_cmd: Option<String> = None;
+            let mut snapshot_args: Vec<String> = Vec::new();
             let mut i = 0;
             while i < args.len() {
                 if args[i] == "--tag" && i + 1 < args.len() {
@@ -1525,10 +1527,106 @@ fn main() {
                 } else if args[i] == "--failed-first" {
                     failed_first = true;
                     i += 1;
+                } else if args[i] == "--snapshot" && i + 1 < args.len() {
+                    snapshot_cmd = Some(args[i + 1].clone());
+                    // Collect remaining args after subcommand as snapshot args
+                    i += 2;
+                    while i < args.len() && !args[i].starts_with("--") {
+                        snapshot_args.push(args[i].clone());
+                        i += 1;
+                    }
                 } else {
                     i += 1;
                 }
             }
+            // Handle snapshot subcommands that don't require compilation
+            let snapshot_dir = {
+                let stem = Path::new(filename).file_stem().and_then(|s| s.to_str()).unwrap_or("test");
+                Path::new(filename).parent().unwrap_or(Path::new(".")).join(".gorget").join("snapshots").join(stem)
+            };
+            if let Some(ref cmd) = snapshot_cmd {
+                match cmd.as_str() {
+                    "list" => {
+                        if snapshot_dir.exists() {
+                            let mut entries: Vec<_> = std::fs::read_dir(&snapshot_dir)
+                                .unwrap_or_else(|_| { eprintln!("No snapshots found"); process::exit(0); })
+                                .filter_map(|e| e.ok())
+                                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+                                .collect();
+                            entries.sort_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()));
+                            if entries.is_empty() {
+                                println!("No snapshots saved.");
+                            } else {
+                                println!("Saved snapshots:");
+                                for entry in &entries {
+                                    let name = entry.path().file_stem().and_then(|s| s.to_str()).unwrap_or("?").to_string();
+                                    println!("  {name}");
+                                }
+                            }
+                        } else {
+                            println!("No snapshots saved.");
+                        }
+                        process::exit(0);
+                    }
+                    "show" => {
+                        let version = snapshot_args.first().unwrap_or_else(|| {
+                            eprintln!("Usage: gg test <file> --snapshot show <version>");
+                            process::exit(1);
+                        });
+                        let path = snapshot_dir.join(format!("{version}.json"));
+                        match std::fs::read_to_string(&path) {
+                            Ok(contents) => print!("{contents}"),
+                            Err(_) => { eprintln!("Snapshot '{version}' not found"); process::exit(1); }
+                        }
+                        process::exit(0);
+                    }
+                    "delete" => {
+                        let version = snapshot_args.first().unwrap_or_else(|| {
+                            eprintln!("Usage: gg test <file> --snapshot delete <version>");
+                            process::exit(1);
+                        });
+                        let path = snapshot_dir.join(format!("{version}.json"));
+                        if path.exists() {
+                            std::fs::remove_file(&path).unwrap_or_else(|e| {
+                                eprintln!("Failed to delete snapshot: {e}");
+                                process::exit(1);
+                            });
+                            println!("Deleted snapshot '{version}'");
+                        } else {
+                            eprintln!("Snapshot '{version}' not found");
+                            process::exit(1);
+                        }
+                        process::exit(0);
+                    }
+                    "diff" => {
+                        if snapshot_args.len() < 2 {
+                            eprintln!("Usage: gg test <file> --snapshot diff <v1> <v2>");
+                            process::exit(1);
+                        }
+                        let v1_path = snapshot_dir.join(format!("{}.json", snapshot_args[0]));
+                        let v2_path = snapshot_dir.join(format!("{}.json", snapshot_args[1]));
+                        let v1 = std::fs::read_to_string(&v1_path).unwrap_or_else(|_| {
+                            eprintln!("Snapshot '{}' not found", snapshot_args[0]);
+                            process::exit(1);
+                        });
+                        let v2 = std::fs::read_to_string(&v2_path).unwrap_or_else(|_| {
+                            eprintln!("Snapshot '{}' not found", snapshot_args[1]);
+                            process::exit(1);
+                        });
+                        let exit_code = snapshot_diff(&snapshot_args[0], &v1, &snapshot_args[1], &v2);
+                        process::exit(exit_code);
+                    }
+                    "save" => { /* handled below — needs compilation */ }
+                    other => {
+                        eprintln!("Unknown snapshot subcommand: {other}");
+                        eprintln!("Usage: --snapshot <save|diff|list|show|delete> [args...]");
+                        process::exit(1);
+                    }
+                }
+            }
+
+            let snapshot_mode = matches!(snapshot_cmd.as_deref(), Some("save"));
+
             // --report html implies --trace (unless --no-trace is explicit)
             let trace = if report_html && !no_trace { true } else { trace };
             let tmp_dir = tempfile::tempdir().unwrap_or_else(|e| {
@@ -1572,6 +1670,7 @@ fn main() {
             let lowering_opts = gorget::ir::lowering::LoweringOptions {
                 test_mode: true,
                 bench_mode,
+                snapshot_mode,
                 test_tags: test_tags.clone(),
                 test_exclude_tags: test_exclude_tags.clone(),
                 test_name_filter: effective_filter,
@@ -1619,14 +1718,51 @@ fn main() {
                 process::exit(if any_failed { 1 } else { 0 });
             }
 
+            // Snapshot temp file for capture
+            let snapshot_tmp = if snapshot_mode {
+                Some(tmp_dir.path().join("snapshot_capture.json"))
+            } else {
+                None
+            };
+
             // Sequential execution (default)
-            let status = Command::new(&exe_path)
-                .env("GORGET_TEST_RESULTS", results_path.display().to_string())
-                .status()
+            let mut cmd = Command::new(&exe_path);
+            cmd.env("GORGET_TEST_RESULTS", results_path.display().to_string());
+            if let Some(ref snap_path) = snapshot_tmp {
+                cmd.env("GORGET_SNAPSHOT_PATH", snap_path.display().to_string());
+            }
+            let status = cmd.status()
                 .unwrap_or_else(|e| {
                     eprintln!("Failed to execute {}: {e}", exe_path.display());
                     process::exit(1);
                 });
+
+            // If snapshot save mode, restructure capture file into versioned JSON
+            if let (Some(snap_path), Some(_cmd)) = (&snapshot_tmp, &snapshot_cmd) {
+                let version = snapshot_args.first().unwrap_or_else(|| {
+                    eprintln!("Usage: gg test <file> --snapshot save <version>");
+                    process::exit(1);
+                });
+                let _ = std::fs::create_dir_all(&snapshot_dir);
+                let dest = snapshot_dir.join(format!("{version}.json"));
+                if snap_path.exists() {
+                    let raw = std::fs::read_to_string(snap_path).unwrap_or_default();
+                    let structured = restructure_snapshot_capture(&raw, version, filename);
+                    std::fs::write(&dest, &structured).unwrap_or_else(|e| {
+                        eprintln!("Failed to write snapshot: {e}");
+                        process::exit(1);
+                    });
+                    println!("Snapshot '{version}' saved to {}", dest.display());
+                } else {
+                    // No snapshot statements executed — write empty
+                    let structured = format!("{{\n  \"version\": \"{version}\",\n  \"file\": \"{filename}\",\n  \"tests\": {{}}\n}}\n");
+                    std::fs::write(&dest, &structured).unwrap_or_else(|e| {
+                        eprintln!("Failed to write snapshot: {e}");
+                        process::exit(1);
+                    });
+                    println!("Snapshot '{version}' saved (no snapshot points captured)");
+                }
+            }
             // Generate HTML report if requested
             if report_html && trace {
                 let input_path = Path::new(filename);
@@ -1862,4 +1998,201 @@ fn worker_results_path(results_path: &Path, worker_id: usize) -> PathBuf {
     let ext = results_path.extension().and_then(|s| s.to_str()).unwrap_or("json");
     let parent = results_path.parent().unwrap_or(Path::new("."));
     parent.join(format!("{stem}.worker{worker_id}.{ext}"))
+}
+
+/// Restructure JSONL snapshot capture into versioned JSON.
+/// Input format: `[{"test":"name","point":"name","value":...}, ...]`
+/// Output format: `{"version":"v1","file":"f.gg","tests":{"test_name":{"point_name":value,...},...}}`
+fn restructure_snapshot_capture(raw: &str, version: &str, filename: &str) -> String {
+    // Parse the JSON array of capture entries
+    // Simple approach: collect test→point→value triples
+    let mut tests: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> = std::collections::BTreeMap::new();
+
+    let mut pos = 0;
+    while let Some(test_pos) = raw[pos..].find("\"test\":\"") {
+        let abs = pos + test_pos;
+        let t_start = abs + "\"test\":\"".len();
+        if let Some(t_end) = raw[t_start..].find('"') {
+            let test_name = raw[t_start..t_start + t_end].to_string();
+            let after_test = t_start + t_end;
+
+            if let Some(p_pos) = raw[after_test..].find("\"point\":\"") {
+                let p_start = after_test + p_pos + "\"point\":\"".len();
+                if let Some(p_end) = raw[p_start..].find('"') {
+                    let point_name = raw[p_start..p_start + p_end].to_string();
+                    let after_point = p_start + p_end;
+
+                    if let Some(v_pos) = raw[after_point..].find("\"value\":") {
+                        let v_start = after_point + v_pos + "\"value\":".len();
+                        // Find the end of the value — scan for the closing } of this entry
+                        if let Some(entry_end) = raw[v_start..].find('}') {
+                            let value = raw[v_start..v_start + entry_end].trim().to_string();
+                            tests.entry(test_name).or_default().insert(point_name, value);
+                            pos = v_start + entry_end + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        pos = abs + 1;
+    }
+
+    // Build structured JSON
+    let mut out = String::new();
+    out.push_str("{\n");
+    out.push_str(&format!("  \"version\": \"{version}\",\n"));
+    out.push_str(&format!("  \"file\": \"{filename}\",\n"));
+    out.push_str("  \"tests\": {\n");
+    let test_count = tests.len();
+    for (ti, (test_name, points)) in tests.iter().enumerate() {
+        out.push_str(&format!("    \"{test_name}\": {{\n"));
+        let point_count = points.len();
+        for (pi, (point_name, value)) in points.iter().enumerate() {
+            let comma = if pi + 1 < point_count { "," } else { "" };
+            out.push_str(&format!("      \"{point_name}\": {value}{comma}\n"));
+        }
+        let comma = if ti + 1 < test_count { "," } else { "" };
+        out.push_str(&format!("    }}{comma}\n"));
+    }
+    out.push_str("  }\n}\n");
+    out
+}
+
+/// Compare two snapshot JSON files and print a human-readable diff.
+/// Returns 0 if identical, 1 if different.
+fn snapshot_diff(name1: &str, json1: &str, name2: &str, json2: &str) -> i32 {
+    // Parse both into test→point→value maps
+    fn parse_snapshot(json: &str) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> {
+        let mut tests: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> = std::collections::BTreeMap::new();
+        // Find the "tests" object
+        if let Some(tests_pos) = json.find("\"tests\"") {
+            let rest = &json[tests_pos..];
+            if let Some(brace) = rest.find('{') {
+                let inner = &rest[brace + 1..];
+                // Parse test entries — look for "test_name": { ... }
+                let mut pos = 0;
+                while let Some(key_start) = inner[pos..].find('"') {
+                    let abs_ks = pos + key_start + 1;
+                    if let Some(key_end) = inner[abs_ks..].find('"') {
+                        let test_name = inner[abs_ks..abs_ks + key_end].to_string();
+                        let after_key = abs_ks + key_end + 1;
+                        // Find opening brace
+                        if let Some(ob) = inner[after_key..].find('{') {
+                            let obj_start = after_key + ob + 1;
+                            // Find matching close brace (simple nesting)
+                            let mut depth = 1;
+                            let mut obj_end = obj_start;
+                            for (i, c) in inner[obj_start..].char_indices() {
+                                match c {
+                                    '{' => depth += 1,
+                                    '}' => { depth -= 1; if depth == 0 { obj_end = obj_start + i; break; } }
+                                    _ => {}
+                                }
+                            }
+                            let obj_body = &inner[obj_start..obj_end];
+                            // Parse point→value pairs within this test
+                            let mut points = std::collections::BTreeMap::new();
+                            let mut pp = 0;
+                            while let Some(pk_start) = obj_body[pp..].find('"') {
+                                let apk = pp + pk_start + 1;
+                                if let Some(pk_end) = obj_body[apk..].find('"') {
+                                    let point_name = obj_body[apk..apk + pk_end].to_string();
+                                    let after_pk = apk + pk_end + 1;
+                                    if let Some(colon) = obj_body[after_pk..].find(':') {
+                                        let val_start = after_pk + colon + 1;
+                                        // Value ends at comma or end of object
+                                        let val_rest = obj_body[val_start..].trim_start();
+                                        let val_end = val_rest.find('\n')
+                                            .or_else(|| val_rest.find(','))
+                                            .unwrap_or(val_rest.len());
+                                        let value = val_rest[..val_end].trim().trim_end_matches(',').to_string();
+                                        points.insert(point_name, value);
+                                        pp = val_start + val_end;
+                                    } else {
+                                        pp = after_pk;
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+                            tests.insert(test_name, points);
+                            pos = obj_end + 1;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        tests
+    }
+
+    let t1 = parse_snapshot(json1);
+    let t2 = parse_snapshot(json2);
+
+    println!("Snapshot diff: {name1} vs {name2}\n");
+
+    let mut changed = 0;
+    let mut unchanged = 0;
+
+    // Collect all test names
+    let all_tests: std::collections::BTreeSet<&String> = t1.keys().chain(t2.keys()).collect();
+
+    for test_name in &all_tests {
+        let p1 = t1.get(*test_name);
+        let p2 = t2.get(*test_name);
+
+        match (p1, p2) {
+            (Some(_), None) => {
+                println!("  test \"{test_name}\": REMOVED in {name2}");
+                changed += 1;
+            }
+            (None, Some(_)) => {
+                println!("  test \"{test_name}\": NEW in {name2}");
+                changed += 1;
+            }
+            (Some(pts1), Some(pts2)) => {
+                let all_points: std::collections::BTreeSet<&String> = pts1.keys().chain(pts2.keys()).collect();
+                let mut test_changed = false;
+                let mut diffs = Vec::new();
+                for point in &all_points {
+                    let v1 = pts1.get(*point);
+                    let v2 = pts2.get(*point);
+                    match (v1, v2) {
+                        (Some(a), Some(b)) if a == b => {}
+                        (Some(a), Some(b)) => {
+                            diffs.push(format!("    \"{}\": {} -> {}", point, a, b));
+                            test_changed = true;
+                        }
+                        (Some(a), None) => {
+                            diffs.push(format!("    \"{}\": {} -> (removed)", point, a));
+                            test_changed = true;
+                        }
+                        (None, Some(b)) => {
+                            diffs.push(format!("    \"{}\": (new) -> {}", point, b));
+                            test_changed = true;
+                        }
+                        (None, None) => {}
+                    }
+                }
+                if test_changed {
+                    println!("  test \"{test_name}\":");
+                    for d in &diffs { println!("{d}"); }
+                    changed += 1;
+                } else {
+                    unchanged += 1;
+                }
+            }
+            (None, None) => {}
+        }
+    }
+
+    if changed == 0 {
+        println!("  (identical)");
+    }
+    println!("\n{changed} test(s) changed, {unchanged} test(s) unchanged");
+    if changed > 0 { 1 } else { 0 }
 }

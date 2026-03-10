@@ -43,6 +43,8 @@ pub struct LoweringOptions {
     pub default_timeout_ms: Option<u64>,
     /// Names of previously-failed tests to run first (for `--failed-first`).
     pub failed_first_names: Vec<String>,
+    /// Whether snapshot capture mode is active (`--snapshot save`).
+    pub snapshot_mode: bool,
     /// Enable trace instrumentation and write events to this file path.
     pub trace_filename: Option<String>,
     /// Enable hot-reload mode (directive hot-reload or --hot-reload flag).
@@ -484,6 +486,7 @@ pub fn lower_module(
     if options.no_strip_asserts { ctx.strip_asserts = false; }
     if options.overflow_wrap { ctx.overflow_wrap = true; }
     if options.overflow_checked { ctx.overflow_wrap = false; }
+    if options.snapshot_mode { ctx.snapshot_mode = true; }
     if let Some(m) = options.scheduler_mode { ctx.spawn.scheduler_mode = m; }
 
     // Register well-known stdlib constants

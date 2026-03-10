@@ -150,6 +150,9 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
             rewrite_expr(condition, res, scopes);
             if let Some(msg) = message { rewrite_expr(msg, res, scopes); }
         }
+        Stmt::Snapshot { value, .. } => {
+            rewrite_expr(value, res, scopes);
+        }
         Stmt::Item(item) => rewrite_item(item, res, scopes),
         Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
             // Conditions are meta expressions — skip rewriting them; rewrite the bodies.

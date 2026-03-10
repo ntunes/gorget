@@ -1790,6 +1790,10 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
+            Stmt::Snapshot { value, .. } => {
+                self.infer_expr(value);
+            }
+
             Stmt::Continue | Stmt::Pass => {}
 
             Stmt::For {

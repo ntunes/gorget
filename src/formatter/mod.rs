@@ -1350,6 +1350,11 @@ impl Formatter {
                 }
                 self.emitter.newline();
             }
+            Stmt::Snapshot { name, value } => {
+                self.emitter.write(&format!("snapshot \"{}\" ", name.node));
+                self.format_expr(value);
+                self.emitter.newline();
+            }
             Stmt::Item(item) => {
                 let spanned = Spanned::new(*item.clone(), stmt.span);
                 self.format_item(&spanned);

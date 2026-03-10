@@ -1706,6 +1706,7 @@ fn eval_meta_stmt(
         | Stmt::Unsafe { .. }
         | Stmt::NamedScope { .. }
         | Stmt::OnError { .. }
+        | Stmt::Snapshot { .. }
         | Stmt::Item(_) => Err(meta_err(
             "this statement type is not supported in compile-time function evaluation",
             stmt_span,
@@ -2124,6 +2125,9 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
         Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
             substitute_expr(condition, env, type_env);
             if let Some(msg) = message { substitute_expr(msg, env, type_env); }
+        }
+        Stmt::Snapshot { value, .. } => {
+            substitute_expr(value, env, type_env);
         }
         Stmt::Item(item) => substitute_item(item, env, type_env),
         Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {

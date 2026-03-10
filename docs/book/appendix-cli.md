@@ -102,17 +102,33 @@ gg test app.gg                       # run all tests
 gg test app.gg --filter "query"      # tests matching substring
 gg test app.gg --tag smoke           # only @tag("smoke") tests
 gg test app.gg --exclude-tag slow    # skip @tag("slow") tests
+gg test app.gg --timeout 5s          # global 5-second timeout
+gg test app.gg --parallel 4          # run across 4 worker processes
+gg test app.gg --failed-only         # re-run only previously failed tests
+gg test app.gg --failed-first        # run failed tests first, then the rest
+gg test app.gg --bench               # run benchmarks instead of tests
 gg test app.gg --report html         # generate HTML report
+gg test app.gg --snapshot save "v1"  # run tests and save snapshots as "v1"
+gg test app.gg --snapshot diff "v1" "v2"  # compare two snapshot versions
+gg test app.gg --snapshot list       # list saved snapshot versions
+gg test app.gg --snapshot show "v1"  # print snapshot contents
+gg test app.gg --snapshot delete "v1"  # remove a saved version
 ```
 
 **Flags:**
 
 | Flag | Description |
 |------|-------------|
-| `--filter=<pattern>` | Run tests with names matching the pattern |
-| `--tag=<name>` | Run only tests with this tag (repeatable) |
-| `--exclude-tag=<name>` | Skip tests with this tag (repeatable) |
-| `--report=html` | Generate an HTML test report |
+| `--filter <pattern>` | Run tests with names matching the pattern |
+| `--tag <name>` | Run only tests with this tag (repeatable) |
+| `--exclude-tag <name>` | Skip tests with this tag (repeatable) |
+| `--timeout <value>` | Global timeout (`5s`, `500ms`, or `5000` for ms) |
+| `--parallel <N>` | Run tests across N worker processes |
+| `--failed-only` | Re-run only previously failed tests |
+| `--failed-first` | Run failed tests first, then the rest |
+| `--bench` | Run `bench` blocks instead of `test` blocks |
+| `--snapshot <cmd>` | Snapshot subcommand: `save`, `diff`, `list`, `show`, `delete` |
+| `--report html` | Generate an HTML test report |
 
 ---
 

@@ -190,6 +190,7 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
         Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
             contains_it(condition) || message.as_ref().is_some_and(contains_it)
         }
+        Stmt::Snapshot { value, .. } => contains_it(value),
         Stmt::Item(_) => false,
         Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
             contains_it(condition)

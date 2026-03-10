@@ -111,6 +111,12 @@ pub fn lower_stmt(
             }
         }
 
+        Stmt::Snapshot { name, value } => {
+            if ctx.snapshot_mode {
+                lower_snapshot(ctx, builder, name, value);
+            }
+        }
+
         Stmt::With { bindings, body } => lower_with(ctx, builder, bindings, body),
 
         Stmt::Unsafe { body } => lower_block(ctx, builder, body),
@@ -1110,6 +1116,81 @@ fn is_allocator_constructor(expr: &Expr) -> bool {
 
 /// Lower a named scope block: `identifier:\n    body`.
 /// Opens a new drop scope so variables declared inside are dropped at block exit.
+/// Lower a `snapshot "name" expr` statement — serialize value and write to snapshot file.
+fn lower_snapshot(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    name: &Spanned<String>,
+    value: &Spanned<Expr>,
+) {
+    let val_op = lower_expr(ctx, builder, value);
+    let val_type = infer_operand_type_full(ctx, &val_op, builder);
+    let val_local = builder.add_local(val_type, None);
+    builder.assign(Place::local(val_local), val_op);
+
+    let point_name = name.node.replace('\\', "\\\\").replace('"', "\\\"");
+    let c_expr = format!("_{}", val_local.0);
+
+    // Emit the appropriate direct-write call based on the value's type
+    if val_type == I64_TYPE || val_type == I32_TYPE || val_type == I16_TYPE || val_type == I8_TYPE
+        || val_type == U64_TYPE || val_type == U32_TYPE || val_type == U16_TYPE || val_type == U8_TYPE
+    {
+        builder.inline_c(format!(
+            "__gorget_snapshot_write_int(__gorget_current_test, \"{point_name}\", (long long)({c_expr}));"
+        ));
+    } else if val_type == F64_TYPE || val_type == F32_TYPE {
+        builder.inline_c(format!(
+            "__gorget_snapshot_write_float(__gorget_current_test, \"{point_name}\", (double){c_expr});"
+        ));
+    } else if val_type == BOOL_TYPE {
+        builder.inline_c(format!(
+            "__gorget_snapshot_write_bool(__gorget_current_test, \"{point_name}\", {c_expr});"
+        ));
+    } else if val_type == ctx.type_mapper.str_type || val_type == ctx.type_mapper.owned_string_type {
+        builder.inline_c(format!(
+            "__gorget_snapshot_write_str(__gorget_current_test, \"{point_name}\", {c_expr});"
+        ));
+    } else if let Some(GirType::Named(ref type_name)) = ctx.type_registry.get(val_type).cloned() {
+        // Named types with display: call display, then write the result as a string
+        let display_method = format!("{type_name}__display");
+        let has_display = ctx.fn_sigs.contains_key(&display_method)
+            || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{type_name}__display")));
+        if has_display {
+            let effective_method = if ctx.fn_sigs.contains_key(&display_method) {
+                display_method
+            } else {
+                ctx.fn_sigs.keys()
+                    .find(|k| k.ends_with(&format!("_for_{type_name}__display")))
+                    .cloned()
+                    .unwrap_or(display_method)
+            };
+            let self_type = ctx.register_ptr_type(val_type);
+            let self_ptr = builder.add_local(self_type, None);
+            builder.emit_borrow(self_ptr, Place::local(val_local));
+            let str_type = ctx.type_mapper.str_type;
+            let result = builder.call(
+                effective_method,
+                vec![FunctionBuilder::copy(self_ptr)],
+                str_type,
+            );
+            builder.inline_c(format!(
+                "__gorget_snapshot_write_str(__gorget_current_test, \"{point_name}\", _{});",
+                result.0
+            ));
+        } else {
+            // No display method — write null
+            builder.inline_c(format!(
+                "__gorget_snapshot_write_null(__gorget_current_test, \"{point_name}\");"
+            ));
+        }
+    } else {
+        // Unknown type — write null
+        builder.inline_c(format!(
+            "__gorget_snapshot_write_null(__gorget_current_test, \"{point_name}\");"
+        ));
+    }
+}
+
 fn lower_named_scope(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,

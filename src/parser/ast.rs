@@ -983,6 +983,13 @@ pub enum Stmt {
         message: Option<Spanned<Expr>>,
     },
 
+    /// snapshot "name" expr — capture a serialized value for snapshot testing.
+    /// Only valid inside test blocks. The expression type must be a primitive or implement Serializable.
+    Snapshot {
+        name: Spanned<String>,
+        value: Spanned<Expr>,
+    },
+
     /// Nested item definition
     Item(Box<Item>),
 

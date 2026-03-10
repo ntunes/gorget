@@ -118,6 +118,7 @@ enum Stmt:
     SSelect(Vector[SelectArm])
     SOnError(Vector[Stmt])
     SItem(Item)
+    SSnapshot(str, int, SpannedExpr)
 
 # ── Items ────────────────────────────────────────────────────
 

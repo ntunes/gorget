@@ -149,6 +149,8 @@ pub struct LoweringContext<'a> {
     pub module_constants: FxHashMap<String, crate::ir::instructions::Constant>,
     /// Whether `directive strip-asserts` is active (asserts become no-ops).
     pub strip_asserts: bool,
+    /// Whether snapshot capture mode is active (`--snapshot save`).
+    pub snapshot_mode: bool,
     /// Whether `directive overflow wrap` is active (integer overflow wraps).
     pub overflow_wrap: bool,
     /// LocalIds that are mutable capture pointers (need deref on read/write in closure bodies).
@@ -211,6 +213,7 @@ impl<'a> LoweringContext<'a> {
             shared: SharedVarState::default(),
             module_constants: FxHashMap::default(),
             strip_asserts: false,
+            snapshot_mode: false,
             overflow_wrap: false,
             mut_capture_locals: FxHashMap::default(),
             extern_bindings: FxHashMap::default(),

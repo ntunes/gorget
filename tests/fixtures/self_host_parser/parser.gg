@@ -172,6 +172,7 @@ const int KW_MOD = 93
 const int KW_CATCH = 94
 const int KW_ON = 95
 const int KW_BENCH = 96
+const int KW_SNAPSHOT = 97
 
 # ── Ownership constants ─────────────────────────────────────
 
@@ -511,6 +512,8 @@ int keyword_tag(Token tok):
                     return KW_CATCH
                 case KwOn:
                     return KW_ON
+                case KwSnapshot:
+                    return KW_SNAPSHOT
                 else:
                     return 0
         else:
@@ -809,6 +812,8 @@ str non_type_keyword_name(int kw):
         return "shared"
     elif kw == KW_META:
         return "meta"
+    elif kw == KW_SNAPSHOT:
+        return "snapshot"
     return ""
 
 # ── Operator helpers ─────────────────────────────────────────
@@ -2343,6 +2348,15 @@ equip Parser:
                     Option[str] some_msg = Some(token_string_val(mt.lex_token))
                     msg = !some_msg
             return SAssert(cond, msg)
+
+        # snapshot "name" expr
+        if self.check_kw(KW_SNAPSHOT):
+            self.advance()
+            SpannedToken snap_name_tok = self.expect_tok(TOK_STRING, "expected string after 'snapshot'")
+            str snap_name = token_string_val(snap_name_tok.lex_token)
+            int snap_name_span = snap_name_tok.span
+            SpannedExpr snap_val = self.parse_expr()
+            return SSnapshot(snap_name, snap_name_span, snap_val)
 
         # on error: body
         if self.check_kw(KW_ON):

@@ -331,6 +331,7 @@ pub enum Keyword {
     Test,
     Suite,
     Bench,
+    Snapshot,
 
     // Compile-time
     Meta,
@@ -438,6 +439,7 @@ impl Keyword {
             Keyword::Test => "test",
             Keyword::Suite => "suite",
             Keyword::Bench => "bench",
+            Keyword::Snapshot => "snapshot",
             Keyword::Meta => "meta",
             Keyword::Mod => "mod",
             Keyword::It => "it",
@@ -540,6 +542,7 @@ impl Keyword {
             "test" => Some(Keyword::Test),
             "suite" => Some(Keyword::Suite),
             "bench" => Some(Keyword::Bench),
+            "snapshot" => Some(Keyword::Snapshot),
             "meta" => Some(Keyword::Meta),
             "mod" => Some(Keyword::Mod),
             "it" => Some(Keyword::It),

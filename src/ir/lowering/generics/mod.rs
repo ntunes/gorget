@@ -388,6 +388,9 @@ impl GenericCollector {
                     self.scan_expr(msg);
                 }
             }
+            Stmt::Snapshot { value, .. } => {
+                self.scan_expr(value);
+            }
             // Delayed meta stmts: scan all branches (conservative — we can't
             // evaluate typename(T) yet; all branches may reference generic calls).
             Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
