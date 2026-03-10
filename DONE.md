@@ -1,6 +1,6 @@
 # DONE
 
-- [2026-03-10] **`field_get` / `field_set` meta builtins**: Renamed `field_value` to `field_get` (keeping `field_value` as backward-compatible alias). Implemented `field_set(obj, fname, value)` — rewrites to `obj.fname = value` assignment at compile time. Works in both direct literal form and inside `meta for` generic bodies. Rewrite sites: meta.rs (substitute_expr for field_get, substitute_stmt for field_set), rewrite.rs (rewrite_expr for field_get, rewrite_stmt for field_set), resolve.rs (field_get/field_set resolution). Test fixture: field_access.gg. Docs: language-reference.md sections 19.15-19.16, book/17-meta.md, AGENTS.md.
+- [2026-03-10] **`field_set(obj, fname, value)` meta builtin**: Write counterpart to `field_value`. Rewrites to `obj.fname = value` assignment at compile time. Works in both direct literal form and inside `meta for` generic bodies. Rewrite sites: meta.rs (substitute_stmt), rewrite.rs (rewrite_stmt), resolve.rs. Test fixture: field_access.gg. Docs: language-reference.md section 19.16, book/17-meta.md, AGENTS.md.
 
 - [2026-03-10] **Fix Vector.each() codegen + wire for_each alias**: `try_emit_higher_order_method` returned early with empty string for void-returning methods (dst=None), silently dropping the `each` loop code. Fixed by letting void methods proceed past the dst check. Also wired `for_each` as alias for `each` in the method whitelist and handler. Added `each` test to test_vector_all.gg.
 

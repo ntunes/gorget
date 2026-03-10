@@ -341,10 +341,10 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
         | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } | Expr::It => {}
     }
 
-    // Rewrite field_get/field_value(val, "field") → val.field (for literal usage outside meta for)
+    // Rewrite field_value(val, "field") → val.field (for literal usage outside meta for)
     if let Expr::Call { ref callee, ref args, .. } = expr.node {
         if let Expr::Identifier(ref cname) = callee.node {
-            if (cname == "field_get" || cname == "field_value") && args.len() == 2 {
+            if cname == "field_value" && args.len() == 2 {
                 if let Expr::StringLiteral(ref s) = args[1].node.value.node {
                     if !s.has_interpolation() {
                         let field_name: String = s.segments.iter()

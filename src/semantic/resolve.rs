@@ -1233,13 +1233,13 @@ fn resolve_expr(
         }
 
         Expr::Call { callee, args, .. } => {
-            // field_get/field_value(obj, fname) and field_set(obj, fname, value) are
+            // field_value(obj, fname) and field_set(obj, fname, value) are
             // compile-time rewrite builtins. The callee is not a real function and the
             // field-name arg is a meta-loop variable or string literal — not a runtime
             // identifier. Skip their resolution to avoid spurious "undefined name" errors;
             // the actual rewrite happens during meta substitution or the rewrite pass.
             if let Expr::Identifier(cname) = &callee.node {
-                if (cname == "field_get" || cname == "field_value") && args.len() == 2 {
+                if cname == "field_value" && args.len() == 2 {
                     // Only resolve arg0 (the object expression).
                     resolve_expr(&args[0].node.value, scopes, errors, resolution_map);
                     return;

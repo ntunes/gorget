@@ -182,7 +182,7 @@ Available struct builtins:
 | `field_count(T)` | Number of fields |
 | `has_field(T, str)` | Whether field exists |
 | `field_type(T, str)` | Type of a field |
-| `field_get(val, name)` | Read field by name (alias: `field_value`) |
+| `field_value(val, name)` | Read field by name |
 | `field_set(obj, name, value)` | Write field by name |
 
 ### Enum Reflection
@@ -224,7 +224,7 @@ Loop over compile-time lists:
 void print_fields[T](T val):
     meta for name in field_names(T):
         meta log "accessing:", name
-        auto v = field_get(val, name)
+        auto v = field_value(val, name)
         # use v...
 ```
 

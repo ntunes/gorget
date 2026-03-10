@@ -2394,11 +2394,11 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
         }
     }
 
-    // Post-recursion: rewrite field_get/field_value(val, "field") → val.field
+    // Post-recursion: rewrite field_value(val, "field") → val.field
     // After substitution, the second arg should now be a plain string literal.
     if let Expr::Call { ref callee, ref args, .. } = expr.node {
         if let Expr::Identifier(ref cname) = callee.node {
-            if (cname == "field_get" || cname == "field_value") && args.len() == 2 {
+            if cname == "field_value" && args.len() == 2 {
                 if let Expr::StringLiteral(ref s) = args[1].node.value.node {
                     if !s.has_interpolation() {
                         let field_name: String = s.segments.iter()
@@ -3075,11 +3075,11 @@ fn eval_delayed_expr(
                                 &format!("enum_from_ordinal: unknown type `{type_name}`"), span)),
                         }
                     }
-                    "field_get" | "field_value" => {
+                    "field_value" => {
                         return Err(meta_err(
-                            "field_get() accesses a runtime struct field and cannot be used as a \
+                            "field_value() accesses a runtime struct field and cannot be used as a \
                              compile-time meta const; use it directly in a runtime statement: \
-                             `auto v = field_get(val, fname)` or inline: `print(\"{field_get(val, fname)}\")`",
+                             `auto v = field_value(val, fname)` or inline: `print(\"{field_value(val, fname)}\")`",
                             span,
                         ));
                     }

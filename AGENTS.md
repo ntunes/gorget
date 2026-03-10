@@ -63,7 +63,7 @@ cargo test               # all tests (use --test-threads=1 if integration tests 
   - `meta for vname, T in variant_payloads(E): case vname(c): ...` — expand match arms from enum variants
   - Phase-0 builtins: `platform()`, `arch()`, `arch_word_bits()`, `feature(str)`, `debug()`, `sizeof(Type)`, `alignof(Type)`, `typename(Type)`, `embed_file(str)`
   - Delayed (generic body) builtins — type: `typename(T)`, `typeof(T)`, `sizeof(T)`, `bitwidth(T)`, `min_val(T)`, `max_val(T)`, `implements(T, str)`
-  - Delayed — struct: `fields(T)`, `field_names(T)`, `field_count(T)`, `has_field(T, str)`, `field_type(T, str)`, `field_get(val, fname)`, `field_set(obj, fname, value)`
+  - Delayed — struct: `fields(T)`, `field_names(T)`, `field_count(T)`, `has_field(T, str)`, `field_type(T, str)`, `field_value(val, fname)`, `field_set(obj, fname, value)`
   - Delayed — enum: `variant_names(T)`, `variant_count(T)`, `variant_payloads(T)`, `enum_ordinal(T, str)`, `enum_from_ordinal(T, n)`, `make_variant(T, str)`
 
 **Always use type-first native Gorget syntax** when generating code, writing plans, or providing examples. Write `int x = 5` not `x: int = 5` or `let x = 5`. Write `str greet(str name)` not `fn greet(name: str) -> str`.
