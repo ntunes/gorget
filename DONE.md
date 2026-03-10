@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-10] **Self-hosting type checker: 587/594 (98.8%) — match arm binding lookup fix**: Phase 15: added `lookup_in_subtree_untyped` method to ScopeTable that skips defs already assigned a type. Used in `assign_pattern_types` PBinding case and SVarDecl handler to find the correct def when the same variable name appears in multiple match arm scopes. Fixed try_from_trait.gg and generic_callable_ref.gg. Score: 584/593 → 587/594 (+3 exact, +1 fixture).
+
 - [2026-03-10] **Self-hosting type checker: 584/593 (98.5%) — bench scope + f-string type**: Phase 14: added IBench body scope handling to typechecker's resolve.gg (was skipping bench blocks entirely). Added interpolation flag to EStringLiteral(str, bool) in shared AST with `token_has_interpolation` parser helper; infer.gg now returns `owned_string_id` (String) for f-strings. Fixed bench_basic.gg and string_format.gg. Score: 581/592 → 584/593 (+3 exact, +1 fixture).
 
 - [2026-03-10] **Vector.zip() C backend codegen**: Implemented `zip` for vectors — `a.zip(b)` returns `Vector[(A, B)]`. IR lowering: registers `Tuple__A__B` struct and `Vector__Tuple__A__B` type, infers correct return type from argument types. C backend: inline loop iterates both arrays to `min(len)`, builds tuple structs, pushes to result. Handles same-type pairs (`(int, int)`) and mixed-type pairs (`(int, str)`). Shorter vector truncates. Added `find_tuple_type_split` helper for parsing tuple type names.

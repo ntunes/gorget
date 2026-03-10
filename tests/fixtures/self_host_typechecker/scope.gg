@@ -256,6 +256,39 @@ equip ScopeTable:
             sid = sid + 1
         return NO_DEF
 
+    # Like lookup_in_subtree, but skips defs that already have a type assigned.
+    # Used by assign_pattern_types to find the correct def when the same name
+    # appears in multiple match arm scopes.
+    int lookup_in_subtree_untyped(self, int root_scope, str name):
+        int ni = self.find_name_entry(root_scope, name)
+        if ni >= 0:
+            int did = self.name_def_ids.get(ni).unwrap()
+            DefInfo d = get_def_at(self.definitions, did)
+            if d.type_id < 0:
+                return did
+        int sid = root_scope + 1
+        while sid < self.scopes.len():
+            bool is_child = false
+            int p = sid
+            while p >= 0:
+                Scope ps = get_scope_at(self.scopes, p)
+                if ps.parent == root_scope:
+                    is_child = true
+                    p = -1
+                elif ps.parent < root_scope:
+                    p = -1
+                else:
+                    p = ps.parent
+            if is_child:
+                int cni = self.find_name_entry(sid, name)
+                if cni >= 0:
+                    int cdid = self.name_def_ids.get(cni).unwrap()
+                    DefInfo cd = get_def_at(self.definitions, cdid)
+                    if cd.type_id < 0:
+                        return cdid
+            sid = sid + 1
+        return NO_DEF
+
     DefInfo get_def(self, int id):
         return get_def_at(self.definitions, id)
 

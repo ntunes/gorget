@@ -243,7 +243,7 @@ int spat_vec_len(Vector[SpannedPattern] v):
 void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_id, ScopeTable &scopes, TypeTable &types):
     match pattern.pat:
         case PBinding(name):
-            int def_id = scopes.lookup_in_subtree(scope_id, name)
+            int def_id = scopes.lookup_in_subtree_untyped(scope_id, name)
             if def_id >= 0:
                 DefInfo d = scopes.get_def(def_id)
                 # Only assign to variable bindings (not variant names, structs, etc.)
@@ -253,7 +253,7 @@ void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_
                         is_variable = true
                     else:
                         pass
-                if is_variable and d.type_id < 0:
+                if is_variable:
                     scopes.set_def_type(def_id, scrutinee_type)
 
         case PConstructor(variant_name, fields):
@@ -565,7 +565,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                 # Phase 2: infer type from initializer expression
                 var_type_id = infer_expr_type(init_expr, scopes, &types, ctx)
             if var_type_id >= 0:
-                int var_def = scopes.lookup_in_subtree(scope_id, name)
+                int var_def = scopes.lookup_in_subtree_untyped(scope_id, name)
                 if var_def >= 0:
                     scopes.set_def_type(var_def, var_type_id)
             # Walk initializer for closures and block expressions
