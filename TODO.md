@@ -53,11 +53,11 @@
 
 - **Async/await — `await` on vector-indexed tasks with multiple spawn functions**: Type-based await dispatch now works when exactly one function produces tasks of a given type. When multiple functions produce the same `Task__T` type (e.g., two functions both returning `int`), the type-based fallback can't disambiguate. Fix: embed a function dispatch pointer in the `Task__T` struct or use a tag field. [updated: 2026-03-07]
 
-- **Self-hosting parser: 595/596 (99.8%)**: Only `chars.gg` remains — null byte `\0` truncates C stdout (unfixable without length-prefixed strings). [updated: 2026-03-10]
+- **Self-hosting parser: 596/596 (100%) — COMPLETE.** [updated: 2026-03-10]
 
-- **Self-hosting resolver: 592/592 (100%) — COMPLETE.** [updated: 2026-03-10]
+- **Self-hosting resolver: 596/596 (100%) — COMPLETE.** [updated: 2026-03-10]
 
-- **Self-hosting type checker: 595/595 (100%) — COMPLETE.** Phases 1-18. [updated: 2026-03-10]
+- **Self-hosting type checker: 595/596 (99.8%)**: Only coroutine_collections.gg — type var numbering mismatch (`?3` vs `?5`). [updated: 2026-03-10]
 
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]

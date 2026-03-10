@@ -810,20 +810,32 @@ pub fn lower_print_call(
             // General expression (identifier, method call, etc.) — lower and infer type
             let val = lower_expr(ctx, builder, arg_expr);
             let type_id = infer_operand_type_full(ctx, &val, builder);
-            let (spec, extra_args) = format_for_printf(ctx, builder, type_id, val);
-            let nl = if add_newline { "\n" } else { "" };
-            let fmt = format!("{spec}{nl}");
-            let fmt_op = Operand::Constant(Constant::Str(fmt));
-            let mut all_args = Vec::new();
-            if use_stderr {
-                all_args.push(Operand::Constant(Constant::Null)); // stderr placeholder
-                all_args.push(fmt_op);
-                all_args.extend(extra_args);
-                builder.call_extern("fprintf_stderr", all_args, I32_TYPE);
+
+            // String types: use fwrite for null-byte safety
+            let is_str = type_id == ctx.type_mapper.str_type
+                || type_id == ctx.type_mapper.owned_string_type;
+            if is_str && !use_stderr {
+                let call_name = if add_newline { "print_str_nl" } else { "print_str" };
+                builder.call_extern(call_name, vec![val], I32_TYPE);
+            } else if is_str && use_stderr {
+                let call_name = if add_newline { "eprint_str_nl" } else { "eprint_str" };
+                builder.call_extern(call_name, vec![val], I32_TYPE);
             } else {
-                all_args.push(fmt_op);
-                all_args.extend(extra_args);
-                builder.call_extern("printf", all_args, I32_TYPE);
+                let (spec, extra_args) = format_for_printf(ctx, builder, type_id, val);
+                let nl = if add_newline { "\n" } else { "" };
+                let fmt = format!("{spec}{nl}");
+                let fmt_op = Operand::Constant(Constant::Str(fmt));
+                let mut all_args = Vec::new();
+                if use_stderr {
+                    all_args.push(Operand::Constant(Constant::Null)); // stderr placeholder
+                    all_args.push(fmt_op);
+                    all_args.extend(extra_args);
+                    builder.call_extern("fprintf_stderr", all_args, I32_TYPE);
+                } else {
+                    all_args.push(fmt_op);
+                    all_args.extend(extra_args);
+                    builder.call_extern("printf", all_args, I32_TYPE);
+                }
             }
         }
     }

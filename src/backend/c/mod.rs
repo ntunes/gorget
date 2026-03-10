@@ -3472,6 +3472,21 @@ fn emit_poll_inst(
                     return None;
                 }
             }
+            // print_str / print_str_nl: fwrite-based string print (null-byte safe)
+            if call_fn == "print_str" || call_fn == "print_str_nl"
+                || call_fn == "eprint_str" || call_fn == "eprint_str_nl"
+            {
+                let stream = if call_fn.starts_with("eprint") { "stderr" } else { "stdout" };
+                let nl = call_fn.ends_with("_nl");
+                if let Some(arg) = args.first() {
+                    let arg_str = fmt_operand_poll(arg, func, registry);
+                    let _ = writeln!(out, "        fwrite({arg_str}.data, 1, {arg_str}.len, {stream});");
+                    if nl {
+                        let _ = writeln!(out, "        fputc('\\n', {stream});");
+                    }
+                }
+                return None;
+            }
             let is_printf = call_fn == "printf" || call_fn == "fprintf" || call_fn == "sprintf"
                 || call_fn == "gorget_string_format";
             let args_str = if is_printf {
@@ -6340,6 +6355,20 @@ fn emit_instruction(
                     let _ = writeln!(out, "        {func_name_mapped}({args_str});");
                 }
             }
+            // print_str / print_str_nl: fwrite-based string print (null-byte safe)
+            else if func_name == "print_str" || func_name == "print_str_nl"
+                || func_name == "eprint_str" || func_name == "eprint_str_nl"
+            {
+                let stream = if func_name.starts_with("eprint") { "stderr" } else { "stdout" };
+                let nl = func_name.ends_with("_nl");
+                if let Some(arg) = args.first() {
+                    let arg_str = format_operand(arg, func, registry);
+                    let _ = writeln!(out, "        fwrite({arg_str}.data, 1, {arg_str}.len, {stream});");
+                    if nl {
+                        let _ = writeln!(out, "        fputc('\\n', {stream});");
+                    }
+                }
+            }
             else {
                 // Check if this is a user-defined function (skip Option/Result wrapping for user fns)
                 let is_user_fn_call = all_functions.iter().any(|f| f.name.as_str() == func_name);
@@ -6347,6 +6376,7 @@ fn emit_instruction(
                 // fprintf_stderr: synthetic name → fprintf(stderr, ...)
                 let is_stderr_print = func_name == "fprintf_stderr";
                 let func_name = if is_stderr_print { "fprintf" } else { func_name };
+
                 let actual_args: &[Operand] = if is_stderr_print && !args.is_empty() && matches!(args[0], Operand::Constant(Constant::Null)) {
                     &args[1..] // skip Null placeholder (legacy format)
                 } else {
