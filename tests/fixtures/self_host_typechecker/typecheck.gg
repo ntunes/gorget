@@ -9,16 +9,16 @@ from std.collections import Vector, Dict
 from ast import Module, Item, Stmt, Param, FunctionDef, StructDef, EnumDef
 from ast import EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch
 from ast import SpannedExpr, SpannedType, SpannedPattern, Span, Type, Expr, Pattern
-from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, SelectArm, SORecv
+from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, EAs, SelectArm, SORecv
 from ids import NO_DEF, NO_TYPE
-from scope import ScopeTable, DefKind, DefInfo, ScopeKind
+from scope import ScopeTable, DefKind, DefInfo, ScopeKind, SkEquipBlock, SkFunction
 from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
 from scope import DkVariable, DkConst, DkStatic, DkGenericParam
-from scope import get_def_at
+from scope import get_def_at, get_scope_at, Scope
 from types import TypeTable, ResolvedType, ast_type_to_resolved, get_stype_at
 from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
 from types import RTTuple, RTArray, RTSlice, get_rtype_at, get_int_at
-from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait
+from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
 from resolve import ResolveContext
 from infer import infer_expr_type
 
@@ -73,15 +73,82 @@ int find_def_by_name(ScopeTable scopes, str name, bool require_function):
         i = i + 1
     return NO_DEF
 
+# ── Find function body scope from parallel vectors ─────────
+# When multiple functions share the same name (e.g. `serialize` across
+# derive-generated equip blocks), the Dict only stores the last one.
+# This helper searches all stored scopes, picks one whose parent chain
+# includes parent_scope.
+
+int find_body_scope(str name, int parent_scope, ScopeTable scopes, ResolveContext ctx):
+    int best = -1
+    int i = 0
+    while i < ctx.fn_scope_names.len():
+        str sn = ctx.fn_scope_names.get(i).unwrap()
+        if sn == name:
+            int sid = ctx.fn_scope_ids.get(i).unwrap()
+            # Check direct parent match
+            int p = scopes.scope_parent_of(sid)
+            if p == parent_scope:
+                return sid
+            # Check grandparent (function → equip → module)
+            if p >= 0:
+                int gp = scopes.scope_parent_of(p)
+                if gp == parent_scope:
+                    return sid
+            # Track first match as fallback
+            if best < 0:
+                best = sid
+        i = i + 1
+    return best
+
+# ── Find the next SkEquipBlock scope ───────────────────────
+# Returns the next equip-block scope that is a child of parent_scope,
+# with scope ID > after_scope. Used for ordered equip block processing.
+
+int find_next_equip_scope(int parent_scope, int after_scope, ScopeTable scopes):
+    int sid = after_scope + 1
+    while sid < scopes.scope_count():
+        Scope s = get_scope_at(scopes.scopes, sid)
+        if s.parent == parent_scope:
+            bool is_equip = false
+            match s.kind:
+                case SkEquipBlock():
+                    is_equip = true
+                else:
+                    pass
+            if is_equip:
+                # Only return equip scopes that have SkFunction children
+                # (pass 1 creates empty equip scopes, pass 2 has the body scopes)
+                bool has_fn_child = false
+                int csid = sid + 1
+                while csid < scopes.scope_count():
+                    Scope cs = get_scope_at(scopes.scopes, csid)
+                    if cs.parent == sid:
+                        match cs.kind:
+                            case SkFunction():
+                                has_fn_child = true
+                            else:
+                                pass
+                    if cs.parent < sid:
+                        csid = scopes.scope_count()
+                    csid = csid + 1
+                if has_fn_child:
+                    return sid
+        sid = sid + 1
+    return -1
+
 # ── Type-check a function definition ────────────────────────
 
-void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext ctx, bool is_equip_method):
+    # Generic functions or equip methods: skip signature registration but still walk body
+    bool skip_sig = func.type_params.len() > 0 or is_equip_method
     # Look up the function's body scope from the resolve context
-    int body_scope = NO_DEF
-    bool has_body_scope = false
-    if ctx.function_body_scopes.contains(func.name):
-        body_scope = ctx.function_body_scopes.get(func.name).unwrap()
-        has_body_scope = true
+    int body_scope = find_body_scope(func.name, parent_scope, scopes, ctx)
+    bool has_body_scope = body_scope >= 0
+    if not has_body_scope:
+        if ctx.function_body_scopes.contains(func.name):
+            body_scope = ctx.function_body_scopes.get(func.name).unwrap()
+            has_body_scope = true
 
     # Resolve return type
     int ret_id = ast_type_to_resolved(func.return_type.ty, func.return_type.span, scopes, &types)
@@ -106,14 +173,16 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
     int fn_type_id = types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
 
     # Find function's def_id in the parent scope and assign type.
-    # Try direct scope lookup first; fall back to scanning all defs
-    # (needed for equip methods where collect_top_level and resolve_bodies
-    # use different equip scope IDs).
-    int fn_def = scopes.lookup_in_scope(parent_scope, func.name)
-    if fn_def < 0:
-        fn_def = find_def_by_name(scopes, func.name, true)
-    if fn_def >= 0:
-        scopes.set_def_type(fn_def, fn_type_id)
+    # Skip generic functions — type params not in scope at module level.
+    if not skip_sig:
+        # Try direct scope lookup first; fall back to scanning all defs
+        # (needed for equip methods where collect_top_level and resolve_bodies
+        # use different equip scope IDs).
+        int fn_def = scopes.lookup_in_scope(parent_scope, func.name)
+        if fn_def < 0:
+            fn_def = find_def_by_name(scopes, func.name, true)
+        if fn_def >= 0:
+            scopes.set_def_type(fn_def, fn_type_id)
 
     # Walk body for VarDecl types
     if has_body_scope:
@@ -350,6 +419,14 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                                     expected_params = ptypes
                                 else:
                                     pass
+                    case RTBoxedCallable(kind_name, inner_fn):
+                        if inner_fn >= 0 and inner_fn < types.types.len():
+                            ResolvedType ifn = get_rtype_at(types.types, inner_fn)
+                            match ifn:
+                                case RTFunction(ptypes, _, _):
+                                    expected_params = ptypes
+                                else:
+                                    pass
                     else:
                         pass
             # Assign types to closure parameters
@@ -557,7 +634,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
 void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
     match item:
         case IFunction(func):
-            type_check_function(func, scope_id, &scopes, &types, ctx)
+            type_check_function(func, scope_id, &scopes, &types, ctx, false)
 
         case IStruct(sdef):
             # Build a field type lookup table for EFieldAccess inference.
@@ -598,15 +675,17 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
             # Resolve the equip target type for self/&self params
             int self_tid = ast_type_to_resolved(eqblk.target.ty, eqblk.target.span, scopes, &types)
             types.self_type_id = self_tid
-            # Equip methods are defined in the equip scope.
+            # Find the equip block scope by scanning for the next SkEquipBlock
+            # child of the module scope, using last_equip_scope for ordering.
+            int equip_scope = find_next_equip_scope(scope_id, types.last_equip_scope, scopes)
+            if equip_scope >= 0:
+                types.last_equip_scope = equip_scope
+            else:
+                equip_scope = scope_id
             int mi = 0
             while mi < eqblk.methods.len():
                 FunctionDef method = get_fndef_at(eqblk.methods, mi)
-                int equip_scope = scope_id
-                if ctx.function_body_scopes.contains(method.name):
-                    int msid = ctx.function_body_scopes.get(method.name).unwrap()
-                    equip_scope = scopes.scope_parent(msid)
-                type_check_function(method, equip_scope, &scopes, &types, ctx)
+                type_check_function(method, equip_scope, &scopes, &types, ctx, true)
                 mi = mi + 1
             types.self_type_id = -1
 
@@ -654,7 +733,25 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 if static_def >= 0:
                     scopes.set_def_type(static_def, static_type_id)
 
-        case ITest(name, attrs, tags, body):
+        case ITest(name, with_exprs, with_names, body):
+            # Type with-clause bindings (test "name" with expr as var:)
+            int wi = 0
+            while wi < with_exprs.len() and wi < with_names.len():
+                SpannedExpr wexpr = with_exprs.get(wi).unwrap()
+                str wname = with_names.get(wi).unwrap()
+                # Unwrap EAs — the parser wraps `expr as name` into EAs(expr, name)
+                SpannedExpr actual_expr = wexpr
+                match wexpr.expr:
+                    case EAs(inner, _):
+                        actual_expr = SpannedExpr((*inner).expr, (*inner).span)
+                    else:
+                        pass
+                int wtype = infer_expr_type(actual_expr, scopes, &types, ctx)
+                if wtype >= 0:
+                    int wdef = scopes.lookup_in_subtree(scope_id, wname)
+                    if wdef >= 0:
+                        scopes.set_def_type(wdef, wtype)
+                wi = wi + 1
             # Walk test body for VarDecl types
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
 

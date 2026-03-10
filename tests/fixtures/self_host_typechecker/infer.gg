@@ -133,6 +133,15 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         pass
                 if is_type:
                     return types.defined_id(def_id)
+                # Fallback: search parent scopes for same-named def with type
+                # (handles with-binding defs that shadow outer typed defs)
+                int pscope = scopes.scope_parent_of(d.scope_id)
+                if pscope >= 0:
+                    int alt_def = scopes.lookup_from_scope(pscope, name)
+                    if alt_def >= 0:
+                        DefInfo alt_d = scopes.get_def(alt_def)
+                        if alt_d.type_id >= 0:
+                            return alt_d.type_id
             return NO_TYPE
 
         case ECall(callee, args, targs):
@@ -450,8 +459,11 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             return NO_TYPE
 
         case EAs(inner, target_type):
-            # Cast: result is the target type
-            return ast_type_to_resolved((*target_type).ty, (*target_type).span, scopes, &types)
+            # Cast: result is the target type; fall back to inner expr if type fails
+            int cast_type = ast_type_to_resolved((*target_type).ty, (*target_type).span, scopes, &types)
+            if cast_type >= 0 and cast_type != types.error_id:
+                return cast_type
+            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
 
         case EMove(inner):
             int it = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)

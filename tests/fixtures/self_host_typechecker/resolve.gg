@@ -92,12 +92,17 @@ void fn_scope_set(ResolveContext &ctx, str name, int scope_id):
     Dict[str, int] m = !ctx.function_body_scopes
     m.put(name, scope_id)
     ctx.function_body_scopes = !m
+    # Also store in parallel vectors so all scopes are preserved (Dict overwrites)
+    ctx.fn_scope_names.push(name)
+    ctx.fn_scope_ids.push(scope_id)
 
 # ── Resolve context ─────────────────────────────────────────
 
 struct ResolveContext:
     Dict[int, int] resolution_map
     Dict[str, int] function_body_scopes
+    Vector[str] fn_scope_names
+    Vector[int] fn_scope_ids
 
 # ── Built-in check ──────────────────────────────────────────
 
@@ -149,7 +154,7 @@ bool is_builtin(str name):
 # ═══════════════════════════════════════════════════════════
 
 ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &types):
-    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[str, int]())
+    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[str, int](), Vector[str](), Vector[int]())
 
     # Register built-in core traits
     Vector[str] trait_names = Vector[str]()

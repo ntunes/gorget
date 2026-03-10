@@ -7,7 +7,7 @@
 from std.collections import Vector
 from std.conv import int_to_str
 from scope import ScopeTable, DefInfo, DefKind, get_def_at
-from types import TypeTable, ResolvedType, get_rtype_at, get_int_at
+from types import TypeTable, ResolvedType, get_rtype_at, get_int_at, RTBoxedCallable
 from ids import NO_DEF, NO_TYPE
 
 # ── Describe a resolved type as a human-readable string ────
@@ -68,6 +68,8 @@ str describe_type(int type_id, ScopeTable scopes, TypeTable types):
             return "MutCallable[" + describe_type(func_id, scopes, types) + "]"
         case RTConsumeCallableTrait(func_id):
             return "ConsumeCallable[" + describe_type(func_id, scopes, types) + "]"
+        case RTBoxedCallable(kind_name, func_id):
+            return "Box[" + kind_name + "[" + describe_type(func_id, scopes, types) + "]]"
         case RTVar(id):
             return "?" + int_to_str(id)
         case RTError():

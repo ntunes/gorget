@@ -20,6 +20,7 @@ enum ResolvedType:
     RTCallableTrait(int)
     RTMutCallableTrait(int)
     RTConsumeCallableTrait(int)
+    RTBoxedCallable(str, int)
     RTVar(int)
     RTError
     RTVoid
@@ -52,6 +53,7 @@ struct TypeTable:
     int never_id
     int self_type_id
     Dict[str, int] variant_field_types
+    int last_equip_scope
 
 equip TypeTable:
 
@@ -76,7 +78,7 @@ equip TypeTable:
         types.push(RTError())
         # 8: never
         types.push(RTNever())
-        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[str, int]())
+        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[str, int](), 0)
 
     int add_type(&self, ResolvedType ty):
         int id = self.types.len()
@@ -132,6 +134,9 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
             return types.primitive_id(name)
 
         case TNamed(name, generic_args):
+            # Handle cstr as primitive (not in self-hosting lexer as keyword)
+            if name == "cstr" and generic_args.len() == 0:
+                return types.primitive_id("cstr")
             # Callable[sig] / MutCallable[sig] / ConsumeCallable[sig]
             if generic_args.len() == 1:
                 if name == "Callable" or name == "MutCallable" or name == "ConsumeCallable":
@@ -203,11 +208,11 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                                 if is_trait:
                                     return types.add_type(RTTraitObject(inner_def_id))
                             case RTCallableTrait(func_id):
-                                return types.add_type(RTCallableTrait(func_id))
+                                return types.add_type(RTBoxedCallable("Callable", func_id))
                             case RTMutCallableTrait(func_id):
-                                return types.add_type(RTMutCallableTrait(func_id))
+                                return types.add_type(RTBoxedCallable("MutCallable", func_id))
                             case RTConsumeCallableTrait(func_id):
-                                return types.add_type(RTConsumeCallableTrait(func_id))
+                                return types.add_type(RTBoxedCallable("ConsumeCallable", func_id))
                             else:
                                 pass
                     return types.add_type(RTGeneric(def_id, resolved_args))
@@ -244,8 +249,7 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
             return types.add_type(RTFunction(param_ids, param_ownerships, ret_id))
 
         case TSelf():
-            if types.self_type_id >= 0:
-                return types.self_type_id
+            # Rust's ast_type_to_resolved always returns error_id for Self
             return types.error_id
 
         case TInferred():
