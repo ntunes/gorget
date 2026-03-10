@@ -781,16 +781,36 @@ pub fn lower_module(
                 continue;
             }
             ctx.global_names.insert(decl.name.node.clone());
-            // Store the mangled type name for method dispatch inference.
+            // Store the type name for type inference on GlobalRef operands.
             // For generic types like Mutex[int] store "Mutex__int64_t" (not just "Mutex")
             // so that infer_type_name_from_operand_full can dispatch correctly.
-            if let ast::Type::Named { name: type_name, generic_args } = &decl.type_.node {
-                let mangled = if generic_args.is_empty() {
-                    type_name.node.clone()
-                } else {
-                    crate::ir::lowering::types::mangle_generic_name(&type_name.node, generic_args)
-                };
-                ctx.global_type_names.insert(decl.name.node.clone(), mangled);
+            let type_name_str = match &decl.type_.node {
+                ast::Type::Named { name: type_name, generic_args } => {
+                    if generic_args.is_empty() {
+                        Some(type_name.node.clone())
+                    } else {
+                        Some(crate::ir::lowering::types::mangle_generic_name(&type_name.node, generic_args))
+                    }
+                }
+                ast::Type::Primitive(p) => Some(match p {
+                    ast::PrimitiveType::Int | ast::PrimitiveType::Int64 => "int",
+                    ast::PrimitiveType::Float | ast::PrimitiveType::Float64 => "float",
+                    ast::PrimitiveType::Bool => "bool",
+                    ast::PrimitiveType::Str => "str",
+                    ast::PrimitiveType::Int8 => "i8",
+                    ast::PrimitiveType::Int16 => "i16",
+                    ast::PrimitiveType::Int32 => "i32",
+                    ast::PrimitiveType::Uint8 => "u8",
+                    ast::PrimitiveType::Uint16 => "u16",
+                    ast::PrimitiveType::Uint32 => "u32",
+                    ast::PrimitiveType::Uint | ast::PrimitiveType::Uint64 => "u64",
+                    ast::PrimitiveType::Float32 => "f32",
+                    _ => "int",
+                }.into()),
+                _ => None,
+            };
+            if let Some(tn) = type_name_str {
+                ctx.global_type_names.insert(decl.name.node.clone(), tn);
             }
         }
     }

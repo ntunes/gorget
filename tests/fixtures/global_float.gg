@@ -1,0 +1,7 @@
+# Test that global float variables print correctly (not as garbage int).
+from std.conv import float_to_str
+
+float pi = 3.14
+
+void main():
+    print(float_to_str(pi))

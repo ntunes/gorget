@@ -1183,6 +1183,11 @@ fn nested_generics() {
 }
 
 #[test]
+fn global_float() {
+    run_gg("global_float.gg", "3.14");
+}
+
+#[test]
 fn generic_struct_methods() {
     run_gg(
         "generic_struct_methods.gg",

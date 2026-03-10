@@ -213,18 +213,40 @@ pub fn infer_operand_type(ctx: &LoweringContext, operand: &Operand) -> TypeId {
             Constant::GlobalRef(name) => {
                 // Look up type from global_type_names → type_mapper
                 ctx.global_type_names.get(name)
-                    .and_then(|tn| ctx.type_mapper.lookup_named(tn))
+                    .and_then(|tn| lookup_global_type(ctx, tn))
                     .unwrap_or(I64_TYPE)
             }
             Constant::GlobalRefPtr(name) => {
                 // Pointer to global: return the base type (the C backend emits `&name`
                 // so the pointer semantics are handled at the backend level).
                 ctx.global_type_names.get(name)
-                    .and_then(|tn| ctx.type_mapper.lookup_named(tn))
+                    .and_then(|tn| lookup_global_type(ctx, tn))
                     .unwrap_or(I64_TYPE)
             }
         },
     }
+}
+
+/// Look up a global variable's type by its type name string.
+/// Tries named types first (structs/enums), then primitive type names.
+fn lookup_global_type(ctx: &LoweringContext, type_name: &str) -> Option<TypeId> {
+    ctx.type_mapper.lookup_named(type_name).or_else(|| {
+        match type_name {
+            "int" | "i64" => Some(I64_TYPE),
+            "float" | "f64" => Some(F64_TYPE),
+            "bool" => Some(BOOL_TYPE),
+            "str" => Some(ctx.type_mapper.str_type),
+            "i8" => Some(I8_TYPE),
+            "i16" => Some(I16_TYPE),
+            "i32" => Some(I32_TYPE),
+            "u8" => Some(U8_TYPE),
+            "u16" => Some(U16_TYPE),
+            "u32" => Some(U32_TYPE),
+            "u64" => Some(U64_TYPE),
+            "f32" => Some(F32_TYPE),
+            _ => None,
+        }
+    })
 }
 
 /// Returns true if `local` has ANY Move-semantics type (Vector, Dict, Set,
