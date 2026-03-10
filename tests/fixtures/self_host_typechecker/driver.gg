@@ -10,6 +10,7 @@ from types import TypeTable
 from resolve import resolve_module, ResolveContext
 from typecheck import type_check_module
 from format_types import format_types
+from derive import expand_derives
 from std.fs import read_file
 from std.os import args
 from std.collections import Vector
@@ -19,6 +20,7 @@ void main():
     str path = cmd_args.get(1).unwrap()
     String source = read_file(path)
     Module m = parse_source(source)
+    expand_derives(&m)
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()
     TypeTable types = TypeTable.new_type_table()

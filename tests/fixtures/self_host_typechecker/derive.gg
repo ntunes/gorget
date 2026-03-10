@@ -1,0 +1,759 @@
+# Derive expansion for the self-hosted type checker.
+# Generates equip blocks from @derive(...) attributes on structs and enums.
+# Mirrors the Rust compiler's derive.rs: generates source text, parses it,
+# and appends equip/function items to the module.
+
+from parser import parse_source
+from ast import Module, Item, IEquip, IFunction, IStruct, IEnum, StructDef, EnumDef, Param, EnumVariant, SpannedType, Type, TPrimitive, TNamed, TArray, TSlice, TTuple, TFunction, TSelf, TInferred
+from std.collections import Vector
+from std.conv import int_to_str
+
+# ── Type formatting ─────────────────────────────────────────
+
+str format_ast_type(SpannedType st):
+    return format_type_inner(st.ty)
+
+str format_type_inner(Type ty):
+    match ty:
+        case TPrimitive(name):
+            return name
+        case TNamed(name, args):
+            if args.len() == 0:
+                return name
+            str result = name
+            result = result + "["
+            int i = 0
+            while i < args.len():
+                if i > 0:
+                    result = result + ", "
+                SpannedType arg = args.get(i).unwrap()
+                result = result + format_ast_type(arg)
+                i = i + 1
+            result = result + "]"
+            return result
+        case TSelf:
+            return "Self"
+        case TInferred:
+            return "auto"
+        else:
+            return "auto"
+
+# ── Helpers ─────────────────────────────────────────────────
+
+str generic_suffix(Vector[str] tps):
+    if tps.len() == 0:
+        return ""
+    str result = "["
+    int i = 0
+    while i < tps.len():
+        if i > 0:
+            result = result + ", "
+        result = result + tps.get(i).unwrap()
+        i = i + 1
+    result = result + "]"
+    return result
+
+str equip_prefix(Vector[str] tps):
+    if tps.len() == 0:
+        return ""
+    return generic_suffix(tps) + " "
+
+# Global counter for unique temp variable names
+int derive_var_counter = 0
+
+str next_var():
+    int v = derive_var_counter
+    derive_var_counter = derive_var_counter + 1
+    return "__t" + int_to_str(v)
+
+# ── Collection type detection ───────────────────────────────
+
+# Collection type detection operates on the string type name.
+# We avoid str.slice() due to C backend GorgetString issues.
+
+str strip_generic_prefix(str ty, str prefix):
+    # Check if ty starts with prefix + "[" and ends with "]"
+    # Returns inner content or ""
+    if not ty.starts_with(prefix):
+        return ""
+    int plen = prefix.len()
+    if ty.len() < plen + 2:
+        return ""
+    str after = ty.char_at(plen)
+    if after != "[":
+        return ""
+    str last = ty.char_at(ty.len() - 1)
+    if last != "]":
+        return ""
+    # Extract between prefix[ and ]
+    # Build a new string character by character
+    str result = ""
+    int i = plen + 1
+    while i < ty.len() - 1:
+        result = result + ty.char_at(i)
+        i = i + 1
+    return result
+
+int find_top_comma(str s):
+    int depth = 0
+    int i = 0
+    while i < s.len():
+        str ch = s.char_at(i)
+        if ch == "[":
+            depth = depth + 1
+        elif ch == "]":
+            depth = depth - 1
+        elif ch == "," and depth == 0:
+            return i
+        i = i + 1
+    return -1
+
+str substr_range(str s, int start, int end):
+    str result = ""
+    int i = start
+    while i < end:
+        result = result + s.char_at(i)
+        i = i + 1
+    return result
+
+str trim_leading(str s):
+    int start = 0
+    while start < s.len() and s.char_at(start) == " ":
+        start = start + 1
+    return substr_range(s, start, s.len())
+
+# Returns "vector", "option", "dict", "hashmap", or ""
+str collection_kind(str ty):
+    if strip_generic_prefix(ty, "Vector") != "":
+        return "vector"
+    if strip_generic_prefix(ty, "Option") != "":
+        return "option"
+    if strip_generic_prefix(ty, "Dict") != "":
+        return "dict"
+    if strip_generic_prefix(ty, "HashMap") != "":
+        return "hashmap"
+    return ""
+
+str collection_elem(str ty):
+    str inner = strip_generic_prefix(ty, "Vector")
+    if inner != "":
+        return inner
+    return strip_generic_prefix(ty, "Option")
+
+str collection_key(str ty):
+    str inner = strip_generic_prefix(ty, "Dict")
+    if inner == "":
+        inner = strip_generic_prefix(ty, "HashMap")
+    if inner == "":
+        return ""
+    int comma = find_top_comma(inner)
+    if comma < 0:
+        return ""
+    return trim_leading(substr_range(inner, 0, comma))
+
+str collection_val(str ty):
+    str inner = strip_generic_prefix(ty, "Dict")
+    if inner == "":
+        inner = strip_generic_prefix(ty, "HashMap")
+    if inner == "":
+        return ""
+    int comma = find_top_comma(inner)
+    if comma < 0:
+        return ""
+    return trim_leading(substr_range(inner, comma + 1, inner.len()))
+
+# ── Multi-line serialization codegen ────────────────────────
+
+str field_write_lines(str expr, str type_name, str indent):
+    str kind = collection_kind(type_name)
+    if kind == "vector":
+        str elem_ty = collection_elem(type_name)
+        str idx = next_var()
+        str val = next_var()
+        str inner = indent + "    "
+        str elem_lines = field_write_lines(val, elem_ty, inner)
+        return indent + "ser.begin_seq(" + expr + ".len())\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + expr + ".len():\n" + inner + "ser.elem(" + idx + ")\n" + inner + elem_ty + " " + val + " = " + expr + ".get(" + idx + ").unwrap()\n" + elem_lines + inner + idx + " = " + idx + " + 1\n" + indent + "ser.end_seq()\n"
+    if kind == "option":
+        str inner_ty = collection_elem(type_name)
+        str val = next_var()
+        str case_indent = indent + "    "
+        str body_indent = indent + "        "
+        str write_lines = field_write_lines(val, inner_ty, body_indent)
+        return indent + "match " + expr + ":\n" + case_indent + "case Some(" + val + "):\n" + write_lines + case_indent + "case None:\n" + body_indent + "ser.write_null()\n"
+    if kind == "dict" or kind == "hashmap":
+        str key_ty = collection_key(type_name)
+        str val_ty = collection_val(type_name)
+        if key_ty == "str":
+            str keys_var = next_var()
+            str idx = next_var()
+            str key_var = next_var()
+            str val_var = next_var()
+            str inner = indent + "    "
+            str val_lines = field_write_lines(val_var, val_ty, inner)
+            return indent + "Vector[str] " + keys_var + " = " + expr + ".keys()\n" + indent + "ser.begin_struct(\"\", " + keys_var + ".len())\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + keys_var + ".len():\n" + inner + "str " + key_var + " = " + keys_var + ".get(" + idx + ").unwrap()\n" + inner + "ser.field(" + key_var + ", " + idx + ")\n" + inner + val_ty + " " + val_var + " = " + expr + "[" + key_var + "]\n" + val_lines + inner + idx + " = " + idx + " + 1\n" + indent + "ser.end_struct()\n"
+    return indent + field_write_call(expr, type_name) + "\n"
+
+# ── Multi-line deserialization codegen ──────────────────────
+
+str field_read_lines(str name, str type_name, str indent):
+    str kind = collection_kind(type_name)
+    if kind == "vector":
+        str elem_ty = collection_elem(type_name)
+        str len_var = next_var()
+        str idx = next_var()
+        str elem_var = next_var()
+        str inner = indent + "    "
+        str elem_lines = field_read_lines(elem_var, elem_ty, inner)
+        return indent + "int " + len_var + " = de.begin_seq()\n" + indent + type_name + " " + name + " = " + type_name + "()\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + len_var + ":\n" + inner + "de.elem(" + idx + ")\n" + elem_lines + inner + name + ".push(" + elem_var + ")\n" + inner + idx + " = " + idx + " + 1\n" + indent + "de.end_seq()\n"
+    if kind == "option":
+        str inner_ty = collection_elem(type_name)
+        str val_var = next_var()
+        str inner = indent + "    "
+        str val_lines = field_read_lines(val_var, inner_ty, inner)
+        return indent + type_name + " " + name + " = None()\n" + indent + "if not de.is_null():\n" + val_lines + inner + name + " = Some(" + val_var + ")\n"
+    if kind == "dict" or kind == "hashmap":
+        str key_ty = collection_key(type_name)
+        str val_ty = collection_val(type_name)
+        if key_ty == "str":
+            str keys_var = next_var()
+            str idx = next_var()
+            str key_var = next_var()
+            str val_var = next_var()
+            str inner = indent + "    "
+            str val_lines = field_read_lines(val_var, val_ty, inner)
+            return indent + "de.begin_struct()\n" + indent + "Vector[str] " + keys_var + " = de.keys()\n" + indent + type_name + " " + name + " = " + type_name + "()\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + keys_var + ".len():\n" + inner + "str " + key_var + " = " + keys_var + ".get(" + idx + ").unwrap()\n" + inner + "de.field(" + key_var + ")\n" + val_lines + inner + name + ".put(" + key_var + ", " + val_var + ")\n" + inner + idx + " = " + idx + " + 1\n" + indent + "de.end_struct()\n"
+    return indent + field_read_decl(name, type_name) + "\n"
+
+str field_default(str type_name):
+    if type_name == "int" or type_name == "int8" or type_name == "int16" or type_name == "int32" or type_name == "int64":
+        return "0"
+    if type_name == "uint" or type_name == "uint8" or type_name == "uint16" or type_name == "uint32" or type_name == "uint64":
+        return "0"
+    if type_name == "float" or type_name == "float32" or type_name == "float64":
+        return "0.0"
+    if type_name == "bool":
+        return "false"
+    if type_name == "str":
+        return "\"\""
+    if type_name == "String":
+        return "String()"
+    return type_name + ".default()"
+
+str field_write_call(str expr, str type_name):
+    if type_name == "int":
+        return "ser.write_int(" + expr + ")"
+    if type_name == "int8" or type_name == "int16" or type_name == "int32" or type_name == "int64":
+        return "ser.write_int(" + expr + " as int)"
+    if type_name == "uint" or type_name == "uint8" or type_name == "uint16" or type_name == "uint32" or type_name == "uint64":
+        return "ser.write_int(" + expr + " as int)"
+    if type_name == "float":
+        return "ser.write_float(" + expr + ")"
+    if type_name == "float32" or type_name == "float64":
+        return "ser.write_float(" + expr + " as float)"
+    if type_name == "bool":
+        return "ser.write_bool(" + expr + ")"
+    if type_name == "str" or type_name == "String":
+        return "ser.write_str(" + expr + ")"
+    return expr + ".serialize(ser)"
+
+str field_read_decl(str name, str type_name):
+    if type_name == "int":
+        return "int " + name + " = de.read_int()"
+    if type_name == "float":
+        return "float " + name + " = de.read_float()"
+    if type_name == "bool":
+        return "bool " + name + " = de.read_bool()"
+    if type_name == "str" or type_name == "String":
+        return "str " + name + " = de.read_str()"
+    return type_name + " " + name + " = deserialize_" + type_name + "(de)"
+
+void inject_items(str source, Vector[Item] &new_items):
+    Module parsed = parse_source(source)
+    int i = 0
+    while i < parsed.items.len():
+        Item item = parsed.items.get(i).unwrap()
+        match item:
+            case IEquip(eb):
+                new_items.push(IEquip(eb))
+            case IFunction(fd):
+                new_items.push(IFunction(fd))
+            else:
+                pass
+        i = i + 1
+
+# ── Variant prefix ──────────────────────────────────────────
+
+str variant_prefix(str type_name, Vector[str] type_params):
+    if type_params.len() > 0:
+        return ""
+    return type_name + "."
+
+# ── Struct derive generators ────────────────────────────────
+
+str gen_struct_equatable(str name, str gs, str gp, Vector[Param] fields):
+    str src = "equip " + gp + name + gs + " with Equatable:\n"
+    src = src + "    bool eq(self, " + name + gs + " other):\n"
+    if fields.len() == 0:
+        src = src + "        return true\n"
+    else:
+        str cmp = ""
+        int i = 0
+        while i < fields.len():
+            Param f = fields.get(i).unwrap()
+            if i > 0:
+                cmp = cmp + " and "
+            cmp = cmp + "self." + f.param_name + " == other." + f.param_name
+            i = i + 1
+        src = src + "        return " + cmp + "\n"
+    return src
+
+str gen_struct_displayable(str name, str gs, str gp, Vector[Param] fields):
+    str src = "equip " + gp + name + gs + " with Displayable:\n"
+    src = src + "    str display(self):\n"
+    if fields.len() == 0:
+        src = src + "        return \"" + name + "()\"\n"
+    else:
+        str parts = ""
+        int i = 0
+        while i < fields.len():
+            Param f = fields.get(i).unwrap()
+            if i > 0:
+                parts = parts + ", "
+            parts = parts + f.param_name + "={self." + f.param_name + "}"
+            i = i + 1
+        src = src + "        return f\"" + name + "(" + parts + ")\"\n"
+    return src
+
+str gen_struct_cloneable(str name, str gs, str gp, Vector[Param] fields):
+    str src = "equip " + gp + name + gs + " with Cloneable:\n"
+    src = src + "    " + name + gs + " clone(self):\n"
+    str args = ""
+    int i = 0
+    while i < fields.len():
+        Param f = fields.get(i).unwrap()
+        if i > 0:
+            args = args + ", "
+        args = args + "self." + f.param_name
+        i = i + 1
+    src = src + "        return " + name + gs + "(" + args + ")\n"
+    return src
+
+str gen_struct_hashable(str name, str gs, str gp, Vector[Param] fields):
+    str src = "equip " + gp + name + gs + " with Hashable:\n"
+    src = src + "    int hash(self):\n"
+    if fields.len() == 0:
+        src = src + "        return 0\n"
+    elif fields.len() == 1:
+        Param f0 = fields.get(0).unwrap()
+        src = src + "        return self." + f0.param_name + ".hash()\n"
+    else:
+        Param f0 = fields.get(0).unwrap()
+        src = src + "        int h = self." + f0.param_name + ".hash()\n"
+        int i = 1
+        while i < fields.len():
+            Param f = fields.get(i).unwrap()
+            src = src + "        h = h *% 31 +% self." + f.param_name + ".hash()\n"
+            i = i + 1
+        src = src + "        return h\n"
+    return src
+
+str gen_struct_default(str name, str gs, str gp, Vector[Param] fields):
+    str src = "equip " + gp + name + gs + " with Default:\n"
+    src = src + "    " + name + gs + " default():\n"
+    str args = ""
+    int i = 0
+    while i < fields.len():
+        Param f = fields.get(i).unwrap()
+        if i > 0:
+            args = args + ", "
+        args = args + field_default(format_ast_type(f.param_type))
+        i = i + 1
+    src = src + "        return " + name + gs + "(" + args + ")\n"
+    return src
+
+str gen_struct_serializable(str name, str gs, str gp, Vector[Param] fields):
+    str src = "equip " + gp + name + gs + " with Serializable:\n"
+    src = src + "    void serialize(self, Box[Serializer] ser):\n"
+    src = src + "        ser.begin_struct(\"" + name + "\", " + int_to_str(fields.len()) + ")\n"
+    int i = 0
+    while i < fields.len():
+        Param f = fields.get(i).unwrap()
+        str fname = f.param_name
+        str ftype = format_ast_type(f.param_type)
+        src = src + "        ser.field(\"" + fname + "\", " + int_to_str(i) + ")\n"
+        src = src + field_write_lines("self." + fname, ftype, "        ")
+        i = i + 1
+    src = src + "        ser.end_struct()\n"
+    return src
+
+str gen_struct_deserializable(str name, str gs, Vector[Param] fields):
+    str src = "Result[" + name + gs + ", str] deserialize_" + name + "(Box[Deserializer] de):\n"
+    src = src + "    de.begin_struct()\n"
+    int i = 0
+    while i < fields.len():
+        Param f = fields.get(i).unwrap()
+        str fname = f.param_name
+        str ftype = format_ast_type(f.param_type)
+        src = src + "    de.field(\"" + fname + "\")\n"
+        src = src + field_read_lines(fname, ftype, "    ")
+        i = i + 1
+    src = src + "    de.end_struct()\n"
+    src = src + "    if de.has_error():\n"
+    src = src + "        return Error(de.error())\n"
+    str args = ""
+    int j = 0
+    while j < fields.len():
+        Param f = fields.get(j).unwrap()
+        if j > 0:
+            args = args + ", "
+        args = args + f.param_name
+        j = j + 1
+    src = src + "    return Ok(" + name + gs + "(" + args + "))\n"
+    return src
+
+str gen_struct_from(str name, str gs, str gp, Vector[Param] fields):
+    if fields.len() != 1:
+        return ""
+    Param f = fields.get(0).unwrap()
+    str ftype = format_ast_type(f.param_type)
+    str src = "equip " + gp + name + gs + " with From[" + ftype + "]:\n"
+    src = src + "    " + name + gs + " from(" + ftype + " value):\n"
+    src = src + "        return " + name + gs + "(value)\n"
+    return src
+
+str gen_struct_try_from(str name, str gs, str gp, Vector[Param] fields):
+    if fields.len() != 1:
+        return ""
+    Param f = fields.get(0).unwrap()
+    str ftype = format_ast_type(f.param_type)
+    str src = "equip " + gp + name + gs + " with TryFrom[" + ftype + "]:\n"
+    src = src + "    Result[" + name + gs + ", str] try_from(" + ftype + " value):\n"
+    src = src + "        return Ok(" + name + gs + "(value))\n"
+    return src
+
+str gen_struct_from_row(str name, str gs, str gp, Vector[Param] fields):
+    str src = "equip " + gp + name + gs + " with FromRow:\n"
+    src = src + "    " + name + gs + " from_row(Row row):\n"
+    int i = 0
+    while i < fields.len():
+        Param f = fields.get(i).unwrap()
+        str fname = f.param_name
+        str ftype = format_ast_type(f.param_type)
+        if ftype == "str" or ftype == "String":
+            src = src + "        str " + fname + " = row.get(\"" + fname + "\")\n"
+        elif ftype == "int" or ftype == "int8" or ftype == "int16" or ftype == "int32" or ftype == "int64" or ftype == "uint" or ftype == "uint8" or ftype == "uint16" or ftype == "uint32" or ftype == "uint64":
+            src = src + "        int " + fname + " = row.get_int(\"" + fname + "\")\n"
+        elif ftype == "float" or ftype == "float32" or ftype == "float64":
+            src = src + "        float " + fname + " = row.get_float(\"" + fname + "\")\n"
+        elif ftype == "bool":
+            src = src + "        bool " + fname + " = row.get_bool(\"" + fname + "\")\n"
+        else:
+            src = src + "        str " + fname + " = row.get(\"" + fname + "\")\n"
+        i = i + 1
+    str args = ""
+    int j = 0
+    while j < fields.len():
+        Param f = fields.get(j).unwrap()
+        if j > 0:
+            args = args + ", "
+        args = args + f.param_name
+        j = j + 1
+    src = src + "        return " + name + gs + "(" + args + ")\n"
+    return src
+
+# ── Enum derive generators ──────────────────────────────────
+
+str gen_enum_equatable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
+    str src = "equip " + gp + name + gs + " with Equatable:\n"
+    src = src + "    bool eq(self, " + name + gs + " other):\n"
+    src = src + "        match self:\n"
+    int vi = 0
+    while vi < variants.len():
+        EnumVariant v = variants.get(vi).unwrap()
+        int fc = v.fields.len()
+        str self_binds = ""
+        str other_binds = ""
+        int fi = 0
+        while fi < fc:
+            if fi > 0:
+                self_binds = self_binds + ", "
+                other_binds = other_binds + ", "
+            self_binds = self_binds + "a" + int_to_str(fi)
+            other_binds = other_binds + "b" + int_to_str(fi)
+            fi = fi + 1
+        str self_pat = pfx + v.name + "(" + self_binds + ")"
+        str other_pat = pfx + v.name + "(" + other_binds + ")"
+        str cmp = "true"
+        if fc > 0:
+            cmp = ""
+            int ci = 0
+            while ci < fc:
+                if ci > 0:
+                    cmp = cmp + " and "
+                cmp = cmp + "a" + int_to_str(ci) + " == b" + int_to_str(ci)
+                ci = ci + 1
+        src = src + "            case " + self_pat + ":\n"
+        src = src + "                match other:\n"
+        src = src + "                    case " + other_pat + ":\n"
+        src = src + "                        return " + cmp + "\n"
+        src = src + "                    else:\n"
+        src = src + "                        return false\n"
+        vi = vi + 1
+    return src
+
+str gen_enum_displayable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
+    str src = "equip " + gp + name + gs + " with Displayable:\n"
+    src = src + "    str display(self):\n"
+    src = src + "        match self:\n"
+    int vi = 0
+    while vi < variants.len():
+        EnumVariant v = variants.get(vi).unwrap()
+        int fc = v.fields.len()
+        str binds = ""
+        int fi = 0
+        while fi < fc:
+            if fi > 0:
+                binds = binds + ", "
+            binds = binds + "a" + int_to_str(fi)
+            fi = fi + 1
+        str pat = pfx + v.name + "(" + binds + ")"
+        if fc == 0:
+            src = src + "            case " + pat + ":\n"
+            src = src + "                return \"" + v.name + "()\"\n"
+        else:
+            str parts = ""
+            int pi = 0
+            while pi < fc:
+                if pi > 0:
+                    parts = parts + ", "
+                parts = parts + "{a" + int_to_str(pi) + "}"
+                pi = pi + 1
+            src = src + "            case " + pat + ":\n"
+            src = src + "                return f\"" + v.name + "(" + parts + ")\"\n"
+        vi = vi + 1
+    return src
+
+str gen_enum_cloneable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
+    str src = "equip " + gp + name + gs + " with Cloneable:\n"
+    src = src + "    " + name + gs + " clone(self):\n"
+    src = src + "        match self:\n"
+    int vi = 0
+    while vi < variants.len():
+        EnumVariant v = variants.get(vi).unwrap()
+        int fc = v.fields.len()
+        str binds = ""
+        int fi = 0
+        while fi < fc:
+            if fi > 0:
+                binds = binds + ", "
+            binds = binds + "a" + int_to_str(fi)
+            fi = fi + 1
+        str pat = pfx + v.name + "(" + binds + ")"
+        src = src + "            case " + pat + ":\n"
+        src = src + "                return " + pfx + v.name + "(" + binds + ")\n"
+        vi = vi + 1
+    return src
+
+str gen_enum_hashable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
+    str src = "equip " + gp + name + gs + " with Hashable:\n"
+    src = src + "    int hash(self):\n"
+    src = src + "        match self:\n"
+    int vi = 0
+    while vi < variants.len():
+        EnumVariant v = variants.get(vi).unwrap()
+        int fc = v.fields.len()
+        str binds = ""
+        int fi = 0
+        while fi < fc:
+            if fi > 0:
+                binds = binds + ", "
+            binds = binds + "a" + int_to_str(fi)
+            fi = fi + 1
+        str pat = pfx + v.name + "(" + binds + ")"
+        if fc == 0:
+            src = src + "            case " + pat + ":\n"
+            src = src + "                return " + int_to_str(vi) + "\n"
+        else:
+            src = src + "            case " + pat + ":\n"
+            src = src + "                int h = " + int_to_str(vi) + "\n"
+            int hi = 0
+            while hi < fc:
+                src = src + "                h = h *% 31 +% a" + int_to_str(hi) + ".hash()\n"
+                hi = hi + 1
+            src = src + "                return h\n"
+        vi = vi + 1
+    return src
+
+str gen_enum_serializable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
+    str src = "equip " + gp + name + gs + " with Serializable:\n"
+    src = src + "    void serialize(self, Box[Serializer] ser):\n"
+    src = src + "        match self:\n"
+    int vi = 0
+    while vi < variants.len():
+        EnumVariant v = variants.get(vi).unwrap()
+        int fc = v.fields.len()
+        str binds = ""
+        int fi = 0
+        while fi < fc:
+            if fi > 0:
+                binds = binds + ", "
+            binds = binds + "a" + int_to_str(fi)
+            fi = fi + 1
+        str pat = pfx + v.name + "(" + binds + ")"
+        src = src + "            case " + pat + ":\n"
+        if fc == 0:
+            src = src + "                ser.write_str(\"" + v.name + "\")\n"
+        else:
+            src = src + "                ser.begin_struct(\"" + v.name + "\", 1)\n"
+            src = src + "                ser.field(\"" + v.name + "\", 0)\n"
+            src = src + "                ser.begin_seq(" + int_to_str(fc) + ")\n"
+            int si = 0
+            while si < fc:
+                src = src + "                ser.elem(" + int_to_str(si) + ")\n"
+                SpannedType ft = v.fields.get(si).unwrap()
+                str ftype = format_ast_type(ft)
+                src = src + "                " + field_write_call("a" + int_to_str(si), ftype) + "\n"
+                si = si + 1
+            src = src + "                ser.end_seq()\n"
+            src = src + "                ser.end_struct()\n"
+        vi = vi + 1
+    return src
+
+str gen_enum_deserializable(str name, str gs, Vector[EnumVariant] variants, str pfx):
+    str src = "Result[" + name + gs + ", str] deserialize_" + name + "(Box[Deserializer] de):\n"
+    # Separate unit and data variants
+    Vector[str] unit_names = Vector[str]()
+    Vector[EnumVariant] data_variants = Vector[EnumVariant]()
+    int vi = 0
+    while vi < variants.len():
+        EnumVariant v = variants.get(vi).unwrap()
+        if v.fields.len() == 0:
+            unit_names.push(v.name)
+        else:
+            data_variants.push(v)
+        vi = vi + 1
+    if unit_names.len() > 0:
+        src = src + "    if de.is_string():\n"
+        src = src + "        str de_tag = de.read_str()\n"
+        int ui = 0
+        while ui < unit_names.len():
+            str uname = unit_names.get(ui).unwrap()
+            if ui == 0:
+                src = src + "        if de_tag == \"" + uname + "\":\n"
+            else:
+                src = src + "        elif de_tag == \"" + uname + "\":\n"
+            src = src + "            return Ok(" + pfx + uname + "())\n"
+            ui = ui + 1
+        src = src + "        return Error(\"unknown variant\")\n"
+    if data_variants.len() > 0:
+        src = src + "    de.begin_struct()\n"
+        int di = 0
+        while di < data_variants.len():
+            EnumVariant dv = data_variants.get(di).unwrap()
+            str cond = "if"
+            if di > 0:
+                cond = "elif"
+            src = src + "    " + cond + " de.has_field(\"" + dv.name + "\"):\n"
+            src = src + "        de.field(\"" + dv.name + "\")\n"
+            src = src + "        int de_seq_len = de.begin_seq()\n"
+            int dfi = 0
+            while dfi < dv.fields.len():
+                src = src + "        de.elem(" + int_to_str(dfi) + ")\n"
+                SpannedType ft = dv.fields.get(dfi).unwrap()
+                str ftype = format_ast_type(ft)
+                str var_name = "a" + int_to_str(dfi)
+                src = src + "        " + field_read_decl(var_name, ftype) + "\n"
+                dfi = dfi + 1
+            src = src + "        de.end_seq()\n"
+            src = src + "        de.end_struct()\n"
+            src = src + "        if de.has_error():\n"
+            src = src + "            return Error(de.error())\n"
+            str dargs = ""
+            int dai = 0
+            while dai < dv.fields.len():
+                if dai > 0:
+                    dargs = dargs + ", "
+                dargs = dargs + "a" + int_to_str(dai)
+                dai = dai + 1
+            src = src + "        return Ok(" + pfx + dv.name + "(" + dargs + "))\n"
+            di = di + 1
+        src = src + "    de.end_struct()\n"
+    src = src + "    return Error(\"unknown variant\")\n"
+    return src
+
+# ── Core expansion ──────────────────────────────────────────
+
+void expand_struct_derives(StructDef sd, Vector[Item] &new_items):
+    str name = sd.name
+    str gs = generic_suffix(sd.type_params)
+    str gp = equip_prefix(sd.type_params)
+    int i = 0
+    while i < sd.derives.len():
+        str trait_name = sd.derives.get(i).unwrap()
+        str source = ""
+        if trait_name == "Equatable":
+            source = gen_struct_equatable(name, gs, gp, sd.fields)
+        elif trait_name == "Displayable":
+            source = gen_struct_displayable(name, gs, gp, sd.fields)
+        elif trait_name == "Cloneable":
+            source = gen_struct_cloneable(name, gs, gp, sd.fields)
+        elif trait_name == "Hashable":
+            source = gen_struct_hashable(name, gs, gp, sd.fields)
+        elif trait_name == "Default":
+            source = gen_struct_default(name, gs, gp, sd.fields)
+        elif trait_name == "Serializable":
+            source = gen_struct_serializable(name, gs, gp, sd.fields)
+        elif trait_name == "Deserializable":
+            source = gen_struct_deserializable(name, gs, sd.fields)
+        elif trait_name == "From":
+            source = gen_struct_from(name, gs, gp, sd.fields)
+        elif trait_name == "TryFrom":
+            source = gen_struct_try_from(name, gs, gp, sd.fields)
+        elif trait_name == "FromRow":
+            source = gen_struct_from_row(name, gs, gp, sd.fields)
+        if source != "":
+            inject_items(source, &new_items)
+        i = i + 1
+
+void expand_enum_derives(EnumDef ed, Vector[Item] &new_items):
+    str name = ed.name
+    str gs = generic_suffix(ed.type_params)
+    str gp = equip_prefix(ed.type_params)
+    str pfx = variant_prefix(name, ed.type_params)
+    int i = 0
+    while i < ed.derives.len():
+        str trait_name = ed.derives.get(i).unwrap()
+        str source = ""
+        if trait_name == "Equatable":
+            source = gen_enum_equatable(name, gs, gp, ed.variants, pfx)
+        elif trait_name == "Displayable":
+            source = gen_enum_displayable(name, gs, gp, ed.variants, pfx)
+        elif trait_name == "Cloneable":
+            source = gen_enum_cloneable(name, gs, gp, ed.variants, pfx)
+        elif trait_name == "Hashable":
+            source = gen_enum_hashable(name, gs, gp, ed.variants, pfx)
+        elif trait_name == "Serializable":
+            source = gen_enum_serializable(name, gs, gp, ed.variants, pfx)
+        elif trait_name == "Deserializable":
+            source = gen_enum_deserializable(name, gs, ed.variants, pfx)
+        if source != "":
+            inject_items(source, &new_items)
+        i = i + 1
+
+void expand_derives(Module &m):
+    Vector[Item] new_items = Vector[Item]()
+    int i = 0
+    while i < m.items.len():
+        Item item = m.items.get(i).unwrap()
+        match item:
+            case IStruct(sd):
+                expand_struct_derives(sd, &new_items)
+            case IEnum(ed):
+                expand_enum_derives(ed, &new_items)
+            else:
+                pass
+        i = i + 1
+    int j = 0
+    while j < new_items.len():
+        m.items.push(new_items.get(j).unwrap())
+        j = j + 1

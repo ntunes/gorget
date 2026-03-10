@@ -2412,9 +2412,9 @@ equip Parser:
 
         # Items: struct, enum, trait, equip, import, from, directive, const, type, newtype, extern, test
         if self.check_kw(KW_STRUCT):
-            return SItem(self.parse_struct_item())
+            return SItem(self.parse_struct_item(Vector[str]()))
         if self.check_kw(KW_ENUM):
-            return SItem(self.parse_enum_item())
+            return SItem(self.parse_enum_item(Vector[str]()))
         if self.check_kw(KW_TRAIT):
             return SItem(self.parse_trait_item())
         if self.check_kw(KW_EQUIP):
@@ -3008,7 +3008,7 @@ equip Parser:
             self.parse_expr()
         return Param(ty, pname, own)
 
-    Item parse_struct_item(&self):
+    Item parse_struct_item(&self, Vector[str] derives):
         self.expect_kw(KW_STRUCT, "expected 'struct'")
         SpannedToken name_tok = self.advance()
         str name = token_ident(name_tok.lex_token)
@@ -3034,9 +3034,9 @@ equip Parser:
             fields.push(Param(ftype, fname, OWN_BORROW))
             self.skip_newlines()
         self.match_tok(TOK_DEDENT)
-        return IStruct(StructDef(name, fields, type_params))
+        return IStruct(StructDef(name, fields, type_params, derives))
 
-    Item parse_enum_item(&self):
+    Item parse_enum_item(&self, Vector[str] derives):
         self.expect_kw(KW_ENUM, "expected 'enum'")
         SpannedToken name_tok = self.advance()
         str name = token_ident(name_tok.lex_token)
@@ -3063,7 +3063,7 @@ equip Parser:
             variants.push(EnumVariant(vname, vfields))
             self.skip_newlines()
         self.match_tok(TOK_DEDENT)
-        return IEnum(EnumDef(name, variants, type_params))
+        return IEnum(EnumDef(name, variants, type_params, derives))
 
     Item parse_trait_item(&self):
         self.expect_kw(KW_TRAIT, "expected 'trait'")
@@ -3099,8 +3099,11 @@ equip Parser:
 
     Item parse_equip_item(&self):
         self.expect_kw(KW_EQUIP, "expected 'equip'")
-        SpannedType target = self.parse_type()
+        # Parse optional generic params: equip [T] TypeName[T] with Trait:
         Vector[str] type_params = Vector[str]()
+        if self.check_tok(TOK_LBRACKET):
+            type_params = self.parse_type_params()
+        SpannedType target = self.parse_type()
         Option[str] trait_name = None
         if self.check_kw(KW_WITH):
             self.advance()
@@ -3345,14 +3348,26 @@ equip Parser:
             if self.at_end():
                 break
 
-            # Skip @attributes (e.g. @derive(Eq, Clone))
+            # Parse @attributes — capture @derive(...) trait names
+            Vector[str] pending_derives = Vector[str]()
             while self.check_tok(TOK_AT):
                 self.advance()
+                str attr_name = ""
                 if self.check_tok(TOK_IDENT):
-                    self.advance()
+                    SpannedToken attr_tok = self.advance()
+                    attr_name = token_ident(attr_tok.lex_token)
                 elif self.peek_kw() > 0:
                     self.advance()
-                if self.check_tok(TOK_LPAREN):
+                if attr_name == "derive" and self.check_tok(TOK_LPAREN):
+                    self.advance()
+                    while not self.check_tok(TOK_RPAREN) and not self.at_end():
+                        if self.check_tok(TOK_IDENT):
+                            SpannedToken dt = self.advance()
+                            pending_derives.push(token_ident(dt.lex_token))
+                        if self.check_tok(TOK_COMMA):
+                            self.advance()
+                    self.match_tok(TOK_RPAREN)
+                elif self.check_tok(TOK_LPAREN):
                     self.skip_paren_contents()
                 self.skip_trivia()
 
@@ -3365,9 +3380,9 @@ equip Parser:
 
             # Try to detect an item
             if self.check_kw(KW_STRUCT):
-                items.push(self.parse_struct_item())
+                items.push(self.parse_struct_item(pending_derives))
             elif self.check_kw(KW_ENUM):
-                items.push(self.parse_enum_item())
+                items.push(self.parse_enum_item(pending_derives))
             elif self.check_kw(KW_TRAIT):
                 items.push(self.parse_trait_item())
             elif self.check_kw(KW_EQUIP):

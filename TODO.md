@@ -60,11 +60,13 @@
 
 - **Async/await — `await` on vector-indexed tasks with multiple spawn functions**: Type-based await dispatch now works when exactly one function produces tasks of a given type. When multiple functions produce the same `Task__T` type (e.g., two functions both returning `int`), the type-based fallback can't disambiguate. Fix: embed a function dispatch pointer in the `Task__T` struct or use a tag field. [updated: 2026-03-07]
 
-- **Self-hosting parser: 1 remaining mismatch (558/559, 99.8%)**: Only `chars.gg` — null byte `\0` truncates C string output. Unfixable without length-prefixed string representation in C runtime. [updated: 2026-03-09]
+- **`field_set(obj, fname, value)` meta builtin**: Write counterpart to `field_value` (read). Zig equivalent: `@field(result, name) = value`. Would make Cloneable and Default fully meta-driven instead of requiring literal field enumeration in derive generators. [added: 2026-03-10]
+
+- **Self-hosting parser: 4 remaining mismatches (586/590, 99.3%)**: `chars.gg` — null byte `\0` truncates C string output. 3 new: `assert_return_*.gg` — self-hosted parser doesn't handle `assert return` keyword (produces `assert (0 >= lo)` instead of `assert return (__return__ >= lo)`). [updated: 2026-03-10]
 
 - **Self-hosting resolver: 559/559 (100%) — COMPLETE.** [updated: 2026-03-09]
 
-- **Self-hosting type checker: 555/580 (95.7%) — exact: 531, superset: 24**: Phases 1-10 complete. Rust checker improved: Self param resolution, equip method signature registration (span fallback), builtin void return (print/assert/panic), spawn allows non-Future closure calls. Gorget checker improved: pass-1/pass-2 equip scope index pairing, IBench body walking. Remaining 25 mismatches: derive/trait expansion (13), meta expansion (3), untyped closure inference (2), method return type inference (2), bench resolver (1), f-string String type (1), pattern bindings in match (3). Most require fundamental new capabilities (derive/meta expansion, unification). [updated: 2026-03-10]
+- **Self-hosting type checker: 573/590 (97.1%) — exact: 549, superset: 24**: Phases 1-11 complete. Phase 11: derive expansion in self-hosted pipeline. Added `derives` field to StructDef/EnumDef, @derive parsing in parser.gg, `derive.gg` module with all struct/enum trait generators (Equatable, Displayable, Cloneable, Hashable, Default, Serializable, Deserializable, From, TryFrom, FromRow), collection-aware serialization codegen (Vector/Option/Dict), equip generic param parsing. Remaining 17 mismatches: match pattern binding types (4 derive-related: derive.gg, derive_hashable.gg, serializable.gg + try_from_trait.gg), generic type param resolution in equip (derive_generic.gg), meta expansion (3), closures (1), conv_stdlib (1), field_access (1), httpserver (2), bench (1), string_format (1), test_vector_all (1). [updated: 2026-03-10]
 
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]

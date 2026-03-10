@@ -165,11 +165,13 @@ struct StructDef:
     str name
     Vector[Param] fields
     Vector[str] type_params
+    Vector[str] derives
 
 struct EnumDef:
     str name
     Vector[EnumVariant] variants
     Vector[str] type_params
+    Vector[str] derives
 
 struct EnumVariant:
     str name
