@@ -1054,43 +1054,43 @@ static void gorget_fallback_free(GorgetFallbackAllocator** pp) {
     *pp = NULL;
 }
 
-// ── String ─────────────────────────────────────────────
+// ── GorgetString ─────────────────────────────────────────────
 typedef struct {
     char* data;
     size_t len;
     size_t cap;
     GorgetAllocator* alloc;
-} String;
+} GorgetString;
 
-static inline String gorget_string_new(const char* s) {
+static inline GorgetString gorget_string_new(const char* s) {
     GorgetAllocator* a = __gorget_current_alloc;
-    if (s == NULL) return (String){NULL, 0, 0, a};
+    if (s == NULL) return (GorgetString){NULL, 0, 0, a};
     size_t len = strlen(s);
     size_t cap = len + 1;
     char* data = (char*)a->alloc(a->ctx, cap);
     memcpy(data, s, len + 1);
-    return (String){data, len, cap, a};
+    return (GorgetString){data, len, cap, a};
 }
 
 // Adopt a freshly-allocated char* into a String without copying.
 // The caller must have allocated `s` with the current allocator — ownership transfers.
-static inline String gorget_string_adopt(char* s) {
+static inline GorgetString gorget_string_adopt(char* s) {
     GorgetAllocator* a = __gorget_current_alloc;
-    if (s == NULL) return (String){NULL, 0, 0, a};
+    if (s == NULL) return (GorgetString){NULL, 0, 0, a};
     size_t len = strlen(s);
-    return (String){s, len, len + 1, a};
+    return (GorgetString){s, len, len + 1, a};
 }
 
-static inline void gorget_string_free(String* s) {
+static inline void gorget_string_free(GorgetString* s) {
     if (s->cap > 0) s->alloc->dealloc(s->alloc->ctx, s->data, s->cap);
     s->data = NULL;
     s->len = 0;
     s->cap = 0;
 }
 
-static inline String gorget_string_clone(const String* src) {
+static inline GorgetString gorget_string_clone(const GorgetString* src) {
     GorgetAllocator* a = __gorget_current_alloc;
-    String dst;
+    GorgetString dst;
     dst.len = src->len;
     dst.cap = src->cap;
     dst.alloc = a;
@@ -1103,25 +1103,25 @@ static inline String gorget_string_clone(const String* src) {
     return dst;
 }
 
-static inline String gorget_string_concat(const String* a, const String* b) {
+static inline GorgetString gorget_string_concat(const GorgetString* a, const GorgetString* b) {
     GorgetAllocator* al = __gorget_current_alloc;
     size_t len = a->len + b->len;
     size_t cap = len + 1;
     char* data = (char*)al->alloc(al->ctx, cap);
     memcpy(data, a->data, a->len);
     memcpy(data + a->len, b->data, b->len + 1);
-    return (String){data, len, cap, al};
+    return (GorgetString){data, len, cap, al};
 }
 
-static inline bool gorget_string_eq(const String* a, const String* b) {
+static inline bool gorget_string_eq(const GorgetString* a, const GorgetString* b) {
     return a->len == b->len && memcmp(a->data, b->data, a->len) == 0;
 }
 
-static inline const char* gorget_string_cstr(const String* s) {
+static inline const char* gorget_string_cstr(const GorgetString* s) {
     return s->data;
 }
 
-static inline String gorget_string_format(const char* fmt, ...) {
+static inline GorgetString gorget_string_format(const char* fmt, ...) {
     GorgetAllocator* a = __gorget_current_alloc;
     va_list args1, args2;
     va_start(args1, fmt);
@@ -1134,7 +1134,7 @@ static inline String gorget_string_format(const char* fmt, ...) {
     if (!data) { fprintf(stderr, "gorget: panic: out of memory\n"); exit(1); }
     vsnprintf(data, cap, fmt, args2);
     va_end(args2);
-    return (String){data, (size_t)len, cap, a};
+    return (GorgetString){data, (size_t)len, cap, a};
 }
 
 static inline const char* gorget_format(const char* fmt, ...) {
@@ -1150,17 +1150,17 @@ static inline const char* gorget_format(const char* fmt, ...) {
     return data;
 }
 
-static inline String gorget_string_from_concat(const char* a, const char* b) {
+static inline GorgetString gorget_string_from_concat(const char* a, const char* b) {
     GorgetAllocator* al = __gorget_current_alloc;
     size_t la = strlen(a), lb = strlen(b);
     size_t cap = la + lb + 1;
     char* data = (char*)al->alloc(al->ctx, cap);
     memcpy(data, a, la);
     memcpy(data + la, b, lb + 1);
-    return (String){data, la + lb, cap, al};
+    return (GorgetString){data, la + lb, cap, al};
 }
 
-static inline void gorget_string_append(String* s, const char* rhs) {
+static inline void gorget_string_append(GorgetString* s, const char* rhs) {
     size_t rlen = strlen(rhs);
     size_t new_len = s->len + rlen;
     if (new_len + 1 > s->cap) {
@@ -1173,7 +1173,7 @@ static inline void gorget_string_append(String* s, const char* rhs) {
     s->len = new_len;
 }
 
-static inline void gorget_string_push_byte(String* s, char c) {
+static inline void gorget_string_push_byte(GorgetString* s, char c) {
     if (s->len + 2 > s->cap) {
         size_t old_cap = s->cap;
         size_t new_cap = (s->len + 2) * 2;
@@ -1185,9 +1185,9 @@ static inline void gorget_string_push_byte(String* s, char c) {
     s->data[s->len] = '\0';
 }
 
-static inline String gorget_string_with_capacity(int64_t cap) {
+static inline GorgetString gorget_string_with_capacity(int64_t cap) {
     GorgetAllocator* a = __gorget_current_alloc;
-    String s;
+    GorgetString s;
     s.len = 0;
     s.cap = (size_t)(cap > 0 ? cap : 16);
     s.alloc = a;
@@ -1196,43 +1196,43 @@ static inline String gorget_string_with_capacity(int64_t cap) {
     return s;
 }
 
-static inline void gorget_string_push_int(String* s, int64_t n) {
+static inline void gorget_string_push_int(GorgetString* s, int64_t n) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%" PRId64, n);
     gorget_string_append(s, buf);
 }
 
-static inline void gorget_string_push_float(String* s, double d) {
+static inline void gorget_string_push_float(GorgetString* s, double d) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", d);
     gorget_string_append(s, buf);
 }
 
-static inline void gorget_string_push_bool(String* s, bool b) {
+static inline void gorget_string_push_bool(GorgetString* s, bool b) {
     gorget_string_append(s, b ? "true" : "false");
 }
 
-static inline void gorget_string_push_line(String* s, const char* rhs) {
+static inline void gorget_string_push_line(GorgetString* s, const char* rhs) {
     gorget_string_append(s, rhs);
     gorget_string_push_byte(s, '\n');
 }
 
-static inline void gorget_string_push_line_int(String* s, int64_t n) {
+static inline void gorget_string_push_line_int(GorgetString* s, int64_t n) {
     gorget_string_push_int(s, n);
     gorget_string_push_byte(s, '\n');
 }
 
-static inline void gorget_string_push_line_float(String* s, double d) {
+static inline void gorget_string_push_line_float(GorgetString* s, double d) {
     gorget_string_push_float(s, d);
     gorget_string_push_byte(s, '\n');
 }
 
-static inline void gorget_string_push_line_bool(String* s, bool b) {
+static inline void gorget_string_push_line_bool(GorgetString* s, bool b) {
     gorget_string_push_bool(s, b);
     gorget_string_push_byte(s, '\n');
 }
 
-static inline void gorget_string_push_line_char(String* s, char c) {
+static inline void gorget_string_push_line_char(GorgetString* s, char c) {
     gorget_string_push_byte(s, c);
     gorget_string_push_byte(s, '\n');
 }
@@ -1260,7 +1260,7 @@ static inline Str gorget_str_from_literal(const char* data, size_t len) {
 }
 
 // Push a str (1+ bytes) onto a String builder — user-facing push_char.
-static inline void gorget_string_push_char(String* s, Str c) {
+static inline void gorget_string_push_char(GorgetString* s, Str c) {
     if (s->len + c.len + 1 > s->cap) {
         size_t old_cap = s->cap;
         size_t new_cap = (s->len + c.len + 1) * 2;
@@ -1388,7 +1388,7 @@ static inline bool gorget_utf8_validate(const char* data, size_t len) {
 }
 
 // Validate String contents as UTF-8 (convenience wrapper for codegen).
-static inline bool gorget_string_is_valid_utf8(const String* s) {
+static inline bool gorget_string_is_valid_utf8(const GorgetString* s) {
     return gorget_utf8_validate(s->data, s->len);
 }
 
@@ -1861,7 +1861,7 @@ static inline Str gorget_str_removesuffix(Str s, Str suffix) {
 
 // Group B: Allocating returns — return String.
 
-static inline String gorget_str_to_upper(Str s) {
+static inline GorgetString gorget_str_to_upper(Str s) {
     // Worst case: each byte could become 4 bytes (but realistically ~1:1 for BMP)
     GorgetAllocator* al = __gorget_current_alloc;
     size_t cap = s.len * 2 + 1; // 2x is generous for Latin/Greek/Cyrillic
@@ -1881,10 +1881,10 @@ static inline String gorget_str_to_upper(Str s) {
         out_len += (size_t)gorget_utf8_encode(upper, out + out_len);
     }
     out[out_len] = '\0';
-    return (String){ out, out_len, cap, al };
+    return (GorgetString){ out, out_len, cap, al };
 }
 
-static inline String gorget_str_to_lower(Str s) {
+static inline GorgetString gorget_str_to_lower(Str s) {
     GorgetAllocator* al = __gorget_current_alloc;
     size_t cap = s.len * 2 + 1;
     char* out = (char*)al->alloc(al->ctx, cap);
@@ -1903,7 +1903,7 @@ static inline String gorget_str_to_lower(Str s) {
         out_len += (size_t)gorget_utf8_encode(lower, out + out_len);
     }
     out[out_len] = '\0';
-    return (String){ out, out_len, cap, al };
+    return (GorgetString){ out, out_len, cap, al };
 }
 
 // Group C: Boolean predicates — all-codepoints semantics (like Python str.isalpha() etc.)
@@ -2004,7 +2004,7 @@ static inline bool gorget_uint8_is_ascii(uint8_t c) { return c < 128; }
 static inline uint8_t gorget_uint8_to_upper(uint8_t c) { return (uint8_t)toupper((int)c); }
 static inline uint8_t gorget_uint8_to_lower(uint8_t c) { return (uint8_t)tolower((int)c); }
 
-static inline String gorget_str_replace(Str s, Str old, Str new_s) {
+static inline GorgetString gorget_str_replace(Str s, Str old, Str new_s) {
     GorgetAllocator* al = __gorget_current_alloc;
     if (old.len == 0) {
         // Empty pattern — return copy of input
@@ -2012,7 +2012,7 @@ static inline String gorget_str_replace(Str s, Str old, Str new_s) {
         if (!out) { fprintf(stderr, "gorget: panic: out of memory\n"); exit(1); }
         if (s.len > 0) memcpy(out, s.data, s.len);
         out[s.len] = '\0';
-        return (String){ out, s.len, s.len + 1, al };
+        return (GorgetString){ out, s.len, s.len + 1, al };
     }
     // Count occurrences
     size_t count = 0;
@@ -2051,16 +2051,16 @@ static inline String gorget_str_replace(Str s, Str old, Str new_s) {
     if (remaining > 0) memcpy(dst, p, remaining);
     dst += remaining;
     *dst = '\0';
-    return (String){ out, (size_t)(dst - out), cap, al };
+    return (GorgetString){ out, (size_t)(dst - out), cap, al };
 }
 
-static inline String gorget_str_repeat(Str s, int64_t n) {
+static inline GorgetString gorget_str_repeat(Str s, int64_t n) {
     GorgetAllocator* al = __gorget_current_alloc;
     if (n <= 0 || s.len == 0) {
         char* empty = (char*)al->alloc(al->ctx, 1);
         if (!empty) { fprintf(stderr, "gorget: panic: out of memory\n"); exit(1); }
         empty[0] = '\0';
-        return (String){ empty, 0, 1, al };
+        return (GorgetString){ empty, 0, 1, al };
     }
     size_t total = s.len * (size_t)n;
     size_t cap = total + 1;
@@ -2070,10 +2070,10 @@ static inline String gorget_str_repeat(Str s, int64_t n) {
         memcpy(out + (size_t)i * s.len, s.data, s.len);
     }
     out[total] = '\0';
-    return (String){ out, total, cap, al };
+    return (GorgetString){ out, total, cap, al };
 }
 
-static inline String gorget_str_pad_left(Str s, int64_t width, Str fill) {
+static inline GorgetString gorget_str_pad_left(Str s, int64_t width, Str fill) {
     GorgetAllocator* al = __gorget_current_alloc;
     int64_t cp_count = gorget_str_codepoint_count(s);
     if (cp_count >= width) {
@@ -2083,7 +2083,7 @@ static inline String gorget_str_pad_left(Str s, int64_t width, Str fill) {
         if (!out) { fprintf(stderr, "gorget: panic: out of memory\n"); exit(1); }
         if (s.len > 0) memcpy(out, s.data, s.len);
         out[s.len] = '\0';
-        return (String){ out, s.len, cap, al };
+        return (GorgetString){ out, s.len, cap, al };
     }
     int64_t pad_count = width - cp_count;
     size_t fill_bytes = fill.len > 0 ? fill.len : 1;
@@ -2097,10 +2097,10 @@ static inline String gorget_str_pad_left(Str s, int64_t width, Str fill) {
     }
     if (s.len > 0) memcpy(out + pad_bytes, s.data, s.len);
     out[pad_bytes + s.len] = '\0';
-    return (String){ out, pad_bytes + s.len, cap, al };
+    return (GorgetString){ out, pad_bytes + s.len, cap, al };
 }
 
-static inline String gorget_str_pad_right(Str s, int64_t width, Str fill) {
+static inline GorgetString gorget_str_pad_right(Str s, int64_t width, Str fill) {
     GorgetAllocator* al = __gorget_current_alloc;
     int64_t cp_count = gorget_str_codepoint_count(s);
     if (cp_count >= width) {
@@ -2109,7 +2109,7 @@ static inline String gorget_str_pad_right(Str s, int64_t width, Str fill) {
         if (!out) { fprintf(stderr, "gorget: panic: out of memory\n"); exit(1); }
         if (s.len > 0) memcpy(out, s.data, s.len);
         out[s.len] = '\0';
-        return (String){ out, s.len, cap, al };
+        return (GorgetString){ out, s.len, cap, al };
     }
     int64_t pad_count = width - cp_count;
     size_t fill_bytes = fill.len > 0 ? fill.len : 1;
@@ -2123,7 +2123,7 @@ static inline String gorget_str_pad_right(Str s, int64_t width, Str fill) {
         else out[s.len + (size_t)i] = ' ';
     }
     out[s.len + pad_bytes] = '\0';
-    return (String){ out, s.len + pad_bytes, cap, al };
+    return (GorgetString){ out, s.len + pad_bytes, cap, al };
 }
 
 // Group C: Non-string returns.
@@ -2161,18 +2161,18 @@ static inline int64_t gorget_str_count(Str s, Str needle) {
 // ── Str-aware String operations ───────────────────────
 
 // Str-aware concatenation (handles non-null-terminated views).
-static inline String gorget_str_cat(Str a, Str b) {
+static inline GorgetString gorget_str_cat(Str a, Str b) {
     GorgetAllocator* al = __gorget_current_alloc;
     size_t cap = a.len + b.len + 1;
     char* data = (char*)al->alloc(al->ctx, cap);
     if (a.len > 0) memcpy(data, a.data, a.len);
     if (b.len > 0) memcpy(data + a.len, b.data, b.len);
     data[a.len + b.len] = '\0';
-    return (String){data, a.len + b.len, cap, al};
+    return (GorgetString){data, a.len + b.len, cap, al};
 }
 
 // Str-aware append (handles non-null-terminated views).
-static inline void gorget_string_append_str(String* s, Str rhs) {
+static inline void gorget_string_append_str(GorgetString* s, Str rhs) {
     size_t new_len = s->len + rhs.len;
     if (new_len + 1 > s->cap) {
         size_t old_cap = s->cap;
@@ -2186,18 +2186,18 @@ static inline void gorget_string_append_str(String* s, Str rhs) {
 }
 
 // Create a String from a Str view (copies len bytes, safe for non-null-terminated views).
-static inline String gorget_string_from_str(Str s) {
+static inline GorgetString gorget_string_from_str(Str s) {
     GorgetAllocator* a = __gorget_current_alloc;
     if (s.len == 0) {
         char* data = (char*)a->alloc(a->ctx, 1);
         data[0] = '\0';
-        return (String){data, 0, 1, a};
+        return (GorgetString){data, 0, 1, a};
     }
     size_t cap = s.len + 1;
     char* data = (char*)a->alloc(a->ctx, cap);
     memcpy(data, s.data, s.len);
     data[s.len] = '\0';
-    return (String){data, s.len, cap, a};
+    return (GorgetString){data, s.len, cap, a};
 }
 
 // ── cstr ↔ Str conversion ───────────────────────────────────
@@ -4408,13 +4408,13 @@ static inline GorgetArray gorget_str_split(Str s, Str delim) {
 #define GORGET_ARRAY_AT(type, arr, i) (*(type*)gorget_array_get(&(arr), (i)))
 
 // ── String join (needs GorgetArray) ─────────────────────────
-static inline String gorget_str_join(Str sep, GorgetArray parts) {
+static inline GorgetString gorget_str_join(Str sep, GorgetArray parts) {
     GorgetAllocator* al = __gorget_current_alloc;
     if (parts.len == 0) {
         char* empty = (char*)al->alloc(al->ctx, 1);
         if (!empty) { fprintf(stderr, "gorget: panic: out of memory\n"); exit(1); }
         empty[0] = '\0';
-        return (String){ empty, 0, 1, al };
+        return (GorgetString){ empty, 0, 1, al };
     }
     // Elements are Str structs
     size_t total = 0;
@@ -4437,7 +4437,7 @@ static inline String gorget_str_join(Str sep, GorgetArray parts) {
         dst += part->len;
     }
     *dst = '\0';
-    return (String){ result, total, cap, al };
+    return (GorgetString){ result, total, cap, al };
 }
 
 // ── String iterator methods (.bytes, .codepoints, .chars) ────
@@ -4845,7 +4845,7 @@ static inline void gorget_file_close(GorgetFile* f) {
     if (f->handle && f->owned) { fclose(f->handle); f->handle = NULL; }
 }
 
-static inline String gorget_file_read_all(GorgetFile* f) {
+static inline GorgetString gorget_file_read_all(GorgetFile* f) {
     fseek(f->handle, 0, SEEK_END);
     long len = ftell(f->handle);
     fseek(f->handle, 0, SEEK_SET);
@@ -4860,9 +4860,9 @@ static inline void gorget_file_write(GorgetFile* f, const char* s) {
 }
 
 // Free functions
-static inline String gorget_read_file(const char* path) {
+static inline GorgetString gorget_read_file(const char* path) {
     GorgetFile f = gorget_file_open(path, "r");
-    String content = gorget_file_read_all(&f);
+    GorgetString content = gorget_file_read_all(&f);
     gorget_file_close(&f);
     return content;
 }
@@ -6637,8 +6637,8 @@ static int64_t gorget_socket_write_str(GorgetSocket* sock, const char* s) {
 }
 
 // Read until \n, return as String (for text protocols like SSH banner)
-static String gorget_socket_read_line(GorgetSocket* sock) {
-    if (sock->fd < 0) return (String){"", 0, 0};
+static GorgetString gorget_socket_read_line(GorgetSocket* sock) {
+    if (sock->fd < 0) return (GorgetString){"", 0, 0};
     size_t cap = 256, len = 0;
     char* buf = (char*)GORGET_ALLOC(cap);
     while (1) {
@@ -7282,8 +7282,8 @@ static int64_t gorget_tls_write_str(GorgetTlsSocket* sock, const char* s) {
     return (int64_t)total;
 }
 
-static String gorget_tls_read_line(GorgetTlsSocket* sock) {
-    if (!sock->ssl) return (String){"", 0, 0};
+static GorgetString gorget_tls_read_line(GorgetTlsSocket* sock) {
+    if (!sock->ssl) return (GorgetString){"", 0, 0};
     size_t cap = 256, len = 0;
     char* buf = (char*)GORGET_ALLOC(cap);
     while (1) {
@@ -7938,9 +7938,9 @@ static GorgetArray gorget_regex_find_all(GorgetRegex* rx, const char* subject) {
 
 // ── Replace ─────────────────────────────────────────────────────
 
-static String gorget_regex_replace_impl(GorgetRegex* rx, const char* subject,
+static GorgetString gorget_regex_replace_impl(GorgetRegex* rx, const char* subject,
                                                const char* replacement, uint32_t extra_opts) {
-    String result = {NULL, 0, 0, __gorget_current_alloc};
+    GorgetString result = {NULL, 0, 0, __gorget_current_alloc};
     if (!rx->code) { result = gorget_string_new(subject); return result; }
     size_t subject_len = strlen(subject);
     size_t repl_len = strlen(replacement);
@@ -7974,11 +7974,11 @@ static String gorget_regex_replace_impl(GorgetRegex* rx, const char* subject,
     return result;
 }
 
-static String gorget_regex_replace(GorgetRegex* rx, const char* subject, const char* replacement) {
+static GorgetString gorget_regex_replace(GorgetRegex* rx, const char* subject, const char* replacement) {
     return gorget_regex_replace_impl(rx, subject, replacement, 0);
 }
 
-static String gorget_regex_replace_all(GorgetRegex* rx, const char* subject, const char* replacement) {
+static GorgetString gorget_regex_replace_all(GorgetRegex* rx, const char* subject, const char* replacement) {
     return gorget_regex_replace_impl(rx, subject, replacement, PCRE2_SUBSTITUTE_GLOBAL);
 }
 
@@ -8112,7 +8112,7 @@ static GorgetArray gorget_regex_match_groups(GorgetRegexMatch* m) {
 
 // ── Escape ──────────────────────────────────────────────────────
 
-static String gorget_regex_escape(const char* s) {
+static GorgetString gorget_regex_escape(const char* s) {
     if (!s) return gorget_string_new("");
     size_t len = strlen(s);
     // Worst case: every char needs escaping → 2x + 1
@@ -8129,7 +8129,7 @@ static String gorget_regex_escape(const char* s) {
         buf[j++] = c;
     }
     buf[j] = '\0';
-    String result;
+    GorgetString result;
     result.data = buf;
     result.len = j;
     result.cap = len * 2 + 1;
@@ -8730,7 +8730,7 @@ static inline void gorget_process_close_stdin(GorgetProcess* proc) {
     if (proc->stdin_fd >= 0) { close(proc->stdin_fd); proc->stdin_fd = -1; }
 }
 
-static inline String gorget_process_read_stdout(GorgetProcess* proc) {
+static inline GorgetString gorget_process_read_stdout(GorgetProcess* proc) {
     if (proc->stdout_fd < 0) return gorget_string_new("");
     size_t cap = 256, len = 0;
     char* buf = (char*)GORGET_ALLOC(cap);
@@ -8740,10 +8740,10 @@ static inline String gorget_process_read_stdout(GorgetProcess* proc) {
         if (len + 1 >= cap) { size_t newcap = cap * 2; buf = (char*)GORGET_REALLOC(buf, cap, newcap); cap = newcap; }
     }
     buf[len] = '\0';
-    return (String){buf, len, cap, __gorget_current_alloc};
+    return (GorgetString){buf, len, cap, __gorget_current_alloc};
 }
 
-static inline String gorget_process_read_stderr(GorgetProcess* proc) {
+static inline GorgetString gorget_process_read_stderr(GorgetProcess* proc) {
     if (proc->stderr_fd < 0) return gorget_string_new("");
     size_t cap = 256, len = 0;
     char* buf = (char*)GORGET_ALLOC(cap);
@@ -8753,7 +8753,7 @@ static inline String gorget_process_read_stderr(GorgetProcess* proc) {
         if (len + 1 >= cap) { size_t newcap = cap * 2; buf = (char*)GORGET_REALLOC(buf, cap, newcap); cap = newcap; }
     }
     buf[len] = '\0';
-    return (String){buf, len, cap, __gorget_current_alloc};
+    return (GorgetString){buf, len, cap, __gorget_current_alloc};
 }
 
 static inline int64_t gorget_getpid(void) {
