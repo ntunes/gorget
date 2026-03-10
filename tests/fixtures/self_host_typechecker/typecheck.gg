@@ -896,6 +896,17 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
         case SItem(item):
             type_check_item(item, scope_id, &scopes, &types, ctx)
 
+        case SMetaFor(body):
+            type_check_stmts(body, scope_id, &scopes, &types, ctx)
+
+        case SMetaIf(then_body, else_branches):
+            type_check_stmts(then_body, scope_id, &scopes, &types, ctx)
+            int ei = 0
+            while ei < else_branches.len():
+                ElseBranch eb = else_branches.get(ei).unwrap()
+                type_check_stmts(eb.body, scope_id, &scopes, &types, ctx)
+                ei = ei + 1
+
         else:
             pass
 
