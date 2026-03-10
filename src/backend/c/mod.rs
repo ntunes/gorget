@@ -7382,7 +7382,7 @@ fn try_emit_higher_order_method(
 ) -> Option<String> {
     // Parse: Vector__ElemType__method or Type__method
     let method = extract_trailing_method(func_name, "");
-    if !matches!(method, "filter" | "map" | "fold" | "reduce" | "enumerate" | "any" | "all" | "each" | "find" | "count" | "get_or_put" | "keys" | "values") {
+    if !matches!(method, "filter" | "map" | "fold" | "reduce" | "enumerate" | "any" | "all" | "each" | "for_each" | "find" | "count" | "get_or_put" | "keys" | "values") {
         return None;
     }
     // Don't treat Option/Result/Regex/Match methods as collection higher-order methods.
@@ -7474,7 +7474,8 @@ fn try_emit_higher_order_method(
     let dst_str = if let Some(d) = dst {
         format!("_{}", d.0)
     } else {
-        return Some(String::new()); // void call — no result needed
+        // Void methods like `each` still need codegen — don't bail early
+        String::new()
     };
 
     let mut out = String::new();
@@ -7668,7 +7669,7 @@ fn try_emit_higher_order_method(
                 if (!{call_fn}(&{closure}, __elem)) {{ __all_result = false; break; }} \
                 }} __all_result; }});");
         }
-        "each" => {
+        "each" | "for_each" => {
             if args.len() < 2 { return None; }
             let closure = format_operand(&args[1], func, registry);
             let closure_type = match &args[1] {

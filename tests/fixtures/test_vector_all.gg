@@ -215,3 +215,9 @@ void main():
     en.push(30)
     for (i, val) in en.enumerate():
         print(f"{i}:{val}")
+
+    # --- each ---
+    Vector[int] ec = Vector[int]()
+    ec.push(100)
+    ec.push(200)
+    ec.each((int x): print(f"{x}"))
