@@ -1,6 +1,12 @@
 # Comprehensive Vector[int] method coverage
 from std.collections import Vector
 
+Vector[int] expand_int(int x):
+    Vector[int] r = Vector[int]()
+    r.push(x)
+    r.push(x * 10)
+    return r
+
 void main():
     # --- Construction ---
     Vector[int] v = Vector[int]()
@@ -221,3 +227,14 @@ void main():
     ec.push(100)
     ec.push(200)
     ec.each((int x): print(f"{x}"))
+
+    # --- flat_map ---
+    Vector[int] fm = Vector[int]()
+    fm.push(1)
+    fm.push(2)
+    Vector[int] flat = fm.flat_map((int x): expand_int(x))
+    print(f"{flat.len()}")
+    print(f"{flat.get(0).unwrap()}")
+    print(f"{flat.get(1).unwrap()}")
+    print(f"{flat.get(2).unwrap()}")
+    print(f"{flat.get(3).unwrap()}")

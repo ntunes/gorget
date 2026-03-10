@@ -2,9 +2,9 @@
 
 ## High
 
-- **Vector.zip() and Vector.flat_map() not in C backend**: Both methods have IR type inference support but no C backend codegen dispatch. Would silently produce no code. [added: 2026-03-10]
+- **Vector.zip() not in C backend**: Has IR type inference but no C backend codegen. Needs tuple return type `Vector[(T, U)]` which isn't supported by current type system. [added: 2026-03-10]
 
-- **`shared_stale_writeback.gg` broken by `snapshot` keyword**: The fixture uses `int snapshot = x` but `snapshot` is now a keyword (from snapshot testing feature). Rename the variable. [added: 2026-03-10]
+- **Higher-order methods with named function args fail**: `v.map(double)` generates `void*__call(...)` which is invalid C. Closures work (`v.map((int x): double(x))`). Affects map, filter, fold, flat_map, each, etc. with bare function references. [added: 2026-03-10]
 
 - **LIR: Phase 5 — expand A/B test coverage**: 76 fixtures match (13% of ~584). Fixed: StrLit vs Str coercion, FieldPtr bounds-safe fallback, synthetic extern merge, runtime fn declaration skip, struct forward declarations for empty structs, GorgetString→Str arg coercion (partial). Remaining: GorgetString→Str coercion for runtime functions (gorget_str_cat etc.), collection method dispatch, trait object support, generic Option/Result method lowering. [updated: 2026-03-08]
 

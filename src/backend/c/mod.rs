@@ -7382,7 +7382,7 @@ fn try_emit_higher_order_method(
 ) -> Option<String> {
     // Parse: Vector__ElemType__method or Type__method
     let method = extract_trailing_method(func_name, "");
-    if !matches!(method, "filter" | "map" | "fold" | "reduce" | "enumerate" | "any" | "all" | "each" | "for_each" | "find" | "count" | "get_or_put" | "keys" | "values") {
+    if !matches!(method, "filter" | "map" | "flat_map" | "fold" | "reduce" | "enumerate" | "any" | "all" | "each" | "for_each" | "find" | "count" | "get_or_put" | "keys" | "values") {
         return None;
     }
     // Don't treat Option/Result/Regex/Match methods as collection higher-order methods.
@@ -7684,6 +7684,28 @@ fn try_emit_higher_order_method(
                 {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
                 {call_fn}(&{closure}, __elem); \
                 }} }}");
+        }
+        "flat_map" => {
+            // flat_map: closure returns a Vector, concatenate all results
+            if args.len() < 2 { return None; }
+            let closure = format_operand(&args[1], func, registry);
+            let closure_type = match &args[1] {
+                Operand::Copy(p) | Operand::Move(p) =>
+                    effective_c_type(p.local.0 as usize, func, registry, type_overrides),
+                _ => "void*".to_string(),
+            };
+            let call_fn = format!("{closure_type}__call");
+            use std::fmt::Write;
+            let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
+                GorgetArray __result = gorget_array_new(sizeof({elem_type})); \
+                for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                GorgetArray __inner = {call_fn}(&{closure}, __elem); \
+                for (size_t __j = 0; __j < __inner.len; __j++) {{ \
+                {elem_type} __ie = GORGET_ARRAY_AT({elem_type}, __inner, __j); \
+                gorget_array_push(&__result, &__ie); \
+                }} gorget_array_free(&__inner); \
+                }} __result; }});");
         }
         "find" => {
             if args.len() < 2 { return None; }
