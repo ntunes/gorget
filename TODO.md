@@ -60,7 +60,7 @@
 
 - **Self-hosting resolver: 592/592 (100%) — COMPLETE.** [updated: 2026-03-10]
 
-- **Self-hosting type checker: 587/594 (98.8%) — exact: 562, superset: 25**: Phases 1-15 complete. Phase 15: lookup_in_subtree_untyped for match arm bindings. Remaining 7 mismatches: closures.gg (closure param inference), derive_generic.gg (generic type params), conv_stdlib.gg (static method return types), field_access.gg (meta for body walking), httpserver_middleware.gg + httpserver_router_extended.gg (untyped closure params), test_vector_all.gg (closure param typing). [updated: 2026-03-10]
+- **Self-hosting type checker: 592/594 (99.7%) — exact: 566, superset: 26**: Phases 1-16 complete. Phase 16: generic equip params, .parse() inference, closure param typing with type vars + call-site propagation. Remaining 2 mismatches: closures.gg (bidirectional type inference for `auto add = (a, b): a + b`), field_access.gg (meta for body walking — needs compile-time expansion). [updated: 2026-03-10]
 
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]

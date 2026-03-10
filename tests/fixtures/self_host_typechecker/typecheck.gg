@@ -496,8 +496,11 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                 # If the param type is <error> or void (inferred), use expected type
                 if (p_type_id < 0 or p_type_id == types.error_id or p_type_id == types.void_id) and pi < expected_params.len():
                     p_type_id = get_int_at(expected_params, pi)
+                # If still unresolved, assign a fresh type variable
+                if p_type_id < 0 or p_type_id == types.error_id or p_type_id == types.void_id:
+                    p_type_id = types.fresh_var()
                 if p_type_id >= 0 and p_type_id != types.error_id:
-                    int param_def = scopes.lookup_in_subtree(scope_id, p.param_name)
+                    int param_def = scopes.lookup_in_subtree_untyped(scope_id, p.param_name)
                     if param_def >= 0:
                         scopes.set_def_type(param_def, p_type_id)
                 pi = pi + 1
@@ -513,10 +516,23 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
     match sexpr.expr:
         case ECall(callee, args, targs):
             walk_expr_closures(*callee, scope_id, &scopes, &types, ctx)
+            # Infer callee type to extract expected param types for closure args
+            Vector[int] call_param_types = Vector[int]()
+            int callee_type = infer_expr_type(SpannedExpr((*callee).expr, (*callee).span), scopes, &types, ctx)
+            if callee_type >= 0 and callee_type < types.types.len():
+                ResolvedType ct = get_rtype_at(types.types, callee_type)
+                match ct:
+                    case RTFunction(ptypes, _, _):
+                        call_param_types = ptypes
+                    else:
+                        pass
             int ai = 0
             while ai < args.len():
                 SpannedExpr arg = args.get(ai).unwrap()
-                walk_expr_closures(arg, scope_id, &scopes, &types, ctx)
+                if ai < call_param_types.len():
+                    walk_expr_closures_with_type(arg, get_int_at(call_param_types, ai), scope_id, &scopes, &types, ctx)
+                else:
+                    walk_expr_closures(arg, scope_id, &scopes, &types, ctx)
                 ai = ai + 1
 
         case EMethodCall(obj, method_name, args, targs):
@@ -731,9 +747,6 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 vi = vi + 1
 
         case IEquip(eqblk):
-            # Resolve the equip target type for self/&self params
-            int self_tid = ast_type_to_resolved(eqblk.target.ty, eqblk.target.span, scopes, &types)
-            types.self_type_id = self_tid
             # Find the equip block scope by scanning for the next SkEquipBlock
             # child of the module scope, using last_equip_scope for ordering.
             int equip_scope = find_next_equip_scope(scope_id, types.last_equip_scope, scopes)
@@ -741,6 +754,12 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 types.last_equip_scope = equip_scope
             else:
                 equip_scope = scope_id
+            # Set current scope to equip scope so generic type params (T etc.)
+            # are visible when resolving the target type and method signatures.
+            int saved_scope = scopes.current_scope()
+            scopes.set_current(equip_scope)
+            int self_tid = ast_type_to_resolved(eqblk.target.ty, eqblk.target.span, scopes, &types)
+            types.self_type_id = self_tid
             # Find the pass-1 equip scope (contains method def definitions)
             # Use equip_def_index to pair pass-1 with pass-2 by order.
             int def_scope = find_nth_def_equip_scope(types.equip_def_index, scope_id, scopes)
@@ -753,6 +772,7 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 type_check_function(method, equip_scope, &scopes, &types, ctx, def_scope)
                 mi = mi + 1
             types.self_type_id = -1
+            scopes.set_current(saved_scope)
 
         case IConstDecl(stype, name, init_expr):
             bool is_inferred = false

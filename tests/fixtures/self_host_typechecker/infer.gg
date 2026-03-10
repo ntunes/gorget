@@ -342,8 +342,25 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                 if args.len() >= 1:
                     SpannedExpr init_arg = args.get(0).unwrap()
                     return infer_expr_type(init_arg, scopes, &types, ctx)
-            # .pop() on Vector[T] → Option[T]
-            if method_name == "pop":
+            # .parse(str) on primitive type → Option[T] or Result[T, str]
+            # e.g. int.parse("99") → Option[int], float.parse("1.5") → Result[float, str]
+            if method_name == "parse":
+                match (*obj).expr:
+                    case EIdentifier(tname):
+                        bool is_prim = tname == "int" or tname == "float" or tname == "bool" or tname == "int8" or tname == "int16" or tname == "int32" or tname == "int64" or tname == "uint8" or tname == "uint16" or tname == "uint32" or tname == "uint64"
+                        if is_prim:
+                            int prim_id = types.primitive_id(tname)
+                            # int.parse → Result[int, str], float.parse → Result[float, str]
+                            # but for int/float the stdlib uses Option[T]
+                            int option_def = scopes.lookup("Option")
+                            if option_def >= 0:
+                                Vector[int] opt_args = Vector[int]()
+                                opt_args.push(prim_id)
+                                return types.add_type(RTGeneric(option_def, opt_args))
+                    else:
+                        pass
+            # .pop() / .remove() on Vector[T] → Option[T]
+            if method_name == "pop" or method_name == "remove":
                 int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
                 if obj_type >= 0 and obj_type < types.types.len():
                     ResolvedType ort = get_rtype_at(types.types, obj_type)
