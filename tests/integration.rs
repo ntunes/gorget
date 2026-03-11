@@ -11534,3 +11534,131 @@ false
 true",
     );
 }
+
+#[test]
+fn test_result_int_int() {
+    run_gg(
+        "test_result_int_int.gg",
+        "\
+true
+false
+false
+true
+42
+99
+42
+0
+84
+true
+99
+42
+100
+50
+42
+99
+42
+77
+42
+100",
+    );
+}
+
+#[test]
+fn test_vector_float_higher_order() {
+    run_gg(
+        "test_vector_float_higher_order.gg",
+        "\
+7.770000
+2
+3.140000
+2.720000
+6.280000
+2.820000
+1
+1
+0
+0
+7.270000
+0.500000
+1.410000
+2.720000
+3.140000",
+    );
+}
+
+#[test]
+fn coroutine_option_combinators() {
+    run_gg(
+        "coroutine_option_combinators.gg",
+        "\
+42
+99
+true
+42
+77
+true
+42
+123
+10
+true
+true
+true
+84
+-1
+0",
+    );
+}
+
+#[test]
+fn coroutine_result_combinators() {
+    run_gg(
+        "coroutine_result_combinators.gg",
+        "\
+10
+99
+worse
+10
+77
+replaced
+10
+BAD
+10
+-1
+50
+fail
+bad
+30
+0",
+    );
+}
+
+#[test]
+fn coroutine_collections_advanced() {
+    run_gg(
+        "coroutine_collections_advanced.gg",
+        "\
+3
+60
+10
+99
+4
+100
+40
+4
+2
+1
+true
+true
+true
+1
+2
+2
+3
+2
+2
+3
+0
+0
+0",
+    );
+}

@@ -1,0 +1,107 @@
+# Test collection inline methods in coroutine poll context.
+# Dict keys/values/items, Set algebra, Vector sorted/reversed/unique.
+from std.async import sleep
+
+async int test_dict_methods():
+    sleep(1)
+
+    Dict[str, int] d = Dict[str, int]()
+    d["a"] = 10
+    d["b"] = 20
+    d["c"] = 30
+
+    # --- keys/values/items ---
+    Vector[str] keys = d.keys()
+    print(keys.len())
+    Vector[int] vals = d.values()
+    int vsum = vals.fold(0, (int a, int x): a + x)
+    print(vsum)
+
+    # --- get_or ---
+    int go1 = d.get_or("a", 99)
+    print(go1)
+    int go2 = d.get_or("z", 99)
+    print(go2)
+
+    # --- update ---
+    Dict[str, int] other = Dict[str, int]()
+    other["c"] = 100
+    other["d"] = 40
+    d.update(other)
+    print(d.len())
+    print(d.get_or("c", 0))
+    print(d.get_or("d", 0))
+
+    return 0
+
+async int test_set_algebra():
+    sleep(1)
+
+    Set[int] a = Set[int]()
+    a.add(1)
+    a.add(2)
+    a.add(3)
+    Set[int] b = Set[int]()
+    b.add(2)
+    b.add(3)
+    b.add(4)
+
+    # --- union ---
+    Set[int] u = a.union(b)
+    print(u.len())
+
+    # --- intersection ---
+    Set[int] inter = a.intersection(b)
+    print(inter.len())
+
+    # --- difference ---
+    Set[int] diff = a.difference(b)
+    print(diff.len())
+    print(diff.contains(1))
+
+    # --- is_subset/is_superset ---
+    Set[int] sub = Set[int]()
+    sub.add(1)
+    sub.add(2)
+    print(sub.is_subset(a))
+    print(a.is_superset(sub))
+
+    return 0
+
+async int test_vector_methods():
+    sleep(1)
+
+    Vector[int] v = Vector[int]()
+    v.push(3)
+    v.push(1)
+    v.push(2)
+    v.push(2)
+
+    # --- sorted (non-mutating) ---
+    Vector[int] s = v.sorted()
+    print(s[0])
+    print(s[1])
+    print(s[2])
+    print(v[0])
+
+    # --- reversed ---
+    Vector[int] r = v.reversed()
+    print(r[0])
+    print(r[1])
+
+    # --- unique ---
+    Vector[int] uniq = v.unique()
+    print(uniq.len())
+
+    return 0
+
+async void main():
+    Task[int] t1 = spawn test_dict_methods()
+    int r1 = t1.await()
+    Task[int] t2 = spawn test_set_algebra()
+    int r2 = t2.await()
+    Task[int] t3 = spawn test_vector_methods()
+    int r3 = t3.await()
+    print(r1)
+    print(r2)
+    print(r3)

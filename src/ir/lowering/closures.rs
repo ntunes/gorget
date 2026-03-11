@@ -651,6 +651,16 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
             }
             I64_TYPE
         }
+        Expr::NoneLiteral => {
+            // Bare `None` — check expected_type for Option context
+            if let Some(et) = ctx.expected_type {
+                let tn = ctx.type_registry.type_name(et).unwrap_or_default();
+                if tn.starts_with("Option__") {
+                    return et;
+                }
+            }
+            I64_TYPE
+        }
         Expr::Block(_) => UNIT_TYPE, // Block bodies are void by default
         _ => I64_TYPE,
     }

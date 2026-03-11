@@ -2237,6 +2237,9 @@ fn compute_type_overrides(
                                         if let Some(callee) = module.functions.iter().find(|f| f.name == call_fn) {
                                             let ret = format_type(callee.return_type, registry);
                                             let ret = runtime_type_name(&ret).unwrap_or(&ret).to_string();
+                                            // Normalize GorgetString → Str for type parameter names
+                                            // (both are `str` in Gorget; typedefs use Str)
+                                            let ret = if ret == "GorgetString" { "Str".to_string() } else { ret };
                                             if call_name.starts_with("Option__") {
                                                 if method == "map" {
                                                     type_overrides.insert(dst_id.0 as usize, format!("Option__{ret}"));
@@ -8649,7 +8652,12 @@ fn emit_poll_inline_method(
         InlineMethod::OptionOr => {
             if let Some(dst_id) = dst {
                 let other = if args.len() > 1 {
-                    fmt_operand_poll(&args[1], func, registry)
+                    if matches!(&args[1], Operand::Constant(Constant::Null)) {
+                        let type_name = extract_type_from_method_call(func_name);
+                        format!("({type_name}){{.tag = 1}}")
+                    } else {
+                        fmt_operand_poll(&args[1], func, registry)
+                    }
                 } else { format!("({{ }})")  };
                 let _ = writeln!(out,
                     "        f->_{id} = ({self_str}.tag == 0) ? {self_str} : {other};",
@@ -8793,10 +8801,12 @@ fn emit_poll_inline_method(
             if let Some(dst_id) = dst {
                 let dst_c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                 let (closure_str, call_fn) = closure_call_info_poll(&args, func, registry, type_overrides, 1);
+                // Use __auto_type + coerce to handle GorgetString → Str mismatches
                 let _ = writeln!(out,
                     "        f->_{id} = ({{ {dst_c_type} __rme; \
                     if ({self_str}.tag == 0) {{ __rme.tag = 0; __rme.data.Ok._0 = {self_str}.data.Ok._0; }} \
-                    else {{ __rme.tag = 1; __rme.data.Error._0 = {call_fn}(&{closure_str}, {self_str}.data.Error._0); }} __rme; }});",
+                    else {{ __rme.tag = 1; __auto_type __ev = {call_fn}(&{closure_str}, {self_str}.data.Error._0); \
+                    memcpy(&__rme.data.Error._0, &__ev, sizeof(__rme.data.Error._0)); }} __rme; }});",
                     id = dst_id.0);
             }
         }
@@ -10918,7 +10928,15 @@ fn emit_inline_method(
         InlineMethod::OptionOr => {
             // or(other): if Some, return self; else return other
             if let Some(dst_id) = dst {
-                let other = if args.len() > 1 { format_operand(&args[1], func, registry) } else { self_str.clone() };
+                let other = if args.len() > 1 {
+                    if matches!(&args[1], Operand::Constant(Constant::Null)) {
+                        // None → emit proper tagged struct
+                        let type_name = extract_type_from_method_call(func_name);
+                        format!("({type_name}){{.tag = 1}}")
+                    } else {
+                        format_operand(&args[1], func, registry)
+                    }
+                } else { self_str.clone() };
                 let _ = writeln!(out,
                     "        _{id} = ({self_str}.tag == 0) ? {self_str} : {other};",
                     id = dst_id.0);
@@ -10971,14 +10989,15 @@ fn emit_inline_method(
         }
         InlineMethod::ResultMapErr => {
             // map_err(f): if Err, return Err(f(error)); else return Ok as-is
-            // Use destination type because map_err may change the Error type
+            // Use __auto_type + memcpy to handle GorgetString → Str mismatches
             if let Some(dst_id) = dst {
                 let dst_c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                 let (closure_str, call_fn) = closure_call_info(&args, func, registry, type_overrides, 1);
                 let _ = writeln!(out,
                     "        _{id} = ({{ {dst_c_type} __rme; \
                     if ({self_str}.tag == 0) {{ __rme.tag = 0; __rme.data.Ok._0 = {self_str}.data.Ok._0; }} \
-                    else {{ __rme.tag = 1; __rme.data.Error._0 = {call_fn}(&{closure_str}, {self_str}.data.Error._0); }} __rme; }});",
+                    else {{ __rme.tag = 1; __auto_type __ev = {call_fn}(&{closure_str}, {self_str}.data.Error._0); \
+                    memcpy(&__rme.data.Error._0, &__ev, sizeof(__rme.data.Error._0)); }} __rme; }});",
                     id = dst_id.0);
             }
         }

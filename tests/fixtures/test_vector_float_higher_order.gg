@@ -1,0 +1,42 @@
+# Test higher-order methods on Vector[float].
+# Fold return type refinement, filter/map/any/all on floats.
+
+void main():
+    Vector[float] vf = Vector[float]()
+    vf.push(3.14)
+    vf.push(1.41)
+    vf.push(2.72)
+    vf.push(0.5)
+
+    # --- fold: should return float, not int ---
+    float sum = vf.fold(0.0, (float acc, float x): acc + x)
+    print(sum)
+
+    # --- filter ---
+    Vector[float] big = vf.filter((float x): x > 2.0)
+    print(big.len())
+    print(big[0])
+    print(big[1])
+
+    # --- map ---
+    Vector[float] doubled = vf.map((float x): x * 2.0)
+    print(doubled[0])
+    print(doubled[1])
+
+    # --- any/all ---
+    # BUG NOTE: any/all return int (1/0) not bool — test for that
+    print(vf.any((float x): x > 3.0))
+    print(vf.all((float x): x > 0.0))
+    print(vf.any((float x): x > 10.0))
+    print(vf.all((float x): x > 1.0))
+
+    # --- chaining ---
+    float chain = vf.filter((float x): x > 1.0).fold(0.0, (float a, float x): a + x)
+    print(chain)
+
+    # --- sorted ---
+    Vector[float] sf = vf.sorted()
+    print(sf[0])
+    print(sf[1])
+    print(sf[2])
+    print(sf[3])

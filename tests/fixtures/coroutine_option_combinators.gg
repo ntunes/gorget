@@ -1,0 +1,58 @@
+# Test Option combinators in coroutine poll context.
+# These methods have separate poll-path codegen that needs end-to-end verification.
+from std.async import sleep
+
+async int test_option_combinators():
+    sleep(1)
+
+    Option[int] some_val = Some(42)
+    Option[int] none_val = None
+
+    # --- or: Some→self, None→other ---
+    Option[int] or1 = some_val.or(Some(99))
+    print(or1.unwrap())
+    Option[int] or2 = none_val.or(Some(99))
+    print(or2.unwrap())
+    Option[int] or3 = none_val.or(None)
+    print(or3.is_none())
+
+    # --- or_else: None→closure result ---
+    Option[int] ore1 = some_val.or_else((): Some(77))
+    print(ore1.unwrap())
+    Option[int] ore2 = none_val.or_else((): Some(77))
+    print(ore2.unwrap())
+    Option[int] ore3 = none_val.or_else((): None)
+    print(ore3.is_none())
+
+    # --- unwrap_or_else ---
+    int uoe1 = some_val.unwrap_or_else((): 0)
+    print(uoe1)
+    int uoe2 = none_val.unwrap_or_else((): 123)
+    print(uoe2)
+
+    # --- flatten: Some(Some(x))→Some(x), Some(None)→None ---
+    Option[Option[int]] nested_some = Some(Some(10))
+    Option[int] flat1 = nested_some.flatten()
+    print(flat1.unwrap())
+    Option[Option[int]] nested_none = Some(None)
+    Option[int] flat2 = nested_none.flatten()
+    print(flat2.is_none())
+
+    # --- filter ---
+    Option[int] filt1 = some_val.filter((int x): x > 40)
+    print(filt1.is_some())
+    Option[int] filt2 = some_val.filter((int x): x > 50)
+    print(filt2.is_none())
+
+    # --- chaining: map then filter then unwrap_or ---
+    int chain = some_val.map((int x): x * 2).filter((int x): x > 80).unwrap_or(0)
+    print(chain)
+    int chain2 = some_val.map((int x): x * 2).filter((int x): x > 100).unwrap_or(-1)
+    print(chain2)
+
+    return 0
+
+async void main():
+    Task[int] t = spawn test_option_combinators()
+    int r = t.await()
+    print(r)
