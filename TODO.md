@@ -132,6 +132,8 @@
 
 - **ECS iter() copies entire entity_ids vector**: `SparseSet[T].iter()` allocates a fresh `Vector[Entity]` and copies all entity IDs. O(n) allocation just to start iteration. Language limitation: `SparseSetIter` can't hold a reference (no lifetime-annotated struct fields). Could improve with index+length snapshot if struct references become available. [added: 2026-02-22]
 
+- **`lib/gg/query.gg` orphan file**: This file is the old name for `gg.jsonpath` — same API, same module. It's included via `builtin_module_source` but not registered in `is_builtin_module` or `generate_builtin_module`. Either delete it (if gg.jsonpath superseded it) or register it as an alias. [added: 2026-03-11]
+
 - **gg.jsonpath Phase 2 — function argument auto-propagation**: `query_all(doc, "friends.#(age>30).name")` — chaining filter + key access in a single path. Currently filter returns matching objects but subsequent segments after filter aren't applied. Need to feed filter results back into the segment pipeline. [added: 2026-03-09]
 
 - **gg.xpath — XPath-style queries for XmlNode**: Move `find`/`find_all` from `gg.xml` to `gg.xpath`. Add path query support consistent with `gg.jsonpath` interface. [added: 2026-03-09]

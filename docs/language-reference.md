@@ -3050,6 +3050,12 @@ String literals are validated at compile time by the lexer. Internal string oper
 | `map(f)` | `(T) → U → Vector[U]` | Apply function to each element |
 | `fold(init, f)` | `U, (U, T) → U → U` | Left fold with initial value |
 | `reduce(f)` | `(T, T) → T → T` | Reduce without initial value |
+| `first()` | `→ Option[T]` | First element (`None` if empty) |
+| `last()` | `→ Option[T]` | Last element (`None` if empty) |
+| `clone()` | `→ Vector[T]` | Shallow copy of the vector |
+| `reversed()` | `→ Vector[T]` | New vector with elements in reverse order |
+| `binary_search(item)` | `T → int` | Binary search on a sorted vector (returns index, or -1) |
+| `unique()` | `→ Vector[T]` | New vector with consecutive duplicates removed |
 
 **`Dict[K, V]`** — Ordered hash map (insertion-order preserving, like Python 3.7+ `dict`)
 
@@ -3154,6 +3160,8 @@ Same API as `Set` but does not preserve insertion order. Use when order is irrel
 | `map(f)` | `(T) → U → Option[U]` | Apply function to inner value |
 | `and_then(f)` | `(T) → Option[U] → Option[U]` | Flat-map |
 | `or_else(f)` | `() → Option[T] → Option[T]` | Fallback if `None` |
+| `or(other)` | `Option[T] → Option[T]` | Return `self` if `Some`, otherwise `other` |
+| `filter(pred)` | `(T) → bool → Option[T]` | Keep value only if predicate holds |
 | `flatten()` | `Option[Option[T]] → Option[T]` | Unwrap one nesting layer |
 
 **`Result[T, E]`** — Success or error
@@ -3169,6 +3177,9 @@ Same API as `Set` but does not preserve insertion order. Use when order is irrel
 | `map(f)` | `(T) → U → Result[U, E]` | Apply function to success value |
 | `and_then(f)` | `(T) → Result[U, E] → Result[U, E]` | Flat-map on success |
 | `or_else(f)` | `(E) → Result[T, F] → Result[T, F]` | Flat-map on error |
+| `unwrap_err()` | `→ E` | Extract error value (panics if `Ok`) |
+| `map_err(f)` | `(E) → F → Result[T, F]` | Apply function to error value |
+| `or(other)` | `Result[T, E] → Result[T, E]` | Return `self` if `Ok`, otherwise `other` |
 
 **`Box[T]`** — Heap-allocated value
 
@@ -4180,6 +4191,118 @@ void main():
 | `FixedBufferAllocator` | Stack/static-buffer bump | Zero-heap hot paths, embedded targets, scratch buffers |
 | `FallbackAllocator` | Combinator | Primary-fast + secondary-safe overflow; composing any two allocators |
 
+**`gg.db`** — Database abstraction layer
+
+Shared types and traits used by all database backends (`gg.sqlite`, `gg.influx`, etc.).
+
+| Type | Kind | Description |
+|---|---|---|
+| `Row` | struct | Query result row; `columns: Dict[str, str]` |
+| `Value` | enum | Typed column value: `IntVal(int)`, `FloatVal(float)`, `StrVal(str)`, `BoolVal(bool)`, `NullVal` |
+| `Param` | enum | Query parameter: `IntParam(int)`, `FloatParam(float)`, `StrParam(str)`, `BoolParam(bool)`, `NullParam` |
+| `FromRow` | trait | `Self from_row(Row row)` — derivable via `@derive(FromRow)` |
+| `Queryable` | trait | `query_raw`, `exec`, `exec_simple` |
+| `DbConnection` | trait | Extends `Queryable` with `is_connected` and `close` |
+
+Row methods: `str get(str col)`, `int get_int(str col)`, `float get_float(str col)`, `bool get_bool(str col)`, `bool has(str col)`.
+
+**`gg.sqlite`** — SQLite database client
+
+```gorget
+from gg.sqlite import SqliteConn, open
+```
+
+| Function | Signature | Description |
+|---|---|---|
+| `open` | `Result[SqliteConn, str](str path)` | Open or create a SQLite database |
+
+`SqliteConn` implements `DbConnection`: `is_connected`, `close`, `query_raw`, `exec`, `exec_simple`.
+
+**`gg.influx`** — InfluxDB 2.x client
+
+```gorget
+from gg.influx import InfluxClient, influx_connect
+```
+
+| Function | Signature | Description |
+|---|---|---|
+| `influx_connect` | `Result[InfluxClient, str](str url, str token, str org, str bucket)` | Connect to InfluxDB instance |
+
+`InfluxClient` implements `DbConnection`. `query_raw` executes Flux queries; `exec` writes line protocol data.
+
+**`gg.uuid`** — UUID v4 generation
+
+```gorget
+from gg.uuid import UUID, v4, parse
+```
+
+| Function | Signature | Description |
+|---|---|---|
+| `v4` | `UUID()` | Generate random UUID v4 |
+| `parse` | `Result[UUID, str](str s)` | Parse UUID from string |
+
+UUID methods: `str to_string()`, `bool equals(UUID other)`, `int version()`.
+
+**`gg.cli`** — Command-line argument parsing
+
+```gorget
+from gg.cli import CliParser
+```
+
+| Method | Signature | Description |
+|---|---|---|
+| `new` | `CliParser(str name, str desc)` | Create parser |
+| `add_flag` | `void(str long, str short, str help)` | Register boolean flag |
+| `add_option` | `void(str long, str short, str help, str default)` | Register named option with default |
+| `add_positional` | `void(str name, str help)` | Register positional argument |
+| `parse` | `Result[bool, str](Vector[str] argv)` | Parse arguments |
+| `has` | `bool(str name)` | Check if flag/option was provided |
+| `get` | `str(str name)` | Get option value |
+| `positionals` | `Vector[str]()` | Get positional arguments |
+| `print_help` | `void()` | Print usage |
+
+**`gg.jsonpath`** — JSONPath query and mutation
+
+```gorget
+from gg.jsonpath import get, get_all, exists, count, set, delete
+```
+
+| Function | Signature | Description |
+|---|---|---|
+| `get` | `Json(Json doc, str path)` | Get first matching value |
+| `get_all` | `Vector[Json](Json doc, str path)` | Get all matching values |
+| `exists` | `bool(Json doc, str path)` | Check if path matches |
+| `count` | `int(Json doc, str path)` | Count matching values |
+| `set` | `bool(Json &doc, str path, Json value)` | Set value at path (in-place) |
+| `delete` | `bool(Json &doc, str path)` | Delete value at path (in-place) |
+
+Path syntax: `name.child`, `[0]`, `[-1]`, `*`, `..key`, `#`, `#(age>30)`, `[0:3]`.
+
+**`gg.p2p`** — Peer-to-peer networking over UDP
+
+```gorget
+from gg.p2p import Node, p2p_create_node, p2p_poll
+```
+
+Full-featured P2P networking stack with identity (Ed25519), peer discovery (multicast + bootstrap), DHT (distributed hash table), gossip/pub-sub, NAT traversal (hole punching + relay), reliable streams (TCP-like with SACK), encryption, and RPC.
+
+Core functions:
+
+| Function | Description |
+|---|---|
+| `p2p_create_node(str addr, int port)` | Create and bind a P2P node |
+| `p2p_generate_identity()` | Generate Ed25519 keypair |
+| `p2p_poll(Node &node, int timeout_ms)` | Main event loop — drives retransmission, discovery, and event delivery |
+| `p2p_add_peer(Node &node, str host, int port)` | Add a peer via PING |
+| `p2p_bootstrap(Node &node, Vector[str] addrs)` | Bootstrap from known peers |
+| `p2p_send(Node &node, PeerId target, Vector[uint8] data)` | Send message to known peer |
+| `p2p_subscribe(Node &node, str topic)` | Subscribe to gossip topic |
+| `p2p_publish(Node &node, str topic, Vector[uint8] data)` | Publish to topic |
+| `p2p_dht_store(Node &node, Vector[uint8] key, Vector[uint8] val)` | Store in DHT |
+| `p2p_dht_get(Node &node, Vector[uint8] key, int timeout_ms)` | Query DHT |
+| `p2p_stream_open(Node &node, str peer_hex)` | Open reliable stream |
+| `p2p_stream_open_encrypted(Node &node, str peer_hex)` | Open encrypted stream |
+
 ---
 
 ## 16. Compilation Model
@@ -4645,7 +4768,7 @@ meta for query, expected in [["SELECT 1", 1], ["SELECT 2", 2]]:
 
 - At most one `suite setup` and one `suite teardown` per file.
 
-### 18.10 Benchmarks
+### 18.12 Benchmarks
 
 ```gorget
 bench "addition":
@@ -4778,7 +4901,7 @@ meta type Index = int32 if MAX_ENTITIES <= 2147483647 else int64
 
 No `elif` on single-line conditional types; use a type function for multi-branch logic (§19.5).
 
-### 19.4 Conditional Compilation
+### 19.5 Conditional Compilation
 
 Syntax mirrors the `if` statement, but the condition and all branches are evaluated at compile time. The losing branch is **completely removed** — its imports, type errors, and platform-specific code are never seen by the type checker.
 
@@ -4807,7 +4930,7 @@ else:
 
 Build flags are passed on the command line: `gg build --feature metrics`.
 
-### 19.5 Meta Type Functions
+### 19.6 Meta Type Functions
 
 Multi-branch type computation. Syntax is identical to a regular function but prefixed `meta type` and returns a type name.
 
@@ -4835,7 +4958,7 @@ Vector[Elem] data = Vector[Elem]()
 
 Type function parameters follow normal Gorget param syntax. Only meta-compatible types (`int`, `float`, `bool`, `str`) are supported as parameter types.
 
-### 19.6 Compile-Time Function Evaluation (M7)
+### 19.7 Compile-Time Function Evaluation (M7)
 
 Any ordinary function with meta-compatible parameter and return types can be called in a meta initializer — no special annotation required. The compiler interprets the body at compile time.
 
@@ -4879,7 +5002,7 @@ Attempting to exceed either limit is a compile error.
 
 **Types supported as parameters/return values:** `int` (and all int variants), `float` (and variants), `bool`, `str`. Structs, enums, and collections are not supported.
 
-### 19.7 Built-In Meta Functions
+### 19.8 Built-In Meta Functions
 
 These are always available in meta contexts:
 
@@ -4923,7 +5046,7 @@ The embedded string becomes an ordinary `meta str` constant and is substituted t
 module like any other meta constant. Multiline files work naturally — the string preserves all
 whitespace and newlines.
 
-### 19.8 Evaluation Order and Scoping
+### 19.9 Evaluation Order and Scoping
 
 Meta declarations are processed **top-to-bottom before any type-checking or code generation**:
 
@@ -4934,7 +5057,7 @@ Meta declarations are processed **top-to-bottom before any type-checking or code
 
 After this pass, the rest of the compiler sees no `meta` constructs.
 
-### 19.9 Interaction with `--feature` Flags
+### 19.10 Interaction with `--feature` Flags
 
 Feature flags are arbitrary strings passed at build time:
 
@@ -4944,7 +5067,7 @@ gg build --feature tls --feature metrics myapp.gg
 
 Test with `feature("tls")` or `debug()` (shorthand for `feature("debug")`). There is no fixed set of features — any string is valid. The `debug` feature has no special compiler behavior beyond being testable with `debug()`.
 
-### 19.10 Common Patterns
+### 19.11 Common Patterns
 
 **Sized integer selection:**
 
@@ -4992,7 +5115,7 @@ meta str CONFIG_DIR = "/etc/myapp" if platform() == "linux" else "/Library/Appli
 
 ---
 
-### 19.11 Delayed Meta in Generic Bodies
+### 19.12 Delayed Meta in Generic Bodies
 
 `meta if` and `meta for` can appear as **statements inside generic function and method bodies**. Unlike module-level `meta if` (which is evaluated before semantic analysis), these *delayed* forms are evaluated at **monomorphization time** — when the type parameters are concrete.
 
@@ -5094,7 +5217,7 @@ Module-level `meta` is evaluated during Phase 0 (before semantic analysis). `met
 
 ---
 
-### 19.12 Delayed-Context Builtins Reference
+### 19.13 Delayed-Context Builtins Reference
 
 Inside generic function bodies, method bodies, and trait default bodies, all of the following
 builtins are available. They resolve generic type parameters to their concrete values at
@@ -5163,7 +5286,7 @@ void main():
 
 ---
 
-### 19.13 Type Predicate `T is Category`
+### 19.14 Type Predicate `T is Category`
 
 `T is X` in a delayed meta condition evaluates to `bool` at monomorphization time. The RHS `X` is interpreted as a **type category** for the common base-type names, allowing concise type-family predicates:
 
@@ -5220,7 +5343,7 @@ void main():
 
 ---
 
-### 19.14 `fields(T)` — Combined Field Iteration
+### 19.15 `fields(T)` — Combined Field Iteration
 
 `fields(T)` returns all struct fields as `(name, type)` pairs, enabling combined iteration in a
 single `meta for` loop using multi-variable destructuring:
@@ -5275,7 +5398,7 @@ name. Use `ftype`, `ty`, `field_type`, or any other non-keyword identifier.
 
 ---
 
-### 19.15 `field_value(val, fname)` — Compile-Time Field Read
+### 19.16 `field_value(val, fname)` — Compile-Time Field Read
 
 `field_value(val, fname)` reads a struct field whose name is known at compile time. It is a
 **source-to-source rewrite** — the compiler transforms `field_value(val, "x")` into `val.x`
@@ -5315,10 +5438,10 @@ meta constant. Using it in a `meta const` definition emits a compile error:
 meta const bad = field_value(p, "x")  # error: field_value() is a runtime expression
 ```
 
-### 19.16 `field_set(obj, fname, value)` — Compile-Time Field Write
+### 19.17 `field_set(obj, fname, value)` — Compile-Time Field Write
 
 `field_set(obj, fname, value)` assigns to a struct field whose name is known at compile time.
-Like `field_get`, it is a **source-to-source rewrite** — the compiler transforms
+Like `field_value`, it is a **source-to-source rewrite** — the compiler transforms
 `field_set(obj, "x", 42)` into `obj.x = 42` (field assignment) before type-checking.
 
 ```gorget
@@ -5366,7 +5489,7 @@ int sum_int_fields[T](T val):
 
 ---
 
-### 19.16 `enum_ordinal` and `enum_from_ordinal` — Enum Ordinal Reflection
+### 19.18 `enum_ordinal` and `enum_from_ordinal` — Enum Ordinal Reflection
 
 Two builtins map between variant names and their zero-based ordinal positions at compile time.
 
@@ -5412,7 +5535,7 @@ the ordinal is out of range.
 
 ---
 
-### 19.17 Compile-Time Loop Unrolling (`meta for`)
+### 19.19 Compile-Time Loop Unrolling (`meta for`)
 
 `meta for` inside a generic body unrolls its loop at monomorphization time. Two range forms are supported:
 
@@ -5465,7 +5588,7 @@ The unrolled code is lowered identically to if the programmer had written each b
 
 ---
 
-### 19.18 Default Trait Method Bodies with Meta
+### 19.20 Default Trait Method Bodies with Meta
 
 Default method bodies in trait definitions can use `meta if`, `meta for`, and reflection builtins
 that reference `Self`. When the trait is equipped onto a concrete type, the compiler evaluates the
@@ -5533,7 +5656,7 @@ registry:
 
 ---
 
-### 19.19 Additional Struct Field Builtins
+### 19.21 Additional Struct Field Builtins
 
 These builtins complement `fields(T)` (§19.14) for targeted struct introspection. All require `T`
 to be a struct and are evaluated at monomorphization time in generic bodies.
@@ -5586,7 +5709,7 @@ void inspect[T]():
 
 ---
 
-### 19.20 Variant Inspection
+### 19.22 Variant Inspection
 
 Three builtins introspect enum variants at monomorphization time. All require `T` to be an enum.
 
@@ -5651,7 +5774,7 @@ void list_payloads[T]():
 
 ---
 
-### 19.21 Numeric Type Inspection
+### 19.23 Numeric Type Inspection
 
 The following builtins are available in delayed meta contexts (generic function and method bodies).
 They all resolve generic type parameters to their concrete values at monomorphization time.
@@ -5716,7 +5839,7 @@ Passing a float type to `min_val`/`max_val` is a compile-time error.
 
 ---
 
-### 19.22 `implements(T, "Trait")` — Trait Introspection
+### 19.24 `implements(T, "Trait")` — Trait Introspection
 
 `implements(T, "TraitName")` evaluates to `true` at monomorphization time if `T` has been
 equipped with the named trait. This allows generic code to adapt its behavior based on what
@@ -5755,7 +5878,7 @@ void generic_combine[T](T a, T b):
 
 ---
 
-### 19.23 `meta op` — Compile-Time Operator Parameters
+### 19.25 `meta op` — Compile-Time Operator Parameters
 
 `meta op` allows a function to accept a **binary operator token as a compile-time parameter**,
 eliminating the need for separate `add`, `sub`, `mul`, `div` variants of the same algorithm.
@@ -5828,7 +5951,7 @@ One `tensor_elemwise` definition replaces separate `tensor_add`, `tensor_sub`, `
 
 ---
 
-### 19.24 `meta for` Inside Match Arms
+### 19.26 `meta for` Inside Match Arms
 
 `meta for` can appear inside a `match` arm list. Each loop iteration produces one concrete match
 arm, replacing a block of identical per-variant arms with a single template.
@@ -5904,6 +6027,100 @@ Column col_concat(Column a, Column b):
 
 When any `meta for` items are present in a match, the exhaustiveness checker defers to IR
 lowering. The expanded arms are validated after expansion completes.
+
+### 19.27 `meta match` — Compile-Time Pattern Matching
+
+`meta match` evaluates a compile-time expression and selects one branch at monomorphization time. Only the matching branch is emitted into the generated code — all other branches are discarded.
+
+#### Syntax
+
+```gorget
+meta match <expr>:
+    case <value>: <body>
+    case <value>: <body>
+    else: <body>
+```
+
+The scrutinee `<expr>` must be a compile-time evaluable expression — typically a delayed meta builtin like `typename(T)`, `bitwidth(T)`, or `sizeof(T)`. Each `case` value is compared for equality at compile time.
+
+#### Example — Type-Specific Dispatch
+
+```gorget
+str type_name[T]():
+    meta match typename(T):
+        case "int":   return "integer"
+        case "float": return "floating-point"
+        case "str":   return "string"
+        else:         return "other"
+
+void main():
+    print(type_name[int]())    # prints: integer
+    print(type_name[str]())    # prints: string
+```
+
+#### Example — Bitwidth-Based Selection
+
+```gorget
+int null_sentinel[T]():
+    meta match bitwidth(T):
+        case 8:  return -1
+        case 16: return -1
+        case 32: return 0
+        else:    return 0
+```
+
+#### Semantics
+
+- The scrutinee is evaluated at monomorphization time.
+- Arms are tested top-to-bottom; the first match wins.
+- The `else` arm is optional but recommended — if no arm matches and there is no `else`, the body is empty.
+- Only the selected arm's body is included in the generated code; dead arms are pruned entirely.
+
+### 19.28 `meta while` — Compile-Time Conditional Guard
+
+`meta while` evaluates its condition at monomorphization time. If the condition is **false**, the body is skipped entirely — no code is emitted. If the condition is **true**, the body is emitted once (it does not loop at runtime).
+
+Despite the `while` keyword, `meta while` acts as a compile-time guard, not a loop. It is useful for conditionally including code based on type properties.
+
+#### Syntax
+
+```gorget
+meta while <condition>:
+    <body>
+```
+
+The condition must be a compile-time evaluable boolean expression.
+
+#### Example — Type Guard
+
+```gorget
+void only_if_int[T]():
+    meta while typeof(T) == "int":
+        print("matched-int")
+    print("done")
+
+void main():
+    only_if_int[int]()    # prints: matched-int\ndone
+    only_if_int[float]()  # prints: done
+```
+
+#### Example — Bitwidth Guard
+
+```gorget
+void only_exotic[T]():
+    meta while bitwidth(T) > 64:
+        print("exotic wide type")
+    print("normal")
+```
+
+When instantiated with `int8` or `int`, `bitwidth(T)` is ≤ 64, so the guarded body is skipped.
+
+#### Semantics
+
+- The condition is evaluated once at monomorphization time.
+- If **false**: the entire body is omitted from generated code.
+- If **true**: the body is included once (no runtime looping).
+- Can be combined with `meta match` for multi-level compile-time dispatch.
 
 ---
 
