@@ -138,6 +138,8 @@
 
 ## Low
 
+- **Named/labeled arguments at call sites**: Allow `=` syntax for labeling arguments: `str.slice(from=2, to=5)`, `transfer(buf=!owned)`, `process(data=&vec)`. Pure sugar — desugars to positional args by matching label to parameter name. Sigils (`&`/`!`) go on the value side only (mandatory, as with positional calls); labels are bare names. Labeled args freely mixable with positional: `connect("localhost", port=8080)`. Parser needs: `IDENT '=' Expr` as an argument form; semantic check maps labels to positions and rejects duplicates/unknowns. [added: 2026-03-11]
+
 - **GIR Phase 6 — LLVM backend**: Implement `src/backend/llvm/` to emit LLVM IR (text or bitcode) from GIR. Use `llc` or Rust `inkwell`/`llvm-sys` crate for compilation. Construct SSA via alloca+mem2reg pattern. Emit debug info from GIR source locations. Wire as `gg build --backend=llvm`. Removes C compiler dependency for native compilation. [added: 2026-03-05]
 
 - **GIR Phase 7 — WASM backend**: Add WebAssembly support — either via LLVM backend with `--target=wasm32-wasi` (Option A, minimal code) or direct WASM emission (Option B, more control). Start with Option A, defer Option B if LLVM quality is sufficient. Wire as `gg build --backend=wasm`. [added: 2026-03-05]
