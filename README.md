@@ -174,10 +174,6 @@ int(int) add_x = (int y): x + y
 Gorget uses Rust-style ownership to prevent use-after-free and double-free bugs at compile time, with zero runtime cost.
 
 ```
-# Move: transfers ownership — caller can't use msg after this
-void send(Message !msg):
-    print("sent")
-
 # Borrow: read-only access — caller keeps ownership
 void preview(Message msg):
     print("peek")
@@ -186,6 +182,10 @@ void preview(Message msg):
 equip Message:
     void set_priority(&self, int p):
         self.priority = p
+
+# Move: transfers ownership — caller can't use msg after this
+void send(Message !msg):
+    print("sent")
 ```
 
 ```
