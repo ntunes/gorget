@@ -60,6 +60,7 @@ fn run_lir(fixture_path: &std::path::Path) -> Option<String> {
         .args(["-w", "-o"])
         .arg(&tmp_exe)
         .arg(&tmp_c)
+        .arg("-lm")
         .output()
         .ok()?;
     if !cc.status.success() {
@@ -172,4 +173,35 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_meta_delayed_nested() { ab_test("meta_delayed_nested.gg"); }
 #[test] fn lir_ab_trait_bounds() { ab_test("trait_bounds.gg"); }
 #[test] fn lir_ab_char_str_coerce() { ab_test("char_str_coerce.gg"); }
-// Async fixtures skipped — timing-sensitive output can cause false A/B mismatches.
+#[test] fn lir_ab_assert_return_basic() { ab_test("assert_return_basic.gg"); }
+#[test] fn lir_ab_assert_return_fail() { ab_test("assert_return_fail.gg"); }
+#[test] fn lir_ab_assert_rich_enum() { ab_test("assert_rich_enum.gg"); }
+#[test] fn lir_ab_assert_rich_enum_fail() { ab_test("assert_rich_enum_fail.gg"); }
+#[test] fn lir_ab_assert_rich_string_fail() { ab_test("assert_rich_string_fail.gg"); }
+#[test] fn lir_ab_assert_rich_strings() { ab_test("assert_rich_strings.gg"); }
+#[test] fn lir_ab_assert_rich_struct() { ab_test("assert_rich_struct.gg"); }
+#[test] fn lir_ab_assert_rich_struct_fail() { ab_test("assert_rich_struct_fail.gg"); }
+#[test] fn lir_ab_catch_basic() { ab_test("catch_basic.gg"); }
+#[test] fn lir_ab_chars() { ab_test("chars.gg"); }
+#[test] fn lir_ab_enum_nullary_bare() { ab_test("enum_nullary_bare.gg"); }
+#[test] fn lir_ab_option_assign() { ab_test("option_assign.gg"); }
+#[test] fn lir_ab_pattern_destructure() { ab_test("pattern_destructure.gg"); }
+#[test] fn lir_ab_result_propagation() { ab_test("result_propagation.gg"); }
+#[test] fn lir_ab_result_str_concat() { ab_test("result_str_concat.gg"); }
+#[test] fn lir_ab_string_concat() { ab_test("string_concat.gg"); }
+#[test] fn lir_ab_string_methods() { ab_test("string_methods.gg"); }
+#[test] fn lir_ab_trait_defaults() { ab_test("trait_defaults.gg"); }
+#[test] fn lir_ab_trait_inheritance() { ab_test("trait_inheritance.gg"); }
+#[test] fn lir_ab_try_from_trait() { ab_test("try_from_trait.gg"); }
+#[test] fn lir_ab_tuples() { ab_test("tuples.gg"); }
+#[test] fn lir_ab_via_delegation() { ab_test("via_delegation.gg"); }
+// Async fixtures — some pass but timing-sensitive output can cause false A/B mismatches.
+#[test] fn lir_ab_async_basic() { ab_test("async_basic.gg"); }
+#[test] fn lir_ab_async_expr_await() { ab_test("async_expr_await.gg"); }
+#[test] fn lir_ab_async_for_else() { ab_test("async_for_else.gg"); }
+#[test] fn lir_ab_async_param_across_await() { ab_test("async_param_across_await.gg"); }
+#[test] fn lir_ab_async_prefix_await() { ab_test("async_prefix_await.gg"); }
+#[test] fn lir_ab_async_condition_await() { ab_test("async_condition_await.gg"); }
+#[test] fn lir_ab_async_range_await() { ab_test("async_range_await.gg"); }
+#[test] fn lir_ab_loops_advanced() { ab_test("loops_advanced.gg"); }
+#[test] fn lir_ab_named_args() { ab_test("named_args.gg"); }

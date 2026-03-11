@@ -2,7 +2,7 @@
 
 ## High
 
-- **LIR: Phase 5 — expand A/B test coverage**: 76 fixtures match (13% of ~584). Fixed: StrLit vs Str coercion, FieldPtr bounds-safe fallback, synthetic extern merge, runtime fn declaration skip, struct forward declarations for empty structs, GorgetString→Str arg coercion (partial). Remaining: GorgetString→Str coercion for runtime functions (gorget_str_cat etc.), collection method dispatch, trait object support, generic Option/Result method lowering. [updated: 2026-03-08]
+- **LIR: Phase 6 — expand A/B test coverage**: 105/~584 fixtures match (18%). Fixed in Phase 5: StrLit vs Str coercion, FieldPtr bounds-safe fallback, synthetic extern merge, runtime fn declaration skip, struct forward declarations for empty structs, GorgetString→Str arg coercion (partial). Fixed in Phase 6: aggregate memcpy sizeof (was `sizeof(*(void*))` = 1), Str comparison in Cmp (was raw pointer compare), SSA block param arg ordering (HashMap iteration), SSA reaching def for untouched slots on back-edges, `-lm` in test harness. Remaining: global variable access (empty function bodies), closure capture (garbage values), division-by-zero check, collection method dispatch (cc fails), undeclared values from void-returning CallExtern. [updated: 2026-03-11]
 
 ## Medium
 

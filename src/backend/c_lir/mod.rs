@@ -212,6 +212,9 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     let mut val_types: Vec<Option<LirType>> = vec![None; max_val as usize];
     // Track which values originate from StrLit instructions (raw `const char*`).
     let mut str_lit_vals: Vec<bool> = vec![false; max_val as usize];
+    // Track the pointee type for Ptr-typed values (e.g. SlotAddr → slot type, FieldPtr → field type).
+    // Used by Inst::Store to emit correct sizeof() for memcpy of aggregates.
+    let mut ptr_pointee: Vec<Option<LirType>> = vec![None; max_val as usize];
     for block in &func.blocks {
         for (vid, ty) in &block.params {
             val_types[vid.0 as usize] = Some(ty.clone());
@@ -224,6 +227,29 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             }
             if let Inst::StrLit { dst, .. } = inst {
                 str_lit_vals[dst.0 as usize] = true;
+            }
+            // Track pointee types for pointer-producing instructions.
+            match inst {
+                Inst::SlotAddr { dst, slot } => {
+                    let slot_ty = &func.slots[slot.0 as usize].ty;
+                    ptr_pointee[dst.0 as usize] = Some(slot_ty.clone());
+                }
+                Inst::FieldPtr { dst, struct_id, field, .. } => {
+                    let sdef = &module.structs[struct_id.0 as usize];
+                    if (*field as usize) < sdef.fields.len() {
+                        ptr_pointee[dst.0 as usize] = Some(sdef.fields[*field as usize].1.clone());
+                    }
+                }
+                Inst::ElemPtr { dst, .. } => {
+                    // Element pointer — pointee type unknown without array element type info.
+                    // Leave as None; Store will fall back to sizeof(*(val)).
+                    let _ = dst;
+                }
+                Inst::GlobalAddr { dst, .. } => {
+                    // Could track global type, but globals are rarely stored into via Store.
+                    let _ = dst;
+                }
+                _ => {}
             }
         }
     }
@@ -261,7 +287,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         // Instructions
         for inst in &block.insts {
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals);
+            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &ptr_pointee);
             writeln!(out).unwrap();
         }
 
@@ -274,7 +300,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool]) {
+fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], ptr_pointee: &[Option<LirType>]) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -391,15 +417,66 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
 
         // Comparison & logic
         Inst::Cmp { dst, op, lhs, rhs } => {
-            let c_op = match op {
-                CmpOp::Eq => "==",
-                CmpOp::Ne => "!=",
-                CmpOp::Lt => "<",
-                CmpOp::Le => "<=",
-                CmpOp::Gt => ">",
-                CmpOp::Ge => ">=",
+            // Detect Str-typed operands for string comparison.
+            let is_str = |vid: &ValueId| -> bool {
+                if str_lit_vals.get(vid.0 as usize).copied().unwrap_or(false) { return true; }
+                if let Some(Some(pt)) = ptr_pointee.get(vid.0 as usize) {
+                    if let LirType::Struct(sid) = pt {
+                        let name = sn.get(&sid.0).map(|s| s.as_str()).unwrap_or("");
+                        if name == "Str" || name == "GorgetString" { return true; }
+                    }
+                }
+                if let Some(Some(LirType::Struct(sid))) = val_types.get(vid.0 as usize) {
+                    let name = sn.get(&sid.0).map(|s| s.as_str()).unwrap_or("");
+                    if name == "Str" || name == "GorgetString" { return true; }
+                }
+                false
             };
-            write!(out, "{} = {} {} {};", v(*dst), v(*lhs), c_op, v(*rhs)).unwrap();
+            let lhs_str = is_str(lhs);
+            let rhs_str = is_str(rhs);
+            if lhs_str || rhs_str {
+                // String comparison — wrap operands into Str values for gorget_str_eq/gorget_str_cmp.
+                let wrap = |vid: &ValueId| -> String {
+                    if str_lit_vals.get(vid.0 as usize).copied().unwrap_or(false) {
+                        format!("gorget_str_from_literal({v}, strlen({v}))", v = v(*vid))
+                    } else if let Some(Some(pt)) = ptr_pointee.get(vid.0 as usize) {
+                        if pt.is_aggregate() {
+                            // Pointer to Str slot — dereference.
+                            format!("(*(Str*){v})", v = v(*vid))
+                        } else {
+                            v(*vid)
+                        }
+                    } else {
+                        v(*vid)
+                    }
+                };
+                let lhs_c = wrap(lhs);
+                let rhs_c = wrap(rhs);
+                match op {
+                    CmpOp::Eq => write!(out, "{} = gorget_str_eq({}, {});", v(*dst), lhs_c, rhs_c).unwrap(),
+                    CmpOp::Ne => write!(out, "{} = !gorget_str_eq({}, {});", v(*dst), lhs_c, rhs_c).unwrap(),
+                    _ => {
+                        let c_op = match op {
+                            CmpOp::Lt => "<",
+                            CmpOp::Le => "<=",
+                            CmpOp::Gt => ">",
+                            CmpOp::Ge => ">=",
+                            _ => unreachable!(),
+                        };
+                        write!(out, "{} = gorget_str_cmp({}, {}) {} 0;", v(*dst), lhs_c, rhs_c, c_op).unwrap();
+                    }
+                }
+            } else {
+                let c_op = match op {
+                    CmpOp::Eq => "==",
+                    CmpOp::Ne => "!=",
+                    CmpOp::Lt => "<",
+                    CmpOp::Le => "<=",
+                    CmpOp::Gt => ">",
+                    CmpOp::Ge => ">=",
+                };
+                write!(out, "{} = {} {} {};", v(*dst), v(*lhs), c_op, v(*rhs)).unwrap();
+            }
         }
         Inst::Not { dst, operand } => {
             write!(out, "{} = !{};", v(*dst), v(*operand)).unwrap();
@@ -439,11 +516,25 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
         Inst::Store { ptr, value } => {
             // Generic store — type is determined by context.
             let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
-            if matches!(val_ty, Some(LirType::Ptr)) {
-                // Source is a pointer to aggregate data — use memcpy with pointer as source.
-                // We don't know the size, so we need to find the pointed-to type.
-                // Fall back to dereferencing: *((type*)ptr) = *((type*)value)
-                write!(out, "memcpy({p}, {val}, sizeof(*({val})));", p = v(*ptr), val = v(*value)).unwrap();
+            let is_str_lit = str_lit_vals.get(value.0 as usize).copied().unwrap_or(false);
+            if is_str_lit {
+                // String literal → wrap into Str and store.
+                write!(out, "*(Str*)({p}) = gorget_str_from_literal({val}, strlen({val}));",
+                    p = v(*ptr), val = v(*value)).unwrap();
+            } else if matches!(val_ty, Some(LirType::Ptr)) {
+                // Source is a pointer to aggregate data — use memcpy.
+                // Look up the pointee type to get correct sizeof.
+                let pointee = ptr_pointee.get(value.0 as usize).and_then(|t| t.as_ref());
+                // Also check the ptr destination's pointee type (from FieldPtr).
+                let dst_pointee = ptr_pointee.get(ptr.0 as usize).and_then(|t| t.as_ref());
+                let size_ty = pointee.or(dst_pointee);
+                if let Some(ty) = size_ty {
+                    let ty_name = c_type_named(ty, sn);
+                    write!(out, "memcpy({p}, {val}, sizeof({ty_name}));", p = v(*ptr), val = v(*value)).unwrap();
+                } else {
+                    // Last resort — sizeof(*(val)) is wrong for void* but we have no type info.
+                    write!(out, "memcpy({p}, {val}, sizeof(*({val})));", p = v(*ptr), val = v(*value)).unwrap();
+                }
             } else if val_ty.map_or(false, |t| t.is_scalar()) {
                 // Scalar — simple dereference store.
                 let ty_name = c_type_named(val_ty.unwrap(), sn);

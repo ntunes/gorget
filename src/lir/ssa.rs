@@ -137,8 +137,9 @@ impl<'a> SsaBuilder<'a> {
                     if reaching != *dst {
                         self.value_subst.insert(*dst, reaching);
                     }
-                    // Also keep block_params for the last load (used by patch_terminators).
-                    self.block_params.insert((bb, *slot), *dst);
+                    // Note: do NOT overwrite block_params here — that map stores
+                    // the actual param ValueIds created by add_block_param and is
+                    // needed by patch_terminators for correct arg ordering.
                 }
                 other => {
                     // For non-promoted instructions, check if they store to a promoted slot
@@ -250,38 +251,87 @@ impl<'a> SsaBuilder<'a> {
     /// Patch terminators: for each jump/branch to a block with params,
     /// provide the reaching definition from the predecessor.
     fn patch_terminators(&mut self) {
-        // Collect the patches we need to make.
-        let mut patches: Vec<(BlockId, BlockId, Vec<ValueId>)> = Vec::new();
+        // First, ensure current_def is populated for all (pred, slot) pairs
+        // we'll need. For slots not directly accessed in a block, we walk up
+        // the predecessor chain to find the reaching definition.
+        let phis: Vec<(BlockId, SlotId)> = self.incomplete_phis.keys().copied().collect();
+        for (target_bb, slot) in &phis {
+            let preds = self.preds[target_bb.0 as usize].clone();
+            for pred_bb in preds {
+                if !self.current_def.contains_key(&(pred_bb, *slot)) {
+                    let val = self.find_reaching_def(*slot, pred_bb);
+                    self.current_def.insert((pred_bb, *slot), val);
+                }
+            }
+        }
 
-        for (&(target_bb, slot), _param_val) in &self.incomplete_phis {
+        // For each target block with params, determine the slot order from
+        // the block params (which were added by add_block_param in discovery order).
+        // Then for each predecessor, collect args in that same order.
+        // First, build a map: target_bb → [slot in param order]
+        let mut target_slots: HashMap<BlockId, Vec<SlotId>> = HashMap::new();
+        for &(target_bb, slot) in &phis {
+            target_slots.entry(target_bb).or_default().push(slot);
+        }
+        // Sort each target's slots by the position of their block param in the
+        // target block's params list. This ensures args match param order.
+        for (target_bb, slots) in &mut target_slots {
+            let block_params_list: &Vec<(ValueId, LirType)> =
+                &self.func.blocks[target_bb.0 as usize].params;
+            slots.sort_by_key(|slot| {
+                let param_val = self.block_params.get(&(*target_bb, *slot)).copied();
+                block_params_list
+                    .iter()
+                    .position(|(vid, _)| Some(*vid) == param_val)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+
+        // Collect patches: for each (pred, target), build a single args vector
+        // with values in the correct param order.
+        let mut patches: HashMap<(BlockId, BlockId), Vec<ValueId>> = HashMap::new();
+        for (&target_bb, slots) in &target_slots {
             let preds = self.preds[target_bb.0 as usize].clone();
             for &pred_bb in &preds {
-                let val = self
-                    .current_def
-                    .get(&(pred_bb, slot))
-                    .copied()
-                    .unwrap_or_else(|| {
-                        // No definition in predecessor — create a zero.
-                        let v = self.func.next_value();
-                        let ty = self.func.slots[slot.0 as usize].ty.clone();
-                        self.func.blocks[pred_bb.0 as usize]
-                            .insts
-                            .push(Inst::IConst {
-                                dst: v,
-                                ty,
-                                value: 0,
-                            });
-                        v
-                    });
-                patches.push((pred_bb, target_bb, vec![val]));
+                let args: Vec<ValueId> = slots.iter().map(|slot| {
+                    self.current_def
+                        .get(&(pred_bb, *slot))
+                        .copied()
+                        .unwrap_or_else(|| {
+                            let v = self.func.next_value();
+                            let ty = self.func.slots[slot.0 as usize].ty.clone();
+                            self.func.blocks[pred_bb.0 as usize]
+                                .insts
+                                .push(Inst::IConst { dst: v, ty, value: 0 });
+                            v
+                        })
+                }).collect();
+                patches.insert((pred_bb, target_bb), args);
             }
         }
 
         // Apply patches to terminators.
-        for (pred_bb, target_bb, args) in patches {
+        for ((pred_bb, target_bb), args) in patches {
             let term = &mut self.func.blocks[pred_bb.0 as usize].terminator;
             add_args_to_terminator(term, target_bb, &args);
         }
+    }
+
+    /// Find the reaching definition of a slot at a block, walking up predecessors.
+    /// Unlike read_variable, this does NOT create new block params.
+    fn find_reaching_def(&self, slot: SlotId, bb: BlockId) -> ValueId {
+        if let Some(&val) = self.current_def.get(&(bb, slot)) {
+            return val;
+        }
+        if let Some(&val) = self.block_params.get(&(bb, slot)) {
+            return val;
+        }
+        let preds = &self.preds[bb.0 as usize];
+        if preds.len() == 1 {
+            return self.find_reaching_def(slot, preds[0]);
+        }
+        // Unreachable for well-formed code — slot should have been defined somewhere.
+        ValueId(0)
     }
 }
 
