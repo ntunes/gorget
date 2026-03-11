@@ -2,7 +2,11 @@
 
 ## High
 
-- **LIR: Phase 10 — remaining mismatches**: 566/610 fixtures enrolled, 565 passing (92.6%). 1 flaky (httpserver_keepalive — port contention). 24 unenrolled are compile-error tests, 20 are environment-dependent (http, sqlite, io_input, cli_args, hot_reload, bench). All core language features, collections, async, closures, drops, traits, generics pass. Remaining build failures: 7 escape-analysis tests (compile errors, expected), 1 test_process (timing). [updated: 2026-03-11]
+- **LIR backend: Phase 2 — reach parity (140/565 real A/B)**: `--backend=lir` now wired for real builds. True pass rate: 140/565 (24.8%). Major remaining failure categories: (1) **Missing function definitions** — `__gorget_push/pop_allocator` (arena), `__option_unwrap`/`__result_unwrap_or` (helpers), `Channel__T__*` (channel runtime), `__gorget_spawn/await_*` (async plumbing), `__gorget_closure_call_*` (closure dispatch). These are all generated inline by the old C backend, not in c_runtime.rs. (2) **IndexLoad on GorgetArray** — LIR treats array base as direct memory, but GorgetArray uses a `data` pointer; element access reads garbage. (3) **Struct type mismatches** — incompatible struct assignments between similar LIR struct types. (4) **Closure capture** — pointer-as-int reads for captured variables. Target: fix systematically until all enrolled tests pass. [updated: 2026-03-11]
+
+- **LIR backend: Phase 4 — default backend switch**: Once all A/B tests pass through LIR, flip default: no flag = LIR→C, `--backend=gir` selects old path. Feature-gate fallback for hot-reload and `--shared` builds. [added: 2026-03-11]
+
+- **LIR backend: Phase 5 — old backend retirement**: Delete `src/backend/c/mod.rs` (12,918 lines) after transition period. Keep `c_runtime.rs`. Remove `--backend=gir` flag. -12,918 lines of the most complex, duplicated code in the project. [added: 2026-03-11]
 
 ## Medium
 

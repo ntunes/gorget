@@ -696,6 +696,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
 
             // ── void* param indices for collection functions ─────────
             let void_params = collection_void_param_indices(emit_name);
+            let self_by_ptr = collection_self_by_ptr(emit_name);
 
             write!(out, "{}(", emit_name).unwrap();
             if is_stderr_print {
@@ -710,8 +711,13 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 }
                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                // Collection self-by-pointer: first arg is already a pointer
+                // to the struct (void* in C); pass it directly without deref.
+                if i == 0 && self_by_ptr && matches!(arg_ty, Some(LirType::Ptr) | Some(LirType::Struct(_))) {
+                    write!(out, "{}", v(*a)).unwrap();
+                }
                 // For printf, wrap bool args with ? "true" : "false"
-                if is_printf && matches!(arg_ty, Some(LirType::Bool)) {
+                else if is_printf && matches!(arg_ty, Some(LirType::Bool)) {
                     write!(out, "{} ? \"true\" : \"false\"", v(*a)).unwrap();
                 }
                 // String literal arg to a gorget_str_* function that takes Str → wrap.
@@ -988,6 +994,15 @@ fn collection_void_param_indices(name: &str) -> &'static [usize] {
     }
 }
 
+/// Returns true if this collection runtime function takes its first arg
+/// (the collection itself) by pointer.  Nearly all gorget_array_*, gorget_map_*,
+/// gorget_set_* methods do, with the exception of constructors (_new).
+fn collection_self_by_ptr(name: &str) -> bool {
+    (name.starts_with("gorget_array_") || name.starts_with("gorget_map_")
+        || name.starts_with("gorget_set_") || name.starts_with("gorget_heap_"))
+        && !name.ends_with("_new")
+}
+
 fn is_std_header_fn(name: &str) -> bool {
     matches!(
         name,
@@ -1145,6 +1160,24 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType
         Inst::CallPtr { .. } => Some(LirType::I64), // default
 
         _ => None,
+    }
+}
+
+// ── Backend trait implementation ──────────────────────────────────────
+
+/// C backend that consumes LIR.
+pub struct CLirBackend;
+
+impl super::Backend for CLirBackend {
+    fn name(&self) -> &str {
+        "c-lir"
+    }
+
+    fn generate(&self, module: &LirModule) -> super::CodegenOutput {
+        super::CodegenOutput {
+            code: generate_c(module),
+            extension: "c",
+        }
     }
 }
 

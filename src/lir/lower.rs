@@ -91,7 +91,12 @@ impl<'a> LoweringContext<'a> {
         self.lower_type_defs();
 
         // Lower extern declarations.
+        // Skip externs whose names map to runtime functions (e.g., Vector__int64_t__new
+        // maps to gorget_array_new which is already in the C runtime).
         for ext in &self.gir.externs {
+            if map_monomorphized_to_runtime(&ext.name).is_some() {
+                continue;
+            }
             self.module.add_extern(LirExtern {
                 name: ext.name.clone(),
                 params: ext.params.iter().map(|t| map_gir_type_with_structs(t, &self.gir.type_registry, Some(&self.struct_reg))).collect(),
@@ -501,33 +506,89 @@ impl<'a> FuncLowering<'a> {
             }
 
             Instruction::CallExtern { dst, func, args } => {
-                let is_printf_like = func == "printf" || func == "fprintf_stderr"
-                    || func == "gorget_string_format" || func == "gorget_string_format_alloc"
-                    || func == "snprintf" || func == "sprintf";
-                let lir_args: Vec<ValueId> = if is_printf_like {
+                // Remap monomorphized names to runtime equivalents
+                // (e.g., Vector__int64_t__push → gorget_array_push).
+                let emit_name = map_monomorphized_to_runtime(func)
+                    .unwrap_or_else(|| func.clone());
+                let is_printf_like = emit_name == "printf" || emit_name == "fprintf_stderr"
+                    || emit_name == "gorget_string_format" || emit_name == "gorget_string_format_alloc"
+                    || emit_name == "snprintf" || emit_name == "sprintf";
+                let mut lir_args: Vec<ValueId> = if is_printf_like {
                     // For printf, expand Str-typed args into (int)len, data pairs.
                     self.lower_printf_args(args, bb)
                 } else {
                     args.iter().map(|a| self.lower_operand(a, bb)).collect()
                 };
+
+                // Collection constructors need synthesized sizeof arguments.
+                // gorget_array_new(elem_size), gorget_set_new(elem_size)
+                if (emit_name == "gorget_array_new" || emit_name == "gorget_set_new")
+                    && lir_args.is_empty()
+                {
+                    let elem_sz = elem_size_from_monomorphized(func).unwrap_or(8) as i64;
+                    let sz_val = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                        dst: sz_val,
+                        ty: LirType::I64,
+                        value: elem_sz,
+                    });
+                    lir_args.push(sz_val);
+                }
+                // gorget_map_new(key_size, val_size) — Dict needs two sizeof args.
+                if emit_name == "gorget_map_new" && lir_args.is_empty() {
+                    let (key_sz, val_sz) = dict_elem_sizes_from_monomorphized(func);
+                    let k = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                        dst: k,
+                        ty: LirType::I64,
+                        value: key_sz as i64,
+                    });
+                    let v = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                        dst: v,
+                        ty: LirType::I64,
+                        value: val_sz as i64,
+                    });
+                    lir_args.push(k);
+                    lir_args.push(v);
+                }
+                // gorget_array_contains needs elem_size appended — derive from
+                // the element arg (index 1 in the original args).
+                if emit_name == "gorget_array_contains" && args.len() >= 2 {
+                    let elem_lir_ty = self.operand_lir_type(&args[1]);
+                    let elem_sz = lir_type_sizeof(&elem_lir_ty) as i64;
+                    let sz_val = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                        dst: sz_val,
+                        ty: LirType::I64,
+                        value: elem_sz,
+                    });
+                    lir_args.push(sz_val);
+                }
+
                 // Derive arg types from GIR operand types (for proper extern declarations).
                 let arg_types: Vec<LirType> = if is_printf_like {
                     lir_args.iter().map(|_| LirType::Ptr).collect()
                 } else {
-                    args.iter().map(|a| self.operand_lir_type(a)).collect()
+                    // Include any synthesized args (sizeof constants).
+                    let mut types: Vec<LirType> = args.iter().map(|a| self.operand_lir_type(a)).collect();
+                    while types.len() < lir_args.len() {
+                        types.push(LirType::I64); // sizeof args
+                    }
+                    types
                 };
                 // Ensure the extern has the correct return type (for collection constructors etc.)
                 let ret_ty = dst.map(|d| {
                     let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
                     map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
                 }).unwrap_or(LirType::Void);
-                self.ensure_extern(func, &arg_types, &ret_ty);
+                self.ensure_extern(&emit_name, &arg_types, &ret_ty);
                 // Skip dst for void-returning functions (e.g. gorget_panic, abort).
                 let is_void_ret = matches!(ret_ty, LirType::Void);
                 let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: result,
-                    name: func.clone(),
+                    name: emit_name,
                     args: lir_args,
                 });
                 if let (Some(d), Some(r)) = (*dst, result) {
@@ -1749,17 +1810,20 @@ fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<(Vec<LirType>, 
 ///       `GorgetString__to_upper` → `gorget_str_to_upper`.
 fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
     // Vector__T__method → gorget_array_method
-    if name.starts_with("Vector__") {
+    // GorgetArray__method → gorget_array_method  (non-generic array calls)
+    if name.starts_with("Vector__") || name.starts_with("GorgetArray__") {
         let method = name.rsplit("__").next()?;
         return Some(format!("gorget_array_{method}"));
     }
     // Dict__K__V__method → gorget_map_method
-    if name.starts_with("Dict__") || name.starts_with("HashMap__") {
+    // GorgetMap__method → gorget_map_method
+    if name.starts_with("Dict__") || name.starts_with("HashMap__") || name.starts_with("GorgetMap__") {
         let method = name.rsplit("__").next()?;
         return Some(format!("gorget_map_{method}"));
     }
     // Set__T__method → gorget_set_method
-    if name.starts_with("Set__") || name.starts_with("HashSet__") {
+    // GorgetSet__method → gorget_set_method
+    if name.starts_with("Set__") || name.starts_with("HashSet__") || name.starts_with("GorgetSet__") {
         let method = name.rsplit("__").next()?;
         return Some(format!("gorget_set_{method}"));
     }
@@ -1782,7 +1846,82 @@ fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
         let method = name.rsplit("__").next()?;
         return Some(format!("gorget_heap_{method}"));
     }
+    // Bare stdlib helpers → gorget_ prefixed runtime functions
+    match name {
+        "time_ms" => return Some("gorget_time_ms".to_string()),
+        "parse_int" => return Some("gorget_parse_int".to_string()),
+        "async_sleep" => return Some("gorget_sleep_ms".to_string()),
+        _ => {}
+    }
     None
+}
+
+/// Extract the element sizeof from a monomorphized collection constructor name.
+/// E.g., `Vector__int64_t__new` → sizeof(int64_t) = 8.
+/// Returns the size in bytes, or None if the name doesn't match.
+fn elem_size_from_monomorphized(name: &str) -> Option<usize> {
+    // Extract the type portion between the collection prefix and `__new`.
+    let type_str = if let Some(rest) = name.strip_prefix("Vector__") {
+        rest.strip_suffix("__new")?
+    } else if let Some(rest) = name.strip_prefix("Set__") {
+        rest.strip_suffix("__new")?
+    } else if let Some(rest) = name.strip_prefix("HashSet__") {
+        rest.strip_suffix("__new")?
+    } else if let Some(rest) = name.strip_prefix("Heap__") {
+        rest.strip_suffix("__new")?
+    } else {
+        // Dict/HashMap constructors are handled by dict_elem_sizes_from_monomorphized.
+        return None;
+    };
+    Some(c_sizeof(type_str))
+}
+
+/// Extract key and value sizeof from a monomorphized Dict constructor name.
+/// E.g., `Dict__Str__int64_t__new` → (sizeof(Str), sizeof(int64_t)) = (16, 8).
+fn dict_elem_sizes_from_monomorphized(name: &str) -> (usize, usize) {
+    // Dict__K__V__new or HashMap__K__V__new
+    let rest = name.strip_prefix("Dict__")
+        .or_else(|| name.strip_prefix("HashMap__"))
+        .and_then(|r| r.strip_suffix("__new"));
+    if let Some(types) = rest {
+        // Split on `__` to find key and value type names.
+        // For simple types: "Str__int64_t" → key=Str, val=int64_t
+        // For complex types: "int64_t__Str" → key=int64_t, val=Str
+        // Heuristic: try splitting at each `__` boundary and pick the first valid split.
+        if let Some(idx) = types.find("__") {
+            let key = &types[..idx];
+            let val = &types[idx + 2..];
+            return (c_sizeof(key), c_sizeof(val));
+        }
+    }
+    (8, 8) // fallback
+}
+
+/// Return the sizeof of an LIR type in bytes (best-effort for 64-bit targets).
+fn lir_type_sizeof(ty: &LirType) -> usize {
+    match ty {
+        LirType::I8 | LirType::U8 | LirType::Bool => 1,
+        LirType::I16 | LirType::U16 => 2,
+        LirType::I32 | LirType::U32 | LirType::F32 => 4,
+        LirType::I64 | LirType::U64 | LirType::F64 => 8,
+        LirType::Ptr => 8,
+        LirType::Struct(_) => 8, // conservative; struct sizeof varies
+        LirType::Void => 0,
+    }
+}
+
+/// Map a GIR C type name to its sizeof in bytes.
+fn c_sizeof(type_name: &str) -> usize {
+    match type_name {
+        "int64_t" | "uint64_t" | "double" => 8,
+        "int32_t" | "uint32_t" | "float" => 4,
+        "int16_t" | "uint16_t" => 2,
+        "int8_t" | "uint8_t" | "bool" => 1,
+        // Str is a (data_ptr, len) pair — 16 bytes on 64-bit
+        "Str" => 16,
+        // GorgetString, GorgetArray, etc. are large structs — use pointer size
+        _ => 8,
+    }
 }
 
 fn lower_global_init(init: &ir::GlobalInit) -> LirGlobalInit {
