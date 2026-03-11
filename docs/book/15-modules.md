@@ -58,7 +58,7 @@ private int helper_function(int x):
     return x * 2
 
 public void api_function():    # public is the default
-    print("{helper_function(5)}")
+    print(f"{helper_function(5)}")
 ```
 
 Private items are only accessible within the same module.

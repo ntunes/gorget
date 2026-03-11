@@ -40,10 +40,10 @@ int parse_port(str input) throws str:
     match n:
         case Some(val):
             if val < 1 or val > 65535:
-                throw "port out of range: {val}"
+                throw f"port out of range: {val}"
             return val
         case None:
-            throw "not a number: {input}"
+            throw f"not a number: {input}"
 ```
 
 The function returns `int` on success. On failure, it `throw`s a `str` describing what
@@ -112,9 +112,9 @@ void main():
     Result[int, str] result = raw parse_port("8080")
     match result:
         case Ok(port):
-            print("using port {port}")
+            print(f"using port {port}")
         case Error(msg):
-            print("bad port: {msg}")
+            print(f"bad port: {msg}")
 ```
 
 Without `raw`, calling a `throws` function from a non-`throws` function is a compile
@@ -128,7 +128,7 @@ When you just need a default value if something fails:
 ```gorget
 void main():
     int port = raw parse_port(input).unwrap_or(8080)
-    print("listening on {port}")
+    print(f"listening on {port}")
 ```
 
 Or with pattern matching for more nuanced recovery:
@@ -140,7 +140,7 @@ void main():
         case Ok(conn):
             handle(conn)
         case Error(e):
-            print("connection failed: {e}, using fallback")
+            print(f"connection failed: {e}, using fallback")
             handle(fallback_conn())
 ```
 
@@ -156,7 +156,7 @@ Config load_with_fallback(str path) throws str:
         case Ok(cfg):
             return cfg
         case Error(e):
-            print("warning: {e}, using defaults")
+            print(f"warning: {e}, using defaults")
             return Config.default()
 ```
 
@@ -173,7 +173,7 @@ value. The overall expression always succeeds:
 ```gorget
 void main():
     int port = parse_port(input) catch (e): 8080
-    print("using port {port}")
+    print(f"using port {port}")
 ```
 
 On success, `parse_port` returns normally and the value passes through. On failure, the
@@ -478,7 +478,7 @@ Config parse_config(str content) throws ConfigError:
                 str val = line.substring(pos + 1, line.len()).trim()
                 pairs.put(key, val)
             case None:
-                throw ConfigError.ParseFailed("invalid line: {line}")
+                throw ConfigError.ParseFailed(f"invalid line: {line}")
 
     str host = pairs.get("host") ?? throw ConfigError.MissingField("host")
     str port_str = pairs.get("port") ?? throw ConfigError.MissingField("port")
@@ -489,7 +489,7 @@ Config parse_config(str content) throws ConfigError:
         case Some(p):
             return Config(host, p, db)
         case None:
-            throw ConfigError.ParseFailed("invalid port: {port_str}")
+            throw ConfigError.ParseFailed(f"invalid port: {port_str}")
 
 Config load_config(str path) throws ConfigError:
     str content = read_file(path) rethrow (str e): ConfigError.FileNotFound(path)
@@ -499,14 +499,14 @@ void main():
     auto result = raw load_config("app.conf")
     match result:
         case Ok(cfg):
-            print("connecting to {cfg.host}:{cfg.port}/{cfg.database}")
+            print(f"connecting to {cfg.host}:{cfg.port}/{cfg.database}")
         case Error(ConfigError.FileNotFound(path)):
-            print("config file not found: {path}")
+            print(f"config file not found: {path}")
             print("using defaults")
         case Error(ConfigError.ParseFailed(msg)):
-            print("config parse error: {msg}")
+            print(f"config parse error: {msg}")
         case Error(ConfigError.MissingField(field)):
-            print("missing required field: {field}")
+            print(f"missing required field: {field}")
 ```
 
 The structure is clear: `parse_config` throws on any parsing issue with a specific

@@ -103,7 +103,7 @@ int factorial(int n):
 
 void main():
     int result = factorial(10)
-    print("10! = {result}")
+    print(f"10! = {result}")
 ```
 
 ```
@@ -115,7 +115,7 @@ Key things to notice:
 - **Type-first declarations**: `int n`, not `n: int`. The type comes before the name.
 - **Indentation-based blocks**: No braces. A colon starts a block, indentation
   defines it.
-- **String interpolation**: `"{result}"` embeds the variable directly in the string.
+- **String interpolation**: `f"{result}"` embeds the variable directly in the string. The `f` prefix is required.
 - **No semicolons**: Lines end naturally.
 
 ---

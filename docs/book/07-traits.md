@@ -40,7 +40,7 @@ equip Circle with Shape:
     float area(self):
         return 3.14159 * self.radius * self.radius
     str describe(self):
-        return "circle with radius {self.radius}"
+        return f"circle with radius {self.radius}"
 ```
 
 Now `Circle` satisfies the `Shape` contract. You can call `area()` and `describe()`
@@ -102,8 +102,8 @@ equip French with Greeter:
 void main():
     English e = English("Alice")
     French f = French("Bob")
-    print("{e.greeting()} {e.name()}")   # hello Alice
-    print("{f.greeting()} {f.name()}")   # bonjour Bob
+    print(f"{e.greeting()} {e.name()}")   # hello Alice
+    print(f"{f.greeting()} {f.name()}")   # bonjour Bob
 ```
 
 Default methods can call other methods in the same trait:
@@ -113,7 +113,7 @@ trait Summary:
     str title(self)
     str body(self)
     str full(self):
-        return "{self.title()}: {self.body()}"
+        return f"{self.title()}: {self.body()}"
 ```
 
 Any type implementing `Summary` gets `full()` for free — it just needs `title()` and
@@ -144,7 +144,7 @@ equip Person with Greeter:
     str name(self):
         return self.first_name
     str greet(self):
-        return "hi, I'm {self.name()}"
+        return f"hi, I'm {self.name()}"
 ```
 
 Default methods from parent traits are inherited through the chain:
@@ -192,7 +192,7 @@ Multiple bounds use `&`:
 
 ```gorget
 void log_and_copy[Displayable & Cloneable T](T item):
-    print("{item}")
+    print(f"{item}")
     T backup = item.clone()
 ```
 
@@ -231,7 +231,7 @@ You can also provide a block to override specific methods while delegating the r
 ```gorget
 equip Outer with Showable via inner:
     str show(self):
-        return "Outer: {self.inner.show()}"
+        return f"Outer: {self.inner.show()}"
 ```
 
 ---
@@ -243,7 +243,7 @@ need to define these — they exist in the prelude.
 
 ### Displayable
 
-Enables string interpolation and `print()`:
+Enables f-string interpolation and `print()`:
 
 ```gorget
 struct Point:
@@ -252,11 +252,11 @@ struct Point:
 
 equip Point with Displayable:
     str display(self):
-        return "({self.x}, {self.y})"
+        return f"({self.x}, {self.y})"
 
 void main():
     Point p = Point(3.0, 4.0)
-    print("{p}")    # (3.0, 4.0)
+    print(f"{p}")    # (3.0, 4.0)
 ```
 
 ### Equatable
@@ -351,7 +351,7 @@ equip Counter with Iterator[int]:
 
 void main():
     for i in Counter(0, 5):
-        print("{i}")    # 0 1 2 3 4
+        print(f"{i}")    # 0 1 2 3 4
 ```
 
 `Iterator[T]` requires `next(&self)` returning `Option[T]`. `Iterable[T]` requires
@@ -389,7 +389,7 @@ Config c = Config.default()    # Config(0, 0, false, "")
 
 | Trait | Required Method | Enables |
 |-------|----------------|---------|
-| `Displayable` | `str display(self)` | String interpolation, `print()` |
+| `Displayable` | `str display(self)` | f-string interpolation, `print()` |
 | `Equatable` | `bool eq(self, Self other)` | `==` and `!=` |
 | `Comparable` | `int compare(self, Self other)` | `<`, `>`, `<=`, `>=` |
 | `Hashable` | `int hash(self)` | `Dict` keys, `Set` elements |

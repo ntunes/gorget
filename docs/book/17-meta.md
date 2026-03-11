@@ -84,7 +84,7 @@ Enable features from the command line:
 ```gorget
 meta if feature("debug_logging"):
     void log(str msg):
-        print("[DEBUG] {msg}")
+        print(f"[DEBUG] {msg}")
 else:
     void log(str msg):
         pass
@@ -209,7 +209,7 @@ void list_variants[T]():
 
 ```gorget
 meta if implements(T, "Displayable"):
-    print("{val}")
+    print(f"{val}")
 else:
     print("(not displayable)")
 ```
@@ -238,7 +238,7 @@ void describe_color[E](E val):
     match val:
         meta for vname, T in variant_payloads(E):
             case vname(payload):
-                print("{vname}")
+                print(f"{vname}")
 ```
 
 This generates one `case` arm per variant, without writing them by hand.

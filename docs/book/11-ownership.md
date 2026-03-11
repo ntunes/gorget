@@ -34,13 +34,13 @@ Not every type follows move semantics. Small, simple types are **copied** implic
 # Copy types — freely duplicated
 int a = 42
 int b = a          # a is still valid
-print("{a} {b}")   # 42 42
+print(f"{a} {b}")   # 42 42
 
 # Move types — ownership transfers
 String s1 = "hello"
 String s2 = !s1    # s1 is now invalid
-print("{s2}")      # hello
-# print("{s1}")    # COMPILE ERROR: use after move
+print(f"{s2}")      # hello
+# print(f"{s1}")    # COMPILE ERROR: use after move
 ```
 
 ---
@@ -131,7 +131,7 @@ struct Resource:
 
 equip Resource with Drop:
     void drop(!self):
-        print("dropping {self.name}")
+        print(f"dropping {self.name}")
 
 void main():
     Resource r = Resource("alpha")

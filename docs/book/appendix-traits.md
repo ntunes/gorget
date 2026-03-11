@@ -14,7 +14,7 @@ trait Displayable:
     str display(self)
 ```
 
-Enables string interpolation (`"{value}"`) and `print`. All primitive types
+Enables string interpolation (`f"{value}"`) and `print`. All primitive types
 implement `Displayable`.
 
 ### Equatable
@@ -245,7 +245,7 @@ must be equal. For `Hashable`, all fields are combined into the hash. For
 
 | Trait | Method(s) | Enables | Derivable |
 |-------|-----------|---------|:---------:|
-| Displayable | `display` | `"{val}"`, `print` | Yes |
+| Displayable | `display` | `f"{val}"`, `print` | Yes |
 | Equatable | `eq` | `==`, `!=` | Yes |
 | Comparable | `compare` | `<`, `>`, `<=`, `>=` | Yes |
 | Hashable | `hash` | Dict keys, Set elements | Yes |

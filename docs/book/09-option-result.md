@@ -32,7 +32,7 @@ The most explicit way to handle an `Option`:
 Option[int] result = find_user_age("Alice")
 match result:
     case Some(age):
-        print("Alice is {age}")
+        print(f"Alice is {age}")
     case None:
         print("Alice not found")
 ```
@@ -41,7 +41,7 @@ The `is` keyword works for quick checks:
 
 ```gorget
 if result is Some(age):
-    print("found: {age}")
+    print(f"found: {age}")
 ```
 
 ### Common Methods
@@ -203,18 +203,18 @@ Like `Option`, the compiler forces you to handle both variants.
 Result[int, str] r = parse_number(input)
 match r:
     case Ok(value):
-        print("parsed: {value}")
+        print(f"parsed: {value}")
     case Error(msg):
-        print("error: {msg}")
+        print(f"error: {msg}")
 ```
 
 The `is` keyword works here too:
 
 ```gorget
 if r is Ok(value):
-    print("got {value}")
+    print(f"got {value}")
 if r is Error(msg):
-    print("failed: {msg}")
+    print(f"failed: {msg}")
 ```
 
 ### Common Methods

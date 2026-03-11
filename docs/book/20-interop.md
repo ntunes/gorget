@@ -32,7 +32,7 @@ extern int llabs_wrapper(int x) = "llabs"
 
 void main():
     int a = llabs_wrapper(-42)
-    print("{a}")    # 42
+    print(f"{a}")    # 42
 ```
 
 The `= "llabs"` tells the compiler to link against the C function `llabs` but
@@ -94,7 +94,7 @@ int safe_abs(int x):
 
 # All callers use the safe wrapper — no unsafe needed
 void main():
-    print("{safe_abs(-42)}")
+    print(f"{safe_abs(-42)}")
 ```
 
 ---

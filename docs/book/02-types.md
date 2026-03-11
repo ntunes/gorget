@@ -104,15 +104,15 @@ String literals automatically adapt: they become `String` in owned positions and
 
 ### String Interpolation
 
-Embed expressions directly in strings with `{}`:
+Prefix a string with `f` to enable interpolation with `{}`:
 
 ```gorget
 str name = "Alice"
 int age = 30
-print("Name: {name}, Age: {age}")
+print(f"Name: {name}, Age: {age}")
 ```
 
-To print literal braces, double them: `"{{escaped}}"` prints `{escaped}`.
+To print literal braces in an f-string, double them: `f"{{escaped}}"` prints `{escaped}`. Plain strings without the `f` prefix treat `{` and `}` as literal characters.
 
 ### Void
 
@@ -121,7 +121,7 @@ a value use `void`:
 
 ```gorget
 void greet(str name):
-    print("Hello, {name}!")
+    print(f"Hello, {name}!")
 ```
 
 ---
@@ -237,4 +237,4 @@ directive overflow=wrap
 | Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=` | `x == y` |
 | Logical | `and`, `or`, `not` | `a and b` |
 | Bitwise | `&`, `\|`, `^`, `~`, `<<`, `>>` | `x & 0xFF` |
-| String interpolation | `"{expr}"` | `"x is {x}"` |
+| String interpolation | `f"{expr}"` | `f"x is {x}"` |

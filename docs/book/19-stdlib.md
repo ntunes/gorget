@@ -105,7 +105,7 @@ int code = exec("ls -la")
 
 ExecResult result = exec_output("git status")
 print(result.output)
-print("exit: {result.exit_code}")
+print(f"exit: {result.exit_code}")
 ```
 
 For long-running processes:
@@ -165,7 +165,7 @@ Min-heap by default. Elements must implement `Comparable`.
 from gg.http import get, post, HttpResponse
 
 HttpResponse resp = get("https://api.example.com/data")
-print("{resp.status_code}")
+print(f"{resp.status_code}")
 print(resp.body_text)
 
 HttpResponse resp2 = post("https://api.example.com/submit", body)
@@ -222,7 +222,7 @@ from gg.csv import parse_table
 
 Vector[Vector[str]] rows = parse_table(csv_text)
 for row in rows:
-    print("{row[0]}, {row[1]}")
+    print(f"{row[0]}, {row[1]}")
 ```
 
 ### YAML / TOML / XML
@@ -253,7 +253,7 @@ from gg.log import log_info, log_warn, log_error
 
 log_info("server started on port 8080")
 log_warn("disk usage above 80%")
-log_error("connection failed: {reason}")
+log_error(f"connection failed: {reason}")
 ```
 
 ### UUID (`gg.uuid`)

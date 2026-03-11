@@ -34,7 +34,7 @@ Person alice = Person("Alice", 30, true)
 ```gorget
 float x = p.x
 str name = alice.name
-print("{alice.name} is {alice.age}")
+print(f"{alice.name} is {alice.age}")
 ```
 
 ---
@@ -56,7 +56,7 @@ equip Point:
 
 ```gorget
 Point p = Point(3.0, 4.0)
-print("{p.magnitude()}")           # 25.0
+print(f"{p.magnitude()}")           # 25.0
 Point p2 = p.translate(1.0, 1.0)
 ```
 
@@ -79,7 +79,7 @@ void main():
     Counter c = Counter(0)
     c.increment()
     c.increment()
-    print("{c.get()}")    # 2
+    print(f"{c.get()}")    # 2
 ```
 
 ### Static Methods
@@ -149,11 +149,11 @@ Shape r = .Rectangle(3.0, 4.0)
 ```gorget
 match s:
     case Circle(radius):
-        print("circle with radius {radius}")
+        print(f"circle with radius {radius}")
     case Rectangle(w, h):
-        print("rectangle {w} x {h}")
+        print(f"rectangle {w} x {h}")
     case Triangle(a, b, c):
-        print("triangle with sides {a}, {b}, {c}")
+        print(f"triangle with sides {a}, {b}, {c}")
 ```
 
 ### Bare Variants
@@ -199,8 +199,8 @@ newtype Milliseconds(int)
 UserId id = UserId(42)
 Meters dist = Meters(3.14)
 
-print("{id.0}")       # 42 — access inner value via .0
-print("{dist.0}")     # 3.14
+print(f"{id.0}")       # 42 — access inner value via .0
+print(f"{dist.0}")     # 3.14
 ```
 
 The inner value is accessed with `.0`. This is intentionally explicit — if you're
@@ -252,11 +252,11 @@ Person p = Person("Alice", .Email("alice@example.com"))
 
 match p.preferred_contact:
     case Email(addr):
-        print("email: {addr}")
+        print(f"email: {addr}")
     case Phone(num):
-        print("call: {num}")
+        print(f"call: {num}")
     case Mail(address):
-        print("mail to {address.city}")
+        print(f"mail to {address.city}")
 ```
 
 ---

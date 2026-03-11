@@ -35,10 +35,10 @@ str label = if count == 1: "item" else: "items"
 
 ```gorget
 for i in 0..5:           # [0, 1, 2, 3, 4] — exclusive end
-    print("{i}")
+    print(f"{i}")
 
 for i in 0..=5:          # [0, 1, 2, 3, 4, 5] — inclusive end
-    print("{i}")
+    print(f"{i}")
 ```
 
 ### Collection Iteration
@@ -46,7 +46,7 @@ for i in 0..=5:          # [0, 1, 2, 3, 4, 5] — inclusive end
 ```gorget
 auto items = [10, 20, 30]
 for x in items:
-    print("{x}")
+    print(f"{x}")
 ```
 
 ### Tuple Unpacking
@@ -54,7 +54,7 @@ for x in items:
 ```gorget
 auto pairs = [(1, "one"), (2, "two"), (3, "three")]
 for num, name in pairs:
-    print("{num}: {name}")
+    print(f"{num}: {name}")
 ```
 
 ### For-Else
@@ -79,7 +79,7 @@ This replaces the common "found" flag pattern. If `break` fires, `else` is skipp
 ```gorget
 int count = 0
 while count < 5:
-    print("{count}")
+    print(f"{count}")
     count += 1
 ```
 
@@ -123,7 +123,7 @@ for i in 0..10:
         continue           # skip even numbers
     if i > 7:
         break              # stop at 7
-    print("{i}")           # prints 1, 3, 5, 7
+    print(f"{i}")           # prints 1, 3, 5, 7
 ```
 
 ---
@@ -175,7 +175,7 @@ Enum variants with data can be destructured:
 Option[int] result = Some(42)
 match result:
     case Some(value):
-        print("got {value}")
+        print(f"got {value}")
     case None:
         print("nothing")
 ```
@@ -184,9 +184,9 @@ match result:
 Result[int, str] r = Ok(100)
 match r:
     case Ok(v):
-        print("success: {v}")
+        print(f"success: {v}")
     case Error(msg):
-        print("failed: {msg}")
+        print(f"failed: {msg}")
 ```
 
 ### Guards
@@ -220,10 +220,10 @@ For quick pattern checks without a full `match`:
 
 ```gorget
 if result is Some(value):
-    print("got {value}")
+    print(f"got {value}")
 
 if response is Error(msg):
-    print("failed: {msg}")
+    print(f"failed: {msg}")
 
 if option is None:
     print("absent")

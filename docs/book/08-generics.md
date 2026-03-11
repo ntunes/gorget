@@ -43,10 +43,10 @@ void main():
     float b = identity[float](3.14)
     str c = identity[str]("hello")
     int d = first[int](10, 20)
-    print("{a}")    # 42
-    print("{b}")    # 3.14
-    print("{c}")    # hello
-    print("{d}")    # 10
+    print(f"{a}")    # 42
+    print(f"{b}")    # 3.14
+    print(f"{c}")    # hello
+    print(f"{d}")    # 10
 ```
 
 ---
@@ -72,8 +72,8 @@ void main():
     Container[int] c = Container[int](42)
     Container[str] s = Container[str]("hello")
     Pair[int, str] p = Pair[int, str](10, "world")
-    print("{p.first}")     # 10
-    print("{p.second}")    # world
+    print(f"{p.first}")     # 10
+    print(f"{p.second}")    # world
 ```
 
 ### Methods on Generic Structs
@@ -100,14 +100,14 @@ Each instantiation gets its own specialized methods:
 ```gorget
 void main():
     Container[int] c = Container[int](42)
-    print("{c.get()}")              # 42
+    print(f"{c.get()}")              # 42
 
     Container[int] c2 = c.wrap()
-    print("{c2.get()}")             # 42
+    print(f"{c2.get()}")             # 42
 
     Pair[int, str] p = Pair[int, str](10, "world")
-    print("{p.get_first()}")        # 10
-    print("{p.get_second()}")       # world
+    print(f"{p.get_first()}")        # 10
+    print(f"{p.get_second()}")       # world
 ```
 
 ### Nesting Generics
@@ -117,7 +117,7 @@ Generic types compose freely:
 ```gorget
 Container[Container[int]] nested = Container[Container[int]](Container[int](99))
 Container[int] inner = nested.get()
-print("{inner.get()}")    # 99
+print(f"{inner.get()}")    # 99
 ```
 
 This extends to standard library types:
@@ -202,7 +202,7 @@ equip Num with Printable:
 void main():
     Num n = Num(42)
     Num m = echo[Num](n)
-    print("{m.show()}")    # num
+    print(f"{m.show()}")    # num
 ```
 
 ### Multiple Bounds
@@ -211,7 +211,7 @@ Combine bounds with `&`:
 
 ```gorget
 void log_and_compare[Displayable & Comparable T](T a, T b):
-    print("{a}")
+    print(f"{a}")
     if a > b:
         print("a is larger")
 ```
@@ -253,8 +253,8 @@ Each monomorphized instantiation gets its own implementation:
 void main():
     Container[int] c1 = Container[int](100)
     Container[str] c2 = Container[str]("hello")
-    print("{c1.code()}")    # 42
-    print("{c2.code()}")    # 42
+    print(f"{c1.code()}")    # 42
+    print(f"{c2.code()}")    # 42
 ```
 
 Default methods work with generic types:
@@ -274,8 +274,8 @@ equip Wrapper[T] with Labeled:
 
 void main():
     Wrapper[int] w = Wrapper[int](10)
-    print("{w.label()}")        # 7
-    print("{w.full_label()}")   # 70
+    print(f"{w.label()}")        # 7
+    print(f"{w.full_label()}")   # 70
 ```
 
 ---

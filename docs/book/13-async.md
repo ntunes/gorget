@@ -34,7 +34,7 @@ concurrent program is typically an `async void main()`:
 ```gorget
 async void main():
     int count = fetch_count()
-    print("got {count}")
+    print(f"got {count}")
 ```
 
 Wait — that call to `fetch_count()` looks synchronous. Where is the `await`? In Gorget,
@@ -54,7 +54,7 @@ immediately — it does not wait for the spawned task to finish.
 ```gorget
 async void download(str url):
     # ... fetch data from url ...
-    print("done: {url}")
+    print(f"done: {url}")
 
 async void main():
     Task[void] t1 = spawn download("https://example.com/a")
@@ -406,7 +406,7 @@ async void main():
     int i = 0
     for t in tasks:
         int result = t.await()
-        print("fib({inputs.get(i)}) = {result}")
+        print(f"fib({inputs.get(i)}) = {result}")
         i += 1
 ```
 

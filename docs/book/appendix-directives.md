@@ -67,7 +67,7 @@ directive trace
 
 void main():
     int x = 5       # recorded in trace
-    print("{x}")
+    print(f"{x}")
 ```
 
 Use `gg report app.trace.jsonl` to generate an HTML visualization.

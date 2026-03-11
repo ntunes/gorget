@@ -54,7 +54,7 @@ void set_priority(&Message msg, int priority):
 void main():
     Message msg = Message("Alice", "hello", 1)
     set_priority(&msg, 5)
-    print("{msg.priority}")    # 5
+    print(f"{msg.priority}")    # 5
 ```
 
 The `&` appears in both the parameter declaration and the call site. This makes
@@ -115,7 +115,7 @@ equip Counter:
 
 Counter c = Counter(0)
 c.increment()          # auto-borrows mutably for &self
-print("{c.get()}")     # auto-borrows immutably for self
+print(f"{c.get()}")     # auto-borrows immutably for self
 ```
 
 You don't write `(&c).increment()` — the compiler inserts the borrow.

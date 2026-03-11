@@ -1,7 +1,7 @@
 # Strings and Collections
 
 This chapter covers Gorget's built-in data structures: strings, vectors, dicts,
-sets, tuples, and comprehensions.
+hash maps, sets, arrays, tuples, and comprehensions.
 
 ---
 
@@ -37,15 +37,16 @@ print(a)
 
 ### String Interpolation
 
-Embed any expression inside `{}`:
+Use f-strings to embed any expression inside `{}`:
 
 ```gorget
 str name = "Alice"
 int age = 30
-print("Name: {name}, Age: {age}")
+print(f"Name: {name}, Age: {age}")
 ```
 
-For literal braces, double them: `"{{x}}"` prints `{x}`.
+The `f` prefix is required — without it, `{name}` would be literal text.
+For literal braces, double them: `f"{{x}}"` prints `{x}`.
 
 ### Common String Methods
 
@@ -104,7 +105,7 @@ int first = v[0]      # subscript read: 10
 v[1] = 99             # subscript write
 
 for x in v:
-    print("{x}")      # iterate
+    print(f"{x}")      # iterate
 ```
 
 ### Membership
@@ -154,7 +155,7 @@ ages.put("Alice", 30)
 ages.put("Bob", 25)
 
 for k, v in ages:
-    print("{k}: {v}")
+    print(f"{k}: {v}")
 ```
 
 Iteration follows insertion order.
@@ -181,10 +182,95 @@ Set[int] s = Set[int]()
 s.add(1)
 s.add(2)
 s.add(2)           # no effect — already present
-print("{s.len()}")  # 2
+print(f"{s.len()}")  # 2
 
 if 1 in s:
     print("found")
+```
+
+### Set Operations
+
+```gorget
+Set[int] a = Set[int]()
+a.add(1)
+a.add(2)
+a.add(3)
+
+Set[int] b = Set[int]()
+b.add(2)
+b.add(3)
+b.add(4)
+
+Set[int] both = a.intersection(b)     # {2, 3}
+Set[int] either = a.union(b)          # {1, 2, 3, 4}
+Set[int] only_a = a.difference(b)     # {1}
+bool sub = a.is_subset(b)             # false
+```
+
+---
+
+## HashMap and HashSet
+
+`Dict` preserves insertion order. When order doesn't matter and you want maximum
+performance, use `HashMap[K, V]` instead. It has the same API as `Dict`:
+
+```gorget
+from std.collections import HashMap
+
+HashMap[str, int] counts = HashMap[str, int]()
+counts.put("apple", 3)
+counts.put("banana", 5)
+int c = counts.get("apple") ?? 0      # 3
+```
+
+Similarly, `HashSet[T]` is the unordered counterpart to `Set[T]`:
+
+```gorget
+from std.collections import HashSet
+
+HashSet[int] seen = HashSet[int]()
+seen.add(10)
+seen.add(20)
+if 10 in seen:
+    print("found")
+```
+
+**When to use which:** Use `Dict`/`Set` when you need deterministic iteration
+order (tests, serialization, user-facing output). Use `HashMap`/`HashSet` when
+order is irrelevant and raw throughput matters.
+
+---
+
+## Arrays
+
+For fixed-size data where the length is known at compile time, use arrays:
+
+```gorget
+int[5] arr = [1, 2, 3, 4, 5]     # fixed C-level array
+int first = arr[0]                 # subscript read: 1
+arr[2] = 99                       # subscript write
+```
+
+Array size must be a compile-time constant. Arrays are stack-allocated and have
+no runtime overhead.
+
+**Arrays vs Vectors:** Use `auto` with a literal to get a `Vector[T]` (dynamic,
+supports `push`/`pop`/`len`). Use an explicit array type like `int[5]` when you
+need a fixed-size, stack-allocated buffer:
+
+```gorget
+auto dynamic = [1, 2, 3]          # Vector[int] — growable
+int[3] fixed = [1, 2, 3]          # int[3] — fixed size, stack-allocated
+```
+
+### Slices
+
+A slice is a borrowed view into contiguous memory — an array or vector section
+without copying:
+
+```gorget
+int[5] arr = [1, 2, 3, 4, 5]
+int[] middle = arr[1..4]           # borrowed view: [2, 3, 4]
 ```
 
 ---
@@ -204,16 +290,16 @@ Access fields by index with `._0`, `._1`, etc.:
 
 ```gorget
 auto pair = (10, 20)
-print("{pair._0}")    # 10
-print("{pair._1}")    # 20
+print(f"{pair._0}")    # 10
+print(f"{pair._1}")    # 20
 ```
 
 ### Tuple Unpacking
 
 ```gorget
 auto x, y = (10, 20)
-print("{x}")    # 10
-print("{y}")    # 20
+print(f"{x}")    # 10
+print(f"{y}")    # 20
 ```
 
 Works with function return values:
@@ -229,8 +315,8 @@ auto name, code = parse_header("...")
 
 ```gorget
 auto nested = (1, (2, 3))
-print("{nested._0}")       # 1
-print("{nested._1._0}")    # 2
+print(f"{nested._0}")       # 1
+print(f"{nested._1._0}")    # 2
 ```
 
 ---
@@ -274,6 +360,10 @@ All three forms support the optional `if` filter.
 | `String` | `"text"` (owned context) | Owned, concatenation with `+` |
 | `Vector[T]` | `[1, 2, 3]` | `push`, `[]`, `len`, `for` |
 | `Dict[K, V]` | `{"k": v}` | `[]`, `put`, `get`, `len`, ordered |
+| `HashMap[K, V]` | (constructor) | Same API as `Dict`, unordered, faster |
 | `Set[T]` | (constructor) | `add`, `in`, `len`, unique elements |
+| `HashSet[T]` | (constructor) | Same API as `Set`, unordered, faster |
+| `T[N]` (array) | `int[5] a = [...]` | Fixed-size, stack-allocated |
+| `T[]` (slice) | `arr[1..4]` | Borrowed view into contiguous memory |
 | Tuple | `(a, b, c)` | `._0`, `._1`, unpacking |
 | Comprehension | `[expr for x in items if cond]` | List, set, and dict forms |

@@ -111,7 +111,7 @@ async void main():
     while True:
         select:
             case int code = urgent.recv():
-                print("urgent: {code}")
+                print(f"urgent: {code}")
                 break
             case str msg = messages.recv():
                 print(msg)
@@ -311,7 +311,7 @@ section simultaneously — without any shared variable.
 async void limited(Channel[void] sem, int id):
     sem.recv()                  # acquire: blocks if pool is empty
     sleep(100)                  # critical section
-    print("running: {id}")
+    print(f"running: {id}")
     sem.send(())                # release
 
 async void main():
@@ -351,7 +351,7 @@ async void handler(Config &cfg, int request_id):
         str host = cfg.upstream_host
         int ms   = cfg.timeout_ms
     # use host and ms outside the lock — no yield while holding it
-    print("request {request_id} → {host} ({ms}ms)")
+    print(f"request {request_id} → {host} ({ms}ms)")
 
 async void main():
     shared Config cfg = Config(timeout_ms=5000, upstream_host="localhost")

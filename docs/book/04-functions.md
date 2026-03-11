@@ -22,7 +22,7 @@ Functions that don't return a value use `void`:
 
 ```gorget
 void greet(str name):
-    print("Hello, {name}!")
+    print(f"Hello, {name}!")
 ```
 
 ### Expression-Body Shorthand
@@ -46,7 +46,7 @@ Parameters are typed with the type-first style:
 
 ```gorget
 str format_greeting(str name, int age):
-    return "Hello {name}, age {age}"
+    return f"Hello {name}, age {age}"
 ```
 
 ### Ownership Modes
@@ -88,7 +88,7 @@ str, int parse(str line):
 
 void main():
     auto key, value = parse("key:42")
-    print("{key}: {value}")
+    print(f"{key}: {value}")
 ```
 
 The bare form (no parentheses) is preferred for both declaration and unpacking.
@@ -106,7 +106,7 @@ int factorial(int n):
     return n * factorial(n - 1)
 
 void main():
-    print("{factorial(10)}")    # 3628800
+    print(f"{factorial(10)}")    # 3628800
 ```
 
 ---
@@ -119,15 +119,15 @@ scope:
 ```gorget
 int x = 10
 auto add_x = (int y): x + y
-print("{add_x(5)}")     # 15
-print("{add_x(20)}")    # 30
+print(f"{add_x(5)}")     # 15
+print(f"{add_x(20)}")    # 30
 ```
 
 The syntax is `(parameters): body`. Parameter types can be inferred:
 
 ```gorget
 auto add = (a, b): a + b
-print("{add(3, 4)}")    # 7
+print(f"{add(3, 4)}")    # 7
 ```
 
 ### Multi-Line Closures
@@ -155,7 +155,7 @@ auto increment = ():
 increment()
 increment()
 increment()
-print("{count}")    # 3
+print(f"{count}")    # 3
 ```
 
 ### Move Closures
@@ -164,7 +164,7 @@ To force a closure to take ownership of captured variables, prefix with `!`:
 
 ```gorget
 auto handler = !(msg):
-    print("got: {msg}")
+    print(f"got: {msg}")
 ```
 
 ### No-Argument Closures
@@ -182,10 +182,10 @@ Functions are values. You can store them in variables and pass them as arguments
 
 ```gorget
 int(int, int) operation = (a, b): a + b
-print("{operation(3, 4)}")    # 7
+print(f"{operation(3, 4)}")    # 7
 
 operation = (a, b): a * b
-print("{operation(3, 4)}")    # 12
+print(f"{operation(3, 4)}")    # 12
 ```
 
 The type syntax is `ReturnType(ParamTypes)`:
@@ -204,7 +204,7 @@ int apply(int(int) f, int x):
 
 void main():
     int result = apply((n): n * 2, 5)
-    print("{result}")    # 10
+    print(f"{result}")    # 10
 ```
 
 ---

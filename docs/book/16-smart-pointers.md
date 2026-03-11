@@ -14,9 +14,9 @@ while preserving safety.
 from std.collections import Box
 
 Box[int] b = Box(42)
-print("{b.get()}")       # 42
+print(f"{b.get()}")       # 42
 b.set(100)
-print("{b.get()}")       # 100
+print(f"{b.get()}")       # 100
 ```
 
 Use `Box` when you need:
@@ -29,7 +29,7 @@ Use `Box` when you need:
 ```gorget
 Box[int] b = Box(42)
 int val = *b             # dereference
-print("{val}")           # 42
+print(f"{val}")           # 42
 ```
 
 ### Boxing Closures
@@ -38,11 +38,11 @@ print("{val}")           # 42
 
 ```gorget
 Box[Callable[int(int)]] f = Box.new((n): n * 2)
-print("{f(5)}")          # 10
+print(f"{f(5)}")          # 10
 
 int factor = 3
 Box[Callable[int(int)]] g = Box.new((n): n * factor)
-print("{g(7)}")          # 21
+print(f"{g(7)}")          # 21
 ```
 
 ---
@@ -54,7 +54,7 @@ the last owner goes away. Always thread-safe (atomic reference counting):
 
 ```gorget
 Shared[int] s = Shared[int](42)
-print("{s.get()}")       # 42
+print(f"{s.get()}")       # 42
 ```
 
 ### Shared Bindings
@@ -66,7 +66,7 @@ async void main():
     shared int x = 99
     Task[void] t = spawn print_value(x)
     t.await()
-    print("{x}")
+    print(f"{x}")
 ```
 
 The compiler uses control-flow analysis to determine the right synchronization
@@ -95,7 +95,7 @@ Weak[int] w = s.downgrade()
 Option[Shared[int]] maybe = w.upgrade()
 match maybe:
     case Some(upgraded):
-        print("{upgraded.get()}")    # 42
+        print(f"{upgraded.get()}")    # 42
     case None:
         print("value was dropped")
 ```
@@ -114,7 +114,7 @@ sides hold references).
 ```gorget
 Cell[int] c = Cell[int](0)
 c.set(42)
-print("{c.get()}")    # 42
+print(f"{c.get()}")    # 42
 ```
 
 Only works with Copy types (integers, floats, bools).
