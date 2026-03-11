@@ -1,0 +1,74 @@
+# Test static/global variables of various types.
+from std.conv import int_to_str, float_to_str
+
+# 1. Basic static int
+static int count = 10
+
+# 2. Static float
+static float ratio = 2.5
+
+# 3. Static bool
+static bool flag = false
+
+# 4. Multiple statics used as counters
+static int calls_a = 0
+static int calls_b = 0
+
+void inc_a():
+    calls_a += 1
+
+void inc_b():
+    calls_b += 1
+
+# 5. Function that reads and modifies a static
+void double_count():
+    count = count * 2
+
+int get_count():
+    return count
+
+# 6. Function that toggles static bool
+void toggle_flag():
+    if flag:
+        flag = false
+    else:
+        flag = true
+
+# 7. Function that modifies static float
+void add_to_ratio(float x):
+    ratio = ratio + x
+
+void main():
+    # Basic static int read
+    print(int_to_str(count))
+
+    # Static modified by function
+    double_count()
+    print(int_to_str(get_count()))
+
+    # Static float
+    print(float_to_str(ratio))
+    add_to_ratio(0.3)
+    print(float_to_str(ratio))
+
+    # Static bool
+    print(f"{flag}")
+    toggle_flag()
+    print(f"{flag}")
+    toggle_flag()
+    print(f"{flag}")
+
+    # Counter across multiple function calls
+    inc_a()
+    inc_a()
+    inc_a()
+    inc_b()
+    inc_b()
+    print(int_to_str(calls_a))
+    print(int_to_str(calls_b))
+
+    # Verify statics retain values after multiple operations
+    double_count()
+    print(int_to_str(get_count()))
+    inc_a()
+    print(int_to_str(calls_a))

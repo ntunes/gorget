@@ -10852,9 +10852,16 @@ fn emit_inline_method(
                 } else {
                     format!("&({key_type}){{{key}}}")
                 };
+                // Wrap default in Str literal if val_type is Str and default is a C string literal
+                let default_expr = if val_type == "Str" && default.starts_with('"') {
+                    let s = default.trim_matches('"');
+                    format!("((Str){{ .data = {default}, .len = {} }})", s.len())
+                } else {
+                    default.clone()
+                };
                 let _ = writeln!(out,
                     "        _{id} = ({{ {val_type}* __gop = ({val_type}*)gorget_map_get(&{self_str}, {key_ref}); \
-                    __gop ? *__gop : {default}; }});",
+                    __gop ? *__gop : {default_expr}; }});",
                     id = dst_id.0);
             }
         }

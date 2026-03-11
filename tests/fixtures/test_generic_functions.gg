@@ -1,0 +1,90 @@
+# Generic identity function
+T identity[T](T x) = x
+
+# Generic function with two type params
+B apply_second[A, B](A a, B b) = b
+
+# Generic function returning Option
+Option[T] find_positive[T](T val, bool keep):
+    if keep:
+        return Some(val)
+    return None
+
+# Generic struct with equip
+struct Holder[T]:
+    T value
+    str label
+
+equip Holder[T]:
+    T get_value(self):
+        return self.value
+
+    str get_label(self):
+        return self.label
+
+    Holder[T] with_label(self, str new_label):
+        return Holder[T](self.value, new_label)
+
+# Generic function operating on generic struct
+T extract[T](Holder[T] h):
+    return h.get_value()
+
+void main():
+    # 1. Generic identity with int, str, float
+    int a = identity[int](42)
+    print(a)
+    str b = identity[str]("hello")
+    print(b)
+    float c = identity[float](3.14)
+    print(c)
+
+    # 2. Generic function with two type params
+    str d = apply_second[int, str](10, "world")
+    print(d)
+    int e = apply_second[str, int]("ignored", 99)
+    print(e)
+
+    # 3. Generic function with Option return
+    Option[int] r1 = find_positive[int](5, true)
+    print(r1.is_some())
+    print(r1.unwrap())
+    Option[int] r2 = find_positive[int](5, false)
+    print(r2.is_none())
+
+    # 4. Generic struct with methods
+    Holder[int] h1 = Holder[int](42, "answer")
+    print(h1.get_value())
+    print(h1.get_label())
+    Holder[int] h2 = h1.with_label("updated")
+    print(h2.get_label())
+    print(h2.get_value())
+
+    # 5. Generic function on generic struct
+    int val = extract[int](h1)
+    print(val)
+    Holder[str] h3 = Holder[str]("data", "info")
+    str sval = extract[str](h3)
+    print(sval)
+
+    # 6. Identity with bool
+    bool flag = identity[bool](true)
+    print(flag)
+
+    # 7. Generic function called in a loop
+    int total = 0
+    int i = 0
+    while i < 5:
+        int x = identity[int](i)
+        total = total + x
+        i = i + 1
+    print(total)
+
+    # 8. Generic struct stored in Vector
+    Vector[Holder[int]] holders = Vector[Holder[int]]()
+    holders.push(Holder[int](1, "one"))
+    holders.push(Holder[int](2, "two"))
+    holders.push(Holder[int](3, "three"))
+    print(holders.len())
+    print(holders[0].get_value())
+    print(holders[1].get_label())
+    print(holders[2].get_value())

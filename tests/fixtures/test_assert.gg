@@ -1,0 +1,57 @@
+def main():
+    # 1. Basic assert true
+    assert true
+
+    # 2. Assert with comparison
+    int x = 5
+    assert x == 5
+
+    # 3. Assert with various comparison operators
+    assert x != 4
+    assert x < 10
+    assert x > 0
+    assert x <= 5
+    assert x >= 5
+
+    # 4. Assert with boolean variable
+    bool flag = true
+    assert flag
+
+    bool computed = x > 3
+    assert computed
+
+    # 5. Assert with function return value
+    assert double(4) == 8
+    assert is_positive(7)
+
+    # 6. Assert with and / or
+    assert x > 0 and x < 100
+    assert x == 5 or x == 10
+    assert true and true
+    assert false or true
+
+    # 7. Assert with not
+    assert not false
+    assert not (x == 3)
+
+    # 8. Assert on collection properties
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    assert v.len() == 3
+
+    str s = "hello"
+    assert s.len() == 5
+
+    # 9. Assert with message (should not trigger)
+    assert x == 5, "x should be 5"
+    assert v.len() == 3, "vector should have 3 elements"
+
+    print("all assertions passed")
+
+int double(int n):
+    return n * 2
+
+bool is_positive(int n):
+    return n > 0

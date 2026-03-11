@@ -1,0 +1,113 @@
+int helper(int x):
+    int result = x * 10
+    return result
+
+int same_local(int n):
+    int val = n + 100
+    return val
+
+void main():
+    # 1. Named scopes with distinct variables at each level
+    int x = 1
+    print(x)
+    outer:
+        int y = x + 10
+        print(y)
+        inner:
+            int z = y + 100
+            print(z)
+        # z is gone, y still alive
+        print(y)
+    # y is gone, x still alive
+    print(x)
+
+    # 2. Variable reuse after scope ends
+    scope_a:
+        int temp = 42
+        print(temp)
+    # temp is out of scope; we can declare a fresh one with a different type
+    str temp = "reused"
+    print(temp)
+
+    # 3. For-loop variable scoping
+    int i = 99
+    for j in [10, 20, 30]:
+        int acc = j + 1
+        print(acc)
+    # j and acc not visible; i unchanged
+    print(i)
+
+    # 4. Function parameter scoping — locals don't leak
+    int r = helper(5)
+    print(r)
+
+    # 5. If-block scoping — locals confined to branch
+    if true:
+        int local_val = 7
+        print(local_val)
+    # local_val no longer visible here
+
+    # 6. Nested function calls with same-named locals
+    int a = same_local(1)
+    int b = same_local(2)
+    print(a)
+    print(b)
+
+    # 7. Variable with different type in named scope
+    int count = 10
+    retype:
+        str label = "ten"
+        print(label)
+    print(count)
+
+    # 8. Do-block scoping (value returned, locals hidden)
+    int result = do:
+        int secret = 6
+        int other = 7
+        secret * other
+    print(result)
+
+    # 9. While loop scoping
+    int idx = 0
+    while idx < 3:
+        int doubled = idx * 2
+        print(doubled)
+        idx = idx + 1
+    print(idx)
+
+    # 10. Match arm scoping
+    int code = 2
+    match code:
+        case 1:
+            int msg = 100
+            print(msg)
+        case 2:
+            int msg = 200
+            print(msg)
+        else:
+            int msg = 300
+            print(msg)
+
+    # 11. Deeply nested named scopes
+    int depth = 0
+    level1:
+        int depth1 = 1
+        level2:
+            int depth2 = 2
+            level3:
+                int depth3 = 3
+                print(depth + depth1 + depth2 + depth3)
+
+    # 12. If-elif-else each has its own scope
+    int branch = 2
+    if branch == 1:
+        int local = 10
+        print(local)
+    elif branch == 2:
+        int local = 20
+        print(local)
+    else:
+        int local = 30
+        print(local)
+
+    print("done")

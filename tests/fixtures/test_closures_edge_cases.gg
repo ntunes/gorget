@@ -1,0 +1,107 @@
+# Closure edge cases: captures, nesting, higher-order, mutation
+
+int apply(int x, int(int) f):
+    return f(x)
+
+int apply2(int x, int y, int(int, int) f):
+    return f(x, y)
+
+void run_action(void() action):
+    action()
+
+void main():
+    # 1. Closure capturing a local variable
+    int base = 10
+    int(int) add_base = (int x): x + base
+    int r1 = add_base(5)
+    print(r1)  # 15
+
+    # 2. Closure capturing multiple variables
+    int a = 3
+    int b = 7
+    int(int) combo = (int x): x * a + b
+    int r2 = combo(4)
+    print(r2)  # 19
+
+    # 3. Closure passed as argument to function
+    int r3 = apply(6, (int x): x * x)
+    print(r3)  # 36
+
+    # 4. Closure with no parameters
+    auto greet = (): 42
+    int r6 = greet()
+    print(r6)  # 42
+
+    # 6. Closure capturing loop variable
+    Vector[int] results = Vector[int]()
+    for i in 0..4:
+        results.push(apply(i, (int x): x * x))
+    print(results[0])  # 0
+    print(results[1])  # 1
+    print(results[2])  # 4
+    print(results[3])  # 9
+
+    # 7. Closure with string operations
+    str prefix = "hello"
+    auto make_greeting = (str name): prefix + " " + name
+    str g1 = make_greeting("world")
+    print(g1)  # hello world
+    str g2 = make_greeting("gorget")
+    print(g2)  # hello gorget
+
+    # 8. Nested closures: closure wrapping closure
+    int outer_val = 10
+    auto inner = (int y): y + outer_val
+    auto outer_fn = (int x): inner(x) + 5
+    int r8 = outer_fn(3)
+    print(r8)  # 18 (3 + 10 + 5)
+
+    # 9. Closure modifying captured mutable variable
+    int counter = 0
+    auto inc = ():
+        counter = counter + 1
+    inc()
+    inc()
+    inc()
+    print(f"{counter}")  # 3
+
+    # 10. Two-argument closure passed as argument
+    int r10 = apply2(3, 4, (int x, int y): x * y + 1)
+    print(r10)  # 13
+
+    # 11. Closure with compound assignment on capture
+    int accum = 0
+    auto add_to = (int n):
+        accum += n
+    add_to(10)
+    add_to(20)
+    add_to(30)
+    print(f"{accum}")  # 60
+
+    # 12. Void closure passed to function
+    int side = 0
+    auto set_side = ():
+        side = 99
+    run_action(set_side)
+    print(f"{side}")  # 99
+
+    # 13. Chained higher-order: map then filter
+    Vector[int] nums = Vector[int]()
+    nums.push(1)
+    nums.push(2)
+    nums.push(3)
+    nums.push(4)
+    int factor = 3
+    Vector[int] mapped = nums.map((int x): x * factor)
+    Vector[int] filtered = mapped.filter((int x): x > 6)
+    print(filtered.len())   # 2
+    print(filtered[0])      # 9
+    print(filtered[1])      # 12
+
+    # 14. Closure using another closure's result
+    int(int) double = (int x): x * 2
+    int(int) plus_one = (int x): x + 1
+    int r14 = plus_one(double(7))
+    print(r14)  # 15
+
+    print("done")

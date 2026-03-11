@@ -1,0 +1,179 @@
+# Comprehensive enum + match tests
+
+# --- Basic enum (no payload) ---
+enum Direction:
+    North
+    South
+    East
+    West
+
+# --- Enum with single payload ---
+enum Wrapper:
+    IntVal(int)
+    StrVal(str)
+    FloatVal(float)
+
+# --- Enum with multiple payloads per variant ---
+enum Shape:
+    Circle(float)
+    Rectangle(float, float)
+    Triangle(float, float, float)
+
+# --- Second enum type in same file ---
+@derive(Equatable)
+enum Priority:
+    Low
+    Medium
+    High
+
+# --- Functions that accept/return enums ---
+str direction_name(Direction d):
+    match d:
+        case North:
+            return "north"
+        case South:
+            return "south"
+        case East:
+            return "east"
+        case West:
+            return "west"
+
+Direction opposite(Direction d):
+    match d:
+        case North:
+            return .South
+        case South:
+            return .North
+        case East:
+            return .West
+        case West:
+            return .East
+
+float shape_area(Shape s):
+    match s:
+        case Circle(r):
+            return 3.14 * r * r
+        case Rectangle(w, h):
+            return w * h
+        case Triangle(a, b, c):
+            # Use base * height / 2 approximation
+            return a * b / 2.0
+
+str describe_wrapper(Wrapper w):
+    match w:
+        case IntVal(n):
+            return f"int:{n}"
+        case StrVal(s):
+            return f"str:{s}"
+        case FloatVal(f):
+            return f"float:{f}"
+
+void main():
+    # 1. Basic enum match — all cases
+    print("--- basic enum ---")
+    Direction d1 = Direction.North()
+    Direction d2 = .South
+    Direction d3 = Direction.East()
+    Direction d4 = .West
+    print(direction_name(d1))
+    print(direction_name(d2))
+    print(direction_name(d3))
+    print(direction_name(d4))
+
+    # 2. Enum with single payload
+    print("--- single payload ---")
+    Wrapper w1 = Wrapper.IntVal(42)
+    Wrapper w2 = Wrapper.StrVal("hello")
+    Wrapper w3 = Wrapper.FloatVal(3.14)
+    print(describe_wrapper(w1))
+    print(describe_wrapper(w2))
+    print(describe_wrapper(w3))
+
+    # 3. Enum with multiple payloads
+    print("--- multi payload ---")
+    Shape s1 = Shape.Circle(5.0)
+    Shape s2 = Shape.Rectangle(4.0, 6.0)
+    Shape s3 = Shape.Triangle(3.0, 4.0, 5.0)
+    print(shape_area(s1))
+    print(shape_area(s2))
+    print(shape_area(s3))
+
+    # 4. Match with else/wildcard
+    print("--- else branch ---")
+    Direction d = Direction.East()
+    match d:
+        case North:
+            print("going north")
+        else:
+            print("not north")
+
+    # 5. Enum return from function
+    print("--- return enum ---")
+    Direction opp = opposite(Direction.North())
+    print(direction_name(opp))
+    Direction opp2 = opposite(Direction.West())
+    print(direction_name(opp2))
+
+    # 6. Enum equality with @derive(Equatable)
+    print("--- equality ---")
+    Priority p1 = Priority.High()
+    Priority p2 = Priority.High()
+    Priority p3 = Priority.Low()
+    if p1 == p2:
+        print("high == high")
+    if p1 != p3:
+        print("high != low")
+
+    # 7. Nested match on enum
+    print("--- nested match ---")
+    Wrapper w = Wrapper.IntVal(10)
+    match w:
+        case IntVal(n):
+            match n:
+                case 10:
+                    print("ten inside wrapper")
+                else:
+                    print("other int")
+        else:
+            print("not int")
+
+    # 8. Enum stored in Vector
+    print("--- vector of enum ---")
+    Vector[Direction] dirs = Vector[Direction]()
+    dirs.push(Direction.North())
+    dirs.push(Direction.East())
+    dirs.push(Direction.South())
+    print(dirs.len())
+    for item in dirs:
+        print(direction_name(item))
+
+    # 9. Multiple enum types interacting
+    print("--- multi enum ---")
+    Shape shape = Shape.Rectangle(10.0, 5.0)
+    Priority prio = Priority.Medium()
+    match shape:
+        case Rectangle(w, h):
+            match prio:
+                case High:
+                    print("urgent rect")
+                case Medium:
+                    print(f"medium rect {w}x{h}")
+                else:
+                    print("low rect")
+        else:
+            print("not rect")
+
+    # 10. Match extracting payload into computation
+    print("--- payload compute ---")
+    Shape circ = Shape.Circle(10.0)
+    match circ:
+        case Circle(r):
+            float diameter = r * 2.0
+            print(f"diameter={diameter}")
+        case Rectangle(w, h):
+            float perim = 2.0 * (w + h)
+            print(f"perimeter={perim}")
+        else:
+            print("triangle")
+
+    print("done")

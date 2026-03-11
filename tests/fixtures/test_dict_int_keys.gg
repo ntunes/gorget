@@ -1,0 +1,39 @@
+void main():
+    # Dict with int keys
+    Dict[int, str] d = Dict[int, str]()
+    d[1] = "one"
+    d[2] = "two"
+    d[3] = "three"
+
+    print(d.len())        # 3
+    print(d[1])           # one
+    print(d[2])           # two
+    print(d.contains(1))  # true
+    print(d.contains(99)) # false
+
+    # get returns Option
+    Option[str] got = d.get(1)
+    print(got.unwrap())   # one
+    Option[str] missing = d.get(99)
+    print(missing.is_none())  # true
+
+    # remove
+    bool removed = d.remove(2)
+    print(removed)        # true
+    print(d.len())        # 2
+
+    # get_or
+    str v1 = d.get_or(1, "default")
+    print(v1)             # one
+    str v2 = d.get_or(99, "default")
+    print(v2)             # default
+
+    # fold — sum keys (order independent)
+    Dict[int, int] nums = Dict[int, int]()
+    nums[10] = 100
+    nums[20] = 200
+    nums[30] = 300
+    int key_sum = nums.fold(0, (int acc, int k, int v): acc + k)
+    print(key_sum)        # 60
+    int val_sum = nums.fold(0, (int acc, int k, int v): acc + v)
+    print(val_sum)        # 600

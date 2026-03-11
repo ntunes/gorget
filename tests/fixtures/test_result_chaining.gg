@@ -1,0 +1,80 @@
+# Result chaining — multi-step chains and function-returned Results
+
+Result[int, str] safe_divide(int a, int b):
+    if b == 0:
+        return Error("division by zero")
+    return Ok(a / b)
+
+Result[int, str] add_if_positive(int x):
+    if x < 0:
+        return Error("negative")
+    return Ok(x + 100)
+
+void main():
+    # 1. Ok map then unwrap_or
+    int r1 = Ok(10).map((int x): x * 2).unwrap_or(0)
+    print(f"{r1}")
+
+    # 2. Error map then unwrap_or (map is skipped)
+    Result[int, str] e1 = Error("bad")
+    int r2 = e1.map((int x): x * 2).unwrap_or(0)
+    print(f"{r2}")
+
+    # 3. Ok and_then returning Ok
+    int r3 = Ok(5).and_then((int x): Ok(x + 100)).unwrap_or(-1)
+    print(f"{r3}")
+
+    # 4. Ok and_then returning Error
+    int r4 = Ok(5).and_then((int x): Error("fail")).unwrap_or(-1)
+    print(f"{r4}")
+
+    # 5. map_err on Error transforms the error
+    Result[int, str] e2 = Error("e1")
+    Result[int, str] wrapped = e2.map_err((str s): "wrapped: " + s)
+    print(wrapped.unwrap_err())
+
+    # 5b. map_err on Ok passes through
+    Result[int, str] ok_me = Ok(42).map_err((str s): "nope")
+    print(f"{ok_me.unwrap()}")
+
+    # 6. is_ok / is_err
+    print(f"{Ok(42).is_ok()}")
+    print(f"{Ok(42).is_err()}")
+    Result[int, str] ex = Error("x")
+    print(f"{ex.is_ok()}")
+    print(f"{ex.is_err()}")
+
+    # 7. Long chain: map -> and_then -> unwrap_or
+    int r7 = Ok(3).map((int x): x * 10).and_then((int x): Ok(x + 7)).unwrap_or(-1)
+    print(f"{r7}")
+
+    # 7b. Long chain on Error collapses
+    Result[int, str] e7 = Error("nope")
+    int r7b = e7.map((int x): x * 10).and_then((int x): Ok(x + 7)).unwrap_or(-1)
+    print(f"{r7b}")
+
+    # 8. Function returning Result, then chained
+    int r8 = safe_divide(100, 5).map((int x): x + 1).unwrap_or(0)
+    print(f"{r8}")
+
+    # 8b. Function returning Error, then chained
+    int r8b = safe_divide(100, 0).map((int x): x + 1).unwrap_or(0)
+    print(f"{r8b}")
+
+    # 9. and_then chaining two functions
+    int r9 = safe_divide(200, 4).and_then((int x): add_if_positive(x)).unwrap_or(-1)
+    print(f"{r9}")
+
+    # 9b. and_then where second function fails
+    int r9b = safe_divide(200, 4).and_then((int x): add_if_positive(x - 1000)).unwrap_or(-1)
+    print(f"{r9b}")
+
+    # 10. map_err chaining
+    Result[int, str] e10 = Error("raw")
+    str r10 = e10.map_err((str s): "a:" + s).map_err((str s): "b:" + s).unwrap_err()
+    print(r10)
+
+    # 11. unwrap_or_else with chain
+    Result[int, str] e11 = Error("hello")
+    int r11 = e11.map((int x): x * 2).unwrap_or_else((str e): len(e))
+    print(f"{r11}")

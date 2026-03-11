@@ -142,6 +142,47 @@ got red",
 }
 
 #[test]
+fn enum_match() {
+    run_gg(
+        "test_enum_match.gg",
+        "\
+--- basic enum ---
+north
+south
+east
+west
+--- single payload ---
+int:42
+str:hello
+float:3.140000
+--- multi payload ---
+78.500000
+24.000000
+6.000000
+--- else branch ---
+not north
+--- return enum ---
+south
+east
+--- equality ---
+high == high
+high != low
+--- nested match ---
+ten inside wrapper
+--- vector of enum ---
+3
+north
+east
+south
+--- multi enum ---
+medium rect 10.000000x5.000000
+--- payload compute ---
+diameter=20.000000
+done",
+    );
+}
+
+#[test]
 fn enum_nullary_bare() {
     run_gg(
         "enum_nullary_bare.gg",
@@ -367,6 +408,57 @@ dict done",
 }
 
 #[test]
+fn test_comprehensions() {
+    run_gg(
+        "test_comprehensions.gg",
+        "\
+squares len: 5
+0
+1
+4
+9
+16
+doubled len: 5
+2
+4
+6
+8
+10
+evens len: 5
+0
+2
+4
+6
+8
+odd_squares len: 4
+1
+9
+25
+49
+set len: 4
+set2 len: 4
+dict len: 4
+d[3]: 9
+empty len: 0
+shifted len: 4
+100
+101
+102
+103
+multiples len: 8
+0
+7
+14
+21
+28
+35
+42
+49
+done",
+    );
+}
+
+#[test]
 fn ownership() {
     run_gg(
         "ownership.gg",
@@ -406,6 +498,51 @@ fn closures_advanced() {
 1
 3
 16");
+}
+
+#[test]
+fn closures_edge_cases() {
+    run_gg("test_closures_edge_cases.gg", "\
+15
+19
+36
+42
+0
+1
+4
+9
+hello world
+hello gorget
+18
+3
+13
+60
+99
+2
+9
+12
+15
+done");
+}
+
+#[test]
+fn multiline_closures() {
+    run_gg("test_multiline_closures.gg", "\
+10
+20
+7
+3
+10
+114
+9
+24
+50
+2
+1
+0
+60
+3
+done");
 }
 
 #[test]
@@ -658,6 +795,29 @@ true
 3
 30
 99",
+    );
+}
+
+#[test]
+fn test_tuples() {
+    run_gg(
+        "test_tuples.gg",
+        "\
+2
+1
+42
+hello
+1
+2
+3
+ok
+true
+0
+10
+1
+20
+2
+30",
     );
 }
 
@@ -2347,6 +2507,14 @@ fn wrapping_ops() {
 #[test]
 fn bitwise_ops() {
     run_gg("bitwise_ops.gg", "1\n7\n6\n-1\n16\n4\n15\n63\n30\n120\n15\n7\n16");
+}
+
+#[test]
+fn test_bitwise_ops() {
+    run_gg(
+        "test_bitwise_ops.gg",
+        "1\n7\n6\n-1\n1024\n32\n13\n42\n42\n43\n8\n7\n1\n99",
+    );
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -4550,6 +4718,24 @@ fn fstring_basic() {
 }
 
 #[test]
+fn test_fstrings() {
+    run_gg(
+        "test_fstrings.gg",
+        "hello world\n\
+         x = 42\n\
+         pi = 3.140000\n\
+         flag = true\n\
+         double = 84\n\
+         sum = 50\n\
+         42 and world\n\
+         upper = WORLD\n\
+         len = 5\n\
+         empty=''\n\
+         no interpolation",
+    );
+}
+
+#[test]
 fn fstring_format() {
     run_gg(
         "fstring_format.gg",
@@ -5998,13 +6184,9 @@ fn describe_string_canonical_rust(slit: &StringLiteral) -> String {
     for seg in &slit.segments {
         match seg {
             StringSegment::Literal(text) => result.push_str(&escape_canonical_rust(text)),
-            StringSegment::Interpolation(expr, spec) => {
+            StringSegment::Interpolation(expr, _) => {
                 result.push('{');
                 result.push_str(expr);
-                if let Some(s) = spec {
-                    result.push(':');
-                    result.push_str(s);
-                }
                 result.push('}');
             }
         }
@@ -6477,13 +6659,9 @@ fn flatten_string_literal(slit: &StringLiteral) -> String {
     for seg in &slit.segments {
         match seg {
             StringSegment::Literal(text) => result.push_str(text),
-            StringSegment::Interpolation(expr, spec) => {
+            StringSegment::Interpolation(expr, _) => {
                 result.push('{');
                 result.push_str(expr);
-                if let Some(s) = spec {
-                    result.push(':');
-                    result.push_str(s);
-                }
                 result.push('}');
             }
         }
@@ -10224,6 +10402,40 @@ fn named_scope_basic() {
 }
 
 #[test]
+fn test_scope_blocks() {
+    run_gg(
+        "test_scope_blocks.gg",
+        "\
+1
+11
+111
+11
+1
+42
+reused
+11
+21
+31
+99
+50
+7
+101
+102
+ten
+10
+42
+0
+2
+4
+3
+200
+6
+20
+done",
+    );
+}
+
+#[test]
 fn async_param_across_await() {
     run_gg(
         "async_param_across_await.gg",
@@ -10608,6 +10820,25 @@ fn static_ref_param() {
 0
 42
 100",
+    );
+}
+
+#[test]
+fn test_static_vars() {
+    run_gg(
+        "test_static_vars.gg",
+        "\
+10
+20
+2.5
+2.8
+false
+true
+false
+3
+2
+40
+4",
     );
 }
 
@@ -11173,6 +11404,77 @@ abc
 }
 
 #[test]
+fn test_string_methods() {
+    run_gg(
+        "test_string_methods.gg",
+        "\
+3
+one,two,three
+3
+a--b--c
+1
+hello
+one|two|three
+xxx
+a-b-c-d
+hell wrld
+baba
+abcabcabc
+xxxxx
+
+
+hello world
+nonempty
+left
+true
+true
+false
+true
+true
+true
+true
+0
+true
+true
+true
+true
+
+
+
+0
+1
+hello
+world
+h
+d
+hello
+42
+value=42
+hello gorget!
+43
+6
+42 and 10
+HELLO
+line1
+line2
+col1\tcol2
+back\\slash
+4
+the-quick-brown-fox
+HELLO
+XYZ DEF
+3
+2
+0
+true
+true
+true
+true
+false",
+    );
+}
+
+#[test]
 fn test_str_all() {
     run_gg(
         "test_str_all.gg",
@@ -11383,6 +11685,32 @@ true
 13
 142
 -1",
+    );
+}
+
+#[test]
+fn test_result_chaining() {
+    run_gg(
+        "test_result_chaining.gg",
+        "\
+20
+0
+105
+-1
+wrapped: e1
+42
+true
+false
+false
+true
+37
+-1
+21
+0
+150
+-1
+b:a:raw
+5",
     );
 }
 
@@ -11735,6 +12063,72 @@ done",
 }
 
 #[test]
+fn test_dict_int_keys() {
+    run_gg(
+        "test_dict_int_keys.gg",
+        "\
+3
+one
+two
+true
+false
+one
+true
+true
+2
+one
+default
+60
+600",
+    );
+}
+
+#[test]
+fn test_dict_str_values() {
+    run_gg(
+        "test_dict_str_values.gg",
+        "\
+0
+true
+3
+false
+true
+Alice
+true
+true
+false
+true
+false
+true
+false
+2
+true
+0
+true
+Bob
+2
+Bob
+fallback
+3
+x
+y
+z
+3
+hello
+world
+test
+3
+two
+true
+false
+TWO
+2
+missing
+done",
+    );
+}
+
+#[test]
 fn coroutine_dict_set() {
     run_gg(
         "coroutine_dict_set.gg",
@@ -11825,6 +12219,88 @@ true
 3
 100
 4950",
+    );
+}
+
+#[test]
+fn test_vector_of_structs() {
+    run_gg(
+        "test_vector_of_structs.gg",
+        "\
+3
+1
+2
+3
+6
+9
+3
+4
+3
+11
+22
+7
+true
+false
+3
+Alice
+25
+Hi, Carol
+2
+5
+20
+0
+true
+true
+true
+4
+1
+50
+2
+20
+1",
+    );
+}
+
+#[test]
+fn test_linked_list() {
+    run_gg(
+        "test_linked_list.gg",
+        "\
+true
+0
+2
+10
+20
+4
+10
+40
+10
+20
+30
+40
+10
+3
+40
+2
+20
+30
+true
+0
+true
+true
+true
+true
+1
+99
+99
+99
+true
+1
+2
+0
+3
+4
+3",
     );
 }
 
@@ -12128,6 +12604,30 @@ false",
 }
 
 #[test]
+fn test_struct_derive() {
+    run_gg(
+        "test_struct_derive.gg",
+        "\
+person eq: same
+person eq: diff
+coord eq: same
+coord eq: diff
+Person(name=Alice, age=30, active=true)
+Person(name=Alice, age=30, active=true)
+clone equals original
+
+0
+false
+hash: same fields same hash
+hash: diff fields diff hash
+vec2 eq: same
+vec2 eq: diff
+Vec2(dx=1.500000, dy=2.500000)
+vec2 clone equals original",
+    );
+}
+
+#[test]
 fn test_struct_methods() {
     run_gg(
         "test_struct_methods.gg",
@@ -12173,6 +12673,41 @@ c
 }
 
 #[test]
+fn test_nested_loops() {
+    run_gg(
+        "test_nested_loops.gg",
+        "\
+1
+2
+3
+2
+4
+6
+3
+3
+3
+0
+1
+2
+24
+2
+2
+2
+4
+4
+4
+11
+21
+31
+12
+22
+32
+16
+3",
+    );
+}
+
+#[test]
 fn test_match_advanced() {
     run_gg(
         "test_match_advanced.gg",
@@ -12208,5 +12743,362 @@ fn coroutine_vector_ops() {
 3
 99
 0",
+    );
+}
+
+#[test]
+fn test_recursion() {
+    run_gg(
+        "test_recursion.gg",
+        "\
+0
+1
+55
+1
+1
+3628800
+15
+6
+25
+1",
+    );
+}
+
+#[test]
+fn coroutine_struct_methods() {
+    run_gg(
+        "coroutine_struct_methods.gg",
+        "\
+0
+true
+1
+false
+3
+3
+10
+20
+true
+42
+0",
+    );
+}
+
+#[test]
+fn test_while_loops() {
+    run_gg(
+        "test_while_loops.gg",
+        "\
+0
+1
+2
+3
+4
+0
+1
+2
+broke at 3
+1
+3
+5
+7
+0,0
+0,1
+0,2
+1,0
+1,1
+1,2
+2,0
+2,1
+2,2
+and-stop: 7
+or-stop: 5
+did not run: 0
+5
+0
+10
+20
+30
+40",
+    );
+}
+
+#[test]
+fn test_numeric_types() {
+    run_gg(
+        "test_numeric_types.gg",
+        "\
+--- int arithmetic ---
+13
+7
+30
+3
+1
+--- float arithmetic ---
+13.700000
+7.300000
+33.600000
+3.281250
+--- int to float ---
+42.000000
+--- float to int ---
+3
+9
+--- negatives ---
+-42
+-3.140000
+--- int division ---
+3
+-3
+--- modulo ---
+1
+-1
+1
+--- float comparison ---
+true
+false
+true
+true
+true
+true
+--- mixed cast ---
+2.500000
+7.500000
+--- neg float to int ---
+-7
+--- large numbers ---
+1000000000000
+done",
+    );
+}
+
+#[test]
+fn test_type_casting() {
+    run_gg(
+        "test_type_casting.gg",
+        "\
+--- int to float ---
+42.000000
+0.000000
+-100.000000
+--- float to int ---
+3
+9
+0
+--- neg float to int ---
+-7
+0
+-100
+--- zero ---
+0.000000
+0
+--- cast in expr ---
+3.500000
+7
+--- large values ---
+1000000.000000
+--- chained ---
+42
+--- int to str ---
+123
+--- conv functions ---
+456
+2.5
+true
+false
+--- parse ---
+99
+3.140000
+parse_none
+--- symmetry ---
+-42
+done",
+    );
+}
+
+#[test]
+fn test_traits_equip() {
+    run_gg(
+        "test_traits_equip.gg",
+        "\
+7
+(3, 4)
+(13, 24)
+(0, 0)
+1.000000
+circle
+78.500000
+square
+16.000000
+Alice
+hello Alice
+robot-7
+beep robot-7",
+    );
+}
+
+#[test]
+fn test_deque() {
+    run_gg(
+        "test_deque.gg",
+        "\
+true
+0
+false
+1
+42
+1
+42
+true
+true
+true
+6
+1
+3
+3
+7
+7
+9
+true
+20
+10
+10
+40
+50
+true
+10
+1
+3
+5
+8
+11
+5
+7
+2
+12
+14
+15
+17
+19
+20
+true
+99
+99
+true
+done",
+    );
+}
+
+#[test]
+fn test_if_expressions() {
+    run_gg(
+        "test_if_expressions.gg",
+        "\
+10
+20
+42
+0
+100
+200
+1
+0
+1
+99
+0
+20
+30
+10
+-1",
+    );
+}
+
+#[test]
+fn test_assert() {
+    run_gg(
+        "test_assert.gg",
+        "\
+all assertions passed",
+    );
+}
+
+#[test]
+fn test_generic_functions() {
+    run_gg(
+        "test_generic_functions.gg",
+        "\
+42
+hello
+3.140000
+world
+99
+true
+5
+true
+42
+answer
+updated
+42
+42
+data
+true
+10
+3
+1
+two
+3",
+    );
+}
+
+#[test]
+fn test_coroutine_basic() {
+    run_gg(
+        "test_coroutine_basic.gg",
+        "\
+42
+hello
+126
+42
+20
+42
+10
+true
+11
+21
+31",
+    );
+}
+
+#[test]
+fn test_option_chaining() {
+    run_gg(
+        "test_option_chaining.gg",
+        "\
+--- map + unwrap_or ---
+20
+0
+--- filter + map + unwrap_or ---
+105
+-1
+--- and_then + unwrap_or ---
+30
+0
+--- or + unwrap_or ---
+99
+50
+--- long chain ---
+25
+-1
+30
+21
+--- conditional ---
+has value
+is none
+mapped is some
+mapped none is none
+--- and_then chain ---
+20
+0
+20
+-1
+done",
     );
 }

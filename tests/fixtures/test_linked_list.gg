@@ -1,0 +1,183 @@
+from std.collections import Vector
+
+struct LinkedList:
+    Vector[int] values
+    Vector[int] nexts
+    Vector[int] prevs
+    int head
+    int tail
+    int len
+
+struct LinkedListIter:
+    Vector[int] collected
+    int cursor
+
+equip LinkedList:
+    void push_front(&self, int val):
+        int idx = self.values.len()
+        self.values.push(val)
+        self.nexts.push(self.head)
+        self.prevs.push(-1)
+        if self.head != -1:
+            self.prevs[self.head] = idx
+        self.head = idx
+        if self.tail == -1:
+            self.tail = idx
+        self.len = self.len + 1
+
+    void push_back(&self, int val):
+        int idx = self.values.len()
+        self.values.push(val)
+        self.nexts.push(-1)
+        self.prevs.push(self.tail)
+        if self.tail != -1:
+            self.nexts[self.tail] = idx
+        self.tail = idx
+        if self.head == -1:
+            self.head = idx
+        self.len = self.len + 1
+
+    Option[int] pop_front(&self):
+        if self.head == -1:
+            return None
+        int val = self.values[self.head]
+        int next = self.nexts[self.head]
+        self.head = next
+        if next != -1:
+            self.prevs[next] = -1
+        else:
+            self.tail = -1
+        self.len = self.len - 1
+        return Some(val)
+
+    Option[int] pop_back(&self):
+        if self.tail == -1:
+            return None
+        int val = self.values[self.tail]
+        int prev = self.prevs[self.tail]
+        self.tail = prev
+        if prev != -1:
+            self.nexts[prev] = -1
+        else:
+            self.head = -1
+        self.len = self.len - 1
+        return Some(val)
+
+    int length(self):
+        return self.len
+
+    bool is_empty(self):
+        return self.len == 0
+
+    Option[int] peek_front(self):
+        if self.head == -1:
+            return None
+        return Some(self.values[self.head])
+
+    Option[int] peek_back(self):
+        if self.tail == -1:
+            return None
+        return Some(self.values[self.tail])
+
+    void clear(&self):
+        self.head = -1
+        self.tail = -1
+        self.len = 0
+
+equip LinkedListIter with Iterator[int]:
+    Option[int] next(&self):
+        if self.cursor >= self.collected.len():
+            return None
+        int val = self.collected[self.cursor]
+        self.cursor = self.cursor + 1
+        return Some(val)
+
+equip LinkedList with Iterable[int]:
+    LinkedListIter iter(&self):
+        Vector[int] ll_vals = Vector[int]()
+        int cur = self.head
+        while cur != -1:
+            ll_vals.push(self.values[cur])
+            cur = self.nexts[cur]
+        return LinkedListIter(ll_vals, 0)
+
+LinkedList make_list():
+    return LinkedList(Vector[int](), Vector[int](), Vector[int](), -1, -1, 0)
+
+void main():
+    # 1. Construction and is_empty
+    LinkedList ll = make_list()
+    print(ll.is_empty())
+    print(ll.length())
+
+    # 2. push_front
+    ll.push_front(20)
+    ll.push_front(10)
+    print(ll.length())
+    print(ll.peek_front().unwrap())
+    print(ll.peek_back().unwrap())
+
+    # 3. push_back
+    ll.push_back(30)
+    ll.push_back(40)
+    print(ll.length())
+    print(ll.peek_front().unwrap())
+    print(ll.peek_back().unwrap())
+
+    # 4. Iteration (for loop)
+    for x in ll:
+        print(x)
+
+    # 5. pop_front
+    int v1 = ll.pop_front().unwrap()
+    print(v1)
+    print(ll.length())
+
+    # 6. pop_back
+    int v2 = ll.pop_back().unwrap()
+    print(v2)
+    print(ll.length())
+
+    # 7. Remaining after pops: 20, 30
+    for x in ll:
+        print(x)
+
+    # 8. Clear
+    ll.clear()
+    print(ll.is_empty())
+    print(ll.length())
+
+    # 9. Pop on empty returns None
+    Option[int] r1 = ll.pop_front()
+    print(r1.is_none())
+    Option[int] r2 = ll.pop_back()
+    print(r2.is_none())
+
+    # 10. Peek on empty returns None
+    print(ll.peek_front().is_none())
+    print(ll.peek_back().is_none())
+
+    # 11. Single element list
+    LinkedList single = make_list()
+    single.push_front(99)
+    print(single.length())
+    print(single.peek_front().unwrap())
+    print(single.peek_back().unwrap())
+    int sv = single.pop_front().unwrap()
+    print(sv)
+    print(single.is_empty())
+
+    # 12. Multiple push/pop sequences
+    LinkedList seq = make_list()
+    seq.push_back(1)
+    seq.push_back(2)
+    seq.push_back(3)
+    int s1 = seq.pop_front().unwrap()
+    print(s1)
+    seq.push_back(4)
+    int s2 = seq.pop_front().unwrap()
+    print(s2)
+    seq.push_front(0)
+    for x in seq:
+        print(x)
+    print(seq.length())

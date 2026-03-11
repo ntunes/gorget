@@ -1,0 +1,157 @@
+# Comprehensive string method tests: edge cases, roundtrips, comparisons
+from std.collections import Vector
+
+void main():
+    # === Split / Join roundtrip ===
+    str csv = "one,two,three"
+    Vector[str] parts = csv.split(",")
+    print(f"{parts.len()}")
+    str rejoined = ",".join(parts)
+    print(rejoined)
+
+    # Split on multi-char delimiter
+    str spaced = "a--b--c"
+    Vector[str] sp2 = spaced.split("--")
+    print(f"{sp2.len()}")
+    str rej2 = "--".join(sp2)
+    print(rej2)
+
+    # Split single element (no delimiter present)
+    str nosep = "hello"
+    Vector[str] sp3 = nosep.split(",")
+    print(f"{sp3.len()}")
+    print(sp3.get(0).unwrap())
+
+    # Join with different separator
+    str piped = "|".join(parts)
+    print(piped)
+
+    # === Replace with multiple occurrences ===
+    str rep = "abcabcabc"
+    str replaced = rep.replace("abc", "x")
+    print(replaced)
+
+    str dots = "a.b.c.d"
+    str nodots = dots.replace(".", "-")
+    print(nodots)
+
+    # Replace with empty string (deletion)
+    str del = "hello world".replace("o", "")
+    print(del)
+
+    # Replace where replacement contains search string
+    str grow = "aa".replace("a", "ba")
+    print(grow)
+
+    # === Repeat ===
+    print("abc".repeat(3))
+    print("x".repeat(5))
+    print("hi".repeat(0))
+    print("".repeat(10))
+
+    # === String concatenation ===
+    str a = "hello"
+    str b = " world"
+    str c = a + b
+    print(c)
+
+    str d = "" + "nonempty"
+    print(d)
+
+    str e = "left" + ""
+    print(e)
+
+    # === String comparison ===
+    print(f"{"abc" == "abc"}")
+    print(f"{"abc" != "def"}")
+    print(f"{"abc" != "abc"}")
+    print(f"{"abc" < "def"}")
+    print(f"{"def" > "abc"}")
+    print(f"{"abc" < "abd"}")
+    print(f"{"a" < "aa"}")
+
+    # === Empty string edge cases ===
+    str empty = ""
+    print(f"{empty.len()}")
+    print(f"{empty.is_empty()}")
+    print(f"{empty.contains("")}")
+    print(f"{empty.starts_with("")}")
+    print(f"{empty.ends_with("")}")
+    print(empty.to_upper())
+    print(empty.to_lower())
+    print(empty.trim())
+    print(f"{empty.count("x")}")
+
+    # Split empty string
+    Vector[str] emp_parts = empty.split(",")
+    print(f"{emp_parts.len()}")
+
+    # === Substring / slicing ===
+    str hw = "hello world"
+    str sub1 = hw.substring(0, 5)
+    print(sub1)
+
+    str sub2 = hw.substring(6, 11)
+    print(sub2)
+
+    # Single character index
+    str ch = hw[0]
+    print(ch)
+    str ch2 = hw[10]
+    print(ch2)
+
+    # byte_slice
+    str bs = hw.byte_slice(0, 5)
+    print(bs)
+
+    # === String interpolation edge cases ===
+    int x = 42
+    str name = "gorget"
+    print(f"{x}")
+    print(f"value={x}")
+    print(f"hello {name}!")
+    print(f"{x + 1}")
+    print(f"{name.len()}")
+
+    # Multiple interpolations in one string
+    int y = 10
+    print(f"{x} and {y}")
+
+    # Interpolation with method call
+    print(f"{"hello".to_upper()}")
+
+    # === Escape sequences ===
+    str nl = "line1\nline2"
+    print(nl)
+    str tab = "col1\tcol2"
+    print(tab)
+    str bs2 = "back\\slash"
+    print(bs2)
+
+    # === Multi-word split and rejoin ===
+    str sentence = "the quick brown fox"
+    Vector[str] words = sentence.split(" ")
+    print(f"{words.len()}")
+
+    # Join with different separator
+    str hyphen = "-".join(words)
+    print(hyphen)
+
+    # === Chained operations ===
+    str upper_trimmed = "  hello  ".trim().to_upper()
+    print(upper_trimmed)
+
+    str result = "abc def".replace("abc", "xyz").to_upper()
+    print(result)
+
+    # === count with multiple occurrences ===
+    print(f"{"banana".count("a")}")
+    print(f"{"banana".count("na")}")
+    print(f"{"banana".count("x")}")
+
+    # === starts_with / ends_with edge cases ===
+    print(f"{"hello".starts_with("")}")
+    print(f"{"hello".ends_with("")}")
+    print(f"{"hello".starts_with("hello")}")
+    print(f"{"hello".ends_with("hello")}")
+    print(f"{"hi".starts_with("hello")}")

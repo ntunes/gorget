@@ -1,0 +1,57 @@
+from std.collections import Vector, Set, Dict
+
+void main():
+    # 1. Basic vector comprehension over range
+    Vector[int] squares = [x * x for x in 0..5]
+    print(f"squares len: {squares.len()}")
+    for v in squares:
+        print(f"{v}")
+
+    # 2. Comprehension with expression transform
+    Vector[int] doubled = [x * 2 for x in 1..6]
+    print(f"doubled len: {doubled.len()}")
+    for v in doubled:
+        print(f"{v}")
+
+    # 3. Comprehension with filter (if clause)
+    Vector[int] evens = [x for x in 0..10 if x % 2 == 0]
+    print(f"evens len: {evens.len()}")
+    for v in evens:
+        print(f"{v}")
+
+    # 4. Comprehension with transform and filter
+    Vector[int] odd_squares = [x * x for x in 0..8 if x % 2 == 1]
+    print(f"odd_squares len: {odd_squares.len()}")
+    for v in odd_squares:
+        print(f"{v}")
+
+    # 5. Set comprehension
+    Set[int] s = {x * 10 for x in 0..4}
+    print(f"set len: {s.len()}")
+
+    # 6. Set comprehension with filter
+    Set[int] s2 = {x for x in 0..10 if x % 3 == 0}
+    print(f"set2 len: {s2.len()}")
+
+    # 7. Dict comprehension
+    Dict[int, int] d = {x: x * x for x in 1..5}
+    print(f"dict len: {d.len()}")
+    print(f"d[3]: {d.get(3).unwrap()}")
+
+    # 8. Empty comprehension (filter removes all)
+    Vector[int] empty = [x for x in 0..5 if x > 100]
+    print(f"empty len: {empty.len()}")
+
+    # 9. Comprehension with addition transform
+    Vector[int] shifted = [x + 100 for x in 0..4]
+    print(f"shifted len: {shifted.len()}")
+    for v in shifted:
+        print(f"{v}")
+
+    # 10. Large range comprehension with filter
+    Vector[int] multiples = [x for x in 0..50 if x % 7 == 0]
+    print(f"multiples len: {multiples.len()}")
+    for v in multiples:
+        print(f"{v}")
+
+    print("done")

@@ -1,0 +1,77 @@
+# Test @derive attributes on structs
+
+# 1. Multiple derives with different field types
+@derive(Equatable, Displayable, Cloneable, Hashable, Default)
+struct Person:
+    str name
+    int age
+    bool active
+
+# 2. Minimal derive: just Equatable
+@derive(Equatable)
+struct Coord:
+    int x
+    int y
+
+# 3. Struct with float fields
+@derive(Equatable, Displayable, Cloneable, Hashable)
+struct Vec2:
+    float dx
+    float dy
+
+void main():
+    # --- Equatable ---
+    Person a = Person("Alice", 30, true)
+    Person b = Person("Alice", 30, true)
+    Person c = Person("Bob", 25, false)
+    if a == b:
+        print("person eq: same")
+    if a != c:
+        print("person eq: diff")
+
+    # Equatable-only struct
+    Coord c1 = Coord(1, 2)
+    Coord c2 = Coord(1, 2)
+    Coord c3 = Coord(3, 4)
+    if c1 == c2:
+        print("coord eq: same")
+    if c1 != c3:
+        print("coord eq: diff")
+
+    # --- Displayable ---
+    print(f"{a}")
+
+    # --- Cloneable ---
+    Person a_clone = a.clone()
+    print(f"{a_clone}")
+    # Cloned struct equals original
+    if a == a_clone:
+        print("clone equals original")
+
+    # --- Default ---
+    Person d = Person.default()
+    print(d.name)
+    print(d.age)
+    print(d.active)
+
+    # --- Hashable ---
+    int h1 = a.hash()
+    int h2 = b.hash()
+    if h1 == h2:
+        print("hash: same fields same hash")
+    int h3 = c.hash()
+    if h1 != h3:
+        print("hash: diff fields diff hash")
+
+    # --- Float struct derives ---
+    Vec2 v1 = Vec2(1.5, 2.5)
+    Vec2 v2 = Vec2(1.5, 2.5)
+    Vec2 v3 = Vec2(3.0, 4.0)
+    if v1 == v2:
+        print("vec2 eq: same")
+    if v1 != v3:
+        print("vec2 eq: diff")
+    print(f"{v1}")
+    Vec2 v_clone = v1.clone()
+    if v1 == v_clone:
+        print("vec2 clone equals original")

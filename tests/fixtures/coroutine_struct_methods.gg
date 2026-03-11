@@ -1,0 +1,49 @@
+from std.async import sleep
+
+struct Counter:
+    int value
+
+equip Counter:
+    Counter increment(self):
+        return Counter(self.value + 1)
+
+    int get(self):
+        return self.value
+
+    bool is_zero(self):
+        return self.value == 0
+
+async int test_struct_ops():
+    sleep(1)
+
+    Counter c = Counter(0)
+    print(c.get())
+    print(c.is_zero())
+
+    Counter c2 = c.increment()
+    print(c2.get())
+    print(c2.is_zero())
+
+    Counter c3 = c2.increment().increment()
+    print(c3.get())
+
+    # Vector of structs in async
+    Vector[Counter] counters = Vector[Counter]()
+    counters.push(Counter(10))
+    counters.push(Counter(20))
+    counters.push(Counter(30))
+    print(counters.len())
+    print(counters[0].get())
+    print(counters[1].get())
+
+    # Option[Counter] in async
+    Option[Counter] maybe = Some(Counter(42))
+    print(maybe.is_some())
+    print(maybe.unwrap().get())
+
+    return 0
+
+async void main():
+    Task[int] t = spawn test_struct_ops()
+    int r = t.await()
+    print(r)

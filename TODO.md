@@ -6,7 +6,27 @@
 
 ## Medium
 
+- **If-expression `elif` branches silently ignored in IR lowering**: `lower_if_expr` in `src/ir/lowering/exprs/mod.rs:1627` discards `elif_branches` (the `..` in the match arm at line 240). `int r = if a == 1: 10 elif a == 2: 20 else: 30` always falls through to the else branch when the first condition is false, ignoring elif. Fix: either chain elif conditions in the else block (nested if-expr), or extend `lower_if_expr` to accept elif branches. [added: 2026-03-11]
+
+- **If-expression result local typed as `I64_TYPE` placeholder**: `lower_if_expr` at line 1639 uses `builder.add_local(I64_TYPE, None)` for the result, ignoring the inferred type from `then_branch`. This breaks string if-expressions (C backend assigns `char*` to `int64_t`) and string interpolation of if-expression results. Fix: use the actual result type from lowering the then branch. [added: 2026-03-11]
+
+- **`shared_stress_yield` flaky deadlock under full test suite**: The fixture runs fine standalone and in isolation but occasionally hangs (infinite CPU loop) when run as part of the full 670+ test suite. Timing-dependent — likely a contention issue in the coroutine runtime's shared counter lock release/reacquire path. Reproduce: `cargo test --test integration -- --test-threads=1` and wait for `shared_stress_yield`. [added: 2026-03-11]
+
 - **Bool negation `!x` in closures returns wrong result for Vector[bool]**: `vb.filter((bool x): !x)` on `[true, false, true, true]` returns 3 elements instead of 1. Workaround: `x == false`. Likely the `!` operator is applied to a bool that's `int32_t` in C, and the closure parameter type inference doesn't handle negation correctly. [added: 2026-03-11]
+
+- **Comprehensions over vector variables produce empty results**: `[x * 10 for int x in some_vector]` silently yields an empty vector. Comprehensions only work correctly with range expressions (`0..N`). The comprehension codegen likely doesn't wire up vector iteration properly. [added: 2026-03-11]
+
+- **Multi-line closures with return always typed as void**: `infer_closure_return_type` in `src/ir/lowering/closures.rs:664` hardcodes `Expr::Block(_) => UNIT_TYPE`. Multi-line closures like `(int x): int y = x + 1; return y * 2` fail type checking because the return type is inferred as void instead of int. Only single-expression closures and void (side-effect) closures work. Fix: walk the block's return statements to infer the actual return type. [added: 2026-03-11]
+
+- **Hashable derive for float fields uses uninitialized accumulator**: `Vec2__hash` (struct with float32/float64 fields) has an uninitialized `_2` hash accumulator variable in the generated C code. The hash value is garbage for float-field structs. Int and str fields work fine. [added: 2026-03-11]
+
+- **Inline `None()` without typed variable produces garbage**: Using bare `None()` in expressions without first binding to a typed `Option[T]` variable causes uninitialized variable warnings and garbage output in the C backend. Workaround: `Option[int] n = None()` then use `n`. [added: 2026-03-11]
+
+- **Variable shadowing in nested scopes aliases storage**: Reusing the same variable name in an inner named scope compiles but the C backend appears to alias the storage, so the outer variable's value gets overwritten after the inner scope exits. [added: 2026-03-11]
+
+- **Generic identity on Vector causes double-free**: `identity[Vector[int]](v)` where `T identity[T](T x): return x` causes a double-free at runtime. Move types passed through generic value-return functions don't properly transfer ownership — the caller and callee both try to drop the collection. [added: 2026-03-11]
+
+- **Static str literal initializer produces zero-initialized memory**: `static str greeting = "hello"` generates `{0}` in C instead of a proper `gorget_str_from_literal("hello")` call, causing segfault when the static str is printed. Numeric statics work fine. [added: 2026-03-11]
 
 - **`shared static` support**: `public static shared int counter = 0` — thread-safe module-level statics. Requires adding `SharedKind` field to `StaticDecl`, atomic/mutex global codegen in C backend (atomic globals, constructor-initialized mutexes), and wiring lock/unlock into `GlobalAssign` emission. Workaround: use explicit `Mutex[int]` or `Atomic[int]` as the static type. [added: 2026-03-10]
 

@@ -1,0 +1,91 @@
+# Option chaining: combined map, filter, and_then, unwrap_or, or, is_some/is_none
+
+void main():
+    Option[int] none_val = None()
+
+    # --- Basic map + unwrap_or ---
+    print("--- map + unwrap_or ---")
+    int r1 = Some(10).map((int x): x * 2).unwrap_or(0)
+    print(f"{r1}")
+
+    int r2 = none_val.map((int x): x * 2).unwrap_or(0)
+    print(f"{r2}")
+
+    # --- filter + map + unwrap_or ---
+    print("--- filter + map + unwrap_or ---")
+    int r3 = Some(5).filter((int x): x > 3).map((int x): x + 100).unwrap_or(-1)
+    print(f"{r3}")
+
+    int r4 = Some(5).filter((int x): x > 10).map((int x): x + 100).unwrap_or(-1)
+    print(f"{r4}")
+
+    # --- and_then + unwrap_or ---
+    print("--- and_then + unwrap_or ---")
+    int r5 = Some(3).and_then((int x): Some(x * 10)).unwrap_or(0)
+    print(f"{r5}")
+
+    int r6 = Some(3).and_then((int x): None()).unwrap_or(0)
+    print(f"{r6}")
+
+    # --- or + unwrap_or ---
+    print("--- or + unwrap_or ---")
+    int r7 = none_val.or(Some(99)).unwrap_or(0)
+    print(f"{r7}")
+
+    int r8 = Some(50).or(Some(99)).unwrap_or(0)
+    print(f"{r8}")
+
+    # --- Long chain: map + filter + map + unwrap_or ---
+    print("--- long chain ---")
+    int r9 = Some(8).map((int x): x * 3).filter((int x): x > 20).map((int x): x + 1).unwrap_or(-1)
+    print(f"{r9}")
+
+    int r10 = Some(2).map((int x): x * 3).filter((int x): x > 20).map((int x): x + 1).unwrap_or(-1)
+    print(f"{r10}")
+
+    # --- and_then + map + filter + unwrap_or ---
+    int r11 = Some(4).and_then((int x): Some(x * 5)).map((int x): x + 10).filter((int x): x > 25).unwrap_or(0)
+    print(f"{r11}")
+
+    # --- or + map + unwrap_or ---
+    int r12 = none_val.or(Some(7)).map((int x): x * 3).unwrap_or(0)
+    print(f"{r12}")
+
+    # --- is_some / is_none in conditions ---
+    print("--- conditional ---")
+    Option[int] opt_a = Some(42)
+    if opt_a.is_some():
+        print("has value")
+    else:
+        print("empty")
+
+    if none_val.is_none():
+        print("is none")
+    else:
+        print("has value")
+
+    # --- chained is_some after map ---
+    if Some(10).map((int x): x + 5).is_some():
+        print("mapped is some")
+
+    if none_val.map((int x): x + 5).is_some():
+        print("should not print")
+    else:
+        print("mapped none is none")
+
+    # --- and_then chain ---
+    print("--- and_then chain ---")
+    int r13 = Some(2).and_then((int x): Some(x + 3)).and_then((int x): Some(x * 4)).unwrap_or(0)
+    print(f"{r13}")
+
+    int r14 = Some(2).and_then((int x): None()).and_then((int x): Some(x * 4)).unwrap_or(0)
+    print(f"{r14}")
+
+    # --- filter + and_then ---
+    int r15 = Some(10).filter((int x): x > 5).and_then((int x): Some(x * 2)).unwrap_or(-1)
+    print(f"{r15}")
+
+    int r16 = Some(3).filter((int x): x > 5).and_then((int x): Some(x * 2)).unwrap_or(-1)
+    print(f"{r16}")
+
+    print("done")

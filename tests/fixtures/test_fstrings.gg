@@ -1,0 +1,30 @@
+void main():
+    int x = 42
+    float f = 3.14
+    str s = "world"
+    bool b = true
+
+    # Basic interpolation
+    print(f"hello {s}")
+    print(f"x = {x}")
+    print(f"pi = {f}")
+    print(f"flag = {b}")
+
+    # Expression in interpolation
+    print(f"double = {x * 2}")
+    print(f"sum = {x + 8}")
+
+    # Multiple interpolations
+    print(f"{x} and {s}")
+
+    # Interpolation with method calls
+    String upper = s.to_upper()
+    print(f"upper = {upper}")
+
+    # Interpolation with string length
+    print(f"len = {s.len()}")
+
+    # Empty and edge cases
+    str empty = ""
+    print(f"empty='{empty}'")
+    print(f"no interpolation")

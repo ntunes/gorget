@@ -1,0 +1,105 @@
+# Heap (priority queue) comprehensive tests
+# Deque does not exist in the language; testing Heap instead.
+
+from std.heap import Heap
+
+void main():
+    # === Construction and basic push/pop ===
+    Heap[int] h = Heap[int].new()
+    print(h.is_empty())                     # true
+    print(h.len())                          # 0
+
+    h.push(42)
+    print(h.is_empty())                     # false
+    print(h.len())                          # 1
+
+    # === peek without removal ===
+    int top = h.peek().unwrap()
+    print(top)                              # 42
+    print(h.len())                          # 1
+
+    # === pop returns min element ===
+    int popped = h.pop().unwrap()
+    print(popped)                           # 42
+    print(h.is_empty())                     # true
+
+    # === Pop on empty returns None ===
+    Option[int] empty_pop = h.pop()
+    print(empty_pop.is_none())              # true
+
+    # === Peek on empty returns None ===
+    Option[int] empty_peek = h.peek()
+    print(empty_peek.is_none())             # true
+
+    # === Push duplicates — pop all in sorted order ===
+    Heap[int] dh = Heap[int].new()
+    dh.push(7)
+    dh.push(3)
+    dh.push(7)
+    dh.push(1)
+    dh.push(3)
+    dh.push(9)
+    print(dh.len())                         # 6
+    print(dh.pop().unwrap())                # 1
+    print(dh.pop().unwrap())                # 3
+    print(dh.pop().unwrap())                # 3
+    print(dh.pop().unwrap())                # 7
+    print(dh.pop().unwrap())                # 7
+    print(dh.pop().unwrap())                # 9
+    print(dh.is_empty())                    # true
+
+    # === Interleaved push/pop ===
+    Heap[int] ip = Heap[int].new()
+    ip.push(50)
+    ip.push(20)
+    print(ip.pop().unwrap())                # 20
+    ip.push(10)
+    ip.push(40)
+    print(ip.peek().unwrap())               # 10
+    print(ip.pop().unwrap())                # 10
+    print(ip.pop().unwrap())                # 40
+    print(ip.pop().unwrap())                # 50
+    print(ip.is_empty())                    # true
+
+    # === Large heap — heapsort 20 elements ===
+    Heap[int] big = Heap[int].new()
+    big.push(17)
+    big.push(3)
+    big.push(12)
+    big.push(8)
+    big.push(1)
+    big.push(19)
+    big.push(5)
+    big.push(14)
+    big.push(11)
+    big.push(20)
+    print(big.len())                        # 10
+    # Pop first 5 (should be 1,3,5,8,11)
+    print(big.pop().unwrap())               # 1
+    print(big.pop().unwrap())               # 3
+    print(big.pop().unwrap())               # 5
+    print(big.pop().unwrap())               # 8
+    print(big.pop().unwrap())               # 11
+    print(big.len())                        # 5
+    # Push more into partially consumed heap
+    big.push(2)
+    big.push(15)
+    print(big.len())                        # 7
+    # Drain rest — should be 2,12,14,15,17,19,20
+    print(big.pop().unwrap())               # 2
+    print(big.pop().unwrap())               # 12
+    print(big.pop().unwrap())               # 14
+    print(big.pop().unwrap())               # 15
+    print(big.pop().unwrap())               # 17
+    print(big.pop().unwrap())               # 19
+    print(big.pop().unwrap())               # 20
+    print(big.is_empty())                   # true
+
+    # === Single element push/pop cycle ===
+    Heap[int] s = Heap[int].new()
+    s.push(99)
+    print(s.peek().unwrap())                # 99
+    print(s.pop().unwrap())                 # 99
+    print(s.pop().is_none())                # true
+
+    print("done")

@@ -1,0 +1,97 @@
+# Comprehensive numeric type tests: arithmetic, casts, edge cases
+
+void main():
+    # === 1. Int arithmetic ===
+    print("--- int arithmetic ---")
+    int a = 10
+    int b = 3
+    print(f"{a + b}")       # 13
+    print(f"{a - b}")       # 7
+    print(f"{a * b}")       # 30
+    print(f"{a / b}")       # 3
+    print(f"{a % b}")       # 1
+
+    # === 2. Float arithmetic ===
+    print("--- float arithmetic ---")
+    float fa = 10.5
+    float fb = 3.2
+    float fsum = fa + fb
+    float fdiff = fa - fb
+    float fprod = fa * fb
+    float fquot = fa / fb
+    print(f"{fsum}")        # 13.700000
+    print(f"{fdiff}")       # 7.300000
+    print(f"{fprod}")       # 33.600000  (10.5 * 3.2)
+    print(f"{fquot}")       # 3.281250  (10.5 / 3.2)
+
+    # === 3. Int to float cast ===
+    print("--- int to float ---")
+    int x = 42
+    float xf = x as float
+    print(f"{xf}")          # 42.000000
+
+    # === 4. Float to int cast (truncation) ===
+    print("--- float to int ---")
+    float pi = 3.14
+    int pi_int = pi as int
+    print(f"{pi_int}")      # 3
+
+    float big_f = 9.99
+    int big_i = big_f as int
+    print(f"{big_i}")       # 9
+
+    # === 5. Negative numbers ===
+    print("--- negatives ---")
+    int neg = -42
+    print(f"{neg}")         # -42
+    float neg_f = -3.14
+    print(f"{neg_f}")       # -3.140000
+
+    # === 6. Integer division (truncation toward zero) ===
+    print("--- int division ---")
+    int d1 = 7 / 2
+    print(f"{d1}")          # 3
+    int d2 = -7 / 2
+    print(f"{d2}")          # -3
+
+    # === 7. Modulo with negatives ===
+    print("--- modulo ---")
+    int m1 = 7 % 3
+    print(f"{m1}")          # 1
+    int m2 = -7 % 3
+    print(f"{m2}")          # -1
+    int m3 = 7 % -3
+    print(f"{m3}")          # 1
+
+    # === 8. Float comparison ===
+    print("--- float comparison ---")
+    float c1 = 1.0
+    float c2 = 2.0
+    print(f"{c1 < c2}")     # true
+    print(f"{c1 > c2}")     # false
+    print(f"{c1 == c1}")    # true
+    print(f"{c1 != c2}")    # true
+    print(f"{c1 <= c1}")    # true
+    print(f"{c2 >= c1}")    # true
+
+    # === 9. Mixed int/float with explicit cast ===
+    print("--- mixed cast ---")
+    int mi = 5
+    float mf = (mi as float) / 2.0
+    print(f"{mf}")          # 2.500000
+    float mf2 = (mi as float) * 1.5
+    print(f"{mf2}")         # 7.500000
+
+    # === 10. Negative float to int ===
+    print("--- neg float to int ---")
+    float nf = -7.9
+    int ni = nf as int
+    print(f"{ni}")          # -7
+
+    # === 11. Large numbers ===
+    print("--- large numbers ---")
+    int big = 1000000000
+    int big2 = big * 1000
+    print(f"{big2}")        # 1000000000000
+
+    print("done")

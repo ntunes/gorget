@@ -1,0 +1,95 @@
+# Multi-line closures: closures with block bodies (multiple statements)
+
+void run_action(void() action):
+    action()
+
+void run_int_action(int x, void(int) action):
+    action(x)
+
+void main():
+    # 1. Multi-line void closure with multiple assignments
+    int a1 = 0
+    int b1 = 0
+    auto set_both = ():
+        a1 = 10
+        b1 = 20
+    set_both()
+    print(f"{a1}")  # 10
+    print(f"{b1}")  # 20
+
+    # 2. Multi-line closure with if/else
+    int result2 = 0
+    auto abs_val = (int x):
+        if x < 0:
+            result2 = -x
+        else:
+            result2 = x
+    abs_val(-7)
+    print(f"{result2}")  # 7
+    abs_val(3)
+    print(f"{result2}")  # 3
+
+    # 3. Multi-line closure with for loop accumulating to captured var
+    int total3 = 0
+    auto sum_up_to = (int n):
+        for i in 0..n:
+            total3 += i
+    sum_up_to(5)
+    print(f"{total3}")  # 10
+
+    # 4. Multi-line closure capturing read-only external variable
+    int base = 100
+    int result4 = 0
+    auto offset = (int x):
+        result4 = x * 2 + base
+    offset(7)
+    print(f"{result4}")  # 114
+
+    # 5. Multi-line closure with compound assignments
+    int accum = 0
+    auto multi_add = (int x):
+        accum += x
+        accum += x * 2
+    multi_add(3)
+    print(f"{accum}")  # 9 (3 + 6)
+    multi_add(5)
+    print(f"{accum}")  # 24 (9 + 5 + 10)
+
+    # 6. Multi-line closure passed to helper function
+    int side = 0
+    auto effect = ():
+        side = 42
+        side += 8
+    run_action(effect)
+    print(f"{side}")  # 50
+
+    # 7. Multi-line closure with nested if
+    int result7 = 0
+    auto classify = (int x):
+        if x > 10:
+            result7 = 2
+        else:
+            if x > 0:
+                result7 = 1
+            else:
+                result7 = 0
+    classify(15)
+    print(f"{result7}")  # 2
+    classify(5)
+    print(f"{result7}")  # 1
+    classify(-3)
+    print(f"{result7}")  # 0
+
+    # 8. Multi-line closure called multiple times accumulating state
+    int total8 = 0
+    int count8 = 0
+    auto record = (int x):
+        total8 += x
+        count8 += 1
+    record(10)
+    record(20)
+    record(30)
+    print(f"{total8}")  # 60
+    print(f"{count8}")  # 3
+
+    print("done")

@@ -1,0 +1,106 @@
+# Test vectors containing user-defined structs
+
+@derive(Equatable, Displayable, Cloneable)
+struct Point:
+    int x
+    int y
+
+equip Point:
+    int manhattan(self):
+        return self.x + self.y
+
+    Point shifted(self, int dx, int dy):
+        return Point(self.x + dx, self.y + dy)
+
+struct Person:
+    str name
+    int age
+
+equip Person:
+    str greeting(self):
+        return "Hi, " + self.name
+
+void main():
+    # --- 1. Push structs into vector ---
+    Vector[Point] points = Vector[Point]()
+    points.push(Point(1, 2))
+    points.push(Point(3, 4))
+    points.push(Point(5, 6))
+    print(points.len())
+
+    # --- 2. Get struct from vector, access fields ---
+    Point p0 = points[0]
+    print(p0.x)
+    print(p0.y)
+    print(points[1].x)
+    print(points[2].y)
+
+    # --- 3. Iterate vector of structs ---
+    int total_x = 0
+    int i = 0
+    while i < points.len():
+        total_x = total_x + points[i].x
+        i = i + 1
+    print(total_x)
+
+    # --- 4. Vector len with structs ---
+    print(points.len())
+    points.push(Point(7, 8))
+    print(points.len())
+
+    # --- 5. Struct with equip methods, call method on retrieved struct ---
+    Point p1 = points[0]
+    print(p1.manhattan())
+    Point shifted = p1.shifted(10, 20)
+    print(shifted.x)
+    print(shifted.y)
+    print(points[1].manhattan())
+
+    # --- 6. Vector of structs with contains (Equatable) ---
+    print(points.contains(Point(3, 4)))
+    print(points.contains(Point(99, 99)))
+
+    # --- 7. Vector of Person structs ---
+    Vector[Person] people = Vector[Person]()
+    people.push(Person("Alice", 30))
+    people.push(Person("Bob", 25))
+    people.push(Person("Carol", 35))
+    print(people.len())
+    print(people[0].name)
+    print(people[1].age)
+    print(people[2].greeting())
+
+    # --- 8. Filter vector of structs ---
+    Vector[Point] big_points = points.filter((Point p): p.x > 3)
+    print(big_points.len())
+    print(big_points[0].x)
+
+    # --- 9. Fold over vector of structs (extract field) ---
+    int sum_y = points.fold(0, (int acc, Point p): acc + p.y)
+    print(sum_y)
+
+    # --- 10. Empty vector of structs ---
+    Vector[Point] empty = Vector[Point]()
+    print(empty.len())
+    print(empty.is_empty())
+    Option[Point] first_empty = empty.first()
+    print(first_empty.is_none())
+    Option[Point] pop_empty = empty.pop()
+    print(pop_empty.is_none())
+
+    # --- 11. Clone vector of structs ---
+    Vector[Point] cloned = points.clone()
+    print(cloned.len())
+    print(cloned[0].x)
+
+    # --- 12. Pop and remove ---
+    Vector[Point] pts = Vector[Point]()
+    pts.push(Point(10, 20))
+    pts.push(Point(30, 40))
+    pts.push(Point(50, 60))
+    Option[Point] popped = pts.pop()
+    print(popped.unwrap().x)
+    print(pts.len())
+    Option[Point] removed = pts.remove(0)
+    print(removed.unwrap().y)
+    print(pts.len())

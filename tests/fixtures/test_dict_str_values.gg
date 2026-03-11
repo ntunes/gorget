@@ -1,0 +1,86 @@
+# Dict with string values — tests Dict[str, str] and Dict[int, str]
+from std.collections import Dict, Vector
+
+void main():
+    # ===== 1. Construction =====
+    Dict[str, str] d = Dict[str, str]()
+    print(f"{d.len()}")
+    print(f"{d.is_empty()}")
+
+    # ===== 2. Put string values =====
+    d["name"] = "Alice"
+    d["city"] = "Boston"
+    d["lang"] = "Gorget"
+    print(f"{d.len()}")
+    print(f"{d.is_empty()}")
+
+    # ===== 3. Get string values (returns Option) =====
+    Option[str] got = d.get("name")
+    print(f"{got.is_some()}")
+    print(f"{got.unwrap()}")
+    Option[str] missing = d.get("nope")
+    print(f"{missing.is_none()}")
+
+    # ===== 4. Contains / has =====
+    print(f"{d.contains("city")}")
+    print(f"{d.contains("zzz")}")
+    print(f"{d.has("lang")}")
+    print(f"{d.has("missing")}")
+
+    # ===== 5. Remove =====
+    bool r1 = d.remove("city")
+    print(f"{r1}")
+    bool r2 = d.remove("nonexistent")
+    print(f"{r2}")
+    print(f"{d.len()}")
+    print(f"{d.get("city").is_none()}")
+
+    # ===== 6. Len / is_empty =====
+    Dict[str, str] empty = Dict[str, str]()
+    print(f"{empty.len()}")
+    print(f"{empty.is_empty()}")
+
+    # ===== 7. Overwrite existing key =====
+    d["name"] = "Bob"
+    print(f"{d.get("name").unwrap()}")
+    print(f"{d.len()}")
+
+    # ===== 8. get_or with string default =====
+    str present = d.get_or("name", "default")
+    print(f"{present}")
+    str absent = d.get_or("unknown", "fallback")
+    print(f"{absent}")
+
+    # ===== 9. Iterate keys and values =====
+    Dict[str, str] d2 = Dict[str, str]()
+    d2["x"] = "hello"
+    d2["y"] = "world"
+    d2["z"] = "test"
+    Vector[str] ks = d2.keys()
+    print(f"{ks.len()}")
+    print(f"{ks.get(0).unwrap()}")
+    print(f"{ks.get(1).unwrap()}")
+    print(f"{ks.get(2).unwrap()}")
+    Vector[str] vs = d2.values()
+    print(f"{vs.len()}")
+    print(f"{vs.get(0).unwrap()}")
+    print(f"{vs.get(1).unwrap()}")
+    print(f"{vs.get(2).unwrap()}")
+
+    # ===== 10. Dict[int, str] — integer keys with string values =====
+    Dict[int, str] ids = Dict[int, str]()
+    ids[1] = "one"
+    ids[2] = "two"
+    ids[3] = "three"
+    print(f"{ids.len()}")
+    print(f"{ids.get(2).unwrap()}")
+    print(f"{ids.contains(3)}")
+    print(f"{ids.contains(99)}")
+    ids[2] = "TWO"
+    print(f"{ids.get(2).unwrap()}")
+    ids.remove(1)
+    print(f"{ids.len()}")
+    str dv = ids.get_or(99, "missing")
+    print(f"{dv}")
+
+    print("done")

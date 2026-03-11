@@ -1,0 +1,105 @@
+# Test traits and equip blocks
+
+# --- Basic struct with equip methods ---
+struct Point:
+    int x
+    int y
+
+equip Point:
+    int manhattan(self):
+        return self.x + self.y
+
+    str to_string(self):
+        return f"({self.x}, {self.y})"
+
+    Point offset(self, int dx, int dy):
+        return Point(self.x + dx, self.y + dy)
+
+    Point zero():
+        return Point(0, 0)
+
+# --- Trait definition ---
+trait Shape:
+    float area(self)
+    str describe(self)
+
+# --- Multiple structs implementing same trait ---
+struct Circle:
+    float radius
+
+equip Circle:
+    Circle unit():
+        return Circle(1.0)
+
+equip Circle with Shape:
+    float area(self):
+        return 3.14 * self.radius * self.radius
+    str describe(self):
+        return "circle"
+
+struct Square:
+    float side
+
+equip Square with Shape:
+    float area(self):
+        return self.side * self.side
+    str describe(self):
+        return "square"
+
+# --- Trait with default method ---
+trait Named:
+    str name(self)
+    str greeting(self):
+        return f"hello {self.name()}"
+
+struct Person:
+    str first
+
+equip Person with Named:
+    str name(self):
+        return self.first
+
+struct Robot:
+    int id
+
+equip Robot with Named:
+    str name(self):
+        return f"robot-{self.id}"
+    str greeting(self):
+        return f"beep {self.name()}"
+
+void main():
+    # 1. Basic equip methods
+    Point p = Point(3, 4)
+    print(p.manhattan())
+    print(p.to_string())
+
+    # 2. Method returning struct
+    Point p2 = p.offset(10, 20)
+    print(p2.to_string())
+
+    # 3. Static method (no self)
+    Point origin = Point.zero()
+    print(origin.to_string())
+
+    # 4. Static method on another struct
+    Circle uc = Circle.unit()
+    print(uc.radius)
+
+    # 5. Trait methods called directly
+    Circle c = Circle(5.0)
+    print(c.describe())
+    print(c.area())
+
+    Square sq = Square(4.0)
+    print(sq.describe())
+    print(sq.area())
+
+    # 6. Trait default methods
+    Person alice = Person("Alice")
+    print(alice.name())
+    print(alice.greeting())
+
+    Robot r = Robot(7)
+    print(r.name())
+    print(r.greeting())

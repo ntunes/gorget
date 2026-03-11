@@ -1554,8 +1554,16 @@ fn infer_collection_method_return_type(
                 } else { I64_TYPE }
             } else { I64_TYPE }
         }
-        // Dict/HashMap.get_or / get_or_put → value type (I64_TYPE as default)
-        "get_or" | "get_or_put" if is_dict => I64_TYPE,
+        // Dict/HashMap.get_or / get_or_put → value type
+        "get_or" | "get_or_put" if is_dict => {
+            let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
+            if let Some(rest) = type_name.strip_prefix(prefix) {
+                if let Some(pos) = rest.find("__") {
+                    let val_name = &rest[pos + 2..];
+                    ctx.lookup_type_by_name(val_name).unwrap_or(I64_TYPE)
+                } else { I64_TYPE }
+            } else { I64_TYPE }
+        }
         // Vector.clone / .sorted / .slice → same collection type
         "clone" | "sorted" | "slice" if is_vector => {
             if let Some(type_id) = ctx.lookup_type_by_name(type_name) {

@@ -1,0 +1,115 @@
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str
+
+void main():
+    # === 1. int to float (as keyword) ===
+    print("--- int to float ---")
+    int i1 = 42
+    float f1 = i1 as float
+    print(f"{f1}")
+
+    int i2 = 0
+    float f2 = i2 as float
+    print(f"{f2}")
+
+    int i3 = -100
+    float f3 = i3 as float
+    print(f"{f3}")
+
+    # === 2. float to int (truncation toward zero) ===
+    print("--- float to int ---")
+    float pi = 3.14
+    int pi_trunc = pi as int
+    print(f"{pi_trunc}")
+
+    float f4 = 9.99
+    int i4 = f4 as int
+    print(f"{i4}")
+
+    float f5 = 0.5
+    int i5 = f5 as int
+    print(f"{i5}")
+
+    # === 3. negative float to int ===
+    print("--- neg float to int ---")
+    float neg1 = -7.9
+    int neg1_i = neg1 as int
+    print(f"{neg1_i}")
+
+    float neg2 = -0.1
+    int neg2_i = neg2 as int
+    print(f"{neg2_i}")
+
+    float neg3 = -100.999
+    int neg3_i = neg3 as int
+    print(f"{neg3_i}")
+
+    # === 4. zero conversions ===
+    print("--- zero ---")
+    int zero_i = 0
+    float zero_f = zero_i as float
+    print(f"{zero_f}")
+
+    float zero_f2 = 0.0
+    int zero_i2 = zero_f2 as int
+    print(f"{zero_i2}")
+
+    # === 5. cast in expressions ===
+    print("--- cast in expr ---")
+    float div_result = (7 as float) / 2.0
+    print(f"{div_result}")
+
+    int sum_cast = (3.7 as int) + (4.2 as int)
+    print(f"{sum_cast}")
+
+    # === 6. large int to float ===
+    print("--- large values ---")
+    int big = 1000000
+    float big_f = big as float
+    print(f"{big_f}")
+
+    # === 7. chained cast ===
+    print("--- chained ---")
+    int orig = 42
+    float mid = orig as float
+    int back = mid as int
+    print(f"{back}")
+
+    # === 8. int to str via interpolation ===
+    print("--- int to str ---")
+    int val = 123
+    str s1 = f"{val}"
+    print(s1)
+
+    # === 9. int_to_str / float_to_str ===
+    print("--- conv functions ---")
+    str s2 = int_to_str(456)
+    print(s2)
+    str s3 = float_to_str(2.5)
+    print(s3)
+    str s4 = bool_to_str(true)
+    print(s4)
+    str s5 = bool_to_str(false)
+    print(s5)
+
+    # === 10. parse string to int/float ===
+    print("--- parse ---")
+    Option[int] parsed_i = int.parse("99")
+    if parsed_i is Some(pv):
+        print(f"{pv}")
+
+    Option[float] parsed_f = float.parse("3.14")
+    if parsed_f is Some(pfv):
+        print(f"{pfv}")
+
+    Option[int] bad_parse = int.parse("hello")
+    if bad_parse is None:
+        print("parse_none")
+
+    # === 11. negative cast symmetry ===
+    print("--- symmetry ---")
+    int neg_val = -42
+    float neg_as_f = neg_val as float
+    int neg_back = neg_as_f as int
+    print(f"{neg_back}")
+
+    print("done")

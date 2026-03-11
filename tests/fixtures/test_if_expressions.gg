@@ -1,0 +1,71 @@
+# Test if-expressions (ternary-like conditional expressions)
+
+int pick(bool b):
+    return if b: 100 else: 200
+
+void main():
+    # 1. Basic if-expression with true condition
+    int x = if true: 10 else: 20
+    print(x)
+
+    # 2. Basic if-expression with false condition
+    int y = if false: 10 else: 20
+    print(y)
+
+    # 3. If-expression with variable condition (true)
+    bool flag = true
+    int z = if flag: 42 else: 0
+    print(z)
+
+    # 4. If-expression with variable condition (false)
+    bool flag2 = false
+    int w = if flag2: 42 else: 0
+    print(w)
+
+    # 5. If-expression in function return
+    print(pick(true))
+    print(pick(false))
+
+    # 6. If-expression with comparison (true branch)
+    int val = 15
+    int big = if val > 10: 1 else: 0
+    print(big)
+
+    # 7. If-expression with comparison (false branch)
+    int val2 = 5
+    int big2 = if val2 > 10: 1 else: 0
+    print(big2)
+
+    # 8. If-expression with equality
+    int code = 42
+    int matched = if code == 42: 1 else: 0
+    print(matched)
+
+    # 9. If-expression with logical and
+    bool p = true
+    bool q = false
+    int r = if p and not q: 99 else: 0
+    print(r)
+
+    # 10. If-expression with logical and (false case)
+    int s = if p and q: 99 else: 0
+    print(s)
+
+    # 11. Nested if-expressions (manually chained)
+    int a = 2
+    int r1 = if a == 1: 10 else: if a == 2: 20 else: 30
+    print(r1)
+
+    # 12. Nested if-expression (falls to inner else)
+    int b = 3
+    int r2 = if b == 1: 10 else: if b == 2: 20 else: 30
+    print(r2)
+
+    # 13. If-expression with arithmetic in branches
+    int n = 5
+    int doubled = if n > 3: n * 2 else: n + 1
+    print(doubled)
+
+    # 14. If-expression with negative result
+    int neg = if false: 1 else: -1
+    print(neg)

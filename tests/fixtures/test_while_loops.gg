@@ -1,0 +1,64 @@
+# Comprehensive while loop tests
+
+void main():
+    # 1. Basic while with counter
+    int i = 0
+    while i < 5:
+        print(i)
+        i += 1
+
+    # 2. While with break
+    int j = 0
+    while j < 100:
+        if j == 3:
+            break
+        print(j)
+        j += 1
+    print(f"broke at {j}")
+
+    # 3. While with continue (skip even numbers)
+    int k = 0
+    while k < 8:
+        k += 1
+        if k % 2 == 0:
+            continue
+        print(k)
+
+    # 4. Nested while loops
+    int outer = 0
+    while outer < 3:
+        int inner = 0
+        while inner < 3:
+            print(f"{outer},{inner}")
+            inner += 1
+        outer += 1
+
+    # 5. While with complex condition (and, or)
+    int m = 0
+    while m < 10 and m != 7:
+        m += 1
+    print(f"and-stop: {m}")
+
+    int n = 10
+    while n > 5 or n == 3:
+        n -= 1
+    print(f"or-stop: {n}")
+
+    # 6. While that does not execute (false condition)
+    int skip = 0
+    while skip > 100:
+        print("should not print")
+        skip += 1
+    print(f"did not run: {skip}")
+
+    # 7. While with mutation of collection (push to vector in loop)
+    Vector[int] nums = Vector[int]()
+    int idx = 0
+    while idx < 5:
+        nums.push(idx * 10)
+        idx += 1
+    print(nums.len())
+    int vi = 0
+    while vi < nums.len():
+        print(nums[vi])
+        vi += 1

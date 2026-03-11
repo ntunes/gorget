@@ -1,0 +1,40 @@
+(int, int) swap(int a, int b):
+    return b, a
+
+(int, str) get_pair():
+    return 42, "hello"
+
+(int, int, int) triple():
+    return 1, 2, 3
+
+(str, bool) tagged(str label, bool flag):
+    return label, flag
+
+void main():
+    # Tuple return + destructuring
+    auto a, b = swap(1, 2)
+    print(a)
+    print(b)
+
+    auto x, s = get_pair()
+    print(x)
+    print(s)
+
+    auto p, q, r = triple()
+    print(p)
+    print(q)
+    print(r)
+
+    # Mixed types
+    auto label, flag = tagged("ok", true)
+    print(label)
+    print(flag)
+
+    # Tuple from enumerate
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    for (i, val) in v.enumerate():
+        print(i)
+        print(val)

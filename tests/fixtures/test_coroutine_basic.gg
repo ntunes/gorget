@@ -1,0 +1,77 @@
+# Test basic async/await coroutine patterns.
+
+# 1. Simple async function returning int
+async int get_number():
+    return 42
+
+# 2. Async function returning str
+async str get_greeting():
+    return "hello"
+
+# 3. Async function with parameters
+async int multiply(int a, int b):
+    return a * b
+
+# 4. Async function calling another async function
+async int double(int x):
+    return x * 2
+
+async int quadruple(int x):
+    int doubled = double(x).await()
+    int result = double(doubled).await()
+    return result
+
+# 5. Async function returning Option[int]
+async Option[int] find_positive(int x):
+    if x > 0:
+        return Some(x)
+    return None
+
+# 6. Async helper for sequential tasks
+async int add_ten(int x):
+    return x + 10
+
+async void main():
+    # 1. Simple async returning int
+    int n = get_number().await()
+    print(n)
+
+    # 2. Async returning str
+    str g = get_greeting().await()
+    print(g)
+
+    # 3. Multiple awaits in sequence
+    int a = get_number().await()
+    int b = get_number().await()
+    int c = get_number().await()
+    print(a + b + c)
+
+    # 4. Async with parameters
+    int prod = multiply(6, 7).await()
+    print(prod)
+
+    # 5. Async calling another async
+    int q = quadruple(5).await()
+    print(q)
+
+    # 6. spawn + await pattern
+    Task[int] t1 = spawn get_number()
+    int r1 = t1.await()
+    print(r1)
+
+    # 7. Async function returning Option[int]
+    Option[int] pos = find_positive(10).await()
+    print(pos.unwrap())
+    Option[int] neg = find_positive(-5).await()
+    print(neg.is_none())
+
+    # 8. Sequential task execution
+    Task[int] s1 = spawn add_ten(1)
+    int v1 = s1.await()
+    Task[int] s2 = spawn add_ten(v1)
+    int v2 = s2.await()
+    Task[int] s3 = spawn add_ten(v2)
+    int v3 = s3.await()
+    print(v1)
+    print(v2)
+    print(v3)

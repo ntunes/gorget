@@ -1,0 +1,63 @@
+void main():
+    # 1. Bitwise AND
+    int r1 = 5 & 3
+    print(f"{r1}")
+
+    # 2. Bitwise OR
+    int r2 = 5 | 3
+    print(f"{r2}")
+
+    # 3. Bitwise XOR
+    int r3 = 5 ^ 3
+    print(f"{r3}")
+
+    # 4. Bitwise NOT
+    int r4 = ~0
+    print(f"{r4}")
+
+    # 5. Left shift
+    int r5 = 1 << 10
+    print(f"{r5}")
+
+    # 6. Right shift
+    int r6 = 1024 >> 5
+    print(f"{r6}")
+
+    # 7. Chained operations: (a & b) | c
+    int a = 12
+    int b = 10
+    int c = 5
+    int r7 = (a & b) | c
+    print(f"{r7}")
+
+    # 8. Shift by 0 (identity)
+    int r8 = 42 << 0
+    int r9 = 42 >> 0
+    print(f"{r8}")
+    print(f"{r9}")
+
+    # 9. Masking: extract low byte
+    int x = 0x1A2B
+    int r10 = x & 0xFF
+    print(f"{r10}")
+
+    # 10. Setting bits: set bit 3
+    int y = 0
+    int r11 = y | (1 << 3)
+    print(f"{r11}")
+
+    # 11. Clearing bits: clear bit 3
+    int z = 15
+    int r12 = z & ~(1 << 3)
+    print(f"{r12}")
+
+    # 12. Testing bits: test bit 3
+    int w = 15
+    int r13 = (w >> 3) & 1
+    print(f"{r13}")
+
+    # 13. XOR swap: a ^ b ^ a = b
+    int p = 37
+    int q = 99
+    int r14 = p ^ q ^ p
+    print(f"{r14}")
