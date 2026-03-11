@@ -4550,6 +4550,27 @@ fn fstring_basic() {
 }
 
 #[test]
+fn fstring_format() {
+    run_gg(
+        "fstring_format.gg",
+        "\
+hex: ff
+HEX: FF
+oct: 377
+bin: 11111111
+bin alt: 0b11111111
+padded: 00000042
+hex padded: 00002a
+fixed: 3.14
+sci: 3.142e+00
+SCI: 3.142E+00
+neg hex: ffffffffffffffd6
+zero bin: 0
+zero hex: 0",
+    );
+}
+
+#[test]
 fn char_str_coerce() {
     run_gg("char_str_coerce.gg", "A\ntrue\nA");
 }
@@ -5977,9 +5998,13 @@ fn describe_string_canonical_rust(slit: &StringLiteral) -> String {
     for seg in &slit.segments {
         match seg {
             StringSegment::Literal(text) => result.push_str(&escape_canonical_rust(text)),
-            StringSegment::Interpolation(expr) => {
+            StringSegment::Interpolation(expr, spec) => {
                 result.push('{');
                 result.push_str(expr);
+                if let Some(s) = spec {
+                    result.push(':');
+                    result.push_str(s);
+                }
                 result.push('}');
             }
         }
@@ -6452,9 +6477,13 @@ fn flatten_string_literal(slit: &StringLiteral) -> String {
     for seg in &slit.segments {
         match seg {
             StringSegment::Literal(text) => result.push_str(text),
-            StringSegment::Interpolation(expr) => {
+            StringSegment::Interpolation(expr, spec) => {
                 result.push('{');
                 result.push_str(expr);
+                if let Some(s) = spec {
+                    result.push(':');
+                    result.push_str(s);
+                }
                 result.push('}');
             }
         }

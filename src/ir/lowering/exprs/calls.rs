@@ -221,7 +221,7 @@ pub(super) fn lower_call(
         // format("...") → string interpolation or gorget_string_from_str
         if name == "format" && args.len() == 1 {
             if let Expr::StringLiteral(lit) = &args[0].node.value.node {
-                if lit.segments.iter().any(|s| matches!(s, StringSegment::Interpolation(_))) {
+                if lit.segments.iter().any(|s| matches!(s, StringSegment::Interpolation(_, _))) {
                     return lower_string_interpolation(ctx, builder, lit);
                 } else {
                     // Plain string literal → gorget_string_from_str(str_literal)
@@ -783,9 +783,9 @@ pub fn lower_print_call(
                     StringSegment::Literal(text) => {
                         format_str.push_str(text);
                     }
-                    StringSegment::Interpolation(var_name) => {
+                    StringSegment::Interpolation(var_name, fmt_spec) => {
                         lower_interp_segment(ctx, builder, var_name,
-                            &mut format_str, &mut printf_args);
+                            &mut format_str, &mut printf_args, fmt_spec.as_deref());
                     }
                 }
             }
@@ -810,7 +810,7 @@ pub fn lower_print_call(
             // General expression (identifier, method call, etc.) — lower and infer type
             let val = lower_expr(ctx, builder, arg_expr);
             let type_id = infer_operand_type_full(ctx, &val, builder);
-            let (spec, extra_args) = format_for_printf(ctx, builder, type_id, val);
+            let (spec, extra_args) = format_for_printf(ctx, builder, type_id, val, None);
             let nl = if add_newline { "\n" } else { "" };
             let fmt = format!("{spec}{nl}");
             let fmt_op = Operand::Constant(Constant::Str(fmt));
@@ -831,12 +831,14 @@ pub fn lower_print_call(
 
 /// Lower a single interpolation segment in a print/format context.
 /// Handles simple variable lookups and re-parses complex expressions (method calls, field access, etc.).
+/// `fmt_spec` is an optional format specifier like ".2f", "x", "08d", etc.
 pub(super) fn lower_interp_segment(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     var_name: &str,
     format_str: &mut String,
     printf_args: &mut Vec<Operand>,
+    fmt_spec: Option<&str>,
 ) {
     // 1. Try simple variable lookup first
     if let Some((local_id, type_id)) = ctx.lookup_local(var_name) {
@@ -848,11 +850,11 @@ pub(super) fn lower_interp_segment(
             };
             let tmp = builder.add_local(value_type, None);
             builder.assign(Place::local(tmp), Operand::Copy(deref_place));
-            let (spec, args) = format_for_printf(ctx, builder, value_type, FunctionBuilder::copy(tmp));
+            let (spec, args) = format_for_printf(ctx, builder, value_type, FunctionBuilder::copy(tmp), fmt_spec);
             format_str.push_str(&spec);
             printf_args.extend(args);
         } else {
-            let (spec, args) = format_for_printf(ctx, builder, type_id, FunctionBuilder::copy(local_id));
+            let (spec, args) = format_for_printf(ctx, builder, type_id, FunctionBuilder::copy(local_id), fmt_spec);
             format_str.push_str(&spec);
             printf_args.extend(args);
         }
@@ -866,7 +868,7 @@ pub(super) fn lower_interp_segment(
         // Store result in a temp local so we can take its address / reuse
         let tmp = builder.add_local(type_id, None);
         builder.assign(Place::local(tmp), val);
-        let (spec, args) = format_for_printf(ctx, builder, type_id, FunctionBuilder::copy(tmp));
+        let (spec, args) = format_for_printf(ctx, builder, type_id, FunctionBuilder::copy(tmp), fmt_spec);
         format_str.push_str(&spec);
         printf_args.extend(args);
         return;
@@ -879,12 +881,22 @@ pub(super) fn lower_interp_segment(
 /// Given a type and an operand, return the printf format specifier and the
 /// argument list. For Str types, returns `%.*s` with two args (len, data).
 /// For bool, returns `%s` with ternary. For other types, returns the standard specifier.
+/// When `fmt_spec` is provided (e.g., ".2f", "x", "08d"), it overrides the default format.
 fn format_for_printf(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     type_id: TypeId,
     operand: Operand,
+    fmt_spec: Option<&str>,
 ) -> (String, Vec<Operand>) {
+    // If a format spec is provided, try to generate a custom printf format
+    if let Some(spec) = fmt_spec {
+        if let Some(result) = apply_format_spec(ctx, builder, type_id, operand.clone(), spec) {
+            return result;
+        }
+        // If apply_format_spec returns None, fall through to default
+    }
+
     if type_id == ctx.type_mapper.str_type || type_id == ctx.type_mapper.owned_string_type {
         // Str/GorgetString → %.*s with (int)expr.len, expr.data
         ("%.*s".to_string(), vec![operand])
@@ -934,5 +946,184 @@ fn format_for_printf(
         };
         let spec = ctx.type_mapper.format_specifier(type_id);
         (spec.to_string(), vec![effective_op])
+    }
+}
+
+/// Apply a user-provided format spec (e.g., ".2f", "x", "08d") to produce a
+/// printf format string. Returns None if the spec is not recognized.
+///
+/// Supported specs:
+///   Integer: d, x, X, o, b, #x, #X, #o, #b, with optional width/zero-pad (e.g., "08x", "5d")
+///   Float: f, e, E, with optional precision (e.g., ".2f", ".4e")
+///   String: s, with optional width (e.g., "10s")
+fn apply_format_spec(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    type_id: TypeId,
+    operand: Operand,
+    spec: &str,
+) -> Option<(String, Vec<Operand>)> {
+    if spec.is_empty() {
+        return None;
+    }
+
+    let is_signed_int = type_id == I8_TYPE || type_id == I16_TYPE || type_id == I32_TYPE
+        || type_id == I64_TYPE;
+    let is_unsigned_int = type_id == U8_TYPE || type_id == U16_TYPE || type_id == U32_TYPE
+        || type_id == U64_TYPE;
+    let is_any_int = is_signed_int || is_unsigned_int;
+    let is_float = type_id == F32_TYPE || type_id == F64_TYPE;
+    let is_str = type_id == ctx.type_mapper.str_type || type_id == ctx.type_mapper.owned_string_type;
+
+    // Parse the spec: [#][0][width][.precision][type_char]
+    let bytes = spec.as_bytes();
+    let mut pos = 0;
+
+    // Check for '#' (alternate form: 0x, 0o, 0b prefix)
+    let alt = if pos < bytes.len() && bytes[pos] == b'#' {
+        pos += 1;
+        true
+    } else {
+        false
+    };
+
+    // Check for '0' (zero-pad)
+    let zero_pad = if pos < bytes.len() && bytes[pos] == b'0'
+        && pos + 1 < bytes.len() && bytes[pos + 1].is_ascii_digit()
+    {
+        pos += 1;
+        true
+    } else {
+        false
+    };
+
+    // Parse width digits
+    let width_start = pos;
+    while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+        pos += 1;
+    }
+    let width: Option<&str> = if pos > width_start {
+        Some(&spec[width_start..pos])
+    } else {
+        None
+    };
+
+    // Parse precision: .N
+    let precision: Option<&str> = if pos < bytes.len() && bytes[pos] == b'.' {
+        pos += 1;
+        let prec_start = pos;
+        while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+            pos += 1;
+        }
+        Some(&spec[prec_start..pos])
+    } else {
+        None
+    };
+
+    // Parse type character
+    if pos >= bytes.len() {
+        // No type char — just width/precision with default type
+        if is_any_int && (width.is_some() || zero_pad) {
+            let w = width.unwrap_or("0");
+            let z = if zero_pad { "0" } else { "" };
+            let len_mod = if is_unsigned_int { "llu" } else { "lld" };
+            let op = widen_int(builder, type_id, operand);
+            return Some((format!("%{z}{w}{len_mod}"), vec![op]));
+        }
+        if is_float && precision.is_some() {
+            let p = precision.unwrap();
+            return Some((format!("%.{p}f"), vec![operand]));
+        }
+        return None;
+    }
+
+    let type_char = bytes[pos] as char;
+
+    match type_char {
+        // ── Integer formats ──
+        'd' if is_any_int => {
+            let w = width.unwrap_or("");
+            let z = if zero_pad { "0" } else { "" };
+            let len_mod = if is_unsigned_int { "llu" } else { "lld" };
+            let op = widen_int(builder, type_id, operand);
+            Some((format!("%{z}{w}{len_mod}"), vec![op]))
+        }
+        'x' if is_any_int => {
+            let w = width.unwrap_or("");
+            let z = if zero_pad { "0" } else { "" };
+            let prefix = if alt { "#" } else { "" };
+            let op = widen_int(builder, type_id, operand);
+            Some((format!("%{prefix}{z}{w}llx"), vec![op]))
+        }
+        'X' if is_any_int => {
+            let w = width.unwrap_or("");
+            let z = if zero_pad { "0" } else { "" };
+            let prefix = if alt { "#" } else { "" };
+            let op = widen_int(builder, type_id, operand);
+            Some((format!("%{prefix}{z}{w}llX"), vec![op]))
+        }
+        'o' if is_any_int => {
+            let w = width.unwrap_or("");
+            let z = if zero_pad { "0" } else { "" };
+            let prefix = if alt { "#" } else { "" };
+            let op = widen_int(builder, type_id, operand);
+            Some((format!("%{prefix}{z}{w}llo"), vec![op]))
+        }
+        'b' if is_any_int => {
+            // Binary has no printf equivalent — call runtime helper returning const char*
+            let op = widen_int(builder, type_id, operand);
+            let str_type = ctx.type_mapper.str_type;
+            let alt_arg = Operand::Constant(Constant::I64(if alt { 1 } else { 0 }));
+            let result = builder.call_extern(
+                "gorget_int_to_binary",
+                vec![op, alt_arg],
+                str_type,
+            );
+            Some(("%.*s".to_string(), vec![FunctionBuilder::copy(result)]))
+        }
+
+        // ── Float formats ──
+        'f' if is_float => {
+            let p = precision.unwrap_or("6");
+            let w = width.unwrap_or("");
+            let z = if zero_pad { "0" } else { "" };
+            Some((format!("%{z}{w}.{p}f"), vec![operand]))
+        }
+        'e' if is_float => {
+            let p = precision.unwrap_or("6");
+            let w = width.unwrap_or("");
+            Some((format!("%{w}.{p}e"), vec![operand]))
+        }
+        'E' if is_float => {
+            let p = precision.unwrap_or("6");
+            let w = width.unwrap_or("");
+            Some((format!("%{w}.{p}E"), vec![operand]))
+        }
+
+        // ── String format ──
+        's' if is_str => {
+            if let Some(w) = width {
+                Some((format!("%-{w}.*s"), vec![operand]))
+            } else {
+                None // no spec effect, use default
+            }
+        }
+
+        _ => None, // unrecognized spec — fall through to default
+    }
+}
+
+/// Widen narrow integer types to 64-bit for printf length modifiers.
+fn widen_int(builder: &mut FunctionBuilder, type_id: TypeId, operand: Operand) -> Operand {
+    let needs_widen = type_id == I8_TYPE || type_id == I16_TYPE || type_id == I32_TYPE;
+    let needs_unsigned_widen = type_id == U8_TYPE || type_id == U16_TYPE || type_id == U32_TYPE;
+    if needs_widen {
+        let tmp = builder.cast(I64_TYPE, operand);
+        FunctionBuilder::copy(tmp)
+    } else if needs_unsigned_widen {
+        let tmp = builder.cast(U64_TYPE, operand);
+        FunctionBuilder::copy(tmp)
+    } else {
+        operand
     }
 }

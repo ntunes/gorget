@@ -626,7 +626,7 @@ impl GenericCollector {
             Expr::StringLiteral(lit) => {
                 // Scan interpolation segments for generic usages (e.g., "{add_values[int](3, 4)}")
                 for seg in &lit.segments {
-                    if let StringSegment::Interpolation(text) = seg {
+                    if let StringSegment::Interpolation(text, _) = seg {
                         if let Ok(parsed) = crate::parser::Parser::new(text).parse_expr() {
                             self.scan_expr(&parsed);
                         }

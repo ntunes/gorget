@@ -221,20 +221,25 @@ Type: `char`. A Unicode scalar value (4 bytes).
 #### String Literals
 
 ```ebnf
-STRING_LITERAL = '"' { string_segment } '"' ;
+STRING_LITERAL = [prefix] '"' { string_segment } '"' ;
 string_segment = literal_chars | interpolation | escape ;
-interpolation  = "{" expression "}" ;
+interpolation  = "{" expression [":" format_spec] "}" ;
+format_spec    = ["#"] ["0"] [width] ["." precision] [type_char] ;
 ```
 
-Interpolation: expressions inside `{}` are evaluated and converted to their string representation. Use `{{` and `}}` to produce literal braces.
+Interpolation is only available in **f-strings** (strings prefixed with `f`). Expressions inside `{}` are evaluated and converted to their string representation. Use `{{` and `}}` to produce literal braces. Normal strings treat `{` and `}` as literal characters.
 
 **String kinds:**
 
-| Prefix | Kind       | Interpolation | Escapes |
-|--------|------------|---------------|---------|
-| (none) | Normal     | Yes           | Yes     |
-| `r`    | Raw        | No            | No      |
-| `b`    | Byte       | No            | Yes     |
+| Prefix    | Kind       | Interpolation | Escapes |
+|-----------|------------|---------------|---------|
+| (none)    | Normal     | No            | Yes     |
+| `f`       | Format     | Yes           | Yes     |
+| `r`       | Raw        | No            | No      |
+| `b`       | Byte       | No            | Yes     |
+| `"""`     | Multi-line | No            | Yes     |
+| `f"""`    | Multi-line format | Yes    | Yes     |
+| `c`       | C string   | No            | Yes     |
 
 Type: `String` (owned, heap-allocated). String literals that appear in borrow position are implicitly `str` (immutable string slice).
 
@@ -2439,7 +2444,9 @@ Self parameters are **auto-borrowed**: the compiler automatically borrows the re
 
 ## 14. String Interpolation
 
-Inside a normal string literal, `{expression}` evaluates the expression and inserts its string representation. The expression must be of a type that is either:
+String interpolation is available only in **f-strings** (strings prefixed with `f`). Inside an f-string, `{expression}` evaluates the expression and inserts its string representation. Normal strings do **not** support interpolation — `{` and `}` are treated as literal characters.
+
+The interpolated expression must be of a type that is either:
 
 - A primitive type (`int`, `float`, `bool`, `char`)
 - A `String` or `str`
@@ -2448,12 +2455,58 @@ Using a non-printable type (struct, enum) in interpolation is a compile-time err
 
 ```gorget
 int x = 42
-print("The answer is {x}")
-print("Math: {2 + 2}")
-print("Escaped brace: {{literal}}")
+print(f"The answer is {x}")
+print(f"Math: {2 + 2}")
+print(f"Escaped brace: {{literal}}")
+str name = "world"
+print(f"Hello, {name}!")
 ```
 
-### 14.1 String Concatenation
+### 14.1 Format Specifiers
+
+Interpolated expressions can include a format specifier after a `:` to control output formatting:
+
+```gorget
+{expression:spec}
+```
+
+The format spec syntax is: `[#][0][width][.precision][type]`
+
+- `#` — alternate form (adds `0x`, `0o`, or `0b` prefix for hex, octal, binary)
+- `0` — zero-pad to fill width
+- `width` — minimum field width (digits)
+- `.precision` — decimal places for floats
+- `type` — conversion type character
+
+**Integer format types:**
+
+| Spec | Description | Example | Output |
+|------|-------------|---------|--------|
+| `d`  | Decimal     | `f"{255:d}"`  | `255`  |
+| `x`  | Hex (lower) | `f"{255:x}"`  | `ff`   |
+| `X`  | Hex (upper) | `f"{255:X}"`  | `FF`   |
+| `o`  | Octal       | `f"{255:o}"`  | `377`  |
+| `b`  | Binary      | `f"{255:b}"`  | `11111111` |
+
+**Float format types:**
+
+| Spec | Description | Example | Output |
+|------|-------------|---------|--------|
+| `f`  | Fixed-point | `f"{3.14159:.2f}"` | `3.14` |
+| `e`  | Scientific (lower) | `f"{3.14159:.3e}"` | `3.142e+00` |
+| `E`  | Scientific (upper) | `f"{3.14159:.3E}"` | `3.142E+00` |
+
+**Combining specifiers:**
+
+```gorget
+int n = 42
+print(f"{n:08d}")        # "00000042" — zero-padded to 8 digits
+print(f"{n:06x}")        # "00002a"   — zero-padded hex
+print(f"{255:#x}")       # "0xff"     — hex with 0x prefix
+print(f"{255:#b}")       # "0b11111111" — binary with 0b prefix
+```
+
+### 14.2 String Concatenation
 
 The `+` operator concatenates two strings and returns a new string. The `+=` operator appends in place. See also §7.5.
 

@@ -2068,9 +2068,13 @@ impl Formatter {
                 StringSegment::Literal(text) => {
                     self.format_string_escape(text, s.kind);
                 }
-                StringSegment::Interpolation(expr_text) => {
+                StringSegment::Interpolation(expr_text, spec) => {
                     self.emitter.write("{");
                     self.emitter.write(expr_text);
+                    if let Some(fmt) = spec {
+                        self.emitter.write(":");
+                        self.emitter.write(fmt);
+                    }
                     self.emitter.write("}");
                 }
             }

@@ -59,7 +59,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
         // ── String literal (may contain interpolations) ──
         Expr::StringLiteral(s) => {
             for seg in &s.segments {
-                if let StringSegment::Interpolation(name) = seg {
+                if let StringSegment::Interpolation(name, _) = seg {
                     // Treat interpolated name as an identifier reference.
                     // Use the string literal's span as a fallback — visitors
                     // needing precise interpolation spans should override.

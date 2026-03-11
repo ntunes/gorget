@@ -2202,9 +2202,9 @@ fn lower_string_interpolation(
             StringSegment::Literal(text) => {
                 format_str.push_str(text);
             }
-            StringSegment::Interpolation(var_name) => {
+            StringSegment::Interpolation(var_name, fmt_spec) => {
                 lower_interp_segment(ctx, builder, var_name,
-                    &mut format_str, &mut args);
+                    &mut format_str, &mut args, fmt_spec.as_deref());
             }
         }
     }
@@ -2333,7 +2333,7 @@ mod tests {
 
         let lit = StringLiteral {
             kind: StringKind::Normal,
-            segments: vec![StringSegment::Interpolation("x".into())],
+            segments: vec![StringSegment::Interpolation("x".into(), None)],
         };
         let args = vec![spanned(CallArg {
             name: None,
@@ -2552,7 +2552,7 @@ mod tests {
                 kind: StringKind::Normal,
                 segments: vec![
                     StringSegment::Literal("value: ".into()),
-                    StringSegment::Interpolation("x".into()),
+                    StringSegment::Interpolation("x".into(), None),
                 ],
             })),
         );

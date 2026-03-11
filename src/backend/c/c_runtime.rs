@@ -1281,6 +1281,30 @@ static inline Str gorget_str_empty(void) {
     return (Str){ .data = "", .len = 0 };
 }
 
+static inline Str gorget_int_to_binary(long long val, long long alt) {
+    // Max 64 bits + "0b" prefix + null
+    char buf[67];
+    int pos = 66;
+    buf[pos] = '\0';
+    unsigned long long uval = (unsigned long long)val;
+    if (uval == 0) {
+        buf[--pos] = '0';
+    } else {
+        while (uval > 0) {
+            buf[--pos] = '0' + (char)(uval & 1);
+            uval >>= 1;
+        }
+    }
+    if (alt) {
+        buf[--pos] = 'b';
+        buf[--pos] = '0';
+    }
+    size_t len = 66 - (size_t)pos;
+    char* data = (char*)GORGET_ALLOC(len + 1);
+    memcpy(data, buf + pos, len + 1);
+    return (Str){data, len};
+}
+
 // ── Str field access + comparison ───────────────────────────
 static inline size_t gorget_str_byte_len(Str s) { return s.len; }
 static inline bool gorget_str_is_empty(Str s) { return s.len == 0; }

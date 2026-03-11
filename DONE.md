@@ -1,5 +1,9 @@
 # DONE
 
+- [2026-03-11] **F-string format specifiers**: Implemented format spec syntax `{expr:spec}` across full pipeline. Lexer splits on last `:` at bracket depth 0. IR lowering maps specs to printf format strings. Supported: `d/x/X/o/b` (int), `f/e/E` (float), `s` (str), `#` alt prefix, `0` zero-pad, width, `.precision`. Binary format (`b`) via `gorget_int_to_binary` C runtime helper. Narrow ints auto-widened to 64-bit. Formatter roundtrips `{expr:spec}`. Updated language-reference.md (§3.1 string kinds table, §14 interpolation) and language-design.md (§12). Added `fstring_format.gg` integration test.
+
+- [2026-03-11] **Docs: fix f-string requirement + string kinds table**: language-reference.md §3.1 incorrectly listed Normal strings as having interpolation (should be f-strings only). Added Format, Multi-line, Multi-line format, and CStr to the string kinds table. Fixed §14 examples to use `f"..."` prefix. Updated language-design.md §12 accordingly.
+
 - [2026-03-11] **Fix: gorget_array_slice scalar args wrapped as pointers in coroutine**: `pass_by_ptr: true` for `slice` caused `start`/`end` int args to be wrapped as `&(int64_t){val}` pointers. Added `scalar_args` check to skip pointer wrapping for non-self arguments. Fixed in both poll and non-poll paths.
 
 - [2026-03-11] **Fix: Vector[str].fold("", ...) broken — string fold type mismatch**: Fold with string init value had three bugs: (1) IR lowering didn't handle `Constant::Str` in fold return type refinement, defaulting to I64 instead of Str. (2) C backend emitted bare `""` instead of `gorget_str_from_literal("", 0)` for Str-typed fold init. (3) Fold loop body used Str accumulator but closure returned GorgetString — added GorgetString internal accumulator with Str boundary coercion. Fixed in both normal and coroutine poll paths. Added test_vector_str_higher_order.gg fixture.

@@ -708,8 +708,9 @@ impl<'src> Lexer<'src> {
                         span: self.span(expr_start - 1, i),
                     });
                 } else {
-                    let expr_text = self.source[expr_start..i].to_string();
-                    segments.push(StringSegment::Interpolation(expr_text));
+                    let full_text = self.source[expr_start..i].to_string();
+                    let (expr_text, fmt_spec) = split_interpolation_spec(&full_text);
+                    segments.push(StringSegment::Interpolation(expr_text, fmt_spec));
                     i += 1; // skip closing }
                 }
                 continue;
@@ -909,6 +910,54 @@ impl<'src> Iterator for Lexer<'src> {
     }
 }
 
+/// Split an interpolation text like `"x:.2f"` into `("x".to_string(), Some(".2f".to_string()))`.
+/// Only splits on the LAST `:` at bracket/paren depth 0, outside quotes.
+/// This avoids false splits on dict literals `{a: b}`, slice `x[1:3]`, or ternary expressions.
+fn split_interpolation_spec(text: &str) -> (String, Option<String>) {
+    let bytes = text.as_bytes();
+    let mut last_colon_at_depth_0: Option<usize> = None;
+    let mut paren_depth: i32 = 0;
+    let mut bracket_depth: i32 = 0;
+    let mut brace_depth: i32 = 0;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => paren_depth += 1,
+            b')' => paren_depth -= 1,
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth -= 1,
+            b'{' => brace_depth += 1,
+            b'}' => brace_depth -= 1,
+            b'"' | b'\'' => {
+                // Skip quoted strings
+                let quote = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    if bytes[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            b':' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                last_colon_at_depth_0 = Some(i);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if let Some(pos) = last_colon_at_depth_0 {
+        let spec = &text[pos + 1..];
+        if !spec.is_empty() {
+            return (text[..pos].to_string(), Some(spec.to_string()));
+        }
+    }
+
+    (text.to_string(), None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1037,7 +1086,7 @@ mod tests {
                     kind: StringKind::Format,
                     segments: vec![
                         StringSegment::Literal("Hello, ".to_string()),
-                        StringSegment::Interpolation("name".to_string()),
+                        StringSegment::Interpolation("name".to_string(), None),
                         StringSegment::Literal("!".to_string()),
                     ],
                 }),

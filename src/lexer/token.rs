@@ -746,7 +746,7 @@ impl StringLiteral {
     pub fn has_interpolation(&self) -> bool {
         self.segments
             .iter()
-            .any(|seg| matches!(seg, StringSegment::Interpolation(_)))
+            .any(|seg| matches!(seg, StringSegment::Interpolation(_, _)))
     }
 }
 
@@ -763,5 +763,7 @@ pub enum StringKind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum StringSegment {
     Literal(String),
-    Interpolation(String),
+    /// (expression_text, optional_format_spec)
+    /// e.g., `{x:.2f}` → Interpolation("x", Some(".2f"))
+    Interpolation(String, Option<String>),
 }

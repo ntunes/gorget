@@ -1,0 +1,30 @@
+int main():
+    # Integer formatting
+    int x = 255
+    print(f"hex: {x:x}")
+    print(f"HEX: {x:X}")
+    print(f"oct: {x:o}")
+    print(f"bin: {x:b}")
+    print(f"bin alt: {x:#b}")
+
+    # Width and zero-padding
+    int n = 42
+    print(f"padded: {n:08d}")
+    print(f"hex padded: {n:06x}")
+
+    # Float formatting
+    float pi = 3.14159265
+    print(f"fixed: {pi:.2f}")
+    print(f"sci: {pi:.3e}")
+    print(f"SCI: {pi:.3E}")
+
+    # Negative numbers
+    int neg = -42
+    print(f"neg hex: {neg:x}")
+
+    # Zero
+    int z = 0
+    print(f"zero bin: {z:b}")
+    print(f"zero hex: {z:x}")
+
+    return 0

@@ -1562,14 +1562,19 @@ unsafe void dangerous_operation(RawPtr[int] ptr):
 
 ## 12. String Interpolation
 
-Built-in, no prefix needed (any type implementing Displayable auto-formats):
+F-strings (prefix `f`) support interpolation — any type implementing Displayable auto-formats:
 
 ```gorget
-String name = "world"
+str name = "world"
 int count = 42
-print("Hello, {name}! Count is {count}")
-print("Math: {2 + 2}")                     # expressions in braces
-print("Escaped brace: {{literal}}")         # double-brace to escape
+print(f"Hello, {name}! Count is {count}")
+print(f"Math: {2 + 2}")                     # expressions in braces
+print(f"Escaped brace: {{literal}}")         # double-brace to escape
+
+# Format specifiers
+print(f"{255:x}")         # "ff"     — hex
+print(f"{3.14159:.2f}")   # "3.14"   — 2 decimal places
+print(f"{42:08d}")        # "00000042" — zero-padded
 ```
 
 ---
@@ -2002,11 +2007,11 @@ str query = """
 char letter = 'A'
 char emoji = '\u{1F40D}'     # snake emoji
 
-# String interpolation (built-in, all strings)
-String greeting = "Hello, {name}! You are {age} years old."
-String math = "2 + 2 = {2 + 2}"
-String formatted = "Pi is approximately {pi:.4}"     # format specifiers — *Not yet implemented*
-String padded = "Value: {x:>10}"                     # right-align, width 10 — *Not yet implemented*
+# String interpolation (f-strings only)
+str greeting = f"Hello, {name}! You are {age} years old."
+str math = f"2 + 2 = {2 + 2}"
+str formatted = f"Pi is approximately {pi:.4f}"      # format specifiers
+str hex = f"Color: #{r:02x}{g:02x}{b:02x}"          # zero-padded hex
 
 # String repetition (Python-style * operator)
 String line = "-" * 40                   # "----------------------------------------"

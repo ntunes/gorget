@@ -1174,7 +1174,7 @@ fn resolve_expr(
         Expr::StringLiteral(s) => {
             // Resolve interpolated expressions inside string
             for segment in &s.segments {
-                if let crate::lexer::token::StringSegment::Interpolation(interp_expr) = segment {
+                if let crate::lexer::token::StringSegment::Interpolation(interp_expr, _) = segment {
                     // The interpolation contains a string that was parsed — we'd need to
                     // re-parse it. For now, we skip resolution inside string interpolations.
                     let _ = interp_expr;

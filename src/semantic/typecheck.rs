@@ -676,7 +676,7 @@ impl<'a> TypeChecker<'a> {
             Expr::StringLiteral(s) => {
                 use crate::lexer::token::StringSegment;
                 for seg in &s.segments {
-                    if let StringSegment::Interpolation(var_name) = seg {
+                    if let StringSegment::Interpolation(var_name, _) = seg {
                         let def_id_opt = if let Some(scope_id) = self.current_fn_scope {
                             self.scopes.lookup_within_function(scope_id, var_name)
                         } else {
@@ -716,7 +716,7 @@ impl<'a> TypeChecker<'a> {
                         }
                     }
                 }
-                if s.segments.iter().any(|seg| matches!(seg, StringSegment::Interpolation(_))) {
+                if s.segments.iter().any(|seg| matches!(seg, StringSegment::Interpolation(_, _))) {
                     self.types.owned_string_id
                 } else if s.kind == crate::lexer::token::StringKind::CStr {
                     self.types.cstr_id

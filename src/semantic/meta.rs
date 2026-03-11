@@ -894,12 +894,12 @@ fn eval_expr(
         Expr::BoolLiteral(b) => Ok(MetaValue::Bool(*b)),
         Expr::StringLiteral(s) => {
             // Only plain string literals (no interpolation segments)
-            if s.segments.iter().any(|seg| matches!(seg, StringSegment::Interpolation(_))) {
+            if s.segments.iter().any(|seg| matches!(seg, StringSegment::Interpolation(_, _))) {
                 return Err(meta_err("interpolated strings cannot be evaluated at compile time", span));
             }
             let text: String = s.segments.iter().map(|seg| match seg {
                 StringSegment::Literal(s) => s.as_str(),
-                StringSegment::Interpolation(_) => unreachable!(),
+                StringSegment::Interpolation(_, _) => unreachable!(),
             }).collect();
             Ok(MetaValue::Str(text))
         }
@@ -2386,7 +2386,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
     // Also handle string interpolation segments
     if let Expr::StringLiteral(s) = &mut expr.node {
         for seg in &mut s.segments {
-            if let StringSegment::Interpolation(name) = seg {
+            if let StringSegment::Interpolation(name, _) = seg {
                 if let Some(value) = env.get(name.as_str()) {
                     *seg = StringSegment::Literal(meta_value_to_string(value));
                 }
@@ -3871,7 +3871,7 @@ mod tests {
                                                 value: Spanned::new(
                                                     Expr::StringLiteral(StringLiteral {
                                                         kind: StringKind::Normal,
-                                                        segments: vec![StringSegment::Interpolation("NAME".to_string())],
+                                                        segments: vec![StringSegment::Interpolation("NAME".to_string(), None)],
                                                     }),
                                                     dummy_span(),
                                                 ),
