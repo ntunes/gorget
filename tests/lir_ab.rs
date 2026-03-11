@@ -60,6 +60,7 @@ fn run_lir(fixture_path: &std::path::Path) -> Option<String> {
         .args(["-w", "-o"])
         .arg(&tmp_exe)
         .arg(&tmp_c)
+        .arg("-lm")
         .output()
         .ok()?;
     if !cc.status.success() {
@@ -172,4 +173,27 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_meta_delayed_nested() { ab_test("meta_delayed_nested.gg"); }
 #[test] fn lir_ab_trait_bounds() { ab_test("trait_bounds.gg"); }
 #[test] fn lir_ab_char_str_coerce() { ab_test("char_str_coerce.gg"); }
-// Async fixtures skipped — timing-sensitive output can cause false A/B mismatches.
+#[test] fn lir_ab_assert_return_basic() { ab_test("assert_return_basic.gg"); }
+#[test] fn lir_ab_assert_return_fail() { ab_test("assert_return_fail.gg"); }
+#[test] fn lir_ab_assert_rich_enum() { ab_test("assert_rich_enum.gg"); }
+#[test] fn lir_ab_assert_rich_enum_fail() { ab_test("assert_rich_enum_fail.gg"); }
+#[test] fn lir_ab_assert_rich_string_fail() { ab_test("assert_rich_string_fail.gg"); }
+#[test] fn lir_ab_assert_rich_strings() { ab_test("assert_rich_strings.gg"); }
+#[test] fn lir_ab_assert_rich_struct() { ab_test("assert_rich_struct.gg"); }
+#[test] fn lir_ab_assert_rich_struct_fail() { ab_test("assert_rich_struct_fail.gg"); }
+#[test] fn lir_ab_async_basic() { ab_test("async_basic.gg"); }
+#[test] fn lir_ab_async_condition_await() { ab_test("async_condition_await.gg"); }
+#[test] fn lir_ab_async_expr_await() { ab_test("async_expr_await.gg"); }
+#[test] fn lir_ab_async_for_else() { ab_test("async_for_else.gg"); }
+#[test] fn lir_ab_async_param_across_await() { ab_test("async_param_across_await.gg"); }
+#[test] fn lir_ab_async_prefix_await() { ab_test("async_prefix_await.gg"); }
+// async_range_await: timing-sensitive
+#[test] fn lir_ab_catch_basic() { ab_test("catch_basic.gg"); }
+#[test] fn lir_ab_math_constants() { ab_test("math_constants.gg"); }
+#[test] fn lir_ab_math_trig() { ab_test("math_trig.gg"); }
+#[test] fn lir_ab_enum_nullary_bare() { ab_test("enum_nullary_bare.gg"); }
+#[test] fn lir_ab_on_error_basic() { ab_test("on_error_basic.gg"); }
+#[test] fn lir_ab_on_error_inline() { ab_test("on_error_inline.gg"); }
+#[test] fn lir_ab_result_propagation() { ab_test("result_propagation.gg"); }
+#[test] fn lir_ab_string_concat() { ab_test("string_concat.gg"); }
+#[test] fn lir_ab_string_methods_all() { ab_test("string_methods.gg"); }
