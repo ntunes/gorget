@@ -31,6 +31,8 @@ pub struct LoweringContext<'a> {
     struct_reg: StructRegistry,
     /// GIR function name → LIR FuncId mapping (for Call resolution).
     func_index: std::collections::HashMap<String, FuncId>,
+    /// GIR global name → LIR GlobalId mapping (for GlobalRef resolution).
+    global_index: std::collections::HashMap<String, GlobalId>,
 }
 
 /// Context for lowering a single GIR function.
@@ -46,8 +48,12 @@ struct FuncLowering<'a> {
     struct_reg: &'a StructRegistry,
     /// Function name → FuncId (for Call).
     func_index: &'a std::collections::HashMap<String, FuncId>,
+    /// Global name → GlobalId (for GlobalRef/GlobalAssign).
+    global_index: &'a std::collections::HashMap<String, GlobalId>,
     /// Module struct definitions (for field-count checking).
     module_structs: &'a [StructDef],
+    /// Module globals (for type lookup).
+    module_globals: &'a [LirGlobal],
     /// Synthetic externs discovered during lowering (for unknown Call targets).
     pending_externs: Vec<LirExtern>,
 }
@@ -69,6 +75,7 @@ impl<'a> LoweringContext<'a> {
             module,
             struct_reg,
             func_index: std::collections::HashMap::new(),
+            global_index: std::collections::HashMap::new(),
         }
     }
 
@@ -95,12 +102,13 @@ impl<'a> LoweringContext<'a> {
 
         // Lower globals.
         for global in &self.gir.globals {
-            self.module.add_global(LirGlobal {
+            let gid = self.module.add_global(LirGlobal {
                 name: global.name.clone(),
                 ty: map_gir_type_with_structs(&global.type_id, &self.gir.type_registry, Some(&self.struct_reg)),
                 init: lower_global_init(&global.init),
                 is_const: false, // GIR doesn't distinguish const vs mut globals
             });
+            self.global_index.insert(global.name.clone(), gid);
         }
 
         // Lower functions.
@@ -115,7 +123,9 @@ impl<'a> LoweringContext<'a> {
                     &self.gir.type_registry,
                     &self.struct_reg,
                     &self.func_index,
+                    &self.global_index,
                     &self.module.structs,
+                    &self.module.globals,
                 );
                 fl.lower();
                 all_pending_externs.extend(fl.pending_externs.drain(..));
@@ -228,7 +238,9 @@ impl<'a> FuncLowering<'a> {
         gir_types: &'a TypeRegistry,
         struct_reg: &'a StructRegistry,
         func_index: &'a std::collections::HashMap<String, FuncId>,
+        global_index: &'a std::collections::HashMap<String, GlobalId>,
         module_structs: &'a [StructDef],
+        module_globals: &'a [LirGlobal],
     ) -> Self {
         let params: Vec<LirType> = gir_func
             .params
@@ -261,7 +273,9 @@ impl<'a> FuncLowering<'a> {
             block_map,
             struct_reg,
             func_index,
+            global_index,
             module_structs,
+            module_globals,
             pending_externs: Vec::new(),
         }
     }
@@ -311,6 +325,45 @@ impl<'a> FuncLowering<'a> {
     fn lower_instruction(&mut self, inst: &Instruction, bb: BlockId) {
         match inst {
             Instruction::Assign { dst, value } => {
+                // Special-case: Constant::Null assigned to an enum-typed local.
+                // Null represents a fieldless variant (e.g. None, Error).  Instead of
+                // emitting NullPtr (which becomes memset(0) ⇒ tag=0 = wrong variant),
+                // emit proper enum init with the correct tag ordinal.
+                if let Operand::Constant(Constant::Null) = value {
+                    if dst.projections.is_empty() {
+                        let local_idx = dst.local.0 as usize;
+                        if local_idx < self.gir_func.locals.len() {
+                            let gir_ty = self.gir_func.locals[local_idx].type_id;
+                            if let Some((struct_id, tag_ordinal)) = self.find_enum_null_variant(gir_ty) {
+                                let slot = self.local_to_slot[local_idx];
+                                let base = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                                    dst: base,
+                                    slot,
+                                });
+                                // Set tag to the null variant ordinal (e.g. None=1).
+                                let tag_val = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                                    dst: tag_val,
+                                    ty: LirType::I32,
+                                    value: tag_ordinal as i64,
+                                });
+                                let tag_ptr = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                    dst: tag_ptr,
+                                    base,
+                                    struct_id,
+                                    field: 0,
+                                });
+                                self.lir_func.block_mut(bb).insts.push(Inst::Store {
+                                    ptr: tag_ptr,
+                                    value: tag_val,
+                                });
+                                return;
+                            }
+                        }
+                    }
+                }
                 let val = self.lower_operand(value, bb);
                 self.store_to_place(dst, val, bb);
             }
@@ -411,37 +464,46 @@ impl<'a> FuncLowering<'a> {
             Instruction::Call { dst, func, args } => {
                 let lir_args: Vec<ValueId> =
                     args.iter().map(|a| self.lower_operand(a, bb)).collect();
-                let result = dst.map(|_| self.lir_func.next_value());
 
                 if let Some(fid) = self.func_index.get(func) {
+                    let result = dst.map(|_| self.lir_func.next_value());
                     self.lir_func.block_mut(bb).insts.push(Inst::Call {
                         dst: result,
                         func: *fid,
                         args: lir_args,
                     });
+                    if let (Some(d), Some(r)) = (*dst, result) {
+                        self.store_to_local(d, r, bb);
+                    }
                 } else {
                     // Unknown function — treat as extern.
-                    // Derive return type from destination local so infer_inst_type works.
+                    // Map monomorphized collection/method names to runtime function names.
+                    let emit_name = map_monomorphized_to_runtime(func)
+                        .unwrap_or_else(|| func.clone());
+                    // Derive return type from destination local.
                     let ret_ty = dst.map(|d| {
                         let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
                         map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
                     }).unwrap_or(LirType::Void);
+                    let is_void_ret = matches!(ret_ty, LirType::Void);
+                    let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
                     let arg_types: Vec<LirType> = args.iter().map(|a| self.operand_lir_type(a)).collect();
-                    self.ensure_extern(func, &arg_types, &ret_ty);
+                    self.ensure_extern(&emit_name, &arg_types, &ret_ty);
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: result,
-                        name: func.clone(),
+                        name: emit_name,
                         args: lir_args,
                     });
-                }
-
-                if let (Some(d), Some(r)) = (*dst, result) {
-                    self.store_to_local(d, r, bb);
+                    if let (Some(d), Some(r)) = (*dst, result) {
+                        self.store_to_local(d, r, bb);
+                    }
                 }
             }
 
             Instruction::CallExtern { dst, func, args } => {
-                let is_printf_like = func == "printf" || func == "fprintf_stderr";
+                let is_printf_like = func == "printf" || func == "fprintf_stderr"
+                    || func == "gorget_string_format" || func == "gorget_string_format_alloc"
+                    || func == "snprintf" || func == "sprintf";
                 let lir_args: Vec<ValueId> = if is_printf_like {
                     // For printf, expand Str-typed args into (int)len, data pairs.
                     self.lower_printf_args(args, bb)
@@ -455,14 +517,14 @@ impl<'a> FuncLowering<'a> {
                     args.iter().map(|a| self.operand_lir_type(a)).collect()
                 };
                 // Ensure the extern has the correct return type (for collection constructors etc.)
-                {
-                    let ret_ty = dst.map(|d| {
-                        let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
-                        map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
-                    }).unwrap_or(LirType::Void);
-                    self.ensure_extern(func, &arg_types, &ret_ty);
-                }
-                let result = dst.map(|_| self.lir_func.next_value());
+                let ret_ty = dst.map(|d| {
+                    let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+                    map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
+                }).unwrap_or(LirType::Void);
+                self.ensure_extern(func, &arg_types, &ret_ty);
+                // Skip dst for void-returning functions (e.g. gorget_panic, abort).
+                let is_void_ret = matches!(ret_ty, LirType::Void);
+                let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: result,
                     name: func.clone(),
@@ -657,8 +719,21 @@ impl<'a> FuncLowering<'a> {
                 variant,
                 field,
             } => {
-                let base_val = self.lower_place_addr(base, bb);
+                let mut base_val = self.lower_place_addr(base, bb);
                 let gir_type_id = self.gir_func.locals[base.local.0 as usize].type_id;
+                // If after resolving projections we still have a pointer type,
+                // the base_val is a SlotAddr of a pointer local — load the pointer
+                // to get the actual enum struct address.
+                let effective_ty = self.effective_place_type(base);
+                if let Some(GirType::Ptr(_) | GirType::MutPtr(_)) = self.gir_types.get(effective_ty) {
+                    let deref = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: deref,
+                        ptr: base_val,
+                        ty: LirType::Ptr,
+                    });
+                    base_val = deref;
+                }
                 let struct_id = self.resolve_struct_id(gir_type_id);
                 let type_name = self.resolve_type_name(gir_type_id);
                 let field_offset = self.resolve_variant_field_offset(&type_name, variant);
@@ -824,8 +899,20 @@ impl<'a> FuncLowering<'a> {
                 });
             }
 
-            Instruction::GlobalAssign { .. } => {
-                // GlobalAssign is handled by the C backend directly; skip in LIR.
+            Instruction::GlobalAssign { name, value } => {
+                if let Some(&gid) = self.global_index.get(name) {
+                    let val = self.lower_operand(value, bb);
+                    let addr = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::GlobalAddr { dst: addr, global: gid });
+                    let global_ty = &self.module_globals[gid.0 as usize].ty;
+                    if global_ty.is_scalar() {
+                        // Scalar store: dereference and assign.
+                        self.lir_func.block_mut(bb).insts.push(Inst::Store { ptr: addr, value: val });
+                    } else {
+                        // Aggregate store: memcpy.
+                        self.lir_func.block_mut(bb).insts.push(Inst::Store { ptr: addr, value: val });
+                    }
+                }
             }
 
             Instruction::Nop => {
@@ -1155,10 +1242,23 @@ impl<'a> FuncLowering<'a> {
                     Inst::IConst { dst, ty: LirType::I64, value: 0 }
                 }
             }
-            Constant::GlobalRef(name) | Constant::GlobalRefPtr(name) => {
-                // Look up the global. For now emit a placeholder.
-                let _ = name;
-                Inst::NullPtr { dst }
+            Constant::GlobalRef(name) => {
+                if let Some(&gid) = self.global_index.get(name) {
+                    // Load the global's value: take address, then load.
+                    let addr = self.lir_func.next_value();
+                    let global_ty = self.module_globals[gid.0 as usize].ty.clone();
+                    self.lir_func.block_mut(bb).insts.push(Inst::GlobalAddr { dst: addr, global: gid });
+                    Inst::Load { dst, ptr: addr, ty: global_ty }
+                } else {
+                    Inst::NullPtr { dst }
+                }
+            }
+            Constant::GlobalRefPtr(name) => {
+                if let Some(&gid) = self.global_index.get(name) {
+                    Inst::GlobalAddr { dst, global: gid }
+                } else {
+                    Inst::NullPtr { dst }
+                }
             }
         };
         self.lir_func.block_mut(bb).insts.push(inst);
@@ -1195,6 +1295,22 @@ impl<'a> FuncLowering<'a> {
     /// If the extern already exists from a previous call site, merge parameter types
     /// by preferring more specific types (e.g., Struct over Ptr).
     fn ensure_extern(&mut self, name: &str, arg_types: &[LirType], ret_ty: &LirType) {
+        // For known runtime functions, use canonical signatures instead of call-site inference.
+        if let Some((canon_params, canon_ret)) = runtime_extern_sig(name, self.struct_reg) {
+            if let Some(existing) = self.pending_externs.iter_mut().find(|e| e.name == name) {
+                existing.params = canon_params;
+                existing.return_type = canon_ret;
+            } else {
+                self.pending_externs.push(LirExtern {
+                    name: name.to_string(),
+                    params: canon_params,
+                    return_type: canon_ret,
+                    is_variadic: false,
+                });
+            }
+            return;
+        }
+
         if let Some(existing) = self.pending_externs.iter_mut().find(|e| e.name == name) {
             // Merge param types: prefer aggregate/specific types over Ptr.
             for (i, new_ty) in arg_types.iter().enumerate() {
@@ -1242,10 +1358,17 @@ impl<'a> FuncLowering<'a> {
 
     fn resolve_struct_id(&self, gir_type_id: GirTypeId) -> StructId {
         let gir_type = self.gir_types.get(gir_type_id);
-        if let Some(GirType::Named(name)) = gir_type {
-            if let Some(sid) = self.struct_reg.lookup(name) {
-                return sid;
+        match gir_type {
+            Some(GirType::Named(name)) => {
+                if let Some(sid) = self.struct_reg.lookup(&name) {
+                    return sid;
+                }
             }
+            // Unwrap pointer/ref types to find the inner Named type (e.g. &Color → Color).
+            Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => {
+                return self.resolve_struct_id(*inner);
+            }
+            _ => {}
         }
         StructId(0) // fallback
     }
@@ -1383,6 +1506,24 @@ impl<'a> FuncLowering<'a> {
             }
         }
         1
+    }
+
+    /// If `gir_ty` is an enum, find the first variant with no fields (the "null" variant,
+    /// e.g. None for Option, Error for Result).  Returns `(StructId, tag_ordinal)`.
+    fn find_enum_null_variant(&self, gir_ty: GirTypeId) -> Option<(StructId, usize)> {
+        let gir_type = self.gir_types.get(gir_ty)?;
+        if let GirType::Named(name) = gir_type {
+            let def = self.gir_types.get_type_def(&name)?;
+            if let gir_types::TypeDefKind::Enum(edef) = &def.kind {
+                let struct_id = self.struct_reg.lookup(&name)?;
+                for (i, v) in edef.variants.iter().enumerate() {
+                    if v.fields.is_empty() {
+                        return Some((struct_id, i));
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn resolve_place_type(&self, place: &Place) -> LirType {
@@ -1526,6 +1667,122 @@ fn map_cmp_op(op: GirCmpOp) -> CmpOp {
         GirCmpOp::Gt => CmpOp::Gt,
         GirCmpOp::Ge => CmpOp::Ge,
     }
+}
+
+/// Return canonical (params, return_type) for known Gorget runtime functions.
+/// This prevents call-site inference from producing wrong parameter types
+/// (e.g. GorgetString instead of Str for gorget_str_* functions).
+fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<(Vec<LirType>, LirType)> {
+    let str_ty = || sr.lookup("Str").map(LirType::Struct).unwrap_or(LirType::Ptr);
+    let gs_ty = || sr.lookup("GorgetString").map(LirType::Struct).unwrap_or(LirType::Ptr);
+    let arr_ty = || sr.lookup("GorgetArray").map(LirType::Struct).unwrap_or(LirType::Ptr);
+    let s = str_ty;
+    let g = gs_ty;
+
+    match name {
+        // String concatenation and conversion
+        "gorget_str_cat" => Some((vec![s(), s()], g())),
+        "gorget_str_eq" => Some((vec![s(), s()], LirType::Bool)),
+        "gorget_str_cmp" => Some((vec![s(), s()], LirType::I64)),
+        "gorget_str_from_cstr" => Some((vec![LirType::Ptr], s())),
+        "gorget_str_to_cstr" => Some((vec![s()], LirType::Ptr)),
+        "gorget_str_empty" => Some((vec![], s())),
+        "gorget_str_index" => Some((vec![s(), LirType::I64], s())),
+        "gorget_str_slice" => Some((vec![s(), LirType::I64, LirType::I64], s())),
+        "gorget_str_byte_slice" => Some((vec![s(), LirType::I64, LirType::I64], s())),
+        "gorget_str_char_at" => Some((vec![s(), LirType::I64], s())),
+        "gorget_str_byte_at" => Some((vec![s(), LirType::I64], LirType::U8)),
+        "gorget_str_byte_len" => Some((vec![s()], LirType::I64)),
+        "gorget_str_codepoint_count" => Some((vec![s()], LirType::I64)),
+        "gorget_str_is_empty" => Some((vec![s()], LirType::Bool)),
+        "gorget_str_contains" => Some((vec![s(), s()], LirType::Bool)),
+        "gorget_str_starts_with" => Some((vec![s(), s()], LirType::Bool)),
+        "gorget_str_ends_with" => Some((vec![s(), s()], LirType::Bool)),
+        "gorget_str_find" => Some((vec![s(), s()], LirType::I64)),
+        "gorget_str_index_of" => Some((vec![s(), s()], LirType::I64)),
+        "gorget_str_count" => Some((vec![s(), s()], LirType::I64)),
+        "gorget_str_trim" | "gorget_str_lstrip_ws" | "gorget_str_rstrip_ws" => Some((vec![s()], s())),
+        "gorget_str_strip" | "gorget_str_lstrip" | "gorget_str_rstrip" => Some((vec![s(), s()], s())),
+        "gorget_str_removeprefix" | "gorget_str_removesuffix" => Some((vec![s(), s()], s())),
+        "gorget_str_to_upper" | "gorget_str_to_lower" => Some((vec![s()], g())),
+        "gorget_str_replace" => Some((vec![s(), s(), s()], g())),
+        "gorget_str_repeat" => Some((vec![s(), LirType::I64], g())),
+        "gorget_str_pad_left" | "gorget_str_pad_right" => Some((vec![s(), LirType::I64, s()], g())),
+        "gorget_str_is_alpha" | "gorget_str_is_digit" | "gorget_str_is_alphanumeric"
+        | "gorget_str_is_whitespace" | "gorget_str_is_upper" | "gorget_str_is_lower"
+        | "gorget_str_is_hex_digit" | "gorget_str_is_ascii" | "gorget_str_has_null" => {
+            Some((vec![s()], LirType::Bool))
+        }
+        "gorget_str_split" => Some((vec![s(), s()], arr_ty())),
+        "gorget_str_join" => Some((vec![s(), arr_ty()], g())),
+        "gorget_str_bytes" | "gorget_str_codepoints" | "gorget_str_chars" => {
+            Some((vec![s()], arr_ty()))
+        }
+        // GorgetString methods
+        "gorget_string_new" => Some((vec![LirType::Ptr], g())),
+        "gorget_string_from_str" => Some((vec![s()], g())),
+        "gorget_string_clone" => Some((vec![LirType::Ptr], g())),
+        "gorget_string_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_string_eq" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Bool)),
+        "gorget_string_cstr" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        "gorget_string_concat" => Some((vec![LirType::Ptr, LirType::Ptr], g())),
+        "gorget_string_append" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
+        "gorget_str_str" | "gorget_str_substring" => Some((vec![s(), s()], s())),
+        "gorget_str_from_literal" => Some((vec![LirType::Ptr, LirType::I64], s())),
+        "gorget_str_from_int" | "gorget_str_from_float" | "gorget_str_from_bool" => {
+            Some((vec![LirType::I64], s()))
+        }
+
+        // Panic / abort functions (void return)
+        "gorget_panic" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_assert_fail" => Some((vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Void)),
+        "gorget_overflow_add" | "gorget_overflow_sub" | "gorget_overflow_mul" => {
+            Some((vec![], LirType::Void))
+        }
+        _ => None,
+    }
+}
+
+/// Map monomorphized GIR function names to their C runtime equivalents.
+/// E.g., `Vector__Str__push` → `gorget_array_push`,
+///       `Dict__Str__int64_t__put` → `gorget_map_put`,
+///       `GorgetString__to_upper` → `gorget_str_to_upper`.
+fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
+    // Vector__T__method → gorget_array_method
+    if name.starts_with("Vector__") {
+        let method = name.rsplit("__").next()?;
+        return Some(format!("gorget_array_{method}"));
+    }
+    // Dict__K__V__method → gorget_map_method
+    if name.starts_with("Dict__") || name.starts_with("HashMap__") {
+        let method = name.rsplit("__").next()?;
+        return Some(format!("gorget_map_{method}"));
+    }
+    // Set__T__method → gorget_set_method
+    if name.starts_with("Set__") || name.starts_with("HashSet__") {
+        let method = name.rsplit("__").next()?;
+        return Some(format!("gorget_set_{method}"));
+    }
+    // GorgetString__method → gorget_str_method (for string methods)
+    if name.starts_with("GorgetString__") {
+        let method = name.strip_prefix("GorgetString__")?;
+        return Some(format!("gorget_str_{method}"));
+    }
+    // Str__method → gorget_str_method
+    if name.starts_with("Str__") {
+        let method = name.strip_prefix("Str__")?;
+        return Some(format!("gorget_str_{method}"));
+    }
+    // Option__T__unwrap → __option_unwrap → gorget_option_unwrap
+    if name == "__option_unwrap" || name.contains("Option__") && name.ends_with("__unwrap") {
+        return Some("gorget_option_unwrap".to_string());
+    }
+    // Heap__T__method → gorget_heap_method
+    if name.starts_with("Heap__") {
+        let method = name.rsplit("__").next()?;
+        return Some(format!("gorget_heap_{method}"));
+    }
+    None
 }
 
 fn lower_global_init(init: &ir::GlobalInit) -> LirGlobalInit {

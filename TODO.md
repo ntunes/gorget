@@ -2,7 +2,7 @@
 
 ## High
 
-- **LIR: Phase 6 — expand A/B test coverage**: 105/~584 fixtures match (18%). Fixed in Phase 5: StrLit vs Str coercion, FieldPtr bounds-safe fallback, synthetic extern merge, runtime fn declaration skip, struct forward declarations for empty structs, GorgetString→Str arg coercion (partial). Fixed in Phase 6: aggregate memcpy sizeof (was `sizeof(*(void*))` = 1), Str comparison in Cmp (was raw pointer compare), SSA block param arg ordering (HashMap iteration), SSA reaching def for untouched slots on back-edges, `-lm` in test harness. Remaining: global variable access (empty function bodies), closure capture (garbage values), division-by-zero check, collection method dispatch (cc fails), undeclared values from void-returning CallExtern. [updated: 2026-03-11]
+- **LIR: Phase 10 — remaining mismatches**: 566/610 fixtures enrolled, 565 passing (92.6%). 1 flaky (httpserver_keepalive — port contention). 24 unenrolled are compile-error tests, 20 are environment-dependent (http, sqlite, io_input, cli_args, hot_reload, bench). All core language features, collections, async, closures, drops, traits, generics pass. Remaining build failures: 7 escape-analysis tests (compile errors, expected), 1 test_process (timing). [updated: 2026-03-11]
 
 ## Medium
 

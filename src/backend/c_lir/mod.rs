@@ -78,7 +78,13 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
             writeln!(out, "    char __pad;").unwrap();
         } else {
             for (fname, fty) in &def.fields {
-                writeln!(out, "    {} {};", c_type_named(fty, &struct_names), c_field_name(fname)).unwrap();
+                // Void-typed fields are invalid in C — substitute uint8_t as a placeholder.
+                let ty_str = if matches!(fty, LirType::Void) {
+                    "uint8_t".to_string()
+                } else {
+                    c_type_named(fty, &struct_names)
+                };
+                writeln!(out, "    {} {};", ty_str, c_field_name(fname)).unwrap();
             }
         }
         writeln!(out, "}};").unwrap();
@@ -105,7 +111,13 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
                 if i > 0 {
                     write!(out, ", ").unwrap();
                 }
-                write!(out, "{}", c_type_named(p, &struct_names)).unwrap();
+                // Void as a non-sole parameter is invalid C; emit void* instead
+                // (typically a closure env pointer that has no captures).
+                if matches!(p, LirType::Void) {
+                    write!(out, "void*").unwrap();
+                } else {
+                    write!(out, "{}", c_type_named(p, &struct_names)).unwrap();
+                }
             }
             if ext.is_variadic {
                 if !ext.params.is_empty() {
@@ -141,7 +153,8 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
                 if i > 0 {
                     write!(out, ", ").unwrap();
                 }
-                write!(out, "{} __p{i}", c_type_named(p, &struct_names)).unwrap();
+                let ty_str = if matches!(p, LirType::Void) { "void*".to_string() } else { c_type_named(p, &struct_names) };
+                write!(out, "{ty_str} __p{i}").unwrap();
             }
         }
         writeln!(out, ");").unwrap();
@@ -167,7 +180,9 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             if i > 0 {
                 write!(out, ", ").unwrap();
             }
-            write!(out, "{} __p{i}", c_type_named(p, sn)).unwrap();
+            // Void as non-sole param is invalid C — use void* (closure env ptr).
+            let ty_str = if matches!(p, LirType::Void) { "void*".to_string() } else { c_type_named(p, sn) };
+            write!(out, "{ty_str} __p{i}").unwrap();
         }
     }
     writeln!(out, ") {{").unwrap();
@@ -212,6 +227,8 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     let mut val_types: Vec<Option<LirType>> = vec![None; max_val as usize];
     // Track which values originate from StrLit instructions (raw `const char*`).
     let mut str_lit_vals: Vec<bool> = vec![false; max_val as usize];
+    // Track which values are NullPtr (so we can avoid memcpy from NULL).
+    let mut null_vals: Vec<bool> = vec![false; max_val as usize];
     // Track the pointee type for Ptr-typed values (e.g. SlotAddr → slot type, FieldPtr → field type).
     // Used by Inst::Store to emit correct sizeof() for memcpy of aggregates.
     let mut ptr_pointee: Vec<Option<LirType>> = vec![None; max_val as usize];
@@ -227,6 +244,9 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             }
             if let Inst::StrLit { dst, .. } = inst {
                 str_lit_vals[dst.0 as usize] = true;
+            }
+            if let Inst::NullPtr { dst } = inst {
+                null_vals[dst.0 as usize] = true;
             }
             // Track pointee types for pointer-producing instructions.
             match inst {
@@ -287,7 +307,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         // Instructions
         for inst in &block.insts {
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &ptr_pointee);
+            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &null_vals, &ptr_pointee);
             writeln!(out).unwrap();
         }
 
@@ -300,7 +320,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], ptr_pointee: &[Option<LirType>]) {
+fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>]) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -310,15 +330,23 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
             let slot_ty = &func.slots[slot.0 as usize].ty;
             let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
             let slot_is_str = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
+            let slot_is_gs = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString"));
             let is_str_lit_val = str_lit_vals.get(value.0 as usize).copied().unwrap_or(false);
             if slot_is_str && is_str_lit_val {
                 // String literal (const char*) → Str slot: wrap with gorget_str_from_literal.
                 write!(out, "{} = gorget_str_from_literal({}, strlen({}));", s(*slot), v(*value), v(*value)).unwrap();
+            } else if slot_is_gs && is_str_lit_val {
+                // String literal → GorgetString slot: wrap with gorget_string_new.
+                write!(out, "{} = gorget_string_new({});", s(*slot), v(*value)).unwrap();
             } else if slot_ty.is_aggregate() {
                 // Aggregate store: source may be a pointer (SlotAddr) or a struct value (ParamRef, Call result).
                 let val_is_ptr = matches!(val_ty, Some(LirType::Ptr));
+                let val_is_null = null_vals.get(value.0 as usize).copied().unwrap_or(false);
                 let ty_name = c_type_named(slot_ty, sn);
-                if val_is_ptr {
+                if val_is_null {
+                    // NullPtr → aggregate slot: zero out (e.g. None variant of Option).
+                    write!(out, "memset(&{}, 0, sizeof({}));", s(*slot), ty_name).unwrap();
+                } else if val_is_ptr {
                     // Value is a pointer to source data — use memcpy.
                     write!(out, "memcpy(&{}, {}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
                 } else {
@@ -611,27 +639,93 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
             write!(out, ");").unwrap();
         }
         Inst::CallExtern { dst, name, args } => {
-            let is_printf = name == "printf" || name == "fprintf_stderr";
-            let ext_params: Option<&[LirType]> = module.externs.iter()
-                .find(|e| &e.name == name)
-                .map(|e| e.params.as_slice());
-            if let Some(d) = dst {
-                write!(out, "{} = ", v(*d)).unwrap();
+            let is_stderr_print = name == "fprintf_stderr";
+            let is_printf = name == "printf" || is_stderr_print
+                || name == "gorget_string_format" || name == "gorget_string_format_alloc"
+                || name == "snprintf" || name == "sprintf";
+            let emit_name = if is_stderr_print { "fprintf" } else { name.as_str() };
+            // time() in C requires a NULL argument.
+            if name == "time" && args.is_empty() {
+                if let Some(d) = dst {
+                    write!(out, "{} = ", v(*d)).unwrap();
+                }
+                write!(out, "time(NULL);").unwrap();
+                return;
             }
-            write!(out, "{}(", name).unwrap();
-            for (i, a) in args.iter().enumerate() {
+            // sleep(x) → gorget_sleep_ms((int64_t)(x * 1000))
+            if (name == "sleep" || name == "gg_sleep") && args.len() == 1 {
+                let a = &args[0];
+                let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                if matches!(arg_ty, Some(LirType::F64) | Some(LirType::F32)) {
+                    write!(out, "gorget_sleep_ms((int64_t)({} * 1000));", v(*a)).unwrap();
+                } else {
+                    write!(out, "gorget_sleep_ms({});", v(*a)).unwrap();
+                }
+                return;
+            }
+            // For fprintf_stderr, skip the first arg (Null placeholder).
+            let emit_args: &[ValueId] = if is_stderr_print && !args.is_empty() {
+                &args[1..]
+            } else {
+                args
+            };
+            let ext_decl = module.externs.iter().find(|e| &e.name == name);
+            let ext_params: Option<&[LirType]> = ext_decl.map(|e| e.params.as_slice());
+            let ret_is_void = ext_decl.map_or(false, |e| matches!(e.return_type, LirType::Void));
+
+            // ── Collection void* return dereference ──────────────────
+            // Functions like gorget_array_get return void* — dereference
+            // to the concrete element type expected by the destination.
+            let void_ret = is_collection_void_return(emit_name);
+            let dst_needs_deref = void_ret && dst.map_or(false, |d| {
+                let ty = val_types.get(d.0 as usize).and_then(|t| t.as_ref());
+                ty.map_or(false, |t| !matches!(t, LirType::Ptr))
+            });
+
+            if dst_needs_deref {
+                let d = dst.unwrap();
+                let dst_ty = val_types[d.0 as usize].as_ref().unwrap();
+                let ty_name = c_type_named(dst_ty, sn);
+                // Emit: dst = *(Type*)call(args);
+                write!(out, "{} = *({ty_name}*)", v(d)).unwrap();
+            } else if let Some(d) = dst {
+                if !ret_is_void {
+                    write!(out, "{} = ", v(*d)).unwrap();
+                }
+            }
+
+            // ── void* param indices for collection functions ─────────
+            let void_params = collection_void_param_indices(emit_name);
+
+            write!(out, "{}(", emit_name).unwrap();
+            if is_stderr_print {
+                write!(out, "stderr").unwrap();
+                if !emit_args.is_empty() {
+                    write!(out, ", ").unwrap();
+                }
+            }
+            for (i, a) in emit_args.iter().enumerate() {
                 if i > 0 {
                     write!(out, ", ").unwrap();
                 }
                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
                 // For printf, wrap bool args with ? "true" : "false"
-                if is_printf && i > 0 && matches!(arg_ty, Some(LirType::Bool)) {
+                if is_printf && matches!(arg_ty, Some(LirType::Bool)) {
                     write!(out, "{} ? \"true\" : \"false\"", v(*a)).unwrap();
                 }
                 // String literal arg to a gorget_str_* function that takes Str → wrap.
                 else if is_str_lit && name.starts_with("gorget_str_") {
                     write!(out, "gorget_str_from_literal({}, strlen({}))", v(*a), v(*a)).unwrap();
+                }
+                // GorgetString arg to a gorget_str_* function → coerce to Str.
+                else if name.starts_with("gorget_str_") && is_gorget_string_type(arg_ty, sn) {
+                    write!(out, "(Str){{ .data = ({v}).data, .len = ({v}).len }}", v = v(*a)).unwrap();
+                }
+                // Collection void* element params — wrap concrete values with &(Type){val}.
+                else if void_params.contains(&i) && arg_ty.map_or(false, |t| !matches!(t, LirType::Ptr)) {
+                    let ty_name = c_type_named(arg_ty.unwrap(), sn);
+                    write!(out, "&({ty_name}){{ {} }}", v(*a)).unwrap();
                 }
                 // Use general coercion for extern params.
                 else {
@@ -846,11 +940,52 @@ fn emit_coerced_arg(
     }
 }
 
+/// Returns true if the LIR type is a GorgetString struct.
+fn is_gorget_string_type(ty: Option<&LirType>, sn: &HashMap<u32, String>) -> bool {
+    if let Some(LirType::Struct(sid)) = ty {
+        let name = sn.get(&sid.0).map(|s| s.as_str()).unwrap_or("");
+        name == "GorgetString"
+    } else {
+        false
+    }
+}
+
+/// Returns true if the LIR type is a Str struct.
 /// Returns true if the function is provided by the Gorget C runtime (static inline).
 fn is_runtime_fn(name: &str) -> bool {
     name.starts_with("gorget_")
         || name.starts_with("GORGET_")
         || name.starts_with("__gorget_")
+}
+
+/// Returns true if the collection runtime function returns `void*` (pointer to element).
+/// The caller must dereference the result to the concrete element type.
+fn is_collection_void_return(name: &str) -> bool {
+    matches!(
+        name,
+        "gorget_array_get"
+            | "gorget_map_get"
+            | "gorget_heap_pop"
+            | "gorget_heap_peek"
+    )
+}
+
+/// Returns the indices of parameters that are `void*` (element/key/value pointers)
+/// for collection runtime functions.  The caller must pass `&(Type){value}` for
+/// these positions when the argument is a concrete value (not already a pointer).
+fn collection_void_param_indices(name: &str) -> &'static [usize] {
+    match name {
+        "gorget_array_push" => &[1],
+        "gorget_array_set" => &[2],
+        "gorget_array_insert" => &[2],
+        "gorget_array_contains" => &[1],
+        "gorget_array_extend" => &[1],
+        "gorget_map_put" => &[1, 2],
+        "gorget_map_get" | "gorget_map_contains" | "gorget_map_remove" => &[1],
+        "gorget_set_add" | "gorget_set_contains" | "gorget_set_remove" => &[1],
+        "gorget_heap_push" => &[1],
+        _ => &[],
+    }
 }
 
 fn is_std_header_fn(name: &str) -> bool {
@@ -871,6 +1006,11 @@ fn is_std_header_fn(name: &str) -> bool {
             | "clock_gettime" | "nanosleep"
             | "rand" | "srand"
             | "qsort" | "bsearch"
+            // Gorget wrappers that collide with POSIX names — skip extern decls
+            // because the actual calls are rewritten to runtime functions.
+            | "sleep" | "gg_sleep"
+            | "mkdir" | "rename" | "remove" | "readdir"
+            | "usleep"
     )
 }
 
