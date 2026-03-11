@@ -1,0 +1,12 @@
+from types import Point, Color
+
+void main():
+    Point p = Point(3, 4)
+    Point q = p.clone()
+    print(q.x)
+    print(q.y)
+    print(p == q)
+
+    Color c = Color.Red()
+    Color d = c.clone()
+    print(d.display())

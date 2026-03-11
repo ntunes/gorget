@@ -1,0 +1,4 @@
+@derive(Cloneable)
+struct Pair:
+    int x
+    int y

@@ -1,0 +1,7 @@
+from types import Pair
+
+void main():
+    Pair a = Pair(10, 20)
+    Pair b = a.clone()
+    print(f"{b.x}")
+    print(f"{b.y}")

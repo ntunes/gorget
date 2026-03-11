@@ -41,10 +41,22 @@ fn format_generic_params(gp: &Option<Spanned<GenericParams>>) -> String {
 ///
 /// For each derivable trait, generates Gorget source code for the equip block,
 /// parses it, and appends the resulting `EquipBlock` items to the module.
+/// Recurses into `Item::Module` wrappers so derives in imported modules are expanded.
 pub fn expand_derives(module: &mut Module, errors: &mut Vec<SemanticError>) {
-    let mut new_items = Vec::new();
+    expand_derives_in_items(&mut module.items, errors);
+}
 
-    for item in &module.items {
+fn expand_derives_in_items(items: &mut Vec<Spanned<Item>>, errors: &mut Vec<SemanticError>) {
+    // First, recurse into Item::Module wrappers so nested modules get expanded too.
+    for item in items.iter_mut() {
+        if let Item::Module { items: inner, .. } = &mut item.node {
+            expand_derives_in_items(inner, errors);
+        }
+    }
+
+    // Then collect derives from structs/enums at this level.
+    let mut new_items = Vec::new();
+    for item in items.iter() {
         match &item.node {
             Item::Struct(s) => {
                 collect_struct_derives(s, &mut new_items, errors);
@@ -56,7 +68,7 @@ pub fn expand_derives(module: &mut Module, errors: &mut Vec<SemanticError>) {
         }
     }
 
-    module.items.extend(new_items);
+    items.extend(new_items);
 }
 
 const DERIVABLE_STRUCT_TRAITS: &[&str] =

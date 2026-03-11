@@ -1,0 +1,10 @@
+@derive(Cloneable, Equatable, Displayable)
+struct Point:
+    int x
+    int y
+
+@derive(Cloneable, Displayable)
+enum Color:
+    Red
+    Green
+    Blue

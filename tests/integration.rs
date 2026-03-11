@@ -1213,6 +1213,16 @@ fn modules_trait() {
 }
 
 #[test]
+fn modules_derive_clone() {
+    run_gg_dir("modules_derive_clone", "main.gg", "10\n20");
+}
+
+#[test]
+fn modules_derive_multi() {
+    run_gg_dir("modules_derive_multi", "main.gg", "3\n4\ntrue\nRed()");
+}
+
+#[test]
 fn modules_auto() {
     run_gg_dir("modules_auto", "main.gg", "49");
 }
