@@ -1,0 +1,375 @@
+# GPU Abstraction — platform-adaptive rendering via compile-time backend selection.
+#
+# Showcases: meta platform() for compile-time dispatch, trait-like equip polymorphism.
+#
+# On macOS: uses Metal via gg.metal
+# On Linux/other: uses OpenGL 2.1 via gg.gl
+#
+# The GPU types are platform-independent. The implementations are selected
+# at compile time — dead code for the other platform is never emitted.
+
+from gg.math3d import Vec3, Vec4, Mat4
+
+# ── GPU Handle Types (platform-independent) ─────────────────
+
+struct GpuDevice:
+    int handle
+    int queue_handle
+    int layer_handle
+
+struct GpuBuffer:
+    int handle
+    int size
+    int usage          # 0=vertex, 1=index, 2=uniform
+
+struct GpuTexture:
+    int handle
+    int width
+    int height
+    int format         # 0=RGBA8, 1=RGB8, 2=Depth32
+
+struct GpuShader:
+    int handle
+
+struct GpuPipeline:
+    int handle
+    int depth_stencil_handle
+
+struct GpuRenderPass:
+    int encoder_handle
+    int cmd_buffer_handle
+    int drawable_handle
+
+# ── Constants ───────────────────────────────────────────────
+
+int GPU_BUFFER_VERTEX = 0
+int GPU_BUFFER_INDEX = 1
+int GPU_BUFFER_UNIFORM = 2
+
+int GPU_FORMAT_RGBA8 = 0
+int GPU_FORMAT_RGB8 = 1
+int GPU_FORMAT_DEPTH32 = 2
+
+int GPU_PRIMITIVE_TRIANGLES = 0
+int GPU_PRIMITIVE_LINES = 1
+int GPU_PRIMITIVE_POINTS = 2
+int GPU_PRIMITIVE_TRIANGLE_STRIP = 3
+
+int GPU_CULL_NONE = 0
+int GPU_CULL_FRONT = 1
+int GPU_CULL_BACK = 2
+
+int GPU_COMPARE_NEVER = 0
+int GPU_COMPARE_LESS = 1
+int GPU_COMPARE_EQUAL = 2
+int GPU_COMPARE_LESS_EQUAL = 3
+int GPU_COMPARE_GREATER = 4
+int GPU_COMPARE_NOT_EQUAL = 5
+int GPU_COMPARE_GREATER_EQUAL = 6
+int GPU_COMPARE_ALWAYS = 7
+
+int GPU_BLEND_ZERO = 0
+int GPU_BLEND_ONE = 1
+int GPU_BLEND_SRC_ALPHA = 2
+int GPU_BLEND_ONE_MINUS_SRC_ALPHA = 3
+int GPU_BLEND_DST_COLOR = 4
+int GPU_BLEND_ZERO2 = 5
+
+# ── Platform Backend Selection ──────────────────────────────
+
+meta if platform() == "macos":
+    from gg.metal import metal_create_device, metal_create_command_queue
+    from gg.metal import metal_create_buffer, metal_create_buffer_with_data
+    from gg.metal import metal_buffer_contents
+    from gg.metal import metal_create_texture_2d, metal_texture_upload
+    from gg.metal import metal_create_library, metal_library_function
+    from gg.metal import metal_create_render_pipeline, metal_create_depth_stencil
+    from gg.metal import metal_begin_frame, metal_create_command_buffer
+    from gg.metal import metal_create_render_encoder
+    from gg.metal import metal_create_render_pass_desc
+    from gg.metal import metal_render_pass_set_color, metal_render_pass_set_depth
+    from gg.metal import metal_encoder_set_pipeline, metal_encoder_set_vertex_buffer
+    from gg.metal import metal_encoder_set_fragment_texture
+    from gg.metal import metal_encoder_set_depth_stencil, metal_encoder_set_cull_mode
+    from gg.metal import metal_encoder_set_viewport, metal_encoder_set_scissor
+    from gg.metal import metal_encoder_draw_primitives, metal_encoder_draw_indexed
+    from gg.metal import metal_encoder_end
+    from gg.metal import metal_command_buffer_present, metal_command_buffer_commit
+    from gg.metal import sdl_metal_create_view, sdl_metal_get_layer
+    from gg.metal import metal_layer_set_device, metal_layer_set_pixel_format
+    from gg.metal import metal_drawable_texture, metal_release
+    from gg.metal import metal_generate_mipmaps
+    from gg.metal import MTL_PIXEL_FORMAT_BGRA8_UNORM, MTL_PIXEL_FORMAT_RGBA8_UNORM
+    from gg.metal import MTL_PIXEL_FORMAT_DEPTH32_FLOAT
+    from gg.metal import MTL_PRIMITIVE_TRIANGLE, MTL_PRIMITIVE_LINE
+    from gg.metal import MTL_PRIMITIVE_POINT, MTL_PRIMITIVE_TRIANGLE_STRIP
+    from gg.metal import MTL_INDEX_UINT16, MTL_INDEX_UINT32
+    from gg.metal import MTL_LOAD_ACTION_CLEAR, MTL_STORE_ACTION_STORE
+    from gg.metal import MTL_LOAD_ACTION_DONT_CARE, MTL_STORE_ACTION_DONT_CARE
+    from gg.metal import MTL_TEXTURE_USAGE_SHADER_READ, MTL_TEXTURE_USAGE_RENDER_TARGET
+    from gg.metal import MTL_STORAGE_MODE_SHARED, MTL_STORAGE_MODE_PRIVATE
+
+    # ── Metal: Device Init ──────────────────────────────────
+
+    GpuDevice gpu_init(int window):
+        int dev = metal_create_device()
+        int queue = metal_create_command_queue(dev)
+        int view = sdl_metal_create_view(window)
+        int layer = sdl_metal_get_layer(view)
+        metal_layer_set_device(layer, dev)
+        metal_layer_set_pixel_format(layer, MTL_PIXEL_FORMAT_BGRA8_UNORM)
+        return GpuDevice(dev, queue, layer)
+
+    # ── Metal: Buffer / Texture / Pipeline ───────────────────
+
+    equip GpuDevice:
+        GpuBuffer create_buffer(&self, int size, int usage):
+            int h = metal_create_buffer(self.handle, size, MTL_STORAGE_MODE_SHARED)
+            return GpuBuffer(h, size, usage)
+
+        GpuBuffer create_buffer_with_data(&self, Vector[uint8] data, int usage):
+            int h = metal_create_buffer_with_data(self.handle, data, data.length(), MTL_STORAGE_MODE_SHARED)
+            return GpuBuffer(h, data.length(), usage)
+
+        GpuTexture create_texture(&self, int width, int height, int format):
+            int mtl_format = MTL_PIXEL_FORMAT_RGBA8_UNORM
+            int mtl_usage = MTL_TEXTURE_USAGE_SHADER_READ
+            int mtl_storage = MTL_STORAGE_MODE_SHARED
+            if format == GPU_FORMAT_DEPTH32:
+                mtl_format = MTL_PIXEL_FORMAT_DEPTH32_FLOAT
+                mtl_usage = MTL_TEXTURE_USAGE_RENDER_TARGET
+                mtl_storage = MTL_STORAGE_MODE_PRIVATE
+            int h = metal_create_texture_2d(self.handle, width, height, mtl_format, mtl_usage, mtl_storage)
+            return GpuTexture(h, width, height, format)
+
+        GpuPipeline create_pipeline(&self, str vertex_src, str fragment_src):
+            int lib = metal_create_library(self.handle, vertex_src)
+            int vert_fn = metal_library_function(lib, "vertex_main")
+            int frag_fn = metal_library_function(lib, "fragment_main")
+            # vertex_desc=0 means no vertex descriptor (use stage_in or manual fetch)
+            int pipeline = metal_create_render_pipeline(self.handle, vert_fn, frag_fn, 0, MTL_PIXEL_FORMAT_BGRA8_UNORM, MTL_PIXEL_FORMAT_DEPTH32_FLOAT)
+            int depth = metal_create_depth_stencil(self.handle, GPU_COMPARE_LESS, 1)
+            return GpuPipeline(pipeline, depth)
+
+        GpuRenderPass begin_render_pass(&self, int unused_layer):
+            int drawable = metal_begin_frame(self.layer_handle)
+            int draw_tex = metal_drawable_texture(drawable)
+            int cmd_buf = metal_create_command_buffer(self.queue_handle)
+            # Build render pass descriptor
+            int pass_desc = metal_create_render_pass_desc()
+            metal_render_pass_set_color(pass_desc, 0, draw_tex, MTL_LOAD_ACTION_CLEAR, MTL_STORE_ACTION_STORE, 0.0, 0.0, 0.0, 1.0)
+            int encoder = metal_create_render_encoder(cmd_buf, pass_desc)
+            metal_release(pass_desc)
+            metal_release(draw_tex)
+            return GpuRenderPass(encoder, cmd_buf, drawable)
+
+    # ── Metal: Texture Upload ───────────────────────────────
+
+    equip GpuTexture:
+        void upload(&self, Vector[uint8] data):
+            int bpr = self.width * 4    # RGBA
+            metal_texture_upload(self.handle, 0, 0, self.width, self.height, data, bpr)
+
+    # ── Metal: Render Pass ──────────────────────────────────
+
+    equip GpuRenderPass:
+        void set_pipeline(&self, GpuPipeline pipeline):
+            metal_encoder_set_pipeline(self.encoder_handle, pipeline.handle)
+            metal_encoder_set_depth_stencil(self.encoder_handle, pipeline.depth_stencil_handle)
+
+        void set_vertex_buffer(&self, GpuBuffer buffer, int index):
+            metal_encoder_set_vertex_buffer(self.encoder_handle, buffer.handle, 0, index)
+
+        void set_texture(&self, GpuTexture texture, int index):
+            metal_encoder_set_fragment_texture(self.encoder_handle, texture.handle, index)
+
+        void set_cull_mode(&self, int mode):
+            metal_encoder_set_cull_mode(self.encoder_handle, mode)
+
+        void set_viewport(&self, float x, float y, float w, float h):
+            metal_encoder_set_viewport(self.encoder_handle, x, y, w, h, 0.0, 1.0)
+
+        void set_scissor(&self, int x, int y, int w, int h):
+            metal_encoder_set_scissor(self.encoder_handle, x, y, w, h)
+
+        void draw(&self, int primitive, int start, int count):
+            int mtl_prim = MTL_PRIMITIVE_TRIANGLE
+            if primitive == GPU_PRIMITIVE_LINES:
+                mtl_prim = MTL_PRIMITIVE_LINE
+            if primitive == GPU_PRIMITIVE_POINTS:
+                mtl_prim = MTL_PRIMITIVE_POINT
+            if primitive == GPU_PRIMITIVE_TRIANGLE_STRIP:
+                mtl_prim = MTL_PRIMITIVE_TRIANGLE_STRIP
+            metal_encoder_draw_primitives(self.encoder_handle, mtl_prim, start, count)
+
+        void draw_indexed(&self, int primitive, int count, GpuBuffer index_buffer):
+            int mtl_prim = MTL_PRIMITIVE_TRIANGLE
+            if primitive == GPU_PRIMITIVE_LINES:
+                mtl_prim = MTL_PRIMITIVE_LINE
+            metal_encoder_draw_indexed(self.encoder_handle, mtl_prim, count, MTL_INDEX_UINT16, index_buffer.handle, 0)
+
+        void end(&self):
+            metal_encoder_end(self.encoder_handle)
+            metal_command_buffer_present(self.cmd_buffer_handle, self.drawable_handle)
+            metal_command_buffer_commit(self.cmd_buffer_handle)
+
+else:
+    from gg.gl import gl_create_context, gl_swap_window
+    from gg.gl import gl_gen_buffer, gl_bind_buffer, gl_buffer_data
+    from gg.gl import gl_gen_texture, gl_bind_texture, gl_tex_image_2d
+    from gg.gl import gl_tex_parameter_i, gl_generate_mipmap
+    from gg.gl import gl_create_shader, gl_shader_source, gl_compile_shader
+    from gg.gl import gl_create_program, gl_attach_shader, gl_link_program
+    from gg.gl import gl_use_program
+    from gg.gl import gl_enable, gl_disable, gl_blend_func, gl_depth_func
+    from gg.gl import gl_depth_mask, gl_cull_face, gl_viewport, gl_scissor
+    from gg.gl import gl_clear, gl_clear_color
+    from gg.gl import gl_draw_arrays, gl_draw_elements
+    from gg.gl import gl_vertex_attrib_pointer
+    from gg.gl import gl_enable_vertex_attrib_array
+    from gg.gl import gl_get_uniform_location, gl_uniform_matrix4fv
+    from gg.gl import GL_TEXTURE_2D, GL_RGBA, GL_RGB, GL_UNSIGNED_BYTE
+    from gg.gl import GL_ARRAY_BUFFER, GL_ELEMENT_ARRAY_BUFFER, GL_STATIC_DRAW
+    from gg.gl import GL_TRIANGLES, GL_LINES, GL_POINTS, GL_TRIANGLE_STRIP
+    from gg.gl import GL_TEXTURE_MIN_FILTER, GL_TEXTURE_MAG_FILTER
+    from gg.gl import GL_LINEAR, GL_LINEAR_MIPMAP_LINEAR, GL_REPEAT
+    from gg.gl import GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T
+    from gg.gl import GL_DEPTH_TEST, GL_BLEND, GL_CULL_FACE
+    from gg.gl import GL_FRONT, GL_BACK, GL_LESS
+    from gg.gl import GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA
+    from gg.gl import GL_VERTEX_SHADER, GL_FRAGMENT_SHADER
+    from gg.gl import GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT
+    from gg.gl import GL_FLOAT
+
+    int GL_FRONT = 1028
+    int GL_BACK = 1029
+    int GL_FLOAT = 5126
+
+    # ── OpenGL: Device Init ─────────────────────────────────
+
+    GpuDevice gpu_init(int window):
+        int ctx = gl_create_context(window)
+        gl_enable(GL_DEPTH_TEST)
+        gl_depth_func(GL_LESS)
+        return GpuDevice(ctx, window, 0)
+
+    # ── OpenGL: Buffer/Texture/Pipeline ─────────────────────
+
+    equip GpuDevice:
+        GpuBuffer create_buffer(&self, int size, int usage):
+            int h = gl_gen_buffer()
+            int target = GL_ARRAY_BUFFER
+            if usage == GPU_BUFFER_INDEX:
+                target = GL_ELEMENT_ARRAY_BUFFER
+            gl_bind_buffer(target, h)
+            return GpuBuffer(h, size, usage)
+
+        GpuBuffer create_buffer_with_data(&self, Vector[uint8] data, int usage):
+            int h = gl_gen_buffer()
+            int target = GL_ARRAY_BUFFER
+            if usage == GPU_BUFFER_INDEX:
+                target = GL_ELEMENT_ARRAY_BUFFER
+            gl_bind_buffer(target, h)
+            gl_buffer_data(target, data.length(), GL_STATIC_DRAW)
+            return GpuBuffer(h, data.length(), usage)
+
+        GpuTexture create_texture(&self, int width, int height, int format):
+            int h = gl_gen_texture()
+            gl_bind_texture(GL_TEXTURE_2D, h)
+            int gl_fmt = GL_RGBA
+            if format == GPU_FORMAT_RGB8:
+                gl_fmt = GL_RGB
+            gl_tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
+            gl_tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+            gl_tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
+            gl_tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+            return GpuTexture(h, width, height, format)
+
+        GpuPipeline create_pipeline(&self, str vertex_src, str fragment_src):
+            int vs = gl_create_shader(GL_VERTEX_SHADER)
+            gl_shader_source(vs, vertex_src)
+            gl_compile_shader(vs)
+            int fs = gl_create_shader(GL_FRAGMENT_SHADER)
+            gl_shader_source(fs, fragment_src)
+            gl_compile_shader(fs)
+            int prog = gl_create_program()
+            gl_attach_shader(prog, vs)
+            gl_attach_shader(prog, fs)
+            gl_link_program(prog)
+            return GpuPipeline(prog, 0)
+
+        GpuRenderPass begin_render_pass(&self, int layer):
+            gl_clear_color(0.0, 0.0, 0.0, 1.0)
+            gl_clear(GL_COLOR_BUFFER_BIT + GL_DEPTH_BUFFER_BIT)
+            return GpuRenderPass(0, 0, self.queue_handle)
+
+    # ── OpenGL: Texture Upload ──────────────────────────────
+
+    equip GpuTexture:
+        void upload(&self, Vector[uint8] data):
+            gl_bind_texture(GL_TEXTURE_2D, self.handle)
+            int gl_fmt = GL_RGBA
+            if self.format == GPU_FORMAT_RGB8:
+                gl_fmt = GL_RGB
+            gl_tex_image_2d(GL_TEXTURE_2D, 0, gl_fmt, self.width, self.height, gl_fmt, GL_UNSIGNED_BYTE, data)
+            gl_generate_mipmap(GL_TEXTURE_2D)
+
+    # ── OpenGL: Render Pass ─────────────────────────────────
+
+    equip GpuRenderPass:
+        void set_pipeline(&self, GpuPipeline pipeline):
+            gl_use_program(pipeline.handle)
+
+        void set_vertex_buffer(&self, GpuBuffer buffer, int index):
+            gl_bind_buffer(GL_ARRAY_BUFFER, buffer.handle)
+
+        void set_texture(&self, GpuTexture texture, int index):
+            gl_bind_texture(GL_TEXTURE_2D, texture.handle)
+
+        void set_cull_mode(&self, int mode):
+            if mode == GPU_CULL_NONE:
+                gl_disable(GL_CULL_FACE)
+            else:
+                gl_enable(GL_CULL_FACE)
+                if mode == GPU_CULL_FRONT:
+                    gl_cull_face(GL_FRONT)
+                else:
+                    gl_cull_face(GL_BACK)
+
+        void set_viewport(&self, float x, float y, float w, float h):
+            gl_viewport(x as int, y as int, w as int, h as int)
+
+        void set_scissor(&self, int x, int y, int w, int h):
+            gl_scissor(x, y, w, h)
+
+        void draw(&self, int primitive, int start, int count):
+            int gl_mode = GL_TRIANGLES
+            if primitive == GPU_PRIMITIVE_LINES:
+                gl_mode = GL_LINES
+            if primitive == GPU_PRIMITIVE_POINTS:
+                gl_mode = GL_POINTS
+            if primitive == GPU_PRIMITIVE_TRIANGLE_STRIP:
+                gl_mode = GL_TRIANGLE_STRIP
+            gl_draw_arrays(gl_mode, start, count)
+
+        void draw_indexed(&self, int primitive, int count, GpuBuffer index_buffer):
+            int gl_mode = GL_TRIANGLES
+            if primitive == GPU_PRIMITIVE_LINES:
+                gl_mode = GL_LINES
+            gl_bind_buffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer.handle)
+            gl_draw_elements(gl_mode, count, GL_UNSIGNED_BYTE, 0)
+
+        void end(&self):
+            # OpenGL: swap is handled by the caller via sdl_gl_swap_window
+            pass
+
+# ── Utility ─────────────────────────────────────────────────
+
+void gpu_clear(float r, float g, float b, float a):
+    meta if platform() == "macos":
+        # Metal: clear color is set in render pass descriptor
+        # (handled internally by begin_render_pass)
+        pass
+    else:
+        gl_clear_color(r, g, b, a)
+        gl_clear(GL_COLOR_BUFFER_BIT + GL_DEPTH_BUFFER_BIT)

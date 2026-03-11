@@ -71,7 +71,9 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
             "json" | "toml" | "xml" | "yaml" | "csv" | "crypto" | "regex"
             | "sdl" | "gfx" | "ecs" | "ssh" | "http" | "httpserver" | "p2p"
             | "uuid" | "log" | "cli" | "tensor" | "dataframe"
-            | "db" | "sqlite" | "influx" | "jsonpath"),
+            | "db" | "sqlite" | "influx" | "jsonpath"
+            | "math3d" | "gl" | "image" | "audio" | "compress"
+            | "metal" | "gpu"),
         _ => false,
     }
 }
@@ -134,6 +136,13 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
             "sqlite" => None,    // file-based module — loaded via builtin_module_source()
             "influx" => None,    // file-based module — loaded via builtin_module_source()
             "jsonpath" => None,  // file-based module — loaded via builtin_module_source()
+            "math3d" => None,    // file-based module — loaded via builtin_module_source()
+            "gl" => Some(gen_gl_module()),
+            "image" => Some(gen_image_module()),
+            "audio" => Some(gen_audio_module()),
+            "compress" => Some(gen_compress_module()),
+            "metal" => Some(gen_metal_module()),
+            "gpu" => None, // file-based module — loaded via builtin_module_source()
             _ => None,
         },
         _ => None,
@@ -846,6 +855,9 @@ fn gen_sdl_module() -> Module {
     items.push(const_item("SDL_WINDOW_SHOWN", 4));
     items.push(const_item("SDL_WINDOW_RESIZABLE", 32));
     items.push(const_item("SDL_WINDOW_FULLSCREEN", 1));
+    items.push(const_item("SDL_WINDOW_OPENGL", 2));
+    items.push(const_item("SDL_WINDOW_BORDERLESS", 16));
+    items.push(const_item("SDL_WINDOW_INPUT_GRABBED", 256));
 
     // Renderer flags
     items.push(const_item("SDL_RENDERER_ACCELERATED", 2));
@@ -911,6 +923,13 @@ fn gen_sdl_module() -> Module {
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_display_width", &[], ty_int()))));
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_display_height", &[], ty_int()))));
 
+    // Mouse capture and relative mode (for FPS controls)
+    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_set_relative_mouse_mode", &[("enabled", ty_int())], ty_void()))));
+    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_show_cursor", &[("toggle", ty_int())], ty_void()))));
+    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_relative_mouse_state", &[], ty_sdl_event()))));
+    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_warp_mouse_in_window", &[("window", ty_sdl_window()), ("x", ty_int()), ("y", ty_int())], ty_void()))));
+    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_mouse_state", &[], ty_sdl_event()))));
+
     Module {
         items,
         span: Span::dummy(),
@@ -954,6 +973,8 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("sqlite") => Some(include_str!("../lib/gg/sqlite.gg")),
             Some("influx") => Some(include_str!("../lib/gg/influx.gg")),
             Some("jsonpath") => Some(include_str!("../lib/gg/jsonpath.gg")),
+            Some("math3d") => Some(include_str!("../lib/gg/math3d.gg")),
+            Some("gpu") => Some(include_str!("../lib/gg/gpu.gg")),
             _ => None,
         },
         _ => None,
@@ -1794,6 +1815,618 @@ fn equip_block(type_name: &str, methods: Vec<FunctionDef>) -> Spanned<Item> {
         items: methods.into_iter().map(Spanned::dummy).collect(),
         span: Span::dummy(),
     }))
+}
+
+// ─── gg.gl — OpenGL 2.1 Bindings ──────────────────────────────
+
+fn gen_gl_module() -> Module {
+    let mut items: Vec<Spanned<Item>> = Vec::new();
+
+    // Opaque handle types
+    items.push(opaque_struct("GLContext"));
+
+    // Helper to make a const declaration item
+    let const_item = |name: &str, value: i64| -> Spanned<Item> {
+        Spanned::dummy(Item::ConstDecl(ConstDecl {
+            visibility: Visibility::Public,
+            type_: Spanned::dummy(ty_int()),
+            name: Spanned::dummy(name.to_string()),
+            value: Spanned::dummy(Expr::IntLiteral(value)),
+            span: Span::dummy(),
+        }))
+    };
+
+    let fn_item = |f: FunctionDef| -> Spanned<Item> {
+        Spanned::dummy(Item::Function(f))
+    };
+
+    // ── GL Constants ────────────────────────────────────────
+    // Primitive types
+    items.push(const_item("GL_POINTS", 0x0000));
+    items.push(const_item("GL_LINES", 0x0001));
+    items.push(const_item("GL_LINE_STRIP", 0x0003));
+    items.push(const_item("GL_TRIANGLES", 0x0004));
+    items.push(const_item("GL_TRIANGLE_STRIP", 0x0005));
+    items.push(const_item("GL_TRIANGLE_FAN", 0x0006));
+    items.push(const_item("GL_QUADS", 0x0007));
+    // Enable/Disable
+    items.push(const_item("GL_DEPTH_TEST", 0x0B71));
+    items.push(const_item("GL_BLEND", 0x0BE2));
+    items.push(const_item("GL_CULL_FACE", 0x0B44));
+    items.push(const_item("GL_SCISSOR_TEST", 0x0C11));
+    items.push(const_item("GL_STENCIL_TEST", 0x0B90));
+    items.push(const_item("GL_TEXTURE_2D", 0x0DE1));
+    items.push(const_item("GL_ALPHA_TEST", 0x0BC0));
+    items.push(const_item("GL_POLYGON_OFFSET_FILL", 0x8037));
+    items.push(const_item("GL_MULTISAMPLE", 0x809D));
+    // Blend funcs
+    items.push(const_item("GL_ZERO", 0));
+    items.push(const_item("GL_ONE", 1));
+    items.push(const_item("GL_SRC_COLOR", 0x0300));
+    items.push(const_item("GL_ONE_MINUS_SRC_COLOR", 0x0301));
+    items.push(const_item("GL_SRC_ALPHA", 0x0302));
+    items.push(const_item("GL_ONE_MINUS_SRC_ALPHA", 0x0303));
+    items.push(const_item("GL_DST_ALPHA", 0x0304));
+    items.push(const_item("GL_ONE_MINUS_DST_ALPHA", 0x0305));
+    items.push(const_item("GL_DST_COLOR", 0x0306));
+    items.push(const_item("GL_ONE_MINUS_DST_COLOR", 0x0307));
+    items.push(const_item("GL_SRC_ALPHA_SATURATE", 0x0308));
+    // Depth func
+    items.push(const_item("GL_NEVER", 0x0200));
+    items.push(const_item("GL_LESS", 0x0201));
+    items.push(const_item("GL_EQUAL", 0x0202));
+    items.push(const_item("GL_LEQUAL", 0x0203));
+    items.push(const_item("GL_GREATER", 0x0204));
+    items.push(const_item("GL_NOTEQUAL", 0x0205));
+    items.push(const_item("GL_GEQUAL", 0x0206));
+    items.push(const_item("GL_ALWAYS", 0x0207));
+    // Cull face
+    items.push(const_item("GL_FRONT", 0x0404));
+    items.push(const_item("GL_BACK", 0x0405));
+    items.push(const_item("GL_FRONT_AND_BACK", 0x0408));
+    // Clear bits
+    items.push(const_item("GL_COLOR_BUFFER_BIT", 0x4000));
+    items.push(const_item("GL_DEPTH_BUFFER_BIT", 0x0100));
+    items.push(const_item("GL_STENCIL_BUFFER_BIT", 0x0400));
+    // Texture parameters
+    items.push(const_item("GL_TEXTURE_MIN_FILTER", 0x2801));
+    items.push(const_item("GL_TEXTURE_MAG_FILTER", 0x2800));
+    items.push(const_item("GL_TEXTURE_WRAP_S", 0x2802));
+    items.push(const_item("GL_TEXTURE_WRAP_T", 0x2803));
+    items.push(const_item("GL_NEAREST", 0x2600));
+    items.push(const_item("GL_LINEAR", 0x2601));
+    items.push(const_item("GL_NEAREST_MIPMAP_NEAREST", 0x2700));
+    items.push(const_item("GL_LINEAR_MIPMAP_NEAREST", 0x2701));
+    items.push(const_item("GL_NEAREST_MIPMAP_LINEAR", 0x2702));
+    items.push(const_item("GL_LINEAR_MIPMAP_LINEAR", 0x2703));
+    items.push(const_item("GL_REPEAT", 0x2901));
+    items.push(const_item("GL_CLAMP_TO_EDGE", 0x812F));
+    items.push(const_item("GL_MIRRORED_REPEAT", 0x8370));
+    // Pixel formats
+    items.push(const_item("GL_RGB", 0x1907));
+    items.push(const_item("GL_RGBA", 0x1908));
+    items.push(const_item("GL_LUMINANCE", 0x1909));
+    items.push(const_item("GL_LUMINANCE_ALPHA", 0x190A));
+    items.push(const_item("GL_ALPHA", 0x1906));
+    // Data types
+    items.push(const_item("GL_UNSIGNED_BYTE", 0x1401));
+    items.push(const_item("GL_UNSIGNED_SHORT", 0x1403));
+    items.push(const_item("GL_UNSIGNED_INT", 0x1405));
+    items.push(const_item("GL_FLOAT", 0x1406));
+    items.push(const_item("GL_BYTE", 0x1400));
+    items.push(const_item("GL_SHORT", 0x1402));
+    items.push(const_item("GL_INT", 0x1404));
+    // Buffer targets
+    items.push(const_item("GL_ARRAY_BUFFER", 0x8892));
+    items.push(const_item("GL_ELEMENT_ARRAY_BUFFER", 0x8893));
+    // Buffer usage
+    items.push(const_item("GL_STATIC_DRAW", 0x88E4));
+    items.push(const_item("GL_DYNAMIC_DRAW", 0x88E8));
+    items.push(const_item("GL_STREAM_DRAW", 0x88E0));
+    // Shader types
+    items.push(const_item("GL_VERTEX_SHADER", 0x8B31));
+    items.push(const_item("GL_FRAGMENT_SHADER", 0x8B30));
+    // Matrix modes (fixed-function)
+    items.push(const_item("GL_MODELVIEW", 0x1700));
+    items.push(const_item("GL_PROJECTION", 0x1701));
+    items.push(const_item("GL_TEXTURE", 0x1702));
+    // Stencil ops
+    items.push(const_item("GL_KEEP", 0x1E00));
+    items.push(const_item("GL_REPLACE", 0x1E01));
+    items.push(const_item("GL_INCR", 0x1E02));
+    items.push(const_item("GL_DECR", 0x1E03));
+    items.push(const_item("GL_INVERT", 0x150A));
+    items.push(const_item("GL_INCR_WRAP", 0x8507));
+    items.push(const_item("GL_DECR_WRAP", 0x8508));
+    // GetString targets
+    items.push(const_item("GL_VENDOR", 0x1F00));
+    items.push(const_item("GL_RENDERER", 0x1F01));
+    items.push(const_item("GL_VERSION", 0x1F02));
+    items.push(const_item("GL_EXTENSIONS", 0x1F03));
+    // Texture units
+    items.push(const_item("GL_TEXTURE0", 0x84C0));
+    items.push(const_item("GL_TEXTURE1", 0x84C1));
+    items.push(const_item("GL_TEXTURE2", 0x84C2));
+    items.push(const_item("GL_TEXTURE3", 0x84C3));
+    items.push(const_item("GL_TEXTURE4", 0x84C4));
+    items.push(const_item("GL_TEXTURE5", 0x84C5));
+    items.push(const_item("GL_TEXTURE6", 0x84C6));
+    items.push(const_item("GL_TEXTURE7", 0x84C7));
+    items.push(const_item("GL_MAX_TEXTURE_IMAGE_UNITS", 0x8872));
+    // SDL GL attrs (for use with sdl_gl_set_attribute)
+    items.push(const_item("SDL_GL_RED_SIZE", 0));
+    items.push(const_item("SDL_GL_GREEN_SIZE", 1));
+    items.push(const_item("SDL_GL_BLUE_SIZE", 2));
+    items.push(const_item("SDL_GL_ALPHA_SIZE", 3));
+    items.push(const_item("SDL_GL_BUFFER_SIZE", 4));
+    items.push(const_item("SDL_GL_DOUBLEBUFFER", 5));
+    items.push(const_item("SDL_GL_DEPTH_SIZE", 6));
+    items.push(const_item("SDL_GL_STENCIL_SIZE", 7));
+    items.push(const_item("SDL_GL_MULTISAMPLEBUFFERS", 13));
+    items.push(const_item("SDL_GL_MULTISAMPLESAMPLES", 14));
+    items.push(const_item("SDL_GL_CONTEXT_MAJOR_VERSION", 17));
+    items.push(const_item("SDL_GL_CONTEXT_MINOR_VERSION", 18));
+    items.push(const_item("SDL_GL_CONTEXT_PROFILE_MASK", 21));
+    items.push(const_item("SDL_GL_CONTEXT_PROFILE_CORE", 0x0001));
+    items.push(const_item("SDL_GL_CONTEXT_PROFILE_COMPATIBILITY", 0x0002));
+
+    // ── SDL-GL Context Functions ────────────────────────────
+    let ty_glctx = || Type::Named {
+        name: Spanned::dummy("GLContext".to_string()),
+        generic_args: vec![],
+    };
+    items.push(fn_item(extern_fn("gl_create_context", &[("window", ty_int())], ty_glctx(), "gorget_gl_create_context")));
+    items.push(fn_item(extern_fn("gl_destroy_context", &[("ctx", ty_glctx())], ty_void(), "gorget_gl_destroy_context")));
+    items.push(fn_item(extern_fn("gl_make_current", &[("window", ty_int()), ("ctx", ty_glctx())], ty_void(), "gorget_gl_make_current")));
+    items.push(fn_item(extern_fn("gl_swap_window", &[("window", ty_int())], ty_void(), "gorget_gl_swap_window")));
+    items.push(fn_item(extern_fn("gl_set_swap_interval", &[("interval", ty_int())], ty_void(), "gorget_gl_set_swap_interval")));
+    items.push(fn_item(extern_fn("gl_set_attribute", &[("attr", ty_int()), ("value", ty_int())], ty_void(), "gorget_gl_set_attribute")));
+
+    // ── GL State ────────────────────────────────────────────
+    items.push(fn_item(extern_fn("gl_enable", &[("cap", ty_int())], ty_void(), "gorget_gl_enable")));
+    items.push(fn_item(extern_fn("gl_disable", &[("cap", ty_int())], ty_void(), "gorget_gl_disable")));
+    items.push(fn_item(extern_fn("gl_blend_func", &[("sfactor", ty_int()), ("dfactor", ty_int())], ty_void(), "gorget_gl_blend_func")));
+    items.push(fn_item(extern_fn("gl_depth_func", &[("func", ty_int())], ty_void(), "gorget_gl_depth_func")));
+    items.push(fn_item(extern_fn("gl_depth_mask", &[("flag", ty_int())], ty_void(), "gorget_gl_depth_mask")));
+    items.push(fn_item(extern_fn("gl_cull_face", &[("mode", ty_int())], ty_void(), "gorget_gl_cull_face")));
+    items.push(fn_item(extern_fn("gl_viewport", &[("x", ty_int()), ("y", ty_int()), ("w", ty_int()), ("h", ty_int())], ty_void(), "gorget_gl_viewport")));
+    items.push(fn_item(extern_fn("gl_scissor", &[("x", ty_int()), ("y", ty_int()), ("w", ty_int()), ("h", ty_int())], ty_void(), "gorget_gl_scissor")));
+    items.push(fn_item(extern_fn("gl_clear", &[("mask", ty_int())], ty_void(), "gorget_gl_clear")));
+    items.push(fn_item(extern_fn("gl_clear_color", &[("r", ty_float()), ("g", ty_float()), ("b", ty_float()), ("a", ty_float())], ty_void(), "gorget_gl_clear_color")));
+    items.push(fn_item(extern_fn("gl_polygon_offset", &[("factor", ty_float()), ("units", ty_float())], ty_void(), "gorget_gl_polygon_offset")));
+    items.push(fn_item(extern_fn("gl_color_mask", &[("r", ty_int()), ("g", ty_int()), ("b", ty_int()), ("a", ty_int())], ty_void(), "gorget_gl_color_mask")));
+    items.push(fn_item(extern_fn("gl_stencil_func", &[("func", ty_int()), ("ref_val", ty_int()), ("mask", ty_int())], ty_void(), "gorget_gl_stencil_func")));
+    items.push(fn_item(extern_fn("gl_stencil_op", &[("sfail", ty_int()), ("dpfail", ty_int()), ("dppass", ty_int())], ty_void(), "gorget_gl_stencil_op")));
+    items.push(fn_item(extern_fn("gl_stencil_mask", &[("mask", ty_int())], ty_void(), "gorget_gl_stencil_mask")));
+
+    // ── Textures ────────────────────────────────────────────
+    items.push(fn_item(extern_fn("gl_gen_texture", &[], ty_int(), "gorget_gl_gen_texture")));
+    items.push(fn_item(extern_fn("gl_delete_texture", &[("tex", ty_int())], ty_void(), "gorget_gl_delete_texture")));
+    items.push(fn_item(extern_fn("gl_bind_texture", &[("target", ty_int()), ("tex", ty_int())], ty_void(), "gorget_gl_bind_texture")));
+    items.push(fn_item(extern_fn("gl_tex_image_2d", &[("target", ty_int()), ("level", ty_int()), ("internal_format", ty_int()), ("width", ty_int()), ("height", ty_int()), ("format", ty_int()), ("type_", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_gl_tex_image_2d")));
+    items.push(fn_item(extern_fn("gl_tex_parameter_i", &[("target", ty_int()), ("pname", ty_int()), ("param", ty_int())], ty_void(), "gorget_gl_tex_parameter_i")));
+    items.push(fn_item(extern_fn("gl_generate_mipmap", &[("target", ty_int())], ty_void(), "gorget_gl_generate_mipmap")));
+    items.push(fn_item(extern_fn("gl_active_texture", &[("unit", ty_int())], ty_void(), "gorget_gl_active_texture")));
+
+    // ── VBO/Vertex Arrays ───────────────────────────────────
+    items.push(fn_item(extern_fn("gl_gen_buffer", &[], ty_int(), "gorget_gl_gen_buffer")));
+    items.push(fn_item(extern_fn("gl_delete_buffer", &[("buf", ty_int())], ty_void(), "gorget_gl_delete_buffer")));
+    items.push(fn_item(extern_fn("gl_bind_buffer", &[("target", ty_int()), ("buf", ty_int())], ty_void(), "gorget_gl_bind_buffer")));
+    items.push(fn_item(extern_fn("gl_buffer_data", &[("target", ty_int()), ("data", ty_vector_uint8()), ("usage", ty_int())], ty_void(), "gorget_gl_buffer_data")));
+    items.push(fn_item(extern_fn("gl_buffer_sub_data", &[("target", ty_int()), ("offset", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_gl_buffer_sub_data")));
+    items.push(fn_item(extern_fn("gl_draw_arrays", &[("mode", ty_int()), ("first", ty_int()), ("count", ty_int())], ty_void(), "gorget_gl_draw_arrays")));
+    items.push(fn_item(extern_fn("gl_draw_elements", &[("mode", ty_int()), ("count", ty_int()), ("type_", ty_int()), ("offset", ty_int())], ty_void(), "gorget_gl_draw_elements")));
+    items.push(fn_item(extern_fn("gl_vertex_attrib_pointer", &[("index", ty_int()), ("size", ty_int()), ("type_", ty_int()), ("normalized", ty_int()), ("stride", ty_int()), ("offset", ty_int())], ty_void(), "gorget_gl_vertex_attrib_pointer")));
+    items.push(fn_item(extern_fn("gl_enable_vertex_attrib_array", &[("index", ty_int())], ty_void(), "gorget_gl_enable_vertex_attrib_array")));
+    items.push(fn_item(extern_fn("gl_disable_vertex_attrib_array", &[("index", ty_int())], ty_void(), "gorget_gl_disable_vertex_attrib_array")));
+
+    // ── Shaders ─────────────────────────────────────────────
+    items.push(fn_item(extern_fn("gl_create_shader", &[("type_", ty_int())], ty_int(), "gorget_gl_create_shader")));
+    items.push(fn_item(extern_fn("gl_shader_source", &[("shader", ty_int()), ("source", ty_str())], ty_void(), "gorget_gl_shader_source")));
+    items.push(fn_item(extern_fn("gl_compile_shader", &[("shader", ty_int())], ty_void(), "gorget_gl_compile_shader")));
+    items.push(fn_item(extern_fn("gl_create_program", &[], ty_int(), "gorget_gl_create_program")));
+    items.push(fn_item(extern_fn("gl_attach_shader", &[("program", ty_int()), ("shader", ty_int())], ty_void(), "gorget_gl_attach_shader")));
+    items.push(fn_item(extern_fn("gl_link_program", &[("program", ty_int())], ty_void(), "gorget_gl_link_program")));
+    items.push(fn_item(extern_fn("gl_use_program", &[("program", ty_int())], ty_void(), "gorget_gl_use_program")));
+    items.push(fn_item(extern_fn("gl_delete_shader", &[("shader", ty_int())], ty_void(), "gorget_gl_delete_shader")));
+    items.push(fn_item(extern_fn("gl_delete_program", &[("program", ty_int())], ty_void(), "gorget_gl_delete_program")));
+    items.push(fn_item(extern_fn("gl_get_shader_info_log", &[("shader", ty_int())], ty_string(), "gorget_gl_get_shader_info_log")));
+    items.push(fn_item(extern_fn("gl_get_program_info_log", &[("program", ty_int())], ty_string(), "gorget_gl_get_program_info_log")));
+
+    // ── Uniforms ────────────────────────────────────────────
+    items.push(fn_item(extern_fn("gl_get_uniform_location", &[("program", ty_int()), ("name", ty_str())], ty_int(), "gorget_gl_get_uniform_location")));
+    items.push(fn_item(extern_fn("gl_uniform_1i", &[("location", ty_int()), ("v0", ty_int())], ty_void(), "gorget_gl_uniform_1i")));
+    items.push(fn_item(extern_fn("gl_uniform_1f", &[("location", ty_int()), ("v0", ty_float())], ty_void(), "gorget_gl_uniform_1f")));
+    items.push(fn_item(extern_fn("gl_uniform_2f", &[("location", ty_int()), ("v0", ty_float()), ("v1", ty_float())], ty_void(), "gorget_gl_uniform_2f")));
+    items.push(fn_item(extern_fn("gl_uniform_3f", &[("location", ty_int()), ("v0", ty_float()), ("v1", ty_float()), ("v2", ty_float())], ty_void(), "gorget_gl_uniform_3f")));
+    items.push(fn_item(extern_fn("gl_uniform_4f", &[("location", ty_int()), ("v0", ty_float()), ("v1", ty_float()), ("v2", ty_float()), ("v3", ty_float())], ty_void(), "gorget_gl_uniform_4f")));
+    items.push(fn_item(extern_fn("gl_uniform_matrix4fv", &[("location", ty_int()), ("transpose", ty_int()), ("value", ty_vector_uint8())], ty_void(), "gorget_gl_uniform_matrix4fv")));
+
+    // ── Fixed-function (Q3 compat) ──────────────────────────
+    items.push(fn_item(extern_fn("gl_matrix_mode", &[("mode", ty_int())], ty_void(), "gorget_gl_matrix_mode")));
+    items.push(fn_item(extern_fn("gl_load_identity", &[], ty_void(), "gorget_gl_load_identity")));
+    items.push(fn_item(extern_fn("gl_load_matrix", &[("m", ty_vector_uint8())], ty_void(), "gorget_gl_load_matrix")));
+    items.push(fn_item(extern_fn("gl_push_matrix", &[], ty_void(), "gorget_gl_push_matrix")));
+    items.push(fn_item(extern_fn("gl_pop_matrix", &[], ty_void(), "gorget_gl_pop_matrix")));
+    items.push(fn_item(extern_fn("gl_begin", &[("mode", ty_int())], ty_void(), "gorget_gl_begin")));
+    items.push(fn_item(extern_fn("gl_end", &[], ty_void(), "gorget_gl_end")));
+    items.push(fn_item(extern_fn("gl_vertex3f", &[("x", ty_float()), ("y", ty_float()), ("z", ty_float())], ty_void(), "gorget_gl_vertex3f")));
+    items.push(fn_item(extern_fn("gl_tex_coord2f", &[("s", ty_float()), ("t", ty_float())], ty_void(), "gorget_gl_tex_coord2f")));
+    items.push(fn_item(extern_fn("gl_normal3f", &[("x", ty_float()), ("y", ty_float()), ("z", ty_float())], ty_void(), "gorget_gl_normal3f")));
+    items.push(fn_item(extern_fn("gl_color4f", &[("r", ty_float()), ("g", ty_float()), ("b", ty_float()), ("a", ty_float())], ty_void(), "gorget_gl_color4f")));
+    items.push(fn_item(extern_fn("gl_color3f", &[("r", ty_float()), ("g", ty_float()), ("b", ty_float())], ty_void(), "gorget_gl_color3f")));
+
+    // ── Query ───────────────────────────────────────────────
+    items.push(fn_item(extern_fn("gl_get_error", &[], ty_int(), "gorget_gl_get_error")));
+    items.push(fn_item(extern_fn("gl_get_string", &[("name", ty_int())], ty_string(), "gorget_gl_get_string")));
+    items.push(fn_item(extern_fn("gl_get_integer", &[("pname", ty_int())], ty_int(), "gorget_gl_get_integer")));
+
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
+// ─── gg.image — Image Loading (stb_image) ─────────────────────
+
+fn gen_image_module() -> Module {
+    // Image struct with user-visible fields
+    let image_struct = Spanned::dummy(Item::Struct(StructDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("Image".to_string()),
+        generic_params: None,
+        fields: vec![
+            Spanned::dummy(FieldDef {
+                visibility: Visibility::Public,
+                name: Spanned::dummy("width".to_string()),
+                type_: Spanned::dummy(ty_int()),
+            }),
+            Spanned::dummy(FieldDef {
+                visibility: Visibility::Public,
+                name: Spanned::dummy("height".to_string()),
+                type_: Spanned::dummy(ty_int()),
+            }),
+            Spanned::dummy(FieldDef {
+                visibility: Visibility::Public,
+                name: Spanned::dummy("channels".to_string()),
+                type_: Spanned::dummy(ty_int()),
+            }),
+            Spanned::dummy(FieldDef {
+                visibility: Visibility::Public,
+                name: Spanned::dummy("data".to_string()),
+                type_: Spanned::dummy(ty_vector_uint8()),
+            }),
+        ],
+        doc_comment: None,
+        span: Span::dummy(),
+    }));
+
+    let ty_image = || Type::Named {
+        name: Spanned::dummy("Image".to_string()),
+        generic_args: vec![],
+    };
+
+    let fn_item = |f: FunctionDef| -> Spanned<Item> {
+        Spanned::dummy(Item::Function(f))
+    };
+
+    let mut items = vec![image_struct];
+    items.push(fn_item(extern_fn("image_load", &[("path", ty_str())], ty_result(ty_image(), ty_str()), "gorget_image_load")));
+    items.push(fn_item(extern_fn("image_load_rgba", &[("path", ty_str())], ty_result(ty_image(), ty_str()), "gorget_image_load_rgba")));
+    items.push(fn_item(extern_fn("image_load_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_load_from_memory")));
+    items.push(fn_item(extern_fn("image_flip_vertically", &[("img", ty_image())], ty_image(), "gorget_image_flip_vertically")));
+
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
+// ─── gg.audio — Audio (SDL2_mixer) ────────────────────────────
+
+fn gen_audio_module() -> Module {
+    let mut items: Vec<Spanned<Item>> = Vec::new();
+
+    // Opaque handle types
+    items.push(opaque_struct("AudioChunk"));
+    items.push(opaque_struct("AudioMusic"));
+
+    let ty_chunk = || Type::Named {
+        name: Spanned::dummy("AudioChunk".to_string()),
+        generic_args: vec![],
+    };
+    let ty_music = || Type::Named {
+        name: Spanned::dummy("AudioMusic".to_string()),
+        generic_args: vec![],
+    };
+
+    let fn_item = |f: FunctionDef| -> Spanned<Item> {
+        Spanned::dummy(Item::Function(f))
+    };
+
+    // Init/Quit
+    items.push(fn_item(extern_fn("audio_init", &[("frequency", ty_int()), ("channels", ty_int()), ("chunk_size", ty_int())], ty_int(), "gorget_audio_init")));
+    items.push(fn_item(extern_fn("audio_quit", &[], ty_void(), "gorget_audio_quit")));
+    items.push(fn_item(extern_fn("audio_allocate_channels", &[("num_channels", ty_int())], ty_void(), "gorget_audio_allocate_channels")));
+
+    // Sound effects
+    items.push(fn_item(extern_fn("audio_load_wav", &[("path", ty_str())], ty_result(ty_chunk(), ty_str()), "gorget_audio_load_wav")));
+    items.push(fn_item(extern_fn("audio_free_chunk", &[("chunk", ty_chunk())], ty_void(), "gorget_audio_free_chunk")));
+    items.push(fn_item(extern_fn("audio_play_channel", &[("channel", ty_int()), ("chunk", ty_chunk()), ("loops", ty_int())], ty_int(), "gorget_audio_play_channel")));
+    items.push(fn_item(extern_fn("audio_halt_channel", &[("channel", ty_int())], ty_void(), "gorget_audio_halt_channel")));
+    items.push(fn_item(extern_fn("audio_set_channel_volume", &[("channel", ty_int()), ("volume", ty_int())], ty_void(), "gorget_audio_set_channel_volume")));
+    items.push(fn_item(extern_fn("audio_set_channel_position", &[("channel", ty_int()), ("angle", ty_int()), ("distance", ty_int())], ty_void(), "gorget_audio_set_channel_position")));
+    items.push(fn_item(extern_fn("audio_set_channel_panning", &[("channel", ty_int()), ("left", ty_int()), ("right", ty_int())], ty_void(), "gorget_audio_set_channel_panning")));
+
+    // Music
+    items.push(fn_item(extern_fn("audio_load_music", &[("path", ty_str())], ty_result(ty_music(), ty_str()), "gorget_audio_load_music")));
+    items.push(fn_item(extern_fn("audio_free_music", &[("music", ty_music())], ty_void(), "gorget_audio_free_music")));
+    items.push(fn_item(extern_fn("audio_play_music", &[("music", ty_music()), ("loops", ty_int())], ty_void(), "gorget_audio_play_music")));
+    items.push(fn_item(extern_fn("audio_halt_music", &[], ty_void(), "gorget_audio_halt_music")));
+    items.push(fn_item(extern_fn("audio_set_music_volume", &[("volume", ty_int())], ty_void(), "gorget_audio_set_music_volume")));
+    items.push(fn_item(extern_fn("audio_pause_music", &[], ty_void(), "gorget_audio_pause_music")));
+    items.push(fn_item(extern_fn("audio_resume_music", &[], ty_void(), "gorget_audio_resume_music")));
+
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
+// ─── gg.compress — Zlib/Deflate (miniz) ──────────────────────
+
+fn gen_compress_module() -> Module {
+    let fn_item = |f: FunctionDef| -> Spanned<Item> {
+        Spanned::dummy(Item::Function(f))
+    };
+
+    let items = vec![
+        fn_item(extern_fn("zlib_decompress", &[("data", ty_vector_uint8()), ("uncompressed_size", ty_int())], ty_result(ty_vector_uint8(), ty_str()), "gorget_zlib_decompress")),
+        fn_item(extern_fn("zlib_compress", &[("data", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str()), "gorget_zlib_compress")),
+    ];
+
+    Module {
+        items,
+        span: Span::dummy(),
+    }
+}
+
+// ─── gg.metal — Apple Metal GPU API ────────────────────────────
+
+fn gen_metal_module() -> Module {
+    let mut items: Vec<Spanned<Item>> = Vec::new();
+
+    let fn_item = |f: FunctionDef| -> Spanned<Item> {
+        Spanned::dummy(Item::Function(f))
+    };
+
+    let const_item = |name: &str, value: i64| -> Spanned<Item> {
+        Spanned::dummy(Item::ConstDecl(ConstDecl {
+            visibility: Visibility::Public,
+            type_: Spanned::dummy(ty_int()),
+            name: Spanned::dummy(name.to_string()),
+            value: Spanned::dummy(Expr::IntLiteral(value)),
+            span: Span::dummy(),
+        }))
+    };
+
+    // ── Pixel Formats ──────────────────────────────────────
+    items.push(const_item("MTL_PIXEL_FORMAT_BGRA8_UNORM", 80));
+    items.push(const_item("MTL_PIXEL_FORMAT_RGBA8_UNORM", 70));
+    items.push(const_item("MTL_PIXEL_FORMAT_RGBA16_FLOAT", 115));
+    items.push(const_item("MTL_PIXEL_FORMAT_R8_UNORM", 10));
+    items.push(const_item("MTL_PIXEL_FORMAT_RG8_UNORM", 30));
+    items.push(const_item("MTL_PIXEL_FORMAT_DEPTH32_FLOAT", 252));
+    items.push(const_item("MTL_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8", 260));
+    items.push(const_item("MTL_PIXEL_FORMAT_STENCIL8", 253));
+
+    // ── Primitive Types ────────────────────────────────────
+    items.push(const_item("MTL_PRIMITIVE_POINT", 0));
+    items.push(const_item("MTL_PRIMITIVE_LINE", 1));
+    items.push(const_item("MTL_PRIMITIVE_LINE_STRIP", 2));
+    items.push(const_item("MTL_PRIMITIVE_TRIANGLE", 3));
+    items.push(const_item("MTL_PRIMITIVE_TRIANGLE_STRIP", 4));
+
+    // ── Index Types ────────────────────────────────────────
+    items.push(const_item("MTL_INDEX_UINT16", 0));
+    items.push(const_item("MTL_INDEX_UINT32", 1));
+
+    // ── Load/Store Actions ─────────────────────────────────
+    items.push(const_item("MTL_LOAD_ACTION_DONT_CARE", 0));
+    items.push(const_item("MTL_LOAD_ACTION_LOAD", 1));
+    items.push(const_item("MTL_LOAD_ACTION_CLEAR", 2));
+    items.push(const_item("MTL_STORE_ACTION_DONT_CARE", 0));
+    items.push(const_item("MTL_STORE_ACTION_STORE", 1));
+
+    // ── Compare Functions ──────────────────────────────────
+    items.push(const_item("MTL_COMPARE_NEVER", 0));
+    items.push(const_item("MTL_COMPARE_LESS", 1));
+    items.push(const_item("MTL_COMPARE_EQUAL", 2));
+    items.push(const_item("MTL_COMPARE_LESS_EQUAL", 3));
+    items.push(const_item("MTL_COMPARE_GREATER", 4));
+    items.push(const_item("MTL_COMPARE_NOT_EQUAL", 5));
+    items.push(const_item("MTL_COMPARE_GREATER_EQUAL", 6));
+    items.push(const_item("MTL_COMPARE_ALWAYS", 7));
+
+    // ── Cull Modes ─────────────────────────────────────────
+    items.push(const_item("MTL_CULL_NONE", 0));
+    items.push(const_item("MTL_CULL_FRONT", 1));
+    items.push(const_item("MTL_CULL_BACK", 2));
+
+    // ── Winding Order ──────────────────────────────────────
+    items.push(const_item("MTL_WINDING_CLOCKWISE", 0));
+    items.push(const_item("MTL_WINDING_COUNTER_CLOCKWISE", 1));
+
+    // ── Triangle Fill Mode ─────────────────────────────────
+    items.push(const_item("MTL_FILL_MODE_FILL", 0));
+    items.push(const_item("MTL_FILL_MODE_LINES", 1));
+
+    // ── Blend Factors ──────────────────────────────────────
+    items.push(const_item("MTL_BLEND_ZERO", 0));
+    items.push(const_item("MTL_BLEND_ONE", 1));
+    items.push(const_item("MTL_BLEND_SRC_COLOR", 2));
+    items.push(const_item("MTL_BLEND_ONE_MINUS_SRC_COLOR", 3));
+    items.push(const_item("MTL_BLEND_SRC_ALPHA", 4));
+    items.push(const_item("MTL_BLEND_ONE_MINUS_SRC_ALPHA", 5));
+    items.push(const_item("MTL_BLEND_DST_COLOR", 6));
+    items.push(const_item("MTL_BLEND_ONE_MINUS_DST_COLOR", 7));
+    items.push(const_item("MTL_BLEND_DST_ALPHA", 8));
+    items.push(const_item("MTL_BLEND_ONE_MINUS_DST_ALPHA", 9));
+
+    // ── Blend Operations ───────────────────────────────────
+    items.push(const_item("MTL_BLEND_OP_ADD", 0));
+    items.push(const_item("MTL_BLEND_OP_SUBTRACT", 1));
+    items.push(const_item("MTL_BLEND_OP_REVERSE_SUBTRACT", 2));
+    items.push(const_item("MTL_BLEND_OP_MIN", 3));
+    items.push(const_item("MTL_BLEND_OP_MAX", 4));
+
+    // ── Sampler Address Modes ──────────────────────────────
+    items.push(const_item("MTL_ADDRESS_CLAMP_TO_EDGE", 0));
+    items.push(const_item("MTL_ADDRESS_MIRROR_CLAMP_TO_EDGE", 1));
+    items.push(const_item("MTL_ADDRESS_REPEAT", 2));
+    items.push(const_item("MTL_ADDRESS_MIRROR_REPEAT", 3));
+    items.push(const_item("MTL_ADDRESS_CLAMP_TO_ZERO", 4));
+
+    // ── Sampler Min/Mag Filter ─────────────────────────────
+    items.push(const_item("MTL_FILTER_NEAREST", 0));
+    items.push(const_item("MTL_FILTER_LINEAR", 1));
+
+    // ── Sampler Mip Filter ─────────────────────────────────
+    items.push(const_item("MTL_MIP_FILTER_NOT_MIPMAPPED", 0));
+    items.push(const_item("MTL_MIP_FILTER_NEAREST", 1));
+    items.push(const_item("MTL_MIP_FILTER_LINEAR", 2));
+
+    // ── Storage Mode ───────────────────────────────────────
+    items.push(const_item("MTL_STORAGE_MODE_SHARED", 0));
+    items.push(const_item("MTL_STORAGE_MODE_MANAGED", 1));
+    items.push(const_item("MTL_STORAGE_MODE_PRIVATE", 2));
+
+    // ── Texture Usage ──────────────────────────────────────
+    items.push(const_item("MTL_TEXTURE_USAGE_SHADER_READ", 1));
+    items.push(const_item("MTL_TEXTURE_USAGE_SHADER_WRITE", 2));
+    items.push(const_item("MTL_TEXTURE_USAGE_RENDER_TARGET", 4));
+
+    // ── Vertex Format ──────────────────────────────────────
+    items.push(const_item("MTL_VERTEX_FORMAT_FLOAT", 28));
+    items.push(const_item("MTL_VERTEX_FORMAT_FLOAT2", 29));
+    items.push(const_item("MTL_VERTEX_FORMAT_FLOAT3", 30));
+    items.push(const_item("MTL_VERTEX_FORMAT_FLOAT4", 31));
+    items.push(const_item("MTL_VERTEX_FORMAT_UCHAR4", 3));
+    items.push(const_item("MTL_VERTEX_FORMAT_SHORT2", 16));
+    items.push(const_item("MTL_VERTEX_FORMAT_SHORT4", 18));
+
+    // ── Vertex Step Function ───────────────────────────────
+    items.push(const_item("MTL_STEP_PER_VERTEX", 1));
+    items.push(const_item("MTL_STEP_PER_INSTANCE", 2));
+
+    // ════════════════════════════════════════════════════════
+    // Functions — all handles are opaque int (pointer-sized)
+    // ════════════════════════════════════════════════════════
+
+    // ── Device ─────────────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_device", &[], ty_int(), "gorget_metal_create_device")));
+    items.push(fn_item(extern_fn("metal_device_name", &[("device", ty_int())], ty_string(), "gorget_metal_device_name")));
+    items.push(fn_item(extern_fn("metal_device_supports_family", &[("device", ty_int()), ("family", ty_int())], ty_bool(), "gorget_metal_device_supports_family")));
+
+    // ── Command Queue ──────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_command_queue", &[("device", ty_int())], ty_int(), "gorget_metal_create_command_queue")));
+
+    // ── Command Buffer ─────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_command_buffer", &[("queue", ty_int())], ty_int(), "gorget_metal_create_command_buffer")));
+    items.push(fn_item(extern_fn("metal_command_buffer_present", &[("cmd_buf", ty_int()), ("drawable", ty_int())], ty_void(), "gorget_metal_command_buffer_present")));
+    items.push(fn_item(extern_fn("metal_command_buffer_commit", &[("cmd_buf", ty_int())], ty_void(), "gorget_metal_command_buffer_commit")));
+    items.push(fn_item(extern_fn("metal_command_buffer_wait", &[("cmd_buf", ty_int())], ty_void(), "gorget_metal_command_buffer_wait")));
+
+    // ── Buffers ────────────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_buffer", &[("device", ty_int()), ("length", ty_int()), ("storage_mode", ty_int())], ty_int(), "gorget_metal_create_buffer")));
+    items.push(fn_item(extern_fn("metal_create_buffer_with_data", &[("device", ty_int()), ("data", ty_vector_uint8()), ("length", ty_int()), ("storage_mode", ty_int())], ty_int(), "gorget_metal_create_buffer_with_data")));
+    items.push(fn_item(extern_fn("metal_buffer_contents", &[("buffer", ty_int())], ty_int(), "gorget_metal_buffer_contents")));
+    items.push(fn_item(extern_fn("metal_buffer_length", &[("buffer", ty_int())], ty_int(), "gorget_metal_buffer_length")));
+    items.push(fn_item(extern_fn("metal_buffer_did_modify_range", &[("buffer", ty_int()), ("offset", ty_int()), ("length", ty_int())], ty_void(), "gorget_metal_buffer_did_modify_range")));
+
+    // ── Textures ───────────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_texture_2d", &[("device", ty_int()), ("width", ty_int()), ("height", ty_int()), ("format", ty_int()), ("usage", ty_int()), ("storage_mode", ty_int())], ty_int(), "gorget_metal_create_texture_2d")));
+    items.push(fn_item(extern_fn("metal_create_texture_2d_mipmapped", &[("device", ty_int()), ("width", ty_int()), ("height", ty_int()), ("format", ty_int()), ("mip_levels", ty_int()), ("usage", ty_int()), ("storage_mode", ty_int())], ty_int(), "gorget_metal_create_texture_2d_mipmapped")));
+    items.push(fn_item(extern_fn("metal_texture_upload", &[("texture", ty_int()), ("x", ty_int()), ("y", ty_int()), ("width", ty_int()), ("height", ty_int()), ("data", ty_vector_uint8()), ("bytes_per_row", ty_int())], ty_void(), "gorget_metal_texture_upload")));
+    items.push(fn_item(extern_fn("metal_texture_upload_mip", &[("texture", ty_int()), ("mip_level", ty_int()), ("x", ty_int()), ("y", ty_int()), ("width", ty_int()), ("height", ty_int()), ("data", ty_vector_uint8()), ("bytes_per_row", ty_int())], ty_void(), "gorget_metal_texture_upload_mip")));
+    items.push(fn_item(extern_fn("metal_texture_width", &[("texture", ty_int())], ty_int(), "gorget_metal_texture_width")));
+    items.push(fn_item(extern_fn("metal_texture_height", &[("texture", ty_int())], ty_int(), "gorget_metal_texture_height")));
+
+    // ── Samplers ───────────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_sampler", &[("device", ty_int()), ("min_filter", ty_int()), ("mag_filter", ty_int()), ("mip_filter", ty_int()), ("address_s", ty_int()), ("address_t", ty_int())], ty_int(), "gorget_metal_create_sampler")));
+
+    // ── Shaders / Library ──────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_library", &[("device", ty_int()), ("source", ty_str())], ty_int(), "gorget_metal_create_library")));
+    items.push(fn_item(extern_fn("metal_create_library_from_data", &[("device", ty_int()), ("data", ty_vector_uint8())], ty_int(), "gorget_metal_create_library_from_data")));
+    items.push(fn_item(extern_fn("metal_library_function", &[("library", ty_int()), ("name", ty_str())], ty_int(), "gorget_metal_library_function")));
+
+    // ── Vertex Descriptor ──────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_vertex_descriptor", &[], ty_int(), "gorget_metal_create_vertex_descriptor")));
+    items.push(fn_item(extern_fn("metal_vertex_desc_set_attribute", &[("desc", ty_int()), ("index", ty_int()), ("format", ty_int()), ("offset", ty_int()), ("buffer_index", ty_int())], ty_void(), "gorget_metal_vertex_desc_set_attribute")));
+    items.push(fn_item(extern_fn("metal_vertex_desc_set_layout", &[("desc", ty_int()), ("index", ty_int()), ("stride", ty_int()), ("step_function", ty_int())], ty_void(), "gorget_metal_vertex_desc_set_layout")));
+
+    // ── Render Pipeline ────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_render_pipeline", &[("device", ty_int()), ("vertex_fn", ty_int()), ("fragment_fn", ty_int()), ("vertex_desc", ty_int()), ("color_format", ty_int()), ("depth_format", ty_int())], ty_int(), "gorget_metal_create_render_pipeline")));
+    items.push(fn_item(extern_fn("metal_create_render_pipeline_blended", &[("device", ty_int()), ("vertex_fn", ty_int()), ("fragment_fn", ty_int()), ("vertex_desc", ty_int()), ("color_format", ty_int()), ("depth_format", ty_int()), ("blend_src_rgb", ty_int()), ("blend_dst_rgb", ty_int()), ("blend_src_a", ty_int()), ("blend_dst_a", ty_int())], ty_int(), "gorget_metal_create_render_pipeline_blended")));
+
+    // ── Depth/Stencil State ────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_depth_stencil", &[("device", ty_int()), ("compare_fn", ty_int()), ("depth_write", ty_int())], ty_int(), "gorget_metal_create_depth_stencil")));
+
+    // ── Render Pass Descriptor ─────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_render_pass_desc", &[], ty_int(), "gorget_metal_create_render_pass_desc")));
+    items.push(fn_item(extern_fn("metal_render_pass_set_color", &[("desc", ty_int()), ("index", ty_int()), ("texture", ty_int()), ("load_action", ty_int()), ("store_action", ty_int()), ("r", ty_float()), ("g", ty_float()), ("b", ty_float()), ("a", ty_float())], ty_void(), "gorget_metal_render_pass_set_color")));
+    items.push(fn_item(extern_fn("metal_render_pass_set_depth", &[("desc", ty_int()), ("texture", ty_int()), ("load_action", ty_int()), ("store_action", ty_int()), ("clear_depth", ty_float())], ty_void(), "gorget_metal_render_pass_set_depth")));
+
+    // ── Render Command Encoder ─────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_render_encoder", &[("cmd_buf", ty_int()), ("pass_desc", ty_int())], ty_int(), "gorget_metal_create_render_encoder")));
+    items.push(fn_item(extern_fn("metal_encoder_set_pipeline", &[("encoder", ty_int()), ("pipeline", ty_int())], ty_void(), "gorget_metal_encoder_set_pipeline")));
+    items.push(fn_item(extern_fn("metal_encoder_set_vertex_buffer", &[("encoder", ty_int()), ("buffer", ty_int()), ("offset", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_encoder_set_vertex_buffer")));
+    items.push(fn_item(extern_fn("metal_encoder_set_vertex_bytes", &[("encoder", ty_int()), ("data", ty_vector_uint8()), ("length", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_encoder_set_vertex_bytes")));
+    items.push(fn_item(extern_fn("metal_encoder_set_fragment_buffer", &[("encoder", ty_int()), ("buffer", ty_int()), ("offset", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_encoder_set_fragment_buffer")));
+    items.push(fn_item(extern_fn("metal_encoder_set_fragment_bytes", &[("encoder", ty_int()), ("data", ty_vector_uint8()), ("length", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_encoder_set_fragment_bytes")));
+    items.push(fn_item(extern_fn("metal_encoder_set_fragment_texture", &[("encoder", ty_int()), ("texture", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_encoder_set_fragment_texture")));
+    items.push(fn_item(extern_fn("metal_encoder_set_fragment_sampler", &[("encoder", ty_int()), ("sampler", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_encoder_set_fragment_sampler")));
+    items.push(fn_item(extern_fn("metal_encoder_set_depth_stencil", &[("encoder", ty_int()), ("state", ty_int())], ty_void(), "gorget_metal_encoder_set_depth_stencil")));
+    items.push(fn_item(extern_fn("metal_encoder_set_cull_mode", &[("encoder", ty_int()), ("mode", ty_int())], ty_void(), "gorget_metal_encoder_set_cull_mode")));
+    items.push(fn_item(extern_fn("metal_encoder_set_front_facing", &[("encoder", ty_int()), ("winding", ty_int())], ty_void(), "gorget_metal_encoder_set_front_facing")));
+    items.push(fn_item(extern_fn("metal_encoder_set_fill_mode", &[("encoder", ty_int()), ("mode", ty_int())], ty_void(), "gorget_metal_encoder_set_fill_mode")));
+    items.push(fn_item(extern_fn("metal_encoder_set_viewport", &[("encoder", ty_int()), ("x", ty_float()), ("y", ty_float()), ("w", ty_float()), ("h", ty_float()), ("near", ty_float()), ("far", ty_float())], ty_void(), "gorget_metal_encoder_set_viewport")));
+    items.push(fn_item(extern_fn("metal_encoder_set_scissor", &[("encoder", ty_int()), ("x", ty_int()), ("y", ty_int()), ("w", ty_int()), ("h", ty_int())], ty_void(), "gorget_metal_encoder_set_scissor")));
+    items.push(fn_item(extern_fn("metal_encoder_set_blend_color", &[("encoder", ty_int()), ("r", ty_float()), ("g", ty_float()), ("b", ty_float()), ("a", ty_float())], ty_void(), "gorget_metal_encoder_set_blend_color")));
+    items.push(fn_item(extern_fn("metal_encoder_set_stencil_ref", &[("encoder", ty_int()), ("ref_val", ty_int())], ty_void(), "gorget_metal_encoder_set_stencil_ref")));
+    items.push(fn_item(extern_fn("metal_encoder_draw_primitives", &[("encoder", ty_int()), ("primitive_type", ty_int()), ("start", ty_int()), ("count", ty_int())], ty_void(), "gorget_metal_encoder_draw_primitives")));
+    items.push(fn_item(extern_fn("metal_encoder_draw_primitives_instanced", &[("encoder", ty_int()), ("primitive_type", ty_int()), ("start", ty_int()), ("count", ty_int()), ("instance_count", ty_int())], ty_void(), "gorget_metal_encoder_draw_primitives_instanced")));
+    items.push(fn_item(extern_fn("metal_encoder_draw_indexed", &[("encoder", ty_int()), ("primitive_type", ty_int()), ("index_count", ty_int()), ("index_type", ty_int()), ("index_buffer", ty_int()), ("index_offset", ty_int())], ty_void(), "gorget_metal_encoder_draw_indexed")));
+    items.push(fn_item(extern_fn("metal_encoder_draw_indexed_instanced", &[("encoder", ty_int()), ("primitive_type", ty_int()), ("index_count", ty_int()), ("index_type", ty_int()), ("index_buffer", ty_int()), ("index_offset", ty_int()), ("instance_count", ty_int())], ty_void(), "gorget_metal_encoder_draw_indexed_instanced")));
+    items.push(fn_item(extern_fn("metal_encoder_end", &[("encoder", ty_int())], ty_void(), "gorget_metal_encoder_end")));
+
+    // ── Blit Command Encoder (for mipmap generation, copies) ──
+    items.push(fn_item(extern_fn("metal_create_blit_encoder", &[("cmd_buf", ty_int())], ty_int(), "gorget_metal_create_blit_encoder")));
+    items.push(fn_item(extern_fn("metal_blit_generate_mipmaps", &[("encoder", ty_int()), ("texture", ty_int())], ty_void(), "gorget_metal_blit_generate_mipmaps")));
+    items.push(fn_item(extern_fn("metal_blit_end", &[("encoder", ty_int())], ty_void(), "gorget_metal_blit_end")));
+    // Alias for gpu.gg compatibility
+    items.push(fn_item(extern_fn("metal_generate_mipmaps", &[("cmd_buf", ty_int()), ("texture", ty_int())], ty_void(), "gorget_metal_generate_mipmaps")));
+
+    // ── SDL Metal Integration ──────────────────────────────
+    items.push(fn_item(extern_fn("sdl_metal_create_view", &[("window", ty_int())], ty_int(), "gorget_sdl_metal_create_view")));
+    items.push(fn_item(extern_fn("sdl_metal_get_layer", &[("view", ty_int())], ty_int(), "gorget_sdl_metal_get_layer")));
+    items.push(fn_item(extern_fn("metal_layer_set_device", &[("layer", ty_int()), ("device", ty_int())], ty_void(), "gorget_metal_layer_set_device")));
+    items.push(fn_item(extern_fn("metal_layer_set_pixel_format", &[("layer", ty_int()), ("format", ty_int())], ty_void(), "gorget_metal_layer_set_pixel_format")));
+    items.push(fn_item(extern_fn("metal_layer_set_drawable_size", &[("layer", ty_int()), ("width", ty_int()), ("height", ty_int())], ty_void(), "gorget_metal_layer_set_drawable_size")));
+    items.push(fn_item(extern_fn("metal_layer_next_drawable", &[("layer", ty_int())], ty_int(), "gorget_metal_layer_next_drawable")));
+    items.push(fn_item(extern_fn("metal_drawable_texture", &[("drawable", ty_int())], ty_int(), "gorget_metal_drawable_texture")));
+
+    // ── Release ────────────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_release", &[("obj", ty_int())], ty_void(), "gorget_metal_release")));
+
+    // ── Convenience: begin_frame wraps drawable+pass creation ──
+    items.push(fn_item(extern_fn("metal_begin_frame", &[("layer", ty_int())], ty_int(), "gorget_metal_begin_frame")));
+
+    Module {
+        items,
+        span: Span::dummy(),
+    }
 }
 
 

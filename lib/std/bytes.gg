@@ -33,6 +33,17 @@ extern Vector[uint8] bytes_concat(Vector[uint8] b64_a, Vector[uint8] b64_b) = "g
 extern Vector[uint8] bytes_slice(Vector[uint8] b64_buf, int b64_start, int b64_end) = "gorget_bytes_slice"
 extern Vector[uint8] random_bytes(int b64_n) = "gorget_random_bytes"
 
+# ── Float/int 32/64-bit read/write ──────────────────────────
+# IEEE 754 single-precision (f32) — for binary file parsing (BSP, MD3, etc.)
+# and vertex buffer packing. Gorget float is f64; these convert.
+
+extern void bytes_write_f32_le(Vector[uint8] buf, int offset, float val) = "gorget_bytes_write_f32_le"
+extern float bytes_read_f32_le(Vector[uint8] buf, int offset) = "gorget_bytes_read_f32_le"
+extern void bytes_write_f64_le(Vector[uint8] buf, int offset, float val) = "gorget_bytes_write_f64_le"
+extern float bytes_read_f64_le(Vector[uint8] buf, int offset) = "gorget_bytes_read_f64_le"
+extern void bytes_write_i64_le(Vector[uint8] buf, int offset, int val) = "gorget_bytes_write_i64_le"
+extern int bytes_read_i64_le(Vector[uint8] buf, int offset) = "gorget_bytes_read_i64_le"
+
 # ── Base64 helpers ───────────────────────────────────────────
 
 int b64_char_value(byte b64_ch):

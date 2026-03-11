@@ -1,0 +1,832 @@
+# gg.math3d — 3D Math Library for Gorget
+#
+# Pure Gorget implementation of common 3D math types and operations.
+# No FFI — showcases traits, expression-body functions, and generics.
+
+from std.math import sqrt, sin, cos, tan, acos, atan2, PI
+
+# ── Constants ────────────────────────────────────────────────
+
+float EPSILON = 0.000001
+
+# ── Utility Functions ────────────────────────────────────────
+
+float radians(float deg) = deg * PI / 180.0
+
+float degrees(float rad) = rad * 180.0 / PI
+
+float clamp_f(float x, float lo, float hi):
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+
+float lerp_f(float a, float b, float t) = a + (b - a) * t
+
+float abs_f(float x):
+    if x < 0.0:
+        return 0.0 - x
+    return x
+
+# ── Vec2 ─────────────────────────────────────────────────────
+
+struct Vec2:
+    float x
+    float y
+
+equip Vec2:
+    Vec2 zero() = Vec2(0.0, 0.0)
+    Vec2 one() = Vec2(1.0, 1.0)
+
+    Vec2 add(self, Vec2 other) = Vec2(self.x + other.x, self.y + other.y)
+    Vec2 sub(self, Vec2 other) = Vec2(self.x - other.x, self.y - other.y)
+    Vec2 scale(self, float s) = Vec2(self.x * s, self.y * s)
+    Vec2 neg(self) = Vec2(0.0 - self.x, 0.0 - self.y)
+
+    float dot(self, Vec2 other) = self.x * other.x + self.y * other.y
+
+    float length_sq(self) = self.x * self.x + self.y * self.y
+
+    float length(self) = sqrt(self.x * self.x + self.y * self.y)
+
+    Vec2 normalize(self):
+        float len = self.length()
+        if len < EPSILON:
+            return Vec2(0.0, 0.0)
+        float inv = 1.0 / len
+        return Vec2(self.x * inv, self.y * inv)
+
+    float distance(self, Vec2 other):
+        float dx = self.x - other.x
+        float dy = self.y - other.y
+        return sqrt(dx * dx + dy * dy)
+
+    Vec2 lerp(self, Vec2 other, float t):
+        return Vec2(self.x + (other.x - self.x) * t, self.y + (other.y - self.y) * t)
+
+    bool approx_eq(self, Vec2 other):
+        return abs_f(self.x - other.x) < EPSILON and abs_f(self.y - other.y) < EPSILON
+
+    str to_string(self):
+        float sx = self.x
+        float sy = self.y
+        return f"Vec2({sx}, {sy})"
+
+# ── Vec3 ─────────────────────────────────────────────────────
+
+struct Vec3:
+    float x
+    float y
+    float z
+
+equip Vec3:
+    Vec3 zero() = Vec3(0.0, 0.0, 0.0)
+    Vec3 one() = Vec3(1.0, 1.0, 1.0)
+    Vec3 up() = Vec3(0.0, 1.0, 0.0)
+    Vec3 right() = Vec3(1.0, 0.0, 0.0)
+    Vec3 forward() = Vec3(0.0, 0.0, -1.0)
+
+    Vec3 add(self, Vec3 other) = Vec3(self.x + other.x, self.y + other.y, self.z + other.z)
+    Vec3 sub(self, Vec3 other) = Vec3(self.x - other.x, self.y - other.y, self.z - other.z)
+    Vec3 scale(self, float s) = Vec3(self.x * s, self.y * s, self.z * s)
+    Vec3 neg(self) = Vec3(0.0 - self.x, 0.0 - self.y, 0.0 - self.z)
+
+    float dot(self, Vec3 other):
+        return self.x * other.x + self.y * other.y + self.z * other.z
+
+    Vec3 cross(self, Vec3 other):
+        return Vec3(
+            self.y * other.z - self.z * other.y,
+            self.z * other.x - self.x * other.z,
+            self.x * other.y - self.y * other.x)
+
+    float length_sq(self) = self.x * self.x + self.y * self.y + self.z * self.z
+
+    float length(self) = sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
+
+    Vec3 normalize(self):
+        float len = self.length()
+        if len < EPSILON:
+            return Vec3(0.0, 0.0, 0.0)
+        float inv = 1.0 / len
+        return Vec3(self.x * inv, self.y * inv, self.z * inv)
+
+    float distance(self, Vec3 other):
+        float dx = self.x - other.x
+        float dy = self.y - other.y
+        float dz = self.z - other.z
+        return sqrt(dx * dx + dy * dy + dz * dz)
+
+    Vec3 lerp(self, Vec3 other, float t):
+        return Vec3(
+            self.x + (other.x - self.x) * t,
+            self.y + (other.y - self.y) * t,
+            self.z + (other.z - self.z) * t)
+
+    Vec3 reflect(self, Vec3 normal):
+        float d = 2.0 * self.dot(normal)
+        return Vec3(self.x - d * normal.x, self.y - d * normal.y, self.z - d * normal.z)
+
+    Vec3 mul_component(self, Vec3 other):
+        return Vec3(self.x * other.x, self.y * other.y, self.z * other.z)
+
+    bool approx_eq(self, Vec3 other):
+        return abs_f(self.x - other.x) < EPSILON and abs_f(self.y - other.y) < EPSILON and abs_f(self.z - other.z) < EPSILON
+
+    str to_string(self):
+        float sx = self.x
+        float sy = self.y
+        float sz = self.z
+        return f"Vec3({sx}, {sy}, {sz})"
+
+# ── Vec4 ─────────────────────────────────────────────────────
+
+struct Vec4:
+    float x
+    float y
+    float z
+    float w
+
+equip Vec4:
+    Vec4 zero() = Vec4(0.0, 0.0, 0.0, 0.0)
+
+    Vec4 add(self, Vec4 other):
+        return Vec4(self.x + other.x, self.y + other.y, self.z + other.z, self.w + other.w)
+
+    Vec4 sub(self, Vec4 other):
+        return Vec4(self.x - other.x, self.y - other.y, self.z - other.z, self.w - other.w)
+
+    Vec4 scale(self, float s):
+        return Vec4(self.x * s, self.y * s, self.z * s, self.w * s)
+
+    float dot(self, Vec4 other):
+        return self.x * other.x + self.y * other.y + self.z * other.z + self.w * other.w
+
+    float length(self):
+        return sqrt(self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w)
+
+    Vec4 normalize(self):
+        float len = self.length()
+        if len < EPSILON:
+            return Vec4(0.0, 0.0, 0.0, 0.0)
+        float inv = 1.0 / len
+        return Vec4(self.x * inv, self.y * inv, self.z * inv, self.w * inv)
+
+    str to_string(self):
+        float sx = self.x
+        float sy = self.y
+        float sz = self.z
+        float sw = self.w
+        return f"Vec4({sx}, {sy}, {sz}, {sw})"
+
+# ── Mat4 ─────────────────────────────────────────────────────
+# Column-major 4x4 matrix (OpenGL convention).
+# Fields m00..m33 where mRC = row R, column C.
+# Memory layout: column 0 = (m00, m10, m20, m30), etc.
+
+struct Mat4:
+    float m00
+    float m10
+    float m20
+    float m30
+    float m01
+    float m11
+    float m21
+    float m31
+    float m02
+    float m12
+    float m22
+    float m32
+    float m03
+    float m13
+    float m23
+    float m33
+
+equip Mat4:
+    Mat4 identity():
+        return Mat4(
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0)
+
+    Mat4 zero():
+        return Mat4(
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0)
+
+    Mat4 multiply(self, Mat4 b):
+        # Row 0
+        float r00 = self.m00 * b.m00 + self.m01 * b.m10 + self.m02 * b.m20 + self.m03 * b.m30
+        float r01 = self.m00 * b.m01 + self.m01 * b.m11 + self.m02 * b.m21 + self.m03 * b.m31
+        float r02 = self.m00 * b.m02 + self.m01 * b.m12 + self.m02 * b.m22 + self.m03 * b.m32
+        float r03 = self.m00 * b.m03 + self.m01 * b.m13 + self.m02 * b.m23 + self.m03 * b.m33
+        # Row 1
+        float r10 = self.m10 * b.m00 + self.m11 * b.m10 + self.m12 * b.m20 + self.m13 * b.m30
+        float r11 = self.m10 * b.m01 + self.m11 * b.m11 + self.m12 * b.m21 + self.m13 * b.m31
+        float r12 = self.m10 * b.m02 + self.m11 * b.m12 + self.m12 * b.m22 + self.m13 * b.m32
+        float r13 = self.m10 * b.m03 + self.m11 * b.m13 + self.m12 * b.m23 + self.m13 * b.m33
+        # Row 2
+        float r20 = self.m20 * b.m00 + self.m21 * b.m10 + self.m22 * b.m20 + self.m23 * b.m30
+        float r21 = self.m20 * b.m01 + self.m21 * b.m11 + self.m22 * b.m21 + self.m23 * b.m31
+        float r22 = self.m20 * b.m02 + self.m21 * b.m12 + self.m22 * b.m22 + self.m23 * b.m32
+        float r23 = self.m20 * b.m03 + self.m21 * b.m13 + self.m22 * b.m23 + self.m23 * b.m33
+        # Row 3
+        float r30 = self.m30 * b.m00 + self.m31 * b.m10 + self.m32 * b.m20 + self.m33 * b.m30
+        float r31 = self.m30 * b.m01 + self.m31 * b.m11 + self.m32 * b.m21 + self.m33 * b.m31
+        float r32 = self.m30 * b.m02 + self.m31 * b.m12 + self.m32 * b.m22 + self.m33 * b.m32
+        float r33 = self.m30 * b.m03 + self.m31 * b.m13 + self.m32 * b.m23 + self.m33 * b.m33
+        return Mat4(r00, r10, r20, r30, r01, r11, r21, r31, r02, r12, r22, r32, r03, r13, r23, r33)
+
+    Vec4 mul_vec4(self, Vec4 v):
+        return Vec4(
+            self.m00 * v.x + self.m01 * v.y + self.m02 * v.z + self.m03 * v.w,
+            self.m10 * v.x + self.m11 * v.y + self.m12 * v.z + self.m13 * v.w,
+            self.m20 * v.x + self.m21 * v.y + self.m22 * v.z + self.m23 * v.w,
+            self.m30 * v.x + self.m31 * v.y + self.m32 * v.z + self.m33 * v.w)
+
+    Vec3 mul_point(self, Vec3 p):
+        float w = self.m30 * p.x + self.m31 * p.y + self.m32 * p.z + self.m33
+        if abs_f(w) < EPSILON:
+            return Vec3(0.0, 0.0, 0.0)
+        float inv_w = 1.0 / w
+        return Vec3(
+            (self.m00 * p.x + self.m01 * p.y + self.m02 * p.z + self.m03) * inv_w,
+            (self.m10 * p.x + self.m11 * p.y + self.m12 * p.z + self.m13) * inv_w,
+            (self.m20 * p.x + self.m21 * p.y + self.m22 * p.z + self.m23) * inv_w)
+
+    Vec3 mul_direction(self, Vec3 d):
+        return Vec3(
+            self.m00 * d.x + self.m01 * d.y + self.m02 * d.z,
+            self.m10 * d.x + self.m11 * d.y + self.m12 * d.z,
+            self.m20 * d.x + self.m21 * d.y + self.m22 * d.z)
+
+    Mat4 transpose(self):
+        return Mat4(
+            self.m00, self.m01, self.m02, self.m03,
+            self.m10, self.m11, self.m12, self.m13,
+            self.m20, self.m21, self.m22, self.m23,
+            self.m30, self.m31, self.m32, self.m33)
+
+    Mat4 inverse(self):
+        # Cofactor expansion for 4x4 inverse
+        float a00 = self.m00
+        float a01 = self.m01
+        float a02 = self.m02
+        float a03 = self.m03
+        float a10 = self.m10
+        float a11 = self.m11
+        float a12 = self.m12
+        float a13 = self.m13
+        float a20 = self.m20
+        float a21 = self.m21
+        float a22 = self.m22
+        float a23 = self.m23
+        float a30 = self.m30
+        float a31 = self.m31
+        float a32 = self.m32
+        float a33 = self.m33
+
+        float b00 = a00 * a11 - a01 * a10
+        float b01 = a00 * a12 - a02 * a10
+        float b02 = a00 * a13 - a03 * a10
+        float b03 = a01 * a12 - a02 * a11
+        float b04 = a01 * a13 - a03 * a11
+        float b05 = a02 * a13 - a03 * a12
+        float b06 = a20 * a31 - a21 * a30
+        float b07 = a20 * a32 - a22 * a30
+        float b08 = a20 * a33 - a23 * a30
+        float b09 = a21 * a32 - a22 * a31
+        float b10 = a21 * a33 - a23 * a31
+        float b11 = a22 * a33 - a23 * a32
+
+        float det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06
+        if abs_f(det) < EPSILON:
+            return Mat4.identity()
+        float inv_det = 1.0 / det
+
+        float r00 = (a11 * b11 - a12 * b10 + a13 * b09) * inv_det
+        float r10 = (0.0 - a10 * b11 + a12 * b08 - a13 * b07) * inv_det
+        float r20 = (a10 * b10 - a11 * b08 + a13 * b06) * inv_det
+        float r30 = (0.0 - a10 * b09 + a11 * b07 - a12 * b06) * inv_det
+        float r01 = (0.0 - a01 * b11 + a02 * b10 - a03 * b09) * inv_det
+        float r11 = (a00 * b11 - a02 * b08 + a03 * b07) * inv_det
+        float r21 = (0.0 - a00 * b10 + a01 * b08 - a03 * b06) * inv_det
+        float r31 = (a00 * b09 - a01 * b07 + a02 * b06) * inv_det
+        float r02 = (a31 * b05 - a32 * b04 + a33 * b03) * inv_det
+        float r12 = (0.0 - a30 * b05 + a32 * b02 - a33 * b01) * inv_det
+        float r22 = (a30 * b04 - a31 * b02 + a33 * b00) * inv_det
+        float r32 = (0.0 - a30 * b03 + a31 * b01 - a32 * b00) * inv_det
+        float r03 = (0.0 - a21 * b05 + a22 * b04 - a23 * b03) * inv_det
+        float r13 = (a20 * b05 - a22 * b02 + a23 * b01) * inv_det
+        float r23 = (0.0 - a20 * b04 + a21 * b02 - a23 * b00) * inv_det
+        float r33 = (a20 * b03 - a21 * b01 + a22 * b00) * inv_det
+
+        return Mat4(r00, r10, r20, r30, r01, r11, r21, r31, r02, r12, r22, r32, r03, r13, r23, r33)
+
+    # ── Projection matrices ──────────────────────────────────
+
+    Mat4 perspective(float fov_rad, float aspect, float near, float far):
+        float f = 1.0 / tan(fov_rad / 2.0)
+        float nf = 1.0 / (near - far)
+        return Mat4(
+            f / aspect, 0.0, 0.0, 0.0,
+            0.0, f, 0.0, 0.0,
+            0.0, 0.0, (far + near) * nf, -1.0,
+            0.0, 0.0, 2.0 * far * near * nf, 0.0)
+
+    Mat4 ortho(float left, float right, float bottom, float top, float near, float far):
+        float rl = 1.0 / (right - left)
+        float tb = 1.0 / (top - bottom)
+        float fn = 1.0 / (far - near)
+        return Mat4(
+            2.0 * rl, 0.0, 0.0, 0.0,
+            0.0, 2.0 * tb, 0.0, 0.0,
+            0.0, 0.0, -2.0 * fn, 0.0,
+            0.0 - (right + left) * rl, 0.0 - (top + bottom) * tb, 0.0 - (far + near) * fn, 1.0)
+
+    # ── View matrix ──────────────────────────────────────────
+
+    Mat4 look_at(Vec3 eye, Vec3 target, Vec3 world_up):
+        Vec3 f = target.sub(eye).normalize()
+        Vec3 s = f.cross(world_up).normalize()
+        Vec3 u = s.cross(f)
+        return Mat4(
+            s.x, u.x, 0.0 - f.x, 0.0,
+            s.y, u.y, 0.0 - f.y, 0.0,
+            s.z, u.z, 0.0 - f.z, 0.0,
+            0.0 - s.dot(eye), 0.0 - u.dot(eye), f.dot(eye), 1.0)
+
+    # ── Transform matrices ───────────────────────────────────
+
+    Mat4 translate(Vec3 v):
+        return Mat4(
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            v.x, v.y, v.z, 1.0)
+
+    Mat4 scale_mat(Vec3 v):
+        return Mat4(
+            v.x, 0.0, 0.0, 0.0,
+            0.0, v.y, 0.0, 0.0,
+            0.0, 0.0, v.z, 0.0,
+            0.0, 0.0, 0.0, 1.0)
+
+    Mat4 rotate_x(float angle_rad):
+        float c = cos(angle_rad)
+        float s = sin(angle_rad)
+        return Mat4(
+            1.0, 0.0, 0.0, 0.0,
+            0.0, c, s, 0.0,
+            0.0, 0.0 - s, c, 0.0,
+            0.0, 0.0, 0.0, 1.0)
+
+    Mat4 rotate_y(float angle_rad):
+        float c = cos(angle_rad)
+        float s = sin(angle_rad)
+        return Mat4(
+            c, 0.0, 0.0 - s, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            s, 0.0, c, 0.0,
+            0.0, 0.0, 0.0, 1.0)
+
+    Mat4 rotate_z(float angle_rad):
+        float c = cos(angle_rad)
+        float s = sin(angle_rad)
+        return Mat4(
+            c, s, 0.0, 0.0,
+            0.0 - s, c, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0)
+
+    Mat4 from_quat(Quat q):
+        float x2 = q.x + q.x
+        float y2 = q.y + q.y
+        float z2 = q.z + q.z
+        float xx = q.x * x2
+        float xy = q.x * y2
+        float xz = q.x * z2
+        float yy = q.y * y2
+        float yz = q.y * z2
+        float zz = q.z * z2
+        float wx = q.w * x2
+        float wy = q.w * y2
+        float wz = q.w * z2
+        return Mat4(
+            1.0 - (yy + zz), xy + wz, xz - wy, 0.0,
+            xy - wz, 1.0 - (xx + zz), yz + wx, 0.0,
+            xz + wy, yz - wx, 1.0 - (xx + yy), 0.0,
+            0.0, 0.0, 0.0, 1.0)
+
+    # Convert to column-major float array for OpenGL
+    Vector[float] to_gl(self):
+        Vector[float] out = Vector[float]()
+        out.push(self.m00)
+        out.push(self.m10)
+        out.push(self.m20)
+        out.push(self.m30)
+        out.push(self.m01)
+        out.push(self.m11)
+        out.push(self.m21)
+        out.push(self.m31)
+        out.push(self.m02)
+        out.push(self.m12)
+        out.push(self.m22)
+        out.push(self.m32)
+        out.push(self.m03)
+        out.push(self.m13)
+        out.push(self.m23)
+        out.push(self.m33)
+        return out
+
+# ── Quat ─────────────────────────────────────────────────────
+# Quaternion (x, y, z, w) — Hamilton convention: w is the scalar part.
+
+struct Quat:
+    float x
+    float y
+    float z
+    float w
+
+equip Quat:
+    Quat identity() = Quat(0.0, 0.0, 0.0, 1.0)
+
+    Quat from_axis_angle(Vec3 axis, float angle_rad):
+        float half = angle_rad / 2.0
+        float s = sin(half)
+        Vec3 n = axis.normalize()
+        return Quat(n.x * s, n.y * s, n.z * s, cos(half))
+
+    Quat from_euler(float pitch, float yaw, float roll):
+        float cp = cos(pitch * 0.5)
+        float sp = sin(pitch * 0.5)
+        float cy = cos(yaw * 0.5)
+        float sy = sin(yaw * 0.5)
+        float cr = cos(roll * 0.5)
+        float sr = sin(roll * 0.5)
+        return Quat(
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+            cr * cp * cy + sr * sp * sy)
+
+    Quat multiply(self, Quat other):
+        return Quat(
+            self.w * other.x + self.x * other.w + self.y * other.z - self.z * other.y,
+            self.w * other.y - self.x * other.z + self.y * other.w + self.z * other.x,
+            self.w * other.z + self.x * other.y - self.y * other.x + self.z * other.w,
+            self.w * other.w - self.x * other.x - self.y * other.y - self.z * other.z)
+
+    float length_sq(self):
+        return self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w
+
+    float length(self):
+        return sqrt(self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w)
+
+    Quat normalize(self):
+        float len = self.length()
+        if len < EPSILON:
+            return Quat(0.0, 0.0, 0.0, 1.0)
+        float inv = 1.0 / len
+        return Quat(self.x * inv, self.y * inv, self.z * inv, self.w * inv)
+
+    Quat conjugate(self):
+        return Quat(0.0 - self.x, 0.0 - self.y, 0.0 - self.z, self.w)
+
+    Quat inverse_q(self):
+        float len_sq = self.length_sq()
+        if len_sq < EPSILON:
+            return Quat.identity()
+        float inv = 1.0 / len_sq
+        return Quat(0.0 - self.x * inv, 0.0 - self.y * inv, 0.0 - self.z * inv, self.w * inv)
+
+    Vec3 rotate_vec3(self, Vec3 v):
+        # q * v * q^-1 (optimized)
+        float tx = 2.0 * (self.y * v.z - self.z * v.y)
+        float ty = 2.0 * (self.z * v.x - self.x * v.z)
+        float tz = 2.0 * (self.x * v.y - self.y * v.x)
+        return Vec3(
+            v.x + self.w * tx + (self.y * tz - self.z * ty),
+            v.y + self.w * ty + (self.z * tx - self.x * tz),
+            v.z + self.w * tz + (self.x * ty - self.y * tx))
+
+    Mat4 to_mat4(self):
+        return Mat4.from_quat(self)
+
+    Quat slerp(self, Quat other, float t):
+        float d = self.x * other.x + self.y * other.y + self.z * other.z + self.w * other.w
+        # If dot is negative, negate one quaternion to take shortest path
+        Quat b = other
+        if d < 0.0:
+            d = 0.0 - d
+            b = Quat(0.0 - other.x, 0.0 - other.y, 0.0 - other.z, 0.0 - other.w)
+        # If very close, use linear interpolation
+        if d > 0.9995:
+            Quat result = Quat(
+                self.x + (b.x - self.x) * t,
+                self.y + (b.y - self.y) * t,
+                self.z + (b.z - self.z) * t,
+                self.w + (b.w - self.w) * t)
+            return result.normalize()
+        float theta = acos(clamp_f(d, -1.0, 1.0))
+        float sin_theta = sin(theta)
+        if abs_f(sin_theta) < EPSILON:
+            return self
+        float a_coeff = sin((1.0 - t) * theta) / sin_theta
+        float b_coeff = sin(t * theta) / sin_theta
+        return Quat(
+            a_coeff * self.x + b_coeff * b.x,
+            a_coeff * self.y + b_coeff * b.y,
+            a_coeff * self.z + b_coeff * b.z,
+            a_coeff * self.w + b_coeff * b.w)
+
+    bool approx_eq(self, Quat other):
+        return abs_f(self.x - other.x) < EPSILON and abs_f(self.y - other.y) < EPSILON and abs_f(self.z - other.z) < EPSILON and abs_f(self.w - other.w) < EPSILON
+
+    str to_string(self):
+        float sx = self.x
+        float sy = self.y
+        float sz = self.z
+        float sw = self.w
+        return f"Quat({sx}, {sy}, {sz}, {sw})"
+
+# ── Plane ────────────────────────────────────────────────────
+# Plane defined by normal and distance: dot(normal, point) + d = 0
+
+struct Plane:
+    Vec3 normal
+    float d
+
+equip Plane:
+    Plane from_normal_distance(Vec3 normal, float d):
+        return Plane(normal.normalize(), d)
+
+    Plane from_points(Vec3 a, Vec3 b, Vec3 c):
+        Vec3 ab = b.sub(a)
+        Vec3 ac = c.sub(a)
+        Vec3 n = ab.cross(ac).normalize()
+        return Plane(n, 0.0 - n.dot(a))
+
+    float distance_to_point(self, Vec3 p):
+        return self.normal.dot(p) + self.d
+
+    # Returns 1 (front), -1 (back), or 0 (on plane)
+    int classify_point(self, Vec3 p):
+        float dist = self.distance_to_point(p)
+        if dist > EPSILON:
+            return 1
+        if dist < 0.0 - EPSILON:
+            return -1
+        return 0
+
+    str to_string(self):
+        str ns = self.normal.to_string()
+        float sd = self.d
+        return f"Plane({ns}, {sd})"
+
+# ── AABB ─────────────────────────────────────────────────────
+# Axis-aligned bounding box.
+
+struct AABB:
+    Vec3 min_pt
+    Vec3 max_pt
+
+equip AABB:
+    AABB from_center_extents(Vec3 center, Vec3 extents):
+        return AABB(center.sub(extents), center.add(extents))
+
+    bool contains_point(self, Vec3 p):
+        return p.x >= self.min_pt.x and p.x <= self.max_pt.x and p.y >= self.min_pt.y and p.y <= self.max_pt.y and p.z >= self.min_pt.z and p.z <= self.max_pt.z
+
+    bool intersects(self, AABB other):
+        return self.min_pt.x <= other.max_pt.x and self.max_pt.x >= other.min_pt.x and self.min_pt.y <= other.max_pt.y and self.max_pt.y >= other.min_pt.y and self.min_pt.z <= other.max_pt.z and self.max_pt.z >= other.min_pt.z
+
+    AABB expand(self, Vec3 point):
+        float nx = self.min_pt.x
+        float ny = self.min_pt.y
+        float nz = self.min_pt.z
+        float xx = self.max_pt.x
+        float xy = self.max_pt.y
+        float xz = self.max_pt.z
+        if point.x < nx:
+            nx = point.x
+        if point.y < ny:
+            ny = point.y
+        if point.z < nz:
+            nz = point.z
+        if point.x > xx:
+            xx = point.x
+        if point.y > xy:
+            xy = point.y
+        if point.z > xz:
+            xz = point.z
+        return AABB(Vec3(nx, ny, nz), Vec3(xx, xy, xz))
+
+    AABB merge(self, AABB other):
+        float nx = self.min_pt.x
+        float ny = self.min_pt.y
+        float nz = self.min_pt.z
+        float xx = self.max_pt.x
+        float xy = self.max_pt.y
+        float xz = self.max_pt.z
+        if other.min_pt.x < nx:
+            nx = other.min_pt.x
+        if other.min_pt.y < ny:
+            ny = other.min_pt.y
+        if other.min_pt.z < nz:
+            nz = other.min_pt.z
+        if other.max_pt.x > xx:
+            xx = other.max_pt.x
+        if other.max_pt.y > xy:
+            xy = other.max_pt.y
+        if other.max_pt.z > xz:
+            xz = other.max_pt.z
+        return AABB(Vec3(nx, ny, nz), Vec3(xx, xy, xz))
+
+    Vec3 center(self):
+        return Vec3(
+            (self.min_pt.x + self.max_pt.x) * 0.5,
+            (self.min_pt.y + self.max_pt.y) * 0.5,
+            (self.min_pt.z + self.max_pt.z) * 0.5)
+
+    Vec3 size(self):
+        return Vec3(
+            self.max_pt.x - self.min_pt.x,
+            self.max_pt.y - self.min_pt.y,
+            self.max_pt.z - self.min_pt.z)
+
+    str to_string(self):
+        str smin = self.min_pt.to_string()
+        str smax = self.max_pt.to_string()
+        return f"AABB({smin}, {smax})"
+
+# ── Ray ──────────────────────────────────────────────────────
+
+struct Ray:
+    Vec3 origin
+    Vec3 direction
+
+equip Ray:
+    Ray new(Vec3 origin, Vec3 direction):
+        return Ray(origin, direction.normalize())
+
+    Vec3 point_at(self, float t):
+        return self.origin.add(self.direction.scale(t))
+
+    # Ray-AABB intersection (slab method). Returns -1.0 if no hit.
+    float intersect_aabb(self, AABB box):
+        float tmin = -999999.0
+        float tmax = 999999.0
+        # X slab
+        if abs_f(self.direction.x) > EPSILON:
+            float t1 = (box.min_pt.x - self.origin.x) / self.direction.x
+            float t2 = (box.max_pt.x - self.origin.x) / self.direction.x
+            if t1 > t2:
+                float tmp = t1
+                t1 = t2
+                t2 = tmp
+            if t1 > tmin:
+                tmin = t1
+            if t2 < tmax:
+                tmax = t2
+        else:
+            if self.origin.x < box.min_pt.x or self.origin.x > box.max_pt.x:
+                return -1.0
+        # Y slab
+        if abs_f(self.direction.y) > EPSILON:
+            float t1 = (box.min_pt.y - self.origin.y) / self.direction.y
+            float t2 = (box.max_pt.y - self.origin.y) / self.direction.y
+            if t1 > t2:
+                float tmp = t1
+                t1 = t2
+                t2 = tmp
+            if t1 > tmin:
+                tmin = t1
+            if t2 < tmax:
+                tmax = t2
+        else:
+            if self.origin.y < box.min_pt.y or self.origin.y > box.max_pt.y:
+                return -1.0
+        # Z slab
+        if abs_f(self.direction.z) > EPSILON:
+            float t1 = (box.min_pt.z - self.origin.z) / self.direction.z
+            float t2 = (box.max_pt.z - self.origin.z) / self.direction.z
+            if t1 > t2:
+                float tmp = t1
+                t1 = t2
+                t2 = tmp
+            if t1 > tmin:
+                tmin = t1
+            if t2 < tmax:
+                tmax = t2
+        else:
+            if self.origin.z < box.min_pt.z or self.origin.z > box.max_pt.z:
+                return -1.0
+        if tmin > tmax or tmax < 0.0:
+            return -1.0
+        if tmin >= 0.0:
+            return tmin
+        return tmax
+
+    str to_string(self):
+        str so = self.origin.to_string()
+        str sd = self.direction.to_string()
+        return f"Ray({so}, {sd})"
+
+# ── Frustum ──────────────────────────────────────────────────
+# View frustum defined by 6 planes (left, right, bottom, top, near, far).
+
+struct Frustum:
+    Plane left
+    Plane right
+    Plane bottom
+    Plane top
+    Plane near
+    Plane far
+
+equip Frustum:
+    # Extract frustum planes from a combined model-view-projection matrix.
+    Frustum from_mat4(Mat4 m):
+        # Left:   row3 + row0
+        Vec3 ln = Vec3(m.m30 + m.m00, m.m31 + m.m01, m.m32 + m.m02)
+        float ld = m.m33 + m.m03
+        float ll = ln.length()
+        Plane lp = Plane(ln.scale(1.0 / ll), ld / ll)
+        # Right:  row3 - row0
+        Vec3 rn = Vec3(m.m30 - m.m00, m.m31 - m.m01, m.m32 - m.m02)
+        float rd = m.m33 - m.m03
+        float rl = rn.length()
+        Plane rp = Plane(rn.scale(1.0 / rl), rd / rl)
+        # Bottom: row3 + row1
+        Vec3 bn = Vec3(m.m30 + m.m10, m.m31 + m.m11, m.m32 + m.m12)
+        float bd = m.m33 + m.m13
+        float bl = bn.length()
+        Plane bp = Plane(bn.scale(1.0 / bl), bd / bl)
+        # Top:    row3 - row1
+        Vec3 tn = Vec3(m.m30 - m.m10, m.m31 - m.m11, m.m32 - m.m12)
+        float td = m.m33 - m.m13
+        float tl = tn.length()
+        Plane tp = Plane(tn.scale(1.0 / tl), td / tl)
+        # Near:   row3 + row2
+        Vec3 nn = Vec3(m.m30 + m.m20, m.m31 + m.m21, m.m32 + m.m22)
+        float nd = m.m33 + m.m23
+        float nl = nn.length()
+        Plane np = Plane(nn.scale(1.0 / nl), nd / nl)
+        # Far:    row3 - row2
+        Vec3 fn = Vec3(m.m30 - m.m20, m.m31 - m.m21, m.m32 - m.m22)
+        float fd = m.m33 - m.m23
+        float fl = fn.length()
+        Plane fp = Plane(fn.scale(1.0 / fl), fd / fl)
+        return Frustum(lp, rp, bp, tp, np, fp)
+
+    bool test_point(self, Vec3 p):
+        if self.left.distance_to_point(p) < 0.0:
+            return false
+        if self.right.distance_to_point(p) < 0.0:
+            return false
+        if self.bottom.distance_to_point(p) < 0.0:
+            return false
+        if self.top.distance_to_point(p) < 0.0:
+            return false
+        if self.near.distance_to_point(p) < 0.0:
+            return false
+        if self.far.distance_to_point(p) < 0.0:
+            return false
+        return true
+
+    # Returns true if the AABB is at least partially inside the frustum.
+    bool test_aabb(self, AABB box):
+        # For each frustum plane, find the corner most aligned with the plane normal.
+        # If that corner is behind the plane, the entire box is outside.
+        if not test_plane_aabb(self.left, box):
+            return false
+        if not test_plane_aabb(self.right, box):
+            return false
+        if not test_plane_aabb(self.bottom, box):
+            return false
+        if not test_plane_aabb(self.top, box):
+            return false
+        if not test_plane_aabb(self.near, box):
+            return false
+        if not test_plane_aabb(self.far, box):
+            return false
+        return true
+
+# Helper: test if AABB is fully behind a plane (returns false if so)
+bool test_plane_aabb(Plane plane, AABB box):
+    # Find the positive vertex (most in the direction of the normal)
+    float px = box.min_pt.x
+    float py = box.min_pt.y
+    float pz = box.min_pt.z
+    if plane.normal.x >= 0.0:
+        px = box.max_pt.x
+    if plane.normal.y >= 0.0:
+        py = box.max_pt.y
+    if plane.normal.z >= 0.0:
+        pz = box.max_pt.z
+    float dist = plane.normal.x * px + plane.normal.y * py + plane.normal.z * pz + plane.d
+    return dist >= 0.0

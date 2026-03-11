@@ -10,6 +10,12 @@
 
 ## Medium
 
+- **Gorget Arena Phase 3: Renderer integration** — BSP loader and renderer skeleton exist but need real BSP file loading test, Q3 shader parser completion (full keyword dispatch), VBO upload pipeline, GLSL shader programs, actual BSP rendering with PVS culling. Requires gg.gl + gg.image working end-to-end. [added: 2026-03-11]
+
+- **Gorget Arena Phase 4-6: Game logic, networking, polish** — ECS integration with gg.ecs, BSP collision tracing, weapon/item/trigger systems wired to game loop. Client/server networking with UDP + delta compression. P2P mode via gg.p2p. Audio integration. UI rendering. Bot AI. Asset download manager with gg.http. [added: 2026-03-11]
+
+- **expand_derives() multi-file fix** — Available on main branch. The derive expander only iterates top-level module.items, missing structs/enums inside Module wrappers from merge_modules(). Rebase gorget-3 onto main when needed. [added: 2026-03-11]
+
 - **If-expression `elif` branches: parser limitation**: The parser doesn't support `elif` in inline if-expressions (only `if cond: expr else: expr`). The IR lowering now handles elif branches if the parser passes them through. Workaround: use nested `else: if`: `if a == 1: 10 else: if a == 2: 20 else: 30`. [updated: 2026-03-11]
 
 - **`shared_stress_yield` flaky deadlock under full test suite**: The fixture runs fine standalone and in isolation but occasionally hangs (infinite CPU loop) when run as part of the full 670+ test suite. Timing-dependent — likely a contention issue in the coroutine runtime's shared counter lock release/reacquire path. Reproduce: `cargo test --test integration -- --test-threads=1` and wait for `shared_stress_yield`. [added: 2026-03-11]

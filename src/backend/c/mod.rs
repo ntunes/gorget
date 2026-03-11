@@ -447,6 +447,17 @@ fn takes_array_ptr_args(name: &str) -> bool {
     if matches!(name, "gorget_cipher_encrypt" | "gorget_cipher_decrypt") {
         return true;
     }
+    // Metal functions that take GorgetArray* (Vector[uint8]) arguments
+    if matches!(name,
+        "gorget_metal_create_buffer_with_data"
+        | "gorget_metal_texture_upload"
+        | "gorget_metal_texture_upload_mip"
+        | "gorget_metal_encoder_set_vertex_bytes"
+        | "gorget_metal_encoder_set_fragment_bytes"
+        | "gorget_metal_create_library_from_data"
+    ) {
+        return true;
+    }
     false
 }
 
@@ -680,6 +691,30 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     }
     if all_call_names.iter().any(|n| n.starts_with("sdl_") || n.starts_with("gorget_sdl_")) {
         out.push_str(c_runtime::SDL_RUNTIME);
+    }
+    // Bytes f32/f64/i64 helpers (always cheap to include)
+    if all_call_names.iter().any(|n| n.starts_with("gorget_bytes_") && (n.contains("f32") || n.contains("f64") || n.contains("i64"))) {
+        out.push_str(c_runtime::BYTES_F32_RUNTIME);
+    }
+    // OpenGL runtime
+    if all_call_names.iter().any(|n| n.starts_with("gorget_gl_")) {
+        out.push_str(c_runtime::GL_RUNTIME);
+    }
+    // Image loading runtime (stb_image)
+    if all_call_names.iter().any(|n| n.starts_with("gorget_image_")) {
+        out.push_str(c_runtime::IMAGE_RUNTIME);
+    }
+    // Audio runtime (SDL2_mixer)
+    if all_call_names.iter().any(|n| n.starts_with("gorget_audio_")) {
+        out.push_str(c_runtime::AUDIO_RUNTIME);
+    }
+    // Zlib/Deflate compression runtime
+    if all_call_names.iter().any(|n| n.starts_with("gorget_zlib_")) {
+        out.push_str(c_runtime::COMPRESS_RUNTIME);
+    }
+    // Metal runtime (macOS only — Objective-C wrappers)
+    if all_call_names.iter().any(|n| n.starts_with("gorget_metal_") || n.starts_with("gorget_sdl_metal_")) {
+        out.push_str(c_runtime::METAL_RUNTIME);
     }
     let needs_sqlite = all_call_names.iter().any(|n| n.starts_with("gorget_sqlite_") || n == "sqlite_open");
     if needs_sqlite {
@@ -3078,6 +3113,30 @@ fn emit_poll_inst(
                     if src_type == "GorgetString" {
                         let _ = writeln!(out, "        {dst_str} = (Str){{ .data = {val_str}.data, .len = {val_str}.len }};");
                         return None;
+                    }
+                }
+            }
+            // Pointer→value coercion: dereference when assigning Ptr(T) to T
+            // (e.g., `_0 = _1` where _1 is `const Quat*` and _0 is `Quat`)
+            if let Operand::Copy(src_place) | Operand::Move(src_place) = value {
+                if src_place.projections.is_empty() {
+                    let src_idx = src_place.local.0 as usize;
+                    let dst_idx = dst.local.0 as usize;
+                    if src_idx < func.locals.len() && dst_idx < func.locals.len() {
+                        let src_tid = func.locals[src_idx].type_id;
+                        let dst_tid = func.locals[dst_idx].type_id;
+                        let src_is_ptr = matches!(
+                            registry.get(src_tid),
+                            Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+                        );
+                        let dst_is_ptr = matches!(
+                            registry.get(dst_tid),
+                            Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+                        );
+                        if src_is_ptr && !dst_is_ptr && dst_tid != UNIT_TYPE {
+                            let _ = writeln!(out, "        {dst_str} = (*{val_str});");
+                            return None;
+                        }
                     }
                 }
             }
@@ -5699,7 +5758,26 @@ fn emit_instruction(
                 if needs_string_coercion(dst_type, src_type, registry) {
                     let _ = writeln!(out, "        {dst_str} = (Str){{ .data = {val_str}.data, .len = {val_str}.len }};");
                 } else {
-                    let _ = writeln!(out, "        {dst_str} = {val_str};");
+                    // Pointer→value coercion: dereference when assigning Ptr(T) to T
+                    // (e.g., `_0 = _1` where _1 is `self` pointer and _0 is value type)
+                    let need_deref = if let Operand::Copy(src_place) | Operand::Move(src_place) = value {
+                        if src_place.projections.is_empty() {
+                            let src_idx = src_place.local.0 as usize;
+                            let dst_idx = dst.local.0 as usize;
+                            if src_idx < func.locals.len() && dst_idx < func.locals.len() {
+                                let src_tid = func.locals[src_idx].type_id;
+                                let dst_tid = func.locals[dst_idx].type_id;
+                                let s_is_ptr = matches!(registry.get(src_tid), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)));
+                                let d_is_ptr = matches!(registry.get(dst_tid), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)));
+                                s_is_ptr && !d_is_ptr && dst_tid != UNIT_TYPE
+                            } else { false }
+                        } else { false }
+                    } else { false };
+                    if need_deref {
+                        let _ = writeln!(out, "        {dst_str} = (*{val_str});");
+                    } else {
+                        let _ = writeln!(out, "        {dst_str} = {val_str};");
+                    }
                 }
             }
 
@@ -7092,7 +7170,28 @@ fn emit_terminator(out: &mut String, term: &Terminator, func: &Function, registr
                         out.push_str("        return;\n");
                     }
                     _ => {
-                        let val_str = format_operand(value, func, registry);
+                        let mut val_str = format_operand(value, func, registry);
+                        // Dereference pointer→value for `return self` in equip methods:
+                        // self is Ptr(T) but the function returns T (value type).
+                        if let Operand::Copy(place) | Operand::Move(place) = value {
+                            if place.projections.is_empty() {
+                                let idx = place.local.0 as usize;
+                                if idx < func.locals.len() {
+                                    let operand_tid = func.locals[idx].type_id;
+                                    let is_ptr = matches!(
+                                        registry.get(operand_tid),
+                                        Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+                                    );
+                                    let ret_is_ptr = matches!(
+                                        registry.get(func.return_type),
+                                        Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+                                    );
+                                    if is_ptr && !ret_is_ptr && func.return_type != UNIT_TYPE {
+                                        val_str = format!("(*{val_str})");
+                                    }
+                                }
+                            }
+                        }
                         let _ = writeln!(out, "        return {val_str};");
                     }
                 }
@@ -12471,7 +12570,27 @@ fn format_args_with_coercion(
                         let call_fn = format!("{closure_type}__call");
                         parts.push(format!("(void*)(void*[2]){{(void*){call_fn}, (void*)&{arg_str}}}"));
                     } else {
-                        parts.push(arg_str);
+                        // Pointer→value coercion: dereference when passing self (Ptr(T))
+                        // to a function parameter expecting T (value type).
+                        let local_idx = place.local.0 as usize;
+                        let local_type_id = if local_idx < func.locals.len() {
+                            Some(func.locals[local_idx].type_id)
+                        } else {
+                            None
+                        };
+                        let is_ptr = local_type_id.map_or(false, |tid| {
+                            matches!(registry.get(tid), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)))
+                        });
+                        let target_is_ptr = target_params
+                            .and_then(|params| params.get(arg_idx))
+                            .map_or(false, |&tid| {
+                                matches!(registry.get(tid), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)))
+                            });
+                        if is_ptr && !target_is_ptr && place.projections.is_empty() {
+                            parts.push(format!("(*{arg_str})"));
+                        } else {
+                            parts.push(arg_str);
+                        }
                     }
                 }
             }

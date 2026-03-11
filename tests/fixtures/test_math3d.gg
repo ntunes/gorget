@@ -1,0 +1,118 @@
+from gg.math3d import Vec2, Vec3, Vec4, Mat4, Quat, Plane, AABB, Ray, Frustum
+from gg.math3d import radians, degrees, clamp_f, lerp_f, abs_f
+from gg.math3d import test_plane_aabb
+from std.math import PI, sqrt
+
+void main():
+    # ── Utility functions ────────────────────────────────────
+    print("--- utilities ---")
+    float r = radians(180.0)
+    print(r > 3.14 and r < 3.15)
+    float d = degrees(PI)
+    print(d > 179.99 and d < 180.01)
+    print(clamp_f(-5.0, 0.0, 10.0))
+    print(clamp_f(15.0, 0.0, 10.0))
+    print(lerp_f(0.0, 10.0, 0.5))
+
+    # ── Vec2 ─────────────────────────────────────────────────
+    print("--- vec2 ---")
+    Vec2 a2 = Vec2(3.0, 4.0)
+    print(a2.to_string())
+    print(a2.length())
+    Vec2 b2 = Vec2(1.0, 2.0)
+    Vec2 c2 = a2.add(b2)
+    print(c2.to_string())
+    Vec2 n2 = a2.normalize()
+    float nlen = n2.length()
+    print(nlen > 0.999 and nlen < 1.001)
+
+    # ── Vec3 ─────────────────────────────────────────────────
+    print("--- vec3 ---")
+    Vec3 a3 = Vec3(1.0, 0.0, 0.0)
+    Vec3 b3 = Vec3(0.0, 1.0, 0.0)
+    Vec3 cross = a3.cross(b3)
+    print(cross.to_string())
+    print(a3.dot(b3))
+    Vec3 v = Vec3(3.0, 4.0, 0.0)
+    print(v.length())
+    Vec3 nv = v.normalize()
+    float nvlen = nv.length()
+    print(nvlen > 0.999 and nvlen < 1.001)
+    Vec3 refl = Vec3(1.0, -1.0, 0.0).reflect(Vec3(0.0, 1.0, 0.0))
+    print(refl.to_string())
+    Vec3 lerped = Vec3(0.0, 0.0, 0.0).lerp(Vec3(10.0, 10.0, 10.0), 0.5)
+    print(lerped.to_string())
+
+    # ── Vec4 ─────────────────────────────────────────────────
+    print("--- vec4 ---")
+    Vec4 v4 = Vec4(1.0, 2.0, 3.0, 4.0)
+    print(v4.to_string())
+    float v4len = v4.length()
+    print(v4len > 5.47 and v4len < 5.48)
+    Vec4 v4n = v4.normalize()
+    float v4nlen = v4n.length()
+    print(v4nlen > 0.999 and v4nlen < 1.001)
+
+    # ── Mat4 ─────────────────────────────────────────────────
+    print("--- mat4 ---")
+    Mat4 ident = Mat4.identity()
+    Vec4 test_v = ident.mul_vec4(Vec4(1.0, 2.0, 3.0, 1.0))
+    print(test_v.to_string())
+    # Translate
+    Mat4 trans = Mat4.translate(Vec3(10.0, 20.0, 30.0))
+    Vec3 tp = trans.mul_point(Vec3(0.0, 0.0, 0.0))
+    print(tp.to_string())
+    # Multiply identity
+    Mat4 m2 = ident.multiply(ident)
+    print(m2.m00)
+    print(m2.m11)
+    print(m2.m22)
+    print(m2.m33)
+    # Inverse of identity = identity
+    Mat4 inv = ident.inverse()
+    print(inv.m00)
+    print(inv.m33)
+
+    # ── Quat ─────────────────────────────────────────────────
+    print("--- quat ---")
+    Quat qi = Quat.identity()
+    print(qi.to_string())
+    Quat q1 = Quat.from_axis_angle(Vec3(0.0, 1.0, 0.0), radians(90.0))
+    Vec3 rotated = q1.rotate_vec3(Vec3(1.0, 0.0, 0.0))
+    # After 90 deg around Y: (1,0,0) -> (0,0,-1)
+    print(abs_f(rotated.x) < 0.01)
+    print(abs_f(rotated.z + 1.0) < 0.01)
+    # Slerp identity to q1 at t=0 should be identity
+    Quat qs0 = qi.slerp(q1, 0.0)
+    print(qs0.approx_eq(qi))
+
+    # ── Plane ────────────────────────────────────────────────
+    print("--- plane ---")
+    Plane p = Plane.from_normal_distance(Vec3(0.0, 1.0, 0.0), 0.0)
+    float dist_above = p.distance_to_point(Vec3(0.0, 5.0, 0.0))
+    print(dist_above)
+    int cls = p.classify_point(Vec3(0.0, -1.0, 0.0))
+    print(cls)
+
+    # ── AABB ─────────────────────────────────────────────────
+    print("--- aabb ---")
+    AABB box1 = AABB(Vec3(0.0, 0.0, 0.0), Vec3(10.0, 10.0, 10.0))
+    print(box1.contains_point(Vec3(5.0, 5.0, 5.0)))
+    print(box1.contains_point(Vec3(15.0, 5.0, 5.0)))
+    Vec3 center = box1.center()
+    print(center.to_string())
+    AABB box2 = AABB(Vec3(5.0, 5.0, 5.0), Vec3(15.0, 15.0, 15.0))
+    print(box1.intersects(box2))
+    AABB merged = box1.merge(box2)
+    print(merged.max_pt.to_string())
+
+    # ── Ray ──────────────────────────────────────────────────
+    print("--- ray ---")
+    Ray ray = Ray.new(Vec3(0.0, 0.0, -5.0), Vec3(0.0, 0.0, 1.0))
+    Vec3 pt = ray.point_at(3.0)
+    print(pt.to_string())
+    AABB target = AABB(Vec3(-1.0, -1.0, -1.0), Vec3(1.0, 1.0, 1.0))
+    float hit = ray.intersect_aabb(target)
+    print(hit > 3.99 and hit < 4.01)
+
+    print("done")

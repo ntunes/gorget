@@ -205,6 +205,67 @@ fn add_regex_flags(cmd: &mut Command, needs_regex: bool) {
     }
 }
 
+/// Add OpenGL linker flags to a cc command (for gg.gl).
+fn add_gl_flags(cmd: &mut Command, needs_gl: bool) {
+    if !needs_gl { return; }
+    #[cfg(target_os = "macos")]
+    {
+        cmd.arg("-framework");
+        cmd.arg("OpenGL");
+    }
+    #[cfg(not(target_os = "macos"))]
+    cmd.arg("-lGL");
+}
+
+/// Add SDL2_mixer linker flags to a cc command (for gg.audio).
+fn add_audio_flags(cmd: &mut Command, needs_audio: bool) {
+    if !needs_audio { return; }
+    let pkg_ok = Command::new("pkg-config")
+        .args(["--cflags", "--libs", "SDL2_mixer"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).to_string())
+            } else {
+                None
+            }
+        });
+    if let Some(flags) = pkg_ok {
+        for flag in flags.split_whitespace() {
+            cmd.arg(flag);
+        }
+    } else {
+        cmd.arg("-lSDL2_mixer");
+        #[cfg(target_os = "macos")]
+        {
+            cmd.arg("-I/opt/homebrew/include");
+            cmd.arg("-L/opt/homebrew/lib");
+            cmd.arg("-I/usr/local/include");
+            cmd.arg("-L/usr/local/lib");
+        }
+    }
+}
+
+/// Add zlib linker flags to a cc command (for gg.compress).
+fn add_compress_flags(cmd: &mut Command, needs_compress: bool) {
+    if !needs_compress { return; }
+    cmd.arg("-lz");
+}
+
+/// Add Metal framework linker flags to a cc command (for gg.metal).
+fn add_metal_flags(cmd: &mut Command, needs_metal: bool) {
+    if !needs_metal { return; }
+    #[cfg(target_os = "macos")]
+    {
+        cmd.arg("-framework").arg("Metal");
+        cmd.arg("-framework").arg("QuartzCore");
+        cmd.arg("-framework").arg("Foundation");
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = cmd; // Metal is macOS-only; suppress unused warning
+}
+
 /// Print inferred borrow analysis for all functions (--show-borrows diagnostic).
 fn print_borrow_summary(result: &gorget::semantic::AnalysisResult) {
     // Collect and sort by function name for stable output
@@ -443,6 +504,7 @@ fn try_build_ir(
 
         let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
         let mut cc_cmd = Command::new(&cc);
+        let needs_metal = concat_source.contains("gg.metal");
         cc_cmd
             .arg("-std=c11")
             .arg("-Wall")
@@ -454,8 +516,13 @@ fn try_build_ir(
             .arg("-ffunction-sections")
             .arg("-fdata-sections")
             .arg("-o")
-            .arg(&exe_path)
-            .arg(&c_path)
+            .arg(&exe_path);
+        // Metal requires Objective-C compilation — must come before source file
+        #[cfg(target_os = "macos")]
+        if needs_metal {
+            cc_cmd.arg("-x").arg("objective-c");
+        }
+        cc_cmd.arg(&c_path)
             .arg("-lm");
 
         #[cfg(not(target_os = "macos"))]
@@ -473,7 +540,11 @@ fn try_build_ir(
         }
 
         // Library detection from source text (no GIR codegen output available)
-        add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx"));
+        add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx") || concat_source.contains("gg.gl") || needs_metal);
+        add_gl_flags(&mut cc_cmd, concat_source.contains("gg.gl"));
+        add_audio_flags(&mut cc_cmd, concat_source.contains("gg.audio"));
+        add_compress_flags(&mut cc_cmd, concat_source.contains("gg.compress"));
+        add_metal_flags(&mut cc_cmd, needs_metal);
         add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || concat_source.contains("gg.http"));
         add_crypto_flags(&mut cc_cmd, concat_source.contains("gg.crypto") || concat_source.contains("gg.p2p"));
         add_regex_flags(&mut cc_cmd, concat_source.contains("gg.regex"));
@@ -653,6 +724,7 @@ fn try_build_ir(
 
     let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
     let mut cc_cmd = Command::new(&cc);
+    let needs_metal = concat_source.contains("gg.metal");
     cc_cmd
         .arg("-std=c11")
         .arg("-Wall")
@@ -664,8 +736,13 @@ fn try_build_ir(
         .arg("-ffunction-sections")
         .arg("-fdata-sections")
         .arg("-o")
-        .arg(&exe_path)
-        .arg(&c_path)
+        .arg(&exe_path);
+    // Metal requires Objective-C compilation — must come before source file
+    #[cfg(target_os = "macos")]
+    if needs_metal {
+        cc_cmd.arg("-x").arg("objective-c");
+    }
+    cc_cmd.arg(&c_path)
         .arg("-lm");
 
     // Let the linker strip unused functions/data (dead code elimination).
@@ -684,7 +761,11 @@ fn try_build_ir(
         cc_cmd.arg("-g");
     }
 
-    add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx"));
+    add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx") || concat_source.contains("gg.gl") || needs_metal);
+    add_gl_flags(&mut cc_cmd, concat_source.contains("gg.gl"));
+    add_audio_flags(&mut cc_cmd, concat_source.contains("gg.audio"));
+    add_compress_flags(&mut cc_cmd, concat_source.contains("gg.compress"));
+    add_metal_flags(&mut cc_cmd, needs_metal);
     add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || gir_output.needs_tls);
     add_crypto_flags(&mut cc_cmd, concat_source.contains("gg.crypto") || concat_source.contains("gg.p2p"));
     add_regex_flags(&mut cc_cmd, concat_source.contains("gg.regex"));
