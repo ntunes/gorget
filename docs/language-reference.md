@@ -1605,11 +1605,27 @@ modify(mutable data)   # keyword form
 as_expr = expr "as" type ;
 ```
 
-Converts between types. Valid for numeric type conversions.
+Converts between types. The following cast pairs are allowed:
+
+| From | To | Behavior |
+|---|---|---|
+| `int` / `i8` / `i16` / `i32` | `float` | Exact for small values; may lose precision for large integers |
+| `float` | `int` / `i8` / `i16` / `i32` | Truncates toward zero |
+| `int` ↔ `i8` / `i16` / `i32` | (each other) | Narrows or widens; narrowing may truncate |
+| `uint8` / `u16` / `u32` / `uint64` | `int` / `float` | Unsigned to signed/float widening |
+| `int` / `float` | `uint8` / `u16` / `u32` / `uint64` | Signed to unsigned; negative values wrap |
+| `char` | `int` | Unicode codepoint value |
+| `int` | `char` | Codepoint to character (must be valid Unicode) |
+| `int` | `uint8` | Common for byte manipulation |
+| `bool` | `int` | `true` → 1, `false` → 0 |
+
+Casts between unrelated types (e.g., `str as int`) are a compile error. Use `str.to_int()` for parsing.
 
 ```gorget
-float f = 42 as float
-int n = 3.14 as int
+float f = 42 as float       # int → float
+int n = 3.14 as int          # float → int (truncates: 3)
+int code = 'A' as int        # char → int (65)
+uint8 b = 255 as uint8       # int → byte
 ```
 
 ### 7.17 Pattern Test (`is`)

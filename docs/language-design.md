@@ -1055,17 +1055,6 @@ void critical_section():
 
 **Rule of thumb:** Can the caller prevent this failure by writing correct code? Yes → panic. No → Result.
 
-**`raw:` as universal escape hatch:** Any panic can be caught as `Result[T, str]` via `raw:` blocks. This means graceful OOM handling is always possible without making every allocation return Result.
-
-```gorget
-# OOM panics by default — but raw: catches it
-Result[Vector[int], str] safe_alloc():
-    raw:
-        Vector[int] v = Vector[int]()
-        v.push(42)
-        return v
-```
-
 ### 6.5 Assert (Always-On)
 
 `assert` checks a condition and panics with a message if it fails. Unlike C/Java, **assertions are always enabled** — they are never stripped in release builds.
