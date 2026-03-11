@@ -373,9 +373,11 @@ Both operator and keyword forms are equivalent and may be used interchangeably.
 | `char`    | 4 bytes | Unicode scalar value            |
 | `str`     | —       | Immutable string slice (borrowed) |
 | `String`  | —       | Owned, heap-allocated string    |
+| `byte`    | 8-bit   | Alias for `uint8`               |
+| `cstr`    | pointer | Null-terminated C string pointer |
 | `void`    | 0       | No value (unit type)            |
 
-All primitive numeric types and `bool` and `char` are **Copy** types — they are implicitly copied on assignment and do not require `!` or `move` to transfer.
+All primitive numeric types and `bool` and `char` are **Copy** types — they are implicitly copied on assignment and do not require `!` or `move` to transfer. `byte` is a convenience alias for `uint8`. `cstr` is a raw C string pointer (`const char*`) for FFI interop — prefer `str` for normal string handling.
 
 ### 4.2 Compound Types
 
@@ -409,6 +411,8 @@ array_type = type "[" const_expr "]" ;
 ```
 
 A fixed-size, homogeneous sequence. Size must be a compile-time constant. Use this only when you need a fixed C-level array; for dynamic lists, use `auto` with an array literal to get a `Vector[T]`.
+
+> **Status:** Fixed-size arrays and slices are parsed and type-checked but not yet lowered to IR or compiled. Use `Vector[T]` for all current use cases.
 
 ```gorget
 int[5] arr = [1, 2, 3, 4, 5]   # fixed C array
@@ -765,7 +769,7 @@ assoc_type = "type" IDENTIFIER [ ":" trait_bound_list ] NEWLINE ;
 Traits define shared behavior. They may contain:
 - **Method signatures** (no body — must be implemented)
 - **Default method implementations** (with body — may be overridden)
-- **Associated type declarations**
+- **Associated type declarations** (parsed but not yet semantically validated)
 
 ```gorget
 trait Displayable:
@@ -939,12 +943,14 @@ test "addition":
 int fast_add(int a, int b) = a + b
 ```
 
+> **Note:** `@inline` is parsed but does not yet affect code generation. The compiler may inline small functions automatically in future versions.
+
 **Derivable traits:**
 
-- **Structs:** Equatable, Displayable, Cloneable, Hashable, Serializable, Deserializable, Default, From, TryFrom
+- **Structs:** Equatable, Displayable, Cloneable, Hashable, Serializable, Deserializable, Default, From, TryFrom, FromRow
 - **Enums:** Equatable, Displayable, Cloneable, Hashable, Serializable, Deserializable
 
-Note: `From` and `TryFrom` are only derivable for single-field structs (newtypes).
+Note: `From` and `TryFrom` are only derivable for single-field structs (newtypes). `FromRow` generates a `from_row(Row)` method that maps struct field names to database row columns (see `gg.db`).
 
 ---
 
@@ -1255,7 +1261,7 @@ async void main():
 unsafe_stmt = "unsafe" ":" block ;
 ```
 
-Opts into operations the compiler cannot verify: raw pointer dereferencing, FFI calls, mutable static access.
+Marks a block for operations the compiler cannot verify: raw pointer dereferencing, FFI calls, mutable static access. Currently parsed but not semantically enforced — the block compiles identically to a normal block. Future versions will require `unsafe` for operations that bypass the type or borrow checker.
 
 ### 6.16 Named Scope Block
 
@@ -1324,7 +1330,7 @@ This introspection works for all types that implement `Formatter` — primitives
 
 If a custom message is provided (second argument), it replaces the generated diagnostic.
 
-For expensive invariant checks that should not run in production, wrap them in a `@[debug_only]` function:
+For expensive invariant checks that should not run in production, wrap them in a `@[debug_only]` function (not yet implemented — use `directive strip-asserts` as an alternative):
 
 ```gorget
 @[debug_only]
@@ -2325,7 +2331,7 @@ void main() throws int:
 
 If `main` throws, the process exits with that code. If `main` completes normally, the process exits with code 0. It is a compile-time error for `main` to throw any type other than `int`.
 
-### 10.5 On Error
+### 10.7 On Error
 
 The `on error` statement registers cleanup code that runs only if the function exits via an error (thrown or auto-propagated). It has two forms:
 
@@ -2354,7 +2360,7 @@ Multiple `on error` statements execute in **reverse** (LIFO) order on error path
 
 It is a compile-time error to use `on error` in a function not declared with `throws`.
 
-### 10.6 Error Types
+### 10.8 Error Types
 
 Error types are typically enums:
 
@@ -2679,6 +2685,8 @@ with Connection(open_fd("db")) as conn:
     conn.query("SELECT 1")
 # conn.drop() called automatically here
 ```
+
+When multiple values go out of scope simultaneously (e.g. at the end of a block), drops are called in **reverse declaration order** (LIFO). This matches Rust's drop semantics and ensures that values declared later — which may reference earlier values — are cleaned up first.
 
 #### Iterator[T]
 
@@ -3087,7 +3095,9 @@ Same API as `Dict` but does not preserve insertion order. Use when order is irre
 | `filter(pred)` | `(K, V) → bool → HashMap[K, V]` | Entries satisfying predicate |
 | `fold(init, f)` | `U, (U, K, V) → U → U` | Left fold over entries |
 
-**`Set[T]`** — Hash set
+**`Set[T]`** — Ordered set (insertion-order preserving)
+
+Iteration yields elements in insertion order. Adding a duplicate does not change order. Removing an element and re-adding it places it at the end.
 
 | Method | Signature | Description |
 |---|---|---|
@@ -3097,13 +3107,39 @@ Same API as `Dict` but does not preserve insertion order. Use when order is irre
 | `len()` | `→ int` | Number of elements |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `clear()` | `→ void` | Remove all elements |
-| `union(other)` | `Set[T] → Set[T]` | New set with elements from both |
-| `intersection(other)` | `Set[T] → Set[T]` | New set with elements in both |
+| `union(other)` | `Set[T] → Set[T]` | New set with elements from both (preserves insertion order) |
+| `intersection(other)` | `Set[T] → Set[T]` | New set with elements in both (preserves self's insertion order) |
 | `difference(other)` | `Set[T] → Set[T]` | New set with elements in self but not `other` |
+| `symmetric_difference(other)` | `Set[T] → Set[T]` | New set with elements in either but not both |
 | `is_subset(other)` | `Set[T] → bool` | True if all elements are in `other` |
 | `is_superset(other)` | `Set[T] → bool` | True if `other`'s elements are all in self |
-| `filter(pred)` | `(T) → bool → Set[T]` | Elements satisfying predicate |
+| `filter(pred)` | `(T) → bool → Set[T]` | Elements satisfying predicate (preserves order) |
+| `fold(init, f)` | `U, (U, T) → U → U` | Left fold over elements in insertion order |
+| `any(pred)` | `(T) → bool → bool` | True if any element satisfies predicate |
+| `all(pred)` | `(T) → bool → bool` | True if all elements satisfy predicate |
+
+**`HashSet[T]`** — Unordered set
+
+Same API as `Set` but does not preserve insertion order. Use when order is irrelevant and maximum performance is desired.
+
+| Method | Signature | Description |
+|---|---|---|
+| `add(item)` | `T → void` | Insert an element |
+| `contains(item)` | `T → bool` | True if element exists |
+| `remove(item)` | `T → bool` | Remove element, return whether it existed |
+| `len()` | `→ int` | Number of elements |
+| `is_empty()` | `→ bool` | True if length is zero |
+| `clear()` | `→ void` | Remove all elements |
+| `union(other)` | `HashSet[T] → HashSet[T]` | New set with elements from both |
+| `intersection(other)` | `HashSet[T] → HashSet[T]` | New set with elements in both |
+| `difference(other)` | `HashSet[T] → HashSet[T]` | New set with elements in self but not `other` |
+| `symmetric_difference(other)` | `HashSet[T] → HashSet[T]` | New set with elements in either but not both |
+| `is_subset(other)` | `HashSet[T] → bool` | True if all elements are in `other` |
+| `is_superset(other)` | `HashSet[T] → bool` | True if `other`'s elements are all in self |
+| `filter(pred)` | `(T) → bool → HashSet[T]` | Elements satisfying predicate |
 | `fold(init, f)` | `U, (U, T) → U → U` | Left fold over elements |
+| `any(pred)` | `(T) → bool → bool` | True if any element satisfies predicate |
+| `all(pred)` | `(T) → bool → bool` | True if all elements satisfy predicate |
 
 **`Option[T]`** — Optional value
 
@@ -5986,7 +6022,7 @@ type = primitive_type | named_type | array_type | slice_type
 primitive_type = "int" | "int8" | "int16" | "int32" | "int64"
                | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
                | "float" | "float32" | "float64"
-               | "bool" | "char" | "str" | "String" | "void" ;
+               | "bool" | "char" | "byte" | "str" | "String" | "cstr" | "void" ;
 named_type     = IDENTIFIER [ "[" type { "," type } "]" ] ;
 array_type     = type "[" const_expr "]" ;
 slice_type     = type "[" "]" ;

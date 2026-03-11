@@ -11205,6 +11205,41 @@ done",
 }
 
 #[test]
+fn set_ordering() {
+    run_gg(
+        "set_ordering.gg",
+        "\
+Set iteration:
+30
+10
+50
+20
+40
+After re-add 10:
+30
+10
+50
+20
+40
+After remove+re-add 50:
+30
+10
+20
+40
+50
+String set:
+banana
+apple
+cherry
+Filter evens:
+2
+4
+12345
+Done",
+    );
+}
+
+#[test]
 fn test_hashset_all() {
     run_gg(
         "test_hashset_all.gg",

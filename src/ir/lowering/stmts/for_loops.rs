@@ -515,16 +515,21 @@ fn lower_for_set(
     let type_name = ctx.type_name_for_id(iter_type)
         .map(|s| s.to_string())
         .unwrap_or_default();
+    let is_ordered = type_name.starts_with("Set__");
     let elem_c_type = parse_set_elem_type(&type_name);
     let elem_type = ctx.lookup_type_by_name(&elem_c_type).unwrap_or(I64_TYPE);
 
-    // i = 0
+    // i = 0  (for ordered: index into order array; for unordered: index into states)
     let i_local = builder.add_local(I64_TYPE, None);
     builder.assign(Place::local(i_local), Operand::Constant(Constant::I64(0)));
 
-    // cap (use assignment form — local declared at fn scope)
-    let cap = builder.add_local(I64_TYPE, None);
-    builder.inline_c(format!("_{} = (int64_t)_{}.cap;", cap.0, set_id));
+    // limit: ordered uses order_len, unordered uses cap
+    let limit = builder.add_local(I64_TYPE, None);
+    if is_ordered {
+        builder.inline_c(format!("_{} = (int64_t)_{}.order_len;", limit.0, set_id));
+    } else {
+        builder.inline_c(format!("_{} = (int64_t)_{}.cap;", limit.0, set_id));
+    }
 
     let header_bb = builder.new_block();
     let body_bb = builder.new_block();
@@ -540,7 +545,7 @@ fn lower_for_set(
     builder.jump(header_bb);
 
     builder.switch_to(header_bb);
-    let cond = builder.cmp(CmpOp::Lt, I64_TYPE, FunctionBuilder::copy(i_local), FunctionBuilder::copy(cap));
+    let cond = builder.cmp(CmpOp::Lt, I64_TYPE, FunctionBuilder::copy(i_local), FunctionBuilder::copy(limit));
     let natural_exit = if else_arm.is_some() { else_exit_bb.unwrap() } else { exit_bb };
     builder.branch(FunctionBuilder::copy(cond), body_bb, natural_exit);
 
@@ -548,21 +553,44 @@ fn lower_for_set(
     ctx.push_loop(incr_bb, break_exit_bb);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
-    // state check (assignment form)
-    let state = builder.add_local(I64_TYPE, None);
-    builder.inline_c(format!("_{s} = (int64_t)_{set}.states[(size_t)_{i}];",
-        s = state.0, set = set_id, i = i_local.0));
-    let state_ok = builder.cmp(CmpOp::Eq, I64_TYPE, FunctionBuilder::copy(state), Operand::Constant(Constant::I64(1)));
+    if is_ordered {
+        // For ordered sets: dereference order array to get the real bucket index
+        let real_i = builder.add_local(I64_TYPE, None);
+        builder.inline_c(format!("_{ri} = (int64_t)_{set}.order[(size_t)_{i}];",
+            ri = real_i.0, set = set_id, i = i_local.0));
 
-    let elem_bb = builder.new_block();
-    builder.branch(FunctionBuilder::copy(state_ok), elem_bb, incr_bb);
-    builder.switch_to(elem_bb);
+        // state check (still needed — deleted entries may leave stale order slots)
+        let state = builder.add_local(I64_TYPE, None);
+        builder.inline_c(format!("_{s} = (int64_t)_{set}.states[(size_t)_{ri}];",
+            s = state.0, set = set_id, ri = real_i.0));
+        let state_ok = builder.cmp(CmpOp::Eq, I64_TYPE, FunctionBuilder::copy(state), Operand::Constant(Constant::I64(1)));
 
-    // Bind element (assignment form with correct type, cast void* keys)
-    let elem_local = builder.add_local(elem_type, Some(var_name));
-    builder.inline_c(format!("_{e} = (({elem_c_type}*)_{set}.keys)[(size_t)_{i}];",
-        e = elem_local.0, set = set_id, i = i_local.0));
-    ctx.register_local(var_name, elem_local, elem_type);
+        let elem_bb = builder.new_block();
+        builder.branch(FunctionBuilder::copy(state_ok), elem_bb, incr_bb);
+        builder.switch_to(elem_bb);
+
+        // Bind element using the real bucket index
+        let elem_local = builder.add_local(elem_type, Some(var_name));
+        builder.inline_c(format!("_{e} = (({elem_c_type}*)_{set}.keys)[(size_t)_{ri}];",
+            e = elem_local.0, set = set_id, ri = real_i.0));
+        ctx.register_local(var_name, elem_local, elem_type);
+    } else {
+        // state check (assignment form)
+        let state = builder.add_local(I64_TYPE, None);
+        builder.inline_c(format!("_{s} = (int64_t)_{set}.states[(size_t)_{i}];",
+            s = state.0, set = set_id, i = i_local.0));
+        let state_ok = builder.cmp(CmpOp::Eq, I64_TYPE, FunctionBuilder::copy(state), Operand::Constant(Constant::I64(1)));
+
+        let elem_bb = builder.new_block();
+        builder.branch(FunctionBuilder::copy(state_ok), elem_bb, incr_bb);
+        builder.switch_to(elem_bb);
+
+        // Bind element (assignment form with correct type, cast void* keys)
+        let elem_local = builder.add_local(elem_type, Some(var_name));
+        builder.inline_c(format!("_{e} = (({elem_c_type}*)_{set}.keys)[(size_t)_{i}];",
+            e = elem_local.0, set = set_id, i = i_local.0));
+        ctx.register_local(var_name, elem_local, elem_type);
+    }
 
     lower_block(ctx, builder, body);
 

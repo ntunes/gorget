@@ -4777,6 +4777,15 @@ static inline GorgetSet gorget_set_new(size_t elem_size) {
     return gorget_map_new(elem_size, 0);
 }
 
+// Ordered Set: preserves insertion order (like Dict vs HashMap)
+static inline GorgetSet gorget_ordered_set_new(size_t elem_size) {
+    return gorget_dict_new(elem_size, 0);
+}
+
+static inline GorgetSet gorget_ordered_set_new_str(void) {
+    return gorget_dict_new_str(0);
+}
+
 static inline void gorget_set_add(GorgetSet* s, const void* elem) {
     gorget_map_put(s, elem, NULL);
 }
@@ -4810,9 +4819,18 @@ static inline GorgetSet gorget_set_clone(const GorgetSet* src) {
     dst.count = src->count;
     dst.cap = src->cap;
     dst.alloc = a;
-    dst.order = NULL;
-    dst.order_len = 0;
-    dst.tombstones = 0;
+    dst.tombstones = src->tombstones;
+    dst.hash_fn = src->hash_fn;
+    dst.eq_fn = src->eq_fn;
+    // Clone order array if present (ordered Set)
+    if (src->order != NULL && src->order_len > 0) {
+        dst.order = (size_t*)a->alloc(a->ctx, src->cap * sizeof(size_t));
+        memcpy(dst.order, src->order, src->cap * sizeof(size_t));
+        dst.order_len = src->order_len;
+    } else {
+        dst.order = NULL;
+        dst.order_len = 0;
+    }
     if (src->cap == 0) {
         dst.keys = NULL; dst.values = NULL; dst.states = NULL;
         return dst;

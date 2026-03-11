@@ -1,0 +1,56 @@
+# Test that Set preserves insertion order.
+
+def main():
+    # --- Set (ordered, insertion-order preserving) ---
+    Set[int] s = Set[int]()
+    s.add(30)
+    s.add(10)
+    s.add(50)
+    s.add(20)
+    s.add(40)
+
+    # Iteration must yield insertion order: 30, 10, 50, 20, 40
+    print("Set iteration:")
+    for x in s:
+        print(x)
+
+    # Adding a duplicate should not change order
+    s.add(10)
+    print("After re-add 10:")
+    for x in s:
+        print(x)
+
+    # Remove and re-add: 50 moves to end
+    s.remove(50)
+    s.add(50)
+    print("After remove+re-add 50:")
+    for x in s:
+        print(x)
+
+    # --- Set with strings ---
+    Set[str] words = Set[str]()
+    words.add("banana")
+    words.add("apple")
+    words.add("cherry")
+    print("String set:")
+    for w in words:
+        print(w)
+
+    # --- Set filter preserves insertion order ---
+    Set[int] a = Set[int]()
+    a.add(1)
+    a.add(2)
+    a.add(3)
+    a.add(4)
+    a.add(5)
+
+    Set[int] evens = a.filter((int x): x % 2 == 0)
+    print("Filter evens:")
+    for x in evens:
+        print(x)
+
+    # fold processes in insertion order
+    int result = a.fold(0, (int acc, int x): acc * 10 + x)
+    print(result)
+
+    print("Done")

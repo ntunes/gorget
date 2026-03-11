@@ -3041,7 +3041,7 @@ std/
 │   └── mem             # Box, Rc, Arc, size_of, drop
 │
 ├── collections/        # Data structures
-│   ├── Vector, HashMap, HashSet
+│   ├── Vector, Dict, Set, HashMap, HashSet
 │   ├── BTreeMap, BTreeSet      # Sorted collections — *Not yet implemented*
 │   ├── LinkedList, VecDeque    # Specialized — *Not yet implemented*
 │   └── BinaryHeap             # Priority queue — *Not yet implemented*

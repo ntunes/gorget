@@ -7861,6 +7861,8 @@ fn try_emit_higher_order_method(
     }
 
     let is_set = bare_type.starts_with("GorgetSet") || bare_type.starts_with("Set__") || bare_type.starts_with("HashSet__");
+    let is_ordered_set = func_name.starts_with("Set__")
+        || bare_type.starts_with("Set__");
 
     // Extract element type — first try the bare C type (e.g., "Vector__Student"),
     // then fall back to the mangled function name (e.g., "Vector__Student__map"),
@@ -7976,11 +7978,19 @@ fn try_emit_higher_order_method(
                     if ({call_fn}({closure_ref}, __key, __val)) gorget_map_put(&__result, &__key, &__val); \
                     }} __result; }});");
             } else if is_set {
-                // Set filter: iterate by hash-table states, create new set
+                // Set filter: iterate elements, create new set
+                let set_ctor = if is_ordered_set { "gorget_ordered_set_new" } else { "gorget_set_new" };
+                let loop_hdr = if is_ordered_set {
+                    "for (size_t __oi = 0; __oi < __src.order_len; __oi++) { \
+                    size_t __i = __src.order[__oi]; \
+                    if (__src.states[__i] != 1) continue;"
+                } else {
+                    "for (size_t __i = 0; __i < __src.cap; __i++) { \
+                    if (__src.states[__i] != 1) continue;"
+                };
                 let _ = writeln!(out, "        {dst_str} = ({{ GorgetSet __src = {coll_val}; \
-                    GorgetSet __result = gorget_set_new(sizeof({elem_type})); \
-                    for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                    if (__src.states[__i] != 1) continue; \
+                    GorgetSet __result = {set_ctor}(sizeof({elem_type})); \
+                    {loop_hdr} \
                     {elem_type} __elem = *({elem_type}*)((char*)__src.keys + __i * __src.key_size); \
                     if ({call_fn}({closure_ref}, __elem)) gorget_set_add(&__result, &__elem); \
                     }} __result; }});");
@@ -8070,10 +8080,17 @@ fn try_emit_higher_order_method(
                     __acc = {call_fn}({closure_ref}, __acc, __key, __val); \
                     }} __acc; }});");
             } else if is_set {
+                let loop_hdr = if is_ordered_set {
+                    "for (size_t __oi = 0; __oi < __src.order_len; __oi++) { \
+                    size_t __i = __src.order[__oi]; \
+                    if (__src.states[__i] != 1) continue;"
+                } else {
+                    "for (size_t __i = 0; __i < __src.cap; __i++) { \
+                    if (__src.states[__i] != 1) continue;"
+                };
                 let _ = writeln!(out, "        {dst_str} = ({{ GorgetSet __src = {coll_val}; \
                     {acc_type} __acc = {init}; \
-                    for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                    if (__src.states[__i] != 1) continue; \
+                    {loop_hdr} \
                     {elem_type} __elem = *({elem_type}*)((char*)__src.keys + __i * __src.key_size); \
                     __acc = {call_fn}({closure_ref}, __acc, __elem); \
                     }} __acc; }});");
@@ -8438,7 +8455,18 @@ fn emit_collection_constructor_to(name: &str, dst: &str) -> Option<String> {
         }
         Some("GorgetSet") => {
             let elem_c_type = extract_collection_elem_type(name);
-            Some(format!("        {dst} = gorget_set_new(sizeof({elem_c_type}));\n"))
+            if type_name.starts_with("Set__") {
+                // Ordered Set: preserves insertion order
+                let elem_rt = runtime_type_name(elem_c_type).unwrap_or(elem_c_type);
+                if elem_rt == "Str" {
+                    Some(format!("        {dst} = gorget_ordered_set_new_str();\n"))
+                } else {
+                    Some(format!("        {dst} = gorget_ordered_set_new(sizeof({elem_c_type}));\n"))
+                }
+            } else {
+                // HashSet: unordered
+                Some(format!("        {dst} = gorget_set_new(sizeof({elem_c_type}));\n"))
+            }
         }
         _ if type_name == "String" => {
             Some(format!("        {dst} = gorget_string_new(\"\");\n"))
@@ -8854,22 +8882,39 @@ fn emit_poll_inline_method(
         }
         InlineMethod::SetUnion => {
             if let Some(dst_id) = dst {
+                let is_ordered = func_name.starts_with("Set__");
                 let other = if args.len() > 1 { fmt_operand_poll(&args[1], func, registry) } else { "/*no other*/".to_string() };
+                let iter_loop = if is_ordered {
+                    format!("for (size_t __oi = 0; __oi < {other}.order_len; __oi++) {{ \
+                    size_t __i = {other}.order[__oi]; \
+                    if ({other}.states[__i] == 1) {{")
+                } else {
+                    format!("for (size_t __i = 0; __i < {other}.cap; __i++) {{ \
+                    if ({other}.states[__i] == 1) {{")
+                };
                 let _ = writeln!(out,
                     "        f->_{id} = gorget_set_clone(&{self_str}); \
-                    for (size_t __i = 0; __i < {other}.cap; __i++) {{ \
-                    if ({other}.states[__i] == 1) {{ \
+                    {iter_loop} \
                     gorget_set_add(&f->_{id}, (char*){other}.keys + __i * {other}.key_size); \
                     }} }}", id = dst_id.0);
             }
         }
         InlineMethod::SetIntersection => {
             if let Some(dst_id) = dst {
+                let is_ordered = func_name.starts_with("Set__");
                 let other = if args.len() > 1 { fmt_operand_poll(&args[1], func, registry) } else { "/*no other*/".to_string() };
+                let ctor = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
+                let iter_loop = if is_ordered {
+                    format!("for (size_t __oi = 0; __oi < {self_str}.order_len; __oi++) {{ \
+                    size_t __i = {self_str}.order[__oi]; \
+                    if ({self_str}.states[__i] == 1) {{")
+                } else {
+                    format!("for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
+                    if ({self_str}.states[__i] == 1) {{")
+                };
                 let _ = writeln!(out,
-                    "        f->_{id} = gorget_set_new({self_str}.key_size); \
-                    for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
-                    if ({self_str}.states[__i] == 1) {{ \
+                    "        f->_{id} = {ctor}({self_str}.key_size); \
+                    {iter_loop} \
                     const void* __k = (char*){self_str}.keys + __i * {self_str}.key_size; \
                     if (gorget_set_contains(&{other}, __k)) gorget_set_add(&f->_{id}, __k); \
                     }} }}", id = dst_id.0);
@@ -8877,11 +8922,20 @@ fn emit_poll_inline_method(
         }
         InlineMethod::SetDifference => {
             if let Some(dst_id) = dst {
+                let is_ordered = func_name.starts_with("Set__");
                 let other = if args.len() > 1 { fmt_operand_poll(&args[1], func, registry) } else { "/*no other*/".to_string() };
+                let ctor = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
+                let iter_loop = if is_ordered {
+                    format!("for (size_t __oi = 0; __oi < {self_str}.order_len; __oi++) {{ \
+                    size_t __i = {self_str}.order[__oi]; \
+                    if ({self_str}.states[__i] == 1) {{")
+                } else {
+                    format!("for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
+                    if ({self_str}.states[__i] == 1) {{")
+                };
                 let _ = writeln!(out,
-                    "        f->_{id} = gorget_set_new({self_str}.key_size); \
-                    for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
-                    if ({self_str}.states[__i] == 1) {{ \
+                    "        f->_{id} = {ctor}({self_str}.key_size); \
+                    {iter_loop} \
                     const void* __k = (char*){self_str}.keys + __i * {self_str}.key_size; \
                     if (!gorget_set_contains(&{other}, __k)) gorget_set_add(&f->_{id}, __k); \
                     }} }}", id = dst_id.0);
@@ -8889,16 +8943,32 @@ fn emit_poll_inline_method(
         }
         InlineMethod::SetSymmetricDifference => {
             if let Some(dst_id) = dst {
+                let is_ordered = func_name.starts_with("Set__");
                 let other = if args.len() > 1 { fmt_operand_poll(&args[1], func, registry) } else { "/*no other*/".to_string() };
+                let ctor = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
+                let iter_self = if is_ordered {
+                    format!("for (size_t __oi = 0; __oi < {self_str}.order_len; __oi++) {{ \
+                    size_t __i = {self_str}.order[__oi]; \
+                    if ({self_str}.states[__i] == 1) {{")
+                } else {
+                    format!("for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
+                    if ({self_str}.states[__i] == 1) {{")
+                };
+                let iter_other = if is_ordered {
+                    format!("for (size_t __oi = 0; __oi < {other}.order_len; __oi++) {{ \
+                    size_t __i = {other}.order[__oi]; \
+                    if ({other}.states[__i] == 1) {{")
+                } else {
+                    format!("for (size_t __i = 0; __i < {other}.cap; __i++) {{ \
+                    if ({other}.states[__i] == 1) {{")
+                };
                 let _ = writeln!(out,
-                    "        f->_{id} = gorget_set_new({self_str}.key_size); \
-                    for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
-                    if ({self_str}.states[__i] == 1) {{ \
+                    "        f->_{id} = {ctor}({self_str}.key_size); \
+                    {iter_self} \
                     const void* __k = (char*){self_str}.keys + __i * {self_str}.key_size; \
                     if (!gorget_set_contains(&{other}, __k)) gorget_set_add(&f->_{id}, __k); \
                     }} }} \
-                    for (size_t __i = 0; __i < {other}.cap; __i++) {{ \
-                    if ({other}.states[__i] == 1) {{ \
+                    {iter_other} \
                     const void* __k = (char*){other}.keys + __i * {other}.key_size; \
                     if (!gorget_set_contains(&{self_str}, __k)) gorget_set_add(&f->_{id}, __k); \
                     }} }}", id = dst_id.0);
@@ -8907,6 +8977,7 @@ fn emit_poll_inline_method(
         InlineMethod::SetIsSubset => {
             let other = if args.len() > 1 { fmt_operand_poll(&args[1], func, registry) } else { "/*no arg*/".to_string() };
             if let Some(dst_id) = dst {
+                // is_subset doesn't need ordering — just checks containment
                 let _ = writeln!(out,
                     "        f->_{id} = ({{ bool __sub = true; \
                     for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
@@ -9083,6 +9154,8 @@ fn try_emit_poll_higher_order_method(
         || bare_type.starts_with("Dict__") || bare_type == "GorgetDict";
     let is_set = bare_type.starts_with("GorgetSet") || bare_type.starts_with("Set__")
         || bare_type.starts_with("HashSet__");
+    let is_ordered_set = func_name.starts_with("Set__")
+        || bare_type.starts_with("Set__");
 
     let elem_type = if let Some(elem) = extract_element_type_from_collection(bare_type) {
         elem
@@ -9182,10 +9255,18 @@ fn try_emit_poll_higher_order_method(
                     if ({call_fn}({closure_ref}, __key, __val)) gorget_map_put(&__result, &__key, &__val); \
                     }} __result; }});");
             } else if is_set {
+                let set_ctor = if is_ordered_set { "gorget_ordered_set_new" } else { "gorget_set_new" };
+                let loop_hdr = if is_ordered_set {
+                    "for (size_t __oi = 0; __oi < __src.order_len; __oi++) { \
+                    size_t __i = __src.order[__oi]; \
+                    if (__src.states[__i] != 1) continue;"
+                } else {
+                    "for (size_t __i = 0; __i < __src.cap; __i++) { \
+                    if (__src.states[__i] != 1) continue;"
+                };
                 let _ = writeln!(out, "        {dst_str} = ({{ GorgetSet __src = {coll_val}; \
-                    GorgetSet __result = gorget_set_new(sizeof({elem_type})); \
-                    for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                    if (__src.states[__i] != 1) continue; \
+                    GorgetSet __result = {set_ctor}(sizeof({elem_type})); \
+                    {loop_hdr} \
                     {elem_type} __elem = *({elem_type}*)((char*)__src.keys + __i * __src.key_size); \
                     if ({call_fn}({closure_ref}, __elem)) gorget_set_add(&__result, &__elem); \
                     }} __result; }});");
@@ -9270,10 +9351,17 @@ fn try_emit_poll_higher_order_method(
                     Operand::Constant(Constant::Str(_)) => "Str".to_string(),
                     _ => "int64_t".to_string(),
                 };
+                let loop_hdr = if is_ordered_set {
+                    "for (size_t __oi = 0; __oi < __src.order_len; __oi++) { \
+                    size_t __i = __src.order[__oi]; \
+                    if (__src.states[__i] != 1) continue;"
+                } else {
+                    "for (size_t __i = 0; __i < __src.cap; __i++) { \
+                    if (__src.states[__i] != 1) continue;"
+                };
                 let _ = writeln!(out, "        {dst_str} = ({{ GorgetSet __src = {coll_val}; \
                     {acc_type} __acc = {init_val}; \
-                    for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                    if (__src.states[__i] != 1) continue; \
+                    {loop_hdr} \
                     {elem_type} __elem = *({elem_type}*)((char*)__src.keys + __i * __src.key_size); \
                     __acc = {call_fn}({closure_ref}, __acc, __elem); \
                     }} __acc; }});");
@@ -9298,9 +9386,16 @@ fn try_emit_poll_higher_order_method(
             if args.len() < 2 { return None; }
             let (call_fn, closure_ref, _) = extract_callable_poll(&args[1]);
             if is_set {
+                let loop_hdr = if is_ordered_set {
+                    "for (size_t __oi = 0; __oi < __src.order_len; __oi++) { \
+                    size_t __i = __src.order[__oi]; \
+                    if (__src.states[__i] != 1) continue;"
+                } else {
+                    "for (size_t __i = 0; __i < __src.cap; __i++) { \
+                    if (__src.states[__i] != 1) continue;"
+                };
                 let _ = writeln!(out, "        {dst_str} = ({{ GorgetSet __src = {coll_val}; bool __any_result = false; \
-                    for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                    if (__src.states[__i] != 1) continue; \
+                    {loop_hdr} \
                     {elem_type} __elem = *({elem_type}*)((char*)__src.keys + __i * __src.key_size); \
                     if ({call_fn}({closure_ref}, __elem)) {{ __any_result = true; break; }} \
                     }} __any_result; }});");
@@ -9316,9 +9411,16 @@ fn try_emit_poll_higher_order_method(
             if args.len() < 2 { return None; }
             let (call_fn, closure_ref, _) = extract_callable_poll(&args[1]);
             if is_set {
+                let loop_hdr = if is_ordered_set {
+                    "for (size_t __oi = 0; __oi < __src.order_len; __oi++) { \
+                    size_t __i = __src.order[__oi]; \
+                    if (__src.states[__i] != 1) continue;"
+                } else {
+                    "for (size_t __i = 0; __i < __src.cap; __i++) { \
+                    if (__src.states[__i] != 1) continue;"
+                };
                 let _ = writeln!(out, "        {dst_str} = ({{ GorgetSet __src = {coll_val}; bool __all_result = true; \
-                    for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                    if (__src.states[__i] != 1) continue; \
+                    {loop_hdr} \
                     {elem_type} __elem = *({elem_type}*)((char*)__src.keys + __i * __src.key_size); \
                     if (!{call_fn}({closure_ref}, __elem)) {{ __all_result = false; break; }} \
                     }} __all_result; }});");
@@ -10746,14 +10848,22 @@ fn emit_inline_method(
         }
         InlineMethod::SetUnion => {
             if let Some(dst_id) = dst {
+                let is_ordered = func_name.starts_with("Set__");
                 let other = if args.len() > 1 {
                     format_operand(&args[1], func, registry)
                 } else { "/*no other*/".to_string() };
                 let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let iter_loop = if is_ordered {
+                    format!("for (size_t __oi = 0; __oi < {other}.order_len; __oi++) {{ \
+                    size_t __i = {other}.order[__oi]; \
+                    if ({other}.states[__i] == 1) {{")
+                } else {
+                    format!("for (size_t __i = 0; __i < {other}.cap; __i++) {{ \
+                    if ({other}.states[__i] == 1) {{")
+                };
                 let _ = writeln!(out,
                     "        _{id} = gorget_set_clone(&{self_str}); \
-                    for (size_t __i = 0; __i < {other}.cap; __i++) {{ \
-                    if ({other}.states[__i] == 1) {{ \
+                    {iter_loop} \
                     gorget_set_add(&_{id}, (char*){other}.keys + __i * {other}.key_size); \
                     }} }}",
                     id = dst_id.0);
@@ -10761,14 +10871,23 @@ fn emit_inline_method(
         }
         InlineMethod::SetIntersection => {
             if let Some(dst_id) = dst {
+                let is_ordered = func_name.starts_with("Set__");
                 let other = if args.len() > 1 {
                     format_operand(&args[1], func, registry)
                 } else { "/*no other*/".to_string() };
                 let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let ctor = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
+                let iter_loop = if is_ordered {
+                    format!("for (size_t __oi = 0; __oi < {self_str}.order_len; __oi++) {{ \
+                    size_t __i = {self_str}.order[__oi]; \
+                    if ({self_str}.states[__i] == 1) {{")
+                } else {
+                    format!("for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
+                    if ({self_str}.states[__i] == 1) {{")
+                };
                 let _ = writeln!(out,
-                    "        _{id} = gorget_set_new({self_str}.key_size); \
-                    for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
-                    if ({self_str}.states[__i] == 1) {{ \
+                    "        _{id} = {ctor}({self_str}.key_size); \
+                    {iter_loop} \
                     const void* __k = (char*){self_str}.keys + __i * {self_str}.key_size; \
                     if (gorget_set_contains(&{other}, __k)) gorget_set_add(&_{id}, __k); \
                     }} }}",
@@ -10777,14 +10896,23 @@ fn emit_inline_method(
         }
         InlineMethod::SetDifference => {
             if let Some(dst_id) = dst {
+                let is_ordered = func_name.starts_with("Set__");
                 let other = if args.len() > 1 {
                     format_operand(&args[1], func, registry)
                 } else { "/*no other*/".to_string() };
                 let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let ctor = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
+                let iter_loop = if is_ordered {
+                    format!("for (size_t __oi = 0; __oi < {self_str}.order_len; __oi++) {{ \
+                    size_t __i = {self_str}.order[__oi]; \
+                    if ({self_str}.states[__i] == 1) {{")
+                } else {
+                    format!("for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
+                    if ({self_str}.states[__i] == 1) {{")
+                };
                 let _ = writeln!(out,
-                    "        _{id} = gorget_set_new({self_str}.key_size); \
-                    for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
-                    if ({self_str}.states[__i] == 1) {{ \
+                    "        _{id} = {ctor}({self_str}.key_size); \
+                    {iter_loop} \
                     const void* __k = (char*){self_str}.keys + __i * {self_str}.key_size; \
                     if (!gorget_set_contains(&{other}, __k)) gorget_set_add(&_{id}, __k); \
                     }} }}",
@@ -10793,19 +10921,35 @@ fn emit_inline_method(
         }
         InlineMethod::SetSymmetricDifference => {
             if let Some(dst_id) = dst {
+                let is_ordered = func_name.starts_with("Set__");
                 let other = if args.len() > 1 {
                     format_operand(&args[1], func, registry)
                 } else { "/*no other*/".to_string() };
                 let _c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+                let ctor = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
+                let iter_self = if is_ordered {
+                    format!("for (size_t __oi = 0; __oi < {self_str}.order_len; __oi++) {{ \
+                    size_t __i = {self_str}.order[__oi]; \
+                    if ({self_str}.states[__i] == 1) {{")
+                } else {
+                    format!("for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
+                    if ({self_str}.states[__i] == 1) {{")
+                };
+                let iter_other = if is_ordered {
+                    format!("for (size_t __oi = 0; __oi < {other}.order_len; __oi++) {{ \
+                    size_t __i = {other}.order[__oi]; \
+                    if ({other}.states[__i] == 1) {{")
+                } else {
+                    format!("for (size_t __i = 0; __i < {other}.cap; __i++) {{ \
+                    if ({other}.states[__i] == 1) {{")
+                };
                 let _ = writeln!(out,
-                    "        _{id} = gorget_set_new({self_str}.key_size); \
-                    for (size_t __i = 0; __i < {self_str}.cap; __i++) {{ \
-                    if ({self_str}.states[__i] == 1) {{ \
+                    "        _{id} = {ctor}({self_str}.key_size); \
+                    {iter_self} \
                     const void* __k = (char*){self_str}.keys + __i * {self_str}.key_size; \
                     if (!gorget_set_contains(&{other}, __k)) gorget_set_add(&_{id}, __k); \
                     }} }} \
-                    for (size_t __i = 0; __i < {other}.cap; __i++) {{ \
-                    if ({other}.states[__i] == 1) {{ \
+                    {iter_other} \
                     const void* __k = (char*){other}.keys + __i * {other}.key_size; \
                     if (!gorget_set_contains(&{self_str}, __k)) gorget_set_add(&_{id}, __k); \
                     }} }}",
