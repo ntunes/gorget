@@ -1,8 +1,8 @@
 # Gorget
 
-Gorget is a statically typed, Python-like language with Rust-inspired ownership and borrow checking.
+A compiled language where safe code looks clean and clean code is safe.
 
-> **Note:** Gorget is highly experimental. Expect breaking changes, missing features, and the possibility of a complete redesign before version 1.0.0.
+Gorget compiles to native binaries through C. It enforces ownership and borrowing at compile time — no garbage collector, no runtime cost — while keeping the syntax minimal enough that programs read like pseudocode.
 
 ```
 void main():
@@ -14,16 +14,16 @@ $ gg run hello.gg
 Hello, World!
 ```
 
-## Features
+> Gorget is in active development. Expect breaking changes before 1.0.
 
-- **Indentation-based syntax** with static typing and type inference
-- **Compiles to C** via transpilation, then to native code via `cc`
-- **Semantic analysis** including name resolution, type checking, trait registry, and borrow checking
-- **Generics** with monomorphization
-- **Traits** with dynamic dispatch via vtables
-- **Pattern matching** with guards, destructuring, and or-patterns
-- **For/else and while/else** loops (else runs when loop completes without `break`)
-- **Closures**, comprehensions, error handling, and more
+## Why Gorget
+
+Most safe languages pay for safety with syntax. Gorget doesn't.
+
+- **Ownership without annotations** — the borrow checker works without lifetime parameters in function signatures. Borrows and moves are visible at call sites (`&` for mutable borrow, `!` for move), not buried in type signatures.
+- **Compile-time meta system** — no macros, no codegen scripts. `meta` blocks run at compile time with full access to type introspection: field iteration, variant expansion, conditional compilation. Derive traits, generate match arms, embed files — all in the language itself.
+- **Batteries included** — HTTP, JSON, CSV, XML, YAML, TOML, SQLite, regex, crypto, and more ship in the standard library. One import, no package hunting for basics.
+- **One toolchain** — `gg build`, `gg test`, `gg fmt`, `gg sim`, `gg add`. No external build system, no formatter choice, no test framework decision.
 
 ## Install
 
@@ -47,236 +47,249 @@ cargo build --release
 
 ## Quick Start
 
-### Write a program
-
 ```bash
 cat > hello.gg << 'EOF'
 void main():
     auto name = "Gorget"
     print("Hello, {name}!")
 EOF
-```
 
-### Compile and run
-
-```bash
-# Two-step: compile then run
-gg build hello.gg
-./hello
-
-# Or one-step:
 gg run hello.gg
 ```
 
-## Language Tour
+## A Taste of the Language
 
-### Functions
+### Functions and type inference
 
-```
+```gorget
 int add(int a, int b):
     return a + b
 
 # Expression-body shorthand
 int double(int x) = x * 2
 
-int factorial(int n):
-    if n <= 1:
-        return 1
-    return n * factorial(n - 1)
+# Type inference for locals
+auto result = add(10, double(5))
 ```
 
-### Variables and Type Inference
+### Pattern matching
 
-```
-int x = 10
-const int y = 20
-auto name = "gorget"     # inferred as str
-auto pi = 3.14           # inferred as float
-auto flag = true          # inferred as bool
-```
+```gorget
+enum Shape:
+    Circle(float radius)
+    Rect(float w, float h)
 
-### Control Flow
-
-```
-if x > 0:
-    print("positive")
-elif x < 0:
-    print("negative")
-else:
-    print("zero")
-
-for i in 0..10:
-    print("{i}")
-
-# For/else: else runs only if loop completes without break
-for i in 0..100:
-    if i == 42:
-        break
-else:
-    print("not found")
+float area(Shape s):
+    match s:
+        case Circle(r):
+            return 3.14159 * r * r
+        case Rect(w, h):
+            return w * h
 ```
 
-### Structs and Enums
+### Error handling
 
-```
-struct Point:
-    int x
-    int y
+```gorget
+from gg.http import get, HttpResponse
 
-enum Color:
-    Red
-    Green
-    Blue
-
-Color c = Red()
-match c:
-    case Red:
-        print("red")
-    case Green:
-        print("green")
-    case Blue:
-        print("blue")
+void main():
+    Result[HttpResponse, str] result = get("https://httpbin.org/get")
+    match result:
+        case Ok(resp):
+            print("Status: {resp.status_code}")
+        case Error(e):
+            print("Error: {e}")
 ```
 
-### Generics
+### Ownership and borrowing
 
-```
-struct Pair[A, B]:
-    A first
-    B second
+```gorget
+struct Message:
+    str sender
+    str subject
+    int priority
 
-Pair[int, int] p = Pair[int, int](10, 20)
+void preview(Message msg):           # borrow — read-only, caller keeps ownership
+    print("[Preview] {msg.subject}")
+
+equip Message:
+    void set_priority(&self, int p): # mutable borrow — modify, caller keeps ownership
+        self.priority = p
+
+void send(Message !msg):             # move — ownership transfers to callee
+    print("[Sent] {msg.subject}")
+
+void main():
+    Message msg = Message("Alice", "Meeting tomorrow", 1)
+    preview(msg)         # borrow — msg still alive
+    msg.set_priority(5)  # mutable borrow — modify in place
+    send(!msg)           # move — msg is now dead
+    # preview(msg)       # compile error: use of moved value `msg`
 ```
 
 ### Traits
 
-```
-trait Shape:
-    int area(self)
+```gorget
+trait Printable:
+    str describe(self)
 
 struct Circle:
     int radius
 
-equip Circle with Shape:
-    int area(self):
-        return 3 * self.radius * self.radius
+equip Circle with Printable:
+    str describe(self):
+        return "circle with radius {self.radius}"
 ```
 
-### Closures
+### Closures and higher-order functions
 
-```
-int x = 10
-int(int) add_x = (int y): x + y
-```
+```gorget
+from std.collections import Vector
 
-### Ownership & Borrowing
-
-Gorget uses Rust-style ownership to prevent use-after-free and double-free bugs at compile time, with zero runtime cost.
-
-```
-# Borrow: read-only access — caller keeps ownership
-void preview(Message msg):
-    print("peek")
-
-# Mutable borrow via method — can modify, caller keeps ownership
-equip Message:
-    void set_priority(&self, int p):
-        self.priority = p
-
-# Move: transfers ownership — caller can't use msg after this
-void send(Message !msg):
-    print("sent")
+void main():
+    Vector[int] nums = [1, 2, 3, 4, 5]
+    Vector[int] evens = nums.filter((int x): x % 2 == 0)
+    int total = nums.fold(0, (int acc, int x): acc + x)
 ```
 
-```
-Message msg = Message("Alice", "Hello", 1)
-preview(msg)        # borrow — msg still alive
-msg.set_priority(5) # mutable borrow — modify in place
-send(!msg)          # move — msg is now dead
-# preview(msg)      # compile error: use of moved value `msg`
+### Contracts
+
+```gorget
+int clamp(int value, int lo, int hi):
+    assert lo <= hi                    # precondition
+    assert return >= lo                # postcondition
+    assert return <= hi                # postcondition
+
+    if value < lo: return lo
+    if value > hi: return hi
+    return value
 ```
 
-Copy types (int, float, bool) pass freely without `!`. See [`examples/ownership.gg`](examples/ownership.gg) for a full walkthrough.
+### Async and channels
 
-## CLI Commands
+```gorget
+from std.sync import Channel
+
+async void producer(Channel[int] ch, int count):
+    for i in 0..count:
+        ch.send(i)
+    ch.close()
+
+async int consumer(Channel[int] ch, int count):
+    int total = 0
+    for i in 0..count:
+        total = total + ch.recv()
+    return total
+
+async void main():
+    Channel[int] ch = Channel[int](2)
+    Task[void] prod = spawn producer(ch, 10)
+    Task[int] cons = spawn consumer(ch, 10)
+    prod.await()
+    int result = cons.await()
+    print(result)   # 45
+```
+
+## CLI
 
 | Command | Description |
 |---------|-------------|
+| `gg <file>` | Compile and run (same as `gg run`) |
+| `gg run <file>` | Compile and run |
+| `gg build <file>` | Compile to native binary |
+| `gg test <file>` | Run tests |
+| `gg check <file>` | Semantic analysis only (fast feedback for editors) |
+| `gg fmt <file>` | Format source code |
+| `gg sim <file>` | Interpret / simulate (runtime checking, no compile) |
 | `gg lex <file>` | Tokenize and print tokens |
 | `gg parse <file>` | Parse and print AST |
-| `gg check <file>` | Run semantic analysis |
-| `gg build <file>` | Compile to native binary |
-| `gg run <file>` | Build and run in one step |
+| `gg report <trace>` | Generate HTML report from trace file |
+| `gg` | Interactive REPL |
 
-### CLI Flags
+### Package commands
 
-**Compilation flags:**
-- `--strip-asserts` — Remove all `assert` statements
-- `--no-strip-asserts` — Keep asserts even if source has `directive strip-asserts`
-- `--overflow=wrap` — Enable wrapping arithmetic (no overflow panic)
-- `--overflow=checked` — Force checked arithmetic even if source says `wrap`
+| Command | Description |
+|---------|-------------|
+| `gg init` | Initialize a new project in the current directory |
+| `gg new <name>` | Create a new project directory |
+| `gg add <pkg>` | Add a dependency |
+| `gg remove <pkg>` | Remove a dependency |
 
-**Testing flags:**
-- `--trace` — Enable tracing for test execution
-- `--no-trace` — Disable tracing even if source has `directive trace`
-- `--report html` — Generate HTML report after testing (implies `--trace`)
-- `--tag <name>` — Only run tests matching this tag (repeatable)
-- `--exclude-tag <name>` — Skip tests with this tag (repeatable; exclusion wins)
-- `--filter <substr>` — Only run tests whose name contains `<substr>`
+### Build flags
+
+| Flag | Description |
+|------|-------------|
+| `--strip-asserts` | Remove all `assert` statements |
+| `--no-strip-asserts` | Keep asserts even if source has `directive strip-asserts` |
+| `--overflow=wrap` | Enable wrapping arithmetic (no overflow panic) |
+| `--overflow=checked` | Force checked arithmetic even if source says `wrap` |
+| `--hot-reload` | Enable hot code reload (builds host + guest shared library) |
+| `--shared [-o F]` | Build as shared library (.dylib/.so) |
+| `--sanitize` | Enable AddressSanitizer + UBSan |
+| `--emit-gir` | Dump GIR (intermediate representation) to stdout |
+| `--emit-lir` | Dump LIR (low-level SSA IR) to stdout |
+
+### Test flags
+
+| Flag | Description |
+|------|-------------|
+| `--trace` | Enable execution tracing |
+| `--no-trace` | Disable tracing even if source has `directive trace` |
+| `--report html` | Generate HTML report (implies `--trace`) |
+| `--filter <substr>` | Only run tests whose name contains `<substr>` |
+| `--tag <name>` | Only run tests matching this tag (repeatable) |
+| `--exclude-tag <name>` | Skip tests with this tag (repeatable) |
+| `--timeout <ms>` | Per-test timeout in milliseconds |
+| `--parallel <n>` | Run tests across `n` parallel workers |
 
 ## Testing
-
-Gorget has a built-in test framework with advanced features:
 
 ```bash
 # Run all tests in a file
 gg test my_tests.gg
 
-# Run specific tests
+# Filter and tag
 gg test my_tests.gg --filter "fibonacci"
 gg test my_tests.gg --tag "slow" --exclude-tag "integration"
 
 # Generate HTML report with execution traces
 gg test my_tests.gg --report html
-
-# Generate trace file (for later report generation)
-gg test my_tests.gg --trace
-gg report my_tests.trace.jsonl  # Generate HTML from trace
 ```
 
-Test files use `test` blocks and support:
-- `@test` attributes with tagging
-- `@should_panic` for expected failures
-- Suite setup/teardown with `suite setup:` and `suite teardown:`
-- Resource management with `with` bindings
-- HTML reports with expandable execution traces
+Test files use `test` blocks with `assert` for contracts, `@should_panic` for expected failures, `suite setup:` / `suite teardown:` for lifecycle hooks, and `with` bindings for scoped resource management.
 
-## Development Testing
+## Development
 
 ```bash
-cargo test --lib                                    # 249 unit tests
-cargo test --test integration -- --test-threads=1   # 102 integration tests
+cargo build                                        # build the compiler
+cargo test --lib                                   # ~913 unit tests
+cargo test --test integration -- --test-threads=1  # ~660 integration tests (serial)
 ```
 
 Integration tests live in `tests/fixtures/*.gg` — each is a self-contained program with deterministic stdout.
 
-## Documentation
-
-- [Language Reference](docs/language-reference.md) — full syntax and semantics specification
-- [Language Design](docs/language-design.md) — design philosophy, safety features, and rationale
-
 ## Architecture
 
 ```
-.gg source → Lexer → Parser → Semantic Analysis → C Codegen → cc → Binary
+.gg source → Lexer → Parser → Semantic Analysis → IR Lowering → C Backend → cc → Binary
 ```
 
 | Stage | Directory | Description |
 |-------|-----------|-------------|
 | Lexer | `src/lexer/` | Logos-based tokenizer with indentation tracking |
 | Parser | `src/parser/` | Recursive descent parser producing AST |
-| Semantic | `src/semantic/` | Name resolution, type checking, traits, borrow checking |
-| Codegen | `src/codegen/` | C code generation (GCC extensions) |
+| Semantic analysis | `src/semantic/` | Name resolution, type checking, traits, borrow checking |
+| IR lowering | `src/ir/` | Monomorphization, drop insertion, closure conversion |
+| C backend | `src/backend/c/` | GIR to C code generation |
+| LIR backend | `src/backend/c_lir/` | SSA-based backend (next-gen, in A/B testing) |
+| Formatter | `src/formatter/` | Source formatter (`gg fmt`) |
+| Simulator | `src/sim/` | Interpreter with runtime safety checks (`gg sim`) |
+
+## Documentation
+
+- [The Gorget Book](docs/book/README.md) — learn the language from scratch (assumes programming experience, not Gorget experience)
+- [Language Reference](docs/language-reference.md) — full syntax and semantics specification
+- [Language Design](docs/language-design.md) — design philosophy, safety features, and rationale
 
 ## License
 
