@@ -1383,8 +1383,8 @@ From lowest to highest precedence:
 | 8          | `??`                         | Left          |
 | 9          | `..` `..=`                   | Non-associative |
 | 10         | `<<` `>>`                    | Left          |
-| 11         | `+` `-`                      | Left          |
-| 12         | `*` `/` `%` `mod`            | Left          |
+| 11         | `+` `-` `+%` `-%`            | Left          |
+| 12         | `*` `/` `%` `mod` `*%`       | Left          |
 | 13         | Unary `-` `~` `!` `&` `*`   | Unary (prefix)|
 | 14         | `?.` `.` `()` `[]`           | Left          |
 | 15         | Atoms (literals, identifiers, grouped expressions) | — |
@@ -1419,12 +1419,14 @@ unary_expr = ( "-" | "not" | "~" | "*" ) expr ;
 
 ```ebnf
 binary_expr = expr op expr ;
-op = "+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | ">"
-   | "<=" | ">=" | "and" | "or" | "in"
+op = "+" | "-" | "*" | "/" | "%" | "+%" | "-%" | "*%"
+   | "==" | "!=" | "<" | ">" | "<=" | ">=" | "and" | "or" | "in"
    | "&" | "|" | "^" | "<<" | ">>" ;
 ```
 
 Arithmetic operators require matching numeric types. Comparison operators produce `bool`. Logical operators require `bool` operands. Bitwise operators require matching integer types and produce the same type.
+
+**Wrapping arithmetic operators** (`+%`, `-%`, `*%`) perform the same operation as `+`, `-`, `*` but are guaranteed to wrap on overflow rather than panic, regardless of the overflow mode. In default (checked) mode, `+` panics on overflow while `+%` wraps silently. Under `directive overflow=wrap` (or `--overflow=wrap`), all arithmetic wraps and the wrapping operators behave identically to their non-wrapping counterparts. Compound assignment forms (`+%=`, `-%=`, `*%=`) are also available.
 
 The `+` and `+=` operators also work on strings, producing a new concatenated string:
 
@@ -1959,6 +1961,29 @@ async void example(str s):
 ```
 
 See [4.6 Copy vs. Non-Copy Types](#46-copy-vs-non-copy-types) for the full type classification and [4.3 Ownership Rules](#43-ownership-rules) for borrow semantics.
+
+### 7.26 Select
+
+```ebnf
+select_stmt = "select" ":" NEWLINE INDENT { select_arm } [ "else" ":" block ] DEDENT ;
+select_arm  = "case" select_op ":" block ;
+select_op   = type IDENT "=" expr ".recv()" | expr ".send(" expr ")" ;
+```
+
+`select` waits on multiple channel operations simultaneously and executes the arm of whichever completes first. Each arm is either a `recv()` (receiving from a channel) or a `send()` (sending to a channel). An optional `else` arm executes if no operation is immediately ready (non-blocking select).
+
+```gorget
+Channel[int] ch1 = Channel[int]()
+Channel[str] ch2 = Channel[str]()
+
+select:
+    case int val = ch1.recv():
+        print(f"got int: {val}")
+    case str msg = ch2.recv():
+        print(f"got str: {msg}")
+    else:
+        print("nothing ready")
+```
 
 ---
 

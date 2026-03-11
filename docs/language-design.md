@@ -1380,7 +1380,7 @@ print(boxed.len())       # Box[String] auto-derefs to String, calls String.len()
 
 ## 10. Concurrency
 
-*Not yet implemented.* The concurrency model below is aspirational design — async/await, threads, `Sendable`/`Syncable`, and the `std.sync`/`std.thread`/`std.async` modules do not exist yet.
+The concurrency model includes async/await, spawn, channels, `Shared[T]`, `Mutex[T]`, `RwLock[T]`, `select`, and structured concurrency with multiple scheduler backends (`pool`, `thread`, `inline`, `single`).
 
 ```gorget
 import std.thread
