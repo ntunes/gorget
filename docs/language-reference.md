@@ -2895,7 +2895,7 @@ The following methods are available on built-in types without any import.
 | `count(needle)` | `str → int` | Number of non-overlapping occurrences |
 | `char_at(index)` | `int → char` | Byte at byte index (panics if out of bounds; for parser/codec use) |
 | `byte_slice(start, end)` | `int, int → str` | Byte-range substring view (O(1), for parser/codec use) |
-| `substring(start, end)` | `int, int → String` | Substring from `start` to `end` (panics if out of bounds) |
+| `substring(start, end)` | `int, int → str` | Codepoint-range substring view from `start` to `end` (panics if out of bounds) |
 | `trim()` | `→ str` | Strip leading/trailing Unicode whitespace (view, no allocation) |
 | `strip(chars?)` | `str? → str` | Strip codepoints (or whitespace) from both ends (view) |
 | `lstrip(chars?)` | `str? → str` | Strip codepoints (or whitespace) from left (view) |
@@ -2943,6 +2943,23 @@ For byte-level access (useful in parsers and codecs), use `char_at(i)` (returns 
 | `bytes_to_str(buf)` | `Result[str, str]` | Returns `Error("invalid UTF-8 in byte buffer")` |
 
 String literals are validated at compile time by the lexer. Internal string operations (slicing, concatenation, indexing) preserve UTF-8 validity by construction.
+
+**`String`** — Owned mutable string methods
+
+`String` is a heap-allocated, growable string buffer. It supports all `str` methods above (auto-coerced to `str` view) plus these mutation methods:
+
+| Method | Signature | Description |
+|---|---|---|
+| `len()` | `→ int` | Number of Unicode codepoints |
+| `is_empty()` | `→ bool` | True if length is zero |
+| `capacity()` | `→ int` | Current allocated capacity in bytes |
+| `push(s)` | `str → void` | Append a string |
+| `push_char(c)` | `char → void` | Append a single character |
+| `push_line(s)` | `str → void` | Append a string followed by a newline |
+| `clear()` | `→ void` | Remove all content (keeps allocated capacity) |
+| `str()` | `→ str` | View as immutable `str` slice |
+
+`String` also inherits all read-only `str` methods: `contains()`, `starts_with()`, `split()`, `trim()`, etc.
 
 **`char`** — Character methods
 
