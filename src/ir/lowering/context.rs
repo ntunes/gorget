@@ -170,6 +170,10 @@ pub struct LoweringContext<'a> {
     /// Set by VarDecl/Assign handlers so enum variant constructors (Some, None, Ok, Error)
     /// can pick the correctly-monomorphized type.
     pub expected_type: Option<TypeId>,
+    /// Closure parameter type hints for higher-order collection methods.
+    /// Set before lowering closure arguments to filter/map/fold/etc. so that
+    /// untyped closure params get the correct element type instead of I64_TYPE.
+    pub closure_param_type_hints: Vec<TypeId>,
     /// Callable parameter return types: LocalId → return TypeId.
     /// Populated during function setup for parameters with Callable/function types.
     pub callable_return_types: FxHashMap<LocalId, TypeId>,
@@ -222,6 +226,7 @@ impl<'a> LoweringContext<'a> {
             fn_param_ownerships: FxHashMap::default(),
             current_throws_result_type: None,
             expected_type: None,
+            closure_param_type_hints: Vec::new(),
             callable_return_types: FxHashMap::default(),
             global_names: rustc_hash::FxHashSet::default(),
             global_type_names: FxHashMap::default(),

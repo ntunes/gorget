@@ -1,0 +1,96 @@
+# Test Option and Result method operations inside async (coroutine) functions.
+# These methods must work correctly in the poll function where locals become
+# frame fields (f->_N).
+from std.async import sleep
+
+async int do_option_work():
+    sleep(1)
+
+    # --- Creation after yield point ---
+    Option[int] some_val = Some(42)
+    Option[int] none_val = None
+
+    # --- unwrap ---
+    print(some_val.unwrap())
+
+    # --- is_some / is_none ---
+    print(some_val.is_some())
+    print(some_val.is_none())
+    print(none_val.is_some())
+    print(none_val.is_none())
+
+    # --- unwrap_or ---
+    int or1 = some_val.unwrap_or(99)
+    print(or1)
+    int or2 = none_val.unwrap_or(99)
+    print(or2)
+
+    # --- map ---
+    Option[int] doubled = some_val.map((int x): x * 2)
+    print(doubled.unwrap())
+    Option[int] none_mapped = none_val.map((int x): x * 2)
+    print(none_mapped.is_none())
+
+    # --- filter ---
+    Option[int] passes = some_val.filter((int x): x > 40)
+    print(passes.is_some())
+    Option[int] fails = some_val.filter((int x): x > 50)
+    print(fails.is_none())
+
+    # --- and_then ---
+    Option[int] chained = some_val.and_then((int x): Some(x + 8))
+    print(chained.unwrap())
+    Option[int] chain_none = none_val.and_then((int x): Some(x + 8))
+    print(chain_none.is_none())
+
+    # --- chaining: map then unwrap_or ---
+    int chain_result = some_val.map((int x): x * 3).unwrap_or(0)
+    print(chain_result)
+
+    return 1
+
+async int do_result_work():
+    sleep(1)
+
+    # --- Creation after yield point ---
+    Result[int, str] ok_val = Ok(10)
+    Result[int, str] err_val = Error("bad")
+
+    # --- unwrap ---
+    print(ok_val.unwrap())
+
+    # --- is_ok / is_err ---
+    print(ok_val.is_ok())
+    print(ok_val.is_err())
+    print(err_val.is_ok())
+    print(err_val.is_err())
+
+    # --- unwrap_or ---
+    int or1 = ok_val.unwrap_or(0)
+    print(or1)
+    int or2 = err_val.unwrap_or(0)
+    print(or2)
+
+    # --- map ---
+    Result[int, str] mapped = ok_val.map((int x): x * 5)
+    print(mapped.unwrap())
+    Result[int, str] mapped_err = err_val.map((int x): x * 5)
+    print(mapped_err.is_err())
+
+    # --- unwrap_err ---
+    print(err_val.unwrap_err())
+
+    # --- map chain ---
+    int chain_result = ok_val.map((int x): x * 3).unwrap_or(0)
+    print(chain_result)
+
+    return 2
+
+async void main():
+    # Run sequentially to get deterministic output order
+    Task[int] t1 = spawn do_option_work()
+    int r1 = t1.await()
+    Task[int] t2 = spawn do_result_work()
+    int r2 = t2.await()
+    print(r1)
+    print(r2)

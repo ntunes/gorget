@@ -1,0 +1,64 @@
+from std.collections import Vector
+
+void main():
+    # === 1. Vector chain: filter -> map -> fold in single expression ===
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    v.push(4)
+    v.push(5)
+    int result1 = v.filter((int x): x > 2).map((int x): x * 10).fold(0, (int a, int b): a + b)
+    print(f"{result1}")
+
+    # === 2. Vector sorted + filter ===
+    Vector[int] v2 = Vector[int]()
+    v2.push(5)
+    v2.push(1)
+    v2.push(3)
+    v2.push(2)
+    v2.push(4)
+    Vector[int] sf = v2.sorted().filter((int x): x < 4)
+    print(f"{sf.len()}")
+    print(f"{sf.get(0).unwrap()}")
+    print(f"{sf.get(1).unwrap()}")
+    print(f"{sf.get(2).unwrap()}")
+
+    # === 3. Option chain: map + unwrap_or ===
+    int result3 = Some(10).map((int x): x + 5).unwrap_or(0)
+    print(f"{result3}")
+
+    # === 4. Option filter + map chain ===
+    int result4 = Some(10).filter((int x): x > 5).map((int x): x * 2).unwrap_or(0)
+    print(f"{result4}")
+
+    # === 5. Option and_then chain ===
+    int result5 = Some(10).and_then((int x): Some(x + 1)).unwrap()
+    print(f"{result5}")
+
+    # === 6. Result map chain ===
+    Result[int, str] r6 = Ok(5)
+    int result6 = r6.map((int x): x * 2).unwrap_or(0)
+    print(f"{result6}")
+
+    # === 7. Nested collection method: len on filter result ===
+    int count7 = v.filter((int x): x % 2 == 0).len()
+    print(f"{count7}")
+
+    # === 8. Multi-step with intermediates ===
+    Vector[int] step1 = v.filter((int x): x > 1)
+    Vector[int] step2 = step1.map((int x): x * 3)
+    int step3 = step2.fold(0, (int a, int b): a + b)
+    print(f"{step1.len()}")
+    print(f"{step2.get(0).unwrap()}")
+    print(f"{step3}")
+
+    # === 9. Empty filter chain ===
+    Vector[int] empty_chain = v.filter((int x): false).map((int x): x * 2)
+    print(f"{empty_chain.len()}")
+
+    # === 10. Boolean chain: any + all ===
+    bool any_big = v.any((int x): x > 10)
+    bool all_pos = v.all((int x): x > 0)
+    print(f"{any_big}")
+    print(f"{all_pos}")

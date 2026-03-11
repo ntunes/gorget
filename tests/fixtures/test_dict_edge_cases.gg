@@ -1,0 +1,115 @@
+# Dict edge cases: integer keys, bool values, overwrites, empty ops,
+# collection values, single-entry removal, filter/fold
+from std.collections import Dict, Vector
+
+void main():
+    # --- 1. Dict[int, str]: integer keys ---
+    Dict[int, str] id_names = Dict[int, str]()
+    id_names.put(1, "alice")
+    id_names.put(2, "bob")
+    id_names.put(3, "carol")
+    print(f"{id_names.len()}")
+    print(f"{id_names.get(1).unwrap()}")
+    print(f"{id_names.get(2).unwrap()}")
+    print(f"{id_names.contains(3)}")
+    print(f"{id_names.contains(99)}")
+    bool rem_int = id_names.remove(2)
+    print(f"{rem_int}")
+    print(f"{id_names.len()}")
+    print(f"{id_names.get(2).is_none()}")
+
+    # --- 2. Dict[str, bool]: boolean values ---
+    Dict[str, bool] flags = Dict[str, bool]()
+    flags.put("debug", true)
+    flags.put("verbose", false)
+    print(f"{flags.get("debug").unwrap()}")
+    print(f"{flags.get("verbose").unwrap()}")
+    print(f"{flags.len()}")
+
+    # --- 3. Overwrite: put same key twice ---
+    Dict[str, int] ow = Dict[str, int]()
+    ow.put("x", 10)
+    ow.put("y", 20)
+    ow.put("x", 30)
+    print(f"{ow.get("x").unwrap()}")
+    print(f"{ow.len()}")
+
+    # --- 4. Empty dict operations ---
+    Dict[str, int] empty = Dict[str, int]()
+    Vector[str] ek = empty.keys()
+    Vector[int] ev = empty.values()
+    Vector[(str, int)] ei = empty.items()
+    print(f"{ek.len()}")
+    print(f"{ev.len()}")
+    print(f"{ei.len()}")
+    print(f"{empty.len()}")
+    print(f"{empty.is_empty()}")
+    empty.clear()
+    print(f"{empty.len()}")
+
+    # --- 5. get_or and get_or_put ---
+    Dict[str, int] gd = Dict[str, int]()
+    gd.put("a", 5)
+    int go1 = gd.get_or("a", 99)
+    int go2 = gd.get_or("missing", 99)
+    print(f"{go1}")
+    print(f"{go2}")
+    int gop1 = gd.get_or_put("a", 100)
+    print(f"{gop1}")
+    int gop2 = gd.get_or_put("b", 42)
+    print(f"{gop2}")
+    print(f"{gd.len()}")
+    print(f"{gd.get("b").unwrap()}")
+
+    # --- 6. update with overlap ---
+    Dict[str, int] base = Dict[str, int]()
+    base.put("x", 1)
+    base.put("y", 2)
+    Dict[str, int] patch = Dict[str, int]()
+    patch.put("y", 200)
+    patch.put("z", 300)
+    base.update(patch)
+    print(f"{base.len()}")
+    print(f"{base.get("x").unwrap()}")
+    print(f"{base.get("y").unwrap()}")
+    print(f"{base.get("z").unwrap()}")
+
+    # --- 7. Dict[str, Vector[int]]: collection values ---
+    Dict[str, Vector[int]] groups = Dict[str, Vector[int]]()
+    Vector[int] va = Vector[int]()
+    va.push(10)
+    va.push(20)
+    Vector[int] vb = Vector[int]()
+    vb.push(30)
+    groups.put("a", va)
+    groups.put("b", vb)
+    Vector[int] got_a = groups.get("a").unwrap()
+    print(f"{got_a.len()}")
+    print(f"{got_a.get(0).unwrap()}")
+    print(f"{got_a.get(1).unwrap()}")
+    Vector[int] got_b = groups.get("b").unwrap()
+    print(f"{got_b.len()}")
+    print(f"{got_b.get(0).unwrap()}")
+
+    # --- 8. Single-entry dict: remove only entry ---
+    Dict[str, int] single = Dict[str, int]()
+    single.put("only", 7)
+    print(f"{single.len()}")
+    bool rem_only = single.remove("only")
+    print(f"{rem_only}")
+    print(f"{single.len()}")
+    print(f"{single.is_empty()}")
+    print(f"{single.get("only").is_none()}")
+
+    # --- 9. filter and fold ---
+    Dict[str, int] scores = Dict[str, int]()
+    scores.put("a", 10)
+    scores.put("b", 3)
+    scores.put("c", 25)
+    scores.put("d", 1)
+    Dict[str, int] big = scores.filter((str k, int v): v > 5)
+    print(f"{big.len()}")
+    int total = scores.fold(0, (int acc, str k, int v): acc + v)
+    print(f"{total}")
+
+    print("done")

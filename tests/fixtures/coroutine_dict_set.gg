@@ -1,0 +1,71 @@
+# Test Dict and Set operations inside a coroutine (async function with await).
+# Higher-order methods (filter/fold) on the original collection must correctly
+# use frame-field access (f->_N) in the poll function.
+from std.async import sleep
+from std.collections import Dict, Set
+
+async int test_dict():
+    sleep(1)
+
+    # --- put / contains / len ---
+    Dict[str, int] d = Dict[str, int]()
+    d.put("a", 10)
+    d.put("b", 20)
+    d.put("c", 30)
+    print(d.len())
+
+    print(d.contains("b"))
+    print(d.contains("z"))
+
+    # --- remove ---
+    bool rem = d.remove("b")
+    print(rem)
+    print(d.len())
+
+    # --- filter (higher-order on Dict) ---
+    Dict[str, int] big = d.filter((str k, int v): v > 15)
+    print(big.len())
+
+    # --- fold (higher-order on Dict) ---
+    int total = d.fold(0, (int acc, str k, int v): acc + v)
+    print(total)
+
+    return total
+
+async int test_set():
+    sleep(1)
+
+    # --- add / contains / len ---
+    Set[int] s = Set[int]()
+    s.add(1)
+    s.add(2)
+    s.add(3)
+    s.add(2)
+    print(s.len())
+
+    print(s.contains(2))
+    print(s.contains(99))
+
+    # --- remove ---
+    bool rem = s.remove(2)
+    print(rem)
+    print(s.len())
+
+    # --- filter (higher-order on Set) ---
+    Set[int] odds = s.filter((int x): x % 2 == 1)
+    print(odds.len())
+
+    # --- fold (higher-order on Set) ---
+    int total = s.fold(0, (int acc, int x): acc + x)
+    print(total)
+
+    return total
+
+async void main():
+    Task[int] t1 = spawn test_dict()
+    int dict_result = t1.await()
+    print(f"dict={dict_result}")
+
+    Task[int] t2 = spawn test_set()
+    int set_result = t2.await()
+    print(f"set={set_result}")

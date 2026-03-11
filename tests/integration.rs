@@ -10809,6 +10809,65 @@ false
 }
 
 #[test]
+fn test_set_string() {
+    run_gg(
+        "test_set_string.gg",
+        "\
+0
+true
+3
+3
+true
+false
+true
+false
+2
+0
+true
+4
+2
+1
+true
+1
+true
+2
+true
+true
+false
+true
+false
+true
+true
+false
+3
+0
+2
+14
+0
+true
+3
+3
+true
+false
+true
+false
+2
+0
+true
+4
+2
+1
+true
+2
+true
+true
+false
+11
+2",
+    );
+}
+
+#[test]
 fn test_string_owned_all() {
     run_gg(
         "test_string_owned_all.gg",
@@ -10974,6 +11033,37 @@ true
 }
 
 #[test]
+fn test_result_advanced() {
+    run_gg(
+        "test_result_advanced.gg",
+        "\
+42
+100
+also failed
+100
+third
+86
+initial error
+true
+nope
+85
+0
+wrapped
+42
+52
+-1
+42
+999
+replaced
+yes
+true
+13
+142
+-1",
+    );
+}
+
+#[test]
 fn test_collections_nested() {
     run_gg(
         "test_collections_nested.gg",
@@ -11005,6 +11095,45 @@ true
 1
 true
 0
+done",
+    );
+}
+
+#[test]
+fn test_collections_nested_advanced() {
+    run_gg(
+        "test_collections_nested_advanced.gg",
+        "\
+--- Vector[Option[int]] ---
+5
+some:10
+none
+some:20
+none
+some:30
+3
+10
+--- Vector[Result[int, str]] ---
+4
+true,false
+false,true
+true,false
+false,true
+ok_count:2
+err_count:2
+--- Dict[str, Option[int]] ---
+3
+95
+true
+88
+true
+--- Result[Vector[int], str] ---
+true
+3
+100
+200
+300
+true
 done",
     );
 }
@@ -11151,6 +11280,37 @@ fn test_vector_zip() {
 }
 
 #[test]
+fn test_vector_advanced() {
+    run_gg(
+        "test_vector_advanced.gg",
+        "\
+25
+10
+true
+true
+3
+3
+0
+0
+5
+0
+0
+30
+42
+20
+6
+1
+2
+3
+10
+20
+30
+0
+0",
+    );
+}
+
+#[test]
 fn option_task() {
     run_gg(
         "option_task.gg",
@@ -11183,5 +11343,194 @@ true
 3
 true
 result=6",
+    );
+}
+
+#[test]
+fn test_dict_edge_cases() {
+    run_gg(
+        "test_dict_edge_cases.gg",
+        "\
+3
+alice
+bob
+true
+false
+true
+2
+true
+true
+false
+2
+30
+2
+0
+0
+0
+0
+true
+0
+5
+99
+5
+42
+2
+42
+3
+1
+200
+300
+2
+10
+20
+1
+30
+1
+true
+0
+true
+true
+2
+39
+done",
+    );
+}
+
+#[test]
+fn coroutine_dict_set() {
+    run_gg(
+        "coroutine_dict_set.gg",
+        "\
+3
+true
+false
+true
+2
+1
+40
+dict=40
+3
+true
+false
+true
+2
+2
+4
+set=4",
+    );
+}
+
+#[test]
+fn test_vector_edge_cases() {
+    run_gg(
+        "test_vector_edge_cases.gg",
+        "\
+3
+true
+false
+hello
+world
+2
+hello
+world
+HELLO
+1.410000
+2.720000
+3.140000
+7.270000
+apple
+banana
+cherry
+1
+0
+true
+0
+true
+0
+1
+0
+42
+true
+true
+true
+99
+99
+99
+99
+99
+true
+120
+2
+10
+2
+30
+1
+true
+3
+true
+1
+true
+3
+100
+4950",
+    );
+}
+
+#[test]
+fn coroutine_option_result() {
+    run_gg(
+        "coroutine_option_result.gg",
+        "\
+42
+true
+false
+false
+true
+42
+99
+84
+true
+true
+true
+50
+true
+126
+10
+true
+false
+false
+true
+10
+0
+50
+true
+bad
+30
+1
+2",
+    );
+}
+
+#[test]
+fn test_method_chaining() {
+    run_gg(
+        "test_method_chaining.gg",
+        "\
+120
+3
+1
+2
+3
+15
+20
+11
+10
+2
+4
+6
+42
+0
+false
+true",
     );
 }

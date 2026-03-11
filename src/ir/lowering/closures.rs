@@ -48,6 +48,8 @@ pub struct LiftedClosure {
     pub return_type: TypeId,
     /// The closure body AST (cloned for deferred lowering).
     pub body: Spanned<Expr>,
+    /// Expected type context at the point of closure creation (for Ok/Error/Some/None resolution).
+    pub expected_type: Option<TypeId>,
 }
 
 /// Manages closure lowering state.
@@ -142,9 +144,13 @@ impl ClosureLowering {
             .map(|p| p.node.name.node.clone())
             .collect();
         let closure_param_types: Vec<TypeId> = params.iter()
-            .map(|p| {
+            .enumerate()
+            .map(|(i, p)| {
                 if let Some(ref ty) = p.node.type_ {
                     ctx.type_mapper.map_ast_type(&ty.node)
+                } else if i < ctx.closure_param_type_hints.len() {
+                    // Use hint from enclosing higher-order method call (e.g., filter/map/fold)
+                    ctx.closure_param_type_hints[i]
                 } else {
                     I64_TYPE // fallback for untyped params
                 }
@@ -185,6 +191,7 @@ impl ClosureLowering {
             param_types: closure_param_types,
             return_type,
             body: body.clone(),
+            expected_type: ctx.expected_type,
         });
 
         // Emit the creation-site StructInit
@@ -273,6 +280,11 @@ pub fn emit_closure_call_function(
         ctx.register_local(name, local_id, *type_id);
     }
 
+    // Restore expected_type from closure creation context so Ok/Error/Some/None
+    // constructors inside the body resolve to the correct Result/Option type.
+    let prev_expected = ctx.expected_type;
+    ctx.expected_type = closure.expected_type;
+
     // Lower the closure body
     match &closure.body.node {
         Expr::Block(block) => {
@@ -292,13 +304,22 @@ pub fn emit_closure_call_function(
             // Re-infer return type from the actual body result (the pre-inference
             // may have returned I64_TYPE for variant constructors like Some(x+1))
             let actual_type = super::exprs::infer_operand_type_full(ctx, &result, &builder);
-            if actual_type != closure.return_type && actual_type != UNIT_TYPE {
+            // Override return type only when meaningful — skip GorgetString→Str confusion
+            // (f-strings produce GorgetString in IR but Str is the public type) and skip
+            // when expected_type provided a better answer (e.g., Result type from and_then).
+            let should_override = actual_type != closure.return_type
+                && actual_type != UNIT_TYPE
+                && !(actual_type == ctx.type_mapper.owned_string_type
+                     && closure.return_type == ctx.type_mapper.str_type);
+            if should_override {
                 builder.locals[0].type_id = actual_type;
             }
             builder.assign(Place::local(LocalId(0)), result);
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
     }
+
+    ctx.expected_type = prev_expected;
 
     let mut func = builder.build();
     // Update the function's return_type to match the actual local[0] type

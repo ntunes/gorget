@@ -1,0 +1,147 @@
+# Vector edge cases: different elem types, empty collections, boundaries, chaining
+# Remaining known bugs:
+#   - any/all returns int not bool (prints 1/0 instead of true/false)
+
+void main():
+    # === Vector[str] ===
+    Vector[str] vs = Vector[str]()
+    vs.push("hello")
+    vs.push("world")
+    vs.push("foo")
+    print(vs.len())                         # 3
+    print(vs.contains("world"))             # true
+    print(vs.contains("bar"))               # false
+    print(vs[0])                            # hello
+    print(vs[1])                            # world
+
+    # Vector[str] filter — was broken (closure param typed int64_t), now fixed
+    Vector[str] filtered = vs.filter((w): w != "foo")
+    print(filtered.len())                   # 2
+    print(filtered[0])                      # hello
+    print(filtered[1])                      # world
+
+    # Vector[str] map
+    Vector[str] upper = vs.map((w): w.to_upper())
+    print(upper[0])                         # HELLO
+
+    # Vector[float] sort — was broken (memcmp comparison), now fixed
+    Vector[float] vf = Vector[float]()
+    vf.push(3.14)
+    vf.push(1.41)
+    vf.push(2.72)
+    vf.sort()
+    print(vf[0])                            # 1.41
+    print(vf[1])                            # 2.72
+    print(vf[2])                            # 3.14
+
+    # Vector[float] fold — was broken (accumulator as int64_t), now fixed
+    float fsum = vf.fold(0.0, (acc, x): acc + x)
+    print(fsum)                             # 7.27
+
+    # Vector[str] sort
+    Vector[str] vs2 = Vector[str]()
+    vs2.push("cherry")
+    vs2.push("apple")
+    vs2.push("banana")
+    vs2.sort()
+    print(vs2[0])                           # apple
+    print(vs2[1])                           # banana
+    print(vs2[2])                           # cherry
+
+    # === Vector[bool] ===
+    Vector[bool] vb = Vector[bool]()
+    vb.push(true)
+    vb.push(false)
+    vb.push(true)
+    # BUG: any/all on Vector[bool] returns int (prints 1/0 not true/false)
+    print(vb.any((b): b))                   # 1
+    print(vb.all((b): b))                   # 0
+    print(vb.contains(false))               # true
+
+    # === Empty vector operations ===
+    Vector[int] empty = Vector[int]()
+    print(empty.len())                      # 0
+    print(empty.is_empty())                 # true
+    # BUG: any/all returns int not bool
+    print(empty.any((x): x > 0))            # 0
+    print(empty.all((x): x > 0))            # 1
+
+    Vector[int] ef = empty.filter((x): x > 0)
+    print(ef.len())                         # 0
+
+    int fold_empty = empty.fold(42, (a, x): a + x)
+    print(fold_empty)                       # 42
+
+    Option[int] pop_empty = empty.pop()
+    print(pop_empty.is_none())              # true
+
+    Option[int] first_empty = empty.first()
+    print(first_empty.is_none())            # true
+
+    Option[int] last_empty = empty.last()
+    print(last_empty.is_none())             # true
+
+    # === Single-element vector ===
+    Vector[int] single = Vector[int]()
+    single.push(99)
+    print(single.first().unwrap())          # 99
+    print(single.last().unwrap())           # 99
+    single.sort()
+    print(single[0])                        # 99
+    single.reverse()
+    print(single[0])                        # 99
+    Option[int] popped = single.pop()
+    print(popped.unwrap())                  # 99
+    print(single.is_empty())               # true
+
+    # === Method chaining (int — works) ===
+    Vector[int] data = Vector[int]()
+    data.push(1)
+    data.push(2)
+    data.push(3)
+    data.push(4)
+    data.push(5)
+
+    int chain_result = data.filter((x): x > 2).map((x): x * 10).fold(0, (a, b): a + b)
+    print(chain_result)                     # 120 (30+40+50)
+
+    int chain_len = data.filter((x): x % 2 == 0).len()
+    print(chain_len)                        # 2
+
+    # === remove() at boundaries ===
+    Vector[int] rv = Vector[int]()
+    rv.push(10)
+    rv.push(20)
+    rv.push(30)
+
+    Option[int] r_first = rv.remove(0)
+    print(r_first.unwrap())                 # 10
+    print(rv.len())                         # 2
+
+    Option[int] r_last = rv.remove(1)
+    print(r_last.unwrap())                  # 30
+    print(rv.len())                         # 1
+
+    Option[int] r_oob = rv.remove(99)
+    print(r_oob.is_none())                  # true
+
+    # === Vector[Option[int]] — None push was emitting NULL instead of tagged struct ===
+    Vector[Option[int]] opt_vec = Vector[Option[int]]()
+    opt_vec.push(Some(1))
+    opt_vec.push(None)
+    opt_vec.push(Some(3))
+    print(opt_vec.len())                    # 3
+    print(opt_vec[0].is_some())             # true
+    print(opt_vec[0].unwrap())              # 1
+    print(opt_vec[1].is_none())             # true
+    print(opt_vec[2].unwrap())              # 3
+
+    # === Large vector ===
+    Vector[int] big = Vector[int]()
+    int i = 0
+    while i < 100:
+        big.push(i)
+        i = i + 1
+    print(big.len())                        # 100
+    int big_sum = big.fold(0, (a, x): a + x)
+    print(big_sum)                          # 4950

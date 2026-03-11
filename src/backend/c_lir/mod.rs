@@ -520,33 +520,6 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
             write!(out, ");").unwrap();
         }
         Inst::CallExtern { dst, name, args } => {
-            // fwrite-based string print (null-byte safe)
-            if name == "print_str" || name == "print_str_nl"
-                || name == "eprint_str" || name == "eprint_str_nl"
-            {
-                let stream = if name.starts_with("eprint") { "stderr" } else { "stdout" };
-                let nl = name.ends_with("_nl");
-                if let Some(a) = args.first() {
-                    let val = v(*a);
-                    let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                    // If the value is already a Str struct, access .data/.len directly.
-                    // If it's a pointer (SlotAddr), cast to Str* and dereference.
-                    let is_str_struct = matches!(arg_ty, Some(LirType::Struct(sid)) if {
-                        let sname = &module.struct_def(*sid).name;
-                        sname == "Str" || sname == "GorgetString"
-                    });
-                    let accessor = if is_str_struct {
-                        val.clone()
-                    } else {
-                        format!("(*(Str*){val})")
-                    };
-                    write!(out, "fwrite({accessor}.data, 1, {accessor}.len, {stream});").unwrap();
-                    if nl {
-                        write!(out, " fputc('\\n', {stream});").unwrap();
-                    }
-                }
-                return;
-            }
             let is_printf = name == "printf" || name == "fprintf_stderr";
             let ext_params: Option<&[LirType]> = module.externs.iter()
                 .find(|e| &e.name == name)

@@ -1282,6 +1282,31 @@ pub(super) fn lower_method_call(
             Vec::new()
         };
 
+        // For higher-order methods (filter/map/fold/etc.), set closure parameter type hints
+        // so untyped closure params get the correct element type instead of defaulting to I64.
+        let prev_hints = std::mem::take(&mut ctx.closure_param_type_hints);
+        if matches!(method_name, "filter" | "map" | "flat_map" | "any" | "all" | "each" | "for_each" | "find" | "count" | "reduce" | "enumerate") {
+            if let Some(elem_type_id) = extract_elem_type_id_from_type_name(ctx, &type_name) {
+                ctx.closure_param_type_hints = vec![elem_type_id];
+            }
+        } else if method_name == "fold" {
+            // fold closure has (accumulator, element) — use element type for both params
+            // as a reasonable default. Explicitly-typed params override the hint.
+            if let Some(elem_type_id) = extract_elem_type_id_from_type_name(ctx, &type_name) {
+                ctx.closure_param_type_hints = vec![elem_type_id, elem_type_id];
+            }
+        }
+
+        // For and_then/or_else, the closure should return the same Option/Result type
+        // as the receiver. Set expected_type so Ok()/Error()/Some()/None() constructors
+        // inside the closure body get the correct type.
+        let prev_expected = ctx.expected_type;
+        if matches!(method_name, "and_then" | "or_else") {
+            if let Some(type_id) = ctx.lookup_type_by_name(&type_name) {
+                ctx.expected_type = Some(type_id);
+            }
+        }
+
         let lowered_method_args: Vec<Operand> = args.iter()
             .enumerate()
             .map(|(i, arg)| {
@@ -1290,6 +1315,10 @@ pub(super) fn lower_method_call(
             })
             .collect();
         call_args.extend(lowered_method_args.iter().cloned());
+
+        // Restore previous hints and expected type
+        ctx.closure_param_type_hints = prev_hints;
+        ctx.expected_type = prev_expected;
 
         // For Vector.zip(other_vec), register tuple and result vector types
         if method_name == "zip" && type_name.starts_with("Vector__") {
@@ -1424,6 +1453,22 @@ pub(super) fn lower_method_call(
                 None
             })
             .collect();
+
+        // For fold, refine ret_type from the init value's type (call_args[1])
+        // so the destination local gets the correct type (e.g., double for float fold).
+        // Note: fold has call_args = [receiver, init, closure], reduce has [receiver, closure].
+        let ret_type = if method_name == "fold" && call_args.len() > 2 {
+            match &call_args[1] {
+                Operand::Constant(Constant::F64(_)) => F64_TYPE,
+                Operand::Copy(p) | Operand::Move(p) => {
+                    let init_type = builder.locals[p.local.0 as usize].type_id;
+                    if init_type != I64_TYPE { init_type } else { ret_type }
+                }
+                _ => ret_type,
+            }
+        } else {
+            ret_type
+        };
 
         let result = if ret_type == UNIT_TYPE {
             builder.call_void(call_name, call_args);
@@ -1611,8 +1656,10 @@ fn infer_collection_method_return_type(
                     .unwrap_or(I64_TYPE)
             }
         }
-        // fold/reduce return a scalar value
-        "fold" | "reduce" | "any" | "all" if is_vector || is_set || is_dict => I64_TYPE,
+        // fold/reduce return a scalar value. Default to I64_TYPE.
+        "fold" | "reduce" if is_vector || is_set || is_dict => I64_TYPE,
+        // any/all always return bool (represented as I64)
+        "any" | "all" if is_vector || is_set || is_dict => I64_TYPE,
         // forEach → void
         "for_each" | "each" if is_vector || is_set || is_dict => UNIT_TYPE,
         // reversed/unique → same collection
@@ -1679,15 +1726,17 @@ fn infer_collection_method_return_type(
         }
         "unwrap_err" if type_name.starts_with("Result__") => {
             // unwrap_err returns the Err type (E from Result[T, E])
+            // Parse from the right: try stripping known Error type suffixes
             let rest = &type_name["Result__".len()..];
-            let parts: Vec<&str> = rest.splitn(2, "__").collect();
-            if parts.len() > 1 {
-                ctx.lookup_type_by_name(parts[1])
-                    .or_else(|| ctx.type_mapper.lookup_named(parts[1]))
-                    .unwrap_or(I64_TYPE)
-            } else {
-                I64_TYPE
-            }
+            let err_name = ["__Str", "__int64_t", "__bool", "__double"].iter()
+                .find_map(|suffix| rest.strip_suffix(suffix).map(|_| &suffix[2..]))
+                .unwrap_or_else(|| {
+                    // Fallback: split at last __ separator
+                    rest.rfind("__").map(|pos| &rest[pos + 2..]).unwrap_or(rest)
+                });
+            ctx.lookup_type_by_name(err_name)
+                .or_else(|| ctx.type_mapper.lookup_named(err_name))
+                .unwrap_or(I64_TYPE)
         }
         _ => UNIT_TYPE,
     }
@@ -2242,5 +2291,33 @@ fn resolve_inner_type(ctx: &mut LoweringContext, inner_name: &str) -> TypeId {
             I64_TYPE
         }
     }
+}
+
+/// Extract the element TypeId from a collection type name like "Vector__Str", "Set__int64_t".
+/// Returns None if the type name doesn't match a known collection pattern.
+fn extract_elem_type_id_from_type_name(ctx: &LoweringContext, type_name: &str) -> Option<TypeId> {
+    let elem_str = if let Some(rest) = type_name.strip_prefix("Vector__") {
+        Some(rest)
+    } else if let Some(rest) = type_name.strip_prefix("Set__") {
+        Some(rest)
+    } else if let Some(rest) = type_name.strip_prefix("HashSet__") {
+        Some(rest)
+    } else {
+        // For Dict/HashMap, element type depends on the method context.
+        // Dict filter closure takes (key, value), which is more complex.
+        // Skip for now — Dict closures with explicit types work fine.
+        None
+    };
+    elem_str.and_then(|elem| {
+        // Check primitive types first
+        match elem {
+            "int64_t" => Some(I64_TYPE),
+            "double" => Some(F64_TYPE),
+            "bool" => Some(BOOL_TYPE),
+            "Str" => Some(ctx.type_mapper.str_type),
+            _ => ctx.lookup_type_by_name(elem)
+                .or_else(|| ctx.type_mapper.lookup_named(elem)),
+        }
+    })
 }
 

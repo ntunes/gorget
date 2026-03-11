@@ -1,0 +1,117 @@
+# Advanced Vector method tests: find, count, zip edge cases, reduce edge cases, flat_map edge cases
+from std.collections import Vector
+
+Vector[int] triple(int x):
+    Vector[int] r = Vector[int]()
+    r.push(x)
+    r.push(x * 2)
+    r.push(x * 3)
+    return r
+
+void main():
+    # --- Setup ---
+    Vector[int] nums = Vector[int]()
+    nums.push(10)
+    nums.push(25)
+    nums.push(30)
+    nums.push(42)
+    nums.push(7)
+
+    Vector[int] empty = Vector[int]()
+
+    # === find(predicate) ===
+    # find first element > 20
+    Option[int] found = nums.find((int x): x > 20)
+    print(f"{found.unwrap()}")
+
+    # find first even element
+    Option[int] first_even = nums.find((int x): x % 2 == 0)
+    print(f"{first_even.unwrap()}")
+
+    # find with no match
+    Option[int] no_match = nums.find((int x): x > 100)
+    print(f"{no_match.is_none()}")
+
+    # find on empty vector
+    Option[int] empty_find = empty.find((int x): x > 0)
+    print(f"{empty_find.is_none()}")
+
+    # === count(predicate) ===
+    # count elements > 20
+    int gt20 = nums.count((int x): x > 20)
+    print(f"{gt20}")
+
+    # count even elements
+    int even_count = nums.count((int x): x % 2 == 0)
+    print(f"{even_count}")
+
+    # count with no match
+    int zero_count = nums.count((int x): x > 100)
+    print(f"{zero_count}")
+
+    # count on empty vector
+    int empty_count = empty.count((int x): x > 0)
+    print(f"{empty_count}")
+
+    # count all match
+    int all_positive = nums.count((int x): x > 0)
+    print(f"{all_positive}")
+
+    # === zip edge cases ===
+    # zip with empty vector
+    Vector[int] a = Vector[int]()
+    a.push(1)
+    a.push(2)
+    a.push(3)
+    Vector[(int, int)] zip_empty = a.zip(empty)
+    print(f"{zip_empty.len()}")
+
+    # zip two empty vectors
+    Vector[(int, int)] both_empty = empty.zip(empty)
+    print(f"{both_empty.len()}")
+
+    # === reduce edge cases ===
+    # reduce with multiplication
+    Vector[int] factors = Vector[int]()
+    factors.push(2)
+    factors.push(3)
+    factors.push(5)
+    int product = factors.reduce((int a, int b): a * b)
+    print(f"{product}")
+
+    # reduce single element
+    Vector[int] single = Vector[int]()
+    single.push(42)
+    int single_reduced = single.reduce((int a, int b): a + b)
+    print(f"{single_reduced}")
+
+    # reduce to find min (subtraction trick: reduce with custom logic)
+    Vector[int] vals = Vector[int]()
+    vals.push(3)
+    vals.push(1)
+    vals.push(9)
+    vals.push(7)
+    # reduce sum to verify multi-element reduce
+    int sum_vals = vals.reduce((int a, int b): a + b)
+    print(f"{sum_vals}")
+
+    # === flat_map edge cases ===
+    # flat_map with triple expansion
+    Vector[int] src = Vector[int]()
+    src.push(1)
+    src.push(10)
+    Vector[int] expanded = src.flat_map((int x): triple(x))
+    print(f"{expanded.len()}")
+    for val in expanded:
+        print(f"{val}")
+
+    # flat_map on empty vector
+    Vector[int] empty_flat = empty.flat_map((int x): triple(x))
+    print(f"{empty_flat.len()}")
+
+    # flat_map returning empty vectors
+    Vector[int] zeros = Vector[int]()
+    zeros.push(1)
+    zeros.push(2)
+    Vector[int] flat_empty = zeros.flat_map((int x): Vector[int]())
+    print(f"{flat_empty.len()}")
