@@ -13,6 +13,7 @@ use super::super::exprs::{
     emit_shared_mutex_lock_get, emit_shared_mutex_lock_set,
     atomic_type_name_for, emit_atomic_load, emit_atomic_store,
     emit_rwlock_write_get, emit_rwlock_write_set, emit_rwlock_write_finish,
+    try_resolve_field_place,
 };
 
 /// Lower an assignment.
@@ -253,12 +254,25 @@ pub(super) fn lower_index_assign(
     index: &Spanned<Expr>,
     value: &Spanned<Expr>,
 ) {
-    let obj = lower_expr(ctx, builder, object);
+    // When the object is a struct field access (e.g. self.dict_field[key] = val),
+    // resolve the field to a Place in-place to avoid copying the Dict struct.
+    // This ensures hash table resizes and metadata updates propagate to the original.
+    let (obj, resolved_field_type) = if let Expr::FieldAccess { object: inner_obj, field } = &object.node {
+        if let Some((field_place, field_type)) = try_resolve_field_place(ctx, builder, inner_obj, &field.node) {
+            (Operand::Copy(field_place), Some(field_type))
+        } else {
+            (lower_expr(ctx, builder, object), None)
+        }
+    } else {
+        (lower_expr(ctx, builder, object), None)
+    };
     let idx = lower_expr(ctx, builder, index);
     let val = lower_expr(ctx, builder, value);
 
-    // Determine the receiver type to dispatch correctly
-    let obj_type = infer_operand_type_full(ctx, &obj, builder);
+    // Determine the receiver type to dispatch correctly.
+    // Use the resolved field type if we resolved through a field access,
+    // since infer_operand_type_full doesn't walk projections.
+    let obj_type = resolved_field_type.unwrap_or_else(|| infer_operand_type_full(ctx, &obj, builder));
     let type_name = ctx.type_name_for_id(obj_type).unwrap_or("").to_string();
     let is_vector = type_name.starts_with("Vector__") || type_name == "GorgetArray";
     let is_dict = type_name.starts_with("Dict__") || type_name.starts_with("HashMap__")
@@ -548,5 +562,93 @@ pub(super) fn lower_compound_assign(
             let tmp = builder.bin_op(gir_op, value_type, cur_val, rhs);
             builder.global_assign(name.clone(), FunctionBuilder::copy(tmp));
         }
+    } else if let Expr::FieldAccess { object, field } = &target.node {
+        // Compound assign on struct field: obj.field OP= val
+        // Desugar to: read field → compute → write field back
+        if let Some((field_place, field_type)) = try_resolve_field_place(ctx, builder, object, &field.node) {
+            // Read current field value
+            let cur = builder.add_local(field_type, None);
+            builder.assign(Place::local(cur), Operand::Copy(field_place.clone()));
+
+            let rhs = lower_expr(ctx, builder, value);
+
+            // String concatenation: field += str → gorget_str_cat
+            let is_string = field_type == ctx.type_mapper.str_type
+                || field_type == ctx.type_mapper.owned_string_type;
+            if is_string && matches!(op, ast::BinaryOp::Add) {
+                let owned_type = ctx.type_mapper.owned_string_type;
+                let tmp = builder.call_extern(
+                    "gorget_str_cat",
+                    vec![FunctionBuilder::copy(cur), rhs],
+                    owned_type,
+                );
+                emit_field_drop_if_needed(ctx, builder, &field_place, field_type);
+                builder.assign(field_place, FunctionBuilder::copy(tmp));
+                return;
+            }
+
+            // Check for operator overload on Named types
+            let overload_method = match op {
+                ast::BinaryOp::Add => Some("add"),
+                ast::BinaryOp::Sub => Some("sub"),
+                ast::BinaryOp::Mul => Some("mul"),
+                ast::BinaryOp::Div => Some("div"),
+                ast::BinaryOp::Rem => Some("rem"),
+                ast::BinaryOp::Mod => Some("mod"),
+                _ => None,
+            }.and_then(|method| {
+                if let Some(GirType::Named(type_name)) = ctx.type_registry.get(field_type).cloned() {
+                    let mangled = format!("{type_name}__{method}");
+                    let has_method = ctx.fn_sigs.contains_key(&mangled)
+                        || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{type_name}__{method}")));
+                    if has_method {
+                        let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
+                            mangled
+                        } else {
+                            ctx.fn_sigs.keys()
+                                .find(|k| k.ends_with(&format!("_for_{type_name}__{method}")))
+                                .cloned()
+                                .unwrap_or(mangled)
+                        };
+                        Some(effective_name)
+                    } else { None }
+                } else { None }
+            });
+
+            let result = if let Some(effective_name) = overload_method {
+                // Borrow lhs for self parameter
+                let ptr_type = ctx.register_ptr_type(field_type);
+                let ptr_local = builder.add_local(ptr_type, None);
+                builder.emit_borrow(ptr_local, Place::local(cur));
+                builder.call(effective_name, vec![FunctionBuilder::copy(ptr_local), rhs], field_type)
+            } else {
+                let gir_op = compound_op_to_gir(op);
+                builder.bin_op(gir_op, field_type, FunctionBuilder::copy(cur), rhs)
+            };
+            builder.assign(field_place, FunctionBuilder::copy(result));
+        }
+    }
+    // Note: Expr::Index compound assign (obj[i] += val) not yet implemented.
+    // Workaround: obj[i] = obj[i] + val
+}
+
+/// Map compound assignment operator to GIR binary operator.
+fn compound_op_to_gir(op: ast::BinaryOp) -> BinOp {
+    match op {
+        ast::BinaryOp::Add => BinOp::Add,
+        ast::BinaryOp::Sub => BinOp::Sub,
+        ast::BinaryOp::Mul => BinOp::Mul,
+        ast::BinaryOp::Div => BinOp::Div,
+        ast::BinaryOp::Rem => BinOp::Rem,
+        ast::BinaryOp::Mod => BinOp::Mod,
+        ast::BinaryOp::AddWrap => BinOp::AddWrap,
+        ast::BinaryOp::SubWrap => BinOp::SubWrap,
+        ast::BinaryOp::MulWrap => BinOp::MulWrap,
+        ast::BinaryOp::BitAnd => BinOp::BitAnd,
+        ast::BinaryOp::BitOr => BinOp::BitOr,
+        ast::BinaryOp::BitXor => BinOp::BitXor,
+        ast::BinaryOp::Shl => BinOp::Shl,
+        ast::BinaryOp::Shr => BinOp::Shr,
+        _ => BinOp::Add,
     }
 }
