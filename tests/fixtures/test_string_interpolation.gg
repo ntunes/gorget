@@ -1,0 +1,66 @@
+struct Point:
+    int x
+    int y
+
+void main():
+    # 1. Simple variable interpolation
+    str name = "Alice"
+    print(f"Hello {name}")
+
+    # 2. Expression interpolation
+    int x = 10
+    print(f"double = {x * 2}")
+    print(f"sum = {x + 5}")
+
+    # 3. Method call in interpolation
+    str s = "hello"
+    print(f"len = {s.len()}")
+
+    # 4. Multiple interpolations in one string
+    str a = "foo"
+    str b = "bar"
+    print(f"{a} and {b}")
+
+    # 5. Bool interpolation
+    bool flag = true
+    print(f"flag = {flag}")
+
+    # 6. Float interpolation
+    float f = 2.5
+    print(f"val = {f}")
+
+    # 7. Empty string interpolation
+    str empty = ""
+    print(f"empty='{empty}'")
+
+    # 8. Int interpolation with zero
+    int z = 0
+    print(f"zero = {z}")
+
+    # 9. Interpolation in concatenated strings
+    int n = 42
+    str result = "prefix " + f"{n}" + " suffix"
+    print(result)
+
+    # 10. Struct field in interpolation
+    Point p = Point(3, 7)
+    print(f"x={p.x} y={p.y}")
+
+    # 11. Nested expressions
+    int v = 5
+    print(f"calc = {v * v + 1}")
+
+    # 12. Adjacent text and interpolation
+    str who = "world"
+    print(f"[{who}]")
+
+    # 13. Only interpolation, no surrounding text
+    int solo = 99
+    print(f"{solo}")
+
+    # 14. Interpolation with negative expression
+    int neg = 10
+    print(f"neg = {neg - 20}")
+
+    # 15. Plain string (no interpolation) with braces
+    print("{literal braces}")

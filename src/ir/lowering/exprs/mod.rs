@@ -237,8 +237,8 @@ fn lower_expr_inner(
         }
 
         // -- If expression (ternary) --
-        Expr::If { condition, then_branch, else_branch, .. } => {
-            lower_if_expr(ctx, builder, condition, then_branch, else_branch.as_deref())
+        Expr::If { condition, then_branch, elif_branches, else_branch, .. } => {
+            lower_if_expr(ctx, builder, condition, then_branch, elif_branches, else_branch.as_deref())
         }
 
         // -- P3.2: Match expression --
@@ -1629,14 +1629,14 @@ fn lower_if_expr(
     builder: &mut FunctionBuilder,
     condition: &Spanned<Expr>,
     then_branch: &Spanned<Expr>,
+    elif_branches: &[(Spanned<Expr>, Spanned<Expr>)],
     else_branch: Option<&Spanned<Expr>>,
 ) -> Operand {
     let cond = lower_expr(ctx, builder, condition);
 
-    // Allocate a result local
-    let result_type = infer_operand_type_full(ctx, &cond, builder);
-    let _ = result_type;
-    let result_id = builder.add_local(I64_TYPE, None); // placeholder type
+    // Allocate result local — we use I64_TYPE initially, then retroactively fix
+    // the type after lowering the then-branch so the C backend sees the correct type.
+    let result_id = builder.add_local(I64_TYPE, None);
 
     let then_bb = builder.new_block();
     let else_bb = builder.new_block();
@@ -1644,12 +1644,36 @@ fn lower_if_expr(
 
     builder.branch(cond, then_bb, else_bb);
 
+    // Then branch
     builder.switch_to(then_bb);
     let then_val = lower_expr(ctx, builder, then_branch);
+    // Fix the result local's type to match the actual then-branch type
+    let result_type = infer_operand_type_full(ctx, &then_val, builder);
+    if result_type != I64_TYPE {
+        builder.set_local_type(result_id, result_type);
+    }
     builder.assign(Place::local(result_id), then_val);
     builder.jump(merge_bb);
 
-    builder.switch_to(else_bb);
+    // Elif branches — chain as nested if-else in the else block
+    let mut current_else_bb = else_bb;
+    for (elif_cond, elif_body) in elif_branches {
+        builder.switch_to(current_else_bb);
+        let elif_cond_val = lower_expr(ctx, builder, elif_cond);
+        let elif_then_bb = builder.new_block();
+        let next_else_bb = builder.new_block();
+        builder.branch(elif_cond_val, elif_then_bb, next_else_bb);
+
+        builder.switch_to(elif_then_bb);
+        let elif_val = lower_expr(ctx, builder, elif_body);
+        builder.assign(Place::local(result_id), elif_val);
+        builder.jump(merge_bb);
+
+        current_else_bb = next_else_bb;
+    }
+
+    // Final else branch
+    builder.switch_to(current_else_bb);
     if let Some(else_expr) = else_branch {
         let else_val = lower_expr(ctx, builder, else_expr);
         builder.assign(Place::local(result_id), else_val);

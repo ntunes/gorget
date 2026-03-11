@@ -74,6 +74,12 @@ impl FunctionBuilder {
         id
     }
 
+    /// Update the type of an existing local (e.g., after discovering the actual
+    /// type from lowering a branch of an if-expression).
+    pub fn set_local_type(&mut self, id: LocalId, type_id: TypeId) {
+        self.locals[id.0 as usize].type_id = type_id;
+    }
+
     // ---- Block management ----
 
     /// Create a new empty basic block and return its BlockId.

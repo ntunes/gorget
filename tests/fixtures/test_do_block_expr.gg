@@ -1,0 +1,91 @@
+void main():
+    # 1. Basic do-block returning int
+    int x = do:
+        42
+    print(x)
+
+    # 2. Do-block with computation
+    int y = do:
+        int a = 10
+        int b = 20
+        a + b
+    print(y)
+
+    # 3. Do-block with more computation steps
+    int z = do:
+        int first = 3
+        int second = first * first
+        int third = second + 1
+        third
+    print(z)
+
+    # 4. Do-block with if/else inside
+    int grade = do:
+        int score = 85
+        if score >= 90:
+            4
+        else:
+            if score >= 80:
+                3
+            else:
+                2
+    print(grade)
+
+    # 5. Do-block with loop inside
+    int total = do:
+        int sum = 0
+        int i = 1
+        while i <= 5:
+            sum = sum + i
+            i = i + 1
+        sum
+    print(total)
+
+    # 6. Nested do-blocks
+    int nested = do:
+        int a = do:
+            int p = 3
+            p * p
+        int b = do:
+            int q = 4
+            q * q
+        a + b
+    print(nested)
+
+    # 7. Do-block returning a string value
+    str msg = do:
+        str greeting = "hello"
+        str name = "world"
+        greeting + " " + name
+    print(msg)
+
+    # 8. Do-block with match as tail
+    int picked = do:
+        int val = 3
+        match val:
+            case 1:
+                10
+            case 2:
+                20
+            case 3:
+                30
+            else:
+                0
+    print(picked)
+
+    # 9. Do-block assigned to variable used in expression
+    int doubled = do:
+        int base = 7
+        base * 2
+    int result = doubled + 3
+    print(result)
+
+    # 10. Do-block with boolean logic
+    bool flag = do:
+        int a = 10
+        int b = 20
+        a < b
+    if flag:
+        print("true")
+    else:
+        print("false")

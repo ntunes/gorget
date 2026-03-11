@@ -4736,6 +4736,29 @@ fn test_fstrings() {
 }
 
 #[test]
+fn test_string_interpolation() {
+    run_gg(
+        "test_string_interpolation.gg",
+        "Hello Alice\n\
+         double = 20\n\
+         sum = 15\n\
+         len = 5\n\
+         foo and bar\n\
+         flag = true\n\
+         val = 2.500000\n\
+         empty=''\n\
+         zero = 0\n\
+         prefix 42 suffix\n\
+         x=3 y=7\n\
+         calc = 26\n\
+         [world]\n\
+         99\n\
+         neg = -10\n\
+         {literal braces}",
+    );
+}
+
+#[test]
 fn fstring_format() {
     run_gg(
         "fstring_format.gg",
@@ -10436,6 +10459,35 @@ done",
 }
 
 #[test]
+fn test_named_scope() {
+    run_gg(
+        "test_named_scope.gg",
+        "\
+30
+0
+2
+4
+6
+16
+100
+200
+300
+yes
+0
+1
+2
+35
+15
+5
+hello world
+6
+two
+trivial
+done",
+    );
+}
+
+#[test]
 fn async_param_across_await() {
     run_gg(
         "async_param_across_await.gg",
@@ -13042,7 +13094,10 @@ fn test_if_expressions() {
 20
 30
 10
--1",
+-1
+yes
+no
+pass",
     );
 }
 
@@ -13135,5 +13190,128 @@ mapped none is none
 20
 -1
 done",
+    );
+}
+
+#[test]
+fn test_do_block_expr() {
+    run_gg(
+        "test_do_block_expr.gg",
+        "\
+42
+30
+10
+3
+15
+25
+hello world
+30
+17
+true",
+    );
+}
+
+#[test]
+fn test_early_return() {
+    run_gg(
+        "test_early_return.gg",
+        "\
+7
+3
+0
+4
+-1
+2
+-1
+negative
+zero
+small
+medium
+large
+both positive
+x positive, y not
+y positive, x not
+both non-positive
+1
+true
+Hello, stranger!
+Hello, Alice!
+6
+positive: 42",
+    );
+}
+
+#[test]
+fn test_vector_sort_methods() {
+    run_gg(
+        "test_vector_sort_methods.gg",
+        "\
+1
+3
+4
+5
+8
+1
+2
+3
+1
+2
+3
+4
+5
+42
+0
+1
+3
+7
+9
+9
+3
+7
+1
+40
+30
+20
+10
+3
+2
+1
+1
+2
+3
+3
+1
+2
+3
+0
+1
+7
+0
+2
+4
+-1
+-1
+-1
+apple
+banana
+cherry
+date
+alpha
+mango
+zebra
+zebra
+0
+3
+7
+-10
+-5
+-1
+99
+0
+5
+4
+3
+2
+1",
     );
 }

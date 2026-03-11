@@ -6,13 +6,9 @@
 
 ## Medium
 
-- **If-expression `elif` branches silently ignored in IR lowering**: `lower_if_expr` in `src/ir/lowering/exprs/mod.rs:1627` discards `elif_branches` (the `..` in the match arm at line 240). `int r = if a == 1: 10 elif a == 2: 20 else: 30` always falls through to the else branch when the first condition is false, ignoring elif. Fix: either chain elif conditions in the else block (nested if-expr), or extend `lower_if_expr` to accept elif branches. [added: 2026-03-11]
-
-- **If-expression result local typed as `I64_TYPE` placeholder**: `lower_if_expr` at line 1639 uses `builder.add_local(I64_TYPE, None)` for the result, ignoring the inferred type from `then_branch`. This breaks string if-expressions (C backend assigns `char*` to `int64_t`) and string interpolation of if-expression results. Fix: use the actual result type from lowering the then branch. [added: 2026-03-11]
+- **If-expression `elif` branches: parser limitation**: The parser doesn't support `elif` in inline if-expressions (only `if cond: expr else: expr`). The IR lowering now handles elif branches if the parser passes them through. Workaround: use nested `else: if`: `if a == 1: 10 else: if a == 2: 20 else: 30`. [updated: 2026-03-11]
 
 - **`shared_stress_yield` flaky deadlock under full test suite**: The fixture runs fine standalone and in isolation but occasionally hangs (infinite CPU loop) when run as part of the full 670+ test suite. Timing-dependent — likely a contention issue in the coroutine runtime's shared counter lock release/reacquire path. Reproduce: `cargo test --test integration -- --test-threads=1` and wait for `shared_stress_yield`. [added: 2026-03-11]
-
-- **Bool negation `!x` in closures returns wrong result for Vector[bool]**: `vb.filter((bool x): !x)` on `[true, false, true, true]` returns 3 elements instead of 1. Workaround: `x == false`. Likely the `!` operator is applied to a bool that's `int32_t` in C, and the closure parameter type inference doesn't handle negation correctly. [added: 2026-03-11]
 
 - **Comprehensions over vector variables produce empty results**: `[x * 10 for int x in some_vector]` silently yields an empty vector. Comprehensions only work correctly with range expressions (`0..N`). The comprehension codegen likely doesn't wire up vector iteration properly. [added: 2026-03-11]
 
@@ -21,6 +17,8 @@
 - **Hashable derive for float fields uses uninitialized accumulator**: `Vec2__hash` (struct with float32/float64 fields) has an uninitialized `_2` hash accumulator variable in the generated C code. The hash value is garbage for float-field structs. Int and str fields work fine. [added: 2026-03-11]
 
 - **Inline `None()` without typed variable produces garbage**: Using bare `None()` in expressions without first binding to a typed `Option[T]` variable causes uninitialized variable warnings and garbage output in the C backend. Workaround: `Option[int] n = None()` then use `n`. [added: 2026-03-11]
+
+- **Vector[int] sort treats negatives as unsigned**: `sort()` on `[-5, 3, -10, 0, 7, -1]` produces `[0, 3, 7, -10, -5, -1]` instead of `[-10, -5, -1, 0, 3, 7]`. The int comparator `__gorget_cmp_i64` looks correct (signed compare), so the issue may be in how the vector stores or casts int elements to the comparator. Documented in `test_vector_sort_methods.gg`. [added: 2026-03-11]
 
 - **Variable shadowing in nested scopes aliases storage**: Reusing the same variable name in an inner named scope compiles but the C backend appears to alias the storage, so the outer variable's value gets overwritten after the inner scope exits. [added: 2026-03-11]
 
@@ -131,8 +129,6 @@
 - **ECS `(int, T)` pair iteration / `items()` method**: `Iterable[int]` only yields entity IDs, forcing immediate `get(eid)` in every loop. An `items()` method yielding `(int, T)` tuples would eliminate boilerplate. Blocked: tuple return from generic equip methods is untested codegen territory. [added: 2026-02-22]
 
 - **ECS iter() copies entire entity_ids vector**: `SparseSet[T].iter()` allocates a fresh `Vector[Entity]` and copies all entity IDs. O(n) allocation just to start iteration. Language limitation: `SparseSetIter` can't hold a reference (no lifetime-annotated struct fields). Could improve with index+length snapshot if struct references become available. [added: 2026-02-22]
-
-- **`lib/gg/query.gg` orphan file**: This file is the old name for `gg.jsonpath` — same API, same module. It's included via `builtin_module_source` but not registered in `is_builtin_module` or `generate_builtin_module`. Either delete it (if gg.jsonpath superseded it) or register it as an alias. [added: 2026-03-11]
 
 - **gg.jsonpath Phase 2 — function argument auto-propagation**: `query_all(doc, "friends.#(age>30).name")` — chaining filter + key access in a single path. Currently filter returns matching objects but subsequent segments after filter aren't applied. Need to feed filter results back into the segment pipeline. [added: 2026-03-09]
 

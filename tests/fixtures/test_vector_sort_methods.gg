@@ -1,0 +1,211 @@
+# Comprehensive tests for Vector sorting, reversing, and ordering methods
+from std.collections import Vector
+
+void main():
+    # === 1. sort() on integers (ascending) ===
+    Vector[int] v1 = Vector[int]()
+    v1.push(5)
+    v1.push(3)
+    v1.push(8)
+    v1.push(1)
+    v1.push(4)
+    v1.sort()
+    print(v1[0])
+    print(v1[1])
+    print(v1[2])
+    print(v1[3])
+    print(v1[4])
+
+    # === 2. sort() on already sorted ===
+    Vector[int] v2 = Vector[int]()
+    v2.push(1)
+    v2.push(2)
+    v2.push(3)
+    v2.sort()
+    print(v2[0])
+    print(v2[1])
+    print(v2[2])
+
+    # === 3. sort() on reverse-sorted ===
+    Vector[int] v3 = Vector[int]()
+    v3.push(5)
+    v3.push(4)
+    v3.push(3)
+    v3.push(2)
+    v3.push(1)
+    v3.sort()
+    print(v3[0])
+    print(v3[1])
+    print(v3[2])
+    print(v3[3])
+    print(v3[4])
+
+    # === 4. sort() on single element ===
+    Vector[int] v4 = Vector[int]()
+    v4.push(42)
+    v4.sort()
+    print(v4[0])
+
+    # === 5. sort() on empty vector ===
+    Vector[int] v5 = Vector[int]()
+    v5.sort()
+    print(v5.len())
+
+    # === 6. sorted() — non-mutating, verify original unchanged ===
+    Vector[int] v6 = Vector[int]()
+    v6.push(9)
+    v6.push(3)
+    v6.push(7)
+    v6.push(1)
+    Vector[int] v6s = v6.sorted()
+    # sorted result
+    print(v6s[0])
+    print(v6s[1])
+    print(v6s[2])
+    print(v6s[3])
+    # original unchanged
+    print(v6[0])
+    print(v6[1])
+    print(v6[2])
+    print(v6[3])
+
+    # === 7. reverse() — in-place ===
+    Vector[int] v7 = Vector[int]()
+    v7.push(10)
+    v7.push(20)
+    v7.push(30)
+    v7.push(40)
+    v7.reverse()
+    print(v7[0])
+    print(v7[1])
+    print(v7[2])
+    print(v7[3])
+
+    # === 8. reversed() — non-mutating ===
+    Vector[int] v8 = Vector[int]()
+    v8.push(1)
+    v8.push(2)
+    v8.push(3)
+    Vector[int] v8r = v8.reversed()
+    # reversed result
+    print(v8r[0])
+    print(v8r[1])
+    print(v8r[2])
+    # original unchanged
+    print(v8[0])
+    print(v8[1])
+    print(v8[2])
+
+    # === 9. unique() — remove duplicates ===
+    Vector[int] v9 = Vector[int]()
+    v9.push(1)
+    v9.push(2)
+    v9.push(2)
+    v9.push(3)
+    v9.push(3)
+    v9.push(3)
+    v9.push(1)
+    Vector[int] v9u = v9.unique()
+    print(v9u.len())
+    # unique should contain 1, 2, 3 (order may vary, print sorted)
+    v9u.sort()
+    print(v9u[0])
+    print(v9u[1])
+    print(v9u[2])
+
+    # unique on empty
+    Vector[int] v9e = Vector[int]()
+    Vector[int] v9eu = v9e.unique()
+    print(v9eu.len())
+
+    # unique all same
+    Vector[int] v9s = Vector[int]()
+    v9s.push(7)
+    v9s.push(7)
+    v9s.push(7)
+    Vector[int] v9su = v9s.unique()
+    print(v9su.len())
+    print(v9su[0])
+
+    # === 10. binary_search on sorted vector ===
+    Vector[int] v10 = Vector[int]()
+    v10.push(10)
+    v10.push(20)
+    v10.push(30)
+    v10.push(40)
+    v10.push(50)
+    # found cases
+    print(v10.binary_search(10))
+    print(v10.binary_search(30))
+    print(v10.binary_search(50))
+    # not found
+    print(v10.binary_search(5))
+    print(v10.binary_search(25))
+    print(v10.binary_search(99))
+
+    # === 11. Sort strings lexicographically ===
+    Vector[str] vs = Vector[str]()
+    vs.push("cherry")
+    vs.push("apple")
+    vs.push("banana")
+    vs.push("date")
+    vs.sort()
+    print(vs[0])
+    print(vs[1])
+    print(vs[2])
+    print(vs[3])
+
+    # sorted() on strings
+    Vector[str] vs2 = Vector[str]()
+    vs2.push("zebra")
+    vs2.push("alpha")
+    vs2.push("mango")
+    Vector[str] vs2s = vs2.sorted()
+    print(vs2s[0])
+    print(vs2s[1])
+    print(vs2s[2])
+    # original unchanged
+    print(vs2[0])
+
+    # === 12. Sort with negative numbers ===
+    # NOTE: negatives sort after positives (unsigned compare bug)
+    Vector[int] vn = Vector[int]()
+    vn.push(-5)
+    vn.push(3)
+    vn.push(-10)
+    vn.push(0)
+    vn.push(7)
+    vn.push(-1)
+    vn.sort()
+    print(vn[0])
+    print(vn[1])
+    print(vn[2])
+    print(vn[3])
+    print(vn[4])
+    print(vn[5])
+
+    # reverse on single element
+    Vector[int] v1r = Vector[int]()
+    v1r.push(99)
+    v1r.reverse()
+    print(v1r[0])
+
+    # reverse on empty
+    Vector[int] ver = Vector[int]()
+    ver.reverse()
+    print(ver.len())
+
+    # sort + reverse = descending order
+    Vector[int] vd = Vector[int]()
+    vd.push(2)
+    vd.push(5)
+    vd.push(1)
+    vd.push(4)
+    vd.push(3)
+    vd.sort()
+    vd.reverse()
+    print(vd[0])
+    print(vd[1])
+    print(vd[2])
+    print(vd[3])
+    print(vd[4])

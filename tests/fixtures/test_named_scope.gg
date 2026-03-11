@@ -1,0 +1,98 @@
+int compute(int x):
+    int result = 0
+    work:
+        int tmp = x * 3
+        result = tmp + 1
+    return result
+
+void main():
+    # 1. Named scope with mutation of outer variable
+    int total = 0
+    accumulate:
+        total = total + 10
+        total = total + 20
+    print(total)
+
+    # 2. Named scope inside a loop
+    for i in 0..3:
+        step:
+            int doubled = i * 2
+            print(doubled)
+
+    # 3. Loop inside a named scope
+    processing:
+        int sum = 0
+        for i in 1..4:
+            sum = sum + i
+        print(sum)
+
+    # 4. Named scope in a function
+    int val = compute(5)
+    print(val)
+
+    # 5. Sequential named scopes reusing variable names
+    first:
+        int n = 100
+        print(n)
+    second:
+        int n = 200
+        print(n)
+    third:
+        int n = 300
+        print(n)
+
+    # 6. Named scope with conditional logic
+    int flag = 1
+    decide:
+        if flag == 1:
+            print("yes")
+        else:
+            print("no")
+
+    # 7. Named scope with while loop
+    counting:
+        int c = 0
+        while c < 3:
+            print(c)
+            c = c + 1
+
+    # 8. Nested named scopes accessing outer scope variables
+    int base = 5
+    layer1:
+        int add1 = base + 10
+        layer2:
+            int add2 = add1 + 20
+            print(add2)
+        print(add1)
+    print(base)
+
+    # 9. Named scope with string operations
+    formatting:
+        str greeting = "hello"
+        str name = "world"
+        print(f"{greeting} {name}")
+
+    # 10. Named scope after loop
+    int last = 0
+    for k in 1..4:
+        last = k
+    cleanup:
+        int doubled = last * 2
+        print(doubled)
+
+    # 11. Named scope with match
+    int code = 2
+    dispatch:
+        match code:
+            case 1:
+                print("one")
+            case 2:
+                print("two")
+            else:
+                print("other")
+
+    # 12. Empty-ish named scope (just a print)
+    trivial:
+        print("trivial")
+
+    print("done")
