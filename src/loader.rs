@@ -66,6 +66,9 @@ pub struct ModuleLoader {
     /// Next byte offset for module span uniqueness. Each module is parsed at
     /// a cumulative offset so that all span-keyed maps work across modules.
     next_offset: usize,
+    /// The entry file's parent directory, used as a fallback for cross-directory
+    /// imports in multi-file projects (e.g. renderer/ importing from client/).
+    entry_base_dir: Option<PathBuf>,
 }
 
 /// Map a dotted import path to a filesystem path.
@@ -112,6 +115,7 @@ impl ModuleLoader {
             load_stack: Vec::new(),
             dep_paths: HashMap::new(),
             next_offset: 0,
+            entry_base_dir: None,
         }
     }
 
@@ -122,6 +126,7 @@ impl ModuleLoader {
             load_stack: Vec::new(),
             dep_paths,
             next_offset: 0,
+            entry_base_dir: None,
         }
     }
 
@@ -156,6 +161,9 @@ impl ModuleLoader {
         // Collect imports from the entry module
         let imports = extract_imports(&entry_module);
         let base_dir = canonical.parent().unwrap().to_path_buf();
+
+        // Store entry base dir for cross-directory fallback resolution
+        self.entry_base_dir = Some(base_dir.clone());
 
         // Entry module has an empty logical path.
         results.push((canonical.clone(), Vec::new(), entry_source, entry_module));
@@ -218,10 +226,28 @@ impl ModuleLoader {
             }
         }
 
-        // Try local filesystem first
+        // Try local filesystem first (relative to importing file's directory)
         let file_path = resolve_import_path(base_dir, segments);
 
-        // If the local file doesn't exist, try package dependencies.
+        // If the local file doesn't exist, try the entry file's base directory
+        // as a fallback. This supports cross-directory imports in multi-file
+        // projects (e.g. renderer/backend.gg importing from client/view.gg).
+        let file_path = if !file_path.exists() {
+            if let Some(entry_dir) = &self.entry_base_dir {
+                let entry_path = resolve_import_path(entry_dir, segments);
+                if entry_path.exists() {
+                    entry_path
+                } else {
+                    file_path
+                }
+            } else {
+                file_path
+            }
+        } else {
+            file_path
+        };
+
+        // If the file still doesn't exist, try package dependencies.
         // The first segment of the import is the package name (e.g. `import mylib`
         // or `from mylib import foo`).
         let file_path = if !file_path.exists() {
