@@ -10297,6 +10297,187 @@ static int64_t gorget_metal_begin_frame(int64_t layer_h) {
     return gorget_metal_layer_next_drawable(layer_h);
 }
 
+// ── Autorelease Pool (per-frame memory management) ──────
+// Call push at frame start, pop at frame end. Drains autoreleased objects.
+
+static int64_t gorget_metal_autorelease_pool_push(void) {
+    // objc_autoreleasePoolPush returns an opaque token
+    extern void* objc_autoreleasePoolPush(void);
+    void* pool = objc_autoreleasePoolPush();
+    return (int64_t)(intptr_t)pool;
+}
+
+static void gorget_metal_autorelease_pool_pop(int64_t pool_h) {
+    extern void objc_autoreleasePoolPop(void* pool);
+    objc_autoreleasePoolPop((void*)(intptr_t)pool_h);
+}
+
+// ── Triple Buffering (dispatch semaphore) ────────────────
+
+#include <dispatch/dispatch.h>
+
+static int64_t gorget_metal_semaphore_create(int64_t value) {
+    dispatch_semaphore_t sem = dispatch_semaphore_create((long)value);
+    return (int64_t)(intptr_t)sem;
+}
+
+static void gorget_metal_semaphore_wait(int64_t sem_h) {
+    dispatch_semaphore_t sem = (dispatch_semaphore_t)(intptr_t)sem_h;
+    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+}
+
+static void gorget_metal_semaphore_signal(int64_t sem_h) {
+    dispatch_semaphore_t sem = (dispatch_semaphore_t)(intptr_t)sem_h;
+    dispatch_semaphore_signal(sem);
+}
+
+// addCompletedHandler: signals a dispatch semaphore when GPU finishes
+static void gorget_metal_command_buffer_on_complete(int64_t cb_h, int64_t sem_h) {
+    @autoreleasepool {
+        id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)(void*)(intptr_t)cb_h;
+        dispatch_semaphore_t sem = (dispatch_semaphore_t)(intptr_t)sem_h;
+        [cb addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull buffer) {
+            (void)buffer;
+            dispatch_semaphore_signal(sem);
+        }];
+    }
+}
+
+// ── Stencil Attachment ──────────────────────────────────
+
+static void gorget_metal_render_pass_set_stencil(int64_t desc_h, int64_t texture_h, int64_t load_action, int64_t store_action, int64_t clear_stencil) {
+    @autoreleasepool {
+        MTLRenderPassDescriptor* desc = (__bridge MTLRenderPassDescriptor*)(void*)(intptr_t)desc_h;
+        id<MTLTexture> tex = texture_h ? (__bridge id<MTLTexture>)(void*)(intptr_t)texture_h : nil;
+        desc.stencilAttachment.texture = tex;
+        desc.stencilAttachment.loadAction = (MTLLoadAction)load_action;
+        desc.stencilAttachment.storeAction = (MTLStoreAction)store_action;
+        desc.stencilAttachment.clearStencil = (uint32_t)clear_stencil;
+    }
+}
+
+static int64_t gorget_metal_create_render_pipeline_with_stencil(int64_t device_h, int64_t vert_fn_h, int64_t frag_fn_h, int64_t vert_desc_h, int64_t color_fmt, int64_t depth_fmt, int64_t stencil_fmt) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        id<MTLFunction> vert = (__bridge id<MTLFunction>)(void*)(intptr_t)vert_fn_h;
+        id<MTLFunction> frag = (__bridge id<MTLFunction>)(void*)(intptr_t)frag_fn_h;
+        MTLVertexDescriptor* vdesc = vert_desc_h ? (__bridge MTLVertexDescriptor*)(void*)(intptr_t)vert_desc_h : nil;
+
+        MTLRenderPipelineDescriptor* desc = [[MTLRenderPipelineDescriptor alloc] init];
+        desc.vertexFunction = vert;
+        desc.fragmentFunction = frag;
+        if (vdesc) desc.vertexDescriptor = vdesc;
+        desc.colorAttachments[0].pixelFormat = (MTLPixelFormat)color_fmt;
+        desc.depthAttachmentPixelFormat = (MTLPixelFormat)depth_fmt;
+        desc.stencilAttachmentPixelFormat = (MTLPixelFormat)stencil_fmt;
+
+        NSError* error = nil;
+        id<MTLRenderPipelineState> pso = [device newRenderPipelineStateWithDescriptor:desc error:&error];
+        [desc release];
+        if (error && !pso) {
+            fprintf(stderr, "Metal pipeline error: %s\n",
+                    [[error localizedDescription] UTF8String]);
+        }
+        return (int64_t)(intptr_t)pso;
+    }
+}
+
+// ── Depth Bias (shadow acne prevention) ─────────────────
+
+static void gorget_metal_encoder_set_depth_bias(int64_t enc_h, double depth_bias, double slope_scale, double clamp) {
+    @autoreleasepool {
+        id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)enc_h;
+        [enc setDepthBias:(float)depth_bias slopeScale:(float)slope_scale clamp:(float)clamp];
+    }
+}
+
+// ── Vertex-stage Texture/Sampler ────────────────────────
+
+static void gorget_metal_encoder_set_vertex_texture(int64_t enc_h, int64_t tex_h, int64_t index) {
+    @autoreleasepool {
+        id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLTexture> tex = (__bridge id<MTLTexture>)(void*)(intptr_t)tex_h;
+        [enc setVertexTexture:tex atIndex:(NSUInteger)index];
+    }
+}
+
+static void gorget_metal_encoder_set_vertex_sampler(int64_t enc_h, int64_t sampler_h, int64_t index) {
+    @autoreleasepool {
+        id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLSamplerState> sampler = (__bridge id<MTLSamplerState>)(void*)(intptr_t)sampler_h;
+        [enc setVertexSamplerState:sampler atIndex:(NSUInteger)index];
+    }
+}
+
+// ── Command Buffer Status/Error ─────────────────────────
+
+static int64_t gorget_metal_command_buffer_status(int64_t cb_h) {
+    @autoreleasepool {
+        id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)(void*)(intptr_t)cb_h;
+        return (int64_t)cb.status;
+    }
+}
+
+static Str gorget_metal_command_buffer_error(int64_t cb_h) {
+    @autoreleasepool {
+        id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)(void*)(intptr_t)cb_h;
+        NSError* error = cb.error;
+        if (!error) {
+            return (Str){ .data = NULL, .len = 0 };
+        }
+        const char* utf8 = [[error localizedDescription] UTF8String];
+        size_t len = strlen(utf8);
+        char* copy = (char*)GORGET_ALLOC(len + 1);
+        memcpy(copy, utf8, len + 1);
+        return (Str){ .data = copy, .len = len };
+    }
+}
+
+// ── MSAA Support ────────────────────────────────────────
+
+static int64_t gorget_metal_create_render_pipeline_msaa(int64_t device_h, int64_t vert_fn_h, int64_t frag_fn_h, int64_t vert_desc_h, int64_t color_fmt, int64_t depth_fmt, int64_t sample_count) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        id<MTLFunction> vert = (__bridge id<MTLFunction>)(void*)(intptr_t)vert_fn_h;
+        id<MTLFunction> frag = (__bridge id<MTLFunction>)(void*)(intptr_t)frag_fn_h;
+        MTLVertexDescriptor* vdesc = vert_desc_h ? (__bridge MTLVertexDescriptor*)(void*)(intptr_t)vert_desc_h : nil;
+
+        MTLRenderPipelineDescriptor* desc = [[MTLRenderPipelineDescriptor alloc] init];
+        desc.vertexFunction = vert;
+        desc.fragmentFunction = frag;
+        if (vdesc) desc.vertexDescriptor = vdesc;
+        desc.colorAttachments[0].pixelFormat = (MTLPixelFormat)color_fmt;
+        desc.depthAttachmentPixelFormat = (MTLPixelFormat)depth_fmt;
+        desc.sampleCount = (NSUInteger)sample_count;
+
+        NSError* error = nil;
+        id<MTLRenderPipelineState> pso = [device newRenderPipelineStateWithDescriptor:desc error:&error];
+        [desc release];
+        if (error && !pso) {
+            fprintf(stderr, "Metal MSAA pipeline error: %s\n",
+                    [[error localizedDescription] UTF8String]);
+        }
+        return (int64_t)(intptr_t)pso;
+    }
+}
+
+static int64_t gorget_metal_create_texture_2d_msaa(int64_t device_h, int64_t width, int64_t height, int64_t format, int64_t sample_count, int64_t usage, int64_t storage_mode) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        MTLTextureDescriptor* desc = [[MTLTextureDescriptor alloc] init];
+        desc.textureType = MTLTextureType2DMultisample;
+        desc.pixelFormat = (MTLPixelFormat)format;
+        desc.width = (NSUInteger)width;
+        desc.height = (NSUInteger)height;
+        desc.sampleCount = (NSUInteger)sample_count;
+        desc.usage = (MTLTextureUsage)usage;
+        desc.storageMode = (MTLStorageMode)storage_mode;
+        id<MTLTexture> tex = [device newTextureWithDescriptor:desc];
+        [desc release];
+        return (int64_t)(intptr_t)tex;
+    }
+}
+
 #endif /* __APPLE__ */
 "#;
 

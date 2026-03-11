@@ -2423,6 +2423,35 @@ fn gen_metal_module() -> Module {
     // ── Convenience: begin_frame wraps drawable+pass creation ──
     items.push(fn_item(extern_fn("metal_begin_frame", &[("layer", ty_int())], ty_int(), "gorget_metal_begin_frame")));
 
+    // ── Autorelease Pool (per-frame memory management) ───
+    items.push(fn_item(extern_fn("metal_autorelease_pool_push", &[], ty_int(), "gorget_metal_autorelease_pool_push")));
+    items.push(fn_item(extern_fn("metal_autorelease_pool_pop", &[("pool", ty_int())], ty_void(), "gorget_metal_autorelease_pool_pop")));
+
+    // ── Triple Buffering (dispatch semaphore) ────────────
+    items.push(fn_item(extern_fn("metal_semaphore_create", &[("value", ty_int())], ty_int(), "gorget_metal_semaphore_create")));
+    items.push(fn_item(extern_fn("metal_semaphore_wait", &[("sem", ty_int())], ty_void(), "gorget_metal_semaphore_wait")));
+    items.push(fn_item(extern_fn("metal_semaphore_signal", &[("sem", ty_int())], ty_void(), "gorget_metal_semaphore_signal")));
+    items.push(fn_item(extern_fn("metal_command_buffer_on_complete", &[("cmd_buf", ty_int()), ("sem", ty_int())], ty_void(), "gorget_metal_command_buffer_on_complete")));
+
+    // ── Stencil Attachment ────────────────────────────────
+    items.push(fn_item(extern_fn("metal_render_pass_set_stencil", &[("desc", ty_int()), ("texture", ty_int()), ("load_action", ty_int()), ("store_action", ty_int()), ("clear_stencil", ty_int())], ty_void(), "gorget_metal_render_pass_set_stencil")));
+    items.push(fn_item(extern_fn("metal_create_render_pipeline_with_stencil", &[("device", ty_int()), ("vertex_fn", ty_int()), ("fragment_fn", ty_int()), ("vertex_desc", ty_int()), ("color_format", ty_int()), ("depth_format", ty_int()), ("stencil_format", ty_int())], ty_int(), "gorget_metal_create_render_pipeline_with_stencil")));
+
+    // ── Depth Bias (shadow acne prevention) ──────────────
+    items.push(fn_item(extern_fn("metal_encoder_set_depth_bias", &[("encoder", ty_int()), ("depth_bias", ty_float()), ("slope_scale", ty_float()), ("clamp", ty_float())], ty_void(), "gorget_metal_encoder_set_depth_bias")));
+
+    // ── Vertex-stage Texture/Sampler ─────────────────────
+    items.push(fn_item(extern_fn("metal_encoder_set_vertex_texture", &[("encoder", ty_int()), ("texture", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_encoder_set_vertex_texture")));
+    items.push(fn_item(extern_fn("metal_encoder_set_vertex_sampler", &[("encoder", ty_int()), ("sampler", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_encoder_set_vertex_sampler")));
+
+    // ── Command Buffer Status ────────────────────────────
+    items.push(fn_item(extern_fn("metal_command_buffer_status", &[("cmd_buf", ty_int())], ty_int(), "gorget_metal_command_buffer_status")));
+    items.push(fn_item(extern_fn("metal_command_buffer_error", &[("cmd_buf", ty_int())], ty_string(), "gorget_metal_command_buffer_error")));
+
+    // ── MSAA Support ─────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_render_pipeline_msaa", &[("device", ty_int()), ("vertex_fn", ty_int()), ("fragment_fn", ty_int()), ("vertex_desc", ty_int()), ("color_format", ty_int()), ("depth_format", ty_int()), ("sample_count", ty_int())], ty_int(), "gorget_metal_create_render_pipeline_msaa")));
+    items.push(fn_item(extern_fn("metal_create_texture_2d_msaa", &[("device", ty_int()), ("width", ty_int()), ("height", ty_int()), ("format", ty_int()), ("sample_count", ty_int()), ("usage", ty_int()), ("storage_mode", ty_int())], ty_int(), "gorget_metal_create_texture_2d_msaa")));
+
     Module {
         items,
         span: Span::dummy(),
