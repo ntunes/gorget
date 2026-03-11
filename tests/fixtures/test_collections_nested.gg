@@ -1,96 +1,137 @@
-# Nested collections: structs in collections, basic nesting
+# Nested collection types: Vector[Vector[int]], Dict[str, Vector[int]],
+# Vector[Option[int]], Option[Vector[int]], Dict[str, Option[int]]
 from std.collections import Vector, Dict
 
-struct Point:
-    int x
-    int y
-
 void main():
-    # --- Vector of struct ---
-    Vector[Point] points = Vector[Point]()
-    points.push(Point(1, 2))
-    points.push(Point(3, 4))
-    print(f"{points.len()}")
-    Point p0 = points.get(0).unwrap()
-    print(f"{p0.x}")
-    print(f"{p0.y}")
-    Point p1 = points.get(1).unwrap()
-    print(f"{p1.x}")
-    print(f"{p1.y}")
+    # === 1. Vector[Vector[int]] ===
+    print("--- vec_of_vec ---")
+    Vector[Vector[int]] vv = Vector[Vector[int]]()
+    Vector[int] inner1 = Vector[int]()
+    inner1.push(10)
+    inner1.push(20)
+    inner1.push(30)
+    Vector[int] inner2 = Vector[int]()
+    inner2.push(40)
+    inner2.push(50)
+    vv.push(inner1)
+    vv.push(inner2)
+    print(vv.len())                            # 2
 
-    # --- Dict[str, Point] ---
-    Dict[str, Point] named_points = Dict[str, Point]()
-    named_points.put("origin", Point(0, 0))
-    named_points.put("unit", Point(1, 1))
-    Point origin = named_points.get("origin").unwrap()
-    print(f"{origin.x}")
-    print(f"{origin.y}")
-    Point unit = named_points.get("unit").unwrap()
-    print(f"{unit.x}")
-    print(f"{unit.y}")
+    # access v[0] then element [1]
+    Vector[int] row0 = vv.get(0).unwrap()
+    print(row0[1])                             # 20
 
-    # --- Dict[str, int] iteration ---
-    Dict[str, int] scores = Dict[str, int]()
-    scores.put("a", 10)
-    scores.put("b", 20)
-    scores.put("c", 30)
-    Vector[str] keys = scores.keys()
-    print(f"{keys.len()}")
-    Vector[int] vals = scores.values()
-    int total = vals.fold(0, (int acc, int x): acc + x)
-    print(f"{total}")
+    # access v[1] then element [0]
+    Vector[int] row1 = vv.get(1).unwrap()
+    print(row1[0])                             # 40
 
-    # --- Option with struct ---
-    Option[Point] some_pt = Some(Point(5, 6))
-    print(f"{some_pt.is_some()}")
-    Point pt = some_pt.unwrap()
-    print(f"{pt.x}")
-    print(f"{pt.y}")
-    Option[Point] no_pt = None()
-    print(f"{no_pt.is_none()}")
+    # modify inner and verify independence after clone
+    Vector[int] orig = Vector[int]()
+    orig.push(1)
+    orig.push(2)
+    orig.push(3)
+    Vector[int] cloned = orig.clone()
+    orig.set(0, 99)
+    print(orig[0])                             # 99
+    print(cloned[0])                           # 1 (independent)
+    print(cloned.len())                        # 3
 
-    # --- Vector[Vector[int]] ---
-    Vector[Vector[int]] grid = Vector[Vector[int]]()
-    Vector[int] row1 = Vector[int]()
-    row1.push(1)
-    row1.push(2)
-    Vector[int] row2 = Vector[int]()
-    row2.push(3)
-    row2.push(4)
-    grid.push(row1)
-    grid.push(row2)
-    print(f"{grid.len()}")
-    Vector[int] got_row = grid.get(0).unwrap()
-    print(f"{got_row.len()}")
-    print(f"{got_row.get(0).unwrap()}")
-    print(f"{got_row.get(1).unwrap()}")
-    Vector[int] got_row2 = grid.get(1).unwrap()
-    print(f"{got_row2.get(0).unwrap()}")
-
-    # --- Dict[str, Vector[int]] ---
+    # === 2. Dict[str, Vector[int]] ===
+    print("--- dict_str_vec ---")
     Dict[str, Vector[int]] groups = Dict[str, Vector[int]]()
     Vector[int] evens = Vector[int]()
     evens.push(2)
     evens.push(4)
+    evens.push(6)
     Vector[int] odds = Vector[int]()
     odds.push(1)
     odds.push(3)
-    odds.push(5)
     groups.put("even", evens)
     groups.put("odd", odds)
-    print(f"{groups.len()}")
-    Vector[int] got_evens = groups.get("even").unwrap()
-    print(f"{got_evens.len()}")
-    print(f"{got_evens.get(0).unwrap()}")
-    Vector[int] got_odds = groups.get("odd").unwrap()
-    print(f"{got_odds.len()}")
-    print(f"{got_odds.get(0).unwrap()}")
-    print(f"{groups.get("missing").is_none()}")
+    print(groups.len())                        # 2
+    print(groups.contains("even"))             # true
+    print(groups.contains("odd"))              # true
+    print(groups.contains("prime"))            # false
 
-    # --- Vector clear (drop correctness) ---
-    Vector[Point] pts = Vector[Point]()
-    pts.push(Point(1, 1))
-    pts.push(Point(2, 2))
-    pts.clear()
-    print(f"{pts.len()}")
+    # get and verify inner contents via len
+    Vector[int] got_evens = groups.get("even").unwrap()
+    print(got_evens.len())                     # 3
+    Vector[int] got_odds = groups.get("odd").unwrap()
+    print(got_odds.len())                      # 2
+
+    # fold over inner vector values
+    int even_sum = got_evens.fold(0, (int a, int x): a + x)
+    print(even_sum)                            # 12
+    int odd_sum = got_odds.fold(0, (int a, int x): a + x)
+    print(odd_sum)                             # 4
+
+    # missing key
+    print(groups.get("prime").is_none())       # true
+
+    # === 3. Vector[Option[int]] ===
+    print("--- vec_of_option ---")
+    Vector[Option[int]] opts = Vector[Option[int]]()
+    opts.push(Some(10))
+    Option[int] none1 = None()
+    opts.push(none1)
+    opts.push(Some(30))
+    Option[int] none2 = None()
+    opts.push(none2)
+    opts.push(Some(50))
+    print(opts.len())                          # 5
+
+    # verify is_some / is_none / unwrap
+    print(opts[0].is_some())                   # true
+    print(opts[0].unwrap())                    # 10
+    print(opts[1].is_none())                   # true
+    print(opts[2].unwrap())                    # 30
+    print(opts[3].is_none())                   # true
+    print(opts[4].is_some())                   # true
+    print(opts[4].unwrap())                    # 50
+
+    # === 4. Option[Vector[int]] ===
+    print("--- option_of_vec ---")
+    Vector[int] inner_vec = Vector[int]()
+    inner_vec.push(100)
+    inner_vec.push(200)
+    inner_vec.push(300)
+    Option[Vector[int]] some_vec = Some(inner_vec)
+    print(some_vec.is_some())                  # true
+
+    # unwrap and access elements
+    Vector[int] unwrapped = some_vec.unwrap()
+    print(unwrapped.len())                     # 3
+    print(unwrapped[0])                        # 100
+    print(unwrapped[1])                        # 200
+    print(unwrapped[2])                        # 300
+
+    # None case
+    Option[Vector[int]] none_vec = None()
+    print(none_vec.is_none())                  # true
+
+    # === 5. Dict[str, Option[int]] ===
+    print("--- dict_str_option ---")
+    Dict[str, Option[int]] scores = Dict[str, Option[int]]()
+    scores.put("alice", Some(95))
+    Option[int] no_score = None()
+    scores.put("bob", no_score)
+    scores.put("carol", Some(88))
+    print(scores.len())                        # 3
+    print(scores.contains("alice"))            # true
+    print(scores.contains("bob"))              # true
+    print(scores.contains("dave"))             # false
+
+    # get returns Option[Option[int]]
+    Option[Option[int]] alice_score = scores.get("alice")
+    print(alice_score.unwrap().unwrap())       # 95
+
+    Option[Option[int]] bob_score = scores.get("bob")
+    print(bob_score.unwrap().is_none())        # true
+
+    Option[Option[int]] carol_score = scores.get("carol")
+    print(carol_score.unwrap().unwrap())       # 88
+
+    Option[Option[int]] missing = scores.get("dave")
+    print(missing.is_none())                   # true
+
     print("done")

@@ -2,39 +2,82 @@
 from std.collections import HashSet
 
 void main():
-    # --- Construction ---
+    # ===== Construction =====
     HashSet[int] s = HashSet[int]()
     print(f"{s.len()}")
     print(f"{s.is_empty()}")
 
-    # --- add ---
+    # ===== add =====
     s.add(1)
     s.add(2)
     s.add(3)
     print(f"{s.len()}")
-    # duplicate
+    print(f"{s.contains(1)}")
+    print(f"{s.contains(2)}")
+    print(f"{s.contains(3)}")
+    # duplicate add — len unchanged
     s.add(2)
     print(f"{s.len()}")
+    # add after duplicate — still works
+    s.add(4)
+    print(f"{s.len()}")
 
-    # --- contains ---
+    # ===== contains =====
     print(f"{s.contains(1)}")
+    print(f"{s.contains(4)}")
     print(f"{s.contains(99)}")
+    print(f"{s.contains(0)}")
+    # contains on empty set
+    HashSet[int] mt = HashSet[int]()
+    print(f"{mt.contains(1)}")
 
-    # --- remove ---
+    # ===== remove =====
     bool rem1 = s.remove(2)
     print(f"{rem1}")
+    print(f"{s.len()}")
+    print(f"{s.contains(2)}")
+    # remove non-existent
     bool rem2 = s.remove(99)
     print(f"{rem2}")
     print(f"{s.len()}")
+    # remove from empty set
+    bool rem3 = mt.remove(5)
+    print(f"{rem3}")
+    # remove same element twice
+    bool rem4 = s.remove(4)
+    print(f"{rem4}")
+    bool rem5 = s.remove(4)
+    print(f"{rem5}")
+    print(f"{s.len()}")
+    # s now has {1, 3}
 
-    # --- clear ---
-    HashSet[int] s2 = HashSet[int]()
-    s2.add(10)
-    s2.clear()
-    print(f"{s2.len()}")
-    print(f"{s2.is_empty()}")
+    # ===== clear =====
+    HashSet[int] sc = HashSet[int]()
+    sc.add(10)
+    sc.add(20)
+    sc.add(30)
+    print(f"{sc.len()}")
+    sc.clear()
+    print(f"{sc.len()}")
+    print(f"{sc.is_empty()}")
+    print(f"{sc.contains(10)}")
+    # clear empty set (no-op)
+    sc.clear()
+    print(f"{sc.len()}")
+    # add after clear
+    sc.add(99)
+    print(f"{sc.len()}")
+    print(f"{sc.contains(99)}")
 
-    # --- Set algebra ---
+    # ===== is_empty =====
+    HashSet[int] e1 = HashSet[int]()
+    print(f"{e1.is_empty()}")
+    e1.add(1)
+    print(f"{e1.is_empty()}")
+    e1.remove(1)
+    print(f"{e1.is_empty()}")
+
+    # ===== Set algebra setup =====
     HashSet[int] a = HashSet[int]()
     a.add(1)
     a.add(2)
@@ -44,30 +87,77 @@ void main():
     b.add(3)
     b.add(4)
 
-    # union
+    # ===== union =====
     HashSet[int] u = a.union(b)
     print(f"{u.len()}")
+    print(f"{u.contains(1)}")
+    print(f"{u.contains(2)}")
+    print(f"{u.contains(3)}")
+    print(f"{u.contains(4)}")
+    # union with empty
+    HashSet[int] empty = HashSet[int]()
+    HashSet[int] u_empty = a.union(empty)
+    print(f"{u_empty.len()}")
+    HashSet[int] u_empty2 = empty.union(a)
+    print(f"{u_empty2.len()}")
+    # union with self
+    HashSet[int] u_self = a.union(a)
+    print(f"{u_self.len()}")
+    # union of two empty
+    HashSet[int] empty2 = HashSet[int]()
+    HashSet[int] u_mt = empty.union(empty2)
+    print(f"{u_mt.len()}")
 
-    # intersection
+    # ===== intersection =====
     HashSet[int] inter = a.intersection(b)
     print(f"{inter.len()}")
+    print(f"{inter.contains(2)}")
+    print(f"{inter.contains(3)}")
+    print(f"{inter.contains(1)}")
+    # intersection with empty
+    HashSet[int] i_empty = a.intersection(empty)
+    print(f"{i_empty.len()}")
+    # intersection with disjoint
+    HashSet[int] disjoint = HashSet[int]()
+    disjoint.add(10)
+    disjoint.add(20)
+    HashSet[int] i_dis = a.intersection(disjoint)
+    print(f"{i_dis.len()}")
+    # intersection with self
+    HashSet[int] i_self = a.intersection(a)
+    print(f"{i_self.len()}")
 
-    # difference (asymmetric)
+    # ===== difference =====
     HashSet[int] diff_ab = a.difference(b)
     print(f"{diff_ab.len()}")
     print(f"{diff_ab.contains(1)}")
     HashSet[int] diff_ba = b.difference(a)
     print(f"{diff_ba.len()}")
     print(f"{diff_ba.contains(4)}")
+    # difference with empty
+    HashSet[int] diff_e = a.difference(empty)
+    print(f"{diff_e.len()}")
+    HashSet[int] diff_e2 = empty.difference(a)
+    print(f"{diff_e2.len()}")
+    # difference with self
+    HashSet[int] diff_self = a.difference(a)
+    print(f"{diff_self.len()}")
 
-    # symmetric_difference
+    # ===== symmetric_difference =====
     HashSet[int] sym = a.symmetric_difference(b)
     print(f"{sym.len()}")
     print(f"{sym.contains(1)}")
     print(f"{sym.contains(4)}")
     print(f"{sym.contains(2)}")
+    print(f"{sym.contains(3)}")
+    # symmetric_difference with empty
+    HashSet[int] sym_e = a.symmetric_difference(empty)
+    print(f"{sym_e.len()}")
+    # symmetric_difference with self
+    HashSet[int] sym_self = a.symmetric_difference(a)
+    print(f"{sym_self.len()}")
 
-    # --- is_subset / is_superset ---
+    # ===== is_subset =====
     HashSet[int] sub = HashSet[int]()
     sub.add(1)
     sub.add(2)
@@ -75,24 +165,41 @@ void main():
     print(f"{a.is_subset(sub)}")
     # reflexive
     print(f"{a.is_subset(a)}")
+    # empty is subset of everything
+    print(f"{empty.is_subset(a)}")
+    print(f"{empty.is_subset(empty2)}")
+    # disjoint
+    print(f"{disjoint.is_subset(a)}")
 
+    # ===== is_superset =====
     print(f"{a.is_superset(sub)}")
     print(f"{sub.is_superset(a)}")
+    # reflexive
+    print(f"{a.is_superset(a)}")
+    # everything is superset of empty
+    print(f"{a.is_superset(empty)}")
+    print(f"{empty.is_superset(empty2)}")
+    # disjoint
+    print(f"{a.is_superset(disjoint)}")
 
-    # --- Edge cases ---
-    HashSet[int] empty = HashSet[int]()
-    HashSet[int] u_empty = a.union(empty)
-    print(f"{u_empty.len()}")
-    HashSet[int] disjoint = HashSet[int]()
-    disjoint.add(10)
-    disjoint.add(20)
-    HashSet[int] i_dis = a.intersection(disjoint)
-    print(f"{i_dis.len()}")
-
-    # --- fold (order-independent sum) ---
-    int total = a.fold(0, (int acc, int x): acc + x)
+    # ===== fold (order-independent sum) =====
+    HashSet[int] nums = HashSet[int]()
+    nums.add(1)
+    nums.add(2)
+    nums.add(3)
+    nums.add(4)
+    nums.add(5)
+    nums.add(6)
+    int total = nums.fold(0, (int acc, int x): acc + x)
     print(f"{total}")
+    # fold with different init
+    int prod = nums.fold(1, (int acc, int x): acc * x)
+    print(f"{prod}")
+    # fold on empty set
+    int fold_mt = empty.fold(42, (int acc, int x): acc + x)
+    print(f"{fold_mt}")
+    # fold counting
+    int count = nums.fold(0, (int acc, int x): acc + 1)
+    print(f"{count}")
 
-    # --- filter ---
-    HashSet[int] evens = a.filter((int x): x % 2 == 0)
-    print(f"{evens.len()}")
+    print("done")

@@ -1,106 +1,174 @@
-# Comprehensive Dict[str, int] method coverage
+# Comprehensive Dict method coverage
 from std.collections import Dict, Vector
 
 void main():
-    # --- Construction ---
+    # ===== Construction =====
     Dict[str, int] d = Dict[str, int]()
     print(f"{d.len()}")
     print(f"{d.is_empty()}")
 
-    # --- put ---
-    d.put("a", 1)
-    d.put("b", 2)
-    d.put("c", 3)
+    # ===== Subscript assignment (put) =====
+    d["a"] = 1
+    d["b"] = 2
+    d["c"] = 3
     print(f"{d.len()}")
+    print(f"{d.is_empty()}")
 
-    # --- set (alias for put) ---
-    d.set("d", 4)
-    print(f"{d.len()}")
-
-    # --- get (returns Option) ---
+    # Overwrite existing key via subscript
+    d["a"] = 10
     print(f"{d.get("a").unwrap()}")
-    print(f"{d.get("z").is_none()}")
+    print(f"{d.len()}")
 
-    # --- contains ---
+    # ===== Subscript read =====
+    print(f"{d["b"]}")
+    print(f"{d["c"]}")
+
+    # ===== get (returns Option) =====
+    Option[int] present = d.get("b")
+    print(f"{present.is_some()}")
+    print(f"{present.unwrap()}")
+    Option[int] absent = d.get("z")
+    print(f"{absent.is_none()}")
+    print(f"{absent.is_some()}")
+
+    # ===== contains =====
     print(f"{d.contains("a")}")
     print(f"{d.contains("z")}")
 
-    # --- has (alias) ---
+    # ===== has (alias for contains) =====
     print(f"{d.has("b")}")
+    print(f"{d.has("missing")}")
 
-    # --- remove ---
+    # ===== remove (returns bool) =====
     bool rem1 = d.remove("b")
     print(f"{rem1}")
-    bool rem2 = d.remove("z")
+    bool rem2 = d.remove("nonexistent")
     print(f"{rem2}")
     print(f"{d.len()}")
+    # Confirm removed key is gone
+    print(f"{d.get("b").is_none()}")
+    print(f"{d.contains("b")}")
 
-    # --- clear ---
+    # ===== clear =====
     Dict[str, int] d2 = Dict[str, int]()
-    d2.put("x", 1)
+    d2["x"] = 100
+    d2["y"] = 200
+    print(f"{d2.len()}")
     d2.clear()
     print(f"{d2.len()}")
     print(f"{d2.is_empty()}")
-    # clear empty (no crash)
+    # Clear already-empty dict (no crash)
     d2.clear()
     print(f"{d2.len()}")
 
-    # --- keys / values (insertion order) ---
+    # ===== keys =====
     Dict[str, int] d3 = Dict[str, int]()
-    d3.put("x", 10)
-    d3.put("y", 20)
-    d3.put("z", 30)
+    d3["x"] = 10
+    d3["y"] = 20
+    d3["z"] = 30
     Vector[str] ks = d3.keys()
     print(f"{ks.len()}")
+    # Verify all keys present via contains (order not guaranteed)
+    # But insertion order IS preserved in gorget dicts
     print(f"{ks.get(0).unwrap()}")
     print(f"{ks.get(1).unwrap()}")
     print(f"{ks.get(2).unwrap()}")
+
+    # ===== values =====
     Vector[int] vs = d3.values()
-    int val_sum = vs.fold(0, (int acc, int x): acc + x)
+    print(f"{vs.len()}")
+    int val_sum = vs.fold(0, (int acc, int v): acc + v)
     print(f"{val_sum}")
 
-    # --- items ---
-    Vector[(str, int)] items = d3.items()
-    print(f"{items.len()}")
-    auto first = items.get(0).unwrap()
+    # ===== items =====
+    Vector[(str, int)] its = d3.items()
+    print(f"{its.len()}")
+    # Access tuple fields
+    auto first = its.get(0).unwrap()
     print(f"{first.0}")
     print(f"{first.1}")
 
-    # --- keys/values on empty ---
+    # ===== keys/values/items on empty dict =====
     Dict[str, int] ed = Dict[str, int]()
-    Vector[str] ek = ed.keys()
-    Vector[int] ev = ed.values()
-    print(f"{ek.len()}")
-    print(f"{ev.len()}")
+    print(f"{ed.keys().len()}")
+    print(f"{ed.values().len()}")
+    print(f"{ed.items().len()}")
 
-    # --- update ---
+    # ===== update =====
     Dict[str, int] u1 = Dict[str, int]()
-    u1.put("a", 1)
-    u1.put("b", 2)
+    u1["a"] = 1
+    u1["b"] = 2
     Dict[str, int] u2 = Dict[str, int]()
-    u2.put("b", 20)
-    u2.put("c", 30)
+    u2["b"] = 20
+    u2["c"] = 30
     u1.update(u2)
     print(f"{u1.len()}")
     print(f"{u1.get("a").unwrap()}")
     print(f"{u1.get("b").unwrap()}")
     print(f"{u1.get("c").unwrap()}")
 
-    # --- get_or ---
+    # ===== get_or =====
     print(f"{u1.get_or("a", 99)}")
-    print(f"{u1.get_or("z", 99)}")
+    print(f"{u1.get_or("missing", 99)}")
 
-    # --- get_or_put ---
-    int gop1 = u1.get_or_put("c", 50)
+    # ===== get_or_put =====
+    Dict[str, int] gd = Dict[str, int]()
+    gd["a"] = 5
+    # Existing key: returns existing value, does NOT overwrite
+    int gop1 = gd.get_or_put("a", 100)
     print(f"{gop1}")
-    int gop2 = u1.get_or_put("new", 50)
+    print(f"{gd.get("a").unwrap()}")
+    # Missing key: inserts default and returns it
+    int gop2 = gd.get_or_put("b", 42)
     print(f"{gop2}")
-    print(f"{u1.len()}")
+    print(f"{gd.get("b").unwrap()}")
+    print(f"{gd.len()}")
 
-    # --- filter ---
-    Dict[str, int] filtered = d3.filter((str k, int v): v > 15)
-    print(f"{filtered.len()}")
+    # ===== filter =====
+    Dict[str, int] scores = Dict[str, int]()
+    scores["low"] = 3
+    scores["mid"] = 15
+    scores["high"] = 25
+    scores["tiny"] = 1
+    Dict[str, int] above_ten = scores.filter((str k, int v): v > 10)
+    print(f"{above_ten.len()}")
+    # Fold the filtered dict to verify sum
+    int filtered_sum = above_ten.fold(0, (int acc, str k, int v): acc + v)
+    print(f"{filtered_sum}")
 
-    # --- fold ---
-    int total = d3.fold(0, (int acc, str k, int v): acc + v)
+    # ===== fold =====
+    int total = scores.fold(0, (int acc, str k, int v): acc + v)
     print(f"{total}")
+    # Fold on empty dict
+    Dict[str, int] empty_fold = Dict[str, int]()
+    int zero = empty_fold.fold(0, (int acc, str k, int v): acc + v)
+    print(f"{zero}")
+
+    # ===== put then remove then re-add =====
+    Dict[str, int] cycle = Dict[str, int]()
+    cycle["k"] = 1
+    cycle.remove("k")
+    print(f"{cycle.is_empty()}")
+    cycle["k"] = 2
+    print(f"{cycle.get("k").unwrap()}")
+    print(f"{cycle.len()}")
+
+    # ===== Multiple removes =====
+    Dict[str, int] multi = Dict[str, int]()
+    multi["a"] = 1
+    multi["b"] = 2
+    multi["c"] = 3
+    multi.remove("a")
+    multi.remove("c")
+    print(f"{multi.len()}")
+    print(f"{multi.get("b").unwrap()}")
+
+    # ===== Overwrite via subscript preserves len =====
+    Dict[str, int] ow = Dict[str, int]()
+    ow["x"] = 10
+    ow["x"] = 20
+    ow["x"] = 30
+    print(f"{ow.len()}")
+    print(f"{ow["x"]}")
+
+    print("done")

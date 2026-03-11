@@ -1,0 +1,36 @@
+from std.async import sleep
+
+async int test_dict_ops():
+    sleep(1)
+
+    Dict[str, int] d = Dict[str, int]()
+    d["a"] = 10
+    d["b"] = 20
+    d["c"] = 30
+    d["d"] = 5
+
+    # fold: sum all values (order independent)
+    int total = d.fold(0, (int acc, str k, int v): acc + v)
+    print(total)
+
+    # filter: keep values > 10
+    Dict[str, int] big = d.filter((str k, int v): v > 10)
+    print(big.len())
+    int big_sum = big.fold(0, (int acc, str k, int v): acc + v)
+    print(big_sum)
+
+    # fold on empty dict
+    Dict[str, int] empty = Dict[str, int]()
+    int z = empty.fold(99, (int acc, str k, int v): acc + v)
+    print(z)
+
+    # filter where nothing matches
+    Dict[str, int] none_match = d.filter((str k, int v): v > 100)
+    print(none_match.len())
+
+    return 0
+
+async void main():
+    Task[int] t = spawn test_dict_ops()
+    int r = t.await()
+    print(r)

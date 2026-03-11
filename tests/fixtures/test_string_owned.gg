@@ -1,0 +1,49 @@
+# Test owned String methods
+void main():
+    # Basic construction and push
+    String s = String()
+    s.push("hello")
+    s.push(" world")
+    print(s.str())
+    print(s.len())
+    print(s.is_empty())
+
+    # push_char
+    s.push_char('!')
+    print(s.str())
+
+    # Empty string checks
+    String s2 = String()
+    print(s2.is_empty())
+    print(s2.len())
+
+    # clear
+    s.clear()
+    print(s.is_empty())
+    print(s.len())
+
+    # capacity
+    String s3 = String()
+    s3.push("test")
+    print(s3.len())
+    int cap = s3.capacity()
+    bool cap_ok = cap >= s3.len()
+    print(cap_ok)
+
+    # Construction with initial value
+    String s4 = String("initial")
+    print(s4.str())
+    print(s4.len())
+
+    # Multiple pushes
+    String s5 = String()
+    s5.push("a")
+    s5.push("b")
+    s5.push("c")
+    print(s5.str())
+
+    # push empty string
+    String s6 = String("base")
+    s6.push("")
+    print(s6.str())
+    print(s6.len())

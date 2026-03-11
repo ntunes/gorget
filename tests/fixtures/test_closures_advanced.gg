@@ -1,0 +1,44 @@
+int apply(int x, int(int) f):
+    return f(x)
+
+int compose(int x, int(int) f, int(int) g):
+    return g(f(x))
+
+void main():
+    # Basic closure
+    int y = 10
+    int result = apply(5, (int x): x + y)
+    print(result)  # 15
+
+    # Closure capturing mutable variable
+    int counter = 0
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+    v.push(3)
+
+    # map with capture
+    Vector[int] added = v.map((int x): x + y)
+    print(added[0])  # 11
+    print(added[1])  # 12
+    print(added[2])  # 13
+
+    # Compose two functions
+    int r = compose(5, (int x): x * 2, (int x): x + 1)
+    print(r)  # 11
+
+    # Nested closure — closure returning closure result
+    int base = 100
+    int r2 = apply(3, (int x): x * x + base)
+    print(r2)  # 109
+
+    # Filter with capture
+    int threshold = 2
+    Vector[int] big = v.filter((int x): x > threshold)
+    print(big.len())  # 1
+    print(big[0])     # 3
+
+    # Fold with capture
+    int offset = 10
+    int total = v.fold(offset, (int acc, int x): acc + x)
+    print(total)  # 16

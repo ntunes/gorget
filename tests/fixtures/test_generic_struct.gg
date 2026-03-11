@@ -1,0 +1,42 @@
+struct Pair[T, U]:
+    T first
+    U second
+
+equip Pair[T, U]:
+    T get_first(self):
+        return self.first
+
+    U get_second(self):
+        return self.second
+
+void main():
+    Pair[int, str] p1 = Pair[int, str](42, "hello")
+    print(p1.first)
+    print(p1.second)
+    print(p1.get_first())
+    print(p1.get_second())
+
+    Pair[str, bool] p2 = Pair[str, bool]("test", true)
+    print(p2.first)
+    print(p2.second)
+
+    # Nested generic
+    Pair[int, Pair[str, int]] nested = Pair[int, Pair[str, int]](1, Pair[str, int]("inner", 99))
+    print(nested.first)
+    print(nested.second.first)
+    print(nested.second.second)
+
+    # Vector of generic structs
+    Vector[Pair[int, int]] pairs = Vector[Pair[int, int]]()
+    pairs.push(Pair[int, int](1, 10))
+    pairs.push(Pair[int, int](2, 20))
+    pairs.push(Pair[int, int](3, 30))
+    print(pairs.len())
+    print(pairs[0].first)
+    print(pairs[1].second)
+
+    # Option of generic struct
+    Option[Pair[int, str]] maybe = Some(Pair[int, str](7, "seven"))
+    print(maybe.is_some())
+    print(maybe.unwrap().first)
+    print(maybe.unwrap().second)

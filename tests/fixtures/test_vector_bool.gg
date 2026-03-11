@@ -1,0 +1,70 @@
+# Vector[bool] operations: push, indexing, contains, filter, any/all, pop, reverse
+
+void main():
+    Vector[bool] vb = Vector[bool]()
+    vb.push(true)
+    vb.push(false)
+    vb.push(true)
+    vb.push(true)
+
+    # basic len and indexing
+    print(vb.len())                         # 4
+    print(vb[0])                            # true
+    print(vb[1])                            # false
+    print(vb[2])                            # true
+    print(vb[3])                            # true
+
+    # contains
+    print(vb.contains(true))                # true
+    print(vb.contains(false))               # true
+
+    # filter: keep only true values
+    Vector[bool] trues = vb.filter((x): x)
+    print(trues.len())                      # 3
+    print(trues[0])                         # true
+
+    # filter: keep only false values using == false
+    Vector[bool] falses = vb.filter((x): x == false)
+    print(falses.len())                     # 1
+    print(falses[0])                        # false
+
+    # any/all (returns int: 1/0)
+    print(vb.any((x): x))                  # 1 (has true)
+    print(vb.all((x): x))                  # 0 (has false)
+    print(vb.any((x): x == false))         # 1 (has false)
+
+    # all-true vector
+    Vector[bool] all_true = Vector[bool]()
+    all_true.push(true)
+    all_true.push(true)
+    print(all_true.all((x): x))            # 1
+
+    # pop
+    Option[bool] p = vb.pop()
+    print(p.unwrap())                       # true (last element)
+    print(vb.len())                         # 3
+
+    # first / last
+    print(vb.first().unwrap())              # true
+    print(vb.last().unwrap())               # true
+
+    # reverse — vb is [true, false, true] → [true, false, true] (symmetric)
+    vb.reverse()
+    print(vb[0])                            # true
+    print(vb[1])                            # false
+    print(vb[2])                            # true
+
+    # empty vector
+    Vector[bool] empty = Vector[bool]()
+    print(empty.len())                      # 0
+    print(empty.is_empty())                 # true
+    print(empty.any((x): x))               # 0
+    print(empty.all((x): x))               # 1
+    Option[bool] ep = empty.pop()
+    print(ep.is_none())                     # true
+
+    # map: negate bools using == false
+    Vector[bool] neg = vb.map((x): x == false)
+    print(neg[0])                           # false
+    print(neg[1])                           # true
+    print(neg[2])                           # false

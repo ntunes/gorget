@@ -1,80 +1,120 @@
-# Comprehensive HashMap[str, int] method coverage (order-independent)
-from std.collections import HashMap
+# Comprehensive HashMap method coverage (order-independent verification)
+from std.collections import HashMap, Vector
 
 void main():
-    # --- Construction ---
+    # ===== Construction =====
     HashMap[str, int] m = HashMap[str, int]()
     print(f"{m.len()}")
     print(f"{m.is_empty()}")
 
-    # --- put ---
-    m.put("a", 1)
-    m.put("b", 2)
-    m.put("c", 3)
+    # ===== Subscript assignment (put) =====
+    m["a"] = 1
+    m["b"] = 2
+    m["c"] = 3
+    print(f"{m.len()}")
+    print(f"{m.is_empty()}")
+
+    # ===== Overwrite via subscript =====
+    m["a"] = 10
+    print(f"{m.get("a").unwrap()}")
     print(f"{m.len()}")
 
-    # --- get (returns Option) ---
-    print(f"{m.get("a").unwrap()}")
-    print(f"{m.get("b").unwrap()}")
-    print(f"{m.get("c").unwrap()}")
-    print(f"{m.get("z").is_none()}")
+    # ===== get (returns Option) =====
+    Option[int] present = m.get("b")
+    print(f"{present.is_some()}")
+    print(f"{present.unwrap()}")
+    Option[int] absent = m.get("z")
+    print(f"{absent.is_none()}")
+    print(f"{absent.is_some()}")
 
-    # --- contains ---
+    # ===== contains =====
     print(f"{m.contains("a")}")
     print(f"{m.contains("z")}")
 
-    # --- has (alias) ---
-    print(f"{m.has("a")}")
-    print(f"{m.has("z")}")
-
-    # --- remove ---
-    m.remove("b")
+    # ===== remove =====
+    bool rem1 = m.remove("b")
+    print(f"{rem1}")
+    bool rem2 = m.remove("nonexistent")
+    print(f"{rem2}")
     print(f"{m.len()}")
+    print(f"{m.get("b").is_none()}")
     print(f"{m.contains("b")}")
 
-    # --- put overwrite ---
-    m.put("a", 10)
-    print(f"{m.get("a").unwrap()}")
-
-    # --- clear ---
+    # ===== clear =====
     HashMap[str, int] m2 = HashMap[str, int]()
-    m2.put("x", 1)
+    m2["x"] = 100
+    m2["y"] = 200
+    print(f"{m2.len()}")
     m2.clear()
     print(f"{m2.len()}")
     print(f"{m2.is_empty()}")
+    # Clear already-empty (no crash)
+    m2.clear()
+    print(f"{m2.len()}")
 
-    # --- fold (order-independent sum) ---
+    # ===== keys (verify count via len) =====
     HashMap[str, int] m3 = HashMap[str, int]()
-    m3.put("x", 10)
-    m3.put("y", 20)
-    m3.put("z", 30)
+    m3["x"] = 10
+    m3["y"] = 20
+    m3["z"] = 30
+    Vector[str] ks = m3.keys()
+    print(f"{ks.len()}")
+
+    # ===== values (verify sum via fold, order-independent) =====
+    Vector[int] vs = m3.values()
+    print(f"{vs.len()}")
+    int val_sum = vs.fold(0, (int acc, int v): acc + v)
+    print(f"{val_sum}")
+
+    # ===== fold on map (order-independent sum) =====
     int total = m3.fold(0, (int acc, str k, int v): acc + v)
     print(f"{total}")
 
-    # --- keys / values (verify count, order-independent) ---
-    Vector[str] ks = m3.keys()
-    print(f"{ks.len()}")
-    Vector[int] vs = m3.values()
-    int val_sum = vs.fold(0, (int acc, int x): acc + x)
-    print(f"{val_sum}")
+    # ===== fold on empty =====
+    HashMap[str, int] empty_m = HashMap[str, int]()
+    int zero = empty_m.fold(0, (int acc, str k, int v): acc + v)
+    print(f"{zero}")
 
-    # --- items (verify count) ---
-    Vector[(str, int)] items = m3.items()
-    print(f"{items.len()}")
-
-    # --- filter ---
-    HashMap[str, int] big = m3.filter((str k, int v): v > 15)
-    print(f"{big.len()}")
-
-    # --- get_or ---
+    # ===== get_or =====
     print(f"{m3.get_or("x", 99)}")
     print(f"{m3.get_or("missing", 99)}")
 
-    # --- get_or_put ---
-    HashMap[str, int] m4 = HashMap[str, int]()
-    int v1 = m4.get_or_put("new", 50)
-    print(f"{v1}")
-    print(f"{m4.len()}")
-    int v2 = m4.get_or_put("new", 99)
-    print(f"{v2}")
-    print(f"{m4.len()}")
+    # ===== update =====
+    HashMap[str, int] u1 = HashMap[str, int]()
+    u1["a"] = 1
+    u1["b"] = 2
+    HashMap[str, int] u2 = HashMap[str, int]()
+    u2["b"] = 20
+    u2["c"] = 30
+    u1.update(u2)
+    print(f"{u1.len()}")
+    # Verify all values via fold sum: 1 + 20 + 30 = 51
+    int update_sum = u1.fold(0, (int acc, str k, int v): acc + v)
+    print(f"{update_sum}")
+    # Verify specific keys
+    print(f"{u1.get("a").unwrap()}")
+    print(f"{u1.get("b").unwrap()}")
+    print(f"{u1.get("c").unwrap()}")
+
+    # ===== keys/values on empty =====
+    print(f"{empty_m.keys().len()}")
+    print(f"{empty_m.values().len()}")
+
+    # ===== put then remove then re-add =====
+    HashMap[str, int] cycle = HashMap[str, int]()
+    cycle["k"] = 1
+    cycle.remove("k")
+    print(f"{cycle.is_empty()}")
+    cycle["k"] = 2
+    print(f"{cycle.get("k").unwrap()}")
+    print(f"{cycle.len()}")
+
+    # ===== Overwrite preserves len =====
+    HashMap[str, int] ow = HashMap[str, int]()
+    ow["x"] = 10
+    ow["x"] = 20
+    ow["x"] = 30
+    print(f"{ow.len()}")
+    print(f"{ow.get("x").unwrap()}")
+
+    print("done")

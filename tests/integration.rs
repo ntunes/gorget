@@ -127,6 +127,21 @@ fn enums() {
 }
 
 #[test]
+fn enum_user_defined() {
+    run_gg(
+        "test_enum_user_defined.gg",
+        "\
+red
+255
+128
+0
+3
+true
+got red",
+    );
+}
+
+#[test]
 fn enum_nullary_bare() {
     run_gg(
         "enum_nullary_bare.gg",
@@ -260,6 +275,26 @@ done",
 }
 
 #[test]
+fn test_error_handling() {
+    run_gg(
+        "test_error_handling.gg",
+        "\
+5
+divide by zero
+10
+0
+0
+3
+-1
+5
+calc failed: divide by zero
+2
+0
+done",
+    );
+}
+
+#[test]
 fn generics() {
     run_gg(
         "generics.gg",
@@ -357,6 +392,20 @@ fn closures() {
 60
 203
 closures");
+}
+
+#[test]
+fn closures_advanced() {
+    run_gg("test_closures_advanced.gg", "\
+15
+11
+12
+13
+11
+109
+1
+3
+16");
 }
 
 #[test]
@@ -1220,6 +1269,29 @@ hello
 equal
 not equal
 10",
+    );
+}
+
+#[test]
+fn test_generic_struct() {
+    run_gg(
+        "test_generic_struct.gg",
+        "\
+42
+hello
+42
+hello
+test
+true
+1
+inner
+99
+3
+1
+20
+true
+7
+seven",
     );
 }
 
@@ -10661,15 +10733,25 @@ fn test_dict_all() {
 0
 true
 3
-4
-1
-true
-true
 false
-true
-true
-false
+10
 3
+2
+3
+true
+2
+true
+false
+true
+false
+true
+false
+true
+false
+2
+true
+false
+2
 0
 true
 0
@@ -10677,10 +10759,12 @@ true
 x
 y
 z
+3
 60
 3
 x
 10
+0
 0
 0
 3
@@ -10689,11 +10773,23 @@ x
 30
 1
 99
-30
-50
-4
+5
+5
+42
+42
 2
-60",
+2
+40
+44
+0
+true
+2
+1
+1
+2
+1
+30
+done",
     );
 }
 
@@ -10705,30 +10801,44 @@ fn test_hashmap_all() {
 0
 true
 3
-1
-2
-3
-true
-true
-false
-true
-false
-2
 false
 10
+3
+true
+2
+true
+false
+true
+false
+true
+false
+2
+true
+false
+2
 0
 true
-60
+0
+3
 3
 60
-3
-2
+60
+0
 10
 99
-50
+3
+51
 1
-50
-1",
+20
+30
+0
+0
+true
+2
+1
+1
+30
+done",
     );
 }
 
@@ -10740,33 +10850,97 @@ fn test_set_all() {
 0
 true
 3
-3
 true
+true
+true
+3
+4
+true
+true
+false
+false
+false
+true
+3
+false
+false
+3
 false
 true
 false
 2
+3
 0
+true
+false
+0
+1
+true
+true
+false
 true
 4
+true
+true
+true
+true
+3
+3
+3
+0
 2
+true
+true
+false
+0
+0
+3
 1
 true
 1
 true
+3
+0
+0
 2
+true
+true
+false
+false
+3
+0
+true
+false
+true
 true
 true
 false
 true
 false
+true
 true
 true
 false
 3
+true
+true
+true
+false
 0
-1
-6",
+6
+0
+21
+720
+42
+6
+3
+9
+3
+true
+true
+true
+3
+done",
     );
 }
 
@@ -10778,33 +10952,82 @@ fn test_hashset_all() {
 0
 true
 3
-3
 true
+true
+true
+3
+4
+true
+true
+false
+false
+false
+true
+3
+false
+false
+3
 false
 true
 false
 2
+3
 0
+true
+false
+0
+1
+true
+true
+false
 true
 4
-2
-1
 true
-1
 true
+true
+true
+3
+3
+3
+0
 2
 true
 true
 false
+0
+0
+3
+1
+true
+1
+true
+3
+0
+0
+2
+true
 true
 false
-true
-true
 false
 3
 0
+true
+false
+true
+true
+true
+false
+true
+false
+true
+true
+true
+false
+21
+720
+42
 6
-1",
+done",
     );
 }
 
@@ -10864,6 +11087,29 @@ true
 false
 11
 2",
+    );
+}
+
+#[test]
+fn test_string_owned() {
+    run_gg(
+        "test_string_owned.gg",
+        "\
+hello world
+11
+false
+hello world!
+true
+0
+true
+0
+4
+true
+initial
+7
+abc
+base
+4",
     );
 }
 
@@ -10976,31 +11222,68 @@ fn test_option_all() {
     run_gg(
         "test_option_all.gg",
         "\
+--- construction ---
 42
+--- unwrap ---
 42
+--- expect ---
+42
+--- is_some / is_none ---
 true
 false
 false
 true
+--- unwrap_or ---
 42
 99
+--- unwrap_or_else ---
 42
 99
+--- map ---
 84
 true
 42
+0
+--- filter ---
+42
 true
+true
+42
+--- and_then ---
 43
 true
+true
+--- or ---
 42
 77
+true
+--- or_else ---
 42
 77
+true
+--- flatten ---
 100
 true
 true
+--- chaining ---
 84
-0",
+0
+126
+0
+100
+10
+55
+86
+--- edge cases ---
+true
+0
+-1
+-1
+0
+100
+true
+45
+done",
     );
 }
 
@@ -11028,7 +11311,18 @@ mapped
 true
 10
 77
-21",
+10
+999
+true
+still bad
+true
+fail
+10
+fail
+10
+21
+55
+4",
     );
 }
 
@@ -11068,33 +11362,48 @@ fn test_collections_nested() {
     run_gg(
         "test_collections_nested.gg",
         "\
+--- vec_of_vec ---
 2
+20
+40
+99
 1
-2
 3
+--- dict_str_vec ---
+2
+true
+true
+false
+3
+2
+12
 4
-0
-0
-1
-1
-3
-60
 true
+--- vec_of_option ---
 5
-6
 true
-2
-2
-1
-2
-3
-2
-2
-2
-3
-1
+10
 true
-0
+30
+true
+true
+50
+--- option_of_vec ---
+true
+3
+100
+200
+300
+true
+--- dict_str_option ---
+3
+true
+true
+false
+95
+true
+88
+true
 done",
     );
 }
@@ -11421,6 +11730,20 @@ set=4",
 }
 
 #[test]
+fn coroutine_dict_higher_order() {
+    run_gg(
+        "coroutine_dict_higher_order.gg",
+        "\
+65
+2
+50
+99
+0
+0",
+    );
+}
+
+#[test]
 fn test_vector_edge_cases() {
     run_gg(
         "test_vector_edge_cases.gg",
@@ -11633,6 +11956,21 @@ bad
 }
 
 #[test]
+fn coroutine_chained_methods() {
+    run_gg(
+        "coroutine_chained_methods.gg",
+        "\
+6
+20
+-1
+50
+-1
+2
+0",
+    );
+}
+
+#[test]
 fn coroutine_collections_advanced() {
     run_gg(
         "coroutine_collections_advanced.gg",
@@ -11659,6 +11997,187 @@ true
 3
 0
 0
+0",
+    );
+}
+
+#[test]
+fn test_str_predicates() {
+    run_gg(
+        "test_str_predicates.gg",
+        "\
+true
+false
+false
+true
+false
+false
+true
+false
+true
+false
+true
+false
+true
+false
+true
+true
+false
+HELLO
+hello
+hello
+true
+true
+true
+hello gorget
+ababab",
+    );
+}
+
+#[test]
+fn test_vector_str_higher_order() {
+    run_gg(
+        "test_vector_str_higher_order.gg",
+        "\
+3
+hello
+world
+gorget
+HELLO
+WORLD
+HI
+GORGET
+helloworldhigorget
+1
+1
+0
+0
+gorget
+hello
+hi
+world
+helloworldgorget",
+    );
+}
+
+#[test]
+fn test_vector_bool() {
+    run_gg(
+        "test_vector_bool.gg",
+        "\
+4
+true
+false
+true
+true
+true
+true
+3
+true
+1
+false
+1
+0
+1
+1
+true
+3
+true
+true
+true
+false
+true
+0
+true
+0
+1
+true
+false
+true
+false",
+    );
+}
+
+#[test]
+fn test_struct_methods() {
+    run_gg(
+        "test_struct_methods.gg",
+        "\
+3
+4
+7
+13
+24
+true
+false
+(3, 4)
+50
+30
+0
+3
+1
+7",
+    );
+}
+
+#[test]
+fn test_for_loops() {
+    run_gg(
+        "test_for_loops.gg",
+        "\
+10
+18
+60
+0
+10
+1
+20
+2
+30
+a
+b
+c
+9
+7
+20",
+    );
+}
+
+#[test]
+fn test_match_advanced() {
+    run_gg(
+        "test_match_advanced.gg",
+        "\
+answer
+small
+3.140000
+5.000000 10.000000
+6.000000 8.000000
+99
+none
+10
+bad
+positive
+first is one
+7",
+    );
+}
+
+#[test]
+fn coroutine_vector_ops() {
+    run_gg(
+        "coroutine_vector_ops.gg",
+        "\
+5
+6
+1
+5
+3
+3
+4
+4
+3
+99
 0",
     );
 }

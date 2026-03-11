@@ -49,6 +49,40 @@ void main():
     print(f"{ok.or(alt).unwrap()}")
     print(f"{err.or(alt).unwrap()}")
 
+    # --- or_else ---
+    Result[int, str] or_else_ok = ok.or_else((str e): Ok(0))
+    print(f"{or_else_ok.unwrap()}")
+    Result[int, str] or_else_err = err.or_else((str e): Ok(999))
+    print(f"{or_else_err.unwrap()}")
+    Result[int, str] or_else_err2 = err.or_else((str e): Error("still bad"))
+    print(f"{or_else_err2.is_err()}")
+    print(or_else_err2.unwrap_err())
+
+    # --- and_then on Error passes through ---
+    Result[int, str] and_err = err.and_then((int x): Ok(x + 1))
+    print(f"{and_err.is_err()}")
+    print(and_err.unwrap_err())
+
+    # --- or on Ok returns self ---
+    Result[int, str] fallback = Error("nope")
+    print(f"{ok.or(fallback).unwrap()}")
+
+    # --- map on Error passes through ---
+    Result[int, str] map_pass = err.map((int x): x + 100)
+    print(map_pass.unwrap_err())
+
+    # --- map_err on Ok passes through ---
+    Result[int, str] maperr_pass = ok.map_err((str e): "changed")
+    print(f"{maperr_pass.unwrap()}")
+
     # --- Chaining ---
     int result = ok.map((int x): x * 2).and_then((int x): Ok(x + 1)).unwrap_or(0)
     print(f"{result}")
+
+    # --- Chaining on Error ---
+    int result2 = err.map((int x): x * 2).and_then((int x): Ok(x + 1)).unwrap_or(55)
+    print(f"{result2}")
+
+    # --- unwrap_or_else with Error content ---
+    int result3 = err.unwrap_or_else((str e): len(e))
+    print(f"{result3}")

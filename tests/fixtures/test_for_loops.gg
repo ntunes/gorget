@@ -1,0 +1,55 @@
+void main():
+    # range loop
+    int sum = 0
+    for i in 0..5:
+        sum = sum + i
+    print(sum)
+
+    # range with start
+    int sum2 = 0
+    for i in 3..7:
+        sum2 = sum2 + i
+    print(sum2)
+
+    # iterate vector
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    int total = 0
+    for x in v:
+        total = total + x
+    print(total)
+
+    # iterate with enumerate
+    for (i, x) in v.enumerate():
+        print(i)
+        print(x)
+
+    # iterate string chars
+    str s = "abc"
+    for c in s:
+        print(c)
+
+    # nested loops
+    int count = 0
+    for i in 0..3:
+        for j in 0..3:
+            count = count + 1
+    print(count)
+
+    # break
+    int found = -1
+    for i in 0..10:
+        if i == 7:
+            found = i
+            break
+    print(found)
+
+    # continue
+    int even_sum = 0
+    for i in 0..10:
+        if i % 2 != 0:
+            continue
+        even_sum = even_sum + i
+    print(even_sum)

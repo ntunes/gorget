@@ -1,0 +1,46 @@
+enum Color:
+    Red
+    Green
+    Blue
+    Custom(int, int, int)
+
+void main():
+    Color c1 = Color.Red()
+    Color c2 = Color.Green()
+    Color c3 = Custom(255, 128, 0)
+
+    # Match with cases
+    match c1:
+        case Red:
+            print("red")
+        case Green:
+            print("green")
+        case Blue:
+            print("blue")
+        case Custom(r, g, b):
+            print("custom")
+
+    match c3:
+        case Custom(r, g, b):
+            print(r)
+            print(g)
+            print(b)
+        else:
+            print("not custom")
+
+    # Vector of enums
+    Vector[Color] colors = Vector[Color]()
+    colors.push(Color.Red())
+    colors.push(Color.Green())
+    colors.push(Color.Blue())
+    print(colors.len())
+
+    # Option[Color]
+    Option[Color] maybe = Some(Color.Red())
+    print(maybe.is_some())
+
+    match maybe.unwrap():
+        case Red:
+            print("got red")
+        else:
+            print("not red")

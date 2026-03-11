@@ -6,6 +6,8 @@
 
 ## Medium
 
+- **Bool negation `!x` in closures returns wrong result for Vector[bool]**: `vb.filter((bool x): !x)` on `[true, false, true, true]` returns 3 elements instead of 1. Workaround: `x == false`. Likely the `!` operator is applied to a bool that's `int32_t` in C, and the closure parameter type inference doesn't handle negation correctly. [added: 2026-03-11]
+
 - **`shared static` support**: `public static shared int counter = 0` — thread-safe module-level statics. Requires adding `SharedKind` field to `StaticDecl`, atomic/mutex global codegen in C backend (atomic globals, constructor-initialized mutexes), and wiring lock/unlock into `GlobalAssign` emission. Workaround: use explicit `Mutex[int]` or `Atomic[int]` as the static type. [added: 2026-03-10]
 
 - **IR refactor: Continue `exprs/` split — Phase 4**: Phases 1-3 done (8 files, mod.rs 2,515 lines). Remaining: control-flow exprs, struct literals, field access — tightly coupled to `lower_expr_inner`. Diminishing returns. Revisit if mod.rs grows again. [updated: 2026-03-07]

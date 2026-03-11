@@ -1,0 +1,122 @@
+enum Shape:
+    Circle(float)
+    Rectangle(float, float)
+    Triangle(float, float)
+
+void main():
+    # Match on int with else
+    int x = 42
+    match x:
+        case 0:
+            print("zero")
+        case 42:
+            print("answer")
+        else:
+            print("other")
+
+    # Match on int with or-pattern
+    int y = 3
+    match y:
+        case 1 | 2:
+            print("tiny")
+        case 3 | 4:
+            print("small")
+        else:
+            print("big")
+
+    # Match on enum with destructuring — Circle
+    Shape s1 = Shape.Circle(3.14)
+    match s1:
+        case Circle(r):
+            print(r)
+        case Rectangle(w, h):
+            print(w)
+        case Triangle(b, h):
+            print(b)
+
+    # Match on enum — Rectangle
+    Shape s2 = Shape.Rectangle(5.0, 10.0)
+    match s2:
+        case Circle(r):
+            print(r)
+        case Rectangle(w, h):
+            print(f"{w} {h}")
+        case Triangle(b, h):
+            print(b)
+
+    # Match on enum — Triangle
+    Shape s3 = Shape.Triangle(6.0, 8.0)
+    match s3:
+        case Circle(r):
+            print(r)
+        case Rectangle(w, h):
+            print(w)
+        case Triangle(b, h):
+            print(f"{b} {h}")
+
+    # Match on Option — Some
+    Option[int] opt = Some(99)
+    match opt:
+        case Some(val):
+            print(val)
+        case None:
+            print("none")
+
+    # Match on Option — None
+    Option[int] none_opt = None()
+    match none_opt:
+        case Some(val):
+            print(val)
+        case None:
+            print("none")
+
+    # Match on Result — Ok
+    Result[int, str] ok_res = Ok(10)
+    match ok_res:
+        case Ok(val):
+            print(val)
+        case Error(e):
+            print(e)
+
+    # Match on Result — Error
+    Result[int, str] err_res = Error("bad")
+    match err_res:
+        case Ok(val):
+            print(val)
+        case Error(e):
+            print(e)
+
+    # Match with guards
+    int z = 42
+    match z:
+        case n if n > 100:
+            print("large")
+        case n if n > 0:
+            print("positive")
+        case 0:
+            print("zero")
+        else:
+            print("negative")
+
+    # Nested match via Option from vector
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+    Option[int] first = v.first()
+    match first:
+        case Some(val):
+            match val:
+                case 1:
+                    print("first is one")
+                else:
+                    print("first is not one")
+        case None:
+            print("empty")
+
+    # Match with variable binding
+    int w = 7
+    match w:
+        case 1 | 2 | 3:
+            print("low")
+        case n:
+            print(n)

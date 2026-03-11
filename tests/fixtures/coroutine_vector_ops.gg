@@ -1,0 +1,53 @@
+from std.async import sleep
+
+# Test Vector operations in async context: clone, slice, extend.
+# These are not covered by coroutine_collections or coroutine_collections_advanced.
+
+async int test_vector_ops():
+    sleep(1)
+
+    Vector[int] v = Vector[int]()
+    v.push(5)
+    v.push(3)
+    v.push(1)
+    v.push(4)
+    v.push(2)
+
+    # clone in async
+    Vector[int] cloned = v.clone()
+    v.push(99)
+    print(cloned.len())
+    print(v.len())
+
+    # sort the clone in async
+    cloned.sort()
+    print(cloned[0])
+    print(cloned[4])
+
+    # slice in async
+    Vector[int] sl = v.slice(1, 4)
+    print(sl.len())
+    print(sl[0])
+    print(sl[2])
+
+    # extend in async
+    Vector[int] a = Vector[int]()
+    a.push(1)
+    a.push(2)
+    Vector[int] b = Vector[int]()
+    b.push(3)
+    b.push(4)
+    a.extend(b)
+    print(a.len())
+    print(a[2])
+
+    # pop in async (after push(99), v = [5,3,1,4,2,99])
+    Option[int] popped = v.pop()
+    print(popped.unwrap())
+
+    return 0
+
+async void main():
+    Task[int] t = spawn test_vector_ops()
+    int r = t.await()
+    print(r)

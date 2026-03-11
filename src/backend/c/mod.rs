@@ -3364,8 +3364,10 @@ fn emit_poll_inst(
                                 }
                             } else {
                                 // Non-self args: if pass_by_ptr, wrap in compound literal for void* params
+                                // slice takes self by ptr but remaining args as plain scalars
                                 let val = fmt_operand_poll(arg, func, registry);
-                                let should_ptr = rewrite.pass_by_ptr;
+                                let scalar_args = rewrite.runtime_fn == "gorget_array_slice";
+                                let should_ptr = rewrite.pass_by_ptr && !scalar_args;
                                 if should_ptr {
                                     match arg {
                                         Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
@@ -8028,7 +8030,12 @@ fn try_emit_higher_order_method(
         "fold" => {
             // args: [collection_ref, init_value, closure]
             if args.len() < 3 { return None; }
-            let init = format_operand(&args[1], func, registry);
+            let init = if let Operand::Constant(crate::ir::instructions::Constant::Str(s)) = &args[1] {
+                let escaped = escape_c_string(s);
+                format!("gorget_str_from_literal(\"{escaped}\", {})", s.len())
+            } else {
+                format_operand(&args[1], func, registry)
+            };
             let (call_fn, closure_ref, _closure_type) = extract_callable(&args[2]);
             // Determine accumulator type from the init value operand.
             // This handles float/str accumulators correctly instead of defaulting to int64_t.
@@ -8071,12 +8078,23 @@ fn try_emit_higher_order_method(
                     __acc = {call_fn}({closure_ref}, __acc, __elem); \
                     }} __acc; }});");
             } else {
-                let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
-                    {acc_type} __acc = {init}; \
-                    for (size_t __i = 0; __i < __src.len; __i++) {{ \
-                    {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
-                    __acc = {call_fn}({closure_ref}, __acc, __elem); \
-                    }} __acc; }});");
+                if acc_type == "Str" {
+                    // String fold: closure returns GorgetString, so accumulate as GorgetString
+                    // and coerce to Str at the end.
+                    let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
+                        GorgetString __acc = gorget_string_new({init}.data); \
+                        for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                        {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                        __acc = {call_fn}({closure_ref}, (Str){{ .data = __acc.data, .len = __acc.len }}, __elem); \
+                        }} (Str){{ .data = __acc.data, .len = __acc.len }}; }});");
+                } else {
+                    let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
+                        {acc_type} __acc = {init}; \
+                        for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                        {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
+                        __acc = {call_fn}({closure_ref}, __acc, __elem); \
+                        }} __acc; }});");
+                }
             }
         }
         "reduce" => {
@@ -9212,7 +9230,12 @@ fn try_emit_poll_higher_order_method(
         }
         "fold" => {
             if args.len() < 3 { return None; }
-            let init_val = fmt_operand_poll(&args[1], func, registry);
+            let init_val = if let Operand::Constant(Constant::Str(s)) = &args[1] {
+                let escaped = escape_c_string(s);
+                format!("gorget_str_from_literal(\"{escaped}\", {})", s.len())
+            } else {
+                fmt_operand_poll(&args[1], func, registry)
+            };
             let (call_fn, closure_ref, _) = extract_callable_poll(&args[2]);
             if is_dict {
                 let iter_loop = if is_ordered_dict {
@@ -9228,6 +9251,7 @@ fn try_emit_poll_higher_order_method(
                         effective_c_type(p.local.0 as usize, func, registry, type_overrides),
                     Operand::Constant(Constant::I64(_)) => "int64_t".to_string(),
                     Operand::Constant(Constant::F64(_)) => "double".to_string(),
+                    Operand::Constant(Constant::Str(_)) => "Str".to_string(),
                     _ => "int64_t".to_string(),
                 };
                 let _ = writeln!(out, "        {dst_str} = ({{ GorgetMap __src = {coll_val}; \
@@ -9243,6 +9267,7 @@ fn try_emit_poll_higher_order_method(
                         effective_c_type(p.local.0 as usize, func, registry, type_overrides),
                     Operand::Constant(Constant::I64(_)) => "int64_t".to_string(),
                     Operand::Constant(Constant::F64(_)) => "double".to_string(),
+                    Operand::Constant(Constant::Str(_)) => "Str".to_string(),
                     _ => "int64_t".to_string(),
                 };
                 let _ = writeln!(out, "        {dst_str} = ({{ GorgetSet __src = {coll_val}; \
@@ -9258,6 +9283,7 @@ fn try_emit_poll_higher_order_method(
                         effective_c_type(p.local.0 as usize, func, registry, type_overrides),
                     Operand::Constant(Constant::I64(_)) => "int64_t".to_string(),
                     Operand::Constant(Constant::F64(_)) => "double".to_string(),
+                    Operand::Constant(Constant::Str(_)) => "Str".to_string(),
                     _ => "int64_t".to_string(),
                 };
                 let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
@@ -9506,7 +9532,7 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
                 ..Default::default()
             }),
             "slice" => Some(CollectionMethodCall {
-                runtime_fn: "gorget_array_slice", pass_by_ptr: false,
+                runtime_fn: "gorget_array_slice", pass_by_ptr: true,
                 has_return: true, needs_deref_cast: false, field_access: None,
                 ..Default::default()
             }),
@@ -11508,12 +11534,14 @@ fn emit_collection_method_call(
     // For set/insert: first extra arg is index (plain value), second is element (by pointer)
     let is_index_plus_elem = rewrite.runtime_fn == "gorget_array_set"
         || rewrite.runtime_fn == "gorget_array_insert";
+    // slice takes self by ptr but remaining args (start, end) as plain int64_t
+    let scalar_args = rewrite.runtime_fn == "gorget_array_slice";
 
     // Remaining args
     for (arg_idx, arg) in args.iter().skip(1).enumerate() {
         let val = format_operand(arg, func, registry);
         // For set/insert: arg[0] = index (value), arg[1] = element (pointer)
-        let should_ptr = if is_index_plus_elem { arg_idx == 1 } else { rewrite.pass_by_ptr };
+        let should_ptr = if scalar_args { false } else if is_index_plus_elem { arg_idx == 1 } else { rewrite.pass_by_ptr };
         if should_ptr {
             // For void*-generic functions, pass element by pointer.
             // Use compound literal for constants/rvalues: &(type){val}

@@ -1,0 +1,61 @@
+# String predicate and transform methods
+
+void main():
+    # === Predicates ===
+
+    # is_alpha
+    print("abc".is_alpha())
+    print("ab1".is_alpha())
+    print("".is_alpha())
+
+    # is_digit
+    print("123".is_digit())
+    print("12a".is_digit())
+    print("".is_digit())
+
+    # is_alphanumeric
+    print("abc123".is_alphanumeric())
+    print("abc!!".is_alphanumeric())
+
+    # is_whitespace
+    str ws = "  \t"
+    print(ws.is_whitespace())
+    print(" a".is_whitespace())
+
+    # is_upper
+    print("ABC".is_upper())
+    print("ABc".is_upper())
+
+    # is_lower
+    print("abc".is_lower())
+    print("aBc".is_lower())
+
+    # is_ascii
+    print("hello".is_ascii())
+
+    # is_hex_digit
+    print("0123abcdef".is_hex_digit())
+    print("xyz".is_hex_digit())
+
+    # === Transforms ===
+
+    # to_upper / to_lower
+    print("hello".to_upper())
+    print("HELLO".to_lower())
+
+    # trim
+    str padded = "  hello  "
+    print(padded.trim())
+
+    # starts_with / ends_with
+    print("hello".starts_with("hel"))
+    print("hello".ends_with("llo"))
+
+    # contains
+    print("hello world".contains("world"))
+
+    # replace
+    print("hello world".replace("world", "gorget"))
+
+    # repeat
+    print("ab".repeat(3))

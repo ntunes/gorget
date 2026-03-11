@@ -1460,6 +1460,7 @@ pub(super) fn lower_method_call(
         let ret_type = if method_name == "fold" && call_args.len() > 2 {
             match &call_args[1] {
                 Operand::Constant(Constant::F64(_)) => F64_TYPE,
+                Operand::Constant(Constant::Str(_)) => ctx.type_mapper.str_type,
                 Operand::Copy(p) | Operand::Move(p) => {
                     let init_type = builder.locals[p.local.0 as usize].type_id;
                     if init_type != I64_TYPE { init_type } else { ret_type }

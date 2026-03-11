@@ -1,65 +1,177 @@
 # Comprehensive Option[T] method coverage
 
 void main():
-    # --- Construction ---
+    # === Construction ===
     Option[int] some = Some(42)
     Option[int] none = None()
-
-    # --- unwrap / expect ---
+    print("--- construction ---")
     print(f"{some.unwrap()}")
+
+    # === unwrap ===
+    print("--- unwrap ---")
+    print(f"{some.unwrap()}")
+
+    # === expect ===
+    print("--- expect ---")
     print(f"{some.expect("should have value")}")
 
-    # --- is_some / is_none ---
+    # === is_some / is_none ===
+    print("--- is_some / is_none ---")
     print(f"{some.is_some()}")
     print(f"{some.is_none()}")
     print(f"{none.is_some()}")
     print(f"{none.is_none()}")
 
-    # --- unwrap_or ---
+    # === unwrap_or ===
+    print("--- unwrap_or ---")
     print(f"{some.unwrap_or(0)}")
     print(f"{none.unwrap_or(99)}")
 
-    # --- unwrap_or_else ---
+    # === unwrap_or_else ===
+    print("--- unwrap_or_else ---")
     print(f"{some.unwrap_or_else((): 0)}")
     print(f"{none.unwrap_or_else((): 99)}")
 
-    # --- map ---
+    # === map on Some ===
+    print("--- map ---")
     Option[int] doubled = some.map((int x): x * 2)
     print(f"{doubled.unwrap()}")
+
+    # === map on None ===
     Option[int] mapped_none = none.map((int x): x * 2)
     print(f"{mapped_none.is_none()}")
 
-    # --- filter ---
+    # === map identity ===
+    Option[int] identity = some.map((int x): x)
+    print(f"{identity.unwrap()}")
+
+    # === map to zero ===
+    Option[int] to_zero = some.map((int x): 0)
+    print(f"{to_zero.unwrap()}")
+
+    # === filter passes ===
+    print("--- filter ---")
     Option[int] passes = some.filter((int x): x > 40)
     print(f"{passes.unwrap()}")
+
+    # === filter fails ===
     Option[int] fails = some.filter((int x): x > 50)
     print(f"{fails.is_none()}")
 
-    # --- and_then ---
+    # === filter on None ===
+    Option[int] filter_none = none.filter((int x): x > 0)
+    print(f"{filter_none.is_none()}")
+
+    # === filter exact boundary ===
+    Option[int] exact = some.filter((int x): x == 42)
+    print(f"{exact.unwrap()}")
+
+    # === and_then returning Some ===
+    print("--- and_then ---")
     Option[int] chained = some.and_then((int x): Some(x + 1))
     print(f"{chained.unwrap()}")
+
+    # === and_then returning None ===
+    Option[int] chain_to_none = some.and_then((int x): None())
+    print(f"{chain_to_none.is_none()}")
+
+    # === and_then on None ===
     Option[int] chain_none = none.and_then((int x): Some(x + 1))
     print(f"{chain_none.is_none()}")
 
-    # --- or ---
+    # === or with Some ===
+    print("--- or ---")
     Option[int] alt = Some(77)
     print(f"{some.or(alt).unwrap()}")
+
+    # === or with None ===
     print(f"{none.or(alt).unwrap()}")
 
-    # --- or_else ---
+    # === or both None ===
+    Option[int] none2 = None()
+    print(f"{none.or(none2).is_none()}")
+
+    # === or_else on Some ===
+    print("--- or_else ---")
     print(f"{some.or_else((): Some(77)).unwrap()}")
+
+    # === or_else on None ===
     print(f"{none.or_else((): Some(77)).unwrap()}")
 
-    # --- flatten (chained) ---
+    # === or_else returning None ===
+    Option[int] or_else_none = none.or_else((): None())
+    print(f"{or_else_none.is_none()}")
+
+    # === flatten Some(Some(v)) ===
+    print("--- flatten ---")
     Option[Option[int]] nested = Some(Some(100))
     print(f"{nested.flatten().unwrap()}")
+
+    # === flatten None outer ===
     Option[Option[int]] none_outer = None()
     print(f"{none_outer.flatten().is_none()}")
+
+    # === flatten Some(None) ===
     Option[Option[int]] some_none = Some(None())
     print(f"{some_none.flatten().is_none()}")
 
-    # --- Chaining ---
-    int result = some.filter((int x): x > 40).map((int x): x * 2).unwrap_or(0)
-    print(f"{result}")
+    # === Chaining: filter pass then map ===
+    print("--- chaining ---")
+    int result1 = some.filter((int x): x > 40).map((int x): x * 2).unwrap_or(0)
+    print(f"{result1}")
+
+    # === Chaining: filter fail then map ===
     int result2 = some.filter((int x): x > 50).map((int x): x * 2).unwrap_or(0)
     print(f"{result2}")
+
+    # === Chaining: map then filter ===
+    int result3 = some.map((int x): x * 3).filter((int x): x > 100).unwrap_or(0)
+    print(f"{result3}")
+
+    # === Chaining: map then filter fail ===
+    int result4 = some.map((int x): x * 2).filter((int x): x > 100).unwrap_or(0)
+    print(f"{result4}")
+
+    # === Chaining: and_then then map ===
+    int result5 = some.and_then((int x): Some(x + 8)).map((int x): x * 2).unwrap_or(0)
+    print(f"{result5}")
+
+    # === Chaining: or then unwrap ===
+    int result6 = none.or(Some(10)).unwrap_or(0)
+    print(f"{result6}")
+
+    # === Chaining: map then unwrap_or ===
+    int result7 = none.map((int x): x + 1).unwrap_or(55)
+    print(f"{result7}")
+
+    # === Multiple map chain ===
+    int result8 = some.map((int x): x + 1).map((int x): x * 2).unwrap_or(0)
+    print(f"{result8}")
+
+    # === Edge: Some(0) is still Some ===
+    print("--- edge cases ---")
+    Option[int] zero_opt = Some(0)
+    print(f"{zero_opt.is_some()}")
+    print(f"{zero_opt.unwrap()}")
+
+    # === Edge: Some(negative) ===
+    Option[int] neg_opt = Some(-1)
+    print(f"{neg_opt.unwrap()}")
+    print(f"{neg_opt.filter((int x): x < 0).unwrap()}")
+
+    # === Edge: unwrap_or on Some returns Some's value ===
+    print(f"{zero_opt.unwrap_or(999)}")
+
+    # === Edge: map on Some(0) ===
+    Option[int] zero_mapped = zero_opt.map((int x): x + 100)
+    print(f"{zero_mapped.unwrap()}")
+
+    # === Edge: filter on Some(0) with predicate x > 0 ===
+    Option[int] zero_filtered = zero_opt.filter((int x): x > 0)
+    print(f"{zero_filtered.is_none()}")
+
+    # === Edge: and_then chain multiple times ===
+    Option[int] multi_chain = some.and_then((int x): Some(x + 1)).and_then((int x): Some(x + 1)).and_then((int x): Some(x + 1))
+    print(f"{multi_chain.unwrap()}")
+
+    print("done")
