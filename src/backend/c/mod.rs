@@ -386,6 +386,14 @@ fn map_stdlib_name(name: &str) -> &str {
         "sdl_render_text" => "gorget_sdl_render_text",
         "sdl_text_width" => "gorget_sdl_text_width",
         "sdl_text_height" => "gorget_sdl_text_height",
+        // SDL mouse capture, relative mode, text input
+        "sdl_set_relative_mouse_mode" => "gorget_sdl_set_relative_mouse_mode",
+        "sdl_show_cursor" => "gorget_sdl_show_cursor",
+        "sdl_get_relative_mouse_state" => "gorget_sdl_get_relative_mouse_state",
+        "sdl_warp_mouse_in_window" => "gorget_sdl_warp_mouse_in_window",
+        "sdl_get_mouse_state" => "gorget_sdl_get_mouse_state",
+        "sdl_start_text_input" => "gorget_sdl_start_text_input",
+        "sdl_stop_text_input" => "gorget_sdl_stop_text_input",
         _ => name,
     }
 }

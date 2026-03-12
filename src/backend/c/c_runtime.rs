@@ -5923,6 +5923,10 @@ static inline GorgetSDLEvent gorget_sdl_poll_event(void) {
                 result.mouse_y = (int64_t)e.button.y;
                 result.mouse_button = (int64_t)e.button.button;
                 break;
+            case SDL_TEXTINPUT:
+                // Put first typed character into key_code for Gorget to read
+                result.key_code = (int64_t)(unsigned char)e.text.text[0];
+                break;
             default:
                 break;
         }
@@ -5994,6 +5998,15 @@ static inline GorgetSDLEvent gorget_sdl_get_mouse_state(void) {
     ev.mouse_y = (int64_t)y;
     ev.mouse_button = (int64_t)buttons;
     return ev;
+}
+
+// ── Text input mode (for console / chat) ─────────────────────
+static inline void gorget_sdl_start_text_input(void) {
+    SDL_StartTextInput();
+}
+
+static inline void gorget_sdl_stop_text_input(void) {
+    SDL_StopTextInput();
 }
 
 "#;

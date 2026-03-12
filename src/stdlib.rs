@@ -932,6 +932,10 @@ fn gen_sdl_module() -> Module {
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_warp_mouse_in_window", &[("window", ty_sdl_window()), ("x", ty_int()), ("y", ty_int())], ty_void()))));
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_mouse_state", &[], ty_sdl_event()))));
 
+    // Text input mode (for console / chat)
+    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_start_text_input", &[], ty_void()))));
+    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_stop_text_input", &[], ty_void()))));
+
     Module {
         items,
         span: Span::dummy(),
