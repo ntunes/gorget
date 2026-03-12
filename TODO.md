@@ -10,7 +10,7 @@
 
 ## Medium
 
-- **Gorget Arena Phase 3: Renderer integration** — BSP loader and renderer skeleton exist but need real BSP file loading test, Q3 shader parser completion (full keyword dispatch), VBO upload pipeline, GLSL shader programs, actual BSP rendering with PVS culling. Requires gg.gl + gg.image working end-to-end. [added: 2026-03-11]
+- **Gorget Arena Phase 3: Renderer integration** — Project passes `gg check` and generates C. BSP loader and renderer skeleton exist but need real BSP file loading test, Q3 shader parser completion, VBO upload pipeline, actual BSP rendering with PVS culling. GL now has 82+ functions including FBOs, vertex arrays, multitexture, shader introspection. Next: install SDL2-dev in container for end-to-end C compilation, download OpenArena test assets, wire BSP loader to renderer. [updated: 2026-03-11]
 
 - **Gorget Arena Phase 4-6: Game logic, networking, polish** — ECS integration with gg.ecs, BSP collision tracing, weapon/item/trigger systems wired to game loop. Client/server networking with UDP + delta compression. P2P mode via gg.p2p. Audio integration. UI rendering. Bot AI. Asset download manager with gg.http. [added: 2026-03-11]
 
