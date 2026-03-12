@@ -456,6 +456,8 @@ fn takes_array_ptr_args(name: &str) -> bool {
         | "gorget_metal_encoder_set_fragment_bytes"
         | "gorget_metal_create_library_from_data"
         | "gorget_metal_compute_set_bytes"
+        | "gorget_metal_create_render_pipeline_mrt"
+        | "gorget_metal_buffer_write"
     ) {
         return true;
     }
@@ -469,6 +471,12 @@ fn takes_array_ptr_args(name: &str) -> bool {
         | "gorget_gl_read_pixels"
         | "gorget_gl_tex_sub_image_2d"
         | "gorget_gl_copy_tex_sub_image_2d"
+        | "gorget_gl_tex_image_3d"
+        | "gorget_gl_tex_sub_image_3d"
+        | "gorget_gl_uniform_3fv"
+        | "gorget_gl_uniform_4fv"
+        | "gorget_gl_uniform_matrix3fv"
+        | "gorget_gl_draw_buffers"
     ) {
         return true;
     }

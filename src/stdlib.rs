@@ -2182,6 +2182,118 @@ fn gen_gl_module() -> Module {
     items.push(fn_item(extern_fn("gl_get_string", &[("name", ty_int())], ty_string(), "gorget_gl_get_string")));
     items.push(fn_item(extern_fn("gl_get_integer", &[("pname", ty_int())], ty_int(), "gorget_gl_get_integer")));
 
+    // ── VAO (Vertex Array Objects — GL 3.0+) ────────────────
+    items.push(fn_item(extern_fn("gl_gen_vertex_array", &[], ty_int(), "gorget_gl_gen_vertex_array")));
+    items.push(fn_item(extern_fn("gl_delete_vertex_array", &[("vao", ty_int())], ty_void(), "gorget_gl_delete_vertex_array")));
+    items.push(fn_item(extern_fn("gl_bind_vertex_array", &[("vao", ty_int())], ty_void(), "gorget_gl_bind_vertex_array")));
+
+    // ── Instanced Rendering (GL 3.1+) ───────────────────────
+    items.push(fn_item(extern_fn("gl_draw_arrays_instanced", &[("mode", ty_int()), ("first", ty_int()), ("count", ty_int()), ("instance_count", ty_int())], ty_void(), "gorget_gl_draw_arrays_instanced")));
+    items.push(fn_item(extern_fn("gl_draw_elements_instanced", &[("mode", ty_int()), ("count", ty_int()), ("type_", ty_int()), ("offset", ty_int()), ("instance_count", ty_int())], ty_void(), "gorget_gl_draw_elements_instanced")));
+    items.push(fn_item(extern_fn("gl_vertex_attrib_divisor", &[("index", ty_int()), ("divisor", ty_int())], ty_void(), "gorget_gl_vertex_attrib_divisor")));
+
+    // ── Occlusion Queries (GL 1.5+) ─────────────────────────
+    items.push(fn_item(extern_fn("gl_gen_query", &[], ty_int(), "gorget_gl_gen_query")));
+    items.push(fn_item(extern_fn("gl_delete_query", &[("query", ty_int())], ty_void(), "gorget_gl_delete_query")));
+    items.push(fn_item(extern_fn("gl_begin_query", &[("target", ty_int()), ("query", ty_int())], ty_void(), "gorget_gl_begin_query")));
+    items.push(fn_item(extern_fn("gl_end_query", &[("target", ty_int())], ty_void(), "gorget_gl_end_query")));
+    items.push(fn_item(extern_fn("gl_get_query_result", &[("query", ty_int())], ty_int(), "gorget_gl_get_query_result")));
+    items.push(fn_item(extern_fn("gl_get_query_result_available", &[("query", ty_int())], ty_int(), "gorget_gl_get_query_result_available")));
+
+    // ── UBO (Uniform Buffer Objects — GL 3.1+) ──────────────
+    items.push(fn_item(extern_fn("gl_bind_buffer_base", &[("target", ty_int()), ("index", ty_int()), ("buffer", ty_int())], ty_void(), "gorget_gl_bind_buffer_base")));
+    items.push(fn_item(extern_fn("gl_bind_buffer_range", &[("target", ty_int()), ("index", ty_int()), ("buffer", ty_int()), ("offset", ty_int()), ("size", ty_int())], ty_void(), "gorget_gl_bind_buffer_range")));
+    items.push(fn_item(extern_fn("gl_get_uniform_block_index", &[("program", ty_int()), ("name", ty_str())], ty_int(), "gorget_gl_get_uniform_block_index")));
+    items.push(fn_item(extern_fn("gl_uniform_block_binding", &[("program", ty_int()), ("block_index", ty_int()), ("binding_point", ty_int())], ty_void(), "gorget_gl_uniform_block_binding")));
+
+    // ── 3D Textures / Texture Arrays (GL 1.2+ / GL 3.0+) ────
+    items.push(fn_item(extern_fn("gl_tex_image_3d", &[("target", ty_int()), ("level", ty_int()), ("internal_format", ty_int()), ("width", ty_int()), ("height", ty_int()), ("depth", ty_int()), ("format", ty_int()), ("type_", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_gl_tex_image_3d")));
+    items.push(fn_item(extern_fn("gl_tex_sub_image_3d", &[("target", ty_int()), ("level", ty_int()), ("xoff", ty_int()), ("yoff", ty_int()), ("zoff", ty_int()), ("w", ty_int()), ("h", ty_int()), ("d", ty_int()), ("format", ty_int()), ("type_", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_gl_tex_sub_image_3d")));
+
+    // ── Geometry Shaders (GL 3.2+) ──────────────────────────
+    items.push(fn_item(extern_fn("gl_program_parameter_i", &[("program", ty_int()), ("pname", ty_int()), ("value", ty_int())], ty_void(), "gorget_gl_program_parameter_i")));
+
+    // ── Map/Unmap Buffers (GL 1.5+) ─────────────────────────
+    items.push(fn_item(extern_fn("gl_map_buffer", &[("target", ty_int()), ("access", ty_int())], ty_int(), "gorget_gl_map_buffer")));
+    items.push(fn_item(extern_fn("gl_unmap_buffer", &[("target", ty_int())], ty_int(), "gorget_gl_unmap_buffer")));
+    items.push(fn_item(extern_fn("gl_map_buffer_range", &[("target", ty_int()), ("offset", ty_int()), ("length", ty_int()), ("access", ty_int())], ty_int(), "gorget_gl_map_buffer_range")));
+    items.push(fn_item(extern_fn("gl_flush_mapped_buffer_range", &[("target", ty_int()), ("offset", ty_int()), ("length", ty_int())], ty_void(), "gorget_gl_flush_mapped_buffer_range")));
+
+    // ── Additional Uniform Types ────────────────────────────
+    items.push(fn_item(extern_fn("gl_uniform_3fv", &[("location", ty_int()), ("count", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_gl_uniform_3fv")));
+    items.push(fn_item(extern_fn("gl_uniform_4fv", &[("location", ty_int()), ("count", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_gl_uniform_4fv")));
+    items.push(fn_item(extern_fn("gl_uniform_matrix3fv", &[("location", ty_int()), ("transpose", ty_int()), ("value", ty_vector_uint8())], ty_void(), "gorget_gl_uniform_matrix3fv")));
+
+    // ── Blend Separate (GL 1.4+) ────────────────────────────
+    items.push(fn_item(extern_fn("gl_blend_func_separate", &[("src_rgb", ty_int()), ("dst_rgb", ty_int()), ("src_alpha", ty_int()), ("dst_alpha", ty_int())], ty_void(), "gorget_gl_blend_func_separate")));
+    items.push(fn_item(extern_fn("gl_blend_equation", &[("mode", ty_int())], ty_void(), "gorget_gl_blend_equation")));
+    items.push(fn_item(extern_fn("gl_blend_equation_separate", &[("mode_rgb", ty_int()), ("mode_alpha", ty_int())], ty_void(), "gorget_gl_blend_equation_separate")));
+
+    // ── Point Sprites (GL 1.4+) ─────────────────────────────
+    items.push(fn_item(extern_fn("gl_point_size", &[("size", ty_float())], ty_void(), "gorget_gl_point_size")));
+
+    // ── Additional GL Constants (GL 3.0+) ────────────────────
+    // VAO binding
+    items.push(const_item("GL_VERTEX_ARRAY_BINDING", 0x85B5));
+    // Query targets
+    items.push(const_item("GL_SAMPLES_PASSED", 0x8914));
+    items.push(const_item("GL_ANY_SAMPLES_PASSED", 0x8C2F));
+    items.push(const_item("GL_PRIMITIVES_GENERATED", 0x8C87));
+    items.push(const_item("GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN", 0x8C88));
+    items.push(const_item("GL_QUERY_RESULT", 0x8866));
+    items.push(const_item("GL_QUERY_RESULT_AVAILABLE", 0x8867));
+    // UBO
+    items.push(const_item("GL_UNIFORM_BUFFER", 0x8A11));
+    items.push(const_item("GL_MAX_UNIFORM_BUFFER_BINDINGS", 0x8A2F));
+    // Texture3D / Array
+    items.push(const_item("GL_TEXTURE_3D", 0x806F));
+    items.push(const_item("GL_TEXTURE_2D_ARRAY", 0x8C1A));
+    items.push(const_item("GL_TEXTURE_WRAP_R", 0x8072));
+    // Geometry shader
+    items.push(const_item("GL_GEOMETRY_SHADER", 0x8DD9));
+    items.push(const_item("GL_GEOMETRY_INPUT_TYPE", 0x8DDB));
+    items.push(const_item("GL_GEOMETRY_OUTPUT_TYPE", 0x8DDC));
+    items.push(const_item("GL_GEOMETRY_VERTICES_OUT", 0x8DDA));
+    // sRGB
+    items.push(const_item("GL_FRAMEBUFFER_SRGB", 0x8DB9));
+    items.push(const_item("GL_SRGB", 0x8C40));
+    items.push(const_item("GL_SRGB8", 0x8C41));
+    items.push(const_item("GL_SRGB_ALPHA", 0x8C42));
+    items.push(const_item("GL_SRGB8_ALPHA8", 0x8C43));
+    // Buffer mapping
+    items.push(const_item("GL_READ_ONLY", 0x88B8));
+    items.push(const_item("GL_WRITE_ONLY", 0x88B9));
+    items.push(const_item("GL_READ_WRITE", 0x88BA));
+    items.push(const_item("GL_MAP_READ_BIT", 0x0001));
+    items.push(const_item("GL_MAP_WRITE_BIT", 0x0002));
+    items.push(const_item("GL_MAP_INVALIDATE_RANGE_BIT", 0x0004));
+    items.push(const_item("GL_MAP_INVALIDATE_BUFFER_BIT", 0x0008));
+    items.push(const_item("GL_MAP_FLUSH_EXPLICIT_BIT", 0x0010));
+    items.push(const_item("GL_MAP_UNSYNCHRONIZED_BIT", 0x0020));
+    // Blend equations
+    items.push(const_item("GL_FUNC_ADD", 0x8006));
+    items.push(const_item("GL_FUNC_SUBTRACT", 0x800A));
+    items.push(const_item("GL_FUNC_REVERSE_SUBTRACT", 0x800B));
+    items.push(const_item("GL_MIN", 0x8007));
+    items.push(const_item("GL_MAX", 0x8008));
+    // Color attachments 1-7 (for MRT)
+    items.push(const_item("GL_COLOR_ATTACHMENT1", 0x8CE1));
+    items.push(const_item("GL_COLOR_ATTACHMENT2", 0x8CE2));
+    items.push(const_item("GL_COLOR_ATTACHMENT3", 0x8CE3));
+    items.push(const_item("GL_COLOR_ATTACHMENT4", 0x8CE4));
+    items.push(const_item("GL_COLOR_ATTACHMENT5", 0x8CE5));
+    items.push(const_item("GL_COLOR_ATTACHMENT6", 0x8CE6));
+    items.push(const_item("GL_COLOR_ATTACHMENT7", 0x8CE7));
+    // Draw buffers (for MRT)
+    items.push(const_item("GL_MAX_DRAW_BUFFERS", 0x8824));
+    items.push(const_item("GL_MAX_COLOR_ATTACHMENTS", 0x8CDF));
+    // Point sprites
+    items.push(const_item("GL_POINT_SPRITE", 0x8861));
+    items.push(const_item("GL_PROGRAM_POINT_SIZE", 0x8642));
+
+    // ── MRT Draw Buffers (GL 2.0+) ──────────────────────────
+    items.push(fn_item(extern_fn("gl_draw_buffers", &[("count", ty_int()), ("bufs", ty_vector_uint8())], ty_void(), "gorget_gl_draw_buffers")));
+
     Module {
         items,
         span: Span::dummy(),
@@ -2616,6 +2728,71 @@ fn gen_metal_module() -> Module {
     items.push(fn_item(extern_fn("metal_create_texture_3d", &[("device", ty_int()), ("format", ty_int()), ("width", ty_int()), ("height", ty_int()), ("depth", ty_int()), ("mipmaps", ty_int()), ("usage", ty_int())], ty_int(), "gorget_metal_create_texture_3d")));
     items.push(fn_item(extern_fn("metal_create_texture_view", &[("texture", ty_int()), ("format", ty_int()), ("tex_type", ty_int()), ("mip_start", ty_int()), ("mip_count", ty_int()), ("slice_start", ty_int()), ("slice_count", ty_int())], ty_int(), "gorget_metal_create_texture_view")));
 
+    // ── Resource Heaps ──────────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_heap", &[("device", ty_int()), ("size", ty_int()), ("storage_mode", ty_int())], ty_int(), "gorget_metal_create_heap")));
+    items.push(fn_item(extern_fn("metal_heap_create_buffer", &[("heap", ty_int()), ("length", ty_int()), ("storage_mode", ty_int())], ty_int(), "gorget_metal_heap_create_buffer")));
+    items.push(fn_item(extern_fn("metal_heap_create_texture", &[("heap", ty_int()), ("width", ty_int()), ("height", ty_int()), ("format", ty_int()), ("usage", ty_int()), ("storage_mode", ty_int())], ty_int(), "gorget_metal_heap_create_texture")));
+    items.push(fn_item(extern_fn("metal_heap_used_size", &[("heap", ty_int())], ty_int(), "gorget_metal_heap_used_size")));
+    items.push(fn_item(extern_fn("metal_heap_current_allocated_size", &[("heap", ty_int())], ty_int(), "gorget_metal_heap_current_allocated_size")));
+    items.push(fn_item(extern_fn("metal_heap_max_available_size", &[("heap", ty_int()), ("alignment", ty_int())], ty_int(), "gorget_metal_heap_max_available_size")));
+
+    // ── Argument Buffers (Bindless Resources) ───────────────────
+    items.push(fn_item(extern_fn("metal_create_argument_encoder", &[("function_handle", ty_int()), ("buffer_index", ty_int())], ty_int(), "gorget_metal_create_argument_encoder")));
+    items.push(fn_item(extern_fn("metal_argument_encoder_encoded_length", &[("encoder", ty_int())], ty_int(), "gorget_metal_argument_encoder_encoded_length")));
+    items.push(fn_item(extern_fn("metal_argument_encoder_set_argument_buffer", &[("encoder", ty_int()), ("buffer", ty_int()), ("offset", ty_int())], ty_void(), "gorget_metal_argument_encoder_set_argument_buffer")));
+    items.push(fn_item(extern_fn("metal_argument_encoder_set_buffer", &[("encoder", ty_int()), ("buffer", ty_int()), ("offset", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_argument_encoder_set_buffer")));
+    items.push(fn_item(extern_fn("metal_argument_encoder_set_texture", &[("encoder", ty_int()), ("texture", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_argument_encoder_set_texture")));
+    items.push(fn_item(extern_fn("metal_argument_encoder_set_sampler", &[("encoder", ty_int()), ("sampler", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_argument_encoder_set_sampler")));
+    items.push(fn_item(extern_fn("metal_encoder_use_resource", &[("encoder", ty_int()), ("resource", ty_int()), ("usage", ty_int())], ty_void(), "gorget_metal_encoder_use_resource")));
+    items.push(fn_item(extern_fn("metal_encoder_use_heap", &[("encoder", ty_int()), ("heap", ty_int())], ty_void(), "gorget_metal_encoder_use_heap")));
+
+    // ── Parallel Render Command Encoder ──────────────────────────
+    items.push(fn_item(extern_fn("metal_create_parallel_render_encoder", &[("cmd_buf", ty_int()), ("pass_desc", ty_int())], ty_int(), "gorget_metal_create_parallel_render_encoder")));
+    items.push(fn_item(extern_fn("metal_parallel_encoder_make_render_encoder", &[("parallel_enc", ty_int())], ty_int(), "gorget_metal_parallel_encoder_make_render_encoder")));
+    items.push(fn_item(extern_fn("metal_parallel_encoder_end", &[("parallel_enc", ty_int())], ty_void(), "gorget_metal_parallel_encoder_end")));
+
+    // ── Visibility Result Buffer (Occlusion Queries) ────────────
+    items.push(fn_item(extern_fn("metal_render_pass_set_visibility_result_buffer", &[("desc", ty_int()), ("buffer", ty_int())], ty_void(), "gorget_metal_render_pass_set_visibility_result_buffer")));
+    items.push(fn_item(extern_fn("metal_encoder_set_visibility_result_mode", &[("encoder", ty_int()), ("mode", ty_int()), ("offset", ty_int())], ty_void(), "gorget_metal_encoder_set_visibility_result_mode")));
+
+    // ── Full Stencil State (Separate front/back) ────────────────
+    items.push(fn_item(extern_fn("metal_create_depth_stencil_full", &[("device", ty_int()), ("depth_compare", ty_int()), ("depth_write", ty_int()), ("front_stencil_compare", ty_int()), ("front_read_mask", ty_int()), ("front_write_mask", ty_int()), ("front_sfail", ty_int()), ("front_dfail", ty_int()), ("front_dspass", ty_int()), ("back_stencil_compare", ty_int()), ("back_read_mask", ty_int()), ("back_write_mask", ty_int()), ("back_sfail", ty_int()), ("back_dfail", ty_int()), ("back_dspass", ty_int())], ty_int(), "gorget_metal_create_depth_stencil_full")));
+
+    // ── MRT Render Pipeline ─────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_render_pipeline_mrt", &[("device", ty_int()), ("vertex_fn", ty_int()), ("fragment_fn", ty_int()), ("vertex_desc", ty_int()), ("num_color_attachments", ty_int()), ("color_formats", ty_vector_uint8()), ("depth_format", ty_int())], ty_int(), "gorget_metal_create_render_pipeline_mrt")));
+    items.push(fn_item(extern_fn("metal_render_pass_set_color_texture", &[("desc", ty_int()), ("index", ty_int()), ("texture", ty_int())], ty_void(), "gorget_metal_render_pass_set_color_texture")));
+
+    // ── Indirect Command Buffers (GPU-Driven Rendering) ─────────
+    items.push(fn_item(extern_fn("metal_create_indirect_command_buffer", &[("device", ty_int()), ("max_commands", ty_int()), ("inherit_pipeline", ty_int()), ("inherit_buffers", ty_int())], ty_int(), "gorget_metal_create_indirect_command_buffer")));
+    items.push(fn_item(extern_fn("metal_icb_indirect_render_command", &[("icb", ty_int()), ("index", ty_int())], ty_int(), "gorget_metal_icb_indirect_render_command")));
+    items.push(fn_item(extern_fn("metal_indirect_render_set_pipeline", &[("cmd", ty_int()), ("pipeline", ty_int())], ty_void(), "gorget_metal_indirect_render_set_pipeline")));
+    items.push(fn_item(extern_fn("metal_indirect_render_set_vertex_buffer", &[("cmd", ty_int()), ("buffer", ty_int()), ("offset", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_indirect_render_set_vertex_buffer")));
+    items.push(fn_item(extern_fn("metal_indirect_render_set_fragment_buffer", &[("cmd", ty_int()), ("buffer", ty_int()), ("offset", ty_int()), ("index", ty_int())], ty_void(), "gorget_metal_indirect_render_set_fragment_buffer")));
+    items.push(fn_item(extern_fn("metal_indirect_render_draw_primitives", &[("cmd", ty_int()), ("prim_type", ty_int()), ("start", ty_int()), ("count", ty_int()), ("instance_count", ty_int()), ("base_instance", ty_int())], ty_void(), "gorget_metal_indirect_render_draw_primitives")));
+    items.push(fn_item(extern_fn("metal_indirect_render_draw_indexed", &[("cmd", ty_int()), ("prim_type", ty_int()), ("index_count", ty_int()), ("index_type", ty_int()), ("index_buffer", ty_int()), ("index_offset", ty_int()), ("instance_count", ty_int()), ("base_vertex", ty_int()), ("base_instance", ty_int())], ty_void(), "gorget_metal_indirect_render_draw_indexed")));
+    items.push(fn_item(extern_fn("metal_indirect_render_reset", &[("cmd", ty_int())], ty_void(), "gorget_metal_indirect_render_reset")));
+    items.push(fn_item(extern_fn("metal_encoder_execute_commands_in_buffer", &[("encoder", ty_int()), ("icb", ty_int()), ("start", ty_int()), ("count", ty_int())], ty_void(), "gorget_metal_encoder_execute_commands_in_buffer")));
+
+    // ── Sampler with LOD ───────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_sampler_with_lod", &[("device", ty_int()), ("min_filter", ty_int()), ("mag_filter", ty_int()), ("mip_filter", ty_int()), ("address_s", ty_int()), ("address_t", ty_int()), ("lod_min", ty_float()), ("lod_max", ty_float()), ("max_anisotropy", ty_int())], ty_int(), "gorget_metal_create_sampler_with_lod")));
+
+    // ── Texture Read-back ──────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_texture_get_bytes", &[("texture", ty_int()), ("x", ty_int()), ("y", ty_int()), ("width", ty_int()), ("height", ty_int()), ("bytes_per_row", ty_int())], ty_vector_uint8(), "gorget_metal_texture_get_bytes")));
+
+    // ── Buffer Write from CPU ──────────────────────────────────
+    items.push(fn_item(extern_fn("metal_buffer_write", &[("buffer", ty_int()), ("offset", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_metal_buffer_write")));
+
+    // ── Device Queries ─────────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_device_max_buffer_length", &[("device", ty_int())], ty_int(), "gorget_metal_device_max_buffer_length")));
+    items.push(fn_item(extern_fn("metal_device_max_threads_per_threadgroup", &[("device", ty_int())], ty_int(), "gorget_metal_device_max_threads_per_threadgroup")));
+    items.push(fn_item(extern_fn("metal_device_has_unified_memory", &[("device", ty_int())], ty_bool(), "gorget_metal_device_has_unified_memory")));
+    items.push(fn_item(extern_fn("metal_device_recommended_max_working_set_size", &[("device", ty_int())], ty_int(), "gorget_metal_device_recommended_max_working_set_size")));
+
+    // ── CAMetalLayer Configuration ─────────────────────────────
+    items.push(fn_item(extern_fn("metal_layer_set_vsync", &[("layer", ty_int()), ("enabled", ty_int())], ty_void(), "gorget_metal_layer_set_vsync")));
+    items.push(fn_item(extern_fn("metal_layer_set_maximum_drawable_count", &[("layer", ty_int()), ("count", ty_int())], ty_void(), "gorget_metal_layer_set_maximum_drawable_count")));
+    items.push(fn_item(extern_fn("metal_layer_set_framebuffer_only", &[("layer", ty_int()), ("flag", ty_int())], ty_void(), "gorget_metal_layer_set_framebuffer_only")));
+
     // ── Additional Metal Constants ──────────────────────────
     // Barrier scopes
     items.push(const_item("MTL_BARRIER_SCOPE_BUFFERS", 1));
@@ -2640,8 +2817,55 @@ fn gen_metal_module() -> Module {
     items.push(const_item("MTL_PIXEL_FORMAT_R32_UINT", 533));
     items.push(const_item("MTL_PIXEL_FORMAT_R32_SINT", 534));
     items.push(const_item("MTL_PIXEL_FORMAT_DEPTH16_UNORM", 250));
+    items.push(const_item("MTL_PIXEL_FORMAT_R16_UINT", 23));
+    items.push(const_item("MTL_PIXEL_FORMAT_RG16_UINT", 33));
+    items.push(const_item("MTL_PIXEL_FORMAT_RGBA16_UINT", 55));
+    items.push(const_item("MTL_PIXEL_FORMAT_R8_UINT", 13));
+    items.push(const_item("MTL_PIXEL_FORMAT_RGBA8_UINT", 43));
     // Storage modes
     items.push(const_item("MTL_STORAGE_MODE_MEMORYLESS", 3));
+    // Resource usage (for argument buffers / use_resource)
+    items.push(const_item("MTL_RESOURCE_USAGE_READ", 1));
+    items.push(const_item("MTL_RESOURCE_USAGE_WRITE", 2));
+    items.push(const_item("MTL_RESOURCE_USAGE_SAMPLE", 4));
+    // Visibility result mode
+    items.push(const_item("MTL_VISIBILITY_RESULT_DISABLED", 0));
+    items.push(const_item("MTL_VISIBILITY_RESULT_BOOLEAN", 1));
+    items.push(const_item("MTL_VISIBILITY_RESULT_COUNTING", 2));
+    // Stencil operations
+    items.push(const_item("MTL_STENCIL_OP_KEEP", 0));
+    items.push(const_item("MTL_STENCIL_OP_ZERO", 1));
+    items.push(const_item("MTL_STENCIL_OP_REPLACE", 2));
+    items.push(const_item("MTL_STENCIL_OP_INCR_CLAMP", 3));
+    items.push(const_item("MTL_STENCIL_OP_DECR_CLAMP", 4));
+    items.push(const_item("MTL_STENCIL_OP_INVERT", 5));
+    items.push(const_item("MTL_STENCIL_OP_INCR_WRAP", 6));
+    items.push(const_item("MTL_STENCIL_OP_DECR_WRAP", 7));
+    // Heap type
+    items.push(const_item("MTL_HEAP_TYPE_AUTOMATIC", 0));
+    items.push(const_item("MTL_HEAP_TYPE_PLACEMENT", 1));
+    // GPU families (for feature queries)
+    items.push(const_item("MTL_GPU_FAMILY_APPLE1", 1001));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE2", 1002));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE3", 1003));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE4", 1004));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE5", 1005));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE6", 1006));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE7", 1007));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE8", 1008));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE9", 1009));
+    items.push(const_item("MTL_GPU_FAMILY_COMMON1", 3001));
+    items.push(const_item("MTL_GPU_FAMILY_COMMON2", 3002));
+    items.push(const_item("MTL_GPU_FAMILY_COMMON3", 3003));
+    items.push(const_item("MTL_GPU_FAMILY_MAC2", 2002));
+    items.push(const_item("MTL_GPU_FAMILY_METAL3", 5001));
+    // Command buffer status
+    items.push(const_item("MTL_COMMAND_BUFFER_STATUS_NOT_ENQUEUED", 0));
+    items.push(const_item("MTL_COMMAND_BUFFER_STATUS_ENQUEUED", 1));
+    items.push(const_item("MTL_COMMAND_BUFFER_STATUS_COMMITTED", 2));
+    items.push(const_item("MTL_COMMAND_BUFFER_STATUS_SCHEDULED", 3));
+    items.push(const_item("MTL_COMMAND_BUFFER_STATUS_COMPLETED", 4));
+    items.push(const_item("MTL_COMMAND_BUFFER_STATUS_ERROR", 5));
 
     Module {
         items,
