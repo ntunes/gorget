@@ -815,6 +815,13 @@ fn flatten_meta_ifs(
                     process_meta_item(&won_item.node, env, type_env, type_func_env, ctx, errors);
                 }
                 new_items.extend(winning);
+            } else if let Item::Module { path, items: mod_items } = item.node {
+                // Recurse into imported module items to flatten their MetaIf blocks
+                let flattened = flatten_meta_ifs(mod_items, env, type_env, type_func_env, ctx, errors);
+                new_items.push(Spanned {
+                    node: Item::Module { path, items: flattened },
+                    span: item.span,
+                });
             } else {
                 new_items.push(item);
             }

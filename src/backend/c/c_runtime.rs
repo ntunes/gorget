@@ -9092,9 +9092,28 @@ static inline int64_t gorget_bytes_read_i64_le(const GorgetArray* arr, int64_t o
 // Gorget float is f64; all GL calls cast to GLfloat/GLdouble as needed.
 
 pub const GL_RUNTIME: &str = r#"
+#define GL_SILENCE_DEPRECATION
 #ifdef __APPLE__
 #include <OpenGL/gl.h>
 #include <OpenGL/glext.h>
+// macOS legacy GL: GL 3.x core functions available only via APPLE/ARB extensions
+#define glGenVertexArrays glGenVertexArraysAPPLE
+#define glDeleteVertexArrays glDeleteVertexArraysAPPLE
+#define glBindVertexArray glBindVertexArrayAPPLE
+#define glDrawArraysInstanced glDrawArraysInstancedARB
+#define glDrawElementsInstanced glDrawElementsInstancedARB
+#define glVertexAttribDivisor glVertexAttribDivisorARB
+#define glBindBufferBase glBindBufferBaseEXT
+#define glBindBufferRange glBindBufferRangeEXT
+#define glProgramParameteri glProgramParameteriEXT
+#define glFlushMappedBufferRange glFlushMappedBufferRangeAPPLE
+// Functions not available even as extensions on macOS legacy GL — stub them
+static inline GLuint gorget__stub_get_uniform_block_index(GLuint p, const GLchar* n) { (void)p; (void)n; return 0; }
+static inline void gorget__stub_uniform_block_binding(GLuint p, GLuint bi, GLuint bp) { (void)p; (void)bi; (void)bp; }
+static inline void* gorget__stub_map_buffer_range(GLenum t, GLintptr o, GLsizeiptr l, GLbitfield a) { (void)t; (void)o; (void)l; (void)a; return NULL; }
+#define glGetUniformBlockIndex gorget__stub_get_uniform_block_index
+#define glUniformBlockBinding gorget__stub_uniform_block_binding
+#define glMapBufferRange gorget__stub_map_buffer_range
 #else
 #include <GL/gl.h>
 #include <GL/glext.h>
@@ -9651,55 +9670,8 @@ static inline void gorget_gl_draw_buffers(int64_t count, const GorgetArray* bufs
 
 // ══════════════════════════════════════════════════════════════
 // GL Tier 3 — GL 3.0 through GL 4.6
+// (FBO/renderbuffer already defined in Tier 1-2 above)
 // ══════════════════════════════════════════════════════════════
-
-// ── Framebuffer Objects ─────────────────────────────────────
-
-static inline int64_t gorget_gl_gen_framebuffer(void) {
-    GLuint fbo = 0;
-    glGenFramebuffers(1, &fbo);
-    return (int64_t)fbo;
-}
-static inline void gorget_gl_delete_framebuffer(int64_t fbo) {
-    GLuint f = (GLuint)fbo;
-    glDeleteFramebuffers(1, &f);
-}
-static inline void gorget_gl_bind_framebuffer(int64_t target, int64_t fbo) {
-    glBindFramebuffer((GLenum)target, (GLuint)fbo);
-}
-static inline void gorget_gl_framebuffer_texture_2d(int64_t target, int64_t attachment, int64_t tex_target, int64_t texture, int64_t level) {
-    glFramebufferTexture2D((GLenum)target, (GLenum)attachment, (GLenum)tex_target, (GLuint)texture, (GLint)level);
-}
-static inline void gorget_gl_framebuffer_renderbuffer(int64_t target, int64_t attachment, int64_t rb_target, int64_t renderbuffer) {
-    glFramebufferRenderbuffer((GLenum)target, (GLenum)attachment, (GLenum)rb_target, (GLuint)renderbuffer);
-}
-static inline int64_t gorget_gl_check_framebuffer_status(int64_t target) {
-    return (int64_t)glCheckFramebufferStatus((GLenum)target);
-}
-static inline void gorget_gl_blit_framebuffer(int64_t sx0, int64_t sy0, int64_t sx1, int64_t sy1, int64_t dx0, int64_t dy0, int64_t dx1, int64_t dy1, int64_t mask, int64_t filter) {
-    glBlitFramebuffer((GLint)sx0, (GLint)sy0, (GLint)sx1, (GLint)sy1, (GLint)dx0, (GLint)dy0, (GLint)dx1, (GLint)dy1, (GLbitfield)mask, (GLenum)filter);
-}
-
-// ── Renderbuffer Objects ────────────────────────────────────
-
-static inline int64_t gorget_gl_gen_renderbuffer(void) {
-    GLuint rbo = 0;
-    glGenRenderbuffers(1, &rbo);
-    return (int64_t)rbo;
-}
-static inline void gorget_gl_delete_renderbuffer(int64_t rbo) {
-    GLuint r = (GLuint)rbo;
-    glDeleteRenderbuffers(1, &r);
-}
-static inline void gorget_gl_bind_renderbuffer(int64_t target, int64_t rbo) {
-    glBindRenderbuffer((GLenum)target, (GLuint)rbo);
-}
-static inline void gorget_gl_renderbuffer_storage(int64_t target, int64_t format, int64_t width, int64_t height) {
-    glRenderbufferStorage((GLenum)target, (GLenum)format, (GLsizei)width, (GLsizei)height);
-}
-static inline void gorget_gl_renderbuffer_storage_multisample(int64_t target, int64_t samples, int64_t format, int64_t width, int64_t height) {
-    glRenderbufferStorageMultisample((GLenum)target, (GLsizei)samples, (GLenum)format, (GLsizei)width, (GLsizei)height);
-}
 
 // ── Sampler Objects (GL 3.3+) ───────────────────────────────
 
@@ -9812,12 +9784,7 @@ static inline void gorget_gl_transform_feedback_varyings(int64_t program, int64_
     const char* v = varyings_str;
     glTransformFeedbackVaryings((GLuint)program, (GLsizei)count, &v, (GLenum)mode);
 }
-static inline void gorget_gl_bind_buffer_base(int64_t target, int64_t index, int64_t buffer) {
-    glBindBufferBase((GLenum)target, (GLuint)index, (GLuint)buffer);
-}
-static inline void gorget_gl_bind_buffer_range(int64_t target, int64_t index, int64_t buffer, int64_t offset, int64_t size) {
-    glBindBufferRange((GLenum)target, (GLuint)index, (GLuint)buffer, (GLintptr)offset, (GLsizeiptr)size);
-}
+// bind_buffer_base/range already defined in UBO section above
 
 // ── Clip Control (GL 4.5+) ─────────────────────────────────
 
