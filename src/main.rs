@@ -101,10 +101,15 @@ fn source_has_trace(source: &str) -> bool {
 }
 
 /// Add SDL2 linker flags to a cc command.
-fn add_sdl_flags(cmd: &mut Command, needs_sdl: bool) {
+fn add_sdl_flags(cmd: &mut Command, needs_sdl: bool, source: &str) {
     if !needs_sdl { return; }
+    let needs_image = source.contains("GORGET_USE_SDL_IMAGE");
+    let needs_ttf = source.contains("GORGET_USE_SDL_TTF");
+    let mut pkg_args: Vec<&str> = vec!["--cflags", "--libs", "sdl2"];
+    if needs_image { pkg_args.push("SDL2_image"); }
+    if needs_ttf { pkg_args.push("SDL2_ttf"); }
     let pkg_ok = Command::new("pkg-config")
-        .args(["--cflags", "--libs", "sdl2", "SDL2_image", "SDL2_ttf"])
+        .args(&pkg_args)
         .output()
         .ok()
         .and_then(|o| {
@@ -119,7 +124,9 @@ fn add_sdl_flags(cmd: &mut Command, needs_sdl: bool) {
             cmd.arg(flag);
         }
     } else {
-        cmd.args(["-lSDL2", "-lSDL2_image", "-lSDL2_ttf"]);
+        cmd.arg("-lSDL2");
+        if needs_image { cmd.arg("-lSDL2_image"); }
+        if needs_ttf { cmd.arg("-lSDL2_ttf"); }
         #[cfg(target_os = "macos")]
         {
             cmd.arg("-I/opt/homebrew/include");
@@ -539,8 +546,8 @@ fn try_build_ir(
             cc_cmd.arg("-g");
         }
 
-        // Library detection from source text (no GIR codegen output available)
-        add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx") || concat_source.contains("gg.gl") || needs_metal);
+        // Library detection — use generated C for precise SDL sub-library detection
+        add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx") || concat_source.contains("gg.gl") || needs_metal, &c_code);
         add_gl_flags(&mut cc_cmd, concat_source.contains("gg.gl"));
         add_audio_flags(&mut cc_cmd, concat_source.contains("gg.audio"));
         add_compress_flags(&mut cc_cmd, concat_source.contains("gg.compress"));
@@ -639,7 +646,7 @@ fn try_build_ir(
             cc_cmd.arg("-fno-omit-frame-pointer");
             cc_cmd.arg("-g");
         }
-        add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx"));
+        add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx"), shared_c_code);
         add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || gir_output.needs_tls);
         add_crypto_flags(&mut cc_cmd, concat_source.contains("gg.crypto") || concat_source.contains("gg.p2p"));
         add_regex_flags(&mut cc_cmd, concat_source.contains("gg.regex"));
@@ -761,7 +768,7 @@ fn try_build_ir(
         cc_cmd.arg("-g");
     }
 
-    add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx") || concat_source.contains("gg.gl") || needs_metal);
+    add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx") || concat_source.contains("gg.gl") || needs_metal, c_code);
     add_gl_flags(&mut cc_cmd, concat_source.contains("gg.gl"));
     add_audio_flags(&mut cc_cmd, concat_source.contains("gg.audio"));
     add_compress_flags(&mut cc_cmd, concat_source.contains("gg.compress"));

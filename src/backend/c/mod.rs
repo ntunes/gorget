@@ -734,6 +734,12 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         out.push_str(c_runtime::TRACE_RUNTIME);
     }
     if all_call_names.iter().any(|n| n.starts_with("sdl_") || n.starts_with("gorget_sdl_")) {
+        if all_call_names.iter().any(|n| *n == "sdl_load_texture" || *n == "gorget_sdl_load_texture") {
+            out.push_str("#define GORGET_USE_SDL_IMAGE\n");
+        }
+        if all_call_names.iter().any(|n| *n == "sdl_load_font" || *n == "sdl_close_font" || *n == "sdl_draw_text" || *n == "sdl_render_text" || *n == "sdl_text_width" || *n == "sdl_text_height" || n.starts_with("gorget_sdl_load_font") || n.starts_with("gorget_sdl_draw_text") || n.starts_with("gorget_sdl_render_text")) {
+            out.push_str("#define GORGET_USE_SDL_TTF\n");
+        }
         out.push_str(c_runtime::SDL_RUNTIME);
     }
     // Bytes f32/f64/i64 helpers (always cheap to include)

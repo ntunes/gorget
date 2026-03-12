@@ -5646,14 +5646,22 @@ static void __gorget_trace_val_void(FILE* fp) { (void)fp; }
 pub const SDL_RUNTIME: &str = r#"
 // ── gg.sdl runtime ──────────────────────────────────────────
 #include <SDL2/SDL.h>
+#ifdef GORGET_USE_SDL_IMAGE
 #include <SDL2/SDL_image.h>
+#endif
+#ifdef GORGET_USE_SDL_TTF
 #include <SDL2/SDL_ttf.h>
+#endif
 
 // ── Opaque handle wrappers ───────────────────────────────────
 typedef struct { SDL_Window* ptr; } GorgetSDLWindow;
 typedef struct { SDL_Renderer* ptr; } GorgetSDLRenderer;
 typedef struct { SDL_Texture* ptr; } GorgetSDLTexture;
+#ifdef GORGET_USE_SDL_TTF
 typedef struct { TTF_Font* ptr; } GorgetSDLFont;
+#else
+typedef struct { void* ptr; } GorgetSDLFont;
+#endif
 
 // ── SDL Event wrapper ────────────────────────────────────────
 typedef struct {
@@ -5725,13 +5733,24 @@ static const int64_t GORGET_SDL_RENDERER_PRESENTVSYNC = 0x00000004;
 // ── Lifecycle ────────────────────────────────────────────────
 static inline int64_t gorget_sdl_init(int64_t flags) {
     int result = SDL_Init((Uint32)flags);
-    if (result == 0) { IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG); TTF_Init(); }
+    if (result == 0) {
+#ifdef GORGET_USE_SDL_IMAGE
+        IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
+#endif
+#ifdef GORGET_USE_SDL_TTF
+        TTF_Init();
+#endif
+    }
     return (int64_t)result;
 }
 
 static inline void gorget_sdl_quit(void) {
+#ifdef GORGET_USE_SDL_TTF
     TTF_Quit();
+#endif
+#ifdef GORGET_USE_SDL_IMAGE
     IMG_Quit();
+#endif
     SDL_Quit();
 }
 
@@ -5831,11 +5850,13 @@ static inline void gorget_sdl_set_blend_mode(GorgetSDLRenderer r, int64_t mode) 
 }
 
 // ── Textures (SDL2_image) ────────────────────────────────────
+#ifdef GORGET_USE_SDL_IMAGE
 static inline GorgetSDLTexture gorget_sdl_load_texture(GorgetSDLRenderer r, const char* path) {
     SDL_Texture* tex = IMG_LoadTexture(r.ptr, path);
     if (!tex) { fprintf(stderr, "gorget: IMG_LoadTexture failed: %s\n", IMG_GetError()); exit(1); }
     return (GorgetSDLTexture){ tex };
 }
+#endif
 
 static inline void gorget_sdl_destroy_texture(GorgetSDLTexture t) {
     if (t.ptr) SDL_DestroyTexture(t.ptr);
@@ -5870,6 +5891,7 @@ static inline void gorget_sdl_set_texture_alpha(GorgetSDLTexture t, int64_t alph
 }
 
 // ── Text (SDL2_ttf) ─────────────────────────────────────────
+#ifdef GORGET_USE_SDL_TTF
 static inline GorgetSDLFont gorget_sdl_load_font(const char* path, int64_t size) {
     TTF_Font* font = TTF_OpenFont(path, (int)size);
     if (!font) { fprintf(stderr, "gorget: TTF_OpenFont failed: %s\n", TTF_GetError()); exit(1); }
@@ -5914,6 +5936,7 @@ static inline int64_t gorget_sdl_text_height(GorgetSDLFont f, const char* text) 
     TTF_SizeText(f.ptr, text, &w, &h);
     return (int64_t)h;
 }
+#endif
 
 // ── Events ───────────────────────────────────────────────────
 static inline GorgetSDLEvent gorget_sdl_poll_event(void) {
