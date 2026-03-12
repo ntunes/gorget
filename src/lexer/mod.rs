@@ -176,26 +176,26 @@ impl<'src> Lexer<'src> {
         self.pos - start
     }
 
+    /// Emit a pending NEWLINE token if one is needed.
+    fn emit_pending_newline(&mut self, line_start: usize) {
+        if self.need_newline {
+            self.pending.push_back(Spanned::new(
+                Token::Newline,
+                self.span(line_start, line_start),
+            ));
+        }
+    }
+
     /// Process indentation changes, emitting INDENT/DEDENT/NEWLINE tokens.
     fn process_indentation(&mut self, spaces: usize, line_start: usize) {
         let current = *self.indent_stack.last().unwrap();
 
         if spaces == current {
             // Same indentation level
-            if self.need_newline {
-                self.pending.push_back(Spanned::new(
-                    Token::Newline,
-                    self.span(line_start, line_start),
-                ));
-            }
+            self.emit_pending_newline(line_start);
         } else if spaces > current {
             // Indentation increased — any amount is valid (Python-style)
-            if self.need_newline {
-                self.pending.push_back(Spanned::new(
-                    Token::Newline,
-                    self.span(line_start, line_start),
-                ));
-            }
+            self.emit_pending_newline(line_start);
             self.indent_stack.push(spaces);
             self.pending.push_back(Spanned::new(
                 Token::Indent,
@@ -203,12 +203,7 @@ impl<'src> Lexer<'src> {
             ));
         } else {
             // Indentation decreased — emit DEDENT(s)
-            if self.need_newline {
-                self.pending.push_back(Spanned::new(
-                    Token::Newline,
-                    self.span(line_start, line_start),
-                ));
-            }
+            self.emit_pending_newline(line_start);
             while *self.indent_stack.last().unwrap() > spaces {
                 self.indent_stack.pop();
                 self.pending.push_back(Spanned::new(
@@ -685,7 +680,7 @@ impl<'src> Lexer<'src> {
                         b'{' => brace_depth += 1,
                         b'}' => brace_depth -= 1,
                         b'"' | b'\'' => {
-                            // Skip nested string (same quote style)
+                            // Skip nested string — advance past closing quote
                             let nested_quote = bytes[i];
                             i += 1;
                             while i < bytes.len() && bytes[i] != nested_quote {
@@ -694,6 +689,11 @@ impl<'src> Lexer<'src> {
                                 }
                                 i += 1;
                             }
+                            // Advance past closing quote (or end of input)
+                            if i < bytes.len() {
+                                i += 1;
+                            }
+                            continue;
                         }
                         _ => {}
                     }
@@ -916,19 +916,19 @@ impl<'src> Iterator for Lexer<'src> {
 fn split_interpolation_spec(text: &str) -> (String, Option<String>) {
     let bytes = text.as_bytes();
     let mut last_colon_at_depth_0: Option<usize> = None;
-    let mut paren_depth: i32 = 0;
-    let mut bracket_depth: i32 = 0;
-    let mut brace_depth: i32 = 0;
+    let mut paren_depth: u32 = 0;
+    let mut bracket_depth: u32 = 0;
+    let mut brace_depth: u32 = 0;
     let mut i = 0;
 
     while i < bytes.len() {
         match bytes[i] {
             b'(' => paren_depth += 1,
-            b')' => paren_depth -= 1,
+            b')' => paren_depth = paren_depth.saturating_sub(1),
             b'[' => bracket_depth += 1,
-            b']' => bracket_depth -= 1,
+            b']' => bracket_depth = bracket_depth.saturating_sub(1),
             b'{' => brace_depth += 1,
-            b'}' => brace_depth -= 1,
+            b'}' => brace_depth = brace_depth.saturating_sub(1),
             b'"' | b'\'' => {
                 // Skip quoted strings
                 let quote = bytes[i];

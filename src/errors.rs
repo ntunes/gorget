@@ -16,9 +16,6 @@ pub enum LexErrorKind {
     UnterminatedString,
     UnterminatedCharLiteral,
     InvalidEscapeSequence(String),
-    InvalidIndentation {
-        got: usize,
-    },
     IndentationMismatch {
         got: usize,
     },
@@ -34,9 +31,6 @@ impl std::fmt::Display for LexError {
             LexErrorKind::UnterminatedString => write!(f, "unterminated string literal"),
             LexErrorKind::UnterminatedCharLiteral => write!(f, "unterminated character literal"),
             LexErrorKind::InvalidEscapeSequence(s) => write!(f, "invalid escape sequence: {s}"),
-            LexErrorKind::InvalidIndentation { got } => {
-                write!(f, "indentation must be a multiple of 4 spaces, got {got}")
-            }
             LexErrorKind::IndentationMismatch { got } => {
                 write!(f, "dedent does not match any outer indentation level (got {got} spaces)")
             }

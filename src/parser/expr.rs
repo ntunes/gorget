@@ -69,7 +69,8 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         Expr::Match { scrutinee, arms, else_arm } => {
             contains_it(scrutinee)
                 || arms.iter().any(|arm| {
-                    arm.guard.as_ref().is_some_and(|g| contains_it(g))
+                    pattern_contains_it(&arm.pattern.node)
+                        || arm.guard.as_ref().is_some_and(|g| contains_it(g))
                         || contains_it(&arm.body)
                 })
                 || else_arm.as_ref().is_some_and(|b| contains_it(b))
@@ -78,8 +79,10 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         // Cast
         Expr::As { expr, .. } => contains_it(expr),
 
-        // Is
-        Expr::Is { expr, .. } => contains_it(expr),
+        // Is — walk pattern too (Pattern::Literal contains expressions)
+        Expr::Is { expr, pattern, .. } => {
+            contains_it(expr) || pattern_contains_it(&pattern.node)
+        }
 
         // Range
         Expr::Range { start, end, .. } => {
@@ -137,6 +140,20 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
     }
 }
 
+/// Recursively check whether a pattern contains `Expr::It` (via `Pattern::Literal`).
+fn pattern_contains_it(pat: &Pattern) -> bool {
+    match pat {
+        Pattern::Literal(expr) => contains_it(expr),
+        Pattern::Constructor { fields, .. }
+        | Pattern::Tuple(fields)
+        | Pattern::Or(fields)
+        | Pattern::DotShorthand { fields, .. } => {
+            fields.iter().any(|f| pattern_contains_it(&f.node))
+        }
+        Pattern::Wildcard | Pattern::Binding(_) | Pattern::Rest => false,
+    }
+}
+
 /// Check whether any statement in a block contains `Expr::It`.
 fn block_contains_it(block: &Block) -> bool {
     block.stmts.iter().any(|stmt| stmt_contains_it(&stmt.node))
@@ -170,7 +187,8 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
         Stmt::Match { scrutinee, arms, else_arm } => {
             contains_it(scrutinee)
                 || arms.iter().filter_map(|i| i.arm()).any(|arm| {
-                    arm.guard.as_ref().is_some_and(|g| contains_it(g))
+                    pattern_contains_it(&arm.pattern.node)
+                        || arm.guard.as_ref().is_some_and(|g| contains_it(g))
                         || contains_it(&arm.body)
                 })
                 || else_arm.as_ref().is_some_and(block_contains_it)
@@ -1681,6 +1699,7 @@ impl Parser {
                 | Token::Keyword(Keyword::Await)
                 | Token::Keyword(Keyword::Raw)
                 | Token::Keyword(Keyword::Spawn)
+                | Token::Keyword(Keyword::Async)
                 | Token::Keyword(Keyword::SelfLower)
                 | Token::Keyword(Keyword::It)
                 | Token::Keyword(Keyword::Move)
