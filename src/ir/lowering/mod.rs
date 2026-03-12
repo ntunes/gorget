@@ -825,9 +825,12 @@ pub fn lower_module(
 
     // Lower module-level static declarations → Globals.
     // Skip stdlib StaticDecl items (dummy spans) — handled by C backend as well-known names.
+    // Skip duplicate globals (same name from different modules merged into one AST).
+    let mut seen_globals: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
     for item in &ast_module.items {
         if let Item::StaticDecl(decl) = &item.node {
             if decl.span.start == decl.span.end { continue; }
+            if !seen_globals.insert(decl.name.node.clone()) { continue; }
             lower_static_decl(&mut ctx, &mut module, decl);
         }
     }
