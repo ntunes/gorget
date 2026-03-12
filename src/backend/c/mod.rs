@@ -477,6 +477,8 @@ fn takes_array_ptr_args(name: &str) -> bool {
         | "gorget_gl_uniform_4fv"
         | "gorget_gl_uniform_matrix3fv"
         | "gorget_gl_draw_buffers"
+        | "gorget_gl_buffer_storage"
+        | "gorget_gl_patch_parameter_fv"
     ) {
         return true;
     }

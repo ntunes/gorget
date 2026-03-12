@@ -2296,6 +2296,165 @@ fn gen_gl_module() -> Module {
     // ── MRT Draw Buffers (GL 2.0+) ──────────────────────────
     items.push(fn_item(extern_fn("gl_draw_buffers", &[("count", ty_int()), ("bufs", ty_vector_uint8())], ty_void(), "gorget_gl_draw_buffers")));
 
+    // ══════════════════════════════════════════════════════════
+    // GL Tier 3 — GL 3.3 through GL 4.6 advanced features
+    // ══════════════════════════════════════════════════════════
+
+    // ── Framebuffer/Renderbuffer already in Tier 2 above ─────
+
+    // ── Sampler Objects (GL 3.3+) ───────────────────────────
+    items.push(fn_item(extern_fn("gl_gen_sampler", &[], ty_int(), "gorget_gl_gen_sampler")));
+    items.push(fn_item(extern_fn("gl_delete_sampler", &[("sampler", ty_int())], ty_void(), "gorget_gl_delete_sampler")));
+    items.push(fn_item(extern_fn("gl_bind_sampler", &[("unit", ty_int()), ("sampler", ty_int())], ty_void(), "gorget_gl_bind_sampler")));
+    items.push(fn_item(extern_fn("gl_sampler_parameter_i", &[("sampler", ty_int()), ("pname", ty_int()), ("param", ty_int())], ty_void(), "gorget_gl_sampler_parameter_i")));
+    items.push(fn_item(extern_fn("gl_sampler_parameter_f", &[("sampler", ty_int()), ("pname", ty_int()), ("param", ty_float())], ty_void(), "gorget_gl_sampler_parameter_f")));
+
+    // ── Compute Shaders (GL 4.3+) ───────────────────────────
+    items.push(fn_item(extern_fn("gl_dispatch_compute", &[("num_groups_x", ty_int()), ("num_groups_y", ty_int()), ("num_groups_z", ty_int())], ty_void(), "gorget_gl_dispatch_compute")));
+    items.push(fn_item(extern_fn("gl_dispatch_compute_indirect", &[("indirect_offset", ty_int())], ty_void(), "gorget_gl_dispatch_compute_indirect")));
+    items.push(fn_item(extern_fn("gl_memory_barrier", &[("barriers", ty_int())], ty_void(), "gorget_gl_memory_barrier")));
+
+    // ── Shader Storage Buffer Objects (GL 4.3+) ─────────────
+    items.push(fn_item(extern_fn("gl_shader_storage_block_binding", &[("program", ty_int()), ("block_index", ty_int()), ("binding", ty_int())], ty_void(), "gorget_gl_shader_storage_block_binding")));
+    items.push(fn_item(extern_fn("gl_get_program_resource_index", &[("program", ty_int()), ("interface", ty_int()), ("name", ty_str())], ty_int(), "gorget_gl_get_program_resource_index")));
+
+    // ── Immutable Texture Storage (GL 4.2+) ─────────────────
+    items.push(fn_item(extern_fn("gl_tex_storage_2d", &[("target", ty_int()), ("levels", ty_int()), ("format", ty_int()), ("width", ty_int()), ("height", ty_int())], ty_void(), "gorget_gl_tex_storage_2d")));
+    items.push(fn_item(extern_fn("gl_tex_storage_3d", &[("target", ty_int()), ("levels", ty_int()), ("format", ty_int()), ("width", ty_int()), ("height", ty_int()), ("depth", ty_int())], ty_void(), "gorget_gl_tex_storage_3d")));
+    // gl_tex_sub_image_2d already in Tier 2 above
+
+    // ── Buffer Storage (GL 4.4+) ─────────────────────────────
+    items.push(fn_item(extern_fn("gl_buffer_storage", &[("target", ty_int()), ("size", ty_int()), ("data", ty_vector_uint8()), ("flags", ty_int())], ty_void(), "gorget_gl_buffer_storage")));
+
+    // ── Indirect Draw (GL 4.0+) ─────────────────────────────
+    items.push(fn_item(extern_fn("gl_draw_arrays_indirect", &[("mode", ty_int()), ("indirect_offset", ty_int())], ty_void(), "gorget_gl_draw_arrays_indirect")));
+    items.push(fn_item(extern_fn("gl_draw_elements_indirect", &[("mode", ty_int()), ("type_", ty_int()), ("indirect_offset", ty_int())], ty_void(), "gorget_gl_draw_elements_indirect")));
+    items.push(fn_item(extern_fn("gl_multi_draw_arrays_indirect", &[("mode", ty_int()), ("indirect_offset", ty_int()), ("draw_count", ty_int()), ("stride", ty_int())], ty_void(), "gorget_gl_multi_draw_arrays_indirect")));
+    items.push(fn_item(extern_fn("gl_multi_draw_elements_indirect", &[("mode", ty_int()), ("type_", ty_int()), ("indirect_offset", ty_int()), ("draw_count", ty_int()), ("stride", ty_int())], ty_void(), "gorget_gl_multi_draw_elements_indirect")));
+
+    // ── Tessellation (GL 4.0+) ──────────────────────────────
+    items.push(fn_item(extern_fn("gl_patch_parameter_i", &[("pname", ty_int()), ("value", ty_int())], ty_void(), "gorget_gl_patch_parameter_i")));
+    items.push(fn_item(extern_fn("gl_patch_parameter_fv", &[("pname", ty_int()), ("values", ty_vector_uint8())], ty_void(), "gorget_gl_patch_parameter_fv")));
+
+    // ── Transform Feedback (GL 3.0+) ────────────────────────
+    items.push(fn_item(extern_fn("gl_gen_transform_feedback", &[], ty_int(), "gorget_gl_gen_transform_feedback")));
+    items.push(fn_item(extern_fn("gl_delete_transform_feedback", &[("id", ty_int())], ty_void(), "gorget_gl_delete_transform_feedback")));
+    items.push(fn_item(extern_fn("gl_bind_transform_feedback", &[("target", ty_int()), ("id", ty_int())], ty_void(), "gorget_gl_bind_transform_feedback")));
+    items.push(fn_item(extern_fn("gl_begin_transform_feedback", &[("mode", ty_int())], ty_void(), "gorget_gl_begin_transform_feedback")));
+    items.push(fn_item(extern_fn("gl_end_transform_feedback", &[], ty_void(), "gorget_gl_end_transform_feedback")));
+    items.push(fn_item(extern_fn("gl_transform_feedback_varyings", &[("program", ty_int()), ("count", ty_int()), ("varyings", ty_str()), ("mode", ty_int())], ty_void(), "gorget_gl_transform_feedback_varyings")));
+    // gl_bind_buffer_base and gl_bind_buffer_range already in Tier 2 above
+
+    // ── Clip Control (GL 4.5+) ──────────────────────────────
+    items.push(fn_item(extern_fn("gl_clip_control", &[("origin", ty_int()), ("depth", ty_int())], ty_void(), "gorget_gl_clip_control")));
+
+    // ── Debug Output (GL 4.3+) ──────────────────────────────
+    items.push(fn_item(extern_fn("gl_debug_message_control", &[("source", ty_int()), ("type_", ty_int()), ("severity", ty_int()), ("enabled", ty_int())], ty_void(), "gorget_gl_debug_message_control")));
+    items.push(fn_item(extern_fn("gl_object_label", &[("identifier", ty_int()), ("name", ty_int()), ("label", ty_str())], ty_void(), "gorget_gl_object_label")));
+
+    // ── Copy Image (GL 4.3+) ────────────────────────────────
+    items.push(fn_item(extern_fn("gl_copy_image_sub_data", &[("src", ty_int()), ("src_target", ty_int()), ("src_level", ty_int()), ("src_x", ty_int()), ("src_y", ty_int()), ("src_z", ty_int()), ("dst", ty_int()), ("dst_target", ty_int()), ("dst_level", ty_int()), ("dst_x", ty_int()), ("dst_y", ty_int()), ("dst_z", ty_int()), ("width", ty_int()), ("height", ty_int()), ("depth", ty_int())], ty_void(), "gorget_gl_copy_image_sub_data")));
+
+    // gl_read_pixels already in Tier 2 above
+
+    // ── Texture Multisample (GL 3.2+) ───────────────────────
+    items.push(fn_item(extern_fn("gl_tex_image_2d_multisample", &[("target", ty_int()), ("samples", ty_int()), ("format", ty_int()), ("width", ty_int()), ("height", ty_int()), ("fixed_locations", ty_int())], ty_void(), "gorget_gl_tex_image_2d_multisample")));
+
+    // ── GL Tier 3 Constants ─────────────────────────────────
+
+    // Framebuffer/Renderbuffer constants already in Tier 2 above
+
+    // Compute shader
+    items.push(const_item("GL_COMPUTE_SHADER", 0x91B9));
+    items.push(const_item("GL_MAX_COMPUTE_WORK_GROUP_COUNT", 0x91BE));
+    items.push(const_item("GL_MAX_COMPUTE_WORK_GROUP_SIZE", 0x91BF));
+    items.push(const_item("GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS", 0x90EB));
+    // Memory barriers
+    items.push(const_item("GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT", 0x00000001));
+    items.push(const_item("GL_ELEMENT_ARRAY_BARRIER_BIT", 0x00000002));
+    items.push(const_item("GL_UNIFORM_BARRIER_BIT", 0x00000004));
+    items.push(const_item("GL_TEXTURE_FETCH_BARRIER_BIT", 0x00000008));
+    items.push(const_item("GL_SHADER_IMAGE_ACCESS_BARRIER_BIT", 0x00000020));
+    items.push(const_item("GL_COMMAND_BARRIER_BIT", 0x00000040));
+    items.push(const_item("GL_PIXEL_BUFFER_BARRIER_BIT", 0x00000080));
+    items.push(const_item("GL_TEXTURE_UPDATE_BARRIER_BIT", 0x00000100));
+    items.push(const_item("GL_BUFFER_UPDATE_BARRIER_BIT", 0x00000200));
+    items.push(const_item("GL_FRAMEBUFFER_BARRIER_BIT", 0x00000400));
+    items.push(const_item("GL_TRANSFORM_FEEDBACK_BARRIER_BIT", 0x00000800));
+    items.push(const_item("GL_ATOMIC_COUNTER_BARRIER_BIT", 0x00001000));
+    items.push(const_item("GL_SHADER_STORAGE_BARRIER_BIT", 0x00002000));
+    items.push(const_item("GL_ALL_BARRIER_BITS", 0xFFFFFFFF_u32 as i64));
+    // SSBO
+    items.push(const_item("GL_SHADER_STORAGE_BUFFER", 0x90D2));
+    items.push(const_item("GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS", 0x90DD));
+    items.push(const_item("GL_SHADER_STORAGE_BUFFER_BINDING", 0x90D3));
+    // Immutable texture storage formats
+    items.push(const_item("GL_R8", 0x8229));
+    items.push(const_item("GL_RG8", 0x822B));
+    items.push(const_item("GL_RGBA8", 0x8058));
+    items.push(const_item("GL_R16F", 0x822D));
+    items.push(const_item("GL_RG16F", 0x822F));
+    items.push(const_item("GL_RGBA16F", 0x881A));
+    items.push(const_item("GL_R32F", 0x822E));
+    items.push(const_item("GL_RG32F", 0x8230));
+    items.push(const_item("GL_RGBA32F", 0x8814));
+    items.push(const_item("GL_R11F_G11F_B10F", 0x8C3A));
+    items.push(const_item("GL_RGB10_A2", 0x8059));
+    items.push(const_item("GL_R32UI", 0x8236));
+    items.push(const_item("GL_RGBA32UI", 0x8238));
+    // Buffer storage flags
+    items.push(const_item("GL_DYNAMIC_STORAGE_BIT", 0x0100));
+    items.push(const_item("GL_MAP_READ_BIT_STORAGE", 0x0001));
+    items.push(const_item("GL_MAP_WRITE_BIT_STORAGE", 0x0002));
+    items.push(const_item("GL_MAP_PERSISTENT_BIT", 0x0040));
+    items.push(const_item("GL_MAP_COHERENT_BIT", 0x0080));
+    items.push(const_item("GL_CLIENT_STORAGE_BIT", 0x0200));
+    // Indirect draw
+    items.push(const_item("GL_DRAW_INDIRECT_BUFFER", 0x8F3F));
+    items.push(const_item("GL_DISPATCH_INDIRECT_BUFFER", 0x90EE));
+    // Tessellation
+    items.push(const_item("GL_TESS_CONTROL_SHADER", 0x8E88));
+    items.push(const_item("GL_TESS_EVALUATION_SHADER", 0x8E87));
+    items.push(const_item("GL_PATCHES", 0x000E));
+    items.push(const_item("GL_PATCH_VERTICES", 0x8E72));
+    items.push(const_item("GL_PATCH_DEFAULT_INNER_LEVEL", 0x8E73));
+    items.push(const_item("GL_PATCH_DEFAULT_OUTER_LEVEL", 0x8E74));
+    // Transform feedback
+    items.push(const_item("GL_TRANSFORM_FEEDBACK", 0x8E22));
+    items.push(const_item("GL_TRANSFORM_FEEDBACK_BUFFER", 0x8C8E));
+    items.push(const_item("GL_INTERLEAVED_ATTRIBS", 0x8C8C));
+    items.push(const_item("GL_SEPARATE_ATTRIBS", 0x8C8D));
+    // Clip control
+    items.push(const_item("GL_LOWER_LEFT", 0x8CA1));
+    items.push(const_item("GL_UPPER_LEFT", 0x8CA2));
+    items.push(const_item("GL_NEGATIVE_ONE_TO_ONE", 0x935E));
+    items.push(const_item("GL_ZERO_TO_ONE", 0x935F));
+    // Debug output
+    items.push(const_item("GL_DEBUG_OUTPUT", 0x92E0));
+    items.push(const_item("GL_DEBUG_OUTPUT_SYNCHRONOUS", 0x8242));
+    items.push(const_item("GL_DEBUG_SOURCE_API", 0x8246));
+    items.push(const_item("GL_DEBUG_SOURCE_WINDOW_SYSTEM", 0x8247));
+    items.push(const_item("GL_DEBUG_SOURCE_SHADER_COMPILER", 0x8248));
+    items.push(const_item("GL_DEBUG_TYPE_ERROR", 0x824C));
+    items.push(const_item("GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR", 0x824D));
+    items.push(const_item("GL_DEBUG_TYPE_PERFORMANCE", 0x8250));
+    items.push(const_item("GL_DEBUG_SEVERITY_HIGH", 0x9146));
+    items.push(const_item("GL_DEBUG_SEVERITY_MEDIUM", 0x9148));
+    items.push(const_item("GL_DEBUG_SEVERITY_LOW", 0x9148));
+    items.push(const_item("GL_DEBUG_SEVERITY_NOTIFICATION", 0x826B));
+    // Multisampled texture
+    items.push(const_item("GL_TEXTURE_2D_MULTISAMPLE", 0x9100));
+    // SPIR-V
+    items.push(const_item("GL_SHADER_BINARY_FORMAT_SPIR_V", 0x9551));
+    // Anisotropic filtering
+    items.push(const_item("GL_TEXTURE_MAX_ANISOTROPY", 0x84FE));
+    items.push(const_item("GL_MAX_TEXTURE_MAX_ANISOTROPY", 0x84FF));
+    // Program interface
+    items.push(const_item("GL_SHADER_STORAGE_BLOCK", 0x92E6));
+    // Pixel buffer objects
+    items.push(const_item("GL_PIXEL_PACK_BUFFER", 0x88EB));
+    items.push(const_item("GL_PIXEL_UNPACK_BUFFER", 0x88EC));
+
     Module {
         items,
         span: Span::dummy(),
@@ -2868,6 +3027,96 @@ fn gen_metal_module() -> Module {
     items.push(const_item("MTL_COMMAND_BUFFER_STATUS_SCHEDULED", 3));
     items.push(const_item("MTL_COMMAND_BUFFER_STATUS_COMPLETED", 4));
     items.push(const_item("MTL_COMMAND_BUFFER_STATUS_ERROR", 5));
+
+    // ══════════════════════════════════════════════════════════
+    // Metal Tier 3 — Advanced GPU features (Metal 3+)
+    // ══════════════════════════════════════════════════════════
+
+    // ── Ray Tracing (Metal 3, Apple7+) ──────────────────────
+    // Acceleration structures
+    items.push(fn_item(extern_fn("metal_create_acceleration_structure_descriptor", &[("type_", ty_int())], ty_int(), "gorget_metal_create_accel_struct_desc")));
+    items.push(fn_item(extern_fn("metal_accel_desc_set_geometry", &[("desc", ty_int()), ("geometry", ty_int()), ("count", ty_int())], ty_void(), "gorget_metal_accel_desc_set_geometry")));
+    items.push(fn_item(extern_fn("metal_create_triangle_geometry_descriptor", &[("vertex_buffer", ty_int()), ("vertex_offset", ty_int()), ("vertex_stride", ty_int()), ("triangle_count", ty_int()), ("index_buffer", ty_int()), ("index_type", ty_int())], ty_int(), "gorget_metal_create_triangle_geom_desc")));
+    items.push(fn_item(extern_fn("metal_accel_structure_sizes", &[("device", ty_int()), ("desc", ty_int())], ty_int(), "gorget_metal_accel_structure_sizes")));
+    items.push(fn_item(extern_fn("metal_create_acceleration_structure", &[("device", ty_int()), ("size", ty_int())], ty_int(), "gorget_metal_create_accel_structure")));
+    items.push(fn_item(extern_fn("metal_build_acceleration_structure", &[("encoder", ty_int()), ("desc", ty_int()), ("accel", ty_int()), ("scratch_buffer", ty_int()), ("scratch_offset", ty_int())], ty_void(), "gorget_metal_build_accel_structure")));
+    items.push(fn_item(extern_fn("metal_refit_acceleration_structure", &[("encoder", ty_int()), ("desc", ty_int()), ("source", ty_int()), ("dest", ty_int()), ("scratch_buffer", ty_int()), ("scratch_offset", ty_int())], ty_void(), "gorget_metal_refit_accel_structure")));
+    // Instance acceleration structures
+    items.push(fn_item(extern_fn("metal_create_instance_accel_desc", &[("instance_buffer", ty_int()), ("instance_count", ty_int())], ty_int(), "gorget_metal_create_instance_accel_desc")));
+    // Intersection function tables
+    items.push(fn_item(extern_fn("metal_create_intersection_function_table", &[("pipeline", ty_int()), ("count", ty_int())], ty_int(), "gorget_metal_create_intersection_fn_table")));
+    items.push(fn_item(extern_fn("metal_intersection_fn_table_set_function", &[("table", ty_int()), ("index", ty_int()), ("pipeline", ty_int()), ("function_name", ty_str())], ty_void(), "gorget_metal_intersection_fn_table_set_fn")));
+    // Acceleration structure encoder
+    items.push(fn_item(extern_fn("metal_command_buffer_acceleration_structure_encoder", &[("cmd_buf", ty_int())], ty_int(), "gorget_metal_cmd_buf_accel_encoder")));
+    items.push(fn_item(extern_fn("metal_accel_encoder_end", &[("encoder", ty_int())], ty_void(), "gorget_metal_accel_encoder_end")));
+    // Render encoder ray tracing support
+    items.push(fn_item(extern_fn("metal_render_encoder_set_accel_structure", &[("encoder", ty_int()), ("index", ty_int()), ("accel", ty_int())], ty_void(), "gorget_metal_render_enc_set_accel_struct")));
+    items.push(fn_item(extern_fn("metal_render_encoder_set_intersection_fn_table", &[("encoder", ty_int()), ("index", ty_int()), ("table", ty_int())], ty_void(), "gorget_metal_render_enc_set_intersection_fn_table")));
+    items.push(fn_item(extern_fn("metal_compute_encoder_set_accel_structure", &[("encoder", ty_int()), ("index", ty_int()), ("accel", ty_int())], ty_void(), "gorget_metal_compute_enc_set_accel_struct")));
+
+    // ── Mesh Shaders (Metal 3) ──────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_mesh_render_pipeline", &[("device", ty_int()), ("object_fn", ty_str()), ("mesh_fn", ty_str()), ("frag_fn", ty_str()), ("library", ty_int()), ("pixel_format", ty_int())], ty_int(), "gorget_metal_create_mesh_pipeline")));
+    items.push(fn_item(extern_fn("metal_render_encoder_draw_mesh_threadgroups", &[("encoder", ty_int()), ("mesh_tg_x", ty_int()), ("mesh_tg_y", ty_int()), ("mesh_tg_z", ty_int()), ("mesh_threads_x", ty_int()), ("mesh_threads_y", ty_int()), ("mesh_threads_z", ty_int()), ("object_threads_x", ty_int()), ("object_threads_y", ty_int()), ("object_threads_z", ty_int())], ty_void(), "gorget_metal_render_enc_draw_mesh_tg")));
+
+    // ── Binary Archives (Metal 2.3+) ────────────────────────
+    items.push(fn_item(extern_fn("metal_create_binary_archive", &[("device", ty_int()), ("url", ty_str())], ty_int(), "gorget_metal_create_binary_archive")));
+    items.push(fn_item(extern_fn("metal_binary_archive_add_pipeline", &[("archive", ty_int()), ("desc", ty_int())], ty_int(), "gorget_metal_binary_archive_add_pipeline")));
+    items.push(fn_item(extern_fn("metal_binary_archive_serialize", &[("archive", ty_int()), ("url", ty_str())], ty_int(), "gorget_metal_binary_archive_serialize")));
+
+    // ── Visible Functions / Function Pointers (Metal 2.3+) ──
+    items.push(fn_item(extern_fn("metal_create_visible_function_table", &[("pipeline", ty_int()), ("count", ty_int())], ty_int(), "gorget_metal_create_visible_fn_table")));
+    items.push(fn_item(extern_fn("metal_visible_fn_table_set_function", &[("table", ty_int()), ("index", ty_int()), ("pipeline", ty_int()), ("function_name", ty_str())], ty_void(), "gorget_metal_visible_fn_table_set_fn")));
+    items.push(fn_item(extern_fn("metal_render_encoder_set_visible_fn_table", &[("encoder", ty_int()), ("index", ty_int()), ("table", ty_int())], ty_void(), "gorget_metal_render_enc_set_visible_fn_table")));
+    items.push(fn_item(extern_fn("metal_compute_encoder_set_visible_fn_table", &[("encoder", ty_int()), ("index", ty_int()), ("table", ty_int())], ty_void(), "gorget_metal_compute_enc_set_visible_fn_table")));
+
+    // ── Texture Views / Shared Resources (Metal 2+) ─────────
+    items.push(fn_item(extern_fn("metal_texture_new_view", &[("texture", ty_int()), ("pixel_format", ty_int()), ("texture_type", ty_int()), ("levels", ty_int()), ("num_levels", ty_int()), ("slices", ty_int()), ("num_slices", ty_int())], ty_int(), "gorget_metal_texture_new_view")));
+    items.push(fn_item(extern_fn("metal_make_aliasable", &[("resource", ty_int())], ty_void(), "gorget_metal_make_aliasable")));
+
+    // ── Fence / Event Synchronization (Metal 2+) ────────────
+    items.push(fn_item(extern_fn("metal_create_fence", &[("device", ty_int())], ty_int(), "gorget_metal_create_fence")));
+    items.push(fn_item(extern_fn("metal_render_encoder_update_fence", &[("encoder", ty_int()), ("fence", ty_int()), ("stages", ty_int())], ty_void(), "gorget_metal_render_enc_update_fence")));
+    items.push(fn_item(extern_fn("metal_render_encoder_wait_for_fence", &[("encoder", ty_int()), ("fence", ty_int()), ("stages", ty_int())], ty_void(), "gorget_metal_render_enc_wait_fence")));
+    items.push(fn_item(extern_fn("metal_create_event", &[("device", ty_int())], ty_int(), "gorget_metal_create_event")));
+    items.push(fn_item(extern_fn("metal_create_shared_event", &[("device", ty_int())], ty_int(), "gorget_metal_create_shared_event")));
+    items.push(fn_item(extern_fn("metal_command_buffer_encode_signal_event", &[("cmd_buf", ty_int()), ("event", ty_int()), ("value", ty_int())], ty_void(), "gorget_metal_cmd_buf_signal_event")));
+    items.push(fn_item(extern_fn("metal_command_buffer_encode_wait_event", &[("cmd_buf", ty_int()), ("event", ty_int()), ("value", ty_int())], ty_void(), "gorget_metal_cmd_buf_wait_event")));
+
+    // ── Timestamps & Counters (Metal 2.3+) ──────────────────
+    items.push(fn_item(extern_fn("metal_create_counter_sample_buffer", &[("device", ty_int()), ("count", ty_int())], ty_int(), "gorget_metal_create_counter_sample_buffer")));
+    items.push(fn_item(extern_fn("metal_device_sample_timestamps", &[("device", ty_int())], ty_int(), "gorget_metal_device_sample_timestamps")));
+
+    // ── Dynamic Libraries (Metal 2.3+) ──────────────────────
+    items.push(fn_item(extern_fn("metal_create_dynamic_library", &[("device", ty_int()), ("library", ty_int())], ty_int(), "gorget_metal_create_dynamic_library")));
+
+    // ── Residency Sets (Metal 3+) ───────────────────────────
+    items.push(fn_item(extern_fn("metal_create_residency_set", &[("device", ty_int())], ty_int(), "gorget_metal_create_residency_set")));
+    items.push(fn_item(extern_fn("metal_residency_set_add_allocation", &[("set", ty_int()), ("resource", ty_int())], ty_void(), "gorget_metal_residency_set_add")));
+    items.push(fn_item(extern_fn("metal_residency_set_commit", &[("set", ty_int())], ty_void(), "gorget_metal_residency_set_commit")));
+
+    // ── Metal Tier 3 Constants ──────────────────────────────
+    // Acceleration structure types
+    items.push(const_item("MTL_ACCEL_STRUCT_PRIMITIVE", 0));
+    items.push(const_item("MTL_ACCEL_STRUCT_INSTANCE", 1));
+    // Index types for ray tracing
+    items.push(const_item("MTL_INDEX_TYPE_UINT16", 0));
+    items.push(const_item("MTL_INDEX_TYPE_UINT32", 1));
+    items.push(const_item("MTL_INDEX_TYPE_NONE", 2));
+    // Render stages for fence/event
+    items.push(const_item("MTL_RENDER_STAGE_VERTEX", 1));
+    items.push(const_item("MTL_RENDER_STAGE_FRAGMENT", 2));
+    items.push(const_item("MTL_RENDER_STAGE_OBJECT", 4));
+    items.push(const_item("MTL_RENDER_STAGE_MESH", 8));
+    items.push(const_item("MTL_RENDER_STAGE_TILE", 16));
+    // Intersection function signature
+    items.push(const_item("MTL_INTERSECTION_FN_SIGNATURE_NONE", 0));
+    items.push(const_item("MTL_INTERSECTION_FN_SIGNATURE_INSTANCING", 1));
+    items.push(const_item("MTL_INTERSECTION_FN_SIGNATURE_TRIANGLE_DATA", 2));
+    items.push(const_item("MTL_INTERSECTION_FN_SIGNATURE_WORLD_SPACE_DATA", 4));
+    // Acceleration structure usage
+    items.push(const_item("MTL_ACCEL_STRUCT_USAGE_NONE", 0));
+    items.push(const_item("MTL_ACCEL_STRUCT_USAGE_REFIT", 1));
+    items.push(const_item("MTL_ACCEL_STRUCT_USAGE_PREFER_FAST_BUILD", 2));
 
     Module {
         items,
