@@ -1582,7 +1582,7 @@ fn infer_collection_method_return_type(
         }
         // String methods returning Str (view operations)
         "trim" | "strip" | "lstrip" | "rstrip" | "removeprefix" | "removesuffix"
-        | "byte_slice" | "substring" if is_string => {
+        | "byte_slice" | "substring" | "slice" if is_string => {
             ctx.type_mapper.str_type
         }
         // String methods returning GorgetString (allocating)

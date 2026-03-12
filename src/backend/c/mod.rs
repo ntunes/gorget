@@ -521,6 +521,9 @@ fn returns_cstr(name: &str) -> bool {
         | "getenv" | "gorget_getenv"
         | "gorget_regex_match_text" | "gorget_regex_pattern_str"
         | "gorget_sdl_get_error"
+        | "gorget_gl_get_shader_info_log" | "gorget_gl_get_program_info_log"
+        | "gorget_gl_get_string"
+        | "gl_get_shader_info_log" | "gl_get_program_info_log" | "gl_get_string"
     )
 }
 
@@ -2398,7 +2401,15 @@ fn compute_type_overrides(
                                     }
                                 });
                             if let Some(ref ret) = user_fn_ret {
-                                if ret != "int64_t" && ret != "void" {
+                                // Don't override if the GIR local type is Option/Result
+                                // and the callee returns a simpler type — the GIR's
+                                // wrapper type is authoritative (caller expects wrapped).
+                                let gir_type_name = if let Some(GirType::Named(n)) = registry.get(func.locals[dst_id.0 as usize].type_id) {
+                                    Some(n.as_str())
+                                } else { None };
+                                let gir_is_wrapper = gir_type_name.map_or(false, |n| n.starts_with("Option__") || n.starts_with("Result__"));
+                                let ret_is_wrapper = ret.starts_with("Option__") || ret.starts_with("Result__");
+                                if ret != "int64_t" && ret != "void" && !(gir_is_wrapper && !ret_is_wrapper) {
                                     type_overrides.insert(dst_id.0 as usize, ret.clone());
                                 }
                             } else if let Some(rt) = infer_runtime_return_type(call_name) {
@@ -2413,6 +2424,12 @@ fn compute_type_overrides(
                                 type_overrides.insert(dst_id.0 as usize, rt.to_string());
                             } else if let Some(rt) = infer_method_return_type(call_name) {
                                 type_overrides.insert(dst_id.0 as usize, rt.to_string());
+                            } else {
+                                // cstr-returning functions: override local to Str
+                                let mapped = map_stdlib_name(call_name);
+                                if returns_cstr(mapped) || returns_cstr(call_name) {
+                                    type_overrides.insert(dst_id.0 as usize, "Str".to_string());
+                                }
                             }
                         }
                     }
@@ -5248,6 +5265,9 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         "TlsfAllocator" => Some("GorgetTlsfAllocator*"),
         "FixedBufferAllocator" => Some("GorgetFixedBufferAllocator*"),
         "FallbackAllocator" => Some("GorgetFallbackAllocator*"),
+        // Audio types
+        "AudioChunk" => Some("GorgetAudioChunk"),
+        "AudioMusic" => Some("GorgetAudioMusic"),
         _ => None,
     }
 }
@@ -5766,6 +5786,35 @@ fn emit_instruction(
                 let _ = writeln!(out, "        {dst_str} = {val_str}.data.Some._0;");
                 return;
             }
+            // Implicit Result::Ok wrap: src is raw T but dst is Result__T__E
+            // Only wrap when source IR type is genuinely non-Result (primitive/concrete)
+            if dst_c_type.starts_with("Result__") && !src_c_type.starts_with("Result__") && src_c_type != "void" {
+                let src_ir_is_wrapper = match value {
+                    Operand::Copy(p) | Operand::Move(p) => {
+                        let t = format_type(func.locals[p.local.0 as usize].type_id, registry);
+                        t.starts_with("Result__")
+                    }
+                    _ => false,
+                };
+                if !src_ir_is_wrapper {
+                    let _ = writeln!(out, "        {dst_str} = ({dst_c_type}){{.tag = 0, .data.Ok._0 = {val_str}}};");
+                    return;
+                }
+            }
+            // Implicit Option::Some wrap: src is raw T but dst is Option__T
+            if dst_c_type.starts_with("Option__") && !src_c_type.starts_with("Option__") && src_c_type != "void" {
+                let src_ir_is_wrapper = match value {
+                    Operand::Copy(p) | Operand::Move(p) => {
+                        let t = format_type(func.locals[p.local.0 as usize].type_id, registry);
+                        t.starts_with("Option__")
+                    }
+                    _ => false,
+                };
+                if !src_ir_is_wrapper {
+                    let _ = writeln!(out, "        {dst_str} = ({dst_c_type}){{.tag = 0, .data.Some._0 = {val_str}}};");
+                    return;
+                }
+            }
             // Closure packing: __Closure_N struct → GorgetClosure (escaped closure).
             // When a closure is returned from a function (return type int(int)),
             // the GIR local has FnPtr type (declared as GorgetClosure), and the RHS is
@@ -6276,6 +6325,10 @@ fn emit_instruction(
             else if let Some(code) = try_emit_result_wrapped_call(func_name, dst, args, func, registry, type_overrides) {
                 out.push_str(&code);
             }
+            // Image/audio/deflate out-parameter calls — C runtime uses out-param ABI
+            else if let Some(code) = try_emit_outparam_call(func_name, dst, args, func, registry, type_overrides) {
+                out.push_str(&code);
+            }
             // sleep(arg) — dispatch based on argument type:
             //   float arg → std.time.sleep(seconds) → gorget_sleep_ms((int64_t)(arg * 1000))
             //   int arg   → std.async.sleep(ms)     → gorget_reactor_sleep_ms(arg)
@@ -6465,7 +6518,17 @@ fn emit_instruction(
                     format_args_with_coercion(args, func, registry, type_overrides, &c_name, all_functions)
                 };
                 let ret_cstr = returns_cstr(mapped_name);
-                if let Some(dst_id) = dst {
+                // Str__slice: C runtime modifies *self in place and returns void,
+                // but GIR expects Str return. Call void-style, then assign *self.
+                if func_name == "Str__slice" {
+                    let _ = writeln!(out, "        {c_name}({args_str});");
+                    if let Some(dst_id) = dst {
+                        if !args.is_empty() {
+                            let self_str = format_operand(&args[0], func, registry);
+                            let _ = writeln!(out, "        _{id} = *{self_str};", id = dst_id.0);
+                        }
+                    }
+                } else if let Some(dst_id) = dst {
                     let local_type = func.locals[dst_id.0 as usize].type_id;
                     if local_type == UNIT_TYPE && !type_overrides.contains_key(&(dst_id.0 as usize)) {
                         let _ = writeln!(out, "        {c_name}({args_str});");
@@ -6475,9 +6538,19 @@ fn emit_instruction(
                             let _ = writeln!(out, "        _{id} = gorget_string_adopt((char*){c_name}({args_str}));", id = dst_id.0);
                         } else if ret_cstr && c_type == "Str" {
                             let _ = writeln!(out, "        _{id} = gorget_str_from_cstr({c_name}({args_str}));", id = dst_id.0);
-                        } else if c_type.starts_with("Option__") && !is_user_fn
+                        } else if c_type.starts_with("Option__")
                             && !c_name.ends_with("__upgrade")
-                            && !c_name.ends_with("__recv_timeout") {
+                            && !c_name.ends_with("__recv_timeout")
+                            && {
+                                // Only wrap if the called function does NOT already return Option.
+                                // For user functions that return raw int, we need to wrap.
+                                let callee_returns_option = all_functions.iter()
+                                    .find(|f| f.name.as_str() == func_name || mangle_name(&f.name) == c_name)
+                                    .map(|f| format_type(f.return_type, registry))
+                                    .as_ref()
+                                    .map_or(false, |r| r.starts_with("Option__"));
+                                !callee_returns_option
+                            } {
                             // Option wrapping for runtime functions.
                             // GorgetRegexMatch uses .start == -1 sentinel; int options use >= 0.
                             // Note: __upgrade functions already return Option directly — skip wrapping.
@@ -6496,6 +6569,25 @@ fn emit_instruction(
                                     else {{ __opt.tag = 1; }} __opt; }});",
                                     id = dst_id.0);
                             }
+                        } else if c_type.starts_with("Result__") && !c_name.starts_with("__result_") && {
+                            // Result wrapping: only when called function does NOT return Result
+                            let callee_returns_result = all_functions.iter()
+                                .find(|f| f.name.as_str() == func_name || mangle_name(&f.name) == c_name)
+                                .map(|f| format_type(f.return_type, registry))
+                                .as_ref()
+                                .map_or(false, |r| r.starts_with("Result__"));
+                            !callee_returns_result
+                        } {
+                            // Wrap raw value in Result::Ok
+                            let raw_expr = if ret_cstr {
+                                format!("gorget_str_from_cstr({c_name}({args_str}))")
+                            } else {
+                                format!("{c_name}({args_str})")
+                            };
+                            let _ = writeln!(out,
+                                "        _{id} = ({{ {c_type} __wr; \
+                                __wr.tag = 0; __wr.data.Ok._0 = {raw_expr}; __wr; }});",
+                                id = dst_id.0);
                         } else {
                             let _ = writeln!(out, "        _{id} = {c_name}({args_str});", id = dst_id.0);
                         }
@@ -6543,6 +6635,9 @@ fn emit_instruction(
             }
             // Stdlib functions that return Result via last_error pattern
             else if let Some(code) = try_emit_result_wrapped_call(func_name, dst, args, func, registry, type_overrides) {
+                if func_name.contains("image") || func_name.contains("audio") || func_name.contains("deflate") {
+                    eprintln!("[DEBUG-CALL] Caught by try_emit_result_wrapped_call: {func_name}");
+                }
                 out.push_str(&code);
             }
             // sleep(arg) — same int/float dispatch as the Call variant above
@@ -6658,6 +6753,10 @@ fn emit_instruction(
                     let _ = writeln!(out, "        _{id} = (Str){{ .data = {s}.data + {pos}, .len = (size_t)gorget_utf8_codepoint_len((unsigned char){s}.data[{pos}]) }};", id = dst_id.0);
                 }
             }
+            // Image/audio out-parameter calls — C runtime uses out-param ABI
+            else if let Some(code) = try_emit_outparam_call(func_name, dst, args, func, registry, type_overrides) {
+                out.push_str(&code);
+            }
             // Runtime functions that take GorgetArray* (pointer) arguments
             else if takes_array_ptr_args(func_name) {
                 let func_name_mapped = map_stdlib_name(func_name);
@@ -6746,6 +6845,10 @@ fn emit_instruction(
                 } else {
                     args
                 };
+                // Image/audio/deflate out-parameter calls in Call path (fallback)
+                if let Some(code) = try_emit_outparam_call(func_name, dst, actual_args, func, registry, type_overrides) {
+                    out.push_str(&code);
+                } else {
                 // Regular extern call
                 let is_printf = func_name == "printf" || func_name == "fprintf" || func_name == "sprintf"
                     || func_name == "gorget_string_format";
@@ -6759,7 +6862,7 @@ fn emit_instruction(
                 } else if is_printf {
                     format_printf_args(args, func, registry, type_overrides)
                 } else if is_str_fn {
-                    format_str_fn_args(args, func, registry)
+                    format_str_fn_args(args, func, registry, type_overrides)
                 } else if is_cstr_fn {
                     let mut base = format_cstr_fn_args(args, func, registry);
                     for arg in args {
@@ -6774,13 +6877,22 @@ fn emit_instruction(
                     }
                     base
                 } else {
-                    format_str_fn_args(args, func, registry)
+                    let c_name_for_coercion = mangle_name(func_name);
+                    format_args_with_coercion(args, func, registry, type_overrides, &c_name_for_coercion, all_functions)
                 };
                 let ret_cstr = returns_cstr(func_name);
                 if let Some(dst_id) = dst {
                     let local_type = func.locals[dst_id.0 as usize].type_id;
                     if local_type == UNIT_TYPE && !type_overrides.contains_key(&(dst_id.0 as usize)) {
                         let _ = writeln!(out, "        {func_name}({args_str});");
+                        // Str__slice mutates self in-place and "returns" void, but
+                        // callers may use the result as Str. Assign *self to dst.
+                        if func_name.ends_with("__slice") && !args.is_empty() {
+                            if let Operand::Copy(p) | Operand::Move(p) = &args[0] {
+                                let self_str = format_operand(&args[0], func, registry);
+                                let _ = writeln!(out, "        _{id} = *{self_str};", id = dst_id.0);
+                            }
+                        }
                     } else {
                         let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
                         // Result wrapping: if destination is Result__* but C function returns raw value
@@ -6819,14 +6931,37 @@ fn emit_instruction(
                             }
                         } else if ret_cstr && c_type == "GorgetString" {
                             let _ = writeln!(out, "        _{id} = gorget_string_adopt((char*){func_name}({args_str}));", id = dst_id.0);
-                        } else if ret_cstr && c_type == "Str" {
+                        } else if ret_cstr && (c_type == "Str" || c_type == "int64_t") {
+                            // cstr-returning function: wrap result in Str (even if local typed as int64_t)
                             let _ = writeln!(out, "        _{id} = gorget_str_from_cstr({func_name}({args_str}));", id = dst_id.0);
-                        } else if c_type.starts_with("Option__") && !is_user_fn_call {
-                            // Option wrapping for stdlib functions — user functions already return Option
+                        } else if c_type.starts_with("Option__") && {
+                            // Option wrapping — skip if the called function already returns Option
+                            let called_ret = all_functions.iter()
+                                .find(|f| f.name.as_str() == func_name || mangle_name(&f.name) == func_name)
+                                .map(|f| format_type(f.return_type, registry));
+                            !called_ret.as_ref().map_or(false, |r| r.starts_with("Option__"))
+                        } {
                             let _ = writeln!(out,
                                 "        _{id} = ({{ __typeof__(_{id}.data.Some._0) __raw = {func_name}({args_str}); \
                                 {c_type} __opt; if (__raw >= 0) {{ __opt.tag = 0; __opt.data.Some._0 = __raw; }} \
                                 else {{ __opt.tag = 1; }} __opt; }});",
+                                id = dst_id.0);
+                        } else if c_type.starts_with("Result__") && !func_name.starts_with("__result_") && {
+                            // Result wrapping — when called function returns raw value, not Result
+                            let called_ret = all_functions.iter()
+                                .find(|f| f.name.as_str() == func_name || mangle_name(&f.name) == func_name)
+                                .map(|f| format_type(f.return_type, registry));
+                            !called_ret.as_ref().map_or(false, |r| r.starts_with("Result__"))
+                        } {
+                            // Wrap raw return value as Ok(value) — the function doesn't throw
+                            let raw_capture = if ret_cstr {
+                                format!("gorget_str_from_cstr({func_name}({args_str}))")
+                            } else {
+                                format!("{func_name}({args_str})")
+                            };
+                            let _ = writeln!(out,
+                                "        _{id} = ({{ __typeof__(_{id}.data.Ok._0) __raw = {raw_capture}; \
+                                {c_type} __wr; __wr.tag = 0; __wr.data.Ok._0 = __raw; __wr; }});",
                                 id = dst_id.0);
                         } else {
                             let _ = writeln!(out, "        _{id} = {func_name}({args_str});", id = dst_id.0);
@@ -6835,6 +6970,7 @@ fn emit_instruction(
                 } else {
                     let _ = writeln!(out, "        {func_name}({args_str});");
                 }
+            } // end of outparam else
             }
         }
 
@@ -7146,7 +7282,31 @@ fn emit_instruction(
         Instruction::Cast { dst, target_type, value } => {
             let c_type = format_type(*target_type, registry);
             let val = format_operand(value, func, registry);
-            let _ = writeln!(out, "        _{id} = ({c_type}){val};", id = dst.0);
+            let src_type_name = operand_type(value, func)
+                .map(|tid| format_type(tid, registry));
+            let src_is_str = matches!(src_type_name.as_deref(), Some("Str") | Some("GorgetString"));
+            let dst_is_str = c_type == "Str" || c_type == "GorgetString";
+            let dst_is_int = c_type == "int64_t" || c_type == "uint8_t" || c_type == "int32_t";
+            let dst_is_float = c_type == "double";
+            let src_is_int = matches!(src_type_name.as_deref(), Some("int64_t") | Some("uint8_t") | Some("int32_t"));
+            let src_is_float = matches!(src_type_name.as_deref(), Some("double"));
+            let src_is_void = matches!(src_type_name.as_deref(), Some("void"));
+            if src_is_str && dst_is_int {
+                // Str → int: extract first codepoint (ASCII byte)
+                let _ = writeln!(out, "        _{id} = ({c_type})((uint8_t){val}.data[0]);", id = dst.0);
+            } else if (src_is_int || src_is_void) && dst_is_str {
+                // int → Str: convert codepoint to UTF-8 string
+                let src_val = if src_is_void { format!("0") } else { val.clone() };
+                let _ = writeln!(out, "        _{id} = gorget_str_from_cstr(gorget_codepoint_to_utf8({src_val}));", id = dst.0);
+            } else if src_is_float && dst_is_str {
+                // float → Str: convert via gorget_float_to_str
+                let _ = writeln!(out, "        _{id} = gorget_str_from_cstr(gorget_float_to_str({val}));", id = dst.0);
+            } else if c_type == "void" {
+                // Cast to void — just evaluate for side effects (don't assign)
+                let _ = writeln!(out, "        (void){val};");
+            } else {
+                let _ = writeln!(out, "        _{id} = ({c_type}){val};", id = dst.0);
+            }
         }
 
         Instruction::BitCast { dst, target_type, value } => {
@@ -10689,6 +10849,97 @@ fn try_emit_result_wrapped_call(
     Some(out)
 }
 
+/// Emit out-parameter calls for image/audio/deflate functions that use out-param ABI.
+/// The C runtime signatures use pointer out-params instead of returning structs.
+fn try_emit_outparam_call(
+    func_name: &str,
+    dst: &Option<LocalId>,
+    args: &[Operand],
+    func: &Function,
+    registry: &TypeRegistry,
+    type_overrides: &std::collections::HashMap<usize, String>,
+) -> Option<String> {
+    let c_name = map_stdlib_name(func_name);
+    let mut out = String::new();
+
+    match c_name {
+        // gorget_image_load_rgba(Str path, int64_t* out_tag, int64_t* out_w, int64_t* out_h,
+        //                       int64_t* out_ch, GorgetArray* out_data, Str* out_err)
+        // Returns Result[Image, str] where Image = {width, height, channels, data}
+        "gorget_image_load_rgba" | "image_load_rgba" => {
+            let dst_id = dst.as_ref()?;
+            let path = format_operand(&args[0], func, registry);
+            let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+            let _ = writeln!(out,
+                "        _{id} = ({{ int64_t __tag = 0, __w = 0, __h = 0, __ch = 0; \
+                GorgetArray __data = gorget_array_new(sizeof(uint8_t)); Str __err = {{0}}; \
+                gorget_image_load_rgba({path}, &__tag, &__w, &__h, &__ch, &__data, &__err); \
+                {c_type} __wr; if (__tag == 0) {{ __wr.tag = 0; __wr.data.Ok._0 = (Image){{.width = __w, .height = __h, .channels = __ch, .data = __data}}; }} \
+                else {{ __wr.tag = 1; __wr.data.Error._0 = __err; }} __wr; }});",
+                id = dst_id.0);
+            Some(out)
+        }
+        // gorget_image_load_rgba_from_memory(const GorgetArray* data, int64_t* out_tag,
+        //   int64_t* out_w, int64_t* out_h, int64_t* out_ch, GorgetArray* out_data, Str* out_err)
+        "gorget_image_load_rgba_from_memory" => {
+            let dst_id = dst.as_ref()?;
+            let data_arg = format_operand(&args[0], func, registry);
+            let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+            let _ = writeln!(out,
+                "        _{id} = ({{ int64_t __tag = 0, __w = 0, __h = 0, __ch = 0; \
+                GorgetArray __data = gorget_array_new(sizeof(uint8_t)); Str __err = {{0}}; \
+                gorget_image_load_rgba_from_memory(&{data_arg}, &__tag, &__w, &__h, &__ch, &__data, &__err); \
+                {c_type} __wr; if (__tag == 0) {{ __wr.tag = 0; __wr.data.Ok._0 = (Image){{.width = __w, .height = __h, .channels = __ch, .data = __data}}; }} \
+                else {{ __wr.tag = 1; __wr.data.Error._0 = __err; }} __wr; }});",
+                id = dst_id.0);
+            Some(out)
+        }
+        // gorget_image_flip_vertically(int64_t w, int64_t h, int64_t ch, const GorgetArray* in_data,
+        //   int64_t* out_w, int64_t* out_h, int64_t* out_ch, GorgetArray* out_data)
+        // Input: Image struct (width, height, channels, data), Output: Image struct
+        "gorget_image_flip_vertically" => {
+            let dst_id = dst.as_ref()?;
+            let img = format_operand(&args[0], func, registry);
+            let _ = writeln!(out,
+                "        _{id} = ({{ int64_t __w = 0, __h = 0, __ch = 0; \
+                GorgetArray __data = gorget_array_new(sizeof(uint8_t)); \
+                gorget_image_flip_vertically({img}.width, {img}.height, {img}.channels, &{img}.data, &__w, &__h, &__ch, &__data); \
+                (Image){{.width = __w, .height = __h, .channels = __ch, .data = __data}}; }});",
+                id = dst_id.0);
+            Some(out)
+        }
+        // gorget_audio_load_wav(Str path, int64_t* out_tag, GorgetAudioChunk* out_chunk, Str* out_err)
+        "gorget_audio_load_wav" => {
+            let dst_id = dst.as_ref()?;
+            let path = format_operand(&args[0], func, registry);
+            let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+            let _ = writeln!(out,
+                "        _{id} = ({{ int64_t __tag = 0; GorgetAudioChunk __chunk = {{0}}; Str __err = {{0}}; \
+                gorget_audio_load_wav({path}, &__tag, &__chunk, &__err); \
+                {c_type} __wr; if (__tag == 0) {{ __wr.tag = 0; __wr.data.Ok._0 = __chunk; }} \
+                else {{ __wr.tag = 1; __wr.data.Error._0 = __err; }} __wr; }});",
+                id = dst_id.0);
+            Some(out)
+        }
+        // gorget_deflate_decompress(const GorgetArray* data, int64_t uncompressed_size,
+        //   int64_t* out_tag, GorgetArray* out_data, Str* out_err)
+        "gorget_deflate_decompress" => {
+            let dst_id = dst.as_ref()?;
+            let data_arg = format_operand(&args[0], func, registry);
+            let size_arg = format_operand(&args[1], func, registry);
+            let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+            let _ = writeln!(out,
+                "        _{id} = ({{ int64_t __tag = 0; GorgetArray __data = gorget_array_new(sizeof(uint8_t)); Str __err = {{0}}; \
+                gorget_deflate_decompress(&{data_arg}, {size_arg}, &__tag, &__data, &__err); \
+                {c_type} __wr; if (__tag == 0) {{ __wr.tag = 0; __wr.data.Ok._0 = __data; }} \
+                else {{ __wr.tag = 1; __wr.data.Error._0 = __err; }} __wr; }});",
+                id = dst_id.0);
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
 fn try_inline_method(func_name: &str) -> Option<InlineMethod> {
     // Vector pop/sort
     if func_name.starts_with("Vector__") || func_name.starts_with("GorgetArray__") {
@@ -12473,9 +12724,8 @@ fn format_printf_args(args: &[Operand], func: &Function, registry: &TypeRegistry
 }
 
 /// Format function call arguments for gorget_str_* (wraps string literals in Str).
-fn format_str_fn_args(args: &[Operand], func: &Function, registry: &TypeRegistry) -> String {
-    let empty = std::collections::HashMap::new();
-    format_args_inner(args, func, registry, FormatArgsMode::StrFn, &empty)
+fn format_str_fn_args(args: &[Operand], func: &Function, registry: &TypeRegistry, type_overrides: &std::collections::HashMap<usize, String>) -> String {
+    format_args_inner(args, func, registry, FormatArgsMode::StrFn, type_overrides)
 }
 
 /// Format function call arguments for C functions that take const char* (extracts .data from Str).
@@ -12524,6 +12774,26 @@ fn format_args_inner(args: &[Operand], func: &Function, registry: &TypeRegistry,
                     }
                     if mode == FormatArgsMode::Printf && i > 0 && (is_float_override || is_float_ir) {
                         float_override_positions.push(i);
+                    }
+                    // int/float → Str coercion for gorget_str_* functions (string interpolation)
+                    // Skip if type_overrides says this local is already Str (e.g. cstr-returning fn)
+                    if mode == FormatArgsMode::StrFn {
+                        let override_is_str = type_overrides.get(&local_idx)
+                            .map_or(false, |t| t == "Str" || t == "GorgetString");
+                        if !override_is_str {
+                            let is_int = local_type == I64_TYPE || local_type == I32_TYPE
+                                || local_type == I16_TYPE || local_type == I8_TYPE
+                                || local_type == U64_TYPE || local_type == U32_TYPE
+                                || local_type == U16_TYPE || local_type == U8_TYPE;
+                            let is_float = local_type == F64_TYPE || local_type == F32_TYPE;
+                            if is_int {
+                                arg_str = format!("gorget_str_from_cstr(gorget_int_to_str({arg_str}))");
+                            } else if is_float {
+                                arg_str = format!("gorget_str_from_cstr(gorget_float_to_str({arg_str}))");
+                            } else if local_type == BOOL_TYPE {
+                                arg_str = format!("gorget_str_from_cstr(gorget_bool_to_str({arg_str}))");
+                            }
+                        }
                     }
                     // Determine effective type name: type_override > GIR Named type
                     let eff_type_name: Option<&str> = type_overrides.get(&local_idx)
@@ -12733,8 +13003,14 @@ fn format_args_with_coercion(
                         } else {
                             false
                         };
+                        // Take address when target expects a pointer but arg is a value type.
+                        // This happens when the IR dereferences a borrow and then passes
+                        // the resulting value to a function that still expects a pointer param.
+                        let should_addr = target_params.is_some() && target_is_ptr && !is_ptr;
                         if is_ptr && should_deref && place.projections.is_empty() {
                             parts.push(format!("(*{arg_str})"));
+                        } else if should_addr {
+                            parts.push(format!("&{arg_str}"));
                         } else {
                             parts.push(arg_str);
                         }

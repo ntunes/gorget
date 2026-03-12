@@ -10,7 +10,7 @@
 
 ## Medium
 
-- **Gorget Arena: end-to-end testing** — Feature showcase complete (61 files, 12,226 lines). Passes `gg check` + `gg build` (C generation succeeds). GPU backend abstraction done (gpu_backend.gg — Metal on macOS, GL on Linux). Link requires SDL2-dev + SDL2_mixer-dev + stb headers. Need runtime environment to verify gameplay. [updated: 2026-03-12]
+- **Gorget Arena: link stage** — All 99 C compilation errors fixed. Remaining: link errors for missing SDL2_image/SDL2_ttf libraries (not installed in this environment). Once SDL2 dev packages are available, the binary should link. [updated: 2026-03-12]
 
 - **Borrow checker: imported module functions not checked** — The borrow checker at `borrow.rs:4413` only iterates top-level `module.items` (entry file functions). Functions inside `Item::Module` wrappers (imported files) are not borrow-checked. This means ownership annotations in imported files are never validated — only the entry file's call sites are checked. Fix: recurse into `Item::Module` nodes in the borrow checker's main loop. [added: 2026-03-12]
 

@@ -31,6 +31,7 @@ float abs_f(float x):
 
 # ── Vec2 ─────────────────────────────────────────────────────
 
+@derive(Default)
 struct Vec2:
     float x
     float y
@@ -75,6 +76,7 @@ equip Vec2:
 
 # ── Vec3 ─────────────────────────────────────────────────────
 
+@derive(Default)
 struct Vec3:
     float x
     float y
@@ -142,6 +144,7 @@ equip Vec3:
 
 # ── Vec4 ─────────────────────────────────────────────────────
 
+@derive(Default)
 struct Vec4:
     float x
     float y
@@ -185,6 +188,7 @@ equip Vec4:
 # Fields m00..m33 where mRC = row R, column C.
 # Memory layout: column 0 = (m00, m10, m20, m30), etc.
 
+@derive(Default)
 struct Mat4:
     float m00
     float m10
@@ -446,6 +450,7 @@ equip Mat4:
 # ── Quat ─────────────────────────────────────────────────────
 # Quaternion (x, y, z, w) — Hamilton convention: w is the scalar part.
 
+@derive(Default)
 struct Quat:
     float x
     float y
