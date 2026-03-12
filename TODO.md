@@ -10,7 +10,7 @@
 
 ## Medium
 
-- **Gorget Arena: end-to-end testing** — Phase 10 complete (57 files, 10,857 lines, passes gg check). Event-driven audio + particles, death screen, full item/weapon/combat systems. Need SDL2-dev + SDL2_mixer-dev + stb headers to verify full build and runtime. [updated: 2026-03-12]
+- **Gorget Arena: end-to-end testing** — Powerup system + console commands + HUD indicators complete (57 files, 11,204 lines, passes gg check). Event-driven audio + particles, death screen, full item/weapon/combat/powerup systems, interactive console. Need SDL2-dev + SDL2_mixer-dev + stb headers to verify full build and runtime. [updated: 2026-03-12]
 
 - **expand_derives() multi-file fix** — Available on main branch. The derive expander only iterates top-level module.items, missing structs/enums inside Module wrappers from merge_modules(). Rebase gorget-3 onto main when needed. [added: 2026-03-11]
 
