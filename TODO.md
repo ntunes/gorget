@@ -12,8 +12,6 @@
 
 - **Gorget Arena: end-to-end testing** — Feature showcase complete (61 files, 12,226 lines). Passes `gg check` + `gg build` (C generation succeeds). GPU backend abstraction done (gpu_backend.gg — Metal on macOS, GL on Linux). Link requires SDL2-dev + SDL2_mixer-dev + stb headers. Need runtime environment to verify gameplay. [updated: 2026-03-12]
 
-- **expand_derives() multi-file fix** — Available on main branch. The derive expander only iterates top-level module.items, missing structs/enums inside Module wrappers from merge_modules(). Rebase gorget-3 onto main when needed. [added: 2026-03-11]
-
 - **Borrow checker: imported module functions not checked** — The borrow checker at `borrow.rs:4413` only iterates top-level `module.items` (entry file functions). Functions inside `Item::Module` wrappers (imported files) are not borrow-checked. This means ownership annotations in imported files are never validated — only the entry file's call sites are checked. Fix: recurse into `Item::Module` nodes in the borrow checker's main loop. [added: 2026-03-12]
 
 - **If-expression `elif` branches: parser limitation**: The parser doesn't support `elif` in inline if-expressions (only `if cond: expr else: expr`). The IR lowering now handles elif branches if the parser passes them through. Workaround: use nested `else: if`: `if a == 1: 10 else: if a == 2: 20 else: 30`. [updated: 2026-03-11]
