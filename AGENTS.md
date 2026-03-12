@@ -16,8 +16,8 @@ Gorget is a statically typed, Python-like language with Rust-inspired ownership 
 ```bash
 cargo build              # build the compiler
 cargo test --lib         # unit tests (currently ~670)
-cargo test --test integration -- --test-threads=1  # integration tests (currently ~493, run serially to avoid cargo lock contention)
-cargo test               # all tests (use --test-threads=1 if integration tests hang)
+cargo test --test integration -- --test-threads=4  # integration tests (currently ~709, parallel with serial_test groups for fixture conflicts)
+cargo test               # all tests
 ```
 
 ## Documentation

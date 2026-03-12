@@ -1,10 +1,50 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use serial_test::serial;
 
 use gorget::lexer::Lexer;
 use gorget::lexer::token::{StringKind, StringLiteral, StringSegment, Token};
 use gorget::parser::ast::*;
 use gorget::span::Spanned;
+
+/// Default timeout for compiled test binaries (30 seconds).
+const TEST_BINARY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Run a command with a timeout. Returns the output or panics if the process
+/// hangs beyond the deadline.
+fn run_with_timeout(cmd: &mut Command, fixture: &str) -> std::process::Output {
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to execute compiled binary");
+
+    let deadline = std::time::Instant::now() + TEST_BINARY_TIMEOUT;
+
+    // Poll the child in a loop with short sleeps
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                // Child exited — collect output
+                return child.wait_with_output().expect("failed to read child output");
+            }
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    child.kill().ok();
+                    child.wait().ok();
+                    panic!(
+                        "Test binary for {fixture} timed out after {}s",
+                        TEST_BINARY_TIMEOUT.as_secs()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => panic!("Failed to wait on child for {fixture}: {e}"),
+        }
+    }
+}
 
 /// Build and run a `.gg` fixture, asserting its stdout matches `expected`.
 fn run_gg(fixture: &str, expected: &str) {
@@ -36,10 +76,8 @@ fn run_gg(fixture: &str, expected: &str) {
         String::from_utf8_lossy(&build.stderr),
     );
 
-    // 2. Execute the compiled binary
-    let run = Command::new(&exe_path)
-        .output()
-        .expect("failed to execute compiled binary");
+    // 2. Execute the compiled binary (with timeout)
+    let run = run_with_timeout(&mut Command::new(&exe_path), fixture);
 
     let stdout = String::from_utf8_lossy(&run.stdout);
 
@@ -79,6 +117,7 @@ gorget",
 }
 
 #[test]
+#[serial(functions_gg)]
 fn functions() {
     run_gg(
         "functions.gg",
@@ -1015,11 +1054,10 @@ fn run_gg_with_args(fixture: &str, binary_args: &[&str], expected: &str) {
         String::from_utf8_lossy(&build.stderr),
     );
 
-    // 2. Execute with args
-    let run = Command::new(&exe_path)
-        .args(binary_args)
-        .output()
-        .expect("failed to execute compiled binary");
+    // 2. Execute with args (with timeout)
+    let mut cmd = Command::new(&exe_path);
+    cmd.args(binary_args);
+    let run = run_with_timeout(&mut cmd, fixture);
 
     let stdout = String::from_utf8_lossy(&run.stdout);
 
@@ -1045,7 +1083,6 @@ fn run_gg_with_args(fixture: &str, binary_args: &[&str], expected: &str) {
 /// Build and run a `.gg` fixture, piping `stdin_data` to the binary.
 fn run_gg_with_stdin(fixture: &str, stdin_data: &str, expected: &str) {
     use std::io::Write;
-    use std::process::Stdio;
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
@@ -1075,7 +1112,7 @@ fn run_gg_with_stdin(fixture: &str, stdin_data: &str, expected: &str) {
         String::from_utf8_lossy(&build.stderr),
     );
 
-    // 2. Execute with stdin
+    // 2. Execute with stdin (with timeout)
     let mut child = Command::new(&exe_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1090,7 +1127,21 @@ fn run_gg_with_stdin(fixture: &str, stdin_data: &str, expected: &str) {
         .write_all(stdin_data.as_bytes())
         .unwrap();
 
-    let output = child.wait_with_output().expect("failed to wait on child");
+    let deadline = std::time::Instant::now() + TEST_BINARY_TIMEOUT;
+    let output = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break child.wait_with_output().expect("failed to read child output"),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    child.kill().ok();
+                    child.wait().ok();
+                    panic!("Test binary for {fixture} timed out after {}s", TEST_BINARY_TIMEOUT.as_secs());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => panic!("Failed to wait on child for {fixture}: {e}"),
+        }
+    };
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     // 3. Assert stdout
@@ -1146,10 +1197,8 @@ fn run_gg_dir(dir_name: &str, main_file: &str, expected: &str) {
         String::from_utf8_lossy(&build.stderr),
     );
 
-    // 2. Execute the compiled binary
-    let run = Command::new(&exe_path)
-        .output()
-        .expect("failed to execute compiled binary");
+    // 2. Execute the compiled binary (with timeout)
+    let run = run_with_timeout(&mut Command::new(&exe_path), &format!("{dir_name}/{main_file}"));
 
     let stdout = String::from_utf8_lossy(&run.stdout);
 
@@ -2267,9 +2316,7 @@ fn run_gg_panics(fixture: &str, expected_stderr: &str) {
     );
 
     // 2. Execute the compiled binary — expect it to fail
-    let run = Command::new(&exe_path)
-        .output()
-        .expect("failed to execute compiled binary");
+    let run = run_with_timeout(&mut Command::new(&exe_path), fixture);
 
     assert!(
         !run.status.success(),
@@ -2446,9 +2493,7 @@ fn run_gg_with_flags(fixture: &str, flags: &[&str], expected: &str) {
     );
 
     // 2. Execute the compiled binary
-    let run = Command::new(&exe_path)
-        .output()
-        .expect("failed to execute compiled binary");
+    let run = run_with_timeout(&mut Command::new(&exe_path), fixture);
 
     let stdout = String::from_utf8_lossy(&run.stdout);
 
@@ -2564,9 +2609,7 @@ fn run_gg_panics_with_flags(fixture: &str, flags: &[&str], expected_stderr: &str
     );
 
     // 2. Execute — expect panic
-    let run = Command::new(&exe_path)
-        .output()
-        .expect("failed to execute compiled binary");
+    let run = run_with_timeout(&mut Command::new(&exe_path), fixture);
 
     assert!(
         !run.status.success(),
@@ -2581,22 +2624,26 @@ fn run_gg_panics_with_flags(fixture: &str, flags: &[&str], expected_stderr: &str
 }
 
 #[test]
+#[serial(strip_asserts_gg)]
 fn directive_strip_asserts() {
     run_gg("use_strip_asserts.gg", "directives work");
 }
 
 #[test]
+#[serial(overflow_wrap_gg)]
 fn directive_overflow_wrap() {
     run_gg("use_overflow_wrap.gg", "-9223372036854775808");
 }
 
 #[test]
+#[serial(strip_asserts_gg)]
 fn directive_cli_override_no_strip_asserts() {
     // Source says `directive strip-asserts` but CLI says `--no-strip-asserts` → asserts kept → panic
     run_gg_panics_with_flags("use_strip_asserts.gg", &["--no-strip-asserts"], "this would fail without strip-asserts");
 }
 
 #[test]
+#[serial(overflow_wrap_gg)]
 fn directive_cli_override_overflow_checked() {
     // Source says `directive overflow=wrap` but CLI says `--overflow=checked` → checked → panic
     run_gg_panics_with_flags("use_overflow_wrap.gg", &["--overflow=checked"], "integer overflow");
@@ -3042,9 +3089,7 @@ fn run_example(name: &str, expected: &str) {
     );
 
     // 2. Execute
-    let run = Command::new(&exe_path)
-        .output()
-        .expect("failed to execute compiled binary");
+    let run = run_with_timeout(&mut Command::new(&exe_path), name);
 
     let stdout = String::from_utf8_lossy(&run.stdout);
 
@@ -3572,6 +3617,7 @@ custom
 // ══════════════════════════════════════════════════════════════
 
 #[test]
+#[serial(trace_test_gg)]
 fn trace_directive() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures/trace_test.gg");
@@ -3595,9 +3641,7 @@ fn trace_directive() {
     );
 
     // 2. Execute the compiled binary
-    let run = Command::new(&exe_path)
-        .output()
-        .expect("failed to execute compiled binary");
+    let run = run_with_timeout(&mut Command::new(&exe_path), "trace_test.gg");
 
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert_eq!(stdout.trim(), "6", "factorial(3) should print 6");
@@ -3643,6 +3687,7 @@ fn trace_directive() {
 }
 
 #[test]
+#[serial(functions_gg)]
 fn trace_cli_flag() {
     // Test --trace flag on a file WITHOUT the directive
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -3666,9 +3711,7 @@ fn trace_cli_flag() {
     );
 
     // Execute
-    let run = Command::new(&exe_path)
-        .output()
-        .expect("failed to execute compiled binary");
+    let run = run_with_timeout(&mut Command::new(&exe_path), "functions.gg");
 
     assert!(run.status.success());
 
@@ -3691,6 +3734,7 @@ fn trace_cli_flag() {
 }
 
 #[test]
+#[serial(trace_test_gg)]
 fn trace_no_trace_flag() {
     // Test --no-trace overrides directive trace
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -3714,9 +3758,7 @@ fn trace_no_trace_flag() {
     );
 
     // Execute
-    let run = Command::new(&exe_path)
-        .output()
-        .expect("failed to execute compiled binary");
+    let run = run_with_timeout(&mut Command::new(&exe_path), "trace_test.gg");
 
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert_eq!(stdout.trim(), "6", "factorial(3) should still print 6");
@@ -3734,6 +3776,7 @@ fn trace_no_trace_flag() {
 }
 
 #[test]
+#[serial(test_basic_gg)]
 fn trace_in_test_mode() {
     // Test --trace flag works with gg test
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -4232,6 +4275,7 @@ fn run_gg_test_with_flags(
 }
 
 #[test]
+#[serial(test_basic_gg)]
 fn test_basic() {
     run_gg_test(
         "test_basic.gg",
@@ -4259,6 +4303,7 @@ fn test_suite_setup_teardown() {
 }
 
 #[test]
+#[serial(test_tags_gg)]
 fn test_tag_filtering() {
     run_gg_test_with_tags(
         "test_tags.gg",
@@ -4302,12 +4347,14 @@ fn test_with_clause() {
 }
 
 #[test]
+#[serial(test_coexist_gg)]
 fn test_coexist_build_mode() {
     // gg build/run should use main(), ignore test blocks
     run_gg("test_coexist.gg", "42");
 }
 
 #[test]
+#[serial(test_coexist_gg)]
 fn test_coexist_test_mode() {
     // gg test should run tests, ignore main()
     run_gg_test(
@@ -4318,6 +4365,7 @@ fn test_coexist_test_mode() {
 }
 
 #[test]
+#[serial(test_coexist_gg)]
 fn test_filter_by_name() {
     // --filter should only run tests whose name contains the substring
     run_gg_test_with_flags(
@@ -4329,6 +4377,7 @@ fn test_filter_by_name() {
 }
 
 #[test]
+#[serial(test_tags_gg)]
 fn test_exclude_tag() {
     // --exclude-tag should skip tests with the excluded tag
     run_gg_test_with_flags(
@@ -4340,6 +4389,7 @@ fn test_exclude_tag() {
 }
 
 #[test]
+#[serial(test_tags_gg)]
 fn test_exclude_tag_wins_over_include() {
     // --exclude-tag wins: if a tag is both included and excluded, test is skipped
     run_gg_test_with_flags(
@@ -4376,6 +4426,7 @@ fn test_skip_attribute() {
 }
 
 #[test]
+#[serial(test_basic_gg)]
 fn test_running_count_header() {
     // All test outputs should include "Running N tests..." header
     run_gg_test(
@@ -4386,6 +4437,7 @@ fn test_running_count_header() {
 }
 
 #[test]
+#[serial(test_basic_gg)]
 fn test_timing_in_output() {
     // Test output should include timing in ms
     run_gg_test(
@@ -4412,6 +4464,7 @@ fn test_timeout_attribute() {
 // ── Report tests ─────────────────────────────────────────────
 
 #[test]
+#[serial(test_basic_gg)]
 fn test_report_subcommand() {
     // 1. Run `gg test --trace` to produce a trace file
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -4477,6 +4530,7 @@ fn test_report_subcommand() {
 }
 
 #[test]
+#[serial(test_basic_gg)]
 fn test_report_flag_on_test() {
     // Run `gg test --report html` — should auto-enable trace and produce both files
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -5149,10 +5203,9 @@ fn hot_reload_basic() {
 
     // 2. Run the host binary (it dlopen's the guest and runs init/tick)
     let exe_path = dir.join(stem);
-    let run = Command::new(&exe_path)
-        .current_dir(dir)
-        .output()
-        .expect("failed to execute hot-reload binary");
+    let mut cmd = Command::new(&exe_path);
+    cmd.current_dir(dir);
+    let run = run_with_timeout(&mut cmd, "hot_reload_basic.gg");
 
     let stdout = String::from_utf8_lossy(&run.stdout);
 

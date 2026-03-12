@@ -21,3 +21,4 @@ regex = "1"
 [dev-dependencies]
 insta = "1"
 pretty_assertions = "1"
+serial_test = "3.4.0"
