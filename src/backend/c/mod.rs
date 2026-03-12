@@ -72,6 +72,7 @@ fn map_stdlib_name(name: &str) -> &str {
         "codepoint_to_utf8" => "gorget_codepoint_to_utf8",
         // File I/O
         "read_file" => "gorget_read_file",
+        "read_file_bytes" => "gorget_read_file_bytes",
         "write_file" => "gorget_write_file",
         "append_file" => "gorget_append_file",
         "file_exists" => "gorget_file_exists",
@@ -350,6 +351,7 @@ fn map_stdlib_name(name: &str) -> &str {
         "sdl_create_window" => "gorget_sdl_create_window",
         "sdl_create_window_try" => "gorget_sdl_create_window_try",
         "sdl_window_is_null" => "gorget_sdl_window_is_null",
+        "sdl_window_to_handle" => "gorget_sdl_window_to_handle",
         "sdl_get_error" => "gorget_sdl_get_error",
         "sdl_create_renderer" => "gorget_sdl_create_renderer",
         "sdl_create_renderer_try" => "gorget_sdl_create_renderer_try",
@@ -430,6 +432,7 @@ fn is_cstr_param_fn(name: &str) -> bool {
         | "gorget_bytes_from_str" | "gorget_bytes_from_hex"
         | "puts" | "fputs" | "system" | "getenv"
         | "gorget_string_new"
+        | "gorget_read_file_bytes"
         | "gorget_file_create" | "gorget_file_open" | "gorget_file_write_handle"
         | "gorget_sdl_create_window" | "gorget_sdl_create_window_try"
         | "gorget_sdl_load_texture" | "gorget_sdl_load_font"
@@ -517,6 +520,7 @@ fn returns_cstr(name: &str) -> bool {
         | "gorget_url_encode"
         | "getenv" | "gorget_getenv"
         | "gorget_regex_match_text" | "gorget_regex_pattern_str"
+        | "gorget_sdl_get_error"
     )
 }
 
@@ -6436,7 +6440,21 @@ fn emit_instruction(
                 let c_name = mangle_name(mapped_name);
                 // Format args: use cstr coercion for functions that take const char*
                 let args_str = if is_cstr_param_fn(mapped_name) {
-                    format_cstr_fn_args(args, func, registry)
+                    // format_cstr_fn_args handles locals but not GlobalRef operands.
+                    // Fix up GlobalRef Str args here where we have access to the module.
+                    let mut base = format_cstr_fn_args(args, func, registry);
+                    for arg in args {
+                        if let Operand::Constant(Constant::GlobalRef(gname)) = arg {
+                            // Check if this global is Str-typed
+                            let is_str_global = module.globals.iter().any(|g| {
+                                g.name == *gname && format_type(g.type_id, registry) == "Str"
+                            });
+                            if is_str_global {
+                                base = base.replace(gname.as_str(), &format!("gorget_str_to_cstr({gname})"));
+                            }
+                        }
+                    }
+                    base
                 } else {
                     format_args_with_coercion(args, func, registry, type_overrides, &c_name, all_functions)
                 };
@@ -6737,7 +6755,18 @@ fn emit_instruction(
                 } else if is_str_fn {
                     format_str_fn_args(args, func, registry)
                 } else if is_cstr_fn {
-                    format_cstr_fn_args(args, func, registry)
+                    let mut base = format_cstr_fn_args(args, func, registry);
+                    for arg in args {
+                        if let Operand::Constant(Constant::GlobalRef(gname)) = arg {
+                            let is_str_global = module.globals.iter().any(|g| {
+                                g.name == *gname && format_type(g.type_id, registry) == "Str"
+                            });
+                            if is_str_global {
+                                base = base.replace(gname.as_str(), &format!("gorget_str_to_cstr({gname})"));
+                            }
+                        }
+                    }
+                    base
                 } else {
                     format_str_fn_args(args, func, registry)
                 };
@@ -12544,6 +12573,9 @@ fn format_args_inner(args: &[Operand], func: &Function, registry: &TypeRegistry,
                     let escaped = escape_c_string(s);
                     arg_str = format!("gorget_str_from_literal(\"{escaped}\", {})", s.len());
                 }
+            }
+            Operand::Constant(Constant::GlobalRef(_)) => {
+                // GlobalRef args handled at CstrFn call sites where module is available
             }
             _ => {}
         }

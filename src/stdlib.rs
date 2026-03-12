@@ -874,6 +874,7 @@ fn gen_sdl_module() -> Module {
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_create_window", &[("title", ty_str()), ("w", ty_int()), ("h", ty_int()), ("flags", ty_int())], ty_sdl_window()))));
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_create_window_try", &[("title", ty_str()), ("w", ty_int()), ("h", ty_int()), ("flags", ty_int())], ty_sdl_window()))));
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_window_is_null", &[("win", ty_sdl_window())], ty_bool()))));
+    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_window_to_handle", &[("win", ty_sdl_window())], ty_int()))));
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_error", &[], ty_str()))));
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_destroy_window", &[("win", ty_sdl_window())], ty_void()))));
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_window_width", &[("win", ty_sdl_window())], ty_int()))));

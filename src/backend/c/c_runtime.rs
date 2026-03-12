@@ -5755,6 +5755,10 @@ static inline const char* gorget_sdl_get_error(void) {
     return SDL_GetError();
 }
 
+static inline int64_t gorget_sdl_window_to_handle(GorgetSDLWindow win) {
+    return (int64_t)(intptr_t)win.ptr;
+}
+
 static inline void gorget_sdl_destroy_window(GorgetSDLWindow win) {
     if (win.ptr) SDL_DestroyWindow(win.ptr);
 }
@@ -9856,7 +9860,7 @@ static inline void gorget_gl_pixel_store_i(int64_t pname, int64_t param) {
 
 static inline void gorget_gl_compressed_tex_image_2d(int64_t target, int64_t level, int64_t format, int64_t width, int64_t height, GorgetArray* data) {
     if (!data || !data->data) return;
-    glCompressedTexImage2D((GLenum)target, (GLint)level, (GLenum)format, (GLsizei)width, (GLsizei)height, 0, (GLsizei)data->length, data->data);
+    glCompressedTexImage2D((GLenum)target, (GLint)level, (GLenum)format, (GLsizei)width, (GLsizei)height, 0, (GLsizei)data->len, data->data);
 }
 static inline void gorget_gl_copy_tex_image_2d(int64_t target, int64_t level, int64_t format, int64_t x, int64_t y, int64_t width, int64_t height) {
     glCopyTexImage2D((GLenum)target, (GLint)level, (GLenum)format, (GLint)x, (GLint)y, (GLsizei)width, (GLsizei)height, 0);
@@ -9875,13 +9879,13 @@ static inline int64_t gorget_gl_get_program_binary(int64_t program, GorgetArray*
     if (!data || !data->data) return 0;
     GLenum fmt = 0;
     GLsizei len = 0;
-    glGetProgramBinary((GLuint)program, (GLsizei)data->length, &len, &fmt, data->data);
-    data->length = len;
+    glGetProgramBinary((GLuint)program, (GLsizei)data->len, &len, &fmt, data->data);
+    data->len = len;
     return (int64_t)fmt;
 }
 static inline void gorget_gl_program_binary(int64_t program, int64_t format, GorgetArray* data) {
     if (!data || !data->data) return;
-    glProgramBinary((GLuint)program, (GLenum)format, data->data, (GLsizei)data->length);
+    glProgramBinary((GLuint)program, (GLenum)format, data->data, (GLsizei)data->len);
 }
 
 // ── Timer Queries (GL 3.3+) ─────────────────────────────────
@@ -10523,12 +10527,12 @@ static inline void gorget_audio_set_channel_distance(int64_t channel, int64_t di
 }
 
 static inline void gorget_audio_load_wav_from_memory(const GorgetArray* data, int64_t* out_tag, GorgetAudioChunk* out_chunk, Str* out_err) {
-    if (!data || !data->data || data->length == 0) {
+    if (!data || !data->data || data->len == 0) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("empty audio data");
         return;
     }
-    SDL_RWops* rw = SDL_RWFromConstMem(data->data, (int)data->length);
+    SDL_RWops* rw = SDL_RWFromConstMem(data->data, (int)data->len);
     Mix_Chunk* chunk = Mix_LoadWAV_RW(rw, 1);
     if (!chunk) {
         *out_tag = 1;
