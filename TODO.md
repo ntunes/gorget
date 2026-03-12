@@ -10,7 +10,7 @@
 
 ## Medium
 
-- **Gorget Arena: end-to-end testing** — Feature showcase complete (61 files, 12,072 lines, passes gg check). All major language features demonstrated: traits, generics, meta, derives, async, pattern matching. Main menu, powerup system, interactive console, debug overlay, entity traits. Need SDL2-dev + SDL2_mixer-dev + stb headers to verify full build and runtime. Remaining: P2P networking mode (gg.p2p showcase). [updated: 2026-03-12]
+- **Gorget Arena: end-to-end testing** — Feature showcase complete (61 files, 12,226 lines, passes gg check). All major language features demonstrated: traits, generics, meta, derives, async, P2P, pattern matching. Main menu, powerup system, interactive console, debug overlay, entity traits, P2P matchmaking. Need SDL2-dev + SDL2_mixer-dev + stb headers to verify full build and runtime. [updated: 2026-03-12]
 
 - **expand_derives() multi-file fix** — Available on main branch. The derive expander only iterates top-level module.items, missing structs/enums inside Module wrappers from merge_modules(). Rebase gorget-3 onto main when needed. [added: 2026-03-11]
 
