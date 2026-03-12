@@ -4909,6 +4909,39 @@ static inline GorgetString gorget_read_file(const char* path) {
     return content;
 }
 
+static inline GorgetArray* gorget_read_file_bytes(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "gorget: panic: read_file_bytes: cannot open '%s'\n", path);
+        exit(1);
+    }
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    GorgetArray* arr = gorget_array_new(1); // element_size = 1 (uint8)
+    if (len > 0) {
+        uint8_t* buf = (uint8_t*)GORGET_ALLOC((size_t)len);
+        size_t read = fread(buf, 1, (size_t)len, f);
+        arr->data = buf;
+        arr->len = read;
+        arr->cap = (size_t)len;
+    }
+    fclose(f);
+    return arr;
+}
+
+static inline void gorget_write_file_bytes(const char* path, const GorgetArray* data) {
+    FILE* f = fopen(path, "wb");
+    if (!f) {
+        fprintf(stderr, "gorget: panic: write_file_bytes: cannot open '%s'\n", path);
+        exit(1);
+    }
+    if (data && data->data && data->len > 0) {
+        fwrite(data->data, 1, data->len, f);
+    }
+    fclose(f);
+}
+
 static inline void gorget_write_file(const char* path, const char* content) {
     GorgetFile f = gorget_file_open(path, "w");
     gorget_file_write(&f, content);
@@ -8939,6 +8972,29 @@ static inline void gorget_bytes_write_f32_le(GorgetArray* arr, int64_t offset, d
     float fv = (float)value;
     uint8_t* p = (uint8_t*)arr->data + offset;
     memcpy(p, &fv, 4);
+}
+
+// Read a signed 32-bit integer from little-endian bytes, sign-extending to i64
+static inline int64_t gorget_bytes_read_i32_le(const GorgetArray* arr, int64_t offset) {
+    if (offset < 0 || (size_t)(offset + 4) > arr->len) {
+        fprintf(stderr, "gorget: panic: bytes_read_i32_le: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
+        exit(1);
+    }
+    int32_t v;
+    const uint8_t* p = (const uint8_t*)arr->data + offset;
+    memcpy(&v, p, 4);
+    return (int64_t)v;  // sign-extends i32 → i64
+}
+
+// Write a signed 32-bit integer to little-endian bytes
+static inline void gorget_bytes_write_i32_le(GorgetArray* arr, int64_t offset, int64_t val) {
+    if (offset < 0 || (size_t)(offset + 4) > arr->len) {
+        fprintf(stderr, "gorget: panic: bytes_write_i32_le: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
+        exit(1);
+    }
+    int32_t v = (int32_t)val;
+    uint8_t* p = (uint8_t*)arr->data + offset;
+    memcpy(p, &v, 4);
 }
 
 // Read a 32-bit IEEE 754 float from little-endian at offset, return as f64

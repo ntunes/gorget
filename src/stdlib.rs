@@ -154,7 +154,9 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
 fn gen_fs_module() -> Module {
     make_module(vec![
         decl_fn("read_file", &[("path", ty_str())], ty_string()),
+        decl_fn("read_file_bytes", &[("path", ty_str())], ty_vector_uint8()),
         decl_fn("write_file", &[("path", ty_str()), ("content", ty_str())], ty_void()),
+        decl_fn("write_file_bytes", &[("path", ty_str()), ("data", ty_vector_uint8())], ty_void()),
         decl_fn("append_file", &[("path", ty_str()), ("content", ty_str())], ty_void()),
         decl_fn("file_exists", &[("path", ty_str())], ty_bool()),
         decl_fn("delete_file", &[("path", ty_str())], ty_bool()),
@@ -2927,13 +2929,15 @@ mod tests {
     #[test]
     fn generate_fs() {
         let m = generate_builtin_module(&["std".into(), "fs".into()]).unwrap();
-        assert_eq!(m.items.len(), 11);
+        assert_eq!(m.items.len(), 13);
         let names: Vec<_> = m.items.iter().map(|i| match &i.node {
             Item::Function(f) => f.name.node.clone(),
             _ => panic!("expected function"),
         }).collect();
         assert!(names.contains(&"read_file".to_string()));
+        assert!(names.contains(&"read_file_bytes".to_string()));
         assert!(names.contains(&"write_file".to_string()));
+        assert!(names.contains(&"write_file_bytes".to_string()));
         assert!(names.contains(&"append_file".to_string()));
         assert!(names.contains(&"file_exists".to_string()));
         assert!(names.contains(&"delete_file".to_string()));

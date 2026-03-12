@@ -480,6 +480,10 @@ fn takes_array_ptr_args(name: &str) -> bool {
     ) {
         return true;
     }
+    // std.fs binary file ops
+    if matches!(name, "gorget_write_file_bytes") {
+        return true;
+    }
     false
 }
 
