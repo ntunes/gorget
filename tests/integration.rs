@@ -13325,3 +13325,20 @@ zebra
 1",
     );
 }
+
+#[test]
+fn compound_index_assign() {
+    run_gg(
+        "compound_index_assign.gg",
+        "\
+15
+17
+60
+150
+175
+117
+1150
+15
+done",
+    );
+}

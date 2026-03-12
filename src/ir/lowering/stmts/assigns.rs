@@ -14,6 +14,7 @@ use super::super::exprs::{
     atomic_type_name_for, emit_atomic_load, emit_atomic_store,
     emit_rwlock_write_get, emit_rwlock_write_set, emit_rwlock_write_finish,
     try_resolve_field_place,
+    infer_collection_element_type,
 };
 
 /// Lower an assignment.
@@ -627,9 +628,192 @@ pub(super) fn lower_compound_assign(
             };
             builder.assign(field_place, FunctionBuilder::copy(result));
         }
+    } else if let Expr::Index { object, index } = &target.node {
+        // Compound assign on index: obj[i] OP= val
+        // Desugar to: current = obj[i]; result = current OP val; obj[i] = result
+
+        // Resolve the object — handle field access (self.vec) by resolving in-place
+        let (obj, resolved_field_type) = if let Expr::FieldAccess { object: inner_obj, field } = &object.node {
+            if let Some((field_place, field_type)) = try_resolve_field_place(ctx, builder, inner_obj, &field.node) {
+                (Operand::Copy(field_place), Some(field_type))
+            } else {
+                (lower_expr(ctx, builder, object), None)
+            }
+        } else {
+            (lower_expr(ctx, builder, object), None)
+        };
+
+        let idx_raw = lower_expr(ctx, builder, index);
+        let obj_type = resolved_field_type.unwrap_or_else(|| infer_operand_type_full(ctx, &obj, builder));
+        let type_name = ctx.type_name_for_id(obj_type).unwrap_or("").to_string();
+        let is_vector = type_name.starts_with("Vector__") || type_name == "GorgetArray";
+        let is_dict = type_name.starts_with("Dict__") || type_name.starts_with("HashMap__")
+            || type_name == "GorgetMap";
+
+        if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
+            // Save index into a local so it can be reused for both read and write
+            let idx_type = infer_operand_type_full(ctx, &idx_raw, builder);
+            let idx_local = builder.add_local(idx_type, None);
+            builder.assign(Place::local(idx_local), idx_raw);
+
+            // For field-accessed collections (e.g. self.scores[i]), copy to a temp local
+            // so the C backend can determine the collection type from the local's TypeId.
+            // index_load doesn't handle Places with Field projections correctly.
+            let read_place = if resolved_field_type.is_some() {
+                let temp = builder.add_local(obj_type, None);
+                builder.assign(Place::local(temp), Operand::Copy(place.clone()));
+                Place::local(temp)
+            } else {
+                place.clone()
+            };
+
+            // Step 1: Read current value at index
+            let (cur_val, elem_type) = if is_vector || is_dict {
+                let elem_type = infer_collection_element_type(ctx, obj_type);
+                let dst = builder.index_load(read_place, FunctionBuilder::copy(idx_local), elem_type);
+                (FunctionBuilder::copy(dst), elem_type)
+            } else {
+                // Custom type: try Type__get / Index_for_Type__get
+                let candidates = [
+                    format!("{type_name}__get"),
+                    format!("Index_for_{type_name}__get"),
+                    format!("{type_name}____getitem__"),
+                ];
+                let mut found = None;
+                for get_name in &candidates {
+                    if ctx.fn_sigs.contains_key(get_name.as_str()) {
+                        let ret_type = ctx.fn_sigs.get(get_name.as_str())
+                            .map(|(_, ret)| *ret)
+                            .unwrap_or(I64_TYPE);
+                        let pt = ctx.register_ptr_type(obj_type);
+                        let pl = builder.add_local(pt, None);
+                        builder.emit_borrow(pl, place.clone());
+                        let dst = builder.call(
+                            get_name.clone(),
+                            vec![FunctionBuilder::copy(pl), FunctionBuilder::copy(idx_local)],
+                            ret_type,
+                        );
+                        found = Some((FunctionBuilder::copy(dst), ret_type));
+                        break;
+                    }
+                }
+                if let Some(pair) = found {
+                    pair
+                } else {
+                    // Fallback: string indexing or unknown type
+                    let elem_type = if obj_type == ctx.type_mapper.str_type
+                        || obj_type == ctx.type_mapper.owned_string_type {
+                        ctx.type_mapper.str_type
+                    } else {
+                        I64_TYPE
+                    };
+                    let dst = builder.index_load(read_place, FunctionBuilder::copy(idx_local), elem_type);
+                    (FunctionBuilder::copy(dst), elem_type)
+                }
+            };
+
+            // Step 2: Lower RHS
+            let rhs = lower_expr(ctx, builder, value);
+
+            // Step 3: Compute result
+            let is_string = elem_type == ctx.type_mapper.str_type
+                || elem_type == ctx.type_mapper.owned_string_type;
+
+            let result = if is_string && matches!(op, ast::BinaryOp::Add) {
+                // String concatenation via gorget_str_cat
+                let owned_type = ctx.type_mapper.owned_string_type;
+                let tmp = builder.call_extern(
+                    "gorget_str_cat",
+                    vec![cur_val, rhs],
+                    owned_type,
+                );
+                FunctionBuilder::copy(tmp)
+            } else {
+                // Check for operator overload on Named types
+                let overload_method = match op {
+                    ast::BinaryOp::Add => Some("add"),
+                    ast::BinaryOp::Sub => Some("sub"),
+                    ast::BinaryOp::Mul => Some("mul"),
+                    ast::BinaryOp::Div => Some("div"),
+                    ast::BinaryOp::Rem => Some("rem"),
+                    ast::BinaryOp::Mod => Some("mod"),
+                    _ => None,
+                }.and_then(|method| {
+                    if let Some(GirType::Named(tn)) = ctx.type_registry.get(elem_type).cloned() {
+                        let mangled = format!("{tn}__{method}");
+                        let has_method = ctx.fn_sigs.contains_key(&mangled)
+                            || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{tn}__{method}")));
+                        if has_method {
+                            let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
+                                mangled
+                            } else {
+                                ctx.fn_sigs.keys()
+                                    .find(|k| k.ends_with(&format!("_for_{tn}__{method}")))
+                                    .cloned()
+                                    .unwrap_or(mangled)
+                            };
+                            Some(effective_name)
+                        } else { None }
+                    } else { None }
+                });
+
+                if let Some(effective_name) = overload_method {
+                    // Borrow lhs for self parameter
+                    let cur_local = builder.add_local(elem_type, None);
+                    builder.assign(Place::local(cur_local), cur_val);
+                    let ptr_type = ctx.register_ptr_type(elem_type);
+                    let ptr_local = builder.add_local(ptr_type, None);
+                    builder.emit_borrow(ptr_local, Place::local(cur_local));
+                    let dst = builder.call(effective_name, vec![FunctionBuilder::copy(ptr_local), rhs], elem_type);
+                    FunctionBuilder::copy(dst)
+                } else {
+                    let gir_op = compound_op_to_gir(op);
+                    let tmp = builder.bin_op(gir_op, elem_type, cur_val, rhs);
+                    FunctionBuilder::copy(tmp)
+                }
+            };
+
+            // Step 4: Write back via collection set method
+            if is_vector {
+                let ptr_type = ctx.register_mut_ptr_type(obj_type);
+                let ptr_local = builder.add_local(ptr_type, None);
+                builder.emit_borrow_mut(ptr_local, place.clone());
+                let mangled = format!("{type_name}__set");
+                builder.call_void(
+                    mangled,
+                    vec![FunctionBuilder::copy(ptr_local), FunctionBuilder::copy(idx_local), result],
+                );
+            } else if is_dict {
+                let ptr_type = ctx.register_mut_ptr_type(obj_type);
+                let ptr_local = builder.add_local(ptr_type, None);
+                builder.emit_borrow_mut(ptr_local, place.clone());
+                let mangled = format!("{type_name}__put");
+                builder.call_void(
+                    mangled,
+                    vec![FunctionBuilder::copy(ptr_local), FunctionBuilder::copy(idx_local), result],
+                );
+            } else {
+                // Custom type: try Type__set / IndexMut_for_Type__set
+                let set_candidates = [
+                    format!("{type_name}__set"),
+                    format!("IndexMut_for_{type_name}__set"),
+                    format!("{type_name}____setitem__"),
+                ];
+                for set_name in &set_candidates {
+                    if ctx.fn_sigs.contains_key(set_name.as_str()) {
+                        let ptr_type = ctx.register_mut_ptr_type(obj_type);
+                        let ptr_local = builder.add_local(ptr_type, None);
+                        builder.emit_borrow_mut(ptr_local, place.clone());
+                        builder.call_void(
+                            set_name.clone(),
+                            vec![FunctionBuilder::copy(ptr_local), FunctionBuilder::copy(idx_local), result],
+                        );
+                        break;
+                    }
+                }
+            }
+        }
     }
-    // Note: Expr::Index compound assign (obj[i] += val) not yet implemented.
-    // Workaround: obj[i] = obj[i] + val
 }
 
 /// Map compound assignment operator to GIR binary operator.

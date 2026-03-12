@@ -1,0 +1,49 @@
+# Test compound assignment on Vector and Dict indices
+
+void main():
+    # Vector[int] compound assign
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    v[0] += 5
+    v[1] -= 3
+    v[2] *= 2
+    int a = v[0]
+    int b = v[1]
+    int c = v[2]
+    print(f"{a}")   # 15
+    print(f"{b}")   # 17
+    print(f"{c}")   # 60
+
+    # Dict[str, int] compound assign
+    Dict[str, int] d = Dict[str, int]()
+    d["a"] = 100
+    d["b"] = 200
+    d["a"] += 50
+    d["b"] -= 25
+    int da = d["a"]
+    int db = d["b"]
+    print(f"{da}")  # 150
+    print(f"{db}")  # 175
+
+    # Vector compound assign with variable index
+    int i = 1
+    v[i] += 100
+    int vi = v[1]
+    print(f"{vi}")  # 117
+
+    # Dict compound assign with variable key
+    str key = "a"
+    d[key] += 1000
+    int dk = d["a"]
+    print(f"{dk}")  # 1150
+
+    # Bitwise compound assign on vector
+    Vector[int] bits = Vector[int]()
+    bits.push(0xFF)
+    bits[0] &= 0x0F
+    int bv = bits[0]
+    print(f"{bv}")  # 15
+
+    print("done")
