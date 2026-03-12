@@ -2633,6 +2633,17 @@ static void __gorget_worker_waker_wake(GorgetWaker* w) {
     pthread_mutex_unlock(&ctx->mtx);
 }
 
+// Select yield: help the executor make progress when the main thread's select
+// spin-loop is waiting for data.  Try to steal + run one queued task; if there
+// is nothing to steal, do a brief sleep so worker threads can acquire channel
+// mutexes without contention from the poller.
+static int __gorget_select_yield(void) {
+    if (!__gorget_try_run_one()) {
+        usleep(100);   // 100 µs backoff
+    }
+    return 0;
+}
+
 #define GORGET_SCHEDULER_SUBMIT(task)  __gorget_executor_submit(task)
 #define GORGET_SCHEDULER_WAIT(task_ptr) do { \
     for (;;) { \
@@ -2719,6 +2730,8 @@ static void __gorget_worker_waker_wake(GorgetWaker* w) {
     pthread_mutex_unlock(&ctx->mtx);
 }
 
+static int __gorget_select_yield(void) { sched_yield(); return 0; }
+
 #define GORGET_SCHEDULER_SUBMIT(task) __gorget_executor_submit(task)
 #define GORGET_SCHEDULER_WAIT(task_ptr) do { \
     pthread_mutex_lock(&(task_ptr)->mtx); \
@@ -2764,6 +2777,8 @@ static void __gorget_worker_waker_wake(GorgetWaker* w) {
     __GorgetWorkerWakerCtx* ctx = (__GorgetWorkerWakerCtx*)w->data;
     ctx->woken = 1;
 }
+
+static int __gorget_select_yield(void) { sched_yield(); return 0; }
 
 #define GORGET_SCHEDULER_SUBMIT(task) __gorget_executor_submit(task)
 #define GORGET_SCHEDULER_WAIT(task_ptr) do { (void)(task_ptr); } while(0)
@@ -2843,6 +2858,11 @@ typedef struct {
 static void __gorget_worker_waker_wake(GorgetWaker* w) {
     __GorgetWorkerWakerCtx* ctx = (__GorgetWorkerWakerCtx*)w->data;
     ctx->woken = 1;
+}
+
+static int __gorget_select_yield(void) {
+    if (!__gorget_single_try_run_one()) { usleep(100); }
+    return 0;
 }
 
 #define GORGET_SCHEDULER_SUBMIT(task) __gorget_single_enqueue(task)
@@ -4909,7 +4929,7 @@ static inline GorgetString gorget_read_file(const char* path) {
     return content;
 }
 
-static inline GorgetArray* gorget_read_file_bytes(const char* path) {
+static inline GorgetArray gorget_read_file_bytes(const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "gorget: panic: read_file_bytes: cannot open '%s'\n", path);
@@ -4918,13 +4938,13 @@ static inline GorgetArray* gorget_read_file_bytes(const char* path) {
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
-    GorgetArray* arr = gorget_array_new(1); // element_size = 1 (uint8)
+    GorgetArray arr = gorget_array_new(1); // element_size = 1 (uint8)
     if (len > 0) {
         uint8_t* buf = (uint8_t*)GORGET_ALLOC((size_t)len);
         size_t read = fread(buf, 1, (size_t)len, f);
-        arr->data = buf;
-        arr->len = read;
-        arr->cap = (size_t)len;
+        arr.data = buf;
+        arr.len = read;
+        arr.cap = (size_t)len;
     }
     fclose(f);
     return arr;
@@ -9971,7 +9991,7 @@ static unsigned char* gorget_tga_load(const unsigned char* buf, int len, int* w,
 #pragma GCC diagnostic pop
 
 // Load image from file path
-static inline void gorget_image_load(Str path, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray** out_data, Str* out_err) {
+static inline void gorget_image_load(Str path, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray* out_data, Str* out_err) {
     char cpath[4096];
     size_t n = path.len < 4095 ? path.len : 4095;
     memcpy(cpath, path.data, n);
@@ -9999,10 +10019,10 @@ static inline void gorget_image_load(Str path, int64_t* out_tag, int64_t* out_wi
         return;
     }
     int data_size = w * h * ch;
-    GorgetArray* arr = gorget_array_new(sizeof(uint8_t));
-    gorget_array_ensure_capacity(arr, data_size, sizeof(uint8_t));
-    memcpy(arr->data, pixels, data_size);
-    arr->len = data_size;
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(&arr, data_size, sizeof(uint8_t));
+    memcpy(arr.data, pixels, data_size);
+    arr.len = data_size;
     stbi_image_free(pixels);
 
     *out_tag = 0; // Ok
@@ -10013,7 +10033,7 @@ static inline void gorget_image_load(Str path, int64_t* out_tag, int64_t* out_wi
 }
 
 // Load image forced to RGBA
-static inline void gorget_image_load_rgba(Str path, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray** out_data, Str* out_err) {
+static inline void gorget_image_load_rgba(Str path, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray* out_data, Str* out_err) {
     char cpath[4096];
     size_t n = path.len < 4095 ? path.len : 4095;
     memcpy(cpath, path.data, n);
@@ -10041,10 +10061,10 @@ static inline void gorget_image_load_rgba(Str path, int64_t* out_tag, int64_t* o
         return;
     }
     int data_size = w * h * 4;
-    GorgetArray* arr = gorget_array_new(sizeof(uint8_t));
-    gorget_array_ensure_capacity(arr, data_size, sizeof(uint8_t));
-    memcpy(arr->data, pixels, data_size);
-    arr->len = data_size;
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(&arr, data_size, sizeof(uint8_t));
+    memcpy(arr.data, pixels, data_size);
+    arr.len = data_size;
     stbi_image_free(pixels);
 
     *out_tag = 0;
@@ -10055,7 +10075,7 @@ static inline void gorget_image_load_rgba(Str path, int64_t* out_tag, int64_t* o
 }
 
 // Load image from memory buffer
-static inline void gorget_image_load_from_memory(const GorgetArray* data, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray** out_data, Str* out_err) {
+static inline void gorget_image_load_from_memory(const GorgetArray* data, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray* out_data, Str* out_err) {
     if (!data || !data->data || data->len == 0) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("empty input data");
@@ -10069,10 +10089,10 @@ static inline void gorget_image_load_from_memory(const GorgetArray* data, int64_
         return;
     }
     int data_size = w * h * ch;
-    GorgetArray* arr = gorget_array_new(sizeof(uint8_t));
-    gorget_array_ensure_capacity(arr, data_size, sizeof(uint8_t));
-    memcpy(arr->data, pixels, data_size);
-    arr->len = data_size;
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(&arr, data_size, sizeof(uint8_t));
+    memcpy(arr.data, pixels, data_size);
+    arr.len = data_size;
     stbi_image_free(pixels);
 
     *out_tag = 0;
@@ -10083,15 +10103,15 @@ static inline void gorget_image_load_from_memory(const GorgetArray* data, int64_
 }
 
 // Flip image vertically (for GL texture upload)
-static inline void gorget_image_flip_vertically(int64_t width, int64_t height, int64_t channels, const GorgetArray* in_data, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray** out_data) {
+static inline void gorget_image_flip_vertically(int64_t width, int64_t height, int64_t channels, const GorgetArray* in_data, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray* out_data) {
     int w = (int)width, h = (int)height, ch = (int)channels;
     int row_bytes = w * ch;
-    GorgetArray* arr = gorget_array_new(sizeof(uint8_t));
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
     int total = w * h * ch;
-    gorget_array_ensure_capacity(arr, total, sizeof(uint8_t));
-    arr->len = total;
+    gorget_array_ensure_capacity(&arr, total, sizeof(uint8_t));
+    arr.len = total;
     const uint8_t* src = (const uint8_t*)in_data->data;
-    uint8_t* dst = (uint8_t*)arr->data;
+    uint8_t* dst = (uint8_t*)arr.data;
     for (int y = 0; y < h; y++) {
         memcpy(dst + y * row_bytes, src + (h - 1 - y) * row_bytes, row_bytes);
     }
@@ -10109,7 +10129,7 @@ static inline void gorget_image_flip_vertically(int64_t width, int64_t height, i
 #endif
 #endif
 
-static inline void gorget_image_info(Str path, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray** out_data, Str* out_err) {
+static inline void gorget_image_info(Str path, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray* out_data, Str* out_err) {
     char cpath[4096];
     size_t n = path.len < 4095 ? path.len : 4095;
     memcpy(cpath, path.data, n);
@@ -10161,7 +10181,7 @@ static inline void gorget_image_info(Str path, int64_t* out_tag, int64_t* out_wi
 #endif
 }
 
-static inline void gorget_image_info_from_memory(const GorgetArray* data, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray** out_data, Str* out_err) {
+static inline void gorget_image_info_from_memory(const GorgetArray* data, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray* out_data, Str* out_err) {
     if (!data || !data->data || data->len == 0) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("empty input data");
@@ -10197,7 +10217,7 @@ static inline void gorget_image_info_from_memory(const GorgetArray* data, int64_
 }
 
 // Load from memory forced RGBA
-static inline void gorget_image_load_rgba_from_memory(const GorgetArray* data, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray** out_data, Str* out_err) {
+static inline void gorget_image_load_rgba_from_memory(const GorgetArray* data, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray* out_data, Str* out_err) {
     if (!data || !data->data || data->len == 0) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("empty input data");
@@ -10211,10 +10231,10 @@ static inline void gorget_image_load_rgba_from_memory(const GorgetArray* data, i
         return;
     }
     int data_size = w * h * 4;
-    GorgetArray* arr = gorget_array_new(sizeof(uint8_t));
-    gorget_array_ensure_capacity(arr, data_size, sizeof(uint8_t));
-    memcpy(arr->data, pixels, data_size);
-    arr->len = data_size;
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(&arr, data_size, sizeof(uint8_t));
+    memcpy(arr.data, pixels, data_size);
+    arr.len = data_size;
     stbi_image_free(pixels);
 
     *out_tag = 0;
@@ -10244,7 +10264,7 @@ static inline void gorget_image_load_rgba_from_memory(const GorgetArray* data, i
 #endif
 
 static inline void gorget_image_resize(int64_t width, int64_t height, int64_t channels, const GorgetArray* in_data, int64_t new_width, int64_t new_height,
-    int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray** out_data, Str* out_err) {
+    int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray* out_data, Str* out_err) {
 
     int w = (int)width, h = (int)height, ch = (int)channels;
     int nw = (int)new_width, nh = (int)new_height;
@@ -10256,18 +10276,18 @@ static inline void gorget_image_resize(int64_t width, int64_t height, int64_t ch
     }
 
     int out_size = nw * nh * ch;
-    GorgetArray* arr = gorget_array_new(sizeof(uint8_t));
-    gorget_array_ensure_capacity(arr, out_size, sizeof(uint8_t));
-    arr->len = out_size;
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(&arr, out_size, sizeof(uint8_t));
+    arr.len = out_size;
 
 #if defined(GORGET_HAS_STB_RESIZE)
-    stbir_resize_uint8_linear((const unsigned char*)in_data->data, w, h, w * ch, (unsigned char*)arr->data, nw, nh, nw * ch, (stbir_pixel_layout)ch);
+    stbir_resize_uint8_linear((const unsigned char*)in_data->data, w, h, w * ch, (unsigned char*)arr.data, nw, nh, nw * ch, (stbir_pixel_layout)ch);
 #elif defined(GORGET_HAS_STB_RESIZE_V1)
-    stbir_resize_uint8((const unsigned char*)in_data->data, w, h, w * ch, (unsigned char*)arr->data, nw, nh, nw * ch, ch);
+    stbir_resize_uint8((const unsigned char*)in_data->data, w, h, w * ch, (unsigned char*)arr.data, nw, nh, nw * ch, ch);
 #else
     // Manual bilinear resize fallback
     const unsigned char* src = (const unsigned char*)in_data->data;
-    unsigned char* dst = (unsigned char*)arr->data;
+    unsigned char* dst = (unsigned char*)arr.data;
     for (int y = 0; y < nh; y++) {
         float fy = (float)y * (float)(h - 1) / (float)(nh > 1 ? nh - 1 : 1);
         int y0 = (int)fy;
@@ -10392,12 +10412,12 @@ static void gorget_stb_write_callback(void* context, void* data, int size) {
 #endif
 
 static inline void gorget_image_encode_png(int64_t width, int64_t height, int64_t channels, const GorgetArray* data,
-    int64_t* out_tag, GorgetArray** out_data, Str* out_err) {
+    int64_t* out_tag, GorgetArray* out_data, Str* out_err) {
 #ifdef GORGET_HAS_STB_WRITE
-    GorgetArray* arr = gorget_array_new(sizeof(uint8_t));
-    int ok = stbi_write_png_to_func(gorget_stb_write_callback, arr, (int)width, (int)height, (int)channels, data->data, (int)(width * channels));
+    GorgetArray arr = gorget_array_new(sizeof(uint8_t));
+    int ok = stbi_write_png_to_func(gorget_stb_write_callback, &arr, (int)width, (int)height, (int)channels, data->data, (int)(width * channels));
     if (!ok) {
-        gorget_array_free(arr, sizeof(uint8_t));
+        gorget_array_free(&arr);
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("PNG encode failed");
         return;
@@ -10553,7 +10573,7 @@ pub const COMPRESS_RUNTIME: &str = r#"
 #endif
 #endif
 
-static inline void gorget_zlib_decompress(const GorgetArray* data, int64_t uncompressed_size, int64_t* out_tag, GorgetArray** out_data, Str* out_err) {
+static inline void gorget_zlib_decompress(const GorgetArray* data, int64_t uncompressed_size, int64_t* out_tag, GorgetArray* out_data, Str* out_err) {
 #if defined(GORGET_HAS_MINIZ) || defined(GORGET_HAS_ZLIB)
     if (!data || !data->data || data->len == 0) {
         *out_tag = 1;
@@ -10561,16 +10581,16 @@ static inline void gorget_zlib_decompress(const GorgetArray* data, int64_t uncom
         return;
     }
     unsigned long dest_len = (unsigned long)uncompressed_size;
-    GorgetArray* out = gorget_array_new(sizeof(uint8_t));
-    gorget_array_ensure_capacity(out, (size_t)dest_len, sizeof(uint8_t));
-    int rc = uncompress((unsigned char*)out->data, &dest_len, (const unsigned char*)data->data, (unsigned long)data->len);
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(&out, (size_t)dest_len, sizeof(uint8_t));
+    int rc = uncompress((unsigned char*)out.data, &dest_len, (const unsigned char*)data->data, (unsigned long)data->len);
     if (rc != 0) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("zlib decompress failed");
-        gorget_array_free(out, sizeof(uint8_t));
+        gorget_array_free(&out);
         return;
     }
-    out->len = (size_t)dest_len;
+    out.len = (size_t)dest_len;
     *out_tag = 0;
     *out_data = out;
 #else
@@ -10579,7 +10599,7 @@ static inline void gorget_zlib_decompress(const GorgetArray* data, int64_t uncom
 #endif
 }
 
-static inline void gorget_zlib_compress(const GorgetArray* data, int64_t* out_tag, GorgetArray** out_data, Str* out_err) {
+static inline void gorget_zlib_compress(const GorgetArray* data, int64_t* out_tag, GorgetArray* out_data, Str* out_err) {
 #if defined(GORGET_HAS_MINIZ) || defined(GORGET_HAS_ZLIB)
     if (!data || !data->data || data->len == 0) {
         *out_tag = 1;
@@ -10587,16 +10607,16 @@ static inline void gorget_zlib_compress(const GorgetArray* data, int64_t* out_ta
         return;
     }
     unsigned long dest_len = compressBound((unsigned long)data->len);
-    GorgetArray* out = gorget_array_new(sizeof(uint8_t));
-    gorget_array_ensure_capacity(out, (size_t)dest_len, sizeof(uint8_t));
-    int rc = compress((unsigned char*)out->data, &dest_len, (const unsigned char*)data->data, (unsigned long)data->len);
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(&out, (size_t)dest_len, sizeof(uint8_t));
+    int rc = compress((unsigned char*)out.data, &dest_len, (const unsigned char*)data->data, (unsigned long)data->len);
     if (rc != 0) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("zlib compress failed");
-        gorget_array_free(out, sizeof(uint8_t));
+        gorget_array_free(&out);
         return;
     }
-    out->len = (size_t)dest_len;
+    out.len = (size_t)dest_len;
     *out_tag = 0;
     *out_data = out;
 #else
@@ -10606,7 +10626,7 @@ static inline void gorget_zlib_compress(const GorgetArray* data, int64_t* out_ta
 }
 
 // Compress with specific level (0=none, 1=fastest, 9=best)
-static inline void gorget_zlib_compress_level(const GorgetArray* data, int64_t level, int64_t* out_tag, GorgetArray** out_data, Str* out_err) {
+static inline void gorget_zlib_compress_level(const GorgetArray* data, int64_t level, int64_t* out_tag, GorgetArray* out_data, Str* out_err) {
 #if defined(GORGET_HAS_MINIZ) || defined(GORGET_HAS_ZLIB)
     if (!data || !data->data || data->len == 0) {
         *out_tag = 1;
@@ -10614,16 +10634,16 @@ static inline void gorget_zlib_compress_level(const GorgetArray* data, int64_t l
         return;
     }
     unsigned long dest_len = compressBound((unsigned long)data->len);
-    GorgetArray* out = gorget_array_new(sizeof(uint8_t));
-    gorget_array_ensure_capacity(out, (size_t)dest_len, sizeof(uint8_t));
-    int rc = compress2((unsigned char*)out->data, &dest_len, (const unsigned char*)data->data, (unsigned long)data->len, (int)level);
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(&out, (size_t)dest_len, sizeof(uint8_t));
+    int rc = compress2((unsigned char*)out.data, &dest_len, (const unsigned char*)data->data, (unsigned long)data->len, (int)level);
     if (rc != 0) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("zlib compress failed");
-        gorget_array_free(out, sizeof(uint8_t));
+        gorget_array_free(&out);
         return;
     }
-    out->len = (size_t)dest_len;
+    out.len = (size_t)dest_len;
     *out_tag = 0;
     *out_data = out;
 #else
@@ -10633,7 +10653,7 @@ static inline void gorget_zlib_compress_level(const GorgetArray* data, int64_t l
 }
 
 // Raw deflate compress (no zlib header)
-static inline void gorget_deflate_compress(const GorgetArray* data, int64_t* out_tag, GorgetArray** out_data, Str* out_err) {
+static inline void gorget_deflate_compress(const GorgetArray* data, int64_t* out_tag, GorgetArray* out_data, Str* out_err) {
 #if defined(GORGET_HAS_MINIZ)
     if (!data || !data->data || data->len == 0) {
         *out_tag = 1;
@@ -10641,29 +10661,29 @@ static inline void gorget_deflate_compress(const GorgetArray* data, int64_t* out
         return;
     }
     mz_ulong dest_len = mz_compressBound((mz_ulong)data->len);
-    GorgetArray* out = gorget_array_new(sizeof(uint8_t));
-    gorget_array_ensure_capacity(out, (size_t)dest_len, sizeof(uint8_t));
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(&out, (size_t)dest_len, sizeof(uint8_t));
     mz_stream stream;
     memset(&stream, 0, sizeof(stream));
     if (mz_deflateInit2(&stream, MZ_DEFAULT_LEVEL, MZ_DEFLATED, -MZ_DEFAULT_WINDOW_BITS, 9, MZ_DEFAULT_STRATEGY) != MZ_OK) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("deflate init failed");
-        gorget_array_free(out, sizeof(uint8_t));
+        gorget_array_free(&out);
         return;
     }
     stream.next_in = (const unsigned char*)data->data;
     stream.avail_in = (mz_uint32)data->len;
-    stream.next_out = (unsigned char*)out->data;
+    stream.next_out = (unsigned char*)out.data;
     stream.avail_out = (mz_uint32)dest_len;
     int rc = mz_deflate(&stream, MZ_FINISH);
     mz_deflateEnd(&stream);
     if (rc != MZ_STREAM_END) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("deflate compress failed");
-        gorget_array_free(out, sizeof(uint8_t));
+        gorget_array_free(&out);
         return;
     }
-    out->len = stream.total_out;
+    out.len = stream.total_out;
     *out_tag = 0;
     *out_data = out;
 #elif defined(GORGET_HAS_ZLIB)
@@ -10673,29 +10693,29 @@ static inline void gorget_deflate_compress(const GorgetArray* data, int64_t* out
         return;
     }
     uLongf dest_len = compressBound((uLong)data->len);
-    GorgetArray* out = gorget_array_new(sizeof(uint8_t));
-    gorget_array_ensure_capacity(out, (size_t)dest_len, sizeof(uint8_t));
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(&out, (size_t)dest_len, sizeof(uint8_t));
     z_stream stream;
     memset(&stream, 0, sizeof(stream));
     if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("deflate init failed");
-        gorget_array_free(out, sizeof(uint8_t));
+        gorget_array_free(&out);
         return;
     }
     stream.next_in = (Bytef*)data->data;
     stream.avail_in = (uInt)data->len;
-    stream.next_out = (Bytef*)out->data;
+    stream.next_out = (Bytef*)out.data;
     stream.avail_out = (uInt)dest_len;
     int rc = deflate(&stream, Z_FINISH);
     deflateEnd(&stream);
     if (rc != Z_STREAM_END) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("deflate compress failed");
-        gorget_array_free(out, sizeof(uint8_t));
+        gorget_array_free(&out);
         return;
     }
-    out->len = stream.total_out;
+    out.len = stream.total_out;
     *out_tag = 0;
     *out_data = out;
 #else
@@ -10705,36 +10725,36 @@ static inline void gorget_deflate_compress(const GorgetArray* data, int64_t* out
 }
 
 // Raw deflate decompress (no zlib header)
-static inline void gorget_deflate_decompress(const GorgetArray* data, int64_t uncompressed_size, int64_t* out_tag, GorgetArray** out_data, Str* out_err) {
+static inline void gorget_deflate_decompress(const GorgetArray* data, int64_t uncompressed_size, int64_t* out_tag, GorgetArray* out_data, Str* out_err) {
 #if defined(GORGET_HAS_MINIZ)
     if (!data || !data->data || data->len == 0) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("empty input");
         return;
     }
-    GorgetArray* out = gorget_array_new(sizeof(uint8_t));
-    gorget_array_ensure_capacity(out, (size_t)uncompressed_size, sizeof(uint8_t));
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(&out, (size_t)uncompressed_size, sizeof(uint8_t));
     mz_stream stream;
     memset(&stream, 0, sizeof(stream));
     if (mz_inflateInit2(&stream, -MZ_DEFAULT_WINDOW_BITS) != MZ_OK) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("inflate init failed");
-        gorget_array_free(out, sizeof(uint8_t));
+        gorget_array_free(&out);
         return;
     }
     stream.next_in = (const unsigned char*)data->data;
     stream.avail_in = (mz_uint32)data->len;
-    stream.next_out = (unsigned char*)out->data;
+    stream.next_out = (unsigned char*)out.data;
     stream.avail_out = (mz_uint32)uncompressed_size;
     int rc = mz_inflate(&stream, MZ_FINISH);
     mz_inflateEnd(&stream);
     if (rc != MZ_STREAM_END) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("deflate decompress failed");
-        gorget_array_free(out, sizeof(uint8_t));
+        gorget_array_free(&out);
         return;
     }
-    out->len = stream.total_out;
+    out.len = stream.total_out;
     *out_tag = 0;
     *out_data = out;
 #elif defined(GORGET_HAS_ZLIB)
@@ -10743,29 +10763,29 @@ static inline void gorget_deflate_decompress(const GorgetArray* data, int64_t un
         *out_err = gorget_str_from_cstr("empty input");
         return;
     }
-    GorgetArray* out = gorget_array_new(sizeof(uint8_t));
-    gorget_array_ensure_capacity(out, (size_t)uncompressed_size, sizeof(uint8_t));
+    GorgetArray out = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(&out, (size_t)uncompressed_size, sizeof(uint8_t));
     z_stream stream;
     memset(&stream, 0, sizeof(stream));
     if (inflateInit2(&stream, -MAX_WBITS) != Z_OK) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("inflate init failed");
-        gorget_array_free(out, sizeof(uint8_t));
+        gorget_array_free(&out);
         return;
     }
     stream.next_in = (Bytef*)data->data;
     stream.avail_in = (uInt)data->len;
-    stream.next_out = (Bytef*)out->data;
+    stream.next_out = (Bytef*)out.data;
     stream.avail_out = (uInt)uncompressed_size;
     int rc = inflate(&stream, Z_FINISH);
     inflateEnd(&stream);
     if (rc != Z_STREAM_END) {
         *out_tag = 1;
         *out_err = gorget_str_from_cstr("deflate decompress failed");
-        gorget_array_free(out, sizeof(uint8_t));
+        gorget_array_free(&out);
         return;
     }
-    out->len = stream.total_out;
+    out.len = stream.total_out;
     *out_tag = 0;
     *out_data = out;
 #else
@@ -12407,18 +12427,18 @@ static int64_t gorget_metal_create_sampler_with_lod(int64_t device_h, int64_t mi
 
 // ── Texture Read-back ───────────────────────────────────
 
-static GorgetArray* gorget_metal_texture_get_bytes(int64_t tex_h, int64_t x, int64_t y, int64_t w, int64_t h, int64_t bytes_per_row) {
+static GorgetArray gorget_metal_texture_get_bytes(int64_t tex_h, int64_t x, int64_t y, int64_t w, int64_t h, int64_t bytes_per_row) {
     @autoreleasepool {
         id<MTLTexture> tex = (__bridge id<MTLTexture>)(void*)(intptr_t)tex_h;
         NSUInteger row_bytes = (NSUInteger)bytes_per_row;
         NSUInteger total = row_bytes * (NSUInteger)h;
-        GorgetArray* arr = gorget_array_new(1);
+        GorgetArray arr = gorget_array_new(1);
         uint8_t* buf = (uint8_t*)GORGET_ALLOC(total);
         MTLRegion region = MTLRegionMake2D((NSUInteger)x, (NSUInteger)y, (NSUInteger)w, (NSUInteger)h);
         [tex getBytes:buf bytesPerRow:row_bytes fromRegion:region mipmapLevel:0];
-        arr->data = buf;
-        arr->len = total;
-        arr->cap = total;
+        arr.data = buf;
+        arr.len = total;
+        arr.cap = total;
         return arr;
     }
 }

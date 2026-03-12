@@ -1689,9 +1689,9 @@ fn emit_channel_recv_timeout_defs(out: &mut String, module: &Module) {
         let chan_name = format!("Channel__{elem_c}");
         let option_name = format!("Option__{elem_c}");
         let _ = writeln!(out,
-            "{option_name} {chan_name}__recv_timeout({chan_name}* self, int64_t ms) {{ \
+            "{option_name} {chan_name}__recv_timeout({chan_name} self, int64_t ms) {{ \
              {option_name} __r; {elem_c} __val; \
-             if (gorget_channel_recv_timeout(*self, &__val, ms)) {{ __r.tag = 0; __r.data.Some._0 = __val; }} \
+             if (gorget_channel_recv_timeout(self, &__val, ms)) {{ __r.tag = 0; __r.data.Some._0 = __val; }} \
              else {{ __r.tag = 1; }} return __r; }}");
     }
 }
@@ -1797,45 +1797,46 @@ fn emit_channel_and_task_defs(out: &mut String, module: &Module) {
              return gorget_channel_new((size_t)cap, sizeof({elem_c})); }}");
         // send(&self, val)
         let _ = writeln!(out,
-            "static inline void {chan_name}__send({chan_name}* self, {elem_c} val) {{ \
-             gorget_channel_send(*self, &val); }}");
+            "static inline void {chan_name}__send({chan_name} self, {elem_c} val) {{ \
+             gorget_channel_send(self, &val); }}");
         // recv(&self) → T
         let _ = writeln!(out,
-            "static inline {elem_c} {chan_name}__recv({chan_name}* self) {{ \
-             {elem_c} __val; gorget_channel_recv(*self, &__val); return __val; }}");
+            "static inline {elem_c} {chan_name}__recv({chan_name} self) {{ \
+             {elem_c} __val; gorget_channel_recv(self, &__val); return __val; }}");
         // close(&self)
         let _ = writeln!(out,
-            "static inline void {chan_name}__close({chan_name}* self) {{ \
-             gorget_channel_close(*self); }}");
+            "static inline void {chan_name}__close({chan_name} self) {{ \
+             gorget_channel_close(self); }}");
         // len(&self) → int
         let _ = writeln!(out,
-            "static inline int64_t {chan_name}__len({chan_name}* self) {{ \
-             return gorget_channel_len(*self); }}");
+            "static inline int64_t {chan_name}__len({chan_name} self) {{ \
+             return gorget_channel_len(self); }}");
         // capacity(&self) → int
         let _ = writeln!(out,
-            "static inline int64_t {chan_name}__capacity({chan_name}* self) {{ \
-             return gorget_channel_capacity(*self); }}");
+            "static inline int64_t {chan_name}__capacity({chan_name} self) {{ \
+             return gorget_channel_capacity(self); }}");
         // is_closed(&self) → bool
         let _ = writeln!(out,
-            "static inline bool {chan_name}__is_closed({chan_name}* self) {{ \
-             return gorget_channel_is_closed(*self); }}");
+            "static inline bool {chan_name}__is_closed({chan_name} self) {{ \
+             return gorget_channel_is_closed(self); }}");
         // recv_timeout — defined later (after Option__T) by emit_channel_recv_timeout_defs
         // poll_send(&self, val, waker) → bool
         let _ = writeln!(out,
-            "static inline bool {chan_name}__poll_send({chan_name}* self, {elem_c} val, GorgetWaker* waker) {{ \
-             return gorget_channel_poll_send(*self, &val, waker); }}");
+            "static inline bool {chan_name}__poll_send({chan_name} self, {elem_c} val, GorgetWaker* waker) {{ \
+             return gorget_channel_poll_send(self, &val, waker); }}");
         // poll_recv(&self, *out, waker) → bool
         let _ = writeln!(out,
-            "static inline bool {chan_name}__poll_recv({chan_name}* self, {elem_c}* out, GorgetWaker* waker) {{ \
-             return gorget_channel_poll_recv(*self, out, waker); }}");
+            "static inline bool {chan_name}__poll_recv({chan_name} self, {elem_c}* out, GorgetWaker* waker) {{ \
+             return gorget_channel_poll_recv(self, out, waker); }}");
         // clone: retain (increment refcount)
         let _ = writeln!(out,
             "static inline {chan_name} {chan_name}__clone({chan_name} self) {{ \
              return gorget_channel_retain(self); }}");
         // drop: release (decrement refcount, auto-close+free when last ref drops)
+        // Takes self by pointer to match emit_drop_code which passes &place_str.
         let _ = writeln!(out,
             "static inline void {chan_name}__drop({chan_name}* self) {{ \
-             gorget_channel_release(*self); }}");
+             gorget_channel_release(*self); *self = NULL; }}");
         out.push('\n');
     }
 
@@ -2894,6 +2895,7 @@ fn fmt_args_poll(args: &[Operand], func: &Function, registry: &TypeRegistry) -> 
 
 /// Format arguments for a Gorget Call in poll context — wraps Constant::Str in gorget_str_from_literal.
 /// Gorget functions expect `Str` type, not bare `const char*`.
+#[allow(dead_code)]
 fn fmt_args_poll_gorget(args: &[Operand], func: &Function, registry: &TypeRegistry) -> String {
     args.iter()
         .map(|a| fmt_operand_poll_as_str(a, func, registry))
@@ -2904,6 +2906,7 @@ fn fmt_args_poll_gorget(args: &[Operand], func: &Function, registry: &TypeRegist
 /// Format arguments for a mapped C stdlib call in poll context.
 /// Str-typed args are converted to `const char*` via `gorget_str_to_cstr()` since
 /// C runtime functions expect null-terminated strings.
+#[allow(dead_code)]
 fn fmt_args_poll_cstr(args: &[Operand], func: &Function, registry: &TypeRegistry) -> String {
     args.iter()
         .map(|a| {
@@ -3544,10 +3547,53 @@ fn emit_poll_inst(
             // Mapped C functions (or already-C-named functions) expect const char*,
             // unmapped Gorget functions expect Str.
             let needs_cstr = was_mapped || c_fn.starts_with("gorget_");
-            let args_str = if needs_cstr {
-                fmt_args_poll_cstr(args, func, registry)
-            } else {
-                fmt_args_poll_gorget(args, func, registry)
+            let args_str = {
+                let mut parts: Vec<String> = if needs_cstr {
+                    args.iter()
+                        .map(|a| {
+                            if let Operand::Constant(Constant::Str(s)) = a {
+                                let escaped = escape_c_string(s);
+                                return format!("\"{escaped}\"");
+                            }
+                            let base = fmt_operand_poll(a, func, registry);
+                            match a {
+                                Operand::Copy(p) | Operand::Move(p) => {
+                                    let local_idx = p.local.0 as usize;
+                                    if local_idx < func.locals.len() {
+                                        let c_type = format_type(func.locals[local_idx].type_id, registry);
+                                        if c_type == "Str" {
+                                            return format!("gorget_str_to_cstr({base})");
+                                        }
+                                        if c_type == "GorgetString" {
+                                            return format!("{base}.data");
+                                        }
+                                    }
+                                    base
+                                }
+                                _ => base,
+                            }
+                        })
+                        .collect()
+                } else {
+                    args.iter()
+                        .map(|a| fmt_operand_poll_as_str(a, func, registry))
+                        .collect()
+                };
+                // Channel auto-deref: Channel__* wrappers expect self by value
+                // (Channel__T = GorgetChannel*), but in poll frames the local is
+                // stored as Channel__T* (= GorgetChannel**).  Deref arg 0.
+                if c_fn.starts_with("Channel__") && !parts.is_empty() {
+                    if let Some(Operand::Copy(p) | Operand::Move(p)) = args.first() {
+                        let local_idx = p.local.0 as usize;
+                        if local_idx < func.locals.len() {
+                            let c_type = format_type(func.locals[local_idx].type_id, registry);
+                            if c_type.starts_with("Channel__") && c_type.ends_with('*') {
+                                parts[0] = format!("(*{})", parts[0]);
+                            }
+                        }
+                    }
+                }
+                parts.join(", ")
             };
             // Result-wrapping: if destination is Result__* and function has last_error_fn,
             // emit compound-literal wrapping (same pattern as try_emit_result_wrapped_call).
@@ -4311,7 +4357,7 @@ fn emit_coroutine(
                         let val_str = val_arg.unwrap_or_else(|| "0".to_string());
                         let _ = writeln!(out, "        {{");
                         let _ = writeln!(out, "            GorgetWaker __w = (GorgetWaker){{__gorget_fiber_waker_wake, (void*)f}};");
-                        let _ = writeln!(out, "            int __r = {poll_fn}({ch_arg}, {val_str}, &__w);");
+                        let _ = writeln!(out, "            int __r = {poll_fn}((*{ch_arg}), {val_str}, &__w);");
                         let _ = writeln!(out, "            if (__r) {{ f->__state = {resume_state}; continue; }}");
                         out.push_str("        }\n");
                     }
@@ -4319,7 +4365,7 @@ fn emit_coroutine(
                         let (dst_local, ch_arg, _, poll_fn) = extract_channel_call_info(&bb.instructions[yield_pos], func, registry, false);
                         let _ = writeln!(out, "        {{");
                         let _ = writeln!(out, "            GorgetWaker __w = (GorgetWaker){{__gorget_fiber_waker_wake, (void*)f}};");
-                        let _ = writeln!(out, "            int __r = {poll_fn}({ch_arg}, &f->_{dst_local}, &__w);");
+                        let _ = writeln!(out, "            int __r = {poll_fn}((*{ch_arg}), &f->_{dst_local}, &__w);");
                         let _ = writeln!(out, "            if (__r) {{ f->__state = {resume_state}; continue; }}");
                         out.push_str("        }\n");
                     }
@@ -12618,7 +12664,30 @@ fn format_args_with_coercion(
                             .map_or(false, |&tid| {
                                 matches!(registry.get(tid), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)))
                             });
-                        if is_ptr && !target_is_ptr && place.projections.is_empty() {
+                        // Auto-deref pointer args: when the target function's param
+                        // types are known, deref if the param is a value type.
+                        // When unknown (inline wrappers not in all_functions), deref
+                        // arg 0 ONLY for Channel types — their wrappers take self by
+                        // value (Channel__T = GorgetChannel*), so MutPtr(Channel__T)
+                        // needs one deref. Other types (Guard, Shared, RwLock) take
+                        // self by pointer, so their MutPtr refs should stay as-is.
+                        let should_deref = if target_params.is_some() {
+                            !target_is_ptr
+                        } else if arg_idx == 0 {
+                            // Only auto-deref self for channel-pointer types
+                            let inner_type_name = local_type_id.and_then(|tid| {
+                                match registry.get(tid)? {
+                                    GirType::Ptr(inner) | GirType::MutPtr(inner) => {
+                                        Some(format_type(*inner, registry))
+                                    }
+                                    _ => None,
+                                }
+                            });
+                            inner_type_name.map_or(false, |n| n.starts_with("Channel__"))
+                        } else {
+                            false
+                        };
+                        if is_ptr && should_deref && place.projections.is_empty() {
                             parts.push(format!("(*{arg_str})"));
                         } else {
                             parts.push(arg_str);

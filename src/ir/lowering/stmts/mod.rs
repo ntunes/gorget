@@ -1404,8 +1404,11 @@ fn lower_select(
     // Entry: jump to spin loop header
     builder.jump(loop_header);
 
-    // Loop header: jump to first try block
+    // Loop header: when all select arms are pending, help the executor make progress
+    // by trying to run a queued task inline (work-stealing), then retry arms.
+    // Without this, the tight spin-loop can starve producer fibers.
     builder.switch_to(loop_header);
+    builder.call("__gorget_select_yield", vec![], I32_TYPE);
     builder.jump(try_blocks[0]);
 
     for (i, arm) in arms.iter().enumerate() {
