@@ -455,6 +455,20 @@ fn takes_array_ptr_args(name: &str) -> bool {
         | "gorget_metal_encoder_set_vertex_bytes"
         | "gorget_metal_encoder_set_fragment_bytes"
         | "gorget_metal_create_library_from_data"
+        | "gorget_metal_compute_set_bytes"
+    ) {
+        return true;
+    }
+    // GL functions that take GorgetArray* (Vector[uint8]) arguments
+    if matches!(name,
+        "gorget_gl_vertex_pointer"
+        | "gorget_gl_tex_coord_pointer"
+        | "gorget_gl_color_pointer"
+        | "gorget_gl_normal_pointer"
+        | "gorget_gl_clip_plane"
+        | "gorget_gl_read_pixels"
+        | "gorget_gl_tex_sub_image_2d"
+        | "gorget_gl_copy_tex_sub_image_2d"
     ) {
         return true;
     }

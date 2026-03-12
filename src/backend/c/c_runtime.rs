@@ -9202,6 +9202,168 @@ static inline void gorget_gl_normal3f(double x, double y, double z) { glNormal3f
 static inline void gorget_gl_color4f(double r, double g, double b, double a) { glColor4f((GLfloat)r, (GLfloat)g, (GLfloat)b, (GLfloat)a); }
 static inline void gorget_gl_color3f(double r, double g, double b) { glColor3f((GLfloat)r, (GLfloat)g, (GLfloat)b); }
 
+// ── Client-side Vertex Arrays (Q3 renderergl1) ──────────
+
+static inline void gorget_gl_vertex_pointer(int64_t size, int64_t type, int64_t stride, const GorgetArray* data) {
+    glVertexPointer((GLint)size, (GLenum)type, (GLsizei)stride, data ? data->data : NULL);
+}
+static inline void gorget_gl_tex_coord_pointer(int64_t size, int64_t type, int64_t stride, const GorgetArray* data) {
+    glTexCoordPointer((GLint)size, (GLenum)type, (GLsizei)stride, data ? data->data : NULL);
+}
+static inline void gorget_gl_color_pointer(int64_t size, int64_t type, int64_t stride, const GorgetArray* data) {
+    glColorPointer((GLint)size, (GLenum)type, (GLsizei)stride, data ? data->data : NULL);
+}
+static inline void gorget_gl_normal_pointer(int64_t type, int64_t stride, const GorgetArray* data) {
+    glNormalPointer((GLenum)type, (GLsizei)stride, data ? data->data : NULL);
+}
+static inline void gorget_gl_enable_client_state(int64_t cap) { glEnableClientState((GLenum)cap); }
+static inline void gorget_gl_disable_client_state(int64_t cap) { glDisableClientState((GLenum)cap); }
+
+// ── Fixed-function State (Q3) ───────────────────────────
+
+static inline void gorget_gl_alpha_func(int64_t func, double ref_val) { glAlphaFunc((GLenum)func, (GLclampf)ref_val); }
+static inline void gorget_gl_shade_model(int64_t mode) { glShadeModel((GLenum)mode); }
+static inline void gorget_gl_tex_env_f(int64_t target, int64_t pname, int64_t param) { glTexEnvf((GLenum)target, (GLenum)pname, (GLfloat)param); }
+static inline void gorget_gl_depth_range(double near_val, double far_val) { glDepthRange((GLclampd)near_val, (GLclampd)far_val); }
+static inline void gorget_gl_polygon_mode(int64_t face, int64_t mode) { glPolygonMode((GLenum)face, (GLenum)mode); }
+static inline void gorget_gl_translate_f(double x, double y, double z) { glTranslatef((GLfloat)x, (GLfloat)y, (GLfloat)z); }
+static inline void gorget_gl_scale_f(double x, double y, double z) { glScalef((GLfloat)x, (GLfloat)y, (GLfloat)z); }
+static inline void gorget_gl_rotate_f(double angle, double x, double y, double z) { glRotatef((GLfloat)angle, (GLfloat)x, (GLfloat)y, (GLfloat)z); }
+
+// ── Projection / Clipping ───────────────────────────────
+
+static inline void gorget_gl_ortho(double left, double right, double bottom, double top, double near_val, double far_val) {
+    glOrtho(left, right, bottom, top, near_val, far_val);
+}
+static inline void gorget_gl_frustum(double left, double right, double bottom, double top, double near_val, double far_val) {
+    glFrustum(left, right, bottom, top, near_val, far_val);
+}
+static inline void gorget_gl_clip_plane(int64_t plane, const GorgetArray* eq) {
+    if (eq && eq->len >= 4 * sizeof(double)) {
+        glClipPlane((GLenum)plane, (const GLdouble*)eq->data);
+    }
+}
+
+// ── Draw Control ────────────────────────────────────────
+
+static inline void gorget_gl_draw_buffer(int64_t mode) { glDrawBuffer((GLenum)mode); }
+static inline void gorget_gl_read_pixels(int64_t x, int64_t y, int64_t w, int64_t h, int64_t format, int64_t type, const GorgetArray* data) {
+    glReadPixels((GLint)x, (GLint)y, (GLsizei)w, (GLsizei)h, (GLenum)format, (GLenum)type, data ? data->data : NULL);
+}
+static inline void gorget_gl_finish(void) { glFinish(); }
+static inline void gorget_gl_flush(void) { glFlush(); }
+
+// ── Clear Control ───────────────────────────────────────
+
+static inline void gorget_gl_clear_depth(double depth) { glClearDepth(depth); }
+static inline void gorget_gl_clear_stencil(int64_t s) { glClearStencil((GLint)s); }
+
+// ── Additional Texture ──────────────────────────────────
+
+static inline void gorget_gl_tex_sub_image_2d(int64_t target, int64_t level, int64_t xoff, int64_t yoff, int64_t w, int64_t h, int64_t format, int64_t type, const GorgetArray* data) {
+    glTexSubImage2D((GLenum)target, (GLint)level, (GLint)xoff, (GLint)yoff, (GLsizei)w, (GLsizei)h, (GLenum)format, (GLenum)type, data ? data->data : NULL);
+}
+static inline void gorget_gl_tex_parameter_f(int64_t target, int64_t pname, double param) { glTexParameterf((GLenum)target, (GLenum)pname, (GLfloat)param); }
+static inline void gorget_gl_copy_tex_sub_image_2d(int64_t target, int64_t level, int64_t xoff, int64_t yoff, int64_t x, int64_t y, int64_t w, int64_t h) {
+    glCopyTexSubImage2D((GLenum)target, (GLint)level, (GLint)xoff, (GLint)yoff, (GLint)x, (GLint)y, (GLsizei)w, (GLsizei)h);
+}
+
+// ── Debug ───────────────────────────────────────────────
+
+static inline void gorget_gl_line_width(double width) { glLineWidth((GLfloat)width); }
+
+// ── Multitexture ────────────────────────────────────────
+
+static inline void gorget_gl_client_active_texture(int64_t texture) { glClientActiveTexture((GLenum)texture); }
+static inline void gorget_gl_multi_tex_coord2f(int64_t target, double s, double t) { glMultiTexCoord2f((GLenum)target, (GLfloat)s, (GLfloat)t); }
+
+// ── Immediate Mode Variants ─────────────────────────────
+
+static inline void gorget_gl_vertex2f(double x, double y) { glVertex2f((GLfloat)x, (GLfloat)y); }
+
+// ── Compiled Vertex Arrays (EXT) ────────────────────────
+
+static inline void gorget_gl_lock_arrays_ext(int64_t first, int64_t count) {
+#ifdef GL_EXT_compiled_vertex_array
+    glLockArraysEXT((GLint)first, (GLsizei)count);
+#else
+    (void)first; (void)count;
+#endif
+}
+static inline void gorget_gl_unlock_arrays_ext(void) {
+#ifdef GL_EXT_compiled_vertex_array
+    glUnlockArraysEXT();
+#endif
+}
+
+// ── Shader Introspection ────────────────────────────────
+
+static inline int64_t gorget_gl_get_shader_iv(int64_t shader, int64_t pname) {
+    GLint val = 0;
+    glGetShaderiv((GLuint)shader, (GLenum)pname, &val);
+    return (int64_t)val;
+}
+static inline int64_t gorget_gl_get_program_iv(int64_t program, int64_t pname) {
+    GLint val = 0;
+    glGetProgramiv((GLuint)program, (GLenum)pname, &val);
+    return (int64_t)val;
+}
+static inline void gorget_gl_validate_program(int64_t program) { glValidateProgram((GLuint)program); }
+static inline void gorget_gl_detach_shader(int64_t program, int64_t shader) { glDetachShader((GLuint)program, (GLuint)shader); }
+static inline void gorget_gl_bind_attrib_location(int64_t program, int64_t index, Str name) {
+    char cname[256];
+    size_t n = name.len < 255 ? name.len : 255;
+    memcpy(cname, name.data, n);
+    cname[n] = '\0';
+    glBindAttribLocation((GLuint)program, (GLuint)index, cname);
+}
+static inline int64_t gorget_gl_get_attrib_location(int64_t program, Str name) {
+    char cname[256];
+    size_t n = name.len < 255 ? name.len : 255;
+    memcpy(cname, name.data, n);
+    cname[n] = '\0';
+    return (int64_t)glGetAttribLocation((GLuint)program, cname);
+}
+
+// ── Framebuffer Objects ─────────────────────────────────
+
+static inline int64_t gorget_gl_gen_framebuffer(void) {
+    GLuint fb;
+    glGenFramebuffers(1, &fb);
+    return (int64_t)fb;
+}
+static inline void gorget_gl_delete_framebuffer(int64_t fb) {
+    GLuint f = (GLuint)fb;
+    glDeleteFramebuffers(1, &f);
+}
+static inline void gorget_gl_bind_framebuffer(int64_t target, int64_t fb) { glBindFramebuffer((GLenum)target, (GLuint)fb); }
+static inline int64_t gorget_gl_check_framebuffer_status(int64_t target) { return (int64_t)glCheckFramebufferStatus((GLenum)target); }
+static inline void gorget_gl_framebuffer_texture_2d(int64_t target, int64_t attachment, int64_t tex_target, int64_t texture, int64_t level) {
+    glFramebufferTexture2D((GLenum)target, (GLenum)attachment, (GLenum)tex_target, (GLuint)texture, (GLint)level);
+}
+static inline void gorget_gl_framebuffer_renderbuffer(int64_t target, int64_t attachment, int64_t rb_target, int64_t renderbuffer) {
+    glFramebufferRenderbuffer((GLenum)target, (GLenum)attachment, (GLenum)rb_target, (GLuint)renderbuffer);
+}
+static inline int64_t gorget_gl_gen_renderbuffer(void) {
+    GLuint rb;
+    glGenRenderbuffers(1, &rb);
+    return (int64_t)rb;
+}
+static inline void gorget_gl_delete_renderbuffer(int64_t rb) {
+    GLuint r = (GLuint)rb;
+    glDeleteRenderbuffers(1, &r);
+}
+static inline void gorget_gl_bind_renderbuffer(int64_t target, int64_t rb) { glBindRenderbuffer((GLenum)target, (GLuint)rb); }
+static inline void gorget_gl_renderbuffer_storage(int64_t target, int64_t format, int64_t width, int64_t height) {
+    glRenderbufferStorage((GLenum)target, (GLenum)format, (GLsizei)width, (GLsizei)height);
+}
+static inline void gorget_gl_blit_framebuffer(int64_t sx0, int64_t sy0, int64_t sx1, int64_t sy1, int64_t dx0, int64_t dy0, int64_t dx1, int64_t dy1, int64_t mask, int64_t filter) {
+    glBlitFramebuffer((GLint)sx0, (GLint)sy0, (GLint)sx1, (GLint)sy1, (GLint)dx0, (GLint)dy0, (GLint)dx1, (GLint)dy1, (GLbitfield)mask, (GLenum)filter);
+}
+static inline void gorget_gl_renderbuffer_storage_multisample(int64_t target, int64_t samples, int64_t format, int64_t width, int64_t height) {
+    glRenderbufferStorageMultisample((GLenum)target, (GLsizei)samples, (GLenum)format, (GLsizei)width, (GLsizei)height);
+}
+
 // ── Query ───────────────────────────────────────────────────
 
 static inline int64_t gorget_gl_get_error(void) { return (int64_t)glGetError(); }
@@ -10475,6 +10637,332 @@ static int64_t gorget_metal_create_texture_2d_msaa(int64_t device_h, int64_t wid
         id<MTLTexture> tex = [device newTextureWithDescriptor:desc];
         [desc release];
         return (int64_t)(intptr_t)tex;
+    }
+}
+
+// ── Compute Pipeline ────────────────────────────────────
+
+static int64_t gorget_metal_create_compute_pipeline(int64_t device_h, int64_t function_h) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        id<MTLFunction> fn = (__bridge id<MTLFunction>)(void*)(intptr_t)function_h;
+        NSError* error = nil;
+        id<MTLComputePipelineState> pso = [device newComputePipelineStateWithFunction:fn error:&error];
+        if (!pso) {
+            NSLog(@"Metal compute pipeline error: %@", error);
+            return 0;
+        }
+        return (int64_t)(intptr_t)pso; // +1 from new, caller owns
+    }
+}
+
+static int64_t gorget_metal_create_compute_encoder(int64_t cmd_buf_h) {
+    @autoreleasepool {
+        id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)(void*)(intptr_t)cmd_buf_h;
+        id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+        [(id)enc retain]; // autoreleased
+        return (int64_t)(intptr_t)enc;
+    }
+}
+
+static void gorget_metal_compute_set_pipeline(int64_t enc_h, int64_t pipeline_h) {
+    @autoreleasepool {
+        id<MTLComputeCommandEncoder> enc = (__bridge id<MTLComputeCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLComputePipelineState> pso = (__bridge id<MTLComputePipelineState>)(void*)(intptr_t)pipeline_h;
+        [enc setComputePipelineState:pso];
+    }
+}
+
+static void gorget_metal_compute_set_buffer(int64_t enc_h, int64_t buf_h, int64_t offset, int64_t index) {
+    @autoreleasepool {
+        id<MTLComputeCommandEncoder> enc = (__bridge id<MTLComputeCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLBuffer> buf = (__bridge id<MTLBuffer>)(void*)(intptr_t)buf_h;
+        [enc setBuffer:buf offset:(NSUInteger)offset atIndex:(NSUInteger)index];
+    }
+}
+
+static void gorget_metal_compute_set_bytes(int64_t enc_h, const GorgetArray* data, int64_t index) {
+    @autoreleasepool {
+        id<MTLComputeCommandEncoder> enc = (__bridge id<MTLComputeCommandEncoder>)(void*)(intptr_t)enc_h;
+        if (data && data->data) {
+            [enc setBytes:data->data length:(NSUInteger)data->len atIndex:(NSUInteger)index];
+        }
+    }
+}
+
+static void gorget_metal_compute_set_texture(int64_t enc_h, int64_t tex_h, int64_t index) {
+    @autoreleasepool {
+        id<MTLComputeCommandEncoder> enc = (__bridge id<MTLComputeCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLTexture> tex = (__bridge id<MTLTexture>)(void*)(intptr_t)tex_h;
+        [enc setTexture:tex atIndex:(NSUInteger)index];
+    }
+}
+
+static void gorget_metal_compute_dispatch_threadgroups(int64_t enc_h, int64_t gx, int64_t gy, int64_t gz, int64_t tx, int64_t ty, int64_t tz) {
+    @autoreleasepool {
+        id<MTLComputeCommandEncoder> enc = (__bridge id<MTLComputeCommandEncoder>)(void*)(intptr_t)enc_h;
+        MTLSize groups = MTLSizeMake((NSUInteger)gx, (NSUInteger)gy, (NSUInteger)gz);
+        MTLSize threads = MTLSizeMake((NSUInteger)tx, (NSUInteger)ty, (NSUInteger)tz);
+        [enc dispatchThreadgroups:groups threadsPerThreadgroup:threads];
+    }
+}
+
+static void gorget_metal_compute_dispatch_threads(int64_t enc_h, int64_t gx, int64_t gy, int64_t gz, int64_t tx, int64_t ty, int64_t tz) {
+    @autoreleasepool {
+        id<MTLComputeCommandEncoder> enc = (__bridge id<MTLComputeCommandEncoder>)(void*)(intptr_t)enc_h;
+        MTLSize grid = MTLSizeMake((NSUInteger)gx, (NSUInteger)gy, (NSUInteger)gz);
+        MTLSize threads = MTLSizeMake((NSUInteger)tx, (NSUInteger)ty, (NSUInteger)tz);
+        [enc dispatchThreads:grid threadsPerThreadgroup:threads];
+    }
+}
+
+static void gorget_metal_compute_end(int64_t enc_h) {
+    @autoreleasepool {
+        id<MTLComputeCommandEncoder> enc = (__bridge id<MTLComputeCommandEncoder>)(void*)(intptr_t)enc_h;
+        [enc endEncoding];
+    }
+}
+
+static int64_t gorget_metal_compute_thread_execution_width(int64_t pipeline_h) {
+    @autoreleasepool {
+        id<MTLComputePipelineState> pso = (__bridge id<MTLComputePipelineState>)(void*)(intptr_t)pipeline_h;
+        return (int64_t)[pso threadExecutionWidth];
+    }
+}
+
+static int64_t gorget_metal_compute_max_threads_per_threadgroup(int64_t pipeline_h) {
+    @autoreleasepool {
+        id<MTLComputePipelineState> pso = (__bridge id<MTLComputePipelineState>)(void*)(intptr_t)pipeline_h;
+        return (int64_t)[pso maxTotalThreadsPerThreadgroup];
+    }
+}
+
+static void gorget_metal_compute_set_sampler(int64_t enc_h, int64_t sampler_h, int64_t index) {
+    @autoreleasepool {
+        id<MTLComputeCommandEncoder> enc = (__bridge id<MTLComputeCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLSamplerState> sampler = (__bridge id<MTLSamplerState>)(void*)(intptr_t)sampler_h;
+        [enc setSamplerState:sampler atIndex:(NSUInteger)index];
+    }
+}
+
+// ── GPU Synchronization ─────────────────────────────────
+
+static int64_t gorget_metal_create_event(int64_t device_h) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        id<MTLEvent> event = [device newEvent];
+        return (int64_t)(intptr_t)event; // +1 from new
+    }
+}
+
+static void gorget_metal_command_buffer_encode_signal_event(int64_t cmd_buf_h, int64_t event_h, int64_t value) {
+    @autoreleasepool {
+        id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)(void*)(intptr_t)cmd_buf_h;
+        id<MTLEvent> event = (__bridge id<MTLEvent>)(void*)(intptr_t)event_h;
+        [cb encodeSignalEvent:event value:(uint64_t)value];
+    }
+}
+
+static void gorget_metal_command_buffer_encode_wait_event(int64_t cmd_buf_h, int64_t event_h, int64_t value) {
+    @autoreleasepool {
+        id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)(void*)(intptr_t)cmd_buf_h;
+        id<MTLEvent> event = (__bridge id<MTLEvent>)(void*)(intptr_t)event_h;
+        [cb encodeWaitForEvent:event value:(uint64_t)value];
+    }
+}
+
+static int64_t gorget_metal_create_shared_event(int64_t device_h) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        id<MTLSharedEvent> event = [device newSharedEvent];
+        return (int64_t)(intptr_t)event; // +1 from new
+    }
+}
+
+static int64_t gorget_metal_shared_event_signaled_value(int64_t event_h) {
+    @autoreleasepool {
+        id<MTLSharedEvent> event = (__bridge id<MTLSharedEvent>)(void*)(intptr_t)event_h;
+        return (int64_t)[event signaledValue];
+    }
+}
+
+static int64_t gorget_metal_create_fence(int64_t device_h) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        id<MTLFence> fence = [device newFence];
+        return (int64_t)(intptr_t)fence; // +1 from new
+    }
+}
+
+static void gorget_metal_encoder_wait_for_fence(int64_t enc_h, int64_t fence_h) {
+    @autoreleasepool {
+        id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLFence> fence = (__bridge id<MTLFence>)(void*)(intptr_t)fence_h;
+        [enc waitForFence:fence beforeStages:MTLRenderStageFragment];
+    }
+}
+
+static void gorget_metal_encoder_update_fence(int64_t enc_h, int64_t fence_h) {
+    @autoreleasepool {
+        id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLFence> fence = (__bridge id<MTLFence>)(void*)(intptr_t)fence_h;
+        [enc updateFence:fence afterStages:MTLRenderStageFragment];
+    }
+}
+
+static void gorget_metal_encoder_memory_barrier(int64_t enc_h, int64_t scope) {
+    @autoreleasepool {
+        id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)enc_h;
+        [enc memoryBarrierWithScope:(MTLBarrierScope)scope afterStages:MTLRenderStageFragment beforeStages:MTLRenderStageVertex];
+    }
+}
+
+// ── Blit Encoder Operations ─────────────────────────────
+
+static void gorget_metal_blit_copy_buffer_to_buffer(int64_t enc_h, int64_t src_h, int64_t src_offset, int64_t dst_h, int64_t dst_offset, int64_t size) {
+    @autoreleasepool {
+        id<MTLBlitCommandEncoder> enc = (__bridge id<MTLBlitCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLBuffer> src = (__bridge id<MTLBuffer>)(void*)(intptr_t)src_h;
+        id<MTLBuffer> dst = (__bridge id<MTLBuffer>)(void*)(intptr_t)dst_h;
+        [enc copyFromBuffer:src sourceOffset:(NSUInteger)src_offset toBuffer:dst destinationOffset:(NSUInteger)dst_offset size:(NSUInteger)size];
+    }
+}
+
+static void gorget_metal_blit_copy_texture_to_texture(int64_t enc_h, int64_t src_h, int64_t src_slice, int64_t src_level, int64_t dst_h, int64_t dst_slice, int64_t dst_level, int64_t sx, int64_t sy, int64_t sw, int64_t sh) {
+    @autoreleasepool {
+        id<MTLBlitCommandEncoder> enc = (__bridge id<MTLBlitCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLTexture> src = (__bridge id<MTLTexture>)(void*)(intptr_t)src_h;
+        id<MTLTexture> dst = (__bridge id<MTLTexture>)(void*)(intptr_t)dst_h;
+        [enc copyFromTexture:src sourceSlice:(NSUInteger)src_slice sourceLevel:(NSUInteger)src_level
+             sourceOrigin:MTLOriginMake((NSUInteger)sx, (NSUInteger)sy, 0)
+             sourceSize:MTLSizeMake((NSUInteger)sw, (NSUInteger)sh, 1)
+             toTexture:dst destinationSlice:(NSUInteger)dst_slice destinationLevel:(NSUInteger)dst_level
+             destinationOrigin:MTLOriginMake(0, 0, 0)];
+    }
+}
+
+static void gorget_metal_blit_copy_buffer_to_texture(int64_t enc_h, int64_t buf_h, int64_t buf_offset, int64_t bytes_per_row, int64_t bytes_per_image, int64_t tex_h, int64_t slice, int64_t level, int64_t w, int64_t h, int64_t d) {
+    @autoreleasepool {
+        id<MTLBlitCommandEncoder> enc = (__bridge id<MTLBlitCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLBuffer> buf = (__bridge id<MTLBuffer>)(void*)(intptr_t)buf_h;
+        id<MTLTexture> tex = (__bridge id<MTLTexture>)(void*)(intptr_t)tex_h;
+        [enc copyFromBuffer:buf sourceOffset:(NSUInteger)buf_offset
+             sourceBytesPerRow:(NSUInteger)bytes_per_row sourceBytesPerImage:(NSUInteger)bytes_per_image
+             sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, (NSUInteger)d)
+             toTexture:tex destinationSlice:(NSUInteger)slice destinationLevel:(NSUInteger)level
+             destinationOrigin:MTLOriginMake(0, 0, 0)];
+    }
+}
+
+static void gorget_metal_blit_copy_texture_to_buffer(int64_t enc_h, int64_t tex_h, int64_t slice, int64_t level, int64_t buf_h, int64_t buf_offset, int64_t bytes_per_row, int64_t bytes_per_image, int64_t w, int64_t h, int64_t d) {
+    @autoreleasepool {
+        id<MTLBlitCommandEncoder> enc = (__bridge id<MTLBlitCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLTexture> tex = (__bridge id<MTLTexture>)(void*)(intptr_t)tex_h;
+        id<MTLBuffer> buf = (__bridge id<MTLBuffer>)(void*)(intptr_t)buf_h;
+        [enc copyFromTexture:tex sourceSlice:(NSUInteger)slice sourceLevel:(NSUInteger)level
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+             sourceSize:MTLSizeMake((NSUInteger)w, (NSUInteger)h, (NSUInteger)d)
+             toBuffer:buf destinationOffset:(NSUInteger)buf_offset
+             destinationBytesPerRow:(NSUInteger)bytes_per_row destinationBytesPerImage:(NSUInteger)bytes_per_image];
+    }
+}
+
+static void gorget_metal_blit_fill_buffer(int64_t enc_h, int64_t buf_h, int64_t offset, int64_t length, int64_t value) {
+    @autoreleasepool {
+        id<MTLBlitCommandEncoder> enc = (__bridge id<MTLBlitCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLBuffer> buf = (__bridge id<MTLBuffer>)(void*)(intptr_t)buf_h;
+        NSRange range = NSMakeRange((NSUInteger)offset, (NSUInteger)length);
+        [enc fillBuffer:buf range:range value:(uint8_t)value];
+    }
+}
+
+static void gorget_metal_blit_synchronize_resource(int64_t enc_h, int64_t resource_h) {
+    @autoreleasepool {
+#if TARGET_OS_OSX
+        id<MTLBlitCommandEncoder> enc = (__bridge id<MTLBlitCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLResource> resource = (__bridge id<MTLResource>)(void*)(intptr_t)resource_h;
+        [enc synchronizeResource:resource];
+#else
+        (void)enc_h; (void)resource_h; // no-op on iOS (unified memory)
+#endif
+    }
+}
+
+// ── Indirect Drawing ────────────────────────────────────
+
+static void gorget_metal_encoder_draw_primitives_indirect(int64_t enc_h, int64_t prim_type, int64_t indirect_buf_h, int64_t offset) {
+    @autoreleasepool {
+        id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLBuffer> buf = (__bridge id<MTLBuffer>)(void*)(intptr_t)indirect_buf_h;
+        [enc drawPrimitives:(MTLPrimitiveType)prim_type indirectBuffer:buf indirectBufferOffset:(NSUInteger)offset];
+    }
+}
+
+static void gorget_metal_encoder_draw_indexed_indirect(int64_t enc_h, int64_t prim_type, int64_t index_count, int64_t index_type, int64_t index_buf_h, int64_t index_offset, int64_t indirect_buf_h, int64_t indirect_offset) {
+    @autoreleasepool {
+        id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLBuffer> idx_buf = (__bridge id<MTLBuffer>)(void*)(intptr_t)index_buf_h;
+        id<MTLBuffer> ind_buf = (__bridge id<MTLBuffer>)(void*)(intptr_t)indirect_buf_h;
+        [enc drawIndexedPrimitives:(MTLPrimitiveType)prim_type indexCount:(NSUInteger)index_count
+             indexType:(MTLIndexType)index_type indexBuffer:idx_buf indexBufferOffset:(NSUInteger)index_offset
+             indirectBuffer:ind_buf indirectBufferOffset:(NSUInteger)indirect_offset];
+    }
+}
+
+// ── Additional Texture Types ────────────────────────────
+
+static int64_t gorget_metal_create_texture_cube(int64_t device_h, int64_t format, int64_t size, int64_t mipmaps, int64_t usage) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        MTLTextureDescriptor* desc = [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:(MTLPixelFormat)format size:(NSUInteger)size mipmapped:(mipmaps > 1)];
+        if (mipmaps > 1) desc.mipmapLevelCount = (NSUInteger)mipmaps;
+        desc.usage = (MTLTextureUsage)usage;
+        id<MTLTexture> tex = [device newTextureWithDescriptor:desc];
+        return (int64_t)(intptr_t)tex; // +1 from new
+    }
+}
+
+static int64_t gorget_metal_create_texture_2d_array(int64_t device_h, int64_t format, int64_t width, int64_t height, int64_t array_length, int64_t mipmaps, int64_t usage) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        MTLTextureDescriptor* desc = [[MTLTextureDescriptor alloc] init];
+        desc.textureType = MTLTextureType2DArray;
+        desc.pixelFormat = (MTLPixelFormat)format;
+        desc.width = (NSUInteger)width;
+        desc.height = (NSUInteger)height;
+        desc.arrayLength = (NSUInteger)array_length;
+        desc.mipmapLevelCount = (NSUInteger)(mipmaps > 0 ? mipmaps : 1);
+        desc.usage = (MTLTextureUsage)usage;
+        id<MTLTexture> tex = [device newTextureWithDescriptor:desc];
+        return (int64_t)(intptr_t)tex; // +1 from new
+    }
+}
+
+static int64_t gorget_metal_create_texture_3d(int64_t device_h, int64_t format, int64_t width, int64_t height, int64_t depth, int64_t mipmaps, int64_t usage) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        MTLTextureDescriptor* desc = [[MTLTextureDescriptor alloc] init];
+        desc.textureType = MTLTextureType3D;
+        desc.pixelFormat = (MTLPixelFormat)format;
+        desc.width = (NSUInteger)width;
+        desc.height = (NSUInteger)height;
+        desc.depth = (NSUInteger)depth;
+        desc.mipmapLevelCount = (NSUInteger)(mipmaps > 0 ? mipmaps : 1);
+        desc.usage = (MTLTextureUsage)usage;
+        id<MTLTexture> tex = [device newTextureWithDescriptor:desc];
+        return (int64_t)(intptr_t)tex; // +1 from new
+    }
+}
+
+static int64_t gorget_metal_create_texture_view(int64_t tex_h, int64_t format, int64_t tex_type, int64_t mip_start, int64_t mip_count, int64_t slice_start, int64_t slice_count) {
+    @autoreleasepool {
+        id<MTLTexture> tex = (__bridge id<MTLTexture>)(void*)(intptr_t)tex_h;
+        NSRange mip_range = NSMakeRange((NSUInteger)mip_start, (NSUInteger)mip_count);
+        NSRange slice_range = NSMakeRange((NSUInteger)slice_start, (NSUInteger)slice_count);
+        id<MTLTexture> view = [tex newTextureViewWithPixelFormat:(MTLPixelFormat)format
+                                   textureType:(MTLTextureType)tex_type
+                                   levels:mip_range slices:slice_range];
+        return (int64_t)(intptr_t)view; // +1 from new
     }
 }
 
