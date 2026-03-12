@@ -1140,7 +1140,7 @@ impl Parser {
                 ))
             }
 
-            _ => unreachable!(),
+            _ => unreachable!("unhandled postfix operator"),
         }
     }
 
@@ -1630,7 +1630,6 @@ impl Parser {
         // Check for named argument: name = value
         let name = if matches!(self.peek(), Token::Identifier(_))
             && matches!(self.peek_ahead(1), Token::Eq)
-            && !matches!(self.peek_ahead(1), Token::EqEq)
         {
             let n = self.expect_identifier()?;
             self.advance(); // skip =

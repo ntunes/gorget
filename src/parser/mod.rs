@@ -447,7 +447,7 @@ impl Parser {
                 let span = start.merge(match &decl {
                     Item::ConstDecl(d) => d.span,
                     Item::Function(f) => f.span,
-                    _ => unreachable!(),
+                    _ => unreachable!("parse_const_item returned unexpected item kind"),
                 });
                 Ok(Spanned::new(decl, span))
             }
@@ -1687,6 +1687,10 @@ impl Parser {
 
     /// Speculatively attempt a parse. If the closure returns `None`, the parser
     /// position is restored to where it was before the attempt.
+    ///
+    /// Note: only `pos` is saved/restored — `errors` are retained even on
+    /// backtrack. This is intentional: speculative paths rarely push errors,
+    /// and any that do are acceptable diagnostics.
     fn try_parse<F, T>(&mut self, f: F) -> Option<T>
     where
         F: FnOnce(&mut Self) -> Option<T>,

@@ -7,6 +7,7 @@ pub struct Span {
 
 impl Span {
     pub fn new(start: usize, end: usize) -> Self {
+        debug_assert!(start <= end, "inverted span: start ({start}) > end ({end})");
         Self { start, end }
     }
 

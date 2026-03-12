@@ -551,7 +551,7 @@ impl<'src> Lexer<'src> {
                     kind: LexErrorKind::InvalidEscapeSequence(
                         format!("\\{}", other as char),
                     ),
-                    span: self.span(*i - 1, *i + 1),
+                    span: self.span(backslash_pos, *i + 1),
                 });
                 *i += 1;
                 other as char
@@ -584,7 +584,7 @@ impl<'src> Lexer<'src> {
 
         // Expect opening quote (either " or ')
         if i >= bytes.len() || (bytes[i] != b'"' && bytes[i] != b'\'') {
-            return (Token::Error("expected string".to_string()), i);
+            return (Token::Error("expected quote after string prefix".to_string()), i);
         }
         let quote_char = bytes[i];
 
@@ -765,7 +765,6 @@ impl<'src> Lexer<'src> {
         // Multi-char (or empty `''`) single-quoted string → StringLiteral::Normal (raw str).
         // Restart from just after the opening `'` and collect until matching `'`.
         let mut literal = String::new();
-        i = pos + 1; // back to just after opening '
 
         loop {
             if i >= bytes.len() || bytes[i] == b'\n' {
