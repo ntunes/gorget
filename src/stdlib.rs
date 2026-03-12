@@ -2360,6 +2360,41 @@ fn gen_gl_module() -> Module {
     // ── Texture Multisample (GL 3.2+) ───────────────────────
     items.push(fn_item(extern_fn("gl_tex_image_2d_multisample", &[("target", ty_int()), ("samples", ty_int()), ("format", ty_int()), ("width", ty_int()), ("height", ty_int()), ("fixed_locations", ty_int())], ty_void(), "gorget_gl_tex_image_2d_multisample")));
 
+    // ── Sync Objects (GL 3.2+) ──────────────────────────────
+    items.push(fn_item(extern_fn("gl_fence_sync", &[], ty_int(), "gorget_gl_fence_sync")));
+    items.push(fn_item(extern_fn("gl_delete_sync", &[("sync", ty_int())], ty_void(), "gorget_gl_delete_sync")));
+    items.push(fn_item(extern_fn("gl_client_wait_sync", &[("sync", ty_int()), ("flags", ty_int()), ("timeout_ns", ty_int())], ty_int(), "gorget_gl_client_wait_sync")));
+    items.push(fn_item(extern_fn("gl_wait_sync", &[("sync", ty_int())], ty_void(), "gorget_gl_wait_sync")));
+
+    // ── Pixel Store (GL 1.0+) ───────────────────────────────
+    items.push(fn_item(extern_fn("gl_pixel_store_i", &[("pname", ty_int()), ("param", ty_int())], ty_void(), "gorget_gl_pixel_store_i")));
+
+    // ── Compressed Textures ─────────────────────────────────
+    items.push(fn_item(extern_fn("gl_compressed_tex_image_2d", &[("target", ty_int()), ("level", ty_int()), ("format", ty_int()), ("width", ty_int()), ("height", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_gl_compressed_tex_image_2d")));
+    items.push(fn_item(extern_fn("gl_copy_tex_image_2d", &[("target", ty_int()), ("level", ty_int()), ("format", ty_int()), ("x", ty_int()), ("y", ty_int()), ("width", ty_int()), ("height", ty_int())], ty_void(), "gorget_gl_copy_tex_image_2d")));
+
+    // ── Texture Download ────────────────────────────────────
+    items.push(fn_item(extern_fn("gl_get_tex_image", &[("target", ty_int()), ("level", ty_int()), ("format", ty_int()), ("type_", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_gl_get_tex_image")));
+
+    // ── Program Binary (GL 4.1+) ────────────────────────────
+    items.push(fn_item(extern_fn("gl_get_program_binary", &[("program", ty_int()), ("data", ty_vector_uint8())], ty_int(), "gorget_gl_get_program_binary")));
+    items.push(fn_item(extern_fn("gl_program_binary", &[("program", ty_int()), ("format", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_gl_program_binary")));
+
+    // ── Timer Queries (GL 3.3+) ─────────────────────────────
+    items.push(fn_item(extern_fn("gl_query_counter", &[("id", ty_int()), ("target", ty_int())], ty_void(), "gorget_gl_query_counter")));
+    items.push(fn_item(extern_fn("gl_get_query_result_i64", &[("id", ty_int())], ty_int(), "gorget_gl_get_query_result_i64")));
+
+    // ── Typed State Getters ─────────────────────────────────
+    items.push(fn_item(extern_fn("gl_get_float", &[("pname", ty_int())], ty_float(), "gorget_gl_get_float")));
+
+    // ── Object Query Functions ──────────────────────────────
+    items.push(fn_item(extern_fn("gl_is_enabled", &[("cap", ty_int())], ty_bool(), "gorget_gl_is_enabled")));
+    items.push(fn_item(extern_fn("gl_is_texture", &[("texture", ty_int())], ty_bool(), "gorget_gl_is_texture")));
+    items.push(fn_item(extern_fn("gl_is_buffer", &[("buffer", ty_int())], ty_bool(), "gorget_gl_is_buffer")));
+    items.push(fn_item(extern_fn("gl_is_shader", &[("shader", ty_int())], ty_bool(), "gorget_gl_is_shader")));
+    items.push(fn_item(extern_fn("gl_is_program", &[("program", ty_int())], ty_bool(), "gorget_gl_is_program")));
+    items.push(fn_item(extern_fn("gl_is_framebuffer", &[("framebuffer", ty_int())], ty_bool(), "gorget_gl_is_framebuffer")));
+
     // ── GL Tier 3 Constants ─────────────────────────────────
 
     // Framebuffer/Renderbuffer constants already in Tier 2 above
@@ -2454,6 +2489,55 @@ fn gen_gl_module() -> Module {
     // Pixel buffer objects
     items.push(const_item("GL_PIXEL_PACK_BUFFER", 0x88EB));
     items.push(const_item("GL_PIXEL_UNPACK_BUFFER", 0x88EC));
+    // Sync objects
+    items.push(const_item("GL_SYNC_GPU_COMMANDS_COMPLETE", 0x9117));
+    items.push(const_item("GL_ALREADY_SIGNALED", 0x911A));
+    items.push(const_item("GL_TIMEOUT_EXPIRED", 0x911B));
+    items.push(const_item("GL_CONDITION_SATISFIED", 0x911C));
+    items.push(const_item("GL_WAIT_FAILED", 0x911D));
+    items.push(const_item("GL_SYNC_FLUSH_COMMANDS_BIT", 0x00000001));
+    items.push(const_item("GL_TIMEOUT_IGNORED", -1));  // 0xFFFFFFFFFFFFFFFF
+    // Pixel store parameters
+    items.push(const_item("GL_PACK_ALIGNMENT", 0x0D05));
+    items.push(const_item("GL_UNPACK_ALIGNMENT", 0x0CF5));
+    items.push(const_item("GL_PACK_ROW_LENGTH", 0x0D02));
+    items.push(const_item("GL_UNPACK_ROW_LENGTH", 0x0CF2));
+    items.push(const_item("GL_PACK_SKIP_ROWS", 0x0D03));
+    items.push(const_item("GL_PACK_SKIP_PIXELS", 0x0D04));
+    items.push(const_item("GL_UNPACK_SKIP_ROWS", 0x0CF3));
+    items.push(const_item("GL_UNPACK_SKIP_PIXELS", 0x0CF4));
+    // Compressed texture formats
+    items.push(const_item("GL_COMPRESSED_RGB_S3TC_DXT1", 0x83F0));
+    items.push(const_item("GL_COMPRESSED_RGBA_S3TC_DXT1", 0x83F1));
+    items.push(const_item("GL_COMPRESSED_RGBA_S3TC_DXT3", 0x83F2));
+    items.push(const_item("GL_COMPRESSED_RGBA_S3TC_DXT5", 0x83F3));
+    items.push(const_item("GL_COMPRESSED_RED_RGTC1", 0x8DBB));
+    items.push(const_item("GL_COMPRESSED_RG_RGTC2", 0x8DBD));
+    items.push(const_item("GL_COMPRESSED_RGBA_BPTC_UNORM", 0x8E8C));
+    items.push(const_item("GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT", 0x8E8E));
+    items.push(const_item("GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT", 0x8E8F));
+    items.push(const_item("GL_COMPRESSED_RGB8_ETC2", 0x9274));
+    items.push(const_item("GL_COMPRESSED_RGBA8_ETC2_EAC", 0x9278));
+    items.push(const_item("GL_COMPRESSED_R11_EAC", 0x9270));
+    items.push(const_item("GL_COMPRESSED_RG11_EAC", 0x9272));
+    // Texture compression query
+    items.push(const_item("GL_NUM_COMPRESSED_TEXTURE_FORMATS", 0x86A3));
+    items.push(const_item("GL_COMPRESSED_TEXTURE_FORMATS", 0x86A4));
+    // Program binary
+    items.push(const_item("GL_PROGRAM_BINARY_LENGTH", 0x8741));
+    items.push(const_item("GL_NUM_PROGRAM_BINARY_FORMATS", 0x87FE));
+    items.push(const_item("GL_PROGRAM_BINARY_FORMATS", 0x87FF));
+    items.push(const_item("GL_PROGRAM_BINARY_RETRIEVABLE_HINT", 0x8257));
+    // Timer queries
+    items.push(const_item("GL_TIMESTAMP", 0x8E28));
+    items.push(const_item("GL_TIME_ELAPSED", 0x88BF));
+    // Geometry shader
+    items.push(const_item("GL_GEOMETRY_SHADER", 0x8DD9));
+    items.push(const_item("GL_GEOMETRY_VERTICES_OUT", 0x8916));
+    items.push(const_item("GL_GEOMETRY_INPUT_TYPE", 0x8917));
+    items.push(const_item("GL_GEOMETRY_OUTPUT_TYPE", 0x8918));
+    items.push(const_item("GL_MAX_GEOMETRY_OUTPUT_VERTICES", 0x8DE0));
+    items.push(const_item("GL_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS", 0x8DE1));
 
     Module {
         items,
@@ -2511,6 +2595,20 @@ fn gen_image_module() -> Module {
     items.push(fn_item(extern_fn("image_load_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_load_from_memory")));
     items.push(fn_item(extern_fn("image_flip_vertically", &[("img", ty_image())], ty_image(), "gorget_image_flip_vertically")));
 
+    // ── Enhanced Image Functions ─────────────────────────────
+    // Query image info without full decode
+    items.push(fn_item(extern_fn("image_info", &[("path", ty_str())], ty_result(ty_image(), ty_str()), "gorget_image_info")));
+    items.push(fn_item(extern_fn("image_info_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_info_from_memory")));
+    // Load from memory with forced RGBA
+    items.push(fn_item(extern_fn("image_load_rgba_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_load_rgba_from_memory")));
+    // Resize
+    items.push(fn_item(extern_fn("image_resize", &[("img", ty_image()), ("new_width", ty_int()), ("new_height", ty_int())], ty_result(ty_image(), ty_str()), "gorget_image_resize")));
+    // Write (stb_image_write — PNG and JPG)
+    items.push(fn_item(extern_fn("image_write_png", &[("path", ty_str()), ("img", ty_image())], ty_result(ty_int(), ty_str()), "gorget_image_write_png")));
+    items.push(fn_item(extern_fn("image_write_jpg", &[("path", ty_str()), ("img", ty_image()), ("quality", ty_int())], ty_result(ty_int(), ty_str()), "gorget_image_write_jpg")));
+    // Encode to memory
+    items.push(fn_item(extern_fn("image_encode_png", &[("img", ty_image())], ty_result(ty_vector_uint8(), ty_str()), "gorget_image_encode_png")));
+
     Module {
         items,
         span: Span::dummy(),
@@ -2562,6 +2660,33 @@ fn gen_audio_module() -> Module {
     items.push(fn_item(extern_fn("audio_pause_music", &[], ty_void(), "gorget_audio_pause_music")));
     items.push(fn_item(extern_fn("audio_resume_music", &[], ty_void(), "gorget_audio_resume_music")));
 
+    // ── Enhanced Audio Functions ─────────────────────────────
+    // Channel query
+    items.push(fn_item(extern_fn("audio_channel_playing", &[("channel", ty_int())], ty_bool(), "gorget_audio_channel_playing")));
+    items.push(fn_item(extern_fn("audio_channel_paused", &[("channel", ty_int())], ty_bool(), "gorget_audio_channel_paused")));
+    items.push(fn_item(extern_fn("audio_pause_channel", &[("channel", ty_int())], ty_void(), "gorget_audio_pause_channel")));
+    items.push(fn_item(extern_fn("audio_resume_channel", &[("channel", ty_int())], ty_void(), "gorget_audio_resume_channel")));
+    items.push(fn_item(extern_fn("audio_playing_count", &[], ty_int(), "gorget_audio_playing_count")));
+    items.push(fn_item(extern_fn("audio_paused_count", &[], ty_int(), "gorget_audio_paused_count")));
+    // Fade in/out
+    items.push(fn_item(extern_fn("audio_fade_in_channel", &[("channel", ty_int()), ("chunk", ty_chunk()), ("loops", ty_int()), ("ms", ty_int())], ty_int(), "gorget_audio_fade_in_channel")));
+    items.push(fn_item(extern_fn("audio_fade_out_channel", &[("channel", ty_int()), ("ms", ty_int())], ty_void(), "gorget_audio_fade_out_channel")));
+    items.push(fn_item(extern_fn("audio_fade_in_music", &[("music", ty_music()), ("loops", ty_int()), ("ms", ty_int())], ty_void(), "gorget_audio_fade_in_music")));
+    items.push(fn_item(extern_fn("audio_fade_out_music", &[("ms", ty_int())], ty_void(), "gorget_audio_fade_out_music")));
+    // Music state
+    items.push(fn_item(extern_fn("audio_music_playing", &[], ty_bool(), "gorget_audio_music_playing")));
+    items.push(fn_item(extern_fn("audio_music_paused", &[], ty_bool(), "gorget_audio_music_paused")));
+    items.push(fn_item(extern_fn("audio_set_music_position", &[("position", ty_float())], ty_void(), "gorget_audio_set_music_position")));
+    // Channel expiration
+    items.push(fn_item(extern_fn("audio_expire_channel", &[("channel", ty_int()), ("ms", ty_int())], ty_void(), "gorget_audio_expire_channel")));
+    // Master volume
+    items.push(fn_item(extern_fn("audio_get_music_volume", &[], ty_int(), "gorget_audio_get_music_volume")));
+    items.push(fn_item(extern_fn("audio_get_channel_volume", &[("channel", ty_int())], ty_int(), "gorget_audio_get_channel_volume")));
+    // Channel distance (without angle)
+    items.push(fn_item(extern_fn("audio_set_channel_distance", &[("channel", ty_int()), ("distance", ty_int())], ty_void(), "gorget_audio_set_channel_distance")));
+    // Sound effects from memory
+    items.push(fn_item(extern_fn("audio_load_wav_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_chunk(), ty_str()), "gorget_audio_load_wav_from_memory")));
+
     Module {
         items,
         span: Span::dummy(),
@@ -2578,6 +2703,13 @@ fn gen_compress_module() -> Module {
     let items = vec![
         fn_item(extern_fn("zlib_decompress", &[("data", ty_vector_uint8()), ("uncompressed_size", ty_int())], ty_result(ty_vector_uint8(), ty_str()), "gorget_zlib_decompress")),
         fn_item(extern_fn("zlib_compress", &[("data", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str()), "gorget_zlib_compress")),
+        // Compress with level (0=none, 1=fastest, 9=best)
+        fn_item(extern_fn("zlib_compress_level", &[("data", ty_vector_uint8()), ("level", ty_int())], ty_result(ty_vector_uint8(), ty_str()), "gorget_zlib_compress_level")),
+        // Raw deflate (no zlib header — for custom formats)
+        fn_item(extern_fn("deflate_compress", &[("data", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str()), "gorget_deflate_compress")),
+        fn_item(extern_fn("deflate_decompress", &[("data", ty_vector_uint8()), ("uncompressed_size", ty_int())], ty_result(ty_vector_uint8(), ty_str()), "gorget_deflate_decompress")),
+        // CRC32 (useful for ZIP/PK3 verification)
+        fn_item(extern_fn("crc32_compute", &[("data", ty_vector_uint8())], ty_int(), "gorget_crc32_compute")),
     ];
 
     Module {
@@ -2936,6 +3068,31 @@ fn gen_metal_module() -> Module {
 
     // ── Sampler with LOD ───────────────────────────────────────
     items.push(fn_item(extern_fn("metal_create_sampler_with_lod", &[("device", ty_int()), ("min_filter", ty_int()), ("mag_filter", ty_int()), ("mip_filter", ty_int()), ("address_s", ty_int()), ("address_t", ty_int()), ("lod_min", ty_float()), ("lod_max", ty_float()), ("max_anisotropy", ty_int())], ty_int(), "gorget_metal_create_sampler_with_lod")));
+    // Sampler with compare function (for shadow mapping)
+    items.push(fn_item(extern_fn("metal_create_sampler_with_compare", &[("device", ty_int()), ("min_filter", ty_int()), ("mag_filter", ty_int()), ("address_s", ty_int()), ("address_t", ty_int()), ("compare_fn", ty_int())], ty_int(), "gorget_metal_create_sampler_with_compare")));
+
+    // ── Debug Groups ─────────────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_encoder_push_debug_group", &[("encoder", ty_int()), ("label", ty_str())], ty_void(), "gorget_metal_encoder_push_debug_group")));
+    items.push(fn_item(extern_fn("metal_encoder_pop_debug_group", &[("encoder", ty_int())], ty_void(), "gorget_metal_encoder_pop_debug_group")));
+    items.push(fn_item(extern_fn("metal_encoder_insert_debug_signpost", &[("encoder", ty_int()), ("label", ty_str())], ty_void(), "gorget_metal_encoder_insert_debug_signpost")));
+    items.push(fn_item(extern_fn("metal_command_buffer_push_debug_group", &[("cmd_buf", ty_int()), ("label", ty_str())], ty_void(), "gorget_metal_cmd_buf_push_debug_group")));
+    items.push(fn_item(extern_fn("metal_command_buffer_pop_debug_group", &[("cmd_buf", ty_int())], ty_void(), "gorget_metal_cmd_buf_pop_debug_group")));
+
+    // ── MRT (Multiple Render Target) Pipeline ────────────────────
+    items.push(fn_item(extern_fn("metal_render_pass_set_color_attachment", &[("desc", ty_int()), ("index", ty_int()), ("texture", ty_int()), ("load_action", ty_int()), ("store_action", ty_int()), ("clear_r", ty_float()), ("clear_g", ty_float()), ("clear_b", ty_float()), ("clear_a", ty_float())], ty_void(), "gorget_metal_render_pass_set_color_attachment")));
+    items.push(fn_item(extern_fn("metal_pipeline_set_color_attachment_format", &[("desc", ty_int()), ("index", ty_int()), ("format", ty_int())], ty_void(), "gorget_metal_pipeline_set_color_attachment_format")));
+    items.push(fn_item(extern_fn("metal_pipeline_set_color_attachment_blending", &[("desc", ty_int()), ("index", ty_int()), ("enabled", ty_int()), ("src_rgb", ty_int()), ("dst_rgb", ty_int()), ("src_alpha", ty_int()), ("dst_alpha", ty_int())], ty_void(), "gorget_metal_pipeline_set_color_attachment_blending")));
+
+    // ── Device Feature Queries ────────────────────────────────────
+    items.push(fn_item(extern_fn("metal_device_supports_family", &[("device", ty_int()), ("family", ty_int())], ty_bool(), "gorget_metal_device_supports_family")));
+    items.push(fn_item(extern_fn("metal_device_name", &[("device", ty_int())], ty_str(), "gorget_metal_device_name")));
+    items.push(fn_item(extern_fn("metal_device_registry_id", &[("device", ty_int())], ty_int(), "gorget_metal_device_registry_id")));
+    items.push(fn_item(extern_fn("metal_device_current_allocated_size", &[("device", ty_int())], ty_int(), "gorget_metal_device_current_allocated_size")));
+
+    // ── Full Stencil Configuration ────────────────────────────────
+    items.push(fn_item(extern_fn("metal_create_depth_stencil_full", &[("device", ty_int()), ("depth_compare", ty_int()), ("depth_write", ty_int()), ("front_stencil_compare", ty_int()), ("front_stencil_fail", ty_int()), ("front_depth_fail", ty_int()), ("front_depth_pass", ty_int()), ("front_read_mask", ty_int()), ("front_write_mask", ty_int()), ("back_stencil_compare", ty_int()), ("back_stencil_fail", ty_int()), ("back_depth_fail", ty_int()), ("back_depth_pass", ty_int()), ("back_read_mask", ty_int()), ("back_write_mask", ty_int())], ty_int(), "gorget_metal_create_depth_stencil_full")));
+    // Set front and back stencil reference values separately
+    items.push(fn_item(extern_fn("metal_encoder_set_stencil_front_back_ref", &[("encoder", ty_int()), ("front_ref", ty_int()), ("back_ref", ty_int())], ty_void(), "gorget_metal_encoder_set_stencil_front_back_ref")));
 
     // ── Texture Read-back ──────────────────────────────────────
     items.push(fn_item(extern_fn("metal_texture_get_bytes", &[("texture", ty_int()), ("x", ty_int()), ("y", ty_int()), ("width", ty_int()), ("height", ty_int()), ("bytes_per_row", ty_int())], ty_vector_uint8(), "gorget_metal_texture_get_bytes")));
@@ -3117,6 +3274,25 @@ fn gen_metal_module() -> Module {
     items.push(const_item("MTL_ACCEL_STRUCT_USAGE_NONE", 0));
     items.push(const_item("MTL_ACCEL_STRUCT_USAGE_REFIT", 1));
     items.push(const_item("MTL_ACCEL_STRUCT_USAGE_PREFER_FAST_BUILD", 2));
+    // GPU family constants (for metal_device_supports_family)
+    items.push(const_item("MTL_GPU_FAMILY_APPLE1", 1001));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE2", 1002));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE3", 1003));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE4", 1004));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE5", 1005));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE6", 1006));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE7", 1007));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE8", 1008));
+    items.push(const_item("MTL_GPU_FAMILY_APPLE9", 1009));
+    items.push(const_item("MTL_GPU_FAMILY_COMMON1", 3001));
+    items.push(const_item("MTL_GPU_FAMILY_COMMON2", 3002));
+    items.push(const_item("MTL_GPU_FAMILY_COMMON3", 3003));
+    items.push(const_item("MTL_GPU_FAMILY_MAC2", 2002));
+    items.push(const_item("MTL_GPU_FAMILY_METAL3", 5001));
+    // Visibility result mode
+    items.push(const_item("MTL_VISIBILITY_RESULT_DISABLED", 0));
+    items.push(const_item("MTL_VISIBILITY_RESULT_BOOLEAN", 1));
+    items.push(const_item("MTL_VISIBILITY_RESULT_COUNTING", 2));
 
     Module {
         items,

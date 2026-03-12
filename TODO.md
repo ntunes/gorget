@@ -10,9 +10,7 @@
 
 ## Medium
 
-- **Gorget Arena Phase 3: Renderer integration** — GL has 110+ functions (VAOs, instanced rendering, UBOs, queries, 3D textures, sRGB, MRT). Metal has 100+ functions (heaps, argument buffers, ICBs, parallel encoder, visibility queries, full stencil). BSP loader and renderer skeleton exist. Next: wire BSP loader → VBO upload → draw loop with PVS culling. Install SDL2-dev in container for end-to-end testing. [updated: 2026-03-11]
-
-- **Gorget Arena Phase 4-6: Game logic, networking, polish** — ECS integration with gg.ecs, BSP collision tracing, weapon/item/trigger systems wired to game loop. Client/server networking with UDP + delta compression. P2P mode via gg.p2p. Audio integration. UI rendering. Bot AI. Asset download manager with gg.http. [added: 2026-03-11]
+- **Gorget Arena: end-to-end testing** — All 6 phases complete (54 files, 8352 lines, passes gg check). Need to install SDL2-dev + SDL2_mixer-dev in container to verify full build and runtime. MD3 model rendering and asset download manager are stubbed but not wired to real data. [updated: 2026-03-12]
 
 - **expand_derives() multi-file fix** — Available on main branch. The derive expander only iterates top-level module.items, missing structs/enums inside Module wrappers from merge_modules(). Rebase gorget-3 onto main when needed. [added: 2026-03-11]
 

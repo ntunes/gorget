@@ -479,6 +479,10 @@ fn takes_array_ptr_args(name: &str) -> bool {
         | "gorget_gl_draw_buffers"
         | "gorget_gl_buffer_storage"
         | "gorget_gl_patch_parameter_fv"
+        | "gorget_gl_compressed_tex_image_2d"
+        | "gorget_gl_get_tex_image"
+        | "gorget_gl_get_program_binary"
+        | "gorget_gl_program_binary"
     ) {
         return true;
     }

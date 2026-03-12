@@ -9819,6 +9819,89 @@ static inline void gorget_gl_read_pixels(int64_t x, int64_t y, int64_t w, int64_
 static inline void gorget_gl_tex_image_2d_multisample(int64_t target, int64_t samples, int64_t format, int64_t width, int64_t height, int64_t fixed) {
     glTexImage2DMultisample((GLenum)target, (GLsizei)samples, (GLenum)format, (GLsizei)width, (GLsizei)height, (GLboolean)fixed);
 }
+
+// ── Sync Objects (GL 3.2+) ──────────────────────────────────
+
+static inline int64_t gorget_gl_fence_sync(void) {
+    GLsync s = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    return (int64_t)(uintptr_t)s;
+}
+static inline void gorget_gl_delete_sync(int64_t sync) {
+    glDeleteSync((GLsync)(uintptr_t)sync);
+}
+static inline int64_t gorget_gl_client_wait_sync(int64_t sync, int64_t flags, int64_t timeout_ns) {
+    GLenum r = glClientWaitSync((GLsync)(uintptr_t)sync, (GLbitfield)flags, (GLuint64)timeout_ns);
+    return (int64_t)r;
+}
+static inline void gorget_gl_wait_sync(int64_t sync) {
+    glWaitSync((GLsync)(uintptr_t)sync, 0, GL_TIMEOUT_IGNORED);
+}
+
+// ── Pixel Store (GL 1.0+) ──────────────────────────────────
+
+static inline void gorget_gl_pixel_store_i(int64_t pname, int64_t param) {
+    glPixelStorei((GLenum)pname, (GLint)param);
+}
+
+// ── Compressed Textures ─────────────────────────────────────
+
+static inline void gorget_gl_compressed_tex_image_2d(int64_t target, int64_t level, int64_t format, int64_t width, int64_t height, GorgetArray* data) {
+    if (!data || !data->data) return;
+    glCompressedTexImage2D((GLenum)target, (GLint)level, (GLenum)format, (GLsizei)width, (GLsizei)height, 0, (GLsizei)data->length, data->data);
+}
+static inline void gorget_gl_copy_tex_image_2d(int64_t target, int64_t level, int64_t format, int64_t x, int64_t y, int64_t width, int64_t height) {
+    glCopyTexImage2D((GLenum)target, (GLint)level, (GLenum)format, (GLint)x, (GLint)y, (GLsizei)width, (GLsizei)height, 0);
+}
+
+// ── Texture Download ────────────────────────────────────────
+
+static inline void gorget_gl_get_tex_image(int64_t target, int64_t level, int64_t format, int64_t type, GorgetArray* data) {
+    if (!data || !data->data) return;
+    glGetTexImage((GLenum)target, (GLint)level, (GLenum)format, (GLenum)type, data->data);
+}
+
+// ── Program Binary (GL 4.1+) ────────────────────────────────
+
+static inline int64_t gorget_gl_get_program_binary(int64_t program, GorgetArray* data) {
+    if (!data || !data->data) return 0;
+    GLenum fmt = 0;
+    GLsizei len = 0;
+    glGetProgramBinary((GLuint)program, (GLsizei)data->length, &len, &fmt, data->data);
+    data->length = len;
+    return (int64_t)fmt;
+}
+static inline void gorget_gl_program_binary(int64_t program, int64_t format, GorgetArray* data) {
+    if (!data || !data->data) return;
+    glProgramBinary((GLuint)program, (GLenum)format, data->data, (GLsizei)data->length);
+}
+
+// ── Timer Queries (GL 3.3+) ─────────────────────────────────
+
+static inline void gorget_gl_query_counter(int64_t id, int64_t target) {
+    glQueryCounter((GLuint)id, (GLenum)target);
+}
+static inline int64_t gorget_gl_get_query_result_i64(int64_t id) {
+    GLint64 result = 0;
+    glGetQueryObjecti64v((GLuint)id, GL_QUERY_RESULT, &result);
+    return (int64_t)result;
+}
+
+// ── Typed State Getters ─────────────────────────────────────
+
+static inline double gorget_gl_get_float(int64_t pname) {
+    GLfloat val = 0.0f;
+    glGetFloatv((GLenum)pname, &val);
+    return (double)val;
+}
+
+// ── Object Query Functions ──────────────────────────────────
+
+static inline int64_t gorget_gl_is_enabled(int64_t cap) { return (int64_t)glIsEnabled((GLenum)cap); }
+static inline int64_t gorget_gl_is_texture(int64_t tex) { return (int64_t)glIsTexture((GLuint)tex); }
+static inline int64_t gorget_gl_is_buffer(int64_t buf) { return (int64_t)glIsBuffer((GLuint)buf); }
+static inline int64_t gorget_gl_is_shader(int64_t s) { return (int64_t)glIsShader((GLuint)s); }
+static inline int64_t gorget_gl_is_program(int64_t p) { return (int64_t)glIsProgram((GLuint)p); }
+static inline int64_t gorget_gl_is_framebuffer(int64_t fb) { return (int64_t)glIsFramebuffer((GLuint)fb); }
 "#;
 
 // ─── Image Loading (stb_image) ───────────────────────────────
@@ -10017,6 +10100,315 @@ static inline void gorget_image_flip_vertically(int64_t width, int64_t height, i
     *out_channels = channels;
     *out_data = arr;
 }
+
+// ── Image Info (header-only query) ──────────────────────────
+
+#ifdef GORGET_HAS_STB_IMAGE
+#ifndef GORGET_HAS_STB_IMAGE_INFO
+#define GORGET_HAS_STB_IMAGE_INFO 1
+#endif
+#endif
+
+static inline void gorget_image_info(Str path, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray** out_data, Str* out_err) {
+    char cpath[4096];
+    size_t n = path.len < 4095 ? path.len : 4095;
+    memcpy(cpath, path.data, n);
+    cpath[n] = '\0';
+
+    FILE* f = fopen(cpath, "rb");
+    if (!f) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("could not open file");
+        return;
+    }
+    fseek(f, 0, SEEK_END);
+    long flen = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    unsigned char* fbuf = (unsigned char*)malloc(flen);
+    fread(fbuf, 1, flen, f);
+    fclose(f);
+
+#ifdef GORGET_HAS_STB_IMAGE_INFO
+    int w, h, ch;
+    if (!stbi_info_from_memory(fbuf, (int)flen, &w, &h, &ch)) {
+        free(fbuf);
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr(stbi_failure_reason());
+        return;
+    }
+    free(fbuf);
+    *out_tag = 0;
+    *out_width = w;
+    *out_height = h;
+    *out_channels = ch;
+    *out_data = gorget_array_new(sizeof(uint8_t)); // empty data for info-only
+#else
+    // Fallback: do full decode
+    int w, h, ch;
+    unsigned char* pixels = stbi_load_from_memory(fbuf, (int)flen, &w, &h, &ch, 0);
+    free(fbuf);
+    if (!pixels) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("could not read image info");
+        return;
+    }
+    stbi_image_free(pixels);
+    *out_tag = 0;
+    *out_width = w;
+    *out_height = h;
+    *out_channels = ch;
+    *out_data = gorget_array_new(sizeof(uint8_t));
+#endif
+}
+
+static inline void gorget_image_info_from_memory(const GorgetArray* data, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray** out_data, Str* out_err) {
+    if (!data || !data->data || data->len == 0) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("empty input data");
+        return;
+    }
+#ifdef GORGET_HAS_STB_IMAGE_INFO
+    int w, h, ch;
+    if (!stbi_info_from_memory((const unsigned char*)data->data, (int)data->len, &w, &h, &ch)) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr(stbi_failure_reason());
+        return;
+    }
+    *out_tag = 0;
+    *out_width = w;
+    *out_height = h;
+    *out_channels = ch;
+    *out_data = gorget_array_new(sizeof(uint8_t));
+#else
+    int w, h, ch;
+    unsigned char* pixels = stbi_load_from_memory((const unsigned char*)data->data, (int)data->len, &w, &h, &ch, 0);
+    if (!pixels) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("could not read image info");
+        return;
+    }
+    stbi_image_free(pixels);
+    *out_tag = 0;
+    *out_width = w;
+    *out_height = h;
+    *out_channels = ch;
+    *out_data = gorget_array_new(sizeof(uint8_t));
+#endif
+}
+
+// Load from memory forced RGBA
+static inline void gorget_image_load_rgba_from_memory(const GorgetArray* data, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray** out_data, Str* out_err) {
+    if (!data || !data->data || data->len == 0) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("empty input data");
+        return;
+    }
+    int w, h, ch;
+    unsigned char* pixels = stbi_load_from_memory((const unsigned char*)data->data, (int)data->len, &w, &h, &ch, 4);
+    if (!pixels) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr(stbi_failure_reason());
+        return;
+    }
+    int data_size = w * h * 4;
+    GorgetArray* arr = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(arr, data_size, sizeof(uint8_t));
+    memcpy(arr->data, pixels, data_size);
+    arr->len = data_size;
+    stbi_image_free(pixels);
+
+    *out_tag = 0;
+    *out_width = w;
+    *out_height = h;
+    *out_channels = 4;
+    *out_data = arr;
+}
+
+// ── Image Resize (bilinear) ─────────────────────────────────
+
+#ifdef GORGET_HAS_STB_IMAGE
+#ifndef STB_IMAGE_RESIZE_IMPLEMENTATION
+// Try system stb_image_resize2.h or stb_image_resize.h
+#ifdef __has_include
+#if __has_include("stb_image_resize2.h")
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize2.h"
+#define GORGET_HAS_STB_RESIZE 1
+#elif __has_include("stb_image_resize.h")
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize.h"
+#define GORGET_HAS_STB_RESIZE_V1 1
+#endif
+#endif
+#endif
+#endif
+
+static inline void gorget_image_resize(int64_t width, int64_t height, int64_t channels, const GorgetArray* in_data, int64_t new_width, int64_t new_height,
+    int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray** out_data, Str* out_err) {
+
+    int w = (int)width, h = (int)height, ch = (int)channels;
+    int nw = (int)new_width, nh = (int)new_height;
+
+    if (nw <= 0 || nh <= 0) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("invalid resize dimensions");
+        return;
+    }
+
+    int out_size = nw * nh * ch;
+    GorgetArray* arr = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(arr, out_size, sizeof(uint8_t));
+    arr->len = out_size;
+
+#if defined(GORGET_HAS_STB_RESIZE)
+    stbir_resize_uint8_linear((const unsigned char*)in_data->data, w, h, w * ch, (unsigned char*)arr->data, nw, nh, nw * ch, (stbir_pixel_layout)ch);
+#elif defined(GORGET_HAS_STB_RESIZE_V1)
+    stbir_resize_uint8((const unsigned char*)in_data->data, w, h, w * ch, (unsigned char*)arr->data, nw, nh, nw * ch, ch);
+#else
+    // Manual bilinear resize fallback
+    const unsigned char* src = (const unsigned char*)in_data->data;
+    unsigned char* dst = (unsigned char*)arr->data;
+    for (int y = 0; y < nh; y++) {
+        float fy = (float)y * (float)(h - 1) / (float)(nh > 1 ? nh - 1 : 1);
+        int y0 = (int)fy;
+        int y1 = y0 + 1 < h ? y0 + 1 : y0;
+        float yw = fy - y0;
+        for (int x = 0; x < nw; x++) {
+            float fx = (float)x * (float)(w - 1) / (float)(nw > 1 ? nw - 1 : 1);
+            int x0 = (int)fx;
+            int x1 = x0 + 1 < w ? x0 + 1 : x0;
+            float xw = fx - x0;
+            for (int c = 0; c < ch; c++) {
+                float v = src[(y0 * w + x0) * ch + c] * (1 - xw) * (1 - yw) +
+                          src[(y0 * w + x1) * ch + c] * xw * (1 - yw) +
+                          src[(y1 * w + x0) * ch + c] * (1 - xw) * yw +
+                          src[(y1 * w + x1) * ch + c] * xw * yw;
+                dst[(y * nw + x) * ch + c] = (unsigned char)(v + 0.5f);
+            }
+        }
+    }
+#endif
+
+    *out_tag = 0;
+    *out_width = nw;
+    *out_height = nh;
+    *out_channels = ch;
+    *out_data = arr;
+}
+
+// ── Image Write (stb_image_write fallback) ──────────────────
+
+#ifdef __has_include
+#if __has_include("stb_image_write.h")
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+#define GORGET_HAS_STB_WRITE 1
+#endif
+#endif
+
+#ifndef GORGET_HAS_STB_WRITE
+// Minimal TGA writer fallback
+static int gorget_write_tga(const char* path, int w, int h, int ch, const unsigned char* data) {
+    FILE* f = fopen(path, "wb");
+    if (!f) return 0;
+    unsigned char hdr[18] = {0};
+    hdr[2] = 2; // uncompressed true-color
+    hdr[12] = w & 0xFF; hdr[13] = (w >> 8) & 0xFF;
+    hdr[14] = h & 0xFF; hdr[15] = (h >> 8) & 0xFF;
+    hdr[16] = ch * 8;
+    fwrite(hdr, 1, 18, f);
+    // Write in BGR order (TGA format)
+    for (int i = 0; i < w * h; i++) {
+        unsigned char bgr[4];
+        bgr[0] = data[i * ch + 2];
+        bgr[1] = data[i * ch + 1];
+        bgr[2] = data[i * ch + 0];
+        if (ch >= 4) bgr[3] = data[i * ch + 3];
+        fwrite(bgr, 1, ch, f);
+    }
+    fclose(f);
+    return 1;
+}
+#endif
+
+static inline void gorget_image_write_png(Str path, int64_t width, int64_t height, int64_t channels, const GorgetArray* data,
+    int64_t* out_tag, int64_t* out_val, Str* out_err) {
+    char cpath[4096];
+    size_t n = path.len < 4095 ? path.len : 4095;
+    memcpy(cpath, path.data, n);
+    cpath[n] = '\0';
+#ifdef GORGET_HAS_STB_WRITE
+    int ok = stbi_write_png(cpath, (int)width, (int)height, (int)channels, data->data, (int)(width * channels));
+    if (!ok) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("PNG write failed");
+        return;
+    }
+    *out_tag = 0;
+    *out_val = 1;
+#else
+    // Fallback: write as TGA
+    int ok = gorget_write_tga(cpath, (int)width, (int)height, (int)channels, (const unsigned char*)data->data);
+    if (!ok) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("image write failed (no stb_image_write, TGA fallback failed)");
+        return;
+    }
+    *out_tag = 0;
+    *out_val = 1;
+#endif
+}
+
+static inline void gorget_image_write_jpg(Str path, int64_t width, int64_t height, int64_t channels, const GorgetArray* data, int64_t quality,
+    int64_t* out_tag, int64_t* out_val, Str* out_err) {
+    char cpath[4096];
+    size_t n = path.len < 4095 ? path.len : 4095;
+    memcpy(cpath, path.data, n);
+    cpath[n] = '\0';
+#ifdef GORGET_HAS_STB_WRITE
+    int ok = stbi_write_jpg(cpath, (int)width, (int)height, (int)channels, data->data, (int)quality);
+    if (!ok) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("JPG write failed");
+        return;
+    }
+    *out_tag = 0;
+    *out_val = 1;
+#else
+    *out_tag = 1;
+    *out_err = gorget_str_from_cstr("JPG write not available (no stb_image_write)");
+#endif
+}
+
+// Callback for stbi_write_*_to_func
+#ifdef GORGET_HAS_STB_WRITE
+static void gorget_stb_write_callback(void* context, void* data, int size) {
+    GorgetArray* arr = (GorgetArray*)context;
+    size_t old_len = arr->len;
+    gorget_array_ensure_capacity(arr, old_len + size, sizeof(uint8_t));
+    memcpy((uint8_t*)arr->data + old_len, data, size);
+    arr->len = old_len + size;
+}
+#endif
+
+static inline void gorget_image_encode_png(int64_t width, int64_t height, int64_t channels, const GorgetArray* data,
+    int64_t* out_tag, GorgetArray** out_data, Str* out_err) {
+#ifdef GORGET_HAS_STB_WRITE
+    GorgetArray* arr = gorget_array_new(sizeof(uint8_t));
+    int ok = stbi_write_png_to_func(gorget_stb_write_callback, arr, (int)width, (int)height, (int)channels, data->data, (int)(width * channels));
+    if (!ok) {
+        gorget_array_free(arr, sizeof(uint8_t));
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("PNG encode failed");
+        return;
+    }
+    *out_tag = 0;
+    *out_data = arr;
+#else
+    *out_tag = 1;
+    *out_err = gorget_str_from_cstr("PNG encode not available (no stb_image_write)");
+#endif
+}
 "#;
 
 // ─── Audio (SDL2_mixer) ──────────────────────────────────────
@@ -10091,6 +10483,52 @@ static inline void gorget_audio_halt_music(void) { Mix_HaltMusic(); }
 static inline void gorget_audio_set_music_volume(int64_t volume) { Mix_VolumeMusic((int)volume); }
 static inline void gorget_audio_pause_music(void) { Mix_PauseMusic(); }
 static inline void gorget_audio_resume_music(void) { Mix_ResumeMusic(); }
+
+// ── Enhanced Audio Functions ────────────────────────────────
+
+static inline int64_t gorget_audio_channel_playing(int64_t channel) { return Mix_Playing((int)channel) ? 1 : 0; }
+static inline int64_t gorget_audio_channel_paused(int64_t channel) { return Mix_Paused((int)channel) ? 1 : 0; }
+static inline void gorget_audio_pause_channel(int64_t channel) { Mix_Pause((int)channel); }
+static inline void gorget_audio_resume_channel(int64_t channel) { Mix_Resume((int)channel); }
+static inline int64_t gorget_audio_playing_count(void) { return (int64_t)Mix_Playing(-1); }
+static inline int64_t gorget_audio_paused_count(void) { return (int64_t)Mix_Paused(-1); }
+
+static inline int64_t gorget_audio_fade_in_channel(int64_t channel, GorgetAudioChunk chunk, int64_t loops, int64_t ms) {
+    return (int64_t)Mix_FadeInChannel((int)channel, chunk.ptr, (int)loops, (int)ms);
+}
+static inline void gorget_audio_fade_out_channel(int64_t channel, int64_t ms) { Mix_FadeOutChannel((int)channel, (int)ms); }
+static inline void gorget_audio_fade_in_music(GorgetAudioMusic m, int64_t loops, int64_t ms) { Mix_FadeInMusic(m.ptr, (int)loops, (int)ms); }
+static inline void gorget_audio_fade_out_music(int64_t ms) { Mix_FadeOutMusic((int)ms); }
+
+static inline int64_t gorget_audio_music_playing(void) { return Mix_PlayingMusic() ? 1 : 0; }
+static inline int64_t gorget_audio_music_paused(void) { return Mix_PausedMusic() ? 1 : 0; }
+static inline void gorget_audio_set_music_position(double position) { Mix_SetMusicPosition(position); }
+
+static inline void gorget_audio_expire_channel(int64_t channel, int64_t ms) { Mix_ExpireChannel((int)channel, (int)ms); }
+
+static inline int64_t gorget_audio_get_music_volume(void) { return (int64_t)Mix_VolumeMusic(-1); }
+static inline int64_t gorget_audio_get_channel_volume(int64_t channel) { return (int64_t)Mix_Volume((int)channel, -1); }
+
+static inline void gorget_audio_set_channel_distance(int64_t channel, int64_t distance) {
+    Mix_SetDistance((int)channel, (Uint8)distance);
+}
+
+static inline void gorget_audio_load_wav_from_memory(const GorgetArray* data, int64_t* out_tag, GorgetAudioChunk* out_chunk, Str* out_err) {
+    if (!data || !data->data || data->length == 0) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("empty audio data");
+        return;
+    }
+    SDL_RWops* rw = SDL_RWFromConstMem(data->data, (int)data->length);
+    Mix_Chunk* chunk = Mix_LoadWAV_RW(rw, 1);
+    if (!chunk) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr(Mix_GetError());
+        return;
+    }
+    *out_tag = 0;
+    out_chunk->ptr = chunk;
+}
 "#;
 
 // ─── Zlib/Deflate (miniz) ────────────────────────────────────
@@ -10164,6 +10602,194 @@ static inline void gorget_zlib_compress(const GorgetArray* data, int64_t* out_ta
 #else
     *out_tag = 1;
     *out_err = gorget_str_from_cstr("no zlib/miniz available");
+#endif
+}
+
+// Compress with specific level (0=none, 1=fastest, 9=best)
+static inline void gorget_zlib_compress_level(const GorgetArray* data, int64_t level, int64_t* out_tag, GorgetArray** out_data, Str* out_err) {
+#if defined(GORGET_HAS_MINIZ) || defined(GORGET_HAS_ZLIB)
+    if (!data || !data->data || data->len == 0) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("empty input");
+        return;
+    }
+    unsigned long dest_len = compressBound((unsigned long)data->len);
+    GorgetArray* out = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(out, (size_t)dest_len, sizeof(uint8_t));
+    int rc = compress2((unsigned char*)out->data, &dest_len, (const unsigned char*)data->data, (unsigned long)data->len, (int)level);
+    if (rc != 0) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("zlib compress failed");
+        gorget_array_free(out, sizeof(uint8_t));
+        return;
+    }
+    out->len = (size_t)dest_len;
+    *out_tag = 0;
+    *out_data = out;
+#else
+    *out_tag = 1;
+    *out_err = gorget_str_from_cstr("no zlib/miniz available");
+#endif
+}
+
+// Raw deflate compress (no zlib header)
+static inline void gorget_deflate_compress(const GorgetArray* data, int64_t* out_tag, GorgetArray** out_data, Str* out_err) {
+#if defined(GORGET_HAS_MINIZ)
+    if (!data || !data->data || data->len == 0) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("empty input");
+        return;
+    }
+    mz_ulong dest_len = mz_compressBound((mz_ulong)data->len);
+    GorgetArray* out = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(out, (size_t)dest_len, sizeof(uint8_t));
+    mz_stream stream;
+    memset(&stream, 0, sizeof(stream));
+    if (mz_deflateInit2(&stream, MZ_DEFAULT_LEVEL, MZ_DEFLATED, -MZ_DEFAULT_WINDOW_BITS, 9, MZ_DEFAULT_STRATEGY) != MZ_OK) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("deflate init failed");
+        gorget_array_free(out, sizeof(uint8_t));
+        return;
+    }
+    stream.next_in = (const unsigned char*)data->data;
+    stream.avail_in = (mz_uint32)data->len;
+    stream.next_out = (unsigned char*)out->data;
+    stream.avail_out = (mz_uint32)dest_len;
+    int rc = mz_deflate(&stream, MZ_FINISH);
+    mz_deflateEnd(&stream);
+    if (rc != MZ_STREAM_END) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("deflate compress failed");
+        gorget_array_free(out, sizeof(uint8_t));
+        return;
+    }
+    out->len = stream.total_out;
+    *out_tag = 0;
+    *out_data = out;
+#elif defined(GORGET_HAS_ZLIB)
+    if (!data || !data->data || data->len == 0) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("empty input");
+        return;
+    }
+    uLongf dest_len = compressBound((uLong)data->len);
+    GorgetArray* out = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(out, (size_t)dest_len, sizeof(uint8_t));
+    z_stream stream;
+    memset(&stream, 0, sizeof(stream));
+    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("deflate init failed");
+        gorget_array_free(out, sizeof(uint8_t));
+        return;
+    }
+    stream.next_in = (Bytef*)data->data;
+    stream.avail_in = (uInt)data->len;
+    stream.next_out = (Bytef*)out->data;
+    stream.avail_out = (uInt)dest_len;
+    int rc = deflate(&stream, Z_FINISH);
+    deflateEnd(&stream);
+    if (rc != Z_STREAM_END) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("deflate compress failed");
+        gorget_array_free(out, sizeof(uint8_t));
+        return;
+    }
+    out->len = stream.total_out;
+    *out_tag = 0;
+    *out_data = out;
+#else
+    *out_tag = 1;
+    *out_err = gorget_str_from_cstr("no zlib/miniz available");
+#endif
+}
+
+// Raw deflate decompress (no zlib header)
+static inline void gorget_deflate_decompress(const GorgetArray* data, int64_t uncompressed_size, int64_t* out_tag, GorgetArray** out_data, Str* out_err) {
+#if defined(GORGET_HAS_MINIZ)
+    if (!data || !data->data || data->len == 0) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("empty input");
+        return;
+    }
+    GorgetArray* out = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(out, (size_t)uncompressed_size, sizeof(uint8_t));
+    mz_stream stream;
+    memset(&stream, 0, sizeof(stream));
+    if (mz_inflateInit2(&stream, -MZ_DEFAULT_WINDOW_BITS) != MZ_OK) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("inflate init failed");
+        gorget_array_free(out, sizeof(uint8_t));
+        return;
+    }
+    stream.next_in = (const unsigned char*)data->data;
+    stream.avail_in = (mz_uint32)data->len;
+    stream.next_out = (unsigned char*)out->data;
+    stream.avail_out = (mz_uint32)uncompressed_size;
+    int rc = mz_inflate(&stream, MZ_FINISH);
+    mz_inflateEnd(&stream);
+    if (rc != MZ_STREAM_END) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("deflate decompress failed");
+        gorget_array_free(out, sizeof(uint8_t));
+        return;
+    }
+    out->len = stream.total_out;
+    *out_tag = 0;
+    *out_data = out;
+#elif defined(GORGET_HAS_ZLIB)
+    if (!data || !data->data || data->len == 0) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("empty input");
+        return;
+    }
+    GorgetArray* out = gorget_array_new(sizeof(uint8_t));
+    gorget_array_ensure_capacity(out, (size_t)uncompressed_size, sizeof(uint8_t));
+    z_stream stream;
+    memset(&stream, 0, sizeof(stream));
+    if (inflateInit2(&stream, -MAX_WBITS) != Z_OK) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("inflate init failed");
+        gorget_array_free(out, sizeof(uint8_t));
+        return;
+    }
+    stream.next_in = (Bytef*)data->data;
+    stream.avail_in = (uInt)data->len;
+    stream.next_out = (Bytef*)out->data;
+    stream.avail_out = (uInt)uncompressed_size;
+    int rc = inflate(&stream, Z_FINISH);
+    inflateEnd(&stream);
+    if (rc != Z_STREAM_END) {
+        *out_tag = 1;
+        *out_err = gorget_str_from_cstr("deflate decompress failed");
+        gorget_array_free(out, sizeof(uint8_t));
+        return;
+    }
+    out->len = stream.total_out;
+    *out_tag = 0;
+    *out_data = out;
+#else
+    *out_tag = 1;
+    *out_err = gorget_str_from_cstr("no zlib/miniz available");
+#endif
+}
+
+// CRC32 (for ZIP/PK3 verification)
+static inline int64_t gorget_crc32_compute(const GorgetArray* data) {
+    if (!data || !data->data || data->len == 0) return 0;
+#if defined(GORGET_HAS_MINIZ) || defined(GORGET_HAS_ZLIB)
+    return (int64_t)crc32(crc32(0, NULL, 0), (const unsigned char*)data->data, (unsigned int)data->len);
+#else
+    // Minimal CRC32 fallback
+    uint32_t crc = 0xFFFFFFFF;
+    const uint8_t* p = (const uint8_t*)data->data;
+    for (size_t i = 0; i < data->len; i++) {
+        crc ^= p[i];
+        for (int j = 0; j < 8; j++) {
+            crc = (crc >> 1) ^ (0xEDB88320 & (-(crc & 1)));
+        }
+    }
+    return (int64_t)(crc ^ 0xFFFFFFFF);
 #endif
 }
 "#;
@@ -12277,6 +12903,158 @@ static void gorget_metal_residency_set_add(int64_t set_h, int64_t resource_h) {
 
 static void gorget_metal_residency_set_commit(int64_t set_h) {
     (void)set_h;
+}
+
+// ── Sampler with Compare Function (shadow mapping) ──────────
+
+static int64_t gorget_metal_create_sampler_with_compare(int64_t device_h, int64_t min_filter, int64_t mag_filter, int64_t addr_s, int64_t addr_t, int64_t compare_fn) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        MTLSamplerDescriptor* desc = [[MTLSamplerDescriptor alloc] init];
+        desc.minFilter = (MTLSamplerMinMagFilter)min_filter;
+        desc.magFilter = (MTLSamplerMinMagFilter)mag_filter;
+        desc.sAddressMode = (MTLSamplerAddressMode)addr_s;
+        desc.tAddressMode = (MTLSamplerAddressMode)addr_t;
+        desc.compareFunction = (MTLCompareFunction)compare_fn;
+        id<MTLSamplerState> sampler = [device newSamplerStateWithDescriptor:desc];
+        return (int64_t)(intptr_t)(__bridge_retained void*)sampler;
+    }
+}
+
+// ── Debug Groups ────────────────────────────────────────────
+
+static void gorget_metal_encoder_push_debug_group(int64_t encoder_h, Str label) {
+    @autoreleasepool {
+        id<MTLCommandEncoder> enc = (__bridge id<MTLCommandEncoder>)(void*)(intptr_t)encoder_h;
+        NSString* ns_label = [[NSString alloc] initWithBytes:label.data length:label.len encoding:NSUTF8StringEncoding];
+        [enc pushDebugGroup:ns_label];
+    }
+}
+static void gorget_metal_encoder_pop_debug_group(int64_t encoder_h) {
+    @autoreleasepool {
+        id<MTLCommandEncoder> enc = (__bridge id<MTLCommandEncoder>)(void*)(intptr_t)encoder_h;
+        [enc popDebugGroup];
+    }
+}
+static void gorget_metal_encoder_insert_debug_signpost(int64_t encoder_h, Str label) {
+    @autoreleasepool {
+        id<MTLCommandEncoder> enc = (__bridge id<MTLCommandEncoder>)(void*)(intptr_t)encoder_h;
+        NSString* ns_label = [[NSString alloc] initWithBytes:label.data length:label.len encoding:NSUTF8StringEncoding];
+        [enc insertDebugSignpost:ns_label];
+    }
+}
+static void gorget_metal_cmd_buf_push_debug_group(int64_t cmd_buf_h, Str label) {
+    @autoreleasepool {
+        id<MTLCommandBuffer> buf = (__bridge id<MTLCommandBuffer>)(void*)(intptr_t)cmd_buf_h;
+        NSString* ns_label = [[NSString alloc] initWithBytes:label.data length:label.len encoding:NSUTF8StringEncoding];
+        [buf pushDebugGroup:ns_label];
+    }
+}
+static void gorget_metal_cmd_buf_pop_debug_group(int64_t cmd_buf_h) {
+    @autoreleasepool {
+        id<MTLCommandBuffer> buf = (__bridge id<MTLCommandBuffer>)(void*)(intptr_t)cmd_buf_h;
+        [buf popDebugGroup];
+    }
+}
+
+// ── MRT (Multiple Render Target) ────────────────────────────
+
+static void gorget_metal_render_pass_set_color_attachment(int64_t desc_h, int64_t index, int64_t texture_h, int64_t load_action, int64_t store_action, double r, double g, double b, double a) {
+    @autoreleasepool {
+        MTLRenderPassDescriptor* desc = (__bridge MTLRenderPassDescriptor*)(void*)(intptr_t)desc_h;
+        MTLRenderPassColorAttachmentDescriptor* ca = desc.colorAttachments[index];
+        ca.texture = (__bridge id<MTLTexture>)(void*)(intptr_t)texture_h;
+        ca.loadAction = (MTLLoadAction)load_action;
+        ca.storeAction = (MTLStoreAction)store_action;
+        ca.clearColor = MTLClearColorMake(r, g, b, a);
+    }
+}
+static void gorget_metal_pipeline_set_color_attachment_format(int64_t desc_h, int64_t index, int64_t format) {
+    @autoreleasepool {
+        MTLRenderPipelineDescriptor* desc = (__bridge MTLRenderPipelineDescriptor*)(void*)(intptr_t)desc_h;
+        desc.colorAttachments[index].pixelFormat = (MTLPixelFormat)format;
+    }
+}
+static void gorget_metal_pipeline_set_color_attachment_blending(int64_t desc_h, int64_t index, int64_t enabled, int64_t src_rgb, int64_t dst_rgb, int64_t src_alpha, int64_t dst_alpha) {
+    @autoreleasepool {
+        MTLRenderPipelineDescriptor* desc = (__bridge MTLRenderPipelineDescriptor*)(void*)(intptr_t)desc_h;
+        MTLRenderPipelineColorAttachmentDescriptor* ca = desc.colorAttachments[index];
+        ca.blendingEnabled = (BOOL)enabled;
+        ca.sourceRGBBlendFactor = (MTLBlendFactor)src_rgb;
+        ca.destinationRGBBlendFactor = (MTLBlendFactor)dst_rgb;
+        ca.sourceAlphaBlendFactor = (MTLBlendFactor)src_alpha;
+        ca.destinationAlphaBlendFactor = (MTLBlendFactor)dst_alpha;
+    }
+}
+
+// ── Device Feature Queries ──────────────────────────────────
+
+static int64_t gorget_metal_device_supports_family(int64_t device_h, int64_t family) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        if (@available(macOS 10.15, iOS 13.0, *)) {
+            return [device supportsFamily:(MTLGPUFamily)family] ? 1 : 0;
+        }
+        return 0;
+    }
+}
+static Str gorget_metal_device_name(int64_t device_h) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        const char* name = [[device name] UTF8String];
+        return gorget_str_from_cstr(name ? name : "unknown");
+    }
+}
+static int64_t gorget_metal_device_registry_id(int64_t device_h) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        return (int64_t)device.registryID;
+    }
+}
+static int64_t gorget_metal_device_current_allocated_size(int64_t device_h) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        return (int64_t)device.currentAllocatedSize;
+    }
+}
+
+// ── Full Stencil Configuration ──────────────────────────────
+
+static int64_t gorget_metal_create_depth_stencil_full(int64_t device_h, int64_t depth_compare, int64_t depth_write,
+    int64_t front_compare, int64_t front_fail, int64_t front_dfail, int64_t front_dpass, int64_t front_rmask, int64_t front_wmask,
+    int64_t back_compare, int64_t back_fail, int64_t back_dfail, int64_t back_dpass, int64_t back_rmask, int64_t back_wmask) {
+    @autoreleasepool {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
+        MTLDepthStencilDescriptor* desc = [[MTLDepthStencilDescriptor alloc] init];
+        desc.depthCompareFunction = (MTLCompareFunction)depth_compare;
+        desc.depthWriteEnabled = (BOOL)depth_write;
+        // Front stencil
+        MTLStencilDescriptor* front = [[MTLStencilDescriptor alloc] init];
+        front.stencilCompareFunction = (MTLCompareFunction)front_compare;
+        front.stencilFailureOperation = (MTLStencilOperation)front_fail;
+        front.depthFailureOperation = (MTLStencilOperation)front_dfail;
+        front.depthStencilPassOperation = (MTLStencilOperation)front_dpass;
+        front.readMask = (uint32_t)front_rmask;
+        front.writeMask = (uint32_t)front_wmask;
+        desc.frontFaceStencil = front;
+        // Back stencil
+        MTLStencilDescriptor* back = [[MTLStencilDescriptor alloc] init];
+        back.stencilCompareFunction = (MTLCompareFunction)back_compare;
+        back.stencilFailureOperation = (MTLStencilOperation)back_fail;
+        back.depthFailureOperation = (MTLStencilOperation)back_dfail;
+        back.depthStencilPassOperation = (MTLStencilOperation)back_dpass;
+        back.readMask = (uint32_t)back_rmask;
+        back.writeMask = (uint32_t)back_wmask;
+        desc.backFaceStencil = back;
+        id<MTLDepthStencilState> state = [device newDepthStencilStateWithDescriptor:desc];
+        return (int64_t)(intptr_t)(__bridge_retained void*)state;
+    }
+}
+static void gorget_metal_encoder_set_stencil_front_back_ref(int64_t encoder_h, int64_t front_ref, int64_t back_ref) {
+    @autoreleasepool {
+        id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)encoder_h;
+        [enc setStencilFrontReferenceValue:(uint32_t)front_ref backReferenceValue:(uint32_t)back_ref];
+    }
 }
 
 #endif /* __APPLE__ */
