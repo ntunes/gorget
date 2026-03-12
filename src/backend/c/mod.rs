@@ -6888,7 +6888,7 @@ fn emit_instruction(
                         // Str__slice mutates self in-place and "returns" void, but
                         // callers may use the result as Str. Assign *self to dst.
                         if func_name.ends_with("__slice") && !args.is_empty() {
-                            if let Operand::Copy(p) | Operand::Move(p) = &args[0] {
+                            if let Operand::Copy(_p) | Operand::Move(_p) = &args[0] {
                                 let self_str = format_operand(&args[0], func, registry);
                                 let _ = writeln!(out, "        _{id} = *{self_str};", id = dst_id.0);
                             }
@@ -7287,7 +7287,7 @@ fn emit_instruction(
             let src_is_str = matches!(src_type_name.as_deref(), Some("Str") | Some("GorgetString"));
             let dst_is_str = c_type == "Str" || c_type == "GorgetString";
             let dst_is_int = c_type == "int64_t" || c_type == "uint8_t" || c_type == "int32_t";
-            let dst_is_float = c_type == "double";
+            let _dst_is_float = c_type == "double";
             let src_is_int = matches!(src_type_name.as_deref(), Some("int64_t") | Some("uint8_t") | Some("int32_t"));
             let src_is_float = matches!(src_type_name.as_deref(), Some("double"));
             let src_is_void = matches!(src_type_name.as_deref(), Some("void"));
