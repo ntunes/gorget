@@ -14,17 +14,17 @@ enum Token:
     Ident(str)
 
 void main():
-    # Unit variants
-    int r = Color.Red().ordinal()
-    int g = Color.Green().ordinal()
-    int b = Color.Blue().ordinal()
+    # Unit variants — no parens needed
+    int r = Color.Red.ordinal()
+    int g = Color.Green.ordinal()
+    int b = Color.Blue.ordinal()
     print(f"{r}")  # 0
     print(f"{g}")  # 1
     print(f"{b}")  # 2
 
     # Variants with payloads — ordinal ignores the payload
-    int t0 = Token.Plus().ordinal()
-    int t1 = Token.Minus().ordinal()
+    int t0 = Token.Plus.ordinal()
+    int t1 = Token.Minus.ordinal()
     int t2 = Token.Number(3.14).ordinal()
     int t3 = Token.Ident("foo").ordinal()
     print(f"{t0}")  # 0
@@ -33,12 +33,12 @@ void main():
     print(f"{t3}")  # 3
 
     # Via variable
-    Color c = Color.Blue()
+    Color c = Color.Blue
     int co = c.ordinal()
     print(f"{co}")  # 2
 
     # Comparison using ordinals
-    bool cmp = Color.Red().ordinal() < Color.Blue().ordinal()
+    bool cmp = Color.Red.ordinal() < Color.Blue.ordinal()
     print(f"{cmp}")  # true
 
     print("done")

@@ -44,6 +44,17 @@ trait Hashable:
 
 Required for use as `Dict` keys or `Set` elements.
 
+### Ordinal
+
+```gorget
+trait Ordinal:
+    int ordinal(self)
+```
+
+Returns the zero-based positional index of an enum variant. Only derivable for
+enums. The first variant is 0, the second is 1, and so on. Payload values are
+ignored.
+
 ---
 
 ## Copying and Cleanup
@@ -233,7 +244,7 @@ struct Point:
 ```
 
 Derivable traits: `Equatable`, `Hashable`, `Displayable`, `Cloneable`,
-`Comparable`, `Default`, `Serializable`, `Deserializable`.
+`Comparable`, `Default`, `Ordinal` (enums only), `Serializable`, `Deserializable`.
 
 The generated implementation operates field-by-field. For `Equatable`, all fields
 must be equal. For `Hashable`, all fields are combined into the hash. For
@@ -249,6 +260,7 @@ must be equal. For `Hashable`, all fields are combined into the hash. For
 | Equatable | `eq` | `==`, `!=` | Yes |
 | Comparable | `compare` | `<`, `>`, `<=`, `>=` | Yes |
 | Hashable | `hash` | Dict keys, Set elements | Yes |
+| Ordinal | `ordinal` | Variant index (enums) | Yes |
 | Cloneable | `clone` | `.clone()` | Yes |
 | Drop | `drop` | Automatic cleanup | No |
 | Default | `default` | `.default()` | Yes |
