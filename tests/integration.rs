@@ -13342,3 +13342,21 @@ fn compound_index_assign() {
 done",
     );
 }
+
+#[test]
+fn derive_ordinal() {
+    run_gg(
+        "derive_ordinal.gg",
+        "\
+0
+1
+2
+0
+1
+2
+3
+2
+true
+done",
+    );
+}

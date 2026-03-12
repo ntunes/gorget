@@ -252,6 +252,17 @@ fn register_builtin_traits(
             });
             m
         }),
+        // Ordinal: int ordinal(self)
+        ("Ordinal", {
+            let mut m = FxHashMap::default();
+            m.insert("ordinal".into(), FunctionSig {
+                params: vec![],
+                return_type: types.int_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
         // Drop: void drop(!self)
         ("Drop", {
             let mut m = FxHashMap::default();

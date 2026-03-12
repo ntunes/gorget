@@ -74,7 +74,7 @@ fn expand_derives_in_items(items: &mut Vec<Spanned<Item>>, errors: &mut Vec<Sema
 const DERIVABLE_STRUCT_TRAITS: &[&str] =
     &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Default", "Deserializable", "From", "TryFrom", "FromRow"];
 const DERIVABLE_ENUM_TRAITS: &[&str] =
-    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Deserializable"];
+    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Deserializable", "Ordinal"];
 
 fn collect_struct_derives(
     s: &StructDef,
@@ -759,8 +759,42 @@ fn generate_enum_derive(type_name: &str, gs: &str, trait_name: &str, e: &EnumDef
         "Hashable" => generate_enum_hashable(type_name, gs, e),
         "Serializable" => generate_enum_serializable(type_name, gs, e),
         "Deserializable" => generate_enum_deserializable(type_name, gs, e),
+        "Ordinal" => generate_enum_ordinal(type_name, gs, e),
         _ => String::new(),
     }
+}
+
+fn generate_enum_ordinal(type_name: &str, gs: &str, e: &EnumDef) -> String {
+    let gp = equip_generic_prefix(gs);
+    let pfx = variant_prefix(type_name, e);
+    let mut arms = String::new();
+
+    for (idx, variant) in e.variants.iter().enumerate() {
+        let vname = &variant.node.name.node;
+        let field_count = match &variant.node.fields {
+            VariantFields::Unit => 0,
+            VariantFields::Tuple(fields) => fields.len(),
+        };
+
+        let pattern = if field_count == 0 {
+            format!("{pfx}{vname}()")
+        } else {
+            let bindings: Vec<String> = (0..field_count).map(|i| format!("a{i}")).collect();
+            format!("{pfx}{vname}({})", bindings.join(", "))
+        };
+
+        arms.push_str(&format!(
+            "            case {pattern}:\n\
+             \x20               return {idx}\n"
+        ));
+    }
+
+    format!(
+        "equip {gp}{type_name}{gs} with Ordinal:\n\
+         \x20   int ordinal(self):\n\
+         \x20       match self:\n\
+         {arms}"
+    )
 }
 
 fn generate_enum_equatable(type_name: &str, gs: &str, e: &EnumDef) -> String {

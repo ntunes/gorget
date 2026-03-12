@@ -1,0 +1,44 @@
+# Test @derive(Ordinal) for enums
+
+@derive(Ordinal)
+enum Color:
+    Red
+    Green
+    Blue
+
+@derive(Ordinal)
+enum Token:
+    Plus
+    Minus
+    Number(float)
+    Ident(str)
+
+void main():
+    # Unit variants
+    int r = Color.Red().ordinal()
+    int g = Color.Green().ordinal()
+    int b = Color.Blue().ordinal()
+    print(f"{r}")  # 0
+    print(f"{g}")  # 1
+    print(f"{b}")  # 2
+
+    # Variants with payloads — ordinal ignores the payload
+    int t0 = Token.Plus().ordinal()
+    int t1 = Token.Minus().ordinal()
+    int t2 = Token.Number(3.14).ordinal()
+    int t3 = Token.Ident("foo").ordinal()
+    print(f"{t0}")  # 0
+    print(f"{t1}")  # 1
+    print(f"{t2}")  # 2
+    print(f"{t3}")  # 3
+
+    # Via variable
+    Color c = Color.Blue()
+    int co = c.ordinal()
+    print(f"{co}")  # 2
+
+    # Comparison using ordinals
+    bool cmp = Color.Red().ordinal() < Color.Blue().ordinal()
+    print(f"{cmp}")  # true
+
+    print("done")
