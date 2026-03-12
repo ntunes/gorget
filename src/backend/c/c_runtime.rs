@@ -4309,6 +4309,15 @@ static inline void gorget_array_reserve(GorgetArray* arr, size_t new_cap) {
     }
 }
 
+static inline void gorget_array_ensure_capacity(GorgetArray* arr, size_t needed, size_t elem_size) {
+    arr->elem_size = elem_size;
+    if (needed > arr->cap) {
+        size_t old_cap = arr->cap;
+        arr->data = arr->alloc->realloc(arr->alloc->ctx, arr->data, old_cap * elem_size, needed * elem_size);
+        arr->cap = needed;
+    }
+}
+
 static inline GorgetArray gorget_array_with_capacity(size_t elem_size, size_t capacity) {
     GorgetAllocator* a = __gorget_current_alloc;
     GorgetArray arr = {NULL, 0, 0, elem_size, a};
