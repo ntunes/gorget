@@ -2531,11 +2531,7 @@ fn gen_gl_module() -> Module {
     // Timer queries
     items.push(const_item("GL_TIMESTAMP", 0x8E28));
     items.push(const_item("GL_TIME_ELAPSED", 0x88BF));
-    // Geometry shader
-    items.push(const_item("GL_GEOMETRY_SHADER", 0x8DD9));
-    items.push(const_item("GL_GEOMETRY_VERTICES_OUT", 0x8916));
-    items.push(const_item("GL_GEOMETRY_INPUT_TYPE", 0x8917));
-    items.push(const_item("GL_GEOMETRY_OUTPUT_TYPE", 0x8918));
+    // Geometry shader (additional constants — base ones already in Tier 2 above)
     items.push(const_item("GL_MAX_GEOMETRY_OUTPUT_VERTICES", 0x8DE0));
     items.push(const_item("GL_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS", 0x8DE1));
 
