@@ -263,7 +263,7 @@ Test files use `test` blocks with `assert` for contracts, `@should_panic` for ex
 ```bash
 cargo build                                        # build the compiler
 cargo test --lib                                   # ~913 unit tests
-cargo test --test integration -- --test-threads=1  # ~660 integration tests (serial)
+cargo test --test integration -- --test-threads=4  # ~709 integration tests
 ```
 
 Integration tests live in `tests/fixtures/*.gg` — each is a self-contained program with deterministic stdout.
