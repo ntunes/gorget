@@ -12,3 +12,4 @@ tests/fixtures/self_host_*/driver.c
 .claude/
 fuzz/artifacts/
 fuzz/corpus/
+fuzz/target/
