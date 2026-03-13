@@ -10,7 +10,7 @@
 
 ## Medium
 
-- **Gorget Arena: GL backend (Linux)** — macOS Metal build compiles and runs. Linux GL build has 20 remaining type mismatch errors (GLContext vs GorgetGLContext, Str vs GorgetString in GL function args). [updated: 2026-03-13]
+- **`register_collection_alias` uses Copy semantics for Vector/Dict/Set types** — `src/ir/lowering/types.rs:551` registers collection type defs with `TypeMetadata::default()` (Copy), while `map_ast_type_mut` correctly uses Move. This causes `is_move_type()` to return false for structs containing collection fields (e.g. ParseCursor with Vector[ShaderToken]). Fixing it to use Move semantics cascades into other codegen issues (gorget_image_flip_vertically out-param handler uses dot instead of arrow). Needs coordinated fix with out-param handlers before the metadata can be corrected. [added: 2026-03-13]
 
 - **Borrow checker: imported module functions not checked** — The borrow checker at `borrow.rs:4413` only iterates top-level `module.items` (entry file functions). Functions inside `Item::Module` wrappers (imported files) are not borrow-checked. This means ownership annotations in imported files are never validated — only the entry file's call sites are checked. Fix: recurse into `Item::Module` nodes in the borrow checker's main loop. [added: 2026-03-12]
 
