@@ -34,6 +34,8 @@ pub struct DefInfo {
     pub is_mutable: bool,
     /// Whether this variable is a function parameter (borrowed from caller, safe to re-bind).
     pub is_param: bool,
+    /// If this is a function parameter, its ownership annotation.
+    pub param_ownership: Option<crate::parser::ast::Ownership>,
     /// Whether this variable was declared with `shared` (for CFA).
     pub shared: crate::parser::ast::SharedKind,
 }
@@ -135,6 +137,7 @@ impl ScopeTable {
             type_id: None,
             is_mutable: false,
             is_param: false,
+            param_ownership: None,
             shared: crate::parser::ast::SharedKind::None,
         });
         def_id
@@ -169,6 +172,7 @@ impl ScopeTable {
                     type_id: None,
                     is_mutable,
                     is_param: false,
+                    param_ownership: None,
                     shared: crate::parser::ast::SharedKind::None,
                 });
                 self.scopes[self.current.0 as usize]
@@ -195,6 +199,7 @@ impl ScopeTable {
             type_id: None,
             is_mutable,
             is_param: false,
+            param_ownership: None,
             shared: crate::parser::ast::SharedKind::None,
         });
         self.scopes[self.current.0 as usize]

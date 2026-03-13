@@ -265,6 +265,9 @@ pub enum SemanticErrorKind {
     /// Assignment to a const binding (always an error).
     AssignmentToConst { name: String },
 
+    /// Mutation of a bare (immutable) parameter.
+    MutationOfBareParam { name: String, detail: String },
+
     /// `via` used without a trait in equip block.
     ViaWithoutTrait,
 
@@ -553,6 +556,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::AssignmentToConst { name } => {
                 write!(f, "cannot assign to constant `{name}`")
+            }
+            SemanticErrorKind::MutationOfBareParam { name, detail } => {
+                write!(f, "cannot mutate bare parameter `{name}`: {detail}")
             }
             SemanticErrorKind::ViaWithoutTrait => {
                 write!(f, "`via` delegation can only be used in trait equip blocks")

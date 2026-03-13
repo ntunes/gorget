@@ -1021,6 +1021,17 @@ done",
 }
 
 #[test]
+fn bare_param_immutable() {
+    run_gg(
+        "bare_param_immutable.gg",
+        "\
+3,4
+50
+3,4 50",
+    );
+}
+
+#[test]
 fn ownership_showcase() {
     run_gg(
         "ownership_showcase.gg",
@@ -5362,6 +5373,14 @@ fn lifetime_dangling_error() {
     check_gg_fails(
         "lifetime_dangling_error.gg",
         "borrows from local variable",
+    );
+}
+
+#[test]
+fn bare_param_mutation_error() {
+    check_gg_fails(
+        "bare_param_mutation_error.gg",
+        "cannot mutate bare parameter",
     );
 }
 

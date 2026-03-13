@@ -10,7 +10,7 @@ from std.signal import signal_ignore, SIGPIPE
 HttpServerResponse handle(HttpRequest req):
     return HttpServerResponse.ok("hello")
 
-async void handle_conn(Socket conn):
+async void handle_conn(Socket !conn):
     Result[HttpRequest, str] r = http_server_parse_request(&conn)
     match r:
         case Ok(req):
@@ -26,7 +26,7 @@ async void serve_n(int port, int n):
     int i = 0
     while i < n:
         Socket client = srv.accept().unwrap()
-        group.spawn(spawn handle_conn(client))
+        group.spawn(spawn handle_conn(!client))
         i = i + 1
     group.join()
     srv.close()

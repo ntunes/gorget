@@ -780,7 +780,9 @@ fn resolve_function(
             true,
         ) {
             Ok(def_id) => {
-                scopes.get_def_mut(def_id).is_param = true;
+                let def = scopes.get_def_mut(def_id);
+                def.is_param = true;
+                def.param_ownership = Some(param.node.ownership);
             }
             Err(e) => {
                 errors.push(e);

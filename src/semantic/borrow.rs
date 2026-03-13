@@ -1489,6 +1489,16 @@ impl<'a> BorrowChecker<'a> {
                 // The `&` operator: mutable borrow
                 // Check that the inner expression is still usable
                 self.check_expr(inner);
+                // Cannot create a mutable borrow from a bare (immutable) parameter
+                if let Some(param_name) = self.check_bare_param_mutation(inner) {
+                    self.error(
+                        SemanticErrorKind::MutationOfBareParam {
+                            name: param_name,
+                            detail: "cannot create mutable borrow from immutable parameter".to_string(),
+                        },
+                        expr.span,
+                    );
+                }
             }
 
             Expr::Deref { expr: inner } => {
@@ -1554,6 +1564,18 @@ impl<'a> BorrowChecker<'a> {
                             }
                         }
                         Ownership::MutableBorrow | Ownership::Borrow => {
+                            // Cannot pass a bare (immutable) param as `&` (mutable borrow)
+                            if arg.node.ownership == Ownership::MutableBorrow {
+                                if let Some(param_name) = self.check_bare_param_mutation(&arg.node.value) {
+                                    self.error(
+                                        SemanticErrorKind::MutationOfBareParam {
+                                            name: param_name,
+                                            detail: "cannot create mutable borrow from immutable parameter".to_string(),
+                                        },
+                                        arg.span,
+                                    );
+                                }
+                            }
                             // For constructor calls, bare non-Copy identifier
                             // args are implicitly consumed (moved into fields).
                             if is_constructor {
@@ -2457,6 +2479,16 @@ impl<'a> BorrowChecker<'a> {
                     }
                     // For field/index assignments, check the base object
                     _ => {
+                        // Check for mutation through a bare (immutable) parameter
+                        if let Some(param_name) = self.check_bare_param_mutation(target) {
+                            self.error(
+                                SemanticErrorKind::MutationOfBareParam {
+                                    name: param_name,
+                                    detail: "use `&` to declare a mutable parameter".to_string(),
+                                },
+                                target.span,
+                            );
+                        }
                         self.check_expr(target);
                     }
                 }
@@ -2517,6 +2549,16 @@ impl<'a> BorrowChecker<'a> {
                             }
                         }
                     }
+                }
+                // Check for mutation through a bare (immutable) parameter
+                if let Some(param_name) = self.check_bare_param_mutation(target) {
+                    self.error(
+                        SemanticErrorKind::MutationOfBareParam {
+                            name: param_name,
+                            detail: "use `&` to declare a mutable parameter".to_string(),
+                        },
+                        target.span,
+                    );
                 }
                 self.check_expr(target);
                 self.check_expr(value);
@@ -3144,6 +3186,39 @@ impl<'a> BorrowChecker<'a> {
             }
             _ => None,
         }
+    }
+
+    /// Walk up FieldAccess/TupleFieldAccess/Index chains to find the root identifier's DefId.
+    fn find_root_def_id(&self, expr: &Spanned<Expr>) -> Option<DefId> {
+        match &expr.node {
+            Expr::Identifier(_) => self.resolution_map.get(&expr.span.start).copied(),
+            Expr::FieldAccess { object, .. }
+            | Expr::TupleFieldAccess { object, .. }
+            | Expr::Index { object, .. } => self.find_root_def_id(object),
+            Expr::SelfExpr => self.resolution_map.get(&expr.span.start).copied(),
+            _ => None,
+        }
+    }
+
+    /// Check if `expr` is a bare (non-mutable) parameter of a non-Copy type.
+    /// Returns the param name if mutation should be rejected.
+    fn check_bare_param_mutation(&self, expr: &Spanned<Expr>) -> Option<String> {
+        let def_id = self.find_root_def_id(expr)?;
+        let def = self.scopes.get_def(def_id);
+        if !def.is_param {
+            return None;
+        }
+        // Only bare (Ownership::Borrow) params are immutable
+        if def.param_ownership != Some(crate::parser::ast::Ownership::Borrow) {
+            return None;
+        }
+        // Only non-Copy types are affected — primitives are passed by value and can be freely mutated
+        if let Some(type_id) = def.type_id {
+            if is_copy_type(type_id, self.types, self.scopes) {
+                return None;
+            }
+        }
+        Some(def.name.clone())
     }
 
     /// Check that call-site ownership annotations match the parameter declarations.
@@ -7446,6 +7521,128 @@ async void main():
                 crate::semantic::errors::SemanticWarningKind::SpawnWithTrackedBinding { .. }
             )),
             "expected no SpawnWithTrackedBinding outside with, got: {:?}", warnings
+        );
+    }
+
+    // ── Bare param mutation tests ──
+
+    #[test]
+    fn bare_param_field_assign_rejected() {
+        let source = "\
+struct Point:
+    int x
+    int y
+
+void move_point(Point p):
+    p.x = 10
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "p")),
+            "expected MutationOfBareParam for field assign, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn mut_param_field_assign_allowed() {
+        let source = "\
+struct Point:
+    int x
+    int y
+
+void move_point(Point &p):
+    p.x = 10
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
+            "unexpected MutationOfBareParam for &param: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn bare_param_mut_borrow_at_call_rejected() {
+        let source = "\
+struct Data:
+    int val
+
+void mutate(Data &d):
+    d.val = 42
+
+void process(Data d):
+    mutate(&d)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "d")),
+            "expected MutationOfBareParam for &bare_param at call, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn bare_param_compound_assign_field_rejected() {
+        let source = "\
+struct Counter:
+    int count
+
+void increment(Counter c):
+    c.count += 1
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "c")),
+            "expected MutationOfBareParam for compound assign to field, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn bare_primitive_param_reassign_allowed() {
+        // Primitives are Copy — reassignment is fine (local copy)
+        let source = "\
+void add_one(int x):
+    x = x + 1
+    print(x)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
+            "unexpected MutationOfBareParam for primitive param: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn move_param_field_assign_allowed() {
+        let source = "\
+struct Point:
+    int x
+    int y
+
+void consume_point(Point !p):
+    p.x = 10
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
+            "unexpected MutationOfBareParam for !param: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn bare_param_nested_field_assign_rejected() {
+        let source = "\
+struct Inner:
+    int val
+
+struct Outer:
+    Inner inner
+
+void process(Outer o):
+    o.inner.val = 42
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "o")),
+            "expected MutationOfBareParam for nested field assign, got: {:?}", errors
         );
     }
 }
