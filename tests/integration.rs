@@ -6735,7 +6735,6 @@ fn format_unaryop_canonical(op: &UnaryOp) -> &'static str {
         UnaryOp::Neg => "-",
         UnaryOp::Not => "not",
         UnaryOp::BitNot => "~",
-        UnaryOp::Deref => "*",
     }
 }
 

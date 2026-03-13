@@ -447,13 +447,7 @@ impl Parser {
                 let value = args.into_iter().next().unwrap().node.value;
                 Ok(SelectOp::Send { channel: *receiver, value })
             }
-            _ => Err(ParseError {
-                kind: crate::errors::ParseErrorKind::UnexpectedToken {
-                    expected: "channel.recv() or channel.send()".to_string(),
-                    got: "other expression".to_string(),
-                },
-                span: expr.span,
-            }),
+            _ => Err(self.error_at(expr.span, "expected channel.recv() or channel.send()")),
         }
     }
 
@@ -940,49 +934,16 @@ impl Parser {
     }
 
     /// Parse a simple binding pattern for variable declarations.
-    /// Supports: name, (a, b), StructName(a, b, ..)
+    /// Supports: name, (a, b), StructName(a, b, ..) — delegates to `parse_pattern()`
+    /// for tuple and constructor cases.
     fn parse_binding_pattern(&mut self) -> Result<Spanned<Pattern>, ParseError> {
-        let start = self.peek_span();
-
-        if self.match_token(&Token::LParen) {
-            // Tuple destructuring: (a, b, c)
-            let mut patterns = Vec::new();
-            while !self.check(&Token::RParen) && !self.at_end() {
-                patterns.push(self.parse_pattern()?);
-                if !self.check(&Token::RParen) {
-                    self.expect(&Token::Comma)?;
-                }
+        // Fast path: plain identifier without constructor parens → Binding
+        if let Token::Identifier(_) = self.peek() {
+            if !matches!(self.peek_ahead(1), Token::LParen | Token::Dot) {
+                let name = self.expect_identifier()?;
+                return Ok(Spanned::new(Pattern::Binding(name.node), name.span));
             }
-            self.expect(&Token::RParen)?;
-            let end = self.previous_span();
-            Ok(Spanned::new(Pattern::Tuple(patterns), start.merge(end)))
-        } else if let Token::Identifier(_) = self.peek() {
-            let name = self.expect_identifier()?;
-
-            // Check for struct destructuring: Name(a, b)
-            if self.check(&Token::LParen) {
-                self.advance();
-                let mut fields = Vec::new();
-                while !self.check(&Token::RParen) && !self.at_end() {
-                    fields.push(self.parse_pattern()?);
-                    if !self.check(&Token::RParen) {
-                        self.expect(&Token::Comma)?;
-                    }
-                }
-                self.expect(&Token::RParen)?;
-                let end = self.previous_span();
-                Ok(Spanned::new(
-                    Pattern::Constructor {
-                        path: vec![name],
-                        fields,
-                    },
-                    start.merge(end),
-                ))
-            } else {
-                Ok(Spanned::new(Pattern::Binding(name.node), name.span))
-            }
-        } else {
-            self.parse_pattern()
         }
+        self.parse_pattern()
     }
 }

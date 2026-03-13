@@ -716,7 +716,6 @@ pub enum UnaryOp {
     Neg,
     Not,
     BitNot,
-    Deref,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

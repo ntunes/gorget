@@ -265,6 +265,16 @@ impl Parser {
         }
     }
 
+    /// Synchronize and guarantee forward progress. If `synchronize()` didn't
+    /// advance past any tokens, force one step forward to prevent infinite loops.
+    pub fn synchronize_with_progress(&mut self) {
+        let pos_before = self.pos;
+        self.synchronize();
+        if self.pos == pos_before {
+            self.advance();
+        }
+    }
+
     // ── Block Parsing ─────────────────────────────────────────
 
     /// Parse a block: COLON NEWLINE INDENT stmts DEDENT
@@ -286,11 +296,7 @@ impl Parser {
                 Ok(stmt) => stmts.push(stmt),
                 Err(e) => {
                     self.errors.push(e);
-                    let pos_before = self.pos;
-                    self.synchronize();
-                    if self.pos == pos_before {
-                        self.advance();
-                    }
+                    self.synchronize_with_progress();
                 }
             }
         }
@@ -356,12 +362,7 @@ impl Parser {
                 }
                 Err(e) => {
                     self.errors.push(e);
-                    let pos_before = self.pos;
-                    self.synchronize();
-                    // Guarantee forward progress to prevent infinite loops
-                    if self.pos == pos_before {
-                        self.advance();
-                    }
+                    self.synchronize_with_progress();
                 }
             }
         }
@@ -754,11 +755,7 @@ impl Parser {
                 Ok(item) => items.push(item),
                 Err(e) => {
                     self.errors.push(e);
-                    let pos_before = self.pos;
-                    self.synchronize();
-                    if self.pos == pos_before {
-                        self.advance();
-                    }
+                    self.synchronize_with_progress();
                 }
             }
         }
@@ -1287,18 +1284,10 @@ impl Parser {
     /// Scans past the type (including optional `[...]` generic args), then the name, checks for `=`.
     fn looks_like_module_var_decl(&self) -> bool {
         let mut i = 0;
-        // First token: identifier (type name) or primitive keyword
+        // First token: identifier (type name) or type keyword
         match self.peek_ahead(i) {
             Token::Identifier(_) => i += 1,
-            Token::Keyword(kw) => {
-                if matches!(kw, Keyword::Str | Keyword::Int | Keyword::Bool | Keyword::Float
-                               | Keyword::Void | Keyword::Auto | Keyword::StringType
-                               | Keyword::Mutex) {
-                    i += 1;
-                } else {
-                    return false;
-                }
-            }
+            Token::Keyword(kw) if kw.is_type_keyword() => i += 1,
             _ => return false,
         }
         // Optional generic args: [...]

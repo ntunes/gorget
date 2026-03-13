@@ -843,7 +843,7 @@ impl<'src> Lexer<'src> {
                 kind: LexErrorKind::InvalidEscapeSequence("byte literal: escape value > 255".to_string()),
                 span: self.span(pos, after),
             });
-            0u8
+            return (Token::Error, after);
         } else {
             ch as u8
         };

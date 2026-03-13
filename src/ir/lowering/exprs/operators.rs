@@ -365,7 +365,6 @@ pub(super) fn lower_unary_op(
         ast::UnaryOp::Neg => UnOp::Neg,
         ast::UnaryOp::Not => UnOp::Not,
         ast::UnaryOp::BitNot => UnOp::BitNot,
-        ast::UnaryOp::Deref => return val, // Phase 1: no pointer derefs
     };
 
     let result_type = if gir_op == UnOp::Not { BOOL_TYPE } else { operand_type };

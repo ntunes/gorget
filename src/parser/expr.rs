@@ -5,6 +5,25 @@ use super::ast::*;
 use super::Parser;
 use crate::errors::ParseError;
 
+/// RAII guard that increments `call_arg_depth` on creation and decrements on drop,
+/// ensuring the counter stays consistent even if parsing returns early.
+struct CallArgGuard<'a> {
+    parser: &'a mut Parser,
+}
+
+impl<'a> CallArgGuard<'a> {
+    fn new(parser: &'a mut Parser) -> Self {
+        parser.call_arg_depth += 1;
+        CallArgGuard { parser }
+    }
+}
+
+impl Drop for CallArgGuard<'_> {
+    fn drop(&mut self) {
+        self.parser.call_arg_depth -= 1;
+    }
+}
+
 /// Map a token to a `BinaryOp` if it is a recognised binary operator token.
 /// Used to parse `meta +`, `meta -`, `meta *`, etc.
 fn binary_op_from_token(tok: &Token) -> Option<BinaryOp> {
@@ -1611,9 +1630,11 @@ impl Parser {
             None
         };
 
-        self.call_arg_depth += 1;
-        let value = self.parse_expr()?;
-        self.call_arg_depth -= 1;
+        let value = {
+            let guard = CallArgGuard::new(self);
+            let v = guard.parser.parse_expr()?;
+            v
+        };
 
         // Auto-wrap: if the argument expression contains `it`, wrap it in
         // an ImplicitClosure so downstream passes treat it as a lambda.
@@ -1698,39 +1719,10 @@ impl Parser {
 
     /// Check if the current token can start a type.
     pub fn is_type_start(&self) -> bool {
-        matches!(
-            self.peek(),
-            Token::Keyword(
-                Keyword::Int
-                    | Keyword::Int8
-                    | Keyword::Int16
-                    | Keyword::Int32
-                    | Keyword::Int64
-                    | Keyword::Uint
-                    | Keyword::Uint8
-                    | Keyword::Uint16
-                    | Keyword::Uint32
-                    | Keyword::Uint64
-                    | Keyword::Float
-                    | Keyword::Float32
-                    | Keyword::Float64
-                    | Keyword::Bool
-                    | Keyword::Str
-                    | Keyword::CStr
-                    | Keyword::StringType
-                    | Keyword::Void
-                    | Keyword::Auto
-                    | Keyword::SelfUpper
-                    | Keyword::Box
-                    | Keyword::Rc
-                    | Keyword::Arc
-                    | Keyword::Weak
-                    | Keyword::Cell
-                    | Keyword::RefCell
-                    | Keyword::Mutex
-                    | Keyword::RwLock
-            ) | Token::Identifier(_)
-                | Token::LParen
-        )
+        match self.peek() {
+            Token::Keyword(kw) => kw.is_type_keyword(),
+            Token::Identifier(_) | Token::LParen => true,
+            _ => false,
+        }
     }
 }

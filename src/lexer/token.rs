@@ -342,11 +342,47 @@ pub enum Keyword {
 
     // Special identifiers
     It,
-    Panic,
     Assert,
 }
 
 impl Keyword {
+    /// Returns true if this keyword names a type (primitives, smart pointers, etc.).
+    /// Single source of truth used by `is_type_start()`, `looks_like_module_var_decl()`,
+    /// and pattern-matching type guards.
+    pub fn is_type_keyword(&self) -> bool {
+        matches!(
+            self,
+            Keyword::Int
+                | Keyword::Int8
+                | Keyword::Int16
+                | Keyword::Int32
+                | Keyword::Int64
+                | Keyword::Uint
+                | Keyword::Uint8
+                | Keyword::Uint16
+                | Keyword::Uint32
+                | Keyword::Uint64
+                | Keyword::Float
+                | Keyword::Float32
+                | Keyword::Float64
+                | Keyword::Bool
+                | Keyword::Str
+                | Keyword::CStr
+                | Keyword::StringType
+                | Keyword::Void
+                | Keyword::Auto
+                | Keyword::SelfUpper
+                | Keyword::Box
+                | Keyword::Rc
+                | Keyword::Arc
+                | Keyword::Weak
+                | Keyword::Cell
+                | Keyword::RefCell
+                | Keyword::Mutex
+                | Keyword::RwLock
+        )
+    }
+
     /// Return the keyword's source-level name (e.g., `"Some"`, `"int"`, `"String"`).
     pub fn as_name(&self) -> &'static str {
         match self {
@@ -445,7 +481,6 @@ impl Keyword {
             Keyword::Meta => "meta",
             Keyword::Mod => "mod",
             Keyword::It => "it",
-            Keyword::Panic => "panic",
             Keyword::Assert => "assert",
         }
     }
@@ -549,9 +584,8 @@ impl Keyword {
             "meta" => Some(Keyword::Meta),
             "mod" => Some(Keyword::Mod),
             "it" => Some(Keyword::It),
-            "panic" => Some(Keyword::Panic),
             "assert" => Some(Keyword::Assert),
-            _ => Option::None,
+            _ => None,
         }
     }
 }

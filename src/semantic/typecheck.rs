@@ -808,10 +808,6 @@ impl<'a> TypeChecker<'a> {
                         let operand_type = self.infer_expr(operand);
                         operand_type
                     }
-                    UnaryOp::Deref => {
-                        let operand_type = self.infer_expr(operand);
-                        operand_type
-                    }
                 }
             }
 
