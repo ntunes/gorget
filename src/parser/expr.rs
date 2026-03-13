@@ -954,7 +954,7 @@ impl Parser {
     fn parse_postfix(&mut self, lhs: Spanned<Expr>) -> Result<Spanned<Expr>, ParseError> {
         let start = lhs.span;
 
-        match self.peek().clone() {
+        match *self.peek() {
             Token::Dot => {
                 self.advance();
                 // Check for tuple field access: .0, .1

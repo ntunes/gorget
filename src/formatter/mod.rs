@@ -1017,11 +1017,7 @@ impl Formatter {
         // type-first: `type [&|!]name`
         self.format_type(&param.type_);
         self.emitter.write(" ");
-        match param.ownership {
-            Ownership::Borrow => {}
-            Ownership::MutableBorrow => self.emitter.write("&"),
-            Ownership::Move => self.emitter.write("!"),
-        }
+        self.format_ownership_prefix(param.ownership);
         self.emitter.write(&param.name.node);
         if let Some(ref default) = param.default {
             self.emitter.write(" = ");
@@ -1161,11 +1157,7 @@ impl Formatter {
                     self.format_pattern(pattern);
                 }
                 self.emitter.write(" in ");
-                match ownership {
-                    Ownership::Borrow => {}
-                    Ownership::MutableBorrow => self.emitter.write("&"),
-                    Ownership::Move => self.emitter.write("!"),
-                }
+                self.format_ownership_prefix(*ownership);
                 self.format_expr(iterable);
                 self.emitter.write(":");
                 self.emitter.newline();
@@ -1441,6 +1433,7 @@ impl Formatter {
                 self.emitter.write(&name.node);
                 self.emitter.write(" = ");
                 self.format_expr(value);
+                self.emitter.newline();
             }
             Stmt::MetaLog { args, .. } => {
                 self.emitter.write("meta log ");
@@ -2027,16 +2020,20 @@ impl Formatter {
     }
 
 
+    fn format_ownership_prefix(&mut self, ownership: Ownership) {
+        match ownership {
+            Ownership::Borrow => {}
+            Ownership::MutableBorrow => self.emitter.write("&"),
+            Ownership::Move => self.emitter.write("!"),
+        }
+    }
+
     fn format_call_arg(&mut self, arg: &CallArg) {
         if let Some(ref name) = arg.name {
             self.emitter.write(&name.node);
             self.emitter.write(" = ");
         }
-        match arg.ownership {
-            Ownership::Borrow => {}
-            Ownership::MutableBorrow => self.emitter.write("&"),
-            Ownership::Move => self.emitter.write("!"),
-        }
+        self.format_ownership_prefix(arg.ownership);
         self.format_expr(&arg.value);
     }
 
@@ -2046,11 +2043,7 @@ impl Formatter {
             self.format_type(ty);
             self.emitter.write(" ");
         }
-        match param.ownership {
-            Ownership::Borrow => {}
-            Ownership::MutableBorrow => self.emitter.write("&"),
-            Ownership::Move => self.emitter.write("!"),
-        }
+        self.format_ownership_prefix(param.ownership);
         self.emitter.write(&param.name.node);
     }
 
@@ -2157,7 +2150,7 @@ fn compound_op_str(op: BinaryOp) -> &'static str {
         BinaryOp::BitXor => "^=",
         BinaryOp::Shl => "<<=",
         BinaryOp::Shr => ">>=",
-        _ => "=",
+        _ => unreachable!("no compound assignment for {:?}", op),
     }
 }
 
