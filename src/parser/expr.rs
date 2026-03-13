@@ -1204,14 +1204,14 @@ impl Parser {
         let mut depth = 0;
         let mut i = self.pos;
         loop {
-            match self.tokens.get(i).map(|t| &t.node) {
+            match self.kinds.get(i) {
                 Some(Token::LParen) => depth += 1,
                 Some(Token::RParen) => {
                     depth -= 1;
                     if depth == 0 {
                         // Check if : follows )
                         return matches!(
-                            self.tokens.get(i + 1).map(|t| &t.node),
+                            self.kinds.get(i + 1),
                             Some(Token::Colon)
                         );
                     }

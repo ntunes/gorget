@@ -34,7 +34,8 @@ fn make_self_param(
 
 /// Recursive descent parser for Gorget source code.
 pub struct Parser {
-    tokens: Vec<Spanned<Token>>,
+    kinds: Vec<Token>,
+    spans: Vec<Span>,
     pos: usize,
     pub errors: Vec<ParseError>,
     /// Nesting depth for call-arg parsing. Used to auto-wrap `it` only at the
@@ -53,22 +54,26 @@ impl Parser {
         let lexer = Lexer::new_with_offset(source, base_offset);
         let all_tokens: Vec<Spanned<Token>> = lexer.collect();
 
-        // Partition: Comment tokens go to side-table, everything else to tokens
-        let mut tokens = Vec::new();
+        // Partition: Comment tokens go to side-table, everything else split into parallel arrays
+        let mut kinds = Vec::new();
+        let mut spans = Vec::new();
         let mut comments = Vec::new();
         for tok in all_tokens {
             if let Token::Comment(ref text) = tok.node {
                 comments.push(Spanned::new(text.clone(), tok.span));
             } else {
-                tokens.push(tok);
+                kinds.push(tok.node);
+                spans.push(tok.span);
             }
         }
 
         // Ensure we always have an EOF sentinel
-        let eof_pos = tokens.last().map(|t| t.span.end).unwrap_or(0);
-        tokens.push(Spanned::new(Token::Eof, Span::new(eof_pos, eof_pos)));
+        let eof_pos = spans.last().map(|s| s.end).unwrap_or(0);
+        kinds.push(Token::Eof);
+        spans.push(Span::new(eof_pos, eof_pos));
         Self {
-            tokens,
+            kinds,
+            spans,
             pos: 0,
             errors: Vec::new(),
             call_arg_depth: 0,
@@ -88,34 +93,23 @@ impl Parser {
     // ── Token Management ──────────────────────────────────────
 
     pub fn peek(&self) -> &Token {
-        self.tokens
-            .get(self.pos)
-            .map(|s| &s.node)
-            .unwrap_or(&Token::Eof)
+        self.kinds.get(self.pos).unwrap_or(&Token::Eof)
     }
 
     pub fn peek_span(&self) -> Span {
-        self.tokens
-            .get(self.pos)
-            .map(|s| s.span)
-            .unwrap_or(Span::dummy())
+        self.spans.get(self.pos).copied().unwrap_or(Span::dummy())
     }
 
     /// Look ahead n tokens (0 = current).
     pub fn peek_ahead(&self, n: usize) -> &Token {
-        self.tokens
-            .get(self.pos + n)
-            .map(|s| &s.node)
-            .unwrap_or(&Token::Eof)
+        self.kinds.get(self.pos + n).unwrap_or(&Token::Eof)
     }
 
     pub fn advance(&mut self) -> Spanned<Token> {
-        let tok = self.tokens.get(self.pos).cloned().unwrap_or(Spanned::new(
-            Token::Eof,
-            Span::dummy(),
-        ));
+        let kind = self.kinds.get(self.pos).cloned().unwrap_or(Token::Eof);
+        let span = self.spans.get(self.pos).copied().unwrap_or(Span::dummy());
         self.pos += 1;
-        tok
+        Spanned::new(kind, span)
     }
 
     pub fn check(&self, token: &Token) -> bool {
@@ -221,7 +215,7 @@ impl Parser {
 
     pub fn previous_span(&self) -> Span {
         if self.pos > 0 {
-            self.tokens[self.pos - 1].span
+            self.spans[self.pos - 1]
         } else {
             Span::dummy()
         }
