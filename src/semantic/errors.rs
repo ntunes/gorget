@@ -102,7 +102,7 @@ pub enum ArenaEscapeKind {
 #[derive(Debug, Clone)]
 pub enum SemanticErrorKind {
     /// Name not found in any enclosing scope.
-    UndefinedName { name: String },
+    UndefinedName { name: String, suggestion: Option<String> },
 
     /// Same name defined twice in the same scope.
     DuplicateDefinition { name: String, original: Span },
@@ -351,8 +351,12 @@ pub enum SemanticErrorKind {
 impl std::fmt::Display for SemanticError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
-            SemanticErrorKind::UndefinedName { name } => {
-                write!(f, "undefined name `{name}`")
+            SemanticErrorKind::UndefinedName { name, suggestion } => {
+                write!(f, "undefined name `{name}`")?;
+                if let Some(s) = suggestion {
+                    write!(f, "; did you mean `{s}`?")?;
+                }
+                Ok(())
             }
             SemanticErrorKind::DuplicateDefinition { name, .. } => {
                 write!(f, "duplicate definition of `{name}`")

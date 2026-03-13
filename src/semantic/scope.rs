@@ -358,6 +358,46 @@ impl ScopeTable {
         false
     }
 
+    /// Collect all visible names from the current scope and its parent chain.
+    pub fn visible_names(&self) -> Vec<String> {
+        let mut seen = rustc_hash::FxHashSet::default();
+        let mut result = Vec::new();
+        let mut scope_id = Some(self.current);
+        while let Some(sid) = scope_id {
+            let scope = &self.scopes[sid.0 as usize];
+            for name in scope.names.keys() {
+                if seen.insert(name.clone()) {
+                    result.push(name.clone());
+                }
+            }
+            scope_id = scope.parent;
+        }
+        result
+    }
+
+    /// Suggest the closest visible name to `target` using edit distance.
+    /// Returns `None` if no name is close enough.
+    pub fn suggest_name(&self, target: &str) -> Option<String> {
+        if target.len() <= 1 {
+            return None;
+        }
+        let names = self.visible_names();
+        let threshold = std::cmp::max(2, target.len() * 2 / 5);
+        let mut best: Option<(usize, String)> = None;
+        for name in names {
+            if name.len() <= 1 {
+                continue;
+            }
+            let dist = edit_distance(target, &name);
+            if dist <= threshold {
+                if best.as_ref().map_or(true, |(d, _)| dist < *d) {
+                    best = Some((dist, name));
+                }
+            }
+        }
+        best.map(|(_, name)| name)
+    }
+
     /// Return all `(name, DefId)` pairs defined directly in the current scope.
     pub fn names_in_current_scope(&self) -> Vec<(String, DefId)> {
         self.scopes[self.current.0 as usize]
@@ -404,6 +444,26 @@ impl ScopeTable {
             }
         }
     }
+}
+
+/// Standard Levenshtein edit distance between two strings.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (m, n) = (a.len(), b.len());
+    let mut prev = (0..=n).collect::<Vec<_>>();
+    let mut curr = vec![0; n + 1];
+    for i in 1..=m {
+        curr[0] = i;
+        for j in 1..=n {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j] + 1)
+                .min(curr[j - 1] + 1)
+                .min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[n]
 }
 
 #[cfg(test)]

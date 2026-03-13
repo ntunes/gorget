@@ -100,6 +100,8 @@ pub struct TypeTable {
     types: Vec<ResolvedType>,
     /// Cache for Defined(DefId) → TypeId deduplication.
     defined_cache: FxHashMap<DefId, TypeId>,
+    /// Cache for Generic(DefId, Vec<TypeId>) → TypeId deduplication.
+    generic_cache: FxHashMap<(DefId, Vec<TypeId>), TypeId>,
     // Pre-allocated IDs for common types
     pub void_id: TypeId,
     pub bool_id: TypeId,
@@ -146,6 +148,7 @@ impl TypeTable {
         Self {
             types,
             defined_cache: FxHashMap::default(),
+            generic_cache: FxHashMap::default(),
             void_id,
             bool_id,
             int_id,
@@ -185,17 +188,16 @@ impl TypeTable {
         self.defined_cache.get(&def_id).copied()
     }
 
-    /// Find an existing `Generic(def_id, args)` entry in the table.
-    /// Returns `None` if no matching entry exists.
-    pub fn find_generic(&self, def_id: DefId, args: &[TypeId]) -> Option<TypeId> {
-        for (i, ty) in self.types.iter().enumerate() {
-            if let ResolvedType::Generic(d, a) = ty {
-                if *d == def_id && a.as_slice() == args {
-                    return Some(TypeId(i as u32));
-                }
-            }
+    /// Get or create a TypeId for `ResolvedType::Generic(def_id, args)`.
+    /// Ensures identical generic instantiations share a single TypeId.
+    pub fn intern_generic(&mut self, def_id: DefId, args: Vec<TypeId>) -> TypeId {
+        let key = (def_id, args.clone());
+        if let Some(&tid) = self.generic_cache.get(&key) {
+            return tid;
         }
-        None
+        let tid = self.insert(ResolvedType::Generic(def_id, args));
+        self.generic_cache.insert(key, tid);
+        tid
     }
 
     /// Get the TypeId for a primitive type.
@@ -396,7 +398,7 @@ pub fn ast_type_to_resolved(
                                     }
                                 }
                                 Ok(types
-                                    .insert(ResolvedType::Generic(def_id, resolved_args)))
+                                    .intern_generic(def_id, resolved_args))
                             }
                         }
                         _ => Err(SemanticError {

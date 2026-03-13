@@ -999,11 +999,11 @@ impl<'a> TypeChecker<'a> {
                                                     Err(_) => self.types.error_id,
                                                 }
                                             }).collect();
-                                            return self.types.insert(ResolvedType::Generic(def_id, resolved_args));
+                                            return self.types.intern_generic(def_id, resolved_args);
                                         }
                                         // Box(value) → Box[T] where T is inferred from the argument
                                         if def_name == "Box" && arg_types.len() == 1 {
-                                            return self.types.insert(ResolvedType::Generic(def_id, arg_types));
+                                            return self.types.intern_generic(def_id, arg_types);
                                         }
                                         return self.types.defined_id(def_id);
                                     }
@@ -1037,7 +1037,7 @@ impl<'a> TypeChecker<'a> {
                                 }
                                 // Box.new(value) → Box[T] where T is inferred from the argument
                                 if def_name == "Box" && arg_types.len() == 1 {
-                                    return self.types.insert(ResolvedType::Generic(def_id, arg_types));
+                                    return self.types.intern_generic(def_id, arg_types);
                                 }
                                 self.types.defined_id(def_id)
                             }
@@ -1297,14 +1297,14 @@ impl<'a> TypeChecker<'a> {
                 if let Some((type_id, args)) = future_type {
                     self.expr_types.insert(inner.span, type_id);
                     let task_def_id = self.scopes.lookup("Task").expect("Task not registered");
-                    self.types.insert(ResolvedType::Generic(task_def_id, vec![args[0]]))
+                    self.types.intern_generic(task_def_id, vec![args[0]])
                 } else {
                     // Allow spawning closure/function calls that return non-Future types.
                     // The backend wraps these in an async context automatically.
                     let is_call = matches!(&inner.node, Expr::Call { .. });
                     if is_call && inner_type != self.types.error_id {
                         let task_def_id = self.scopes.lookup("Task").expect("Task not registered");
-                        self.types.insert(ResolvedType::Generic(task_def_id, vec![inner_type]))
+                        self.types.intern_generic(task_def_id, vec![inner_type])
                     } else {
                         if inner_type != self.types.error_id {
                             self.error(SemanticErrorKind::SpawnNonFuture, expr.span);
@@ -1329,7 +1329,7 @@ impl<'a> TypeChecker<'a> {
                     inner_type
                 };
                 let task_def_id = self.scopes.lookup("Task").expect("Task not registered");
-                self.types.insert(ResolvedType::Generic(task_def_id, vec![result_type]))
+                self.types.intern_generic(task_def_id, vec![result_type])
             }
 
             Expr::RawCapture { expr: inner } => {
@@ -1525,7 +1525,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 // Build Dict[K, V] type
                 if let Some(dict_def_id) = self.scopes.lookup("Dict") {
-                    self.types.insert(ResolvedType::Generic(dict_def_id, vec![key_type, val_type]))
+                    self.types.intern_generic(dict_def_id, vec![key_type, val_type])
                 } else {
                     self.types.error_id
                 }
@@ -1554,7 +1554,7 @@ impl<'a> TypeChecker<'a> {
                             ).ok()
                         }).collect();
                         if !type_ids.is_empty() {
-                            return self.types.insert(ResolvedType::Generic(def_id, type_ids));
+                            return self.types.intern_generic(def_id, type_ids);
                         }
                     }
                     self.types.defined_id(def_id)
@@ -2419,7 +2419,7 @@ impl<'a> TypeChecker<'a> {
                 // (T) -> U, returns Option[U]
                 let closure_type = self.infer_expr(&args.first()?.node.value);
                 let u_type = self.extract_fn_return_type(closure_type)?;
-                Some(self.types.insert(ResolvedType::Generic(def_id, vec![u_type])))
+                Some(self.types.intern_generic(def_id, vec![u_type]))
             }
             ("Option", "and_then") => {
                 // (T) -> Option[U], returns Option[U] directly
@@ -2437,7 +2437,7 @@ impl<'a> TypeChecker<'a> {
                 let closure_type = self.infer_expr(&args.first()?.node.value);
                 let u_type = self.extract_fn_return_type(closure_type)?;
                 let e_type = type_args.get(1).copied()?;
-                Some(self.types.insert(ResolvedType::Generic(def_id, vec![u_type, e_type])))
+                Some(self.types.intern_generic(def_id, vec![u_type, e_type]))
             }
             ("Result", "and_then") => {
                 // (T) -> Result[U, E], returns Result[U, E] directly
@@ -2456,7 +2456,7 @@ impl<'a> TypeChecker<'a> {
                 let closure_type = self.infer_expr(&args.first()?.node.value);
                 let f_type = self.extract_fn_return_type(closure_type)?;
                 let t_type = type_args.first().copied()?;
-                Some(self.types.insert(ResolvedType::Generic(def_id, vec![t_type, f_type])))
+                Some(self.types.intern_generic(def_id, vec![t_type, f_type]))
             }
 
             // --- Vector higher-order methods ---
@@ -2469,7 +2469,7 @@ impl<'a> TypeChecker<'a> {
                 // (T) -> U, returns Vector[U]
                 let closure_type = self.infer_expr(&args.first()?.node.value);
                 let u_type = self.extract_fn_return_type(closure_type)?;
-                Some(self.types.insert(ResolvedType::Generic(def_id, vec![u_type])))
+                Some(self.types.intern_generic(def_id, vec![u_type]))
             }
             ("Vector", "fold") => {
                 // args: initial_value, closure (U, T) -> U — returns U
@@ -2541,18 +2541,18 @@ impl<'a> TypeChecker<'a> {
         match method {
             "collect" => {
                 // () -> Vector[T]
-                Some(self.types.insert(ResolvedType::Generic(vector_def_id, vec![elem_type])))
+                Some(self.types.intern_generic(vector_def_id, vec![elem_type]))
             }
             "filter" => {
                 // (T) -> bool, returns Vector[T]
                 let _ = self.infer_expr(&args.first()?.node.value);
-                Some(self.types.insert(ResolvedType::Generic(vector_def_id, vec![elem_type])))
+                Some(self.types.intern_generic(vector_def_id, vec![elem_type]))
             }
             "map" => {
                 // (T) -> U, returns Vector[U]
                 let closure_type = self.infer_expr(&args.first()?.node.value);
                 let u_type = self.extract_fn_return_type(closure_type)?;
-                Some(self.types.insert(ResolvedType::Generic(vector_def_id, vec![u_type])))
+                Some(self.types.intern_generic(vector_def_id, vec![u_type]))
             }
             "fold" => {
                 // args: initial_value, closure (U, T) -> U — returns U
@@ -2750,7 +2750,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 // Return Option[T]
                 if let Some(option_def_id) = self.scopes.lookup("Option") {
-                    let ret = self.types.insert(ResolvedType::Generic(option_def_id, vec![prim_tid]));
+                    let ret = self.types.intern_generic(option_def_id, vec![prim_tid]);
                     self.expr_types.insert(span, ret);
                     Some(ret)
                 } else {
@@ -2820,7 +2820,7 @@ impl<'a> TypeChecker<'a> {
                 "push" => Some(self.types.void_id),
                 "pop" | "remove" | "get" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
-                        Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![elem_type()])))
+                        Some(self.types.intern_generic(option_def_id, vec![elem_type()]))
                     } else {
                         Some(elem_type())
                     }
@@ -2829,7 +2829,7 @@ impl<'a> TypeChecker<'a> {
                 "len" => Some(self.types.int_id),
                 "index_of" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
-                        Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![self.types.int_id])))
+                        Some(self.types.intern_generic(option_def_id, vec![self.types.int_id]))
                     } else {
                         Some(self.types.int_id)
                     }
@@ -2839,7 +2839,7 @@ impl<'a> TypeChecker<'a> {
                 "sorted" | "reversed" | "unique" | "slice" | "enumerate" => Some(receiver_type),
                 "first" | "last" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
-                        Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![elem_type()])))
+                        Some(self.types.intern_generic(option_def_id, vec![elem_type()]))
                     } else {
                         Some(elem_type())
                     }
@@ -2851,7 +2851,7 @@ impl<'a> TypeChecker<'a> {
                 "put" | "update" | "set" => Some(self.types.void_id),
                 "get" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
-                        Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![val_type()])))
+                        Some(self.types.intern_generic(option_def_id, vec![val_type()]))
                     } else {
                         Some(val_type())
                     }
@@ -2865,7 +2865,7 @@ impl<'a> TypeChecker<'a> {
                 "keys" => {
                     // Return Vector[K]
                     if let Some(vec_def_id) = self.scopes.lookup("Vector") {
-                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![elem_type()])))
+                        Some(self.types.intern_generic(vec_def_id, vec![elem_type()]))
                     } else {
                         Some(self.types.int_id)
                     }
@@ -2873,7 +2873,7 @@ impl<'a> TypeChecker<'a> {
                 "values" => {
                     // Return Vector[V]
                     if let Some(vec_def_id) = self.scopes.lookup("Vector") {
-                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![val_type()])))
+                        Some(self.types.intern_generic(vec_def_id, vec![val_type()]))
                     } else {
                         Some(self.types.int_id)
                     }
@@ -2882,7 +2882,7 @@ impl<'a> TypeChecker<'a> {
                     // Return Vector[(K,V)]
                     let tuple_tid = self.types.insert(ResolvedType::Tuple(vec![elem_type(), val_type()]));
                     if let Some(vec_def_id) = self.scopes.lookup("Vector") {
-                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![tuple_tid])))
+                        Some(self.types.intern_generic(vec_def_id, vec![tuple_tid]))
                     } else {
                         Some(self.types.int_id)
                     }
@@ -2910,7 +2910,7 @@ impl<'a> TypeChecker<'a> {
                 "len" | "hash" | "count" | "byte_len" => Some(self.types.int_id),
                 "index_of" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
-                        Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![self.types.int_id])))
+                        Some(self.types.intern_generic(option_def_id, vec![self.types.int_id]))
                     } else {
                         Some(self.types.int_id)
                     }
@@ -2933,7 +2933,7 @@ impl<'a> TypeChecker<'a> {
                 "split" => {
                     // Return Vector[str]
                     if let Some(vec_def_id) = self.scopes.lookup("Vector") {
-                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![self.types.string_id])))
+                        Some(self.types.intern_generic(vec_def_id, vec![self.types.string_id]))
                     } else {
                         Some(self.types.string_id) // fallback
                     }
@@ -2942,7 +2942,7 @@ impl<'a> TypeChecker<'a> {
                     // Return Vector[uint8]
                     if let Some(vec_def_id) = self.scopes.lookup("Vector") {
                         let uint8_tid = self.types.insert(ResolvedType::Primitive(PrimitiveType::Uint8));
-                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![uint8_tid])))
+                        Some(self.types.intern_generic(vec_def_id, vec![uint8_tid]))
                     } else {
                         Some(self.types.int_id)
                     }
@@ -2950,7 +2950,7 @@ impl<'a> TypeChecker<'a> {
                 "codepoints" => {
                     // Return Vector[int]
                     if let Some(vec_def_id) = self.scopes.lookup("Vector") {
-                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![self.types.int_id])))
+                        Some(self.types.intern_generic(vec_def_id, vec![self.types.int_id]))
                     } else {
                         Some(self.types.int_id)
                     }
@@ -2958,7 +2958,7 @@ impl<'a> TypeChecker<'a> {
                 "chars" => {
                     // Return Vector[str]
                     if let Some(vec_def_id) = self.scopes.lookup("Vector") {
-                        Some(self.types.insert(ResolvedType::Generic(vec_def_id, vec![self.types.string_id])))
+                        Some(self.types.intern_generic(vec_def_id, vec![self.types.string_id]))
                     } else {
                         Some(self.types.string_id)
                     }
@@ -3004,7 +3004,7 @@ impl<'a> TypeChecker<'a> {
                 // downgrade() returns Weak[T]
                 "downgrade" => {
                     if let Some(weak_def_id) = self.scopes.lookup("Weak") {
-                        Some(self.types.insert(ResolvedType::Generic(weak_def_id, vec![elem_type()])))
+                        Some(self.types.intern_generic(weak_def_id, vec![elem_type()]))
                     } else {
                         Some(receiver_type)
                     }
@@ -3029,12 +3029,12 @@ impl<'a> TypeChecker<'a> {
                 // upgrade() returns Option[Shared[T]]
                 "upgrade" => {
                     let shared_type = if let Some(shared_def_id) = self.scopes.lookup("Shared") {
-                        self.types.insert(ResolvedType::Generic(shared_def_id, vec![elem_type()]))
+                        self.types.intern_generic(shared_def_id, vec![elem_type()])
                     } else {
                         receiver_type
                     };
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
-                        Some(self.types.insert(ResolvedType::Generic(option_def_id, vec![shared_type])))
+                        Some(self.types.intern_generic(option_def_id, vec![shared_type]))
                     } else {
                         Some(shared_type)
                     }
@@ -3045,7 +3045,7 @@ impl<'a> TypeChecker<'a> {
                 // lock() returns Guard[T]; the async wrapper is handled in codegen
                 "lock" => {
                     if let Some(guard_def_id) = self.scopes.lookup("Guard") {
-                        Some(self.types.insert(ResolvedType::Generic(guard_def_id, vec![elem_type()])))
+                        Some(self.types.intern_generic(guard_def_id, vec![elem_type()]))
                     } else {
                         Some(elem_type())
                     }
@@ -3070,10 +3070,10 @@ impl<'a> TypeChecker<'a> {
                 "read_all" => {
                     // Returns Result[String, str]
                     if let Some(result_def_id) = self.scopes.lookup("Result") {
-                        Some(self.types.insert(ResolvedType::Generic(
+                        Some(self.types.intern_generic(
                             result_def_id,
                             vec![self.types.owned_string_id, self.types.string_id],
-                        )))
+                        ))
                     } else {
                         Some(self.types.owned_string_id)
                     }
@@ -3086,10 +3086,10 @@ impl<'a> TypeChecker<'a> {
                 "read_line" => {
                     // Returns Result[String, str]
                     if let Some(result_def_id) = self.scopes.lookup("Result") {
-                        Some(self.types.insert(ResolvedType::Generic(
+                        Some(self.types.intern_generic(
                             result_def_id,
                             vec![self.types.owned_string_id, self.types.string_id],
-                        )))
+                        ))
                     } else {
                         Some(self.types.owned_string_id)
                     }
@@ -3213,7 +3213,7 @@ impl<'a> TypeChecker<'a> {
         // Async functions expose Future[T] as their return type at call sites
         let return_type = if func.qualifiers.is_async {
             let future_def_id = self.scopes.lookup("Future").expect("Future not registered");
-            self.types.insert(ResolvedType::Generic(future_def_id, vec![return_type]))
+            self.types.intern_generic(future_def_id, vec![return_type])
         } else {
             return_type
         };

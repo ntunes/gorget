@@ -203,7 +203,7 @@ pub fn collect_top_level(
                         fi.return_type_id = if f.qualifiers.is_async {
                             ret_type.map(|inner_tid| {
                                 let future_def_id = scopes.lookup("Future").expect("Future not registered");
-                                types.insert(types::ResolvedType::Generic(future_def_id, vec![inner_tid]))
+                                types.intern_generic(future_def_id, vec![inner_tid])
                             })
                         } else {
                             ret_type
@@ -275,7 +275,7 @@ fn collect_item(
                     let ret_type = if f.qualifiers.is_async {
                         ret_type.map(|inner_tid| {
                             let future_def_id = scopes.lookup("Future").expect("Future not registered");
-                            types.insert(types::ResolvedType::Generic(future_def_id, vec![inner_tid]))
+                            types.intern_generic(future_def_id, vec![inner_tid])
                         })
                     } else {
                         ret_type
@@ -465,7 +465,7 @@ fn collect_item(
                         let ret_type = if f.qualifiers.is_async {
                             ret_type.map(|inner_tid| {
                                 let future_def_id = scopes.lookup("Future").expect("Future not registered");
-                                types.insert(types::ResolvedType::Generic(future_def_id, vec![inner_tid]))
+                                types.intern_generic(future_def_id, vec![inner_tid])
                             })
                         } else {
                             ret_type
@@ -1193,6 +1193,7 @@ fn resolve_expr(
                         errors.push(SemanticError {
                             kind: SemanticErrorKind::UndefinedName {
                                 name: name.clone(),
+                                suggestion: scopes.suggest_name(name),
                             },
                             span: expr.span,
                         });
@@ -1213,6 +1214,7 @@ fn resolve_expr(
                             errors.push(SemanticError {
                                 kind: SemanticErrorKind::UndefinedName {
                                     name: first.node.clone(),
+                                    suggestion: scopes.suggest_name(&first.node),
                                 },
                                 span: first.span,
                             });
@@ -1472,6 +1474,7 @@ fn resolve_expr(
                     errors.push(SemanticError {
                         kind: SemanticErrorKind::UndefinedName {
                             name: name.node.clone(),
+                            suggestion: scopes.suggest_name(&name.node),
                         },
                         span: name.span,
                     });
@@ -1772,7 +1775,7 @@ mod tests {
         assert!(!errors.is_empty());
         assert!(errors.iter().any(|e| matches!(
             &e.kind,
-            SemanticErrorKind::UndefinedName { name } if name == "undefined_var"
+            SemanticErrorKind::UndefinedName { name, .. } if name == "undefined_var"
         )));
     }
 
