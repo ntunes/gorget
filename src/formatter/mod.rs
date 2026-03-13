@@ -169,8 +169,7 @@ impl Formatter {
         while self.comment_cursor < self.comments.len() {
             let c = &self.comments[self.comment_cursor];
             if c.span.start < pos {
-                let text = c.node.clone();
-                self.emitter.write(&text);
+                self.emitter.write(&c.node);
                 self.emitter.newline();
                 self.comment_cursor += 1;
             } else {
@@ -181,8 +180,7 @@ impl Formatter {
 
     fn emit_remaining_comments(&mut self) {
         while self.comment_cursor < self.comments.len() {
-            let text = self.comments[self.comment_cursor].node.clone();
-            self.emitter.write(&text);
+            self.emitter.write(&self.comments[self.comment_cursor].node);
             self.emitter.newline();
             self.comment_cursor += 1;
         }
@@ -702,12 +700,15 @@ impl Formatter {
                 self.write_doc(&doc);
                 self.emitter.newline();
             }
-            ImportStmt::From { path, names, .. } => {
+            ImportStmt::From { path, names, glob_types, .. } => {
                 self.emitter.write("from ");
                 self.format_dotted_path(path);
                 self.emitter.write(" import ");
-                // Sort names alphabetically within the import.
-                let mut sorted: Vec<&str> = names.iter().map(|n| n.node.as_str()).collect();
+                // Merge regular names and glob types (with .* suffix), then sort.
+                let mut sorted: Vec<String> = names.iter().map(|n| n.node.clone()).collect();
+                for gt in glob_types {
+                    sorted.push(format!("{}.*", gt.node));
+                }
                 sorted.sort_unstable();
                 // No wrapping for `from` imports — bare names on new lines
                 // would be parsed as new statements in indentation-based syntax.
@@ -732,6 +733,7 @@ impl Formatter {
     }
 
     fn format_type_alias(&mut self, ta: &TypeAlias) {
+        self.format_visibility(&ta.visibility);
         self.emitter.write("type ");
         self.emitter.write(&ta.name.node);
         if let Some(ref gp) = ta.generic_params {
@@ -743,6 +745,7 @@ impl Formatter {
     }
 
     fn format_newtype(&mut self, nt: &NewtypeDef) {
+        self.format_visibility(&nt.visibility);
         self.emitter.write("newtype ");
         self.emitter.write(&nt.name.node);
         self.emitter.write("(");
@@ -1034,6 +1037,29 @@ impl Formatter {
         }
     }
 
+    fn format_elif_else_blocks(
+        &mut self,
+        elif_branches: &[(Spanned<Expr>, Block)],
+        else_body: Option<&Block>,
+    ) {
+        for (cond, body) in elif_branches {
+            self.emitter.write("elif ");
+            self.format_expr(cond);
+            self.emitter.write(":");
+            self.emitter.newline();
+            self.emitter.indent();
+            self.format_block_stmts(body);
+            self.emitter.dedent();
+        }
+        if let Some(else_body) = else_body {
+            self.emitter.write("else:");
+            self.emitter.newline();
+            self.emitter.indent();
+            self.format_block_stmts(else_body);
+            self.emitter.dedent();
+        }
+    }
+
     fn format_stmt(&mut self, stmt: &Spanned<Stmt>) {
         match &stmt.node {
             Stmt::VarDecl {
@@ -1212,22 +1238,7 @@ impl Formatter {
                 self.emitter.indent();
                 self.format_block_stmts(then_body);
                 self.emitter.dedent();
-                for (cond, body) in elif_branches {
-                    self.emitter.write("elif ");
-                    self.format_expr(cond);
-                    self.emitter.write(":");
-                    self.emitter.newline();
-                    self.emitter.indent();
-                    self.format_block_stmts(body);
-                    self.emitter.dedent();
-                }
-                if let Some(else_body) = else_body {
-                    self.emitter.write("else:");
-                    self.emitter.newline();
-                    self.emitter.indent();
-                    self.format_block_stmts(else_body);
-                    self.emitter.dedent();
-                }
+                self.format_elif_else_blocks(elif_branches, else_body.as_ref());
             }
             Stmt::Match {
                 scrutinee,
@@ -1276,7 +1287,9 @@ impl Formatter {
                     match &arm.op {
                         SelectOp::Recv { type_, name, channel } => {
                             self.format_type(type_);
-                            self.emitter.write(&format!(" {} = ", name.node));
+                            self.emitter.write(" ");
+                            self.emitter.write(&name.node);
+                            self.emitter.write(" = ");
                             self.format_expr(channel);
                             self.emitter.write(".recv()");
                         }
@@ -1366,22 +1379,7 @@ impl Formatter {
                 self.emitter.indent();
                 self.format_block_stmts(then_body);
                 self.emitter.dedent();
-                for (cond, body) in elif_branches {
-                    self.emitter.write("elif ");
-                    self.format_expr(cond);
-                    self.emitter.write(":");
-                    self.emitter.newline();
-                    self.emitter.indent();
-                    self.format_block_stmts(body);
-                    self.emitter.dedent();
-                }
-                if let Some(else_body) = else_body {
-                    self.emitter.write("else:");
-                    self.emitter.newline();
-                    self.emitter.indent();
-                    self.format_block_stmts(else_body);
-                    self.emitter.dedent();
-                }
+                self.format_elif_else_blocks(elif_branches, else_body.as_ref());
             }
             Stmt::MetaFor { vars, range, body, .. } => {
                 self.emitter.write("meta for ");

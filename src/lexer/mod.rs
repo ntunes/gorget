@@ -810,7 +810,7 @@ impl<'src> Lexer<'src> {
         };
 
         // Validate byte range
-        let byte_val = if ch as u32 > 255 {
+        let byte_val = if ch as u32 > u8::MAX as u32 {
             self.errors.push(LexError {
                 kind: LexErrorKind::InvalidEscapeSequence("byte literal: escape value > 255".to_string()),
                 span: self.span(pos, after),

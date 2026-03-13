@@ -1344,6 +1344,16 @@ impl Parser {
         Ok(Spanned::new(Expr::ArrayLiteral(items), start.merge(end)))
     }
 
+    fn parse_optional_comprehension_filter(
+        &mut self,
+    ) -> Result<Option<Box<Spanned<Expr>>>, ParseError> {
+        if self.match_keyword(Keyword::If) {
+            Ok(Some(Box::new(self.parse_expr()?)))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn parse_list_comprehension(
         &mut self,
         expr: Spanned<Expr>,
@@ -1357,11 +1367,7 @@ impl Parser {
         self.expect_keyword(Keyword::In)?;
         let iterable = self.parse_expr()?;
 
-        let condition = if self.match_keyword(Keyword::If) {
-            Some(Box::new(self.parse_expr()?))
-        } else {
-            None
-        };
+        let condition = self.parse_optional_comprehension_filter()?;
 
         self.expect(&Token::RBracket)?;
         let end = self.previous_span();
@@ -1406,11 +1412,7 @@ impl Parser {
                 }
                 self.expect_keyword(Keyword::In)?;
                 let iterable = self.parse_expr()?;
-                let condition = if self.match_keyword(Keyword::If) {
-                    Some(Box::new(self.parse_expr()?))
-                } else {
-                    None
-                };
+                let condition = self.parse_optional_comprehension_filter()?;
                 self.expect(&Token::RBrace)?;
                 let end = self.previous_span();
                 return Ok(Spanned::new(
@@ -1447,11 +1449,7 @@ impl Parser {
             let variable = self.expect_identifier()?;
             self.expect_keyword(Keyword::In)?;
             let iterable = self.parse_expr()?;
-            let condition = if self.match_keyword(Keyword::If) {
-                Some(Box::new(self.parse_expr()?))
-            } else {
-                None
-            };
+            let condition = self.parse_optional_comprehension_filter()?;
             self.expect(&Token::RBrace)?;
             let end = self.previous_span();
             return Ok(Spanned::new(
