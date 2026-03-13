@@ -524,16 +524,6 @@ fn returns_cstr(name: &str) -> bool {
     )
 }
 
-/// Functions whose C runtime implementation returns `Str` directly (not `const char*`).
-/// These need the local type overridden to `Str` but do NOT need `gorget_str_from_cstr` wrapping.
-fn returns_str_direct(name: &str) -> bool {
-    matches!(name,
-        "gorget_gl_get_shader_info_log" | "gorget_gl_get_program_info_log"
-        | "gorget_gl_get_string"
-        | "gl_get_shader_info_log" | "gl_get_program_info_log" | "gl_get_string"
-    )
-}
-
 /// Translate a GIR Module into C output (main path; hot-reload opts from `module`).
 pub fn generate_c(module: &Module) -> GirCodegenOutput {
     generate_c_impl(module, None)
@@ -634,7 +624,7 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         out.push_str(c_runtime::PROCESS_RUNTIME);
     }
     if module.runtime.has_process
-        || all_call_names.iter().any(|n| n.starts_with("gorget_process_") || n == "process_spawn" || n == "getpid" || n == "gorget_getpid" || n.starts_with("Process__")) {
+        || all_call_names.iter().any(|n| n.starts_with("gorget_process_") || n == "process_spawn" || n == "getpid" || n == "gorget_getpid" || n.starts_with("Process__") || n.starts_with("gorget_signal_") || n.starts_with("signal_")) {
         out.push_str(c_runtime::PROCESS_SPAWN_RUNTIME);
     }
     if module.runtime.has_sync

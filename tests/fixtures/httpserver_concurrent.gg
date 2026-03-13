@@ -5,6 +5,7 @@ from gg.httpserver import HttpServerResponse, HttpRequest, http_server_parse_req
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
 from std.channel import Channel
 from std.time import sleep
+from std.signal import signal_ignore, SIGPIPE
 
 HttpServerResponse handle(HttpRequest req):
     return HttpServerResponse.ok("hello")
@@ -31,7 +32,7 @@ async void serve_n(int port, int n):
     srv.close()
 
 async void client_task(int port, Channel[int] results):
-    sleep(0.05).await()
+    sleep(0.5).await()
     Result[Socket, str] cr = socket_connect("127.0.0.1", port)
     if cr.is_err():
         results.send(0)
@@ -48,6 +49,7 @@ async void client_task(int port, Channel[int] results):
     results.send(0)
 
 async void main():
+    signal_ignore(SIGPIPE)
     int port = 18082
     Task[void] srv = spawn serve_n(port, 2)
 

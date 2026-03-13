@@ -18,6 +18,7 @@ from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.collections import Dict
 from std.conv import int_to_str
 from std.time import sleep
+from std.signal import signal_ignore, SIGPIPE
 
 # ── Top-level handler (no closure capture needed) ─────────────
 
@@ -64,11 +65,12 @@ void check(str label, bool ok):
         print("ok")
 
 async void main():
+    signal_ignore(SIGPIPE)
     int port = 18086
 
     # 6 requests → 6 connections (each get/post sends Connection: close)
     Task[void] srv = spawn serve_n(port, 6)
-    sleep(0.05).await()
+    sleep(0.5).await()
 
     str base = "http://127.0.0.1:" + int_to_str(port)
 

@@ -4,6 +4,7 @@
 from gg.httpserver import HttpServerResponse, HttpRequest
 from gg.httpserver import http_server_parse_request, http_server_write_response_ka
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
+from std.signal import signal_ignore, SIGPIPE
 from std.time import sleep
 
 HttpServerResponse handle(HttpRequest req):
@@ -32,9 +33,10 @@ async void serve_ka(int port):
     conn.close()
 
 async void main():
+    signal_ignore(SIGPIPE)
     int port = 18083
     Task[void] srv = spawn serve_ka(port)
-    sleep(0.05).await()
+    sleep(0.5).await()
 
     Socket c = socket_connect("127.0.0.1", port).unwrap()
 

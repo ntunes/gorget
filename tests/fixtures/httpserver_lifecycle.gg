@@ -17,6 +17,7 @@ from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_conn
 from std.bytes import bytes_to_str
 from std.conv import int_to_str
 from std.time import sleep
+from std.signal import signal_ignore, SIGPIPE
 
 HttpServerResponse handle(HttpRequest req):
     return HttpServerResponse.ok("pong")
@@ -28,11 +29,12 @@ void check(str label, bool ok):
         print("ok")
 
 async void main():
+    signal_ignore(SIGPIPE)
     # ── Test 1 & 2: serve_n with 2 normal connections ──────────
     int port1 = 18096
     HttpServer s1 = HttpServer.with_max_requests("127.0.0.1", port1, 0)
     Task[void] srv1 = spawn s1.accept_n(handle, 2)
-    sleep(0.05).await()
+    sleep(0.5).await()
 
     # Both get requests use Connection: close → 2 separate connections
     Result[HttpResponse, str] r1a = get("http://127.0.0.1:18096/ping")
@@ -48,7 +50,7 @@ async void main():
     # Server accepts 1 connection, closes after 1 request (max_requests=1)
     HttpServer s2 = HttpServer.with_max_requests("127.0.0.1", port2, 1)
     Task[void] srv2 = spawn s2.accept_n(handle, 1)
-    sleep(0.05).await()
+    sleep(0.5).await()
 
     Result[Socket, str] cr = socket_connect("127.0.0.1", port2)
     if cr.is_err():

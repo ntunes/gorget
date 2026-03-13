@@ -18,6 +18,7 @@ from gg.json import Json, json_parse, json_stringify
 from gg.http import post, HttpResponse
 from std.collections import Dict, Vector
 from std.time import sleep
+from std.signal import signal_ignore, SIGPIPE
 
 void check(str label, bool ok):
     if not ok:
@@ -71,12 +72,13 @@ async void run_echo_server(int port):
     s.accept_n(echo_json, 1).await()
 
 async void main():
+    signal_ignore(SIGPIPE)
     test_direct()
 
     # 5. Wire: POST JSON body → server echoes via of_json → body parses back
     int port5 = 18098
     Task[void] srv5 = spawn run_echo_server(port5)
-    sleep(0.05).await()
+    sleep(0.5).await()
 
     Dict[str, Json] post_map = Dict[str, Json]()
     post_map.put("x", Int(42))
