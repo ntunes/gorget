@@ -338,7 +338,7 @@ fn lower_shared_var_decl(
                     metadata: TypeMetadata {
                         size: None,
                         align: None,
-                        copy_semantics: CopySemantics::Copy, // pointer type, cheap to copy
+                        copy_semantics: CopySemantics::Trivial, // pointer type, cheap to copy
                         drop_strategy: DropStrategy::Trivial(drop_fn),
                     },
                 };

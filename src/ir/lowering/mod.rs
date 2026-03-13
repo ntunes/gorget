@@ -237,7 +237,7 @@ pub fn lower_module(
                         let name_str = &type_name.node;
                         // Upgrade the TypeDef metadata
                         if let Some(type_def) = module.type_registry.get_type_def_mut(name_str) {
-                            type_def.metadata.copy_semantics = CopySemantics::Move;
+                            type_def.metadata.copy_semantics = CopySemantics::Resource;
                             type_def.metadata.drop_strategy = DropStrategy::Custom(format!("{name_str}__drop"));
                         }
                     }
@@ -254,7 +254,7 @@ pub fn lower_module(
         let droppable_names: Vec<String> = module.type_registry.all_type_def_names()
             .filter(|name| {
                 if let Some(td) = module.type_registry.get_type_def(name) {
-                    td.metadata.copy_semantics == CopySemantics::Move
+                    td.metadata.copy_semantics == CopySemantics::Resource
                         || td.metadata.drop_strategy != DropStrategy::None
                 } else {
                     false
@@ -309,7 +309,7 @@ pub fn lower_module(
                     if td.metadata.drop_strategy == DropStrategy::None {
                         td.metadata.drop_strategy = DropStrategy::Recursive;
                     }
-                    td.metadata.copy_semantics = CopySemantics::Move;
+                    td.metadata.copy_semantics = CopySemantics::Resource;
                 }
             }
         }
@@ -329,7 +329,7 @@ pub fn lower_module(
                 size: None,
                 align: None,
                 drop_strategy: DropStrategy::Trivial("gorget_array_free".to_string()),
-                copy_semantics: CopySemantics::Move,
+                copy_semantics: CopySemantics::Resource,
             },
         });
         let array_type_id = module.type_registry.insert(GirType::Named("GorgetArray".to_string()));
@@ -344,7 +344,7 @@ pub fn lower_module(
                 size: None,
                 align: None,
                 drop_strategy: DropStrategy::Trivial("gorget_map_free".to_string()),
-                copy_semantics: CopySemantics::Move,
+                copy_semantics: CopySemantics::Resource,
             },
         });
         let map_type_id = module.type_registry.insert(GirType::Named("GorgetMap".to_string()));
@@ -359,7 +359,7 @@ pub fn lower_module(
                 size: None,
                 align: None,
                 drop_strategy: DropStrategy::Trivial("gorget_set_free".to_string()),
-                copy_semantics: CopySemantics::Move,
+                copy_semantics: CopySemantics::Resource,
             },
         });
         let set_type_id = module.type_registry.insert(GirType::Named("GorgetSet".to_string()));
@@ -380,7 +380,7 @@ pub fn lower_module(
                 ],
             }),
             metadata: TypeMetadata {
-                copy_semantics: CopySemantics::Copy,
+                copy_semantics: CopySemantics::Trivial,
                 ..TypeMetadata::default()
             },
         };
@@ -416,7 +416,7 @@ pub fn lower_module(
                     size: None,
                     align: None,
                     drop_strategy: DropStrategy::Trivial(drop_fn.to_string()),
-                    copy_semantics: CopySemantics::Move,
+                    copy_semantics: CopySemantics::Resource,
                 },
             });
             let tid = module.type_registry.insert(GirType::Named(mangled_name.clone()));
@@ -443,7 +443,7 @@ pub fn lower_module(
                         size: None,
                         align: None,
                         drop_strategy: DropStrategy::Trivial("gorget_array_free".to_string()),
-                        copy_semantics: CopySemantics::Move,
+                        copy_semantics: CopySemantics::Resource,
                     },
                 });
             }

@@ -3938,7 +3938,7 @@ fn emit_poll_inst(
                     } else {
                         let _ = writeln!(out, "        {dst_str} = *({elem_c_type}*)gorget_array_get(&{base_str}, {idx_str});");
                         // For non-cloneable move types, zero to prevent double-free
-                        if dst.0 < func.locals.len() as u32 && registry.is_move_type(func.locals[dst.0 as usize].type_id) {
+                        if dst.0 < func.locals.len() as u32 && registry.is_resource_type(func.locals[dst.0 as usize].type_id) {
                             let mut clone_ops: Vec<String> = Vec::new();
                             collect_clone_ops(&elem_c_type, &format!("f->_{}", dst.0), &mut clone_ops, registry);
                             if !clone_ops.is_empty() {
@@ -7259,7 +7259,7 @@ fn emit_instruction(
                             None
                         };
                         if let Some(tid) = elem_type_id {
-                            if registry.is_move_type(tid) {
+                            if registry.is_resource_type(tid) {
                                 // Deep clone struct fields that are collections
                                 let mut clone_ops: Vec<String> = Vec::new();
                                 collect_clone_ops(&c_type, &format!("_{}", dst.0), &mut clone_ops, registry);

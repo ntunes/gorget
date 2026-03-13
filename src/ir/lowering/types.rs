@@ -26,7 +26,7 @@ impl TypeMapper {
                 size: None,
                 align: None,
                 drop_strategy: DropStrategy::Trivial("gorget_string_free".to_string()),
-                copy_semantics: CopySemantics::Move,
+                copy_semantics: CopySemantics::Resource,
             },
         });
         let owned_string_type = registry.insert(GirType::Named("GorgetString".to_string()));
@@ -110,15 +110,15 @@ impl TypeMapper {
                             _ => "gorget_array_free",
                         };
                         return self.get_or_register(&mangled, registry, |n| {
-                            make_opaque_type_def(n, CopySemantics::Move, DropStrategy::Trivial(drop_fn.to_string()))
+                            make_opaque_type_def(n, CopySemantics::Resource, DropStrategy::Trivial(drop_fn.to_string()))
                         });
                     }
                     // Auto-register concurrency types: Channel[T], Shared[T], Weak[T], Mutex[T], Guard[T].
                     if matches!(base, "Channel" | "Shared" | "Weak" | "Mutex" | "Guard") {
                         let (copy_sem, drop_strat) = match base {
-                            "Guard" => (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop"))),
-                            "Shared" | "Weak" | "Channel" => (CopySemantics::Copy, DropStrategy::Trivial(format!("{mangled}__drop"))),
-                            _ => (CopySemantics::Copy, DropStrategy::None),
+                            "Guard" => (CopySemantics::Resource, DropStrategy::Trivial(format!("{mangled}__drop"))),
+                            "Shared" | "Weak" | "Channel" => (CopySemantics::Trivial, DropStrategy::Trivial(format!("{mangled}__drop"))),
+                            _ => (CopySemantics::Trivial, DropStrategy::None),
                         };
                         return self.get_or_register(&mangled, registry, |n| {
                             make_opaque_type_def(n, copy_sem, drop_strat)
@@ -127,8 +127,8 @@ impl TypeMapper {
                     // Auto-register std.sync generic types: RWLock[T], ReadGuard[T], WriteGuard[T].
                     if matches!(base, "RWLock" | "ReadGuard" | "WriteGuard") {
                         let (copy_sem, drop_strat) = match base {
-                            "ReadGuard" | "WriteGuard" => (CopySemantics::Move, DropStrategy::Trivial(format!("{mangled}__drop"))),
-                            _ => (CopySemantics::Copy, DropStrategy::None),
+                            "ReadGuard" | "WriteGuard" => (CopySemantics::Resource, DropStrategy::Trivial(format!("{mangled}__drop"))),
+                            _ => (CopySemantics::Trivial, DropStrategy::None),
                         };
                         return self.get_or_register(&mangled, registry, |n| {
                             make_opaque_type_def(n, copy_sem, drop_strat)
@@ -137,7 +137,7 @@ impl TypeMapper {
                     // Auto-register std.thread generic type: Thread[T].
                     if base == "Thread" {
                         return self.get_or_register(&mangled, registry, |n| {
-                            make_opaque_type_def(n, CopySemantics::Move, DropStrategy::None)
+                            make_opaque_type_def(n, CopySemantics::Resource, DropStrategy::None)
                         });
                     }
                     // Task[T] — hand-emitted by C backend.  Register only a Named
@@ -168,26 +168,26 @@ impl TypeMapper {
                 // Auto-register the non-generic TaskGroup type (Move pointer, RAII join+free).
                 if name.node == "TaskGroup" {
                     return self.get_or_register("TaskGroup", registry, |n| {
-                        make_opaque_type_def(n, CopySemantics::Move, DropStrategy::Trivial("gorget_task_group_free".to_string()))
+                        make_opaque_type_def(n, CopySemantics::Resource, DropStrategy::Trivial("gorget_task_group_free".to_string()))
                     });
                 }
                 // Auto-register non-generic std.sync types (AtomicInt, AtomicBool, Barrier).
                 if matches!(name.node.as_str(), "AtomicInt" | "AtomicBool" | "Barrier") {
                     return self.get_or_register(&name.node, registry, |n| {
-                        make_opaque_type_def(n, CopySemantics::Copy, DropStrategy::None)
+                        make_opaque_type_def(n, CopySemantics::Trivial, DropStrategy::None)
                     });
                 }
                 // WaitGroup, Semaphore — heap-allocated pointer types, Copy semantics
                 // (shared across threads by copying the pointer).
                 if matches!(name.node.as_str(), "WaitGroup" | "Semaphore" | "OnceFlag") {
                     return self.get_or_register(&name.node, registry, |n| {
-                        make_opaque_type_def(n, CopySemantics::Copy, DropStrategy::None)
+                        make_opaque_type_def(n, CopySemantics::Trivial, DropStrategy::None)
                     });
                 }
                 // Auto-register std.process Process type (non-generic, Move, RAII).
                 if name.node == "Process" {
                     return self.get_or_register("Process", registry, |n| {
-                        make_opaque_type_def(n, CopySemantics::Move, DropStrategy::None)
+                        make_opaque_type_def(n, CopySemantics::Resource, DropStrategy::None)
                     });
                 }
                 UNIT_TYPE
@@ -538,7 +538,7 @@ pub(super) fn register_collection_alias(
             metadata: TypeMetadata {
                 size: None,
                 align: None,
-                copy_semantics: CopySemantics::Move,
+                copy_semantics: CopySemantics::Resource,
                 drop_strategy: DropStrategy::Trivial("free".to_string()),
             },
         };

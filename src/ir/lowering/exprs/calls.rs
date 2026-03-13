@@ -9,7 +9,7 @@ use crate::parser::Parser;
 use crate::span::Spanned;
 
 use super::super::context::LoweringContext;
-use super::{lower_expr, infer_operand_type_full, is_move_type_local,
+use super::{lower_expr, infer_operand_type_full, is_resource_type_local,
             ensure_box_type_def, ensure_mutex_type_def, ensure_shared_type_def,
             ensure_task_group_type_def,
             resolve_option_result_variant, lower_string_interpolation};
@@ -24,7 +24,7 @@ pub(super) fn lower_call_arg(
 ) -> Operand {
     // Whether the callee's parameter is a Move type (passed by pointer)
     let callee_is_move_param = callee_param_type
-        .map(|pt| ctx.type_registry.is_move_type(pt))
+        .map(|pt| ctx.type_registry.is_resource_type(pt))
         .unwrap_or(false);
 
     // Check if the callee's param has explicit MutableBorrow (&) or Move (!) ownership.
@@ -392,7 +392,7 @@ pub(super) fn lower_call(
                     // as moved so the drop elaborator skips them (avoids dangling ptr).
                     if let Operand::Copy(place) = &val_op {
                         if place.projections.is_empty()
-                            && is_move_type_local(place.local, builder, &ctx.type_registry)
+                            && is_resource_type_local(place.local, builder, &ctx.type_registry)
                         {
                             builder.move_zero(place.clone());
                             ctx.drops.mark_moved(place.local);
@@ -761,7 +761,7 @@ pub(super) fn lower_call(
                 if !matches!(arg.node.ownership, Ownership::Move) { return None; }
                 if let Operand::Copy(place) | Operand::Move(place) = op {
                     if place.projections.is_empty()
-                        && is_move_type_local(place.local, builder, &ctx.type_registry)
+                        && is_resource_type_local(place.local, builder, &ctx.type_registry)
                     {
                         return Some(place.clone());
                     }

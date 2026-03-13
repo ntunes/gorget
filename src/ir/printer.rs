@@ -113,8 +113,8 @@ fn print_type_def(out: &mut String, def: &TypeDef, reg: &TypeRegistry) {
         DropStrategy::Custom(f) => format!("Custom(@{})", f),
     };
     let copy_str = match m.copy_semantics {
-        CopySemantics::Copy => "Copy",
-        CopySemantics::Move => "Move",
+        CopySemantics::Trivial => "Copy",
+        CopySemantics::Resource => "Move",
     };
     writeln!(
         out,
@@ -708,7 +708,7 @@ mod tests {
                 size: Some(16),
                 align: Some(8),
                 drop_strategy: DropStrategy::None,
-                copy_semantics: CopySemantics::Copy,
+                copy_semantics: CopySemantics::Trivial,
             },
         });
 
@@ -790,7 +790,7 @@ mod tests {
                 size: Some(16),
                 align: Some(8),
                 drop_strategy: DropStrategy::None,
-                copy_semantics: CopySemantics::Copy,
+                copy_semantics: CopySemantics::Trivial,
             },
         });
 

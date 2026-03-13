@@ -453,7 +453,7 @@ impl<'a> LoweringContext<'a> {
     /// Copy-type structs pass by value (natural immutability via copy).
     /// Primitives pass by value (except & which becomes MutPtr for out-params).
     pub fn resolve_param_type(&mut self, base_type: TypeId, ownership: Ownership) -> TypeId {
-        let is_move = self.type_registry.is_move_type(base_type);
+        let is_move = self.type_registry.is_resource_type(base_type);
         match ownership {
             Ownership::MutableBorrow => self.register_mut_ptr_type(base_type),
             Ownership::Move if is_move => self.register_mut_ptr_type(base_type),
@@ -464,14 +464,14 @@ impl<'a> LoweringContext<'a> {
 
     /// Whether this is a bare Borrow param of a Move type (read-only const pointer).
     pub fn is_ref_param(&self, base_type: TypeId, ownership: Ownership) -> bool {
-        matches!(ownership, Ownership::Borrow) && self.type_registry.is_move_type(base_type)
+        matches!(ownership, Ownership::Borrow) && self.type_registry.is_resource_type(base_type)
     }
 
     /// Whether this param results in a MutPtr (mutable pointer).
     /// True for MutableBorrow (&) and Move (!) on Move types.
     pub fn is_mut_ref_param(&self, base_type: TypeId, ownership: Ownership) -> bool {
         matches!(ownership, Ownership::MutableBorrow)
-            || (matches!(ownership, Ownership::Move) && self.type_registry.is_move_type(base_type))
+            || (matches!(ownership, Ownership::Move) && self.type_registry.is_resource_type(base_type))
     }
 
     /// Whether this param ownership + type combination results in any pointer passing.

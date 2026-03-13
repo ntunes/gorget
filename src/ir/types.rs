@@ -104,8 +104,8 @@ pub struct EnumVariant {
 /// # Drop contract
 ///
 /// `DropElaborator` (in `ir/lowering/drops.rs`) decides WHEN to drop based on:
-/// - `copy_semantics == Move` → register for drop at scope exit
-/// - `drop_strategy != None` → also register (even for Copy types, e.g., ref-counted)
+/// - `copy_semantics == Resource` → register for drop at scope exit
+/// - `drop_strategy != None` → also register (even for Trivial types, e.g., ref-counted)
 ///
 /// The C backend decides HOW to drop by looking up `drop_strategy` via
 /// `lookup_drop_strategy()` when it encounters a `Drop`/`DropIfAlive` instruction.
@@ -114,14 +114,14 @@ pub struct EnumVariant {
 ///
 /// | CopySemantics | DropStrategy    | Use case                               |
 /// |---------------|-----------------|----------------------------------------|
-/// | Copy          | None            | Primitives, plain value structs        |
-/// | Copy          | Trivial(fn)     | Ref-counted types (Shared, Weak, Channel) — Copy at GIR level, decrement on drop |
-/// | Move          | None            | Ownership-tracked handles (Thread, Process) — no heap to free, move semantics prevent duplication |
-/// | Move          | Trivial(fn)     | Standard owned types (String, Vector, Guard) — single free call |
-/// | Move          | Recursive       | Structs containing droppable fields — auto-upgraded by lowering |
-/// | Move          | Custom(fn)      | User-defined Drop::drop — runs custom cleanup then field drops |
+/// | Trivial       | None            | Primitives, plain value structs        |
+/// | Trivial       | Trivial(fn)     | Ref-counted types (Shared, Weak, Channel) — copyable at GIR level, decrement on drop |
+/// | Resource      | None            | Ownership-tracked handles (Thread, Process) — no heap to free, resource semantics prevent duplication |
+/// | Resource      | Trivial(fn)     | Standard owned types (String, Vector, Guard) — single free call |
+/// | Resource      | Recursive       | Structs containing droppable fields — auto-upgraded by lowering |
+/// | Resource      | Custom(fn)      | User-defined Drop::drop — runs custom cleanup then field drops |
 ///
-/// **Suspicious** (flagged by validator): Copy + Recursive, Copy + Custom
+/// **Suspicious** (flagged by validator): Trivial + Recursive, Trivial + Custom
 #[derive(Debug, Clone)]
 pub struct TypeMetadata {
     pub size: Option<u64>,
@@ -136,7 +136,7 @@ impl Default for TypeMetadata {
             size: None,
             align: None,
             drop_strategy: DropStrategy::None,
-            copy_semantics: CopySemantics::Copy,
+            copy_semantics: CopySemantics::Trivial,
         }
     }
 }
@@ -161,13 +161,13 @@ pub enum DropStrategy {
     Custom(String),
 }
 
-/// Determines whether a value can be bitwise-copied or requires ownership transfer.
+/// Determines whether a value can be bitwise-copied or owns resources requiring cleanup.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CopySemantics {
-    /// Bitwise copy (primitives, `str`, Copy structs, ref-counted types).
-    Copy,
-    /// Ownership transfer — value cannot be used after move.
-    Move,
+    /// Trivial data — can be freely bitwise-copied (primitives, `str`, small value structs, ref-counted handles).
+    Trivial,
+    /// Owns a resource (heap allocation, file handle, lock guard) — requires ownership tracking, cannot be implicitly copied.
+    Resource,
 }
 
 // Pre-allocated primitive type IDs.
@@ -333,11 +333,11 @@ impl TypeRegistry {
     }
 
     /// Check whether a type has Move copy semantics (owns heap-allocated buffers).
-    pub fn is_move_type(&self, type_id: TypeId) -> bool {
+    pub fn is_resource_type(&self, type_id: TypeId) -> bool {
         if type_id.0 < 12 { return false; } // primitives
         if let Some(GirType::Named(name)) = self.get(type_id) {
             if let Some(type_def) = self.get_type_def(name) {
-                return type_def.metadata.copy_semantics == CopySemantics::Move;
+                return type_def.metadata.copy_semantics == CopySemantics::Resource;
             }
         }
         false
@@ -412,7 +412,7 @@ mod tests {
                 size: Some(16),
                 align: Some(8),
                 drop_strategy: DropStrategy::None,
-                copy_semantics: CopySemantics::Copy,
+                copy_semantics: CopySemantics::Trivial,
             },
         };
         reg.add_type_def(def);

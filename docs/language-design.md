@@ -302,22 +302,45 @@ consume(!name)           # moved - name is GONE after this
 # print(name)            # COMPILE ERROR: name was moved
 ```
 
-### 3.2 Ownership (Move Semantics)
+### 3.2 Type Categories: Resource vs Trivial
 
-For non-Copy types (String, Vector, etc.), assignment with `!` moves:
+Every type in Gorget falls into one of two categories based on whether it owns a resource:
+
+| Category | Meaning | Examples | Parameter passing |
+|----------|---------|----------|-------------------|
+| **Trivial** | Pure data — can be freely copied | `int`, `float`, `bool`, `str`, `Point { float x, float y }` | By value (copy) |
+| **Resource** | Owns a heap allocation, file handle, or lock — cannot be implicitly copied | `String`, `Vector[T]`, `Dict[K,V]`, `Guard[T]` | By pointer (const by default) |
+
+The distinction is about **what the type owns**, not how large it is. A `Point` with two floats is Trivial because it's just data. A `Vector[int]` is Resource because it owns a heap-allocated buffer that must be freed exactly once.
+
+**Resource types and parameter passing:**
+
+| Declaration | Pointer kind | Callee may mutate? | Callee drops? |
+|-------------|-------------|-------------------|---------------|
+| `Vector[int] v` | `const T*` (read-only) | No | No |
+| `Vector[int] &v` | `T*` (mutable) | Yes | No |
+| `Vector[int] !v` | `T*` (mutable) | Yes | Yes |
+
+Bare Resource params are `const` — the C compiler enforces immutability. The `&` sigil grants mutation, `!` transfers ownership.
+
+**Trivial types** pass by value regardless of sigils (except `&` on primitives, which creates a mutable pointer for out-params).
+
+### 3.3 Ownership (Move Semantics)
+
+For Resource types (String, Vector, etc.), assignment with `!` moves:
 ```gorget
 String s1 = "hello"
 String s2 = !s1          # explicit move, s1 is invalid
 # print(s1)              # COMPILE ERROR
 ```
 
-Primitive types (int, float, bool, char) are Copy - always copied automatically:
+Trivial types (int, float, bool, char) are always copied automatically:
 ```gorget
 int a = 5
 int b = a                # just copies, both valid (no ! needed)
 ```
 
-### 3.3 The Borrow Rules (same as Rust)
+### 3.4 The Borrow Rules (same as Rust)
 
 At any given time, for a given piece of data, you can have **either**:
 - Any number of immutable borrows (`String s`), OR
@@ -325,7 +348,7 @@ At any given time, for a given piece of data, you can have **either**:
 
 Never both simultaneously. Enforced at compile time. This prevents data races and aliasing bugs.
 
-### 3.4 Lifetimes
+### 3.5 Lifetimes
 
 **The compiler infers lifetimes from function bodies automatically.** Most programmers never write lifetime annotations.
 
@@ -389,7 +412,7 @@ str merge(live Merger m) where left outlives right:
 
 ---
 
-### 3.5 Comparison with Rust Lifetimes
+### 3.6 Comparison with Rust Lifetimes
 
 Gorget's lifetime system covers the same safety guarantees as Rust's but differs in how annotations are inferred. This section is aimed at Rust-experienced users.
 

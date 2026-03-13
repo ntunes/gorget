@@ -937,14 +937,14 @@ fn monomorphize_struct(
         TypeMetadata {
             size: None,
             align: None,
-            copy_semantics: CopySemantics::Move,
+            copy_semantics: CopySemantics::Resource,
             drop_strategy: DropStrategy::Trivial("free".to_string()),
         }
     } else if matches!(template.name.node.as_str(), "ReadGuard" | "WriteGuard") {
         TypeMetadata {
             size: None,
             align: None,
-            copy_semantics: CopySemantics::Move,
+            copy_semantics: CopySemantics::Resource,
             drop_strategy: DropStrategy::Trivial(format!("{mangled_name}__drop")),
         }
     } else {

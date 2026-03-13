@@ -176,7 +176,7 @@ pub(super) fn lower_method_spawn(
                 size: None,
                 align: None,
                 drop_strategy: DropStrategy::Trivial(format!("{task_name}__drop")),
-                copy_semantics: CopySemantics::Move,
+                copy_semantics: CopySemantics::Resource,
             },
         });
         let tid = ctx.type_registry.insert(GirType::Named(task_name.clone()));
@@ -406,7 +406,7 @@ pub(super) fn lower_closure_spawn(
                 size: None,
                 align: None,
                 drop_strategy: DropStrategy::Trivial(format!("{task_name}__drop")),
-                copy_semantics: CopySemantics::Move,
+                copy_semantics: CopySemantics::Resource,
             },
         });
         let tid = ctx.type_registry.insert(GirType::Named(task_name.clone()));

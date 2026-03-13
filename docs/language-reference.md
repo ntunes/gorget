@@ -539,19 +539,22 @@ auto name = "hello"  # inferred as String
 | `Mutex[T]`        | Thread-safe interior mutability          |
 | `RwLock[T]`       | Reader-writer lock                       |
 
-### 4.6 Copy vs. Non-Copy Types
+### 4.6 Trivial vs. Resource Types
 
-**Copy types** (implicitly copied, no `!` needed):
+**Trivial types** (implicitly copied, no `!` needed):
 - All integer types (`int`, `int8`, ..., `uint64`)
 - All float types (`float`, `float32`, `float64`)
 - `bool`, `char`
-- Tuples where all elements are Copy
+- Tuples where all elements are Trivial
+- Small value structs with no owned resources (e.g., `Point { float x, float y }`)
 
-**Non-Copy types** (require `!` or `move` to transfer ownership):
+**Resource types** (own heap allocations or handles, require `!` or `move` to transfer ownership):
 - `String`
-- All structs
-- All enums
-- Collections (`Vector`, `Dict`, `HashMap`, etc.)
+- Collections (`Vector`, `Dict`, `Set`, `Heap`)
+- Lock guards (`Guard[T]`, `ReadGuard[T]`, `WriteGuard[T]`)
+- Structs containing Resource-type fields (automatically upgraded)
+
+Resource types are always passed by pointer to avoid expensive copies. Bare parameters use `const T*` (read-only); `&` parameters use `T*` (mutable).
 
 ---
 

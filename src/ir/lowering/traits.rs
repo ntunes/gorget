@@ -247,7 +247,7 @@ pub fn register_trait_equip_sigs(
                     .find(|m| m.name == *method_name)
                 {
                     // Use base_param_types for fn_sigs so auto-borrow
-                    // triggers correctly at call sites (is_move_type check).
+                    // triggers correctly at call sites (is_resource_type check).
                     ctx.fn_sigs.insert(
                         mangled,
                         (

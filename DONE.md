@@ -6,7 +6,7 @@
 
 - [2026-03-13] **Gorget Arena: GL backend compiles (0 errors)** — Fixed 20 GL/Linux C compilation errors: GL string functions (gl_get_string, gl_get_shader_info_log, gl_get_program_info_log) return `str` not `String`; added gl_buffer_data/gl_tex_image_2d/gl_uniform_matrix4fv/gl_load_matrix to `takes_array_ptr_args`; made GorgetGLContext an int64_t opaque handle matching Metal pattern.
 
-- [2026-03-13] **Borrow pass-through for standalone & cross-module functions** — Registered standalone function signatures in `fn_sigs` (was missing, only equip methods and closures). Added `fn_param_ownerships` check in `lower_call_arg` to detect explicit `&` params, enabling pointer forwarding even when `is_move_type` returns false (cross-module structs with Vector fields). Fixed infinite loop in shader parser where `cursor_next(cur)` copied `ParseCursor` via deref instead of forwarding the pointer.
+- [2026-03-13] **Borrow pass-through for standalone & cross-module functions** — Registered standalone function signatures in `fn_sigs` (was missing, only equip methods and closures). Added `fn_param_ownerships` check in `lower_call_arg` to detect explicit `&` params, enabling pointer forwarding even when `is_resource_type` returns false (cross-module structs with Vector fields). Fixed infinite loop in shader parser where `cursor_next(cur)` copied `ParseCursor` via deref instead of forwarding the pointer.
 
 - [2026-03-13] **Static str literal initializer fix** — `static str x = "hello"` now generates `gorget_str_from_literal(...)` in `__gorget_init_globals()` instead of `{0}`. Fixed Metal shader sources being empty at runtime.
 

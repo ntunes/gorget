@@ -759,7 +759,7 @@ fn lower_expr_inner(
                                 size: None,
                                 align: None,
                                 drop_strategy: DropStrategy::Trivial(format!("{task_name}__drop")),
-                                copy_semantics: CopySemantics::Move,
+                                copy_semantics: CopySemantics::Resource,
                             },
                         });
                         let tid = ctx.type_registry.insert(GirType::Named(task_name.clone()));
@@ -918,7 +918,7 @@ fn lower_expr_inner(
                                 size: None,
                                 align: None,
                                 drop_strategy: DropStrategy::Trivial(format!("{task_name}__drop")),
-                                copy_semantics: CopySemantics::Move,
+                                copy_semantics: CopySemantics::Resource,
                             },
                         });
                         let tid = ctx.type_registry.insert(GirType::Named(task_name.clone()));
@@ -1227,7 +1227,7 @@ fn lower_struct_literal(
         // unconditional free — otherwise the shared block would hold a dangling data pointer.
         if let Operand::Copy(place) = &val_op {
             if place.projections.is_empty() {
-                if is_move_type_local(place.local, builder, &ctx.type_registry) {
+                if is_resource_type_local(place.local, builder, &ctx.type_registry) {
                     builder.move_zero(place.clone());
                     ctx.drops.mark_moved(place.local);
                 }
@@ -1371,7 +1371,7 @@ fn lower_struct_literal(
     for op in &field_operands {
         if let Operand::Copy(place) = op {
             if place.projections.is_empty() {
-                if is_move_type_local(place.local, builder, &ctx.type_registry) {
+                if is_resource_type_local(place.local, builder, &ctx.type_registry) {
                     builder.move_zero(place.clone());
                     ctx.drops.mark_moved(place.local);
                 }

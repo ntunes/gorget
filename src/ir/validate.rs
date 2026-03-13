@@ -586,14 +586,14 @@ fn check_drop_metadata_consistency(module: &Module, errors: &mut Vec<ValidationE
     for type_def in module.type_registry.type_defs() {
         let is_suspicious = match (&type_def.metadata.copy_semantics, &type_def.metadata.drop_strategy) {
             // Copy + None: fine (plain value types)
-            (CopySemantics::Copy, DropStrategy::None) => false,
+            (CopySemantics::Trivial, DropStrategy::None) => false,
             // Copy + Trivial: fine (ref-counted types)
-            (CopySemantics::Copy, DropStrategy::Trivial(_)) => false,
+            (CopySemantics::Trivial, DropStrategy::Trivial(_)) => false,
             // Copy + Recursive or Copy + Custom: suspicious
-            (CopySemantics::Copy, DropStrategy::Recursive) => true,
-            (CopySemantics::Copy, DropStrategy::Custom(_)) => true,
+            (CopySemantics::Trivial, DropStrategy::Recursive) => true,
+            (CopySemantics::Trivial, DropStrategy::Custom(_)) => true,
             // Move + anything: fine
-            (CopySemantics::Move, _) => false,
+            (CopySemantics::Resource, _) => false,
         };
         if is_suspicious {
             errors.push(ValidationError {
@@ -781,7 +781,7 @@ fn type_needs_drop(type_id: TypeId, registry: &TypeRegistry) -> bool {
     if type_id.0 < 12 { return false; }
     if let Some(GirType::Named(name)) = registry.get(type_id) {
         if let Some(type_def) = registry.get_type_def(name) {
-            return type_def.metadata.copy_semantics == CopySemantics::Move
+            return type_def.metadata.copy_semantics == CopySemantics::Resource
                 || type_def.metadata.drop_strategy != DropStrategy::None;
         }
     }
@@ -1057,7 +1057,7 @@ mod tests {
                 size: None,
                 align: None,
                 drop_strategy: DropStrategy::Trivial("buf_free".into()),
-                copy_semantics: CopySemantics::Move,
+                copy_semantics: CopySemantics::Resource,
             },
         });
         let buf_id = module.type_registry.insert(GirType::Named("OwnedBuf".into()));
@@ -1101,7 +1101,7 @@ mod tests {
                 size: None,
                 align: None,
                 drop_strategy: DropStrategy::Recursive,
-                copy_semantics: CopySemantics::Copy,
+                copy_semantics: CopySemantics::Trivial,
             },
         });
 
@@ -1219,7 +1219,7 @@ mod tests {
                 size: None,
                 align: None,
                 drop_strategy: DropStrategy::Trivial("buf_free".into()),
-                copy_semantics: CopySemantics::Move,
+                copy_semantics: CopySemantics::Resource,
             },
         });
         let buf_id = module.type_registry.insert(GirType::Named("Buf".into()));
@@ -1249,7 +1249,7 @@ mod tests {
                 size: None,
                 align: None,
                 drop_strategy: DropStrategy::Trivial("shared_decref".into()),
-                copy_semantics: CopySemantics::Copy,
+                copy_semantics: CopySemantics::Trivial,
             },
         });
 

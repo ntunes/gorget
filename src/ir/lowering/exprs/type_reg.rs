@@ -46,7 +46,7 @@ pub(super) fn register_tuple_type(ctx: &mut LoweringContext, elem_types: &[TypeI
         name: name.clone(),
         kind: TypeDefKind::Struct(StructDef { fields: fields.clone() }),
         metadata: TypeMetadata {
-            copy_semantics: CopySemantics::Copy,
+            copy_semantics: CopySemantics::Trivial,
             ..TypeMetadata::default()
         },
     });
@@ -86,7 +86,7 @@ pub fn ensure_box_type_def(ctx: &mut LoweringContext, box_type_name: &str, inner
     use super::super::types::make_wrapper_type_def;
     if ctx.type_registry.get_type_def(box_type_name).is_some() { return; }
     ctx.type_registry.add_type_def(
-        make_wrapper_type_def(box_type_name, inner_type, CopySemantics::Move, DropStrategy::Trivial("free".to_string()))
+        make_wrapper_type_def(box_type_name, inner_type, CopySemantics::Resource, DropStrategy::Trivial("free".to_string()))
     );
 }
 
@@ -96,7 +96,7 @@ pub fn ensure_shared_type_def(ctx: &mut LoweringContext, shared_type_name: &str,
     use super::super::types::make_wrapper_type_def;
     if ctx.type_registry.get_type_def(shared_type_name).is_some() { return; }
     ctx.type_registry.add_type_def(
-        make_wrapper_type_def(shared_type_name, inner_type, CopySemantics::Copy, DropStrategy::Trivial(format!("{shared_type_name}__drop")))
+        make_wrapper_type_def(shared_type_name, inner_type, CopySemantics::Trivial, DropStrategy::Trivial(format!("{shared_type_name}__drop")))
     );
 }
 
@@ -106,7 +106,7 @@ pub fn ensure_weak_type_def(ctx: &mut LoweringContext, weak_type_name: &str, inn
     use super::super::types::make_wrapper_type_def;
     if ctx.type_registry.get_type_def(weak_type_name).is_some() { return; }
     ctx.type_registry.add_type_def(
-        make_wrapper_type_def(weak_type_name, inner_type, CopySemantics::Copy, DropStrategy::Trivial(format!("{weak_type_name}__drop")))
+        make_wrapper_type_def(weak_type_name, inner_type, CopySemantics::Trivial, DropStrategy::Trivial(format!("{weak_type_name}__drop")))
     );
 }
 
@@ -116,7 +116,7 @@ pub fn ensure_mutex_type_def(ctx: &mut LoweringContext, mutex_type_name: &str, i
     use super::super::types::make_wrapper_type_def;
     if ctx.type_registry.get_type_def(mutex_type_name).is_some() { return; }
     ctx.type_registry.add_type_def(
-        make_wrapper_type_def(mutex_type_name, inner_type, CopySemantics::Copy, DropStrategy::None)
+        make_wrapper_type_def(mutex_type_name, inner_type, CopySemantics::Trivial, DropStrategy::None)
     );
 }
 
@@ -126,7 +126,7 @@ pub fn ensure_guard_type_def(ctx: &mut LoweringContext, guard_type_name: &str, i
     use super::super::types::make_wrapper_type_def;
     if ctx.type_registry.get_type_def(guard_type_name).is_some() { return; }
     ctx.type_registry.add_type_def(
-        make_wrapper_type_def(guard_type_name, inner_type, CopySemantics::Move, DropStrategy::Trivial(format!("{guard_type_name}__drop")))
+        make_wrapper_type_def(guard_type_name, inner_type, CopySemantics::Resource, DropStrategy::Trivial(format!("{guard_type_name}__drop")))
     );
 }
 
@@ -136,7 +136,7 @@ pub fn ensure_rwlock_type_def(ctx: &mut LoweringContext, rwlock_type_name: &str,
     use super::super::types::make_wrapper_type_def;
     if ctx.type_registry.get_type_def(rwlock_type_name).is_some() { return; }
     ctx.type_registry.add_type_def(
-        make_wrapper_type_def(rwlock_type_name, inner_type, CopySemantics::Copy, DropStrategy::None)
+        make_wrapper_type_def(rwlock_type_name, inner_type, CopySemantics::Trivial, DropStrategy::None)
     );
 }
 
@@ -146,7 +146,7 @@ pub fn ensure_channel_type_def(ctx: &mut LoweringContext, channel_type_name: &st
     use super::super::types::make_opaque_type_def;
     if ctx.type_registry.get_type_def(channel_type_name).is_some() { return; }
     ctx.type_registry.add_type_def(
-        make_opaque_type_def(channel_type_name, CopySemantics::Copy, DropStrategy::None)
+        make_opaque_type_def(channel_type_name, CopySemantics::Trivial, DropStrategy::None)
     );
 }
 
@@ -156,7 +156,7 @@ pub fn ensure_task_group_type_def(ctx: &mut LoweringContext, tg_type_name: &str)
     use super::super::types::make_opaque_type_def;
     if ctx.type_registry.get_type_def(tg_type_name).is_some() { return; }
     ctx.type_registry.add_type_def(
-        make_opaque_type_def(tg_type_name, CopySemantics::Move, DropStrategy::Trivial("gorget_task_group_free".to_string()))
+        make_opaque_type_def(tg_type_name, CopySemantics::Resource, DropStrategy::Trivial("gorget_task_group_free".to_string()))
     );
 }
 
@@ -253,10 +253,10 @@ fn lookup_global_type(ctx: &LoweringContext, type_name: &str) -> Option<TypeId> 
 /// GorgetString, Box, user Move structs). Used to emit MoveZero + mark_moved
 /// after ownership transfer (function call args, unwrap, struct-init fields)
 /// to prevent double-free of shared heap buffers.
-pub(super) fn is_move_type_local(
+pub(super) fn is_resource_type_local(
     local: LocalId,
     builder: &FunctionBuilder,
     registry: &TypeRegistry,
 ) -> bool {
-    registry.is_move_type(builder.locals[local.0 as usize].type_id)
+    registry.is_resource_type(builder.locals[local.0 as usize].type_id)
 }

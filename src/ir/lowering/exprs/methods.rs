@@ -8,7 +8,7 @@ use crate::span::Spanned;
 
 use super::super::context::LoweringContext;
 use super::{lower_expr, lower_call_arg, infer_operand_type_full, register_tuple_type,
-            c_suffix_to_type_id, is_move_type_local,
+            c_suffix_to_type_id, is_resource_type_local,
             ensure_box_type_def, ensure_guard_type_def, ensure_shared_type_def, ensure_weak_type_def,
             index_expr_to_mangle_fragment, try_resolve_field_place};
 
@@ -359,7 +359,7 @@ pub(super) fn lower_method_call(
                     );
                     // If the extracted value is a Move type, zero the Option/Result
                     // to prevent its drop from freeing the inner value's buffer.
-                    if is_move_type_local(dst, builder, &ctx.type_registry) {
+                    if is_resource_type_local(dst, builder, &ctx.type_registry) {
                         builder.move_zero(place.clone());
                         ctx.drops.mark_moved(place.local);
                     }
@@ -374,7 +374,7 @@ pub(super) fn lower_method_call(
                     );
                     // If the extracted value is a Move type, zero the Option/Result
                     // to prevent its drop from freeing the inner value's buffer.
-                    if is_move_type_local(dst, builder, &ctx.type_registry) {
+                    if is_resource_type_local(dst, builder, &ctx.type_registry) {
                         builder.move_zero(place.clone());
                         ctx.drops.mark_moved(place.local);
                     }
@@ -1449,7 +1449,7 @@ pub(super) fn lower_method_call(
                 if !matches!(arg.node.ownership, Ownership::Move) { return None; }
                 if let Operand::Copy(place) | Operand::Move(place) = op {
                     if place.projections.is_empty()
-                        && is_move_type_local(place.local, builder, &ctx.type_registry)
+                        && is_resource_type_local(place.local, builder, &ctx.type_registry)
                     {
                         return Some(place.clone());
                     }

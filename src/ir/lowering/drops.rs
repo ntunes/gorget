@@ -182,7 +182,7 @@ fn needs_param_drop(type_id: TypeId, registry: &TypeRegistry) -> bool {
     }
     if let Some(GirType::Named(name)) = registry.get(type_id) {
         if let Some(type_def) = registry.get_type_def(name) {
-            return type_def.metadata.copy_semantics == CopySemantics::Copy
+            return type_def.metadata.copy_semantics == CopySemantics::Trivial
                 && type_def.metadata.drop_strategy != DropStrategy::None;
         }
     }
@@ -199,7 +199,7 @@ fn needs_drop(type_id: TypeId, registry: &TypeRegistry) -> bool {
     // Check Named types for their metadata
     if let Some(GirType::Named(name)) = registry.get(type_id) {
         if let Some(type_def) = registry.get_type_def(name) {
-            return type_def.metadata.copy_semantics == CopySemantics::Move
+            return type_def.metadata.copy_semantics == CopySemantics::Resource
                 || type_def.metadata.drop_strategy != DropStrategy::None;
         }
     }
@@ -266,7 +266,7 @@ mod tests {
                 size: Some(16),
                 align: Some(8),
                 drop_strategy: DropStrategy::Trivial("gorget_string_free".into()),
-                copy_semantics: CopySemantics::Move,
+                copy_semantics: CopySemantics::Resource,
             },
         });
         reg.insert(GirType::Named("OwnedString".into()));
