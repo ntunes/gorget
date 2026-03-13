@@ -4203,20 +4203,18 @@ fn emit_coroutine(
     let mut type_overrides = compute_type_overrides(func, registry, module);
 
     // Parameter locals (indices 1..=N) are stored by value in the coroutine frame,
-    // even though the function signature passes collections by MutPtr.
-    // Override their effective C type to the value type (strip pointer suffix).
+    // even though the function signature passes Move types by Ptr/MutPtr.
+    // Unwrap pointer types at the GIR level to get the value type for the frame field.
     let num_params = params.len();
     for idx in 1..=num_params {
         if idx < func.locals.len() {
-            let c_type = if let Some(ovr) = type_overrides.get(&idx) {
-                ovr.clone()
-            } else {
-                format_type(func.locals[idx].type_id, registry)
+            let type_id = func.locals[idx].type_id;
+            let inner = match registry.get(type_id) {
+                Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => Some(*inner),
+                _ => None,
             };
-            if let Some(stripped) = c_type.strip_suffix('*') {
-                // Strip const qualifier too (bare Borrow params use const T*)
-                let stripped = stripped.strip_prefix("const ").unwrap_or(stripped);
-                type_overrides.insert(idx, stripped.to_string());
+            if let Some(inner_type) = inner {
+                type_overrides.insert(idx, format_type(inner_type, registry));
             }
         }
     }
