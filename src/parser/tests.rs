@@ -596,8 +596,57 @@ fn test_error_recovery() {
     // Parser should recover from errors and continue parsing
     let (module, errors) = parse_with_errors("struct Point:\n    float x\n\n!@#$%\n\nstruct Size:\n    int w\n");
     assert!(!errors.is_empty());
-    // Should still parse both structs despite the error line
-    assert!(module.items.len() >= 1);
+    // Should parse both structs despite the error line between them
+    assert_eq!(module.items.len(), 2);
+}
+
+#[test]
+fn test_recovery_struct_bad_field() {
+    // One bad field in a struct shouldn't lose the other fields
+    let (module, errors) = parse_with_errors(
+        "struct Point:\n    int x\n    !@#$ garbage\n    int z\n"
+    );
+    assert!(!errors.is_empty());
+    assert_eq!(module.items.len(), 1);
+    if let Item::Struct(ref s) = module.items[0].node {
+        // Should have recovered and parsed x and z
+        assert!(s.fields.len() >= 2, "expected at least 2 fields, got {}", s.fields.len());
+    } else {
+        panic!("Expected struct");
+    }
+}
+
+#[test]
+fn test_recovery_enum_bad_variant() {
+    // One bad variant shouldn't lose the others
+    let (module, errors) = parse_with_errors(
+        "enum Color:\n    Red\n    !@#$\n    Blue\n"
+    );
+    assert!(!errors.is_empty());
+    assert_eq!(module.items.len(), 1);
+    if let Item::Enum(ref e) = module.items[0].node {
+        assert!(e.variants.len() >= 2, "expected at least 2 variants, got {}", e.variants.len());
+    } else {
+        panic!("Expected enum");
+    }
+}
+
+#[test]
+fn test_recovery_multiple_top_level_items() {
+    // Three items, middle one broken — first and third should survive
+    let (module, errors) = parse_with_errors(
+        "struct A:\n    int x\n\n!@#$ broken item\n\nstruct C:\n    int z\n"
+    );
+    assert!(!errors.is_empty());
+    assert_eq!(module.items.len(), 2);
+}
+
+#[test]
+fn test_recovery_error_limit() {
+    // Generate many errors — parser should stop after MAX_ERRORS
+    let bad_lines = (0..20).map(|_| "!@#$%").collect::<Vec<_>>().join("\n");
+    let (_, errors) = parse_with_errors(&bad_lines);
+    assert!(errors.len() <= super::MAX_ERRORS, "errors {} should be <= {}", errors.len(), super::MAX_ERRORS);
 }
 
 #[test]

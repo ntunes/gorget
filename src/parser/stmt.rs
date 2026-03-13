@@ -315,44 +315,47 @@ impl Parser {
         let mut arms = Vec::new();
         let mut else_arm = None;
 
-        while !self.check(&Token::Dedent) && !self.at_end() {
+        while !self.check(&Token::Dedent) && !self.at_end() && !self.at_error_limit() {
             if self.check(&Token::Newline) {
                 self.advance();
                 continue;
             }
 
             if self.match_keyword(Keyword::Else) {
-                else_arm = Some(self.parse_block()?);
+                match self.parse_block() {
+                    Ok(block) => else_arm = Some(block),
+                    Err(e) => {
+                        self.errors.push(e);
+                        self.synchronize_with_progress();
+                    }
+                }
                 continue;
             }
 
             // meta for <vars> in <range>: <single case arm>
             if self.check(&Token::Keyword(Keyword::Meta)) {
-                let meta_for_item = self.parse_meta_for_match_item()?;
-                arms.push(meta_for_item);
+                match self.parse_meta_for_match_item() {
+                    Ok(item) => arms.push(item),
+                    Err(e) => {
+                        self.errors.push(e);
+                        self.synchronize_with_progress();
+                    }
+                }
                 continue;
             }
 
+            let saved_pos = self.pos;
             let arm_start = self.peek_span();
-            self.expect_keyword(Keyword::Case)?;
-            let pattern = self.parse_pattern()?;
-
-            let guard = if self.match_keyword(Keyword::If) {
-                Some(self.parse_expr()?)
-            } else {
-                None
-            };
-
-            self.expect(&Token::Colon)?;
-            let body = self.parse_arm_body(arm_start)?;
-
-            let arm_end = body.span;
-            arms.push(MatchItem::Arm(MatchArm {
-                pattern,
-                guard,
-                body,
-                span: arm_start.merge(arm_end),
-            }));
+            match self.parse_match_arm_inner(arm_start) {
+                Ok(arm) => arms.push(arm),
+                Err(e) => {
+                    self.errors.push(e);
+                    self.synchronize_with_progress();
+                    if self.pos == saved_pos {
+                        self.advance();
+                    }
+                }
+            }
         }
 
         self.expect(&Token::Dedent)?;
@@ -366,6 +369,28 @@ impl Parser {
             },
             start.merge(end),
         ))
+    }
+
+    fn parse_match_arm_inner(&mut self, arm_start: Span) -> Result<MatchItem, ParseError> {
+        self.expect_keyword(Keyword::Case)?;
+        let pattern = self.parse_pattern()?;
+
+        let guard = if self.match_keyword(Keyword::If) {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
+        self.expect(&Token::Colon)?;
+        let body = self.parse_arm_body(arm_start)?;
+
+        let arm_end = body.span;
+        Ok(MatchItem::Arm(MatchArm {
+            pattern,
+            guard,
+            body,
+            span: arm_start.merge(arm_end),
+        }))
     }
 
     fn parse_select_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {

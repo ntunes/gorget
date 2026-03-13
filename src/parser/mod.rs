@@ -32,6 +32,9 @@ fn make_self_param(
     )
 }
 
+/// Maximum number of errors before the parser stops trying to recover.
+const MAX_ERRORS: usize = 10;
+
 /// Recursive descent parser for Gorget source code.
 pub struct Parser {
     kinds: Vec<Token>,
@@ -290,6 +293,46 @@ impl Parser {
         }
     }
 
+    /// Skip tokens until we reach the top level (balanced INDENT/DEDENT).
+    /// Used after a failed top-level item to skip its entire body.
+    fn synchronize_to_top_level(&mut self) {
+        let mut depth: usize = 0;
+        loop {
+            match self.peek() {
+                Token::Eof => return,
+                Token::Indent => {
+                    depth += 1;
+                    self.advance();
+                }
+                Token::Dedent => {
+                    if depth == 0 {
+                        return;
+                    }
+                    depth -= 1;
+                    self.advance();
+                    if depth == 0 {
+                        if self.check(&Token::Newline) {
+                            self.advance();
+                        }
+                        return;
+                    }
+                }
+                Token::Newline if depth == 0 => {
+                    self.advance();
+                    return;
+                }
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+    }
+
+    /// Returns `true` when the error limit has been reached.
+    fn at_error_limit(&self) -> bool {
+        self.errors.len() >= MAX_ERRORS
+    }
+
     // ── Block Parsing ─────────────────────────────────────────
 
     /// Parse a block: COLON NEWLINE INDENT stmts DEDENT
@@ -363,7 +406,7 @@ impl Parser {
         let start = self.peek_span();
         let mut items = Vec::new();
 
-        while !self.at_end() {
+        while !self.at_end() && !self.at_error_limit() {
 
             // Skip stray newlines at top level
             if self.check(&Token::Newline) {
@@ -377,7 +420,11 @@ impl Parser {
                 }
                 Err(e) => {
                     self.errors.push(e);
-                    self.synchronize_with_progress();
+                    self.synchronize_to_top_level();
+                    // Guarantee progress
+                    if !self.at_end() && !matches!(self.peek(), Token::Newline | Token::Dedent) {
+                        // Still stuck — force one token forward
+                    }
                 }
             }
         }
@@ -843,22 +890,37 @@ impl Parser {
         self.expect_block_start()?;
 
         let mut fields = Vec::new();
-        while !self.check(&Token::Dedent) && !self.at_end() {
+        while !self.check(&Token::Dedent) && !self.at_end() && !self.at_error_limit() {
+            if self.check(&Token::Newline) {
+                self.advance();
+                continue;
+            }
+            let saved_pos = self.pos;
             let field_start = self.peek_span();
             let field_vis = self.parse_visibility_modifier();
-            let type_ = self.parse_type()?;
-            let field_name = self.expect_identifier()?;
-            let field_end = self.previous_span();
-            self.consume_newline();
-
-            fields.push(Spanned::new(
-                FieldDef {
-                    visibility: field_vis,
-                    type_,
-                    name: field_name,
-                },
-                field_start.merge(field_end),
-            ));
+            match self.parse_type().and_then(|type_| {
+                let field_name = self.expect_identifier()?;
+                let field_end = self.previous_span();
+                self.consume_newline();
+                Ok(Spanned::new(
+                    FieldDef {
+                        visibility: field_vis,
+                        type_,
+                        name: field_name,
+                    },
+                    field_start.merge(field_end),
+                ))
+            }) {
+                Ok(field) => fields.push(field),
+                Err(e) => {
+                    self.errors.push(e);
+                    self.synchronize_with_progress();
+                    // Ensure progress even if synchronize landed on same spot
+                    if self.pos == saved_pos {
+                        self.advance();
+                    }
+                }
+            }
         }
 
         self.expect(&Token::Dedent)?;
@@ -892,34 +954,23 @@ impl Parser {
         self.expect_block_start()?;
 
         let mut variants = Vec::new();
-        while !self.check(&Token::Dedent) && !self.at_end() {
+        while !self.check(&Token::Dedent) && !self.at_end() && !self.at_error_limit() {
+            if self.check(&Token::Newline) {
+                self.advance();
+                continue;
+            }
+            let saved_pos = self.pos;
             let var_start = self.peek_span();
-            let var_name = self.expect_name()?;
-
-            let fields = if self.match_token(&Token::LParen) {
-                let mut types = Vec::new();
-                while !self.check(&Token::RParen) && !self.at_end() {
-                    types.push(self.parse_type()?);
-                    if !self.check(&Token::RParen) {
-                        self.expect(&Token::Comma)?;
+            match self.parse_enum_variant_inner(var_start) {
+                Ok(variant) => variants.push(variant),
+                Err(e) => {
+                    self.errors.push(e);
+                    self.synchronize_with_progress();
+                    if self.pos == saved_pos {
+                        self.advance();
                     }
                 }
-                self.expect(&Token::RParen)?;
-                VariantFields::Tuple(types)
-            } else {
-                VariantFields::Unit
-            };
-
-            let var_end = self.previous_span();
-            self.consume_newline();
-
-            variants.push(Spanned::new(
-                Variant {
-                    name: var_name,
-                    fields,
-                },
-                var_start.merge(var_end),
-            ));
+            }
         }
 
         self.expect(&Token::Dedent)?;
@@ -934,6 +985,35 @@ impl Parser {
             doc_comment,
             span: start.merge(end),
         })
+    }
+
+    fn parse_enum_variant_inner(&mut self, var_start: Span) -> Result<Spanned<Variant>, ParseError> {
+        let var_name = self.expect_name()?;
+
+        let fields = if self.match_token(&Token::LParen) {
+            let mut types = Vec::new();
+            while !self.check(&Token::RParen) && !self.at_end() {
+                types.push(self.parse_type()?);
+                if !self.check(&Token::RParen) {
+                    self.expect(&Token::Comma)?;
+                }
+            }
+            self.expect(&Token::RParen)?;
+            VariantFields::Tuple(types)
+        } else {
+            VariantFields::Unit
+        };
+
+        let var_end = self.previous_span();
+        self.consume_newline();
+
+        Ok(Spanned::new(
+            Variant {
+                name: var_name,
+                fields,
+            },
+            var_start.merge(var_end),
+        ))
     }
 
     // ── Trait ─────────────────────────────────────────────────
@@ -959,7 +1039,7 @@ impl Parser {
         self.expect_block_start()?;
 
         let mut items = Vec::new();
-        while !self.check(&Token::Dedent) && !self.at_end() {
+        while !self.check(&Token::Dedent) && !self.at_end() && !self.at_error_limit() {
             // Skip doc comments within trait body
             let method_doc = self.collect_doc_comment();
 
@@ -968,15 +1048,26 @@ impl Parser {
                 continue;
             }
 
-            // Associated type: type Item
-            if self.check_keyword(Keyword::Type) {
-                let assoc = self.parse_associated_type()?;
-                items.push(Spanned::new(TraitItem::AssociatedType(assoc.node), assoc.span));
+            let saved_pos = self.pos;
+            let result = if self.check_keyword(Keyword::Type) {
+                self.parse_associated_type().map(|assoc| {
+                    Spanned::new(TraitItem::AssociatedType(assoc.node), assoc.span)
+                })
             } else {
-                // Method
-                let func = self.parse_function_def(Vec::new(), Visibility::Public, method_doc)?;
-                let span = func.span;
-                items.push(Spanned::new(TraitItem::Method(func), span));
+                self.parse_function_def(Vec::new(), Visibility::Public, method_doc).map(|func| {
+                    let span = func.span;
+                    Spanned::new(TraitItem::Method(func), span)
+                })
+            };
+            match result {
+                Ok(item) => items.push(item),
+                Err(e) => {
+                    self.errors.push(e);
+                    self.synchronize_with_progress();
+                    if self.pos == saved_pos {
+                        self.advance();
+                    }
+                }
             }
         }
 
@@ -1061,7 +1152,7 @@ impl Parser {
             self.expect(&Token::Indent)?;
 
             let mut items = Vec::new();
-            while !self.check(&Token::Dedent) && !self.at_end() {
+            while !self.check(&Token::Dedent) && !self.at_end() && !self.at_error_limit() {
                 let method_doc = self.collect_doc_comment();
 
                 if self.check(&Token::Newline) {
@@ -1077,17 +1168,41 @@ impl Parser {
                     continue;
                 }
 
+                let saved_pos = self.pos;
+
                 // Collect attributes for methods
                 let mut attrs = Vec::new();
-                while self.check(&Token::At) {
-                    attrs.push(self.parse_attribute()?);
+                let attr_ok = loop {
+                    if !self.check(&Token::At) {
+                        break true;
+                    }
+                    match self.parse_attribute() {
+                        Ok(attr) => attrs.push(attr),
+                        Err(e) => {
+                            self.errors.push(e);
+                            break false;
+                        }
+                    }
+                };
+
+                if attr_ok {
+                    let vis = self.parse_visibility_modifier();
+                    match self.parse_function_def(attrs, vis, method_doc) {
+                        Ok(func) => {
+                            let span = func.span;
+                            items.push(Spanned::new(func, span));
+                            continue;
+                        }
+                        Err(e) => {
+                            self.errors.push(e);
+                        }
+                    }
                 }
 
-                let vis = self.parse_visibility_modifier();
-
-                let func = self.parse_function_def(attrs, vis, method_doc)?;
-                let span = func.span;
-                items.push(Spanned::new(func, span));
+                self.synchronize_with_progress();
+                if self.pos == saved_pos {
+                    self.advance();
+                }
             }
 
             self.expect(&Token::Dedent)?;

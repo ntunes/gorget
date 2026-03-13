@@ -1,5 +1,11 @@
 # DONE
 
+- [2026-03-13] **Parser error recovery synchronization** — Added recovery loops inside struct field, enum variant, trait method, equip method, and match arm parsing so the parser reports multiple errors instead of bailing at the first one. Added `synchronize_to_top_level()` for indentation-aware recovery, `at_error_limit()` (MAX_ERRORS=10) to prevent cascading, and 4 new recovery tests. 917 unit + 709 integration tests pass.
+
+- [2026-03-13] **SoA token storage in parser** — Split `Parser`'s `Vec<Spanned<Token>>` into parallel `Vec<Token>` + `Vec<Span>` for better cache locality on the hot path (peek/peek_ahead only touch token kinds). 7 access sites updated.
+
+- [2026-03-13] **Parser fuzzing harness** — Added `fuzz/` with cargo-fuzz targets for lexer, parser, and formatter roundtrip. Seeded from 663 test fixtures.
+
 - [2026-03-13] **Generic type deduplication in TypeTable** — Added `intern_generic()` with `generic_cache: FxHashMap<(DefId, Vec<TypeId>), TypeId>` to deduplicate identical generic instantiations (e.g., every `Vector[int]` now shares a single TypeId). Replaced `find_generic()` (dead code) and ~38 `insert(ResolvedType::Generic(...))` call sites across typecheck.rs, resolve.rs, and types.rs.
 
 - [2026-03-13] **"Did you mean?" suggestions for undefined names** — Added Levenshtein edit-distance-based name suggestions to all 3 `UndefinedName` error emission sites in resolve.rs. New helpers: `edit_distance()`, `visible_names()`, `suggest_name()` in scope.rs. Extended `UndefinedName` variant with `suggestion: Option<String>`. Threshold: edit distance ≤ max(2, len×2/5), skipping single-char names.
