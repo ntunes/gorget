@@ -9180,20 +9180,20 @@ static inline void* gorget__stub_map_buffer_range(GLenum t, GLintptr o, GLsizeip
 
 // ── Context (SDL-GL) ────────────────────────────────────────
 
-typedef struct { SDL_GLContext ctx; } GorgetGLContext;
+typedef int64_t GorgetGLContext;
 
 static inline GorgetGLContext gorget_gl_create_context(int64_t window_handle) {
-    GorgetGLContext gc;
-    gc.ctx = SDL_GL_CreateContext((SDL_Window*)(uintptr_t)window_handle);
-    return gc;
+    SDL_GLContext ctx = SDL_GL_CreateContext((SDL_Window*)(uintptr_t)window_handle);
+    return (int64_t)(uintptr_t)ctx;
 }
 
 static inline void gorget_gl_destroy_context(GorgetGLContext gc) {
-    if (gc.ctx) SDL_GL_DeleteContext(gc.ctx);
+    SDL_GLContext ctx = (SDL_GLContext)(uintptr_t)gc;
+    if (ctx) SDL_GL_DeleteContext(ctx);
 }
 
 static inline void gorget_gl_make_current(int64_t window_handle, GorgetGLContext gc) {
-    SDL_GL_MakeCurrent((SDL_Window*)(uintptr_t)window_handle, gc.ctx);
+    SDL_GL_MakeCurrent((SDL_Window*)(uintptr_t)window_handle, (SDL_GLContext)(uintptr_t)gc);
 }
 
 static inline void gorget_gl_swap_window(int64_t window_handle) {

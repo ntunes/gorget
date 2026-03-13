@@ -2088,8 +2088,8 @@ fn gen_gl_module() -> Module {
     items.push(fn_item(extern_fn("gl_use_program", &[("program", ty_int())], ty_void(), "gorget_gl_use_program")));
     items.push(fn_item(extern_fn("gl_delete_shader", &[("shader", ty_int())], ty_void(), "gorget_gl_delete_shader")));
     items.push(fn_item(extern_fn("gl_delete_program", &[("program", ty_int())], ty_void(), "gorget_gl_delete_program")));
-    items.push(fn_item(extern_fn("gl_get_shader_info_log", &[("shader", ty_int())], ty_string(), "gorget_gl_get_shader_info_log")));
-    items.push(fn_item(extern_fn("gl_get_program_info_log", &[("program", ty_int())], ty_string(), "gorget_gl_get_program_info_log")));
+    items.push(fn_item(extern_fn("gl_get_shader_info_log", &[("shader", ty_int())], ty_str(), "gorget_gl_get_shader_info_log")));
+    items.push(fn_item(extern_fn("gl_get_program_info_log", &[("program", ty_int())], ty_str(), "gorget_gl_get_program_info_log")));
 
     // ── Uniforms ────────────────────────────────────────────
     items.push(fn_item(extern_fn("gl_get_uniform_location", &[("program", ty_int()), ("name", ty_str())], ty_int(), "gorget_gl_get_uniform_location")));
@@ -2190,7 +2190,7 @@ fn gen_gl_module() -> Module {
 
     // ── Query ───────────────────────────────────────────────
     items.push(fn_item(extern_fn("gl_get_error", &[], ty_int(), "gorget_gl_get_error")));
-    items.push(fn_item(extern_fn("gl_get_string", &[("name", ty_int())], ty_string(), "gorget_gl_get_string")));
+    items.push(fn_item(extern_fn("gl_get_string", &[("name", ty_int())], ty_str(), "gorget_gl_get_string")));
     items.push(fn_item(extern_fn("gl_get_integer", &[("pname", ty_int())], ty_int(), "gorget_gl_get_integer")));
 
     // ── VAO (Vertex Array Objects — GL 3.0+) ────────────────

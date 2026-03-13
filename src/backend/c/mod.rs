@@ -493,6 +493,10 @@ fn takes_array_ptr_args(name: &str) -> bool {
         | "gorget_gl_uniform_3fv"
         | "gorget_gl_uniform_4fv"
         | "gorget_gl_uniform_matrix3fv"
+        | "gorget_gl_uniform_matrix4fv"
+        | "gorget_gl_buffer_data"
+        | "gorget_gl_tex_image_2d"
+        | "gorget_gl_load_matrix"
         | "gorget_gl_draw_buffers"
         | "gorget_gl_buffer_storage"
         | "gorget_gl_patch_parameter_fv"
@@ -5275,6 +5279,8 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
         // Audio types
         "AudioChunk" => Some("GorgetAudioChunk"),
         "AudioMusic" => Some("GorgetAudioMusic"),
+        // GL types (GorgetGLContext is int64_t — opaque handle like Metal)
+        "GLContext" => Some("GorgetGLContext"),
         _ => None,
     }
 }
