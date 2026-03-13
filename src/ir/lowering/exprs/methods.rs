@@ -1311,7 +1311,9 @@ pub(super) fn lower_method_call(
             .enumerate()
             .map(|(i, arg)| {
                 let callee_pt = method_param_types.get(i).copied();
-                lower_call_arg(ctx, builder, arg, callee_pt)
+                // Method args: i is 0-based for non-self args, but fn_param_ownerships
+                // includes self at index 0, so offset by 1.
+                lower_call_arg(ctx, builder, arg, callee_pt, &effective_name, i + 1)
             })
             .collect();
         call_args.extend(lowered_method_args.iter().cloned());

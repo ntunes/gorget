@@ -19,23 +19,33 @@ pub(super) fn lower_call_arg(
     builder: &mut FunctionBuilder,
     arg: &Spanned<ast::CallArg>,
     callee_param_type: Option<TypeId>,
+    callee_name: &str,
+    arg_idx: usize,
 ) -> Operand {
     // Whether the callee's parameter is a Move type (and therefore auto-borrowed to MutPtr)
     let callee_expects_auto_borrow = callee_param_type
         .map(|pt| ctx.type_registry.is_move_type(pt))
         .unwrap_or(false);
 
+    // Check if the callee's param has explicit MutableBorrow (&) ownership.
+    // This is distinct from the default Borrow ownership which doesn't imply pointer passing.
+    let callee_param_is_mut_borrow = ctx.fn_param_ownerships.get(callee_name)
+        .and_then(|ownerships| ownerships.get(arg_idx))
+        .map(|o| matches!(o, Ownership::MutableBorrow))
+        .unwrap_or(false);
+
+    // The callee will auto-borrow this param (pass as MutPtr) if:
+    // 1. The param base type is Move (auto-borrow for Move types with Borrow ownership), OR
+    // 2. The param has explicit & (MutableBorrow) ownership in its declaration
+    let callee_auto_borrows = callee_expects_auto_borrow || callee_param_is_mut_borrow;
+
     // Special case: &name or bare name where name is already an auto-borrowed param (pointer).
     // Skip the auto-deref that Identifier would do — just forward the pointer.
-    // For Borrow, only forward when callee also auto-borrows (both sides use MutPtr).
     if matches!(arg.node.ownership, Ownership::MutableBorrow)
-        || (matches!(arg.node.ownership, Ownership::Borrow) && callee_expects_auto_borrow)
+        || (matches!(arg.node.ownership, Ownership::Borrow) && callee_auto_borrows)
     {
         if let Expr::Identifier(name) = &arg.node.value.node {
             if let Some((local_id, _)) = ctx.lookup_local(name) {
-                // Forward the pointer directly if:
-                // 1. It's a mutable capture local (closure), OR
-                // 2. It's already a MutPtr type (auto-borrowed parameter like `T &param`)
                 let is_already_ptr = {
                     let lid = local_id.0 as usize;
                     lid < builder.locals.len() && matches!(
@@ -690,7 +700,7 @@ pub(super) fn lower_call(
                 if let Some(pt) = callee_pt {
                     ctx.expected_type = Some(pt);
                 }
-                let op = lower_call_arg(ctx, builder, arg, callee_pt);
+                let op = lower_call_arg(ctx, builder, arg, callee_pt, &effective_name, i);
                 ctx.expected_type = prev_expected;
                 op
             })
