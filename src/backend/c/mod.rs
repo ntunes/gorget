@@ -7708,6 +7708,20 @@ fn format_operand(operand: &Operand, func: &Function, registry: &TypeRegistry) -
     }
 }
 
+/// Format an array operand as a pointer: adds `&` if the operand is a value type,
+/// passes through unchanged if it's already a pointer (Ptr/MutPtr).
+fn addr_of_array_operand(operand: &Operand, func: &Function, registry: &TypeRegistry, type_overrides: &std::collections::HashMap<usize, String>) -> String {
+    let s = format_operand(operand, func, registry);
+    if let Operand::Copy(p) | Operand::Move(p) = operand {
+        let idx = p.local.0 as usize;
+        let ct = effective_c_type(idx, func, registry, type_overrides);
+        if ct.ends_with('*') {
+            return s;
+        }
+    }
+    format!("&{s}")
+}
+
 /// Extract a `const char*` from an operand: string literals pass through,
 /// Str/GorgetString values get `.data` appended.
 fn extract_cstr_operand(operand: &Operand, func: &Function, registry: &TypeRegistry, type_overrides: &std::collections::HashMap<usize, String>) -> String {
@@ -10925,12 +10939,12 @@ fn try_emit_outparam_call(
         //   int64_t* out_w, int64_t* out_h, int64_t* out_ch, GorgetArray* out_data, Str* out_err)
         "gorget_image_load_rgba_from_memory" => {
             let dst_id = dst.as_ref()?;
-            let data_arg = format_operand(&args[0], func, registry);
+            let data_ptr = addr_of_array_operand(&args[0], func, registry, type_overrides);
             let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
             let _ = writeln!(out,
                 "        _{id} = ({{ int64_t __tag = 0, __w = 0, __h = 0, __ch = 0; \
                 GorgetArray __data = gorget_array_new(sizeof(uint8_t)); Str __err = {{0}}; \
-                gorget_image_load_rgba_from_memory(&{data_arg}, &__tag, &__w, &__h, &__ch, &__data, &__err); \
+                gorget_image_load_rgba_from_memory({data_ptr}, &__tag, &__w, &__h, &__ch, &__data, &__err); \
                 {c_type} __wr; if (__tag == 0) {{ __wr.tag = 0; __wr.data.Ok._0 = (Image){{.width = __w, .height = __h, .channels = __ch, .data = __data}}; }} \
                 else {{ __wr.tag = 1; __wr.data.Error._0 = __err; }} __wr; }});",
                 id = dst_id.0);
@@ -10966,11 +10980,11 @@ fn try_emit_outparam_call(
         // gorget_audio_load_wav_from_memory(const GorgetArray* data, int64_t* out_tag, GorgetAudioChunk* out_chunk, Str* out_err)
         "gorget_audio_load_wav_from_memory" => {
             let dst_id = dst.as_ref()?;
-            let data_arg = format_operand(&args[0], func, registry);
+            let data_ptr = addr_of_array_operand(&args[0], func, registry, type_overrides);
             let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
             let _ = writeln!(out,
                 "        _{id} = ({{ int64_t __tag = 0; GorgetAudioChunk __chunk = {{0}}; Str __err = {{0}}; \
-                gorget_audio_load_wav_from_memory(&{data_arg}, &__tag, &__chunk, &__err); \
+                gorget_audio_load_wav_from_memory({data_ptr}, &__tag, &__chunk, &__err); \
                 {c_type} __wr; if (__tag == 0) {{ __wr.tag = 0; __wr.data.Ok._0 = __chunk; }} \
                 else {{ __wr.tag = 1; __wr.data.Error._0 = __err; }} __wr; }});",
                 id = dst_id.0);
@@ -10980,12 +10994,12 @@ fn try_emit_outparam_call(
         //   int64_t* out_tag, GorgetArray* out_data, Str* out_err)
         "gorget_deflate_decompress" => {
             let dst_id = dst.as_ref()?;
-            let data_arg = format_operand(&args[0], func, registry);
+            let data_ptr = addr_of_array_operand(&args[0], func, registry, type_overrides);
             let size_arg = format_operand(&args[1], func, registry);
             let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
             let _ = writeln!(out,
                 "        _{id} = ({{ int64_t __tag = 0; GorgetArray __data = gorget_array_new(sizeof(uint8_t)); Str __err = {{0}}; \
-                gorget_deflate_decompress(&{data_arg}, {size_arg}, &__tag, &__data, &__err); \
+                gorget_deflate_decompress({data_ptr}, {size_arg}, &__tag, &__data, &__err); \
                 {c_type} __wr; if (__tag == 0) {{ __wr.tag = 0; __wr.data.Ok._0 = __data; }} \
                 else {{ __wr.tag = 1; __wr.data.Error._0 = __err; }} __wr; }});",
                 id = dst_id.0);
