@@ -33,7 +33,17 @@ pub(super) fn lower_call_arg(
     {
         if let Expr::Identifier(name) = &arg.node.value.node {
             if let Some((local_id, _)) = ctx.lookup_local(name) {
-                if ctx.mut_capture_locals.contains_key(&local_id) {
+                // Forward the pointer directly if:
+                // 1. It's a mutable capture local (closure), OR
+                // 2. It's already a MutPtr type (auto-borrowed parameter like `T &param`)
+                let is_already_ptr = {
+                    let lid = local_id.0 as usize;
+                    lid < builder.locals.len() && matches!(
+                        ctx.type_registry.get(builder.locals[lid].type_id),
+                        Some(GirType::MutPtr(_)) | Some(GirType::Ptr(_))
+                    )
+                };
+                if ctx.mut_capture_locals.contains_key(&local_id) || is_already_ptr {
                     return FunctionBuilder::copy(local_id);
                 }
             }

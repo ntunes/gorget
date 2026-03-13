@@ -49,6 +49,18 @@ pub fn lower_function(
         })
         .collect();
 
+    // Register standalone function signature in fn_sigs with BASE types
+    // (before MutPtr wrapping) so callers can detect auto-borrow parameters
+    // and forward pointers instead of copying structs.
+    if !ctx.fn_sigs.contains_key(name) {
+        let base_param_types: Vec<TypeId> = func
+            .params
+            .iter()
+            .map(|p| ctx.type_mapper.map_ast_type(&p.node.type_.node))
+            .collect();
+        ctx.fn_sigs.insert(name.to_string(), (base_param_types, return_type));
+    }
+
     let mut builder = FunctionBuilder::new(name.to_string(), return_type, &params);
 
     // Clear and register locals for this function
