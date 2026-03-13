@@ -4214,6 +4214,8 @@ fn emit_coroutine(
                 format_type(func.locals[idx].type_id, registry)
             };
             if let Some(stripped) = c_type.strip_suffix('*') {
+                // Strip const qualifier too (bare Borrow params use const T*)
+                let stripped = stripped.strip_prefix("const ").unwrap_or(stripped);
                 type_overrides.insert(idx, stripped.to_string());
             }
         }
@@ -4688,7 +4690,8 @@ fn emit_spawn_helpers(out: &mut String, module: &Module) {
                     f.params.get(i).map_or(false, |&actual_type| {
                         actual_type != *stored_type && matches!(
                             module.type_registry.get(actual_type),
-                            Some(GirType::MutPtr(inner)) if *inner == *stored_type
+                            Some(GirType::MutPtr(inner)) | Some(GirType::Ptr(inner))
+                                if *inner == *stored_type
                         )
                     })
                 });

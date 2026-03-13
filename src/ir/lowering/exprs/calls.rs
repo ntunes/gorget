@@ -22,22 +22,28 @@ pub(super) fn lower_call_arg(
     callee_name: &str,
     arg_idx: usize,
 ) -> Operand {
-    // Whether the callee's parameter is a Move type (and therefore auto-borrowed to MutPtr)
-    let callee_expects_auto_borrow = callee_param_type
+    // Whether the callee's parameter is a Move type (passed by pointer)
+    let callee_is_move_param = callee_param_type
         .map(|pt| ctx.type_registry.is_move_type(pt))
         .unwrap_or(false);
 
-    // Check if the callee's param has explicit MutableBorrow (&) ownership.
-    // This is distinct from the default Borrow ownership which doesn't imply pointer passing.
-    let callee_param_is_mut_borrow = ctx.fn_param_ownerships.get(callee_name)
+    // Check if the callee's param has explicit MutableBorrow (&) or Move (!) ownership.
+    let callee_param_ownership = ctx.fn_param_ownerships.get(callee_name)
         .and_then(|ownerships| ownerships.get(arg_idx))
+        .copied();
+
+    let callee_param_is_mut_borrow = callee_param_ownership
         .map(|o| matches!(o, Ownership::MutableBorrow))
         .unwrap_or(false);
 
-    // The callee will auto-borrow this param (pass as MutPtr) if:
-    // 1. The param base type is Move (auto-borrow for Move types with Borrow ownership), OR
-    // 2. The param has explicit & (MutableBorrow) ownership in its declaration
-    let callee_auto_borrows = callee_expects_auto_borrow || callee_param_is_mut_borrow;
+    let callee_param_is_move = callee_param_ownership
+        .map(|o| matches!(o, Ownership::Move))
+        .unwrap_or(false);
+
+    // The callee expects a pointer for this param if:
+    // 1. The param base type is a struct (all structs pass by pointer), OR
+    // 2. The param has explicit & (MutableBorrow) ownership (even for primitives)
+    let callee_auto_borrows = callee_is_move_param || callee_param_is_mut_borrow;
 
     // Special case: &name or bare name where name is already an auto-borrowed param (pointer).
     // Skip the auto-deref that Identifier would do — just forward the pointer.
@@ -53,7 +59,10 @@ pub(super) fn lower_call_arg(
                         Some(GirType::MutPtr(_)) | Some(GirType::Ptr(_))
                     )
                 };
-                if ctx.mut_capture_locals.contains_key(&local_id) || is_already_ptr {
+                if ctx.ref_locals.contains_key(&local_id)
+                    || ctx.mut_capture_locals.contains_key(&local_id)
+                    || is_already_ptr
+                {
                     return FunctionBuilder::copy(local_id);
                 }
             }
@@ -79,8 +88,10 @@ pub(super) fn lower_call_arg(
             }
             val
         }
-        Ownership::Borrow if callee_expects_auto_borrow => {
-            // Auto-borrow Move-type values: pass as pointer, not by value.
+        Ownership::Borrow if callee_auto_borrows => {
+            // Struct param: pass as pointer. Use const Ptr if callee has bare Borrow ownership,
+            // MutPtr if callee has & or ! ownership.
+            let use_mut_ptr = callee_param_is_mut_borrow || callee_param_is_move;
             // GlobalRef → GlobalRefPtr: emit &global_name directly.
             if let Operand::Constant(Constant::GlobalRef(name)) = &val {
                 return Operand::Constant(Constant::GlobalRefPtr(name.clone()));
@@ -90,13 +101,51 @@ pub(super) fn lower_call_arg(
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 if place.projections.is_empty() {
                     let local_type = builder.locals[place.local.0 as usize].type_id;
-                    let ptr_type = ctx.register_mut_ptr_type(local_type);
-                    let dst = builder.add_local(ptr_type, None);
-                    builder.emit_borrow_mut(dst, place.clone());
-                    return FunctionBuilder::copy(dst);
+                    if use_mut_ptr {
+                        let ptr_type = ctx.register_mut_ptr_type(local_type);
+                        let dst = builder.add_local(ptr_type, None);
+                        builder.emit_borrow_mut(dst, place.clone());
+                        return FunctionBuilder::copy(dst);
+                    } else {
+                        let ptr_type = ctx.register_ptr_type(local_type);
+                        let dst = builder.add_local(ptr_type, None);
+                        builder.emit_borrow(dst, place.clone());
+                        return FunctionBuilder::copy(dst);
+                    }
                 }
             }
             // Materialize non-place values (constants, call results) into a temp local
+            if let Some(pt) = callee_param_type {
+                let tmp = builder.add_local(pt, None);
+                builder.assign(Place::local(tmp), val);
+                if use_mut_ptr {
+                    let ptr_type = ctx.register_mut_ptr_type(pt);
+                    let dst = builder.add_local(ptr_type, None);
+                    builder.emit_borrow_mut(dst, Place::local(tmp));
+                    return FunctionBuilder::copy(dst);
+                } else {
+                    let ptr_type = ctx.register_ptr_type(pt);
+                    let dst = builder.add_local(ptr_type, None);
+                    builder.emit_borrow(dst, Place::local(tmp));
+                    return FunctionBuilder::copy(dst);
+                }
+            }
+            Operand::Constant(Constant::Unit) // unreachable: callee_expects_auto_borrow implies callee_param_type.is_some()
+        }
+        Ownership::Move if callee_is_move_param => {
+            // Move of a Move-type value: callee expects MutPtr. Emit borrow_mut.
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
+                if place.projections.is_empty() {
+                    let local_type = builder.locals[place.local.0 as usize].type_id;
+                    let ptr_type = ctx.register_mut_ptr_type(local_type);
+                    let dst = builder.add_local(ptr_type, None);
+                    builder.emit_borrow_mut(dst, place.clone());
+                    // Mark the source as moved in the caller
+                    ctx.drops.mark_moved(place.local);
+                    return FunctionBuilder::copy(dst);
+                }
+            }
+            // Materialize non-place values into a temp
             if let Some(pt) = callee_param_type {
                 let tmp = builder.add_local(pt, None);
                 builder.assign(Place::local(tmp), val);
@@ -105,9 +154,9 @@ pub(super) fn lower_call_arg(
                 builder.emit_borrow_mut(dst, Place::local(tmp));
                 return FunctionBuilder::copy(dst);
             }
-            Operand::Constant(Constant::Unit) // unreachable: callee_expects_auto_borrow implies callee_param_type.is_some()
+            val
         }
-        _ => val, // Move or Borrow-of-Copy: pass by value
+        _ => val, // Borrow-of-Copy or Move-of-Copy: pass by value
     }
 }
 
@@ -862,8 +911,10 @@ pub(super) fn lower_interp_segment(
 ) {
     // 1. Try simple variable lookup first
     if let Some((local_id, type_id)) = ctx.lookup_local(var_name) {
-        // If this is a mutable capture/borrow pointer, deref to get the value
-        if let Some(&value_type) = ctx.mut_capture_locals.get(&local_id) {
+        // If this is a ref/mut-ref pointer param, deref to get the value
+        if let Some(&value_type) = ctx.ref_locals.get(&local_id)
+            .or_else(|| ctx.mut_capture_locals.get(&local_id))
+        {
             let deref_place = Place {
                 local: local_id,
                 projections: vec![Projection::Deref],

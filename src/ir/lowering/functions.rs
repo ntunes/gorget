@@ -73,7 +73,9 @@ pub fn lower_function(
         let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.register_local(&p.node.name.node, local_id, gir_type);
-        if ctx.is_auto_borrowed(base_type, p.node.ownership) {
+        if ctx.is_ref_param(base_type, p.node.ownership) {
+            ctx.ref_locals.insert(local_id, base_type);
+        } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             ctx.mut_capture_locals.insert(local_id, base_type);
         }
         // Track callable parameter return types
@@ -254,7 +256,9 @@ pub fn lower_equip_method(
         let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
-        if ctx.is_auto_borrowed(base_type, p.node.ownership) {
+        if ctx.is_ref_param(base_type, p.node.ownership) {
+            ctx.ref_locals.insert(LocalId(param_idx), base_type);
+        } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }
         // Track callable parameter return types for indirect call lowering
@@ -434,7 +438,9 @@ pub fn lower_generic_function(
         let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.register_local(&p.node.name.node, local_id, gir_type);
-        if ctx.is_auto_borrowed(base_type, p.node.ownership) {
+        if ctx.is_ref_param(base_type, p.node.ownership) {
+            ctx.ref_locals.insert(local_id, base_type);
+        } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             ctx.mut_capture_locals.insert(local_id, base_type);
         }
         // Track callable parameter return types for indirect call lowering
@@ -607,7 +613,9 @@ pub fn lower_generic_equip_methods_with_defaults(
             let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
             let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
             ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
-            if ctx.is_auto_borrowed(base_type, p.node.ownership) {
+            if ctx.is_ref_param(base_type, p.node.ownership) {
+                ctx.ref_locals.insert(LocalId(param_idx), base_type);
+            } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
                 ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
             }
             // Track callable parameter return types for indirect call lowering

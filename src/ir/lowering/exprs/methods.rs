@@ -204,11 +204,13 @@ pub(super) fn lower_method_call(
         None
     };
 
-    // For mutable borrow params used as method receivers, pass the raw pointer directly.
+    // For pointer params used as method receivers, pass the raw pointer directly.
     // Auto-deref would copy the struct, and mutations to the copy wouldn't propagate back.
     let borrow_param_local = if let Expr::Identifier(name) = &receiver.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
-            if ctx.mut_capture_locals.contains_key(&local_id) {
+            if ctx.ref_locals.contains_key(&local_id)
+                || ctx.mut_capture_locals.contains_key(&local_id)
+            {
                 Some(local_id)
             } else {
                 None

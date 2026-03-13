@@ -154,7 +154,11 @@ pub struct LoweringContext<'a> {
     /// Whether `directive overflow wrap` is active (integer overflow wraps).
     pub overflow_wrap: bool,
     /// LocalIds that are mutable capture pointers (need deref on read/write in closure bodies).
+    /// Tracks `&` (MutableBorrow) and `!` (Move) struct params, which are MutPtr in GIR.
     pub mut_capture_locals: FxHashMap<LocalId, TypeId>,
+    /// LocalIds that are read-only reference params (bare struct Borrow params).
+    /// These are Ptr (const pointer) in GIR and need auto-deref on read.
+    pub ref_locals: FxHashMap<LocalId, TypeId>,
     /// Extern binding: Gorget name → C symbol name (e.g., "llabs_wrapper" → "llabs").
     pub extern_bindings: FxHashMap<String, String>,
     /// Default parameter values: fn_name → Vec<(param_index, default_expr)>.
@@ -220,6 +224,7 @@ impl<'a> LoweringContext<'a> {
             snapshot_mode: false,
             overflow_wrap: false,
             mut_capture_locals: FxHashMap::default(),
+            ref_locals: FxHashMap::default(),
             extern_bindings: FxHashMap::default(),
             fn_defaults: FxHashMap::default(),
             fn_param_names: FxHashMap::default(),
@@ -304,6 +309,7 @@ impl<'a> LoweringContext<'a> {
     pub fn clear_locals(&mut self) {
         self.locals.clear();
         self.mut_capture_locals.clear();
+        self.ref_locals.clear();
         self.spawn.result_locals.clear();
         self.spawn.pending_fn = None;
         self.shared.locals.clear();
@@ -437,23 +443,41 @@ impl<'a> LoweringContext<'a> {
         self.type_registry.insert(GirType::MutPtr(pointee))
     }
 
-    /// Resolve a parameter's GIR type, applying auto-borrow for Move-type Borrow params.
-    /// MutableBorrow always becomes MutPtr; Borrow of a Move type becomes MutPtr.
+    /// Resolve a parameter's GIR type with explicit reference semantics.
+    ///
+    /// Move-type params are always passed by pointer:
+    /// - Borrow (bare) → Ptr (const T*) — read-only, callee cannot mutate
+    /// - MutableBorrow (&) → MutPtr (T*) — mutable
+    /// - Move (!) → MutPtr (T*) — mutable, callee drops pointee
+    ///
+    /// Copy-type structs pass by value (natural immutability via copy).
+    /// Primitives pass by value (except & which becomes MutPtr for out-params).
     pub fn resolve_param_type(&mut self, base_type: TypeId, ownership: Ownership) -> TypeId {
+        let is_move = self.type_registry.is_move_type(base_type);
         match ownership {
             Ownership::MutableBorrow => self.register_mut_ptr_type(base_type),
-            Ownership::Borrow if self.type_registry.is_move_type(base_type) => {
-                self.register_mut_ptr_type(base_type)
-            }
+            Ownership::Move if is_move => self.register_mut_ptr_type(base_type),
+            Ownership::Borrow if is_move => self.register_ptr_type(base_type),
             _ => base_type,
         }
     }
 
-    /// Whether this param ownership + type combination results in auto-borrow (MutPtr).
-    pub fn is_auto_borrowed(&self, base_type: TypeId, ownership: Ownership) -> bool {
+    /// Whether this is a bare Borrow param of a Move type (read-only const pointer).
+    pub fn is_ref_param(&self, base_type: TypeId, ownership: Ownership) -> bool {
+        matches!(ownership, Ownership::Borrow) && self.type_registry.is_move_type(base_type)
+    }
+
+    /// Whether this param results in a MutPtr (mutable pointer).
+    /// True for MutableBorrow (&) and Move (!) on Move types.
+    pub fn is_mut_ref_param(&self, base_type: TypeId, ownership: Ownership) -> bool {
         matches!(ownership, Ownership::MutableBorrow)
-            || (matches!(ownership, Ownership::Borrow)
-                && self.type_registry.is_move_type(base_type))
+            || (matches!(ownership, Ownership::Move) && self.type_registry.is_move_type(base_type))
+    }
+
+    /// Whether this param ownership + type combination results in any pointer passing.
+    /// Used for backwards-compatible checks that previously used is_auto_borrowed.
+    pub fn is_auto_borrowed(&self, base_type: TypeId, ownership: Ownership) -> bool {
+        self.is_ref_param(base_type, ownership) || self.is_mut_ref_param(base_type, ownership)
     }
 
     /// Populate the struct_fields cache from the TypeRegistry.
