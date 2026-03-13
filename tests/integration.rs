@@ -4617,6 +4617,7 @@ done",
 }
 
 #[test]
+#[serial(httpserver_tcp)]
 fn httpserver_basic() {
     run_gg(
         "httpserver_basic.gg",
@@ -4627,11 +4628,13 @@ done",
 }
 
 #[test]
+#[serial(httpserver_tcp)]
 fn httpserver_concurrent() {
     run_gg("httpserver_concurrent.gg", "2");
 }
 
 #[test]
+#[serial(httpserver_tcp)]
 fn httpserver_keepalive() {
     run_gg("httpserver_keepalive.gg", "true\ntrue");
 }
@@ -4669,6 +4672,7 @@ fn httpserver_tls() {
 }
 
 #[test]
+#[serial(httpserver_tcp)]
 fn httpserver_e2e() {
     // 6 checks × 2 lines each (status + body/header), all printing "ok"
     run_gg(
@@ -4694,6 +4698,7 @@ fn httpserver_methods() {
 }
 
 #[test]
+#[serial(httpserver_tcp)]
 fn httpserver_large_body() {
     run_gg(
         "httpserver_large_body.gg",
@@ -4718,6 +4723,7 @@ fn httpserver_protocol() {
 }
 
 #[test]
+#[serial(httpserver_tcp)]
 fn httpserver_chunked() {
     run_gg(
         "httpserver_chunked.gg",
@@ -4758,6 +4764,7 @@ fn httpserver_static_enhanced() {
 }
 
 #[test]
+#[serial(httpserver_tcp)]
 fn httpserver_lifecycle() {
     run_gg(
         "httpserver_lifecycle.gg",
@@ -4883,6 +4890,7 @@ fn httpserver_query_string() {
 }
 
 #[test]
+#[serial(httpserver_tcp)]
 fn httpserver_parse_request() {
     run_gg(
         "httpserver_parse_request.gg",
@@ -4912,6 +4920,7 @@ done",
 }
 
 #[test]
+#[serial(httpserver_tcp)]
 fn httpserver_e2e_extended() {
     run_gg(
         "httpserver_e2e_extended.gg",
