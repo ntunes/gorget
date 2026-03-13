@@ -114,6 +114,11 @@ fn map_stdlib_name(name: &str) -> &str {
         "Process__close_stdin" => "gorget_process_close_stdin",
         "Process__read_stdout" => "gorget_process_read_stdout",
         "Process__read_stderr" => "gorget_process_read_stderr",
+        // Memory diagnostics (std.os)
+        "mem_allocated" => "gorget_mem_allocated",
+        "mem_freed" => "gorget_mem_freed",
+        "mem_live" => "gorget_mem_live",
+        "mem_alloc_count" => "gorget_mem_alloc_count",
         // Signal functions (std.signal)
         "signal_trap" => "gorget_signal_trap",
         "signal_check" => "gorget_signal_check",

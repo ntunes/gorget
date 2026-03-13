@@ -32,17 +32,39 @@ typedef struct GorgetAllocator {
     void* ctx;
 } GorgetAllocator;
 
+static _Atomic size_t __gorget_total_allocated = 0;
+static _Atomic size_t __gorget_total_freed = 0;
+static _Atomic size_t __gorget_alloc_count = 0;
+
 static void* __gorget_global_alloc_fn(void* ctx, size_t size) {
     (void)ctx;
+    __gorget_total_allocated += size;
+    __gorget_alloc_count++;
     return malloc(size);
 }
 static void* __gorget_global_realloc_fn(void* ctx, void* ptr, size_t old_size, size_t new_size) {
-    (void)ctx; (void)old_size;
+    (void)ctx;
+    __gorget_total_allocated += (new_size > old_size ? new_size - old_size : 0);
+    if (old_size > new_size) __gorget_total_freed += (old_size - new_size);
     return realloc(ptr, new_size);
 }
 static void __gorget_global_dealloc_fn(void* ctx, void* ptr, size_t size) {
-    (void)ctx; (void)size;
+    (void)ctx;
+    __gorget_total_freed += size;
     free(ptr);
+}
+
+static int64_t gorget_mem_allocated(void) {
+    return (int64_t)__gorget_total_allocated;
+}
+static int64_t gorget_mem_freed(void) {
+    return (int64_t)__gorget_total_freed;
+}
+static int64_t gorget_mem_live(void) {
+    return (int64_t)(__gorget_total_allocated - __gorget_total_freed);
+}
+static int64_t gorget_mem_alloc_count(void) {
+    return (int64_t)__gorget_alloc_count;
 }
 
 static GorgetAllocator __gorget_global_alloc = {

@@ -190,6 +190,10 @@ fn gen_os_module() -> Module {
         decl_fn("platform", &[], ty_str()),
         decl_fn("args", &[], ty_vector_str()),
         decl_fn("readdir", &[("path", ty_str())], ty_vector_str()),
+        decl_fn("mem_allocated", &[], ty_int()),
+        decl_fn("mem_freed", &[], ty_int()),
+        decl_fn("mem_live", &[], ty_int()),
+        decl_fn("mem_alloc_count", &[], ty_int()),
     ])
 }
 
