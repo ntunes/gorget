@@ -1,3 +1,4 @@
+use crate::intern::Symbol;
 use logos::Logos;
 use std::fmt;
 
@@ -601,7 +602,7 @@ impl fmt::Display for Keyword {
 pub enum Token {
     // Keywords and identifiers
     Keyword(Keyword),
-    Identifier(String),
+    Identifier(Symbol),
 
     // Literals
     IntLiteral(i64),
@@ -689,7 +690,7 @@ impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Token::Keyword(kw) => write!(f, "{kw}"),
-            Token::Identifier(name) => write!(f, "identifier '{name}'"),
+            Token::Identifier(sym) => write!(f, "identifier '{sym}'"),
             Token::IntLiteral(n) => write!(f, "integer {n}"),
             Token::FloatLiteral(n) => write!(f, "float {n}"),
             Token::StringLiteral(_) => write!(f, "string"),

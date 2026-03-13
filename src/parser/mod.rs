@@ -158,8 +158,8 @@ impl Parser {
     }
 
     pub fn expect_identifier(&mut self) -> Result<Spanned<String>, ParseError> {
-        if let Token::Identifier(name) = self.peek() {
-            let name = name.clone();
+        if let Token::Identifier(sym) = self.peek() {
+            let name = sym.as_str().to_string();
             let span = self.peek_span();
             self.advance();
             Ok(Spanned::new(name, span))
@@ -172,8 +172,8 @@ impl Parser {
     /// in certain positions (e.g., field names).
     pub fn expect_name(&mut self) -> Result<Spanned<String>, ParseError> {
         match self.peek() {
-            Token::Identifier(name) => {
-                let name = name.clone();
+            Token::Identifier(sym) => {
+                let name = sym.as_str().to_string();
                 let span = self.peek_span();
                 self.advance();
                 Ok(Spanned::new(name, span))

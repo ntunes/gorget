@@ -410,7 +410,7 @@ impl<'src> Lexer<'src> {
                 } else if slice == "_" {
                     Token::Underscore
                 } else {
-                    Token::Identifier(slice.to_string())
+                    Token::Identifier(crate::intern::intern(slice))
                 }
             }
             RawToken::Newline => {
@@ -948,7 +948,7 @@ mod tests {
             tokens,
             vec![
                 Token::Keyword(Keyword::Int),
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::Eq,
                 Token::IntLiteral(5),
                 Token::Newline,
@@ -963,11 +963,11 @@ mod tests {
             tokens,
             vec![
                 Token::Keyword(Keyword::If),
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::Colon,
                 Token::Newline,
                 Token::Indent,
-                Token::Identifier("y".to_string()),
+                Token::Identifier(crate::intern::intern("y")),
                 Token::Eq,
                 Token::IntLiteral(1),
                 Token::Newline,
@@ -983,16 +983,16 @@ mod tests {
             tokens,
             vec![
                 Token::Keyword(Keyword::If),
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::Colon,
                 Token::Newline,
                 Token::Indent,
                 Token::Keyword(Keyword::If),
-                Token::Identifier("y".to_string()),
+                Token::Identifier(crate::intern::intern("y")),
                 Token::Colon,
                 Token::Newline,
                 Token::Indent,
-                Token::Identifier("z".to_string()),
+                Token::Identifier(crate::intern::intern("z")),
                 Token::Eq,
                 Token::IntLiteral(1),
                 Token::Newline,
@@ -1008,11 +1008,11 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::Identifier("f".to_string()),
+                Token::Identifier(crate::intern::intern("f")),
                 Token::LParen,
-                Token::Identifier("a".to_string()),
+                Token::Identifier(crate::intern::intern("a")),
                 Token::Comma,
-                Token::Identifier("b".to_string()),
+                Token::Identifier(crate::intern::intern("b")),
                 Token::RParen,
                 Token::Newline,
             ]
@@ -1091,11 +1091,11 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::Identifier("a".to_string()),
+                Token::Identifier(crate::intern::intern("a")),
                 Token::Plus,
-                Token::Identifier("b".to_string()),
+                Token::Identifier(crate::intern::intern("b")),
                 Token::EqEq,
-                Token::Identifier("c".to_string()),
+                Token::Identifier(crate::intern::intern("c")),
                 Token::Newline,
             ]
         );
@@ -1108,21 +1108,21 @@ mod tests {
             tokens,
             vec![
                 Token::Keyword(Keyword::Int),
-                Token::Identifier("add".to_string()),
+                Token::Identifier(crate::intern::intern("add")),
                 Token::LParen,
                 Token::Keyword(Keyword::Int),
-                Token::Identifier("a".to_string()),
+                Token::Identifier(crate::intern::intern("a")),
                 Token::Comma,
                 Token::Keyword(Keyword::Int),
-                Token::Identifier("b".to_string()),
+                Token::Identifier(crate::intern::intern("b")),
                 Token::RParen,
                 Token::Colon,
                 Token::Newline,
                 Token::Indent,
                 Token::Keyword(Keyword::Return),
-                Token::Identifier("a".to_string()),
+                Token::Identifier(crate::intern::intern("a")),
                 Token::Plus,
-                Token::Identifier("b".to_string()),
+                Token::Identifier(crate::intern::intern("b")),
                 Token::Newline,
                 Token::Dedent,
             ]
@@ -1135,7 +1135,7 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::Eq,
                 Token::IntLiteral(5),
                 Token::Comment("# comment".to_string()),
@@ -1150,11 +1150,11 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::Eq,
                 Token::IntLiteral(1),
                 Token::Newline,
-                Token::Identifier("y".to_string()),
+                Token::Identifier(crate::intern::intern("y")),
                 Token::Eq,
                 Token::IntLiteral(2),
                 Token::Newline,
@@ -1170,7 +1170,7 @@ mod tests {
             vec![
                 Token::DocComment("#/ This is a doc comment".to_string()),
                 Token::Keyword(Keyword::Int),
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::Eq,
                 Token::IntLiteral(5),
                 Token::Newline,
@@ -1217,26 +1217,26 @@ mod tests {
             tokens,
             vec![
                 Token::Keyword(Keyword::If),
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::Colon,
                 Token::Newline,
                 Token::Indent,
                 Token::Keyword(Keyword::If),
-                Token::Identifier("y".to_string()),
+                Token::Identifier(crate::intern::intern("y")),
                 Token::Colon,
                 Token::Newline,
                 Token::Indent,
-                Token::Identifier("a".to_string()),
+                Token::Identifier(crate::intern::intern("a")),
                 Token::Eq,
                 Token::IntLiteral(1),
                 Token::Newline,
                 Token::Dedent,
-                Token::Identifier("b".to_string()),
+                Token::Identifier(crate::intern::intern("b")),
                 Token::Eq,
                 Token::IntLiteral(2),
                 Token::Newline,
                 Token::Dedent,
-                Token::Identifier("c".to_string()),
+                Token::Identifier(crate::intern::intern("c")),
                 Token::Eq,
                 Token::IntLiteral(3),
                 Token::Newline,
@@ -1250,15 +1250,15 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::Eq,
-                Token::Identifier("foo".to_string()),
+                Token::Identifier(crate::intern::intern("foo")),
                 Token::Dot,
-                Token::Identifier("bar".to_string()),
+                Token::Identifier(crate::intern::intern("bar")),
                 Token::LParen,
                 Token::RParen,
                 Token::Dot,
-                Token::Identifier("baz".to_string()),
+                Token::Identifier(crate::intern::intern("baz")),
                 Token::LParen,
                 Token::RParen,
                 Token::Newline,
@@ -1319,11 +1319,11 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::Identifier("a".to_string()),
+                Token::Identifier(crate::intern::intern("a")),
                 Token::QuestionDot,
-                Token::Identifier("b".to_string()),
+                Token::Identifier(crate::intern::intern("b")),
                 Token::DoubleQuestion,
-                Token::Identifier("c".to_string()),
+                Token::Identifier(crate::intern::intern("c")),
                 Token::Newline,
             ]
         );
@@ -1353,7 +1353,7 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::PlusEq,
                 Token::IntLiteral(1),
                 Token::Newline,
@@ -1367,16 +1367,16 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token::Identifier("f".to_string()),
+                Token::Identifier(crate::intern::intern("f")),
                 Token::LParen,
                 Token::Ampersand,
-                Token::Identifier("name".to_string()),
+                Token::Identifier(crate::intern::intern("name")),
                 Token::RParen,
                 Token::Newline,
-                Token::Identifier("f".to_string()),
+                Token::Identifier(crate::intern::intern("f")),
                 Token::LParen,
                 Token::Bang,
-                Token::Identifier("name".to_string()),
+                Token::Identifier(crate::intern::intern("name")),
                 Token::RParen,
                 Token::Newline,
             ]
@@ -1390,9 +1390,9 @@ mod tests {
             tokens,
             vec![
                 Token::At,
-                Token::Identifier("derive".to_string()),
+                Token::Identifier(crate::intern::intern("derive")),
                 Token::LParen,
-                Token::Identifier("Debuggable".to_string()),
+                Token::Identifier(crate::intern::intern("Debuggable")),
                 Token::RParen,
                 Token::Newline,
             ]
@@ -1446,25 +1446,25 @@ void main():
             tokens,
             vec![
                 Token::Keyword(Keyword::Void),
-                Token::Identifier("main".to_string()),
+                Token::Identifier(crate::intern::intern("main")),
                 Token::LParen,
                 Token::RParen,
                 Token::Colon,
                 Token::Newline,
                 Token::Indent,
                 Token::Keyword(Keyword::Int),
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::Eq,
                 Token::IntLiteral(42),
                 Token::Newline,
                 Token::Keyword(Keyword::If),
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::Gt,
                 Token::IntLiteral(0),
                 Token::Colon,
                 Token::Newline,
                 Token::Indent,
-                Token::Identifier("print".to_string()),
+                Token::Identifier(crate::intern::intern("print")),
                 Token::LParen,
                 Token::StringLiteral(StringLiteral {
                     kind: StringKind::Normal,
@@ -1485,7 +1485,7 @@ void main():
             tokens,
             vec![
                 Token::Comment("# whole line comment".to_string()),
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::Eq,
                 Token::IntLiteral(1),
                 Token::Newline,
@@ -1499,13 +1499,13 @@ void main():
         assert_eq!(
             tokens,
             vec![
-                Token::Identifier("a".to_string()),
+                Token::Identifier(crate::intern::intern("a")),
                 Token::PlusPercent,
-                Token::Identifier("b".to_string()),
+                Token::Identifier(crate::intern::intern("b")),
                 Token::MinusPercent,
-                Token::Identifier("c".to_string()),
+                Token::Identifier(crate::intern::intern("c")),
                 Token::StarPercent,
-                Token::Identifier("d".to_string()),
+                Token::Identifier(crate::intern::intern("d")),
                 Token::Newline,
             ]
         );
@@ -1519,7 +1519,7 @@ void main():
             vec![
                 Token::Keyword(Keyword::Meta),
                 Token::Keyword(Keyword::Int),
-                Token::Identifier("X".to_string()),
+                Token::Identifier(crate::intern::intern("X")),
                 Token::Eq,
                 Token::IntLiteral(1024),
                 Token::Newline,
@@ -1533,15 +1533,15 @@ void main():
         assert_eq!(
             tokens,
             vec![
-                Token::Identifier("x".to_string()),
+                Token::Identifier(crate::intern::intern("x")),
                 Token::PlusPercentEq,
                 Token::IntLiteral(1),
                 Token::Newline,
-                Token::Identifier("y".to_string()),
+                Token::Identifier(crate::intern::intern("y")),
                 Token::MinusPercentEq,
                 Token::IntLiteral(2),
                 Token::Newline,
-                Token::Identifier("z".to_string()),
+                Token::Identifier(crate::intern::intern("z")),
                 Token::StarPercentEq,
                 Token::IntLiteral(3),
                 Token::Newline,

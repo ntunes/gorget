@@ -2,7 +2,6 @@ pub mod borrow;
 pub mod derive;
 pub mod errors;
 pub mod ids;
-pub mod intern;
 pub mod meta;
 pub mod resolve;
 pub mod rewrite;

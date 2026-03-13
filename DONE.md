@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-13] **String interning at lex time (Phase 1: Token layer)** — Added `src/intern.rs` with `Symbol` type (u32 handle), thread-local `Interner`, and ergonomic API (`intern()`, `Symbol::as_str()`, `Display`, `PartialEq<str>`). Changed `Token::Identifier(String)` → `Token::Identifier(Symbol)` — all identifiers are now interned at lex time, deduplicating allocations. Parser bridge resolves Symbol→String for AST (AST migration deferred to Phase 2). Removed unused `src/semantic/intern.rs`. 918 unit + 709 integration tests pass.
+
 - [2026-03-13] **Parser error recovery synchronization** — Added recovery loops inside struct field, enum variant, trait method, equip method, and match arm parsing so the parser reports multiple errors instead of bailing at the first one. Added `synchronize_to_top_level()` for indentation-aware recovery, `at_error_limit()` (MAX_ERRORS=10) to prevent cascading, and 4 new recovery tests. 917 unit + 709 integration tests pass.
 
 - [2026-03-13] **SoA token storage in parser** — Split `Parser`'s `Vec<Spanned<Token>>` into parallel `Vec<Token>` + `Vec<Span>` for better cache locality on the hot path (peek/peek_ahead only touch token kinds). 7 access sites updated.

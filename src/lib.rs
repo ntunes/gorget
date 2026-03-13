@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod errors;
 pub mod formatter;
+pub mod intern;
 pub mod ir;
 pub mod lexer;
 pub mod lir;
