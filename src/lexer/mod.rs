@@ -340,9 +340,7 @@ impl<'src> Lexer<'src> {
                                             self.bracket_depth += 1;
                                         }
                                         Token::RParen | Token::RBracket | Token::RBrace => {
-                                            if self.bracket_depth > 0 {
-                                                self.bracket_depth -= 1;
-                                            }
+                                            self.bracket_depth = self.bracket_depth.saturating_sub(1);
                                         }
                                         _ => {}
                                     }
@@ -649,19 +647,7 @@ impl<'src> Lexer<'src> {
                         b'{' => brace_depth += 1,
                         b'}' => brace_depth -= 1,
                         b'"' | b'\'' => {
-                            // Skip nested string — advance past closing quote
-                            let nested_quote = bytes[i];
-                            i += 1;
-                            while i < bytes.len() && bytes[i] != nested_quote {
-                                if bytes[i] == b'\\' {
-                                    i += 1;
-                                }
-                                i += 1;
-                            }
-                            // Advance past closing quote (or end of input)
-                            if i < bytes.len() {
-                                i += 1;
-                            }
+                            skip_quoted_string(bytes, &mut i);
                             continue;
                         }
                         _ => {}
@@ -888,15 +874,33 @@ impl<'src> Iterator for Lexer<'src> {
     }
 }
 
+/// Advance `i` past a quoted string (single or double), handling backslash escapes.
+/// On entry, `bytes[i]` must be the opening quote character.
+/// On exit, `i` points one past the closing quote (or at end of input if unclosed).
+fn skip_quoted_string(bytes: &[u8], i: &mut usize) {
+    let quote = bytes[*i];
+    *i += 1;
+    while *i < bytes.len() && bytes[*i] != quote {
+        if bytes[*i] == b'\\' {
+            *i += 1;
+        }
+        *i += 1;
+    }
+    // Advance past closing quote
+    if *i < bytes.len() {
+        *i += 1;
+    }
+}
+
 /// Split an interpolation text like `"x:.2f"` into `("x".to_string(), Some(".2f".to_string()))`.
 /// Only splits on the LAST `:` at bracket/paren depth 0, outside quotes.
 /// This avoids false splits on dict literals `{a: b}`, slice `x[1:3]`, or ternary expressions.
 fn split_interpolation_spec(text: &str) -> (String, Option<String>) {
     let bytes = text.as_bytes();
     let mut last_colon_at_depth_0: Option<usize> = None;
-    let mut paren_depth: u32 = 0;
-    let mut bracket_depth: u32 = 0;
-    let mut brace_depth: u32 = 0;
+    let mut paren_depth: usize = 0;
+    let mut bracket_depth: usize = 0;
+    let mut brace_depth: usize = 0;
     let mut i = 0;
 
     while i < bytes.len() {
@@ -908,15 +912,8 @@ fn split_interpolation_spec(text: &str) -> (String, Option<String>) {
             b'{' => brace_depth += 1,
             b'}' => brace_depth = brace_depth.saturating_sub(1),
             b'"' | b'\'' => {
-                // Skip quoted strings
-                let quote = bytes[i];
-                i += 1;
-                while i < bytes.len() && bytes[i] != quote {
-                    if bytes[i] == b'\\' {
-                        i += 1;
-                    }
-                    i += 1;
-                }
+                skip_quoted_string(bytes, &mut i);
+                continue;
             }
             b':' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 last_colon_at_depth_0 = Some(i);

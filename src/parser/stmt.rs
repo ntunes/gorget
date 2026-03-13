@@ -440,7 +440,7 @@ impl Parser {
         let expr = self.parse_expr()?;
         match expr.node {
             Expr::MethodCall { receiver, method, args, .. } if method.node == "send" && args.len() == 1 => {
-                let value = args.into_iter().next().unwrap().node.value;
+                let value = args.into_iter().next().expect("len was 1").node.value;
                 Ok(SelectOp::Send { channel: *receiver, value })
             }
             _ => Err(self.error_at(expr.span, "expected channel.recv() or channel.send()")),

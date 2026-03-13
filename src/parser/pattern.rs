@@ -221,7 +221,7 @@ impl Parser {
             ))
         } else if path.len() == 1 {
             // Single identifier — binding or unit variant
-            let name = path.into_iter().next().unwrap();
+            let name = path.into_iter().next().expect("len was 1");
             // Uppercase-starting = unit variant, lowercase = binding
             // But we'll let semantic analysis handle this distinction
             Ok(Spanned::new(Pattern::Binding(name.node), name.span))

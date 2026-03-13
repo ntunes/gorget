@@ -525,7 +525,9 @@ impl Formatter {
                 self.emitter.newline();
             }
             FunctionBody::Extern(sym) => {
-                self.emitter.write(&format!(" = \"{sym}\""));
+                self.emitter.write(" = \"");
+                self.emitter.write(sym);
+                self.emitter.write("\"");
                 self.emitter.newline();
             }
         }
@@ -1357,7 +1359,9 @@ impl Formatter {
                 self.emitter.newline();
             }
             Stmt::Snapshot { name, value } => {
-                self.emitter.write(&format!("snapshot \"{}\" ", name.node));
+                self.emitter.write("snapshot \"");
+                self.emitter.write(&name.node);
+                self.emitter.write("\" ");
                 self.format_expr(value);
                 self.emitter.newline();
             }
@@ -1605,8 +1609,8 @@ impl Formatter {
     fn format_assert_return_expr(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
             Expr::Identifier(name) if name == "__return__" => {
-                // __return__ is represented by the `return` keyword already
-                // written by the AssertReturn handler — emit nothing here.
+                // __return__ is a parser-internal placeholder; the surrounding
+                // assert-return handler emits the keyword.
             }
             Expr::BinaryOp { left, op, right } => {
                 self.format_assert_return_expr(left);

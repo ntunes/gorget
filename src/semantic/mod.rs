@@ -87,11 +87,11 @@ pub fn analyze_with_source_dir(
     for item in &module.items {
         if let Item::Directive(d) = &item.node {
             match d.name.as_str() {
-                "strip-asserts" => {
-                    if d.value.is_some() {
+                "strip-asserts" | "trace" | "hot-reload" => {
+                    if let Some(val) = d.value.as_deref() {
                         errors.push(SemanticError {
                             kind: SemanticErrorKind::UnknownDirective {
-                                name: format!("strip-asserts={}", d.value.as_deref().unwrap()),
+                                name: format!("{}={}", d.name, val),
                             },
                             span: d.span,
                         });
@@ -105,26 +105,6 @@ pub fn analyze_with_source_dir(
                                     "overflow={}",
                                     d.value.as_deref().unwrap_or("(missing value)")
                                 ),
-                            },
-                            span: d.span,
-                        });
-                    }
-                }
-                "trace" => {
-                    if d.value.is_some() {
-                        errors.push(SemanticError {
-                            kind: SemanticErrorKind::UnknownDirective {
-                                name: format!("trace={}", d.value.as_deref().unwrap()),
-                            },
-                            span: d.span,
-                        });
-                    }
-                }
-                "hot-reload" => {
-                    if d.value.is_some() {
-                        errors.push(SemanticError {
-                            kind: SemanticErrorKind::UnknownDirective {
-                                name: format!("hot-reload={}", d.value.as_deref().unwrap()),
                             },
                             span: d.span,
                         });

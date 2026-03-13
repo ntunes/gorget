@@ -225,7 +225,7 @@ fn collect_top_level_inner(
     ctx: &mut ResolveContext,
 ) {
     for item in &module.items {
-        collect_item(&item.node, item.span, scopes, types, errors, ctx);
+        collect_item(&item.node, scopes, types, errors, ctx);
     }
 }
 
@@ -253,7 +253,6 @@ pub(super) fn validate_str_param_modes(params: &[Spanned<Param>], errors: &mut V
 
 fn collect_item(
     item: &Item,
-    _span: Span,
     scopes: &mut ScopeTable,
     types: &mut TypeTable,
     errors: &mut Vec<SemanticError>,
@@ -592,7 +591,7 @@ fn collect_item(
             ctx.file_module_scopes.insert(path.join("."), file_scope_id);
 
             for si in items {
-                collect_item(&si.node, si.span, scopes, types, errors, ctx);
+                collect_item(&si.node, scopes, types, errors, ctx);
             }
 
             // Promote non-private names to the enclosing global scope.
@@ -1087,7 +1086,7 @@ fn resolve_stmt(
         Stmt::Item(item) => {
             // Nested item definitions
             let mut ctx = ResolveContext::new();
-            collect_item(item, Span::dummy(), scopes, types, errors, &mut ctx);
+            collect_item(item, scopes, types, errors, &mut ctx);
             resolve_item_body(item, scopes, types, errors, resolution_map, &mut ctx.function_info, &mut ctx.function_body_scopes, &ctx.file_module_scopes);
         }
 
