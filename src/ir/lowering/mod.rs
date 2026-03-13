@@ -1342,10 +1342,14 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
         Expr::IntLiteral(n) => return GlobalInit::RuntimeCall(n.to_string()),
         Expr::FloatLiteral(f) => return GlobalInit::RuntimeCall(format!("{f}")),
         Expr::BoolLiteral(b) => return GlobalInit::RuntimeCall(if *b { "true" } else { "false" }.to_string()),
-        Expr::StringLiteral(_) => {
-            // String globals need the allocator runtime initialized first;
-            // handled via RuntimeCall from the Named-type / constructor path.
-            // Plain string literals as static initializers are not yet supported.
+        Expr::StringLiteral(s) => {
+            // Str is just {const char*, size_t} — no heap allocation needed.
+            let text = s.as_plain_text();
+            let escaped = text.replace('\\', "\\\\").replace('"', "\\\"")
+                .replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
+            return GlobalInit::RuntimeCall(
+                format!("gorget_str_from_literal(\"{escaped}\", {})", text.len())
+            );
         }
         // Negative literals: parsed as UnaryOp { op: Neg, operand: IntLiteral/FloatLiteral }
         Expr::UnaryOp { op: crate::parser::ast::UnaryOp::Neg, operand } => {
