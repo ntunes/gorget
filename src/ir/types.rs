@@ -332,10 +332,21 @@ impl TypeRegistry {
         self.name_to_def.keys()
     }
 
-    /// Check whether a type has Move copy semantics (owns heap-allocated buffers).
+    /// Check whether a type has Resource copy semantics (owns heap-allocated buffers).
+    /// This covers both types with explicit Resource metadata in their TypeDef,
+    /// and collection types whose TypeDef may lack correct metadata due to
+    /// early registration via `register_collection_alias`.
     pub fn is_resource_type(&self, type_id: TypeId) -> bool {
         if type_id.0 < 12 { return false; } // primitives
         if let Some(GirType::Named(name)) = self.get(type_id) {
+            // Collection/string types are always Resource regardless of TypeDef metadata
+            if name.starts_with("Vector__") || name.starts_with("Dict__")
+                || name.starts_with("HashMap__") || name.starts_with("Set__")
+                || name.starts_with("HashSet__") || name == "GorgetString"
+                || name == "GorgetArray"
+            {
+                return true;
+            }
             if let Some(type_def) = self.get_type_def(name) {
                 return type_def.metadata.copy_semantics == CopySemantics::Resource;
             }
