@@ -339,16 +339,36 @@ impl TypeRegistry {
     pub fn is_resource_type(&self, type_id: TypeId) -> bool {
         if type_id.0 < 12 { return false; } // primitives
         if let Some(GirType::Named(name)) = self.get(type_id) {
-            // Collection/string types are always Resource regardless of TypeDef metadata
-            if name.starts_with("Vector__") || name.starts_with("Dict__")
-                || name.starts_with("HashMap__") || name.starts_with("Set__")
-                || name.starts_with("HashSet__") || name == "GorgetString"
-                || name == "GorgetArray"
-            {
+            self.is_resource_name(name)
+        } else {
+            false
+        }
+    }
+
+    /// Check if a named type is a resource type (owns heap allocations).
+    /// Checks collection prefixes, TypeDef metadata, and struct fields transitively.
+    fn is_resource_name(&self, name: &str) -> bool {
+        // Collection/string types are always Resource regardless of TypeDef metadata
+        if name.starts_with("Vector__") || name.starts_with("Dict__")
+            || name.starts_with("HashMap__") || name.starts_with("Set__")
+            || name.starts_with("HashSet__") || name == "GorgetString"
+            || name == "GorgetArray"
+        {
+            return true;
+        }
+        if let Some(type_def) = self.get_type_def(name) {
+            if type_def.metadata.copy_semantics == CopySemantics::Resource {
                 return true;
             }
-            if let Some(type_def) = self.get_type_def(name) {
-                return type_def.metadata.copy_semantics == CopySemantics::Resource;
+            // Check if any struct field is a resource type (transitive)
+            if let TypeDefKind::Struct(ref sdef) = type_def.kind {
+                for f in &sdef.fields {
+                    if let Some(GirType::Named(field_name)) = self.get(f.type_id) {
+                        if field_name != name && self.is_resource_name(field_name) {
+                            return true;
+                        }
+                    }
+                }
             }
         }
         false

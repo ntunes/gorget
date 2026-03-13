@@ -60,17 +60,17 @@ struct Message:
 
 Vector[uint8] p2p_make_byte(int val):
     Vector[uint8] tmp = bytes_from_hex("00000000")
-    bytes_write_u32_be(tmp, 0, val)
+    bytes_write_u32_be(&tmp, 0, val)
     return bytes_slice(tmp, 3, 4)
 
 Vector[uint8] p2p_make_u32(int val):
     Vector[uint8] buf = bytes_from_hex("00000000")
-    bytes_write_u32_be(buf, 0, val)
+    bytes_write_u32_be(&buf, 0, val)
     return buf
 
 Vector[uint8] p2p_make_u16(int val):
     Vector[uint8] buf = bytes_from_hex("0000")
-    bytes_write_u16_be(buf, 0, val)
+    bytes_write_u16_be(&buf, 0, val)
     return buf
 
 # ── Message Encoding ─────────────────────────────────────────

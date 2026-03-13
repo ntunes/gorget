@@ -10956,10 +10956,20 @@ fn try_emit_outparam_call(
         "gorget_image_flip_vertically" => {
             let dst_id = dst.as_ref()?;
             let img = format_operand(&args[0], func, registry);
+            // Check if the operand is a pointer type — use -> instead of .
+            let acc = if let Operand::Copy(p) | Operand::Move(p) = &args[0] {
+                let ct = effective_c_type(p.local.0 as usize, func, registry, type_overrides);
+                if ct.ends_with('*') { "->" } else { "." }
+            } else { "." };
+            let data_ref = if acc == "->" {
+                format!("&{img}->data")
+            } else {
+                format!("&{img}.data")
+            };
             let _ = writeln!(out,
                 "        _{id} = ({{ int64_t __w = 0, __h = 0, __ch = 0; \
                 GorgetArray __data = gorget_array_new(sizeof(uint8_t)); \
-                gorget_image_flip_vertically({img}.width, {img}.height, {img}.channels, &{img}.data, &__w, &__h, &__ch, &__data); \
+                gorget_image_flip_vertically({img}{acc}width, {img}{acc}height, {img}{acc}channels, {data_ref}, &__w, &__h, &__ch, &__data); \
                 (Image){{.width = __w, .height = __h, .channels = __ch, .data = __data}}; }});",
                 id = dst_id.0);
             Some(out)

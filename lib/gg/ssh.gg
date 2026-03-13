@@ -163,13 +163,13 @@ private void check_len(Vector[uint8] buf, int required, str context):
 Vector[uint8] make_name_list(str names):
     Vector[uint8] data = bytes_from_str(names)
     Vector[uint8] buf = bytes_from_hex("00000000")
-    bytes_write_u32_be(buf, 0, data.len())
+    bytes_write_u32_be(&buf, 0, data.len())
     return bytes_concat(buf, data)
 
 # Build a uint32 payload
 Vector[uint8] make_u32(int value):
     Vector[uint8] buf = bytes_from_hex("00000000")
-    bytes_write_u32_be(buf, 0, value)
+    bytes_write_u32_be(&buf, 0, value)
     return buf
 
 # Build an SSH mpint from a BigNum (RFC 4251 section 5)
@@ -225,7 +225,7 @@ void send_packet(Session &session, Vector[uint8] payload):
     Vector[uint8] packet = make_u32(packet_len)
     # Build 1-byte padding length
     Vector[uint8] pad_byte_buf = bytes_from_hex("00000000")
-    bytes_write_u32_be(pad_byte_buf, 0, pad_len)
+    bytes_write_u32_be(&pad_byte_buf, 0, pad_len)
     Vector[uint8] pad_len_byte = bytes_slice(pad_byte_buf, 3, 4)
     packet = bytes_concat(packet, pad_len_byte)
     packet = bytes_concat(packet, payload)

@@ -25,7 +25,7 @@ void main():
 
     # big-endian u32 read/write
     Vector[uint8] buf = bytes_from_hex("00000000aabbccdd")
-    bytes_write_u32_be(buf, 0, 305419896)
+    bytes_write_u32_be(&buf, 0, 305419896)
     int val = bytes_read_u32_be(buf, 0)
     print(f"{val}")
 
@@ -35,13 +35,13 @@ void main():
 
     # big-endian u16 read/write
     Vector[uint8] buf16 = bytes_from_hex("00001234")
-    bytes_write_u16_be(buf16, 0, 4660)
+    bytes_write_u16_be(&buf16, 0, 4660)
     int v16 = bytes_read_u16_be(buf16, 0)
     print(f"{v16}")
 
     # little-endian u32 read/write
     Vector[uint8] le_buf = bytes_from_hex("0000000000000000")
-    bytes_write_u32_le(le_buf, 0, 305419896)
+    bytes_write_u32_le(&le_buf, 0, 305419896)
     int le_val = bytes_read_u32_le(le_buf, 0)
     print(f"{le_val}")
     # verify byte order: 305419896 = 0x12345678
@@ -51,7 +51,7 @@ void main():
 
     # little-endian u16 read/write
     Vector[uint8] le_buf16 = bytes_from_hex("00000000")
-    bytes_write_u16_le(le_buf16, 0, 4660)
+    bytes_write_u16_le(&le_buf16, 0, 4660)
     int le_v16 = bytes_read_u16_le(le_buf16, 0)
     print(f"{le_v16}")
     # verify byte order: 4660 = 0x1234, LE stores as 34 12

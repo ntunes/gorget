@@ -959,7 +959,7 @@ equip Router:
         return HttpServerResponse.not_found()
 
     # Run post-dispatch middlewares on a response.
-    HttpServerResponse run_post_middlewares(&self, HttpRequest req, HttpServerResponse resp):
+    HttpServerResponse run_post_middlewares(&self, HttpRequest req, HttpServerResponse !resp):
         int mi = 0
         while mi < self.middlewares.len():
             Callable[HttpServerResponse(HttpRequest, HttpServerResponse)] mw = self.middlewares[mi]
