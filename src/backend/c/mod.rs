@@ -502,6 +502,10 @@ fn takes_array_ptr_args(name: &str) -> bool {
     if matches!(name, "gorget_write_file_bytes") {
         return true;
     }
+    // Compression / CRC functions taking array pointer
+    if matches!(name, "gorget_crc32_compute" | "gorget_deflate_decompress") {
+        return true;
+    }
     false
 }
 
@@ -6516,10 +6520,36 @@ fn emit_instruction(
                     format_args_with_coercion(args, func, registry, type_overrides, &c_name, all_functions)
                 };
                 let ret_cstr = returns_cstr(mapped_name);
-                // Str__slice: C runtime modifies *self in place and returns void,
-                // but GIR expects Str return. Call void-style, then assign *self.
+                // Str__slice: gorget_str_slice takes Str by value, not Str*.
+                // If self is a borrow (Str*), dereference it.
                 if func_name == "Str__slice" {
-                    let _ = writeln!(out, "        {c_name}({args_str});");
+                    // Build args with first arg dereferenced if it's a Str pointer
+                    let slice_args = if !args.is_empty() {
+                        let self_str = format_operand(&args[0], func, registry);
+                        let self_local_idx = match &args[0] {
+                            Operand::Copy(p) | Operand::Move(p) => p.local.0 as usize,
+                            _ => usize::MAX,
+                        };
+                        let self_type = if self_local_idx < func.locals.len() {
+                            format_type(func.locals[self_local_idx].type_id, registry)
+                        } else { String::new() };
+                        let self_val = if self_type.ends_with("*") {
+                            format!("(*{self_str})")
+                        } else {
+                            self_str.clone()
+                        };
+                        let rest: Vec<String> = args[1..].iter()
+                            .map(|a| format_operand(a, func, registry))
+                            .collect();
+                        if rest.is_empty() {
+                            self_val
+                        } else {
+                            format!("{self_val}, {}", rest.join(", "))
+                        }
+                    } else {
+                        args_str.clone()
+                    };
+                    let _ = writeln!(out, "        {c_name}({slice_args});");
                     if let Some(dst_id) = dst {
                         if !args.is_empty() {
                             let self_str = format_operand(&args[0], func, registry);
@@ -10103,7 +10133,7 @@ fn try_rewrite_collection_method(func_name: &str) -> Option<CollectionMethodCall
     if func_name.starts_with("Dict__") {
         let method = extract_trailing_method(func_name, "Dict__");
         return match method {
-            "put" | "set" => Some(CollectionMethodCall {
+            "put" | "set" | "insert" => Some(CollectionMethodCall {
                 runtime_fn: "gorget_map_put", pass_by_ptr: true,
                 has_return: false, needs_deref_cast: false, field_access: None,
                 ..Default::default()
@@ -12791,6 +12821,20 @@ fn format_args_inner(args: &[Operand], func: &Function, registry: &TypeRegistry,
                             } else if local_type == BOOL_TYPE {
                                 arg_str = format!("gorget_str_from_cstr(gorget_bool_to_str({arg_str}))");
                             }
+                        }
+                    }
+                    // Dereference Str*/const Str* pointers for str/cstr functions
+                    // gorget_str_* functions expect Str by value, not Str*
+                    if mode == FormatArgsMode::StrFn || mode == FormatArgsMode::CstrFn {
+                        let is_str_ptr = match registry.get(local_type) {
+                            Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => {
+                                matches!(registry.get(*inner), Some(GirType::Named(n)) if n == "Str" || n == "GorgetString")
+                                    || format_type(*inner, registry) == "Str"
+                            }
+                            _ => false,
+                        };
+                        if is_str_ptr {
+                            arg_str = format!("(*{arg_str})");
                         }
                     }
                     // Determine effective type name: type_override > GIR Named type
