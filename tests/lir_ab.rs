@@ -8,14 +8,17 @@ use std::path::PathBuf;
 use std::process::Command;
 
 /// Build + run through the GIR C backend (normal path).
+/// Uses a `_gir` suffix to avoid colliding with `integration.rs` which
+/// builds to the bare stem path.
 fn run_gir(fixture_path: &std::path::Path) -> Option<String> {
     let stem = fixture_path.file_stem()?.to_str()?;
     let dir = fixture_path.parent()?;
-    let exe_path = dir.join(stem);
-    let c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(format!("{stem}_gir"));
+    let c_path = dir.join(format!("{stem}_gir.c"));
 
     let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build"])
+        .args(["run", "--quiet", "--", "build", "-o"])
+        .arg(&exe_path)
         .arg(fixture_path)
         .output()
         .ok()?;
