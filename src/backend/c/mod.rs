@@ -10956,6 +10956,19 @@ fn try_emit_outparam_call(
                 id = dst_id.0);
             Some(out)
         }
+        // gorget_audio_load_wav_from_memory(const GorgetArray* data, int64_t* out_tag, GorgetAudioChunk* out_chunk, Str* out_err)
+        "gorget_audio_load_wav_from_memory" => {
+            let dst_id = dst.as_ref()?;
+            let data_arg = format_operand(&args[0], func, registry);
+            let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
+            let _ = writeln!(out,
+                "        _{id} = ({{ int64_t __tag = 0; GorgetAudioChunk __chunk = {{0}}; Str __err = {{0}}; \
+                gorget_audio_load_wav_from_memory(&{data_arg}, &__tag, &__chunk, &__err); \
+                {c_type} __wr; if (__tag == 0) {{ __wr.tag = 0; __wr.data.Ok._0 = __chunk; }} \
+                else {{ __wr.tag = 1; __wr.data.Error._0 = __err; }} __wr; }});",
+                id = dst_id.0);
+            Some(out)
+        }
         // gorget_deflate_decompress(const GorgetArray* data, int64_t uncompressed_size,
         //   int64_t* out_tag, GorgetArray* out_data, Str* out_err)
         "gorget_deflate_decompress" => {
