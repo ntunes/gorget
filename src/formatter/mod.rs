@@ -117,8 +117,22 @@ impl Formatter {
         self.emit_remaining_comments();
         let mut result = self.emitter.finish();
         // Normalize blank lines: collapse 3+ consecutive newlines to 2 (one blank line max).
-        while result.contains("\n\n\n") {
-            result = result.replace("\n\n\n", "\n\n");
+        // Single-pass: track consecutive newlines and skip extras.
+        {
+            let mut normalized = String::with_capacity(result.len());
+            let mut consecutive_newlines = 0u32;
+            for ch in result.chars() {
+                if ch == '\n' {
+                    consecutive_newlines += 1;
+                    if consecutive_newlines <= 2 {
+                        normalized.push(ch);
+                    }
+                } else {
+                    consecutive_newlines = 0;
+                    normalized.push(ch);
+                }
+            }
+            result = normalized;
         }
         // Ensure trailing newline
         if !result.ends_with('\n') {
@@ -221,26 +235,13 @@ impl Formatter {
             emitted += 1;
         }
 
-        // Emit sorted imports, with a blank line between std and non-std groups.
-        let mut prev_was_std: Option<bool> = None;
+        // Emit sorted imports.
         for item in &imports {
-            let path = import_sort_key(item);
-            let is_std = is_std_import(&path);
             if emitted > 0 {
-                if let Some(prev) = prev_was_std {
-                    if prev && !is_std {
-                        // Extra blank line between std and third-party groups
-                        self.emitter.blank_line();
-                    } else {
-                        self.emitter.blank_line();
-                    }
-                } else {
-                    self.emitter.blank_line();
-                }
+                self.emitter.blank_line();
             }
             self.emit_comments_before(item.span.start);
             self.format_item(item);
-            prev_was_std = Some(is_std);
             emitted += 1;
         }
 
@@ -1999,7 +2000,8 @@ impl Formatter {
                 self.format_expr(right);
             }
             Expr::MetaOpToken(op) => {
-                self.emitter.write(&format!("meta {:?}", op).to_lowercase());
+                self.emitter.write("meta ");
+                self.emitter.write(binary_op_str(*op));
             }
             Expr::Rethrow { expr, error_binding, transform } => {
                 self.format_expr(expr);

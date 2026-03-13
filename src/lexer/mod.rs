@@ -133,29 +133,9 @@ impl<'src> Lexer<'src> {
                 }
                 Some('#') => {
                     // Check for doc comment
-                    if self.pos + 1 < self.source.len()
-                        && self.source.as_bytes()[self.pos + 1] == b'/'
-                    {
-                        // Doc comment — extract content and emit
-                        let content = self.scan_to_eol();
-                        self.pending.push_back(Spanned::new(
-                            Token::DocComment(content),
-                            self.span(line_start, self.pos),
-                        ));
-                        if self.pos < self.source.len() {
-                            self.pos += 1; // skip \n
-                        }
-                        continue;
-                    }
-                    // Regular comment — emit as token
-                    let content = self.scan_to_eol();
-                    self.pending.push_back(Spanned::new(
-                        Token::Comment(content),
-                        self.span(line_start, self.pos),
-                    ));
-                    if self.pos < self.source.len() {
-                        self.pos += 1; // skip \n
-                    }
+                    let is_doc = self.pos + 1 < self.source.len()
+                        && self.source.as_bytes()[self.pos + 1] == b'/';
+                    self.emit_comment_token(line_start, is_doc);
                     continue;
                 }
                 Some('.') if self.bracket_depth == 0 && self.need_newline => {
@@ -522,8 +502,10 @@ impl<'src> Lexer<'src> {
                 if *i < bytes.len() {
                     *i += 1; // skip }
                 }
-                match u32::from_str_radix(hex, 16) {
-                    Ok(code) => char::from_u32(code).unwrap_or_else(|| {
+                u32::from_str_radix(hex, 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .unwrap_or_else(|| {
                         self.errors.push(LexError {
                             kind: LexErrorKind::InvalidEscapeSequence(
                                 format!("\\u{{{hex}}}"),
@@ -531,17 +513,7 @@ impl<'src> Lexer<'src> {
                             span: self.span(backslash_pos, *i),
                         });
                         '\u{FFFD}'
-                    }),
-                    Err(_) => {
-                        self.errors.push(LexError {
-                            kind: LexErrorKind::InvalidEscapeSequence(
-                                format!("\\u{{{hex}}}"),
-                            ),
-                            span: self.span(backslash_pos, *i),
-                        });
-                        '\u{FFFD}'
-                    }
-                }
+                    })
             }
             other => {
                 self.errors.push(LexError {
@@ -857,6 +829,16 @@ impl<'src> Lexer<'src> {
                 span: self.span(pos, after),
             });
             (Token::Error, after)
+        }
+    }
+
+    /// Scan a comment to EOL, emit as a token, and skip the trailing newline.
+    fn emit_comment_token(&mut self, start: usize, is_doc: bool) {
+        let content = self.scan_to_eol();
+        let token = if is_doc { Token::DocComment(content) } else { Token::Comment(content) };
+        self.pending.push_back(Spanned::new(token, self.span(start, self.pos)));
+        if self.pos < self.source.len() {
+            self.pos += 1; // skip \n
         }
     }
 

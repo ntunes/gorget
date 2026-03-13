@@ -502,7 +502,7 @@ impl Keyword {
             "float32" => Some(Keyword::Float32),
             "float64" => Some(Keyword::Float64),
             "bool" => Some(Keyword::Bool),
-            "byte" => Some(Keyword::Uint8),
+            "byte" => Some(Keyword::Uint8), // `byte` is a user-facing alias for `uint8`
             "str" => Some(Keyword::Str),
             "cstr" => Some(Keyword::CStr),
             "String" => Some(Keyword::StringType),

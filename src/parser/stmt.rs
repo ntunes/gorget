@@ -310,9 +310,7 @@ impl Parser {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Match)?;
         let scrutinee = self.parse_expr()?;
-        self.expect(&Token::Colon)?;
-        self.expect(&Token::Newline)?;
-        self.expect(&Token::Indent)?;
+        self.expect_block_start()?;
 
         let mut arms = Vec::new();
         let mut else_arm = None;
@@ -373,9 +371,7 @@ impl Parser {
     fn parse_select_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Select)?;
-        self.expect(&Token::Colon)?;
-        self.expect(&Token::Newline)?;
-        self.expect(&Token::Indent)?;
+        self.expect_block_start()?;
 
         let mut arms = Vec::new();
         let mut else_arm = None;
@@ -766,7 +762,8 @@ impl Parser {
         ))
     }
 
-    fn parse_meta_for_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
+    /// Parse `var, var2 in range` after `meta for` — shared between statement and match-item forms.
+    fn parse_meta_for_vars(&mut self) -> Result<(Vec<Spanned<String>>, Spanned<Expr>), ParseError> {
         self.expect_keyword(Keyword::For)?;
         let var_span = self.peek_span();
         let first = self.expect_identifier()?;
@@ -776,6 +773,11 @@ impl Parser {
         }
         self.expect_keyword(Keyword::In)?;
         let range = self.parse_expr()?;
+        Ok((vars, range))
+    }
+
+    fn parse_meta_for_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
+        let (vars, range) = self.parse_meta_for_vars()?;
         let body = self.parse_block()?;
         let end = self.previous_span();
         let span = start.merge(end);
@@ -795,21 +797,10 @@ impl Parser {
     fn parse_meta_for_match_item(&mut self) -> Result<MatchItem, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Meta)?;
-        self.expect_keyword(Keyword::For)?;
-
-        let var_span = self.peek_span();
-        let first = self.expect_identifier()?;
-        let mut vars = vec![Spanned::new(first.node, var_span)];
-        while self.match_token(&Token::Comma) {
-            vars.push(self.expect_identifier()?);
-        }
-        self.expect_keyword(Keyword::In)?;
-        let range = self.parse_expr()?;
+        let (vars, range) = self.parse_meta_for_vars()?;
 
         // Parse `:` newline indent — then exactly one case arm as the template
-        self.expect(&Token::Colon)?;
-        self.expect(&Token::Newline)?;
-        self.expect(&Token::Indent)?;
+        self.expect_block_start()?;
 
         // Skip blank lines
         while self.check(&Token::Newline) { self.advance(); }
@@ -841,9 +832,7 @@ impl Parser {
     fn parse_meta_match_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
         self.expect_keyword(Keyword::Match)?;
         let scrutinee = self.parse_expr()?;
-        self.expect(&Token::Colon)?;
-        self.expect(&Token::Newline)?;
-        self.expect(&Token::Indent)?;
+        self.expect_block_start()?;
 
         let mut arms: Vec<(Spanned<Expr>, Block)> = Vec::new();
         let mut else_arm: Option<Block> = None;

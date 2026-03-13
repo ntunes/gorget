@@ -161,29 +161,31 @@ impl Parser {
     }
 
     pub fn expect_identifier(&mut self) -> Result<Spanned<String>, ParseError> {
-        match self.peek().clone() {
-            Token::Identifier(name) => {
-                let span = self.peek_span();
-                self.advance();
-                Ok(Spanned::new(name, span))
-            }
-            _ => Err(self.error_unexpected("identifier")),
+        if let Token::Identifier(name) = self.peek() {
+            let name = name.clone();
+            let span = self.peek_span();
+            self.advance();
+            Ok(Spanned::new(name, span))
+        } else {
+            Err(self.error_unexpected("identifier"))
         }
     }
 
     /// Expect an identifier, but also accept keywords that can be used as names
     /// in certain positions (e.g., field names).
     pub fn expect_name(&mut self) -> Result<Spanned<String>, ParseError> {
-        match self.peek().clone() {
+        match self.peek() {
             Token::Identifier(name) => {
+                let name = name.clone();
                 let span = self.peek_span();
                 self.advance();
                 Ok(Spanned::new(name, span))
             }
             Token::Keyword(kw) => {
+                let name = kw.as_name().to_string();
                 let span = self.peek_span();
                 self.advance();
-                Ok(Spanned::new(kw.as_name().to_string(), span))
+                Ok(Spanned::new(name, span))
             }
             _ => Err(self.error_unexpected("identifier")),
         }
@@ -199,6 +201,17 @@ impl Parser {
             Ownership::Move
         } else {
             Ownership::Borrow
+        }
+    }
+
+    /// Parse an optional `private` or `public` visibility modifier.
+    /// Defaults to `Public` if neither is present.
+    pub fn parse_visibility_modifier(&mut self) -> Visibility {
+        if self.match_keyword(Keyword::Private) {
+            Visibility::Private
+        } else {
+            let _ = self.match_keyword(Keyword::Public);
+            Visibility::Public
         }
     }
 
@@ -263,6 +276,14 @@ impl Parser {
                 }
             }
         }
+    }
+
+    /// Expect the `: NEWLINE INDENT` sequence that begins an indented block.
+    pub fn expect_block_start(&mut self) -> Result<(), ParseError> {
+        self.expect(&Token::Colon)?;
+        self.expect(&Token::Newline)?;
+        self.expect(&Token::Indent)?;
+        Ok(())
     }
 
     /// Synchronize and guarantee forward progress. If `synchronize()` didn't
@@ -741,9 +762,7 @@ impl Parser {
 
     /// Parse `: NEWLINE INDENT item* DEDENT` — a block of items (not statements).
     fn parse_meta_block(&mut self) -> Result<Vec<Spanned<Item>>, ParseError> {
-        self.expect(&Token::Colon)?;
-        self.expect(&Token::Newline)?;
-        self.expect(&Token::Indent)?;
+        self.expect_block_start()?;
 
         let mut items = Vec::new();
         while !self.check(&Token::Dedent) && !self.at_end() {
@@ -779,9 +798,10 @@ impl Parser {
                         let ident = self.expect_identifier()?;
                         if self.match_token(&Token::Eq) {
                             // key = "value"
-                            if let Token::StringLiteral(s) = self.peek().clone() {
+                            if let Token::StringLiteral(s) = self.peek() {
+                                let text = s.as_plain_text();
                                 self.advance();
-                                args.push(AttributeArg::KeyValue(ident.node, s.as_plain_text()));
+                                args.push(AttributeArg::KeyValue(ident.node, text));
                             } else {
                                 let val_ident = self.expect_identifier()?;
                                 args.push(AttributeArg::KeyValue(ident.node, val_ident.node));
@@ -826,19 +846,12 @@ impl Parser {
 
         let generic_params = self.try_parse_generic_params()?;
 
-        self.expect(&Token::Colon)?;
-        self.expect(&Token::Newline)?;
-        self.expect(&Token::Indent)?;
+        self.expect_block_start()?;
 
         let mut fields = Vec::new();
         while !self.check(&Token::Dedent) && !self.at_end() {
             let field_start = self.peek_span();
-            let field_vis = if self.match_keyword(Keyword::Private) {
-                Visibility::Private
-            } else {
-                let _ = self.match_keyword(Keyword::Public);
-                Visibility::Public
-            };
+            let field_vis = self.parse_visibility_modifier();
             let type_ = self.parse_type()?;
             let field_name = self.expect_identifier()?;
             let field_end = self.previous_span();
@@ -882,9 +895,7 @@ impl Parser {
 
         let generic_params = self.try_parse_generic_params()?;
 
-        self.expect(&Token::Colon)?;
-        self.expect(&Token::Newline)?;
-        self.expect(&Token::Indent)?;
+        self.expect_block_start()?;
 
         let mut variants = Vec::new();
         while !self.check(&Token::Dedent) && !self.at_end() {
@@ -951,9 +962,7 @@ impl Parser {
             Vec::new()
         };
 
-        self.expect(&Token::Colon)?;
-        self.expect(&Token::Newline)?;
-        self.expect(&Token::Indent)?;
+        self.expect_block_start()?;
 
         let mut items = Vec::new();
         while !self.check(&Token::Dedent) && !self.at_end() {
@@ -1080,12 +1089,7 @@ impl Parser {
                     attrs.push(self.parse_attribute()?);
                 }
 
-                let vis = if self.match_keyword(Keyword::Private) {
-                    Visibility::Private
-                } else {
-                    let _ = self.match_keyword(Keyword::Public); // consume optional `public`
-                    Visibility::Public
-                };
+                let vis = self.parse_visibility_modifier();
 
                 let func = self.parse_function_def(attrs, vis, method_doc)?;
                 let span = func.span;
@@ -1253,9 +1257,7 @@ impl Parser {
             None
         };
 
-        self.expect(&Token::Colon)?;
-        self.expect(&Token::Newline)?;
-        self.expect(&Token::Indent)?;
+        self.expect_block_start()?;
 
         let mut items = Vec::new();
         while !self.check(&Token::Dedent) && !self.at_end() {
@@ -1320,19 +1322,7 @@ impl Parser {
     /// `TypeName [generic_args] name = expr`
     fn parse_module_var_decl(&mut self, visibility: Visibility) -> Result<StaticDecl, ParseError> {
         let start = self.peek_span();
-        let type_ = self.parse_type()?;
-        let name = self.expect_identifier()?;
-        self.expect(&Token::Eq)?;
-        let value = self.parse_expr()?;
-        let end = self.previous_span();
-        self.consume_newline();
-        Ok(StaticDecl {
-            visibility,
-            type_,
-            name,
-            value,
-            span: start.merge(end),
-        })
+        self.parse_static_decl_body(start, visibility)
     }
 
     // ── Static Declaration ────────────────────────────────────
@@ -1340,15 +1330,18 @@ impl Parser {
     fn parse_static_decl(&mut self, visibility: Visibility) -> Result<StaticDecl, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Static)?;
+        self.parse_static_decl_body(start, visibility)
+    }
 
+    /// Shared body for module-level and `static` variable declarations:
+    /// `type name = expr`
+    fn parse_static_decl_body(&mut self, start: Span, visibility: Visibility) -> Result<StaticDecl, ParseError> {
         let type_ = self.parse_type()?;
         let name = self.expect_identifier()?;
-
         self.expect(&Token::Eq)?;
         let value = self.parse_expr()?;
         let end = self.previous_span();
         self.consume_newline();
-
         Ok(StaticDecl {
             visibility,
             type_,
@@ -1863,17 +1856,16 @@ impl Parser {
 
     /// Consume a string literal that must be plain (no interpolations).
     fn expect_plain_string(&mut self) -> Result<Spanned<String>, ParseError> {
-        match self.peek().clone() {
-            Token::StringLiteral(ref s) => {
-                if s.has_interpolation() {
-                    return Err(self.error_at(self.peek_span(), "test name must be a plain string (no interpolations)"));
-                }
-                let text = s.as_plain_text();
-                let span = self.peek_span();
-                self.advance();
-                Ok(Spanned::new(text, span))
+        if let Token::StringLiteral(s) = self.peek() {
+            if s.has_interpolation() {
+                return Err(self.error_at(self.peek_span(), "test name must be a plain string (no interpolations)"));
             }
-            _ => Err(self.error_unexpected("string literal")),
+            let text = s.as_plain_text();
+            let span = self.peek_span();
+            self.advance();
+            Ok(Spanned::new(text, span))
+        } else {
+            Err(self.error_unexpected("string literal"))
         }
     }
 
