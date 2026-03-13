@@ -607,6 +607,8 @@ equip AABB:
     bool contains_point(self, Vec3 p):
         return p.x >= self.min_pt.x and p.x <= self.max_pt.x and p.y >= self.min_pt.y and p.y <= self.max_pt.y and p.z >= self.min_pt.z and p.z <= self.max_pt.z
 
+    bool contains(self, Vec3 p) = self.contains_point(p)
+
     bool intersects(self, AABB other):
         return self.min_pt.x <= other.max_pt.x and self.max_pt.x >= other.min_pt.x and self.min_pt.y <= other.max_pt.y and self.max_pt.y >= other.min_pt.y and self.min_pt.z <= other.max_pt.z and self.max_pt.z >= other.min_pt.z
 

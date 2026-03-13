@@ -12552,7 +12552,7 @@ static int64_t gorget_metal_create_accel_struct_desc(int64_t type) {
 static void gorget_metal_accel_desc_set_geometry(int64_t desc_h, int64_t geometry_h, int64_t count) {
     @autoreleasepool {
         MTLPrimitiveAccelerationStructureDescriptor* desc = (__bridge MTLPrimitiveAccelerationStructureDescriptor*)(void*)(intptr_t)desc_h;
-        id<MTLAccelerationStructureGeometryDescriptor> geom = (__bridge id)(void*)(intptr_t)geometry_h;
+        id geom = (__bridge id)(void*)(intptr_t)geometry_h;
         desc.geometryDescriptors = @[geom];
     }
 }
@@ -12827,14 +12827,9 @@ static void gorget_metal_make_aliasable(int64_t resource_h) {
 }
 
 // ── Fence / Event Synchronization ──────────────────────────
-
-static int64_t gorget_metal_create_fence(int64_t device_h) {
-    @autoreleasepool {
-        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
-        id<MTLFence> fence = [device newFence];
-        return (int64_t)(intptr_t)(__bridge_retained void*)fence;
-    }
-}
+// gorget_metal_create_fence — already defined above
+// gorget_metal_create_event — already defined above
+// gorget_metal_create_shared_event — already defined above
 
 static void gorget_metal_render_enc_update_fence(int64_t encoder_h, int64_t fence_h, int64_t stages) {
     @autoreleasepool {
@@ -12849,22 +12844,6 @@ static void gorget_metal_render_enc_wait_fence(int64_t encoder_h, int64_t fence_
         id<MTLRenderCommandEncoder> encoder = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)encoder_h;
         id<MTLFence> fence = (__bridge id<MTLFence>)(void*)(intptr_t)fence_h;
         [encoder waitForFence:fence beforeStages:(MTLRenderStages)stages];
-    }
-}
-
-static int64_t gorget_metal_create_event(int64_t device_h) {
-    @autoreleasepool {
-        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
-        id<MTLEvent> event = [device newEvent];
-        return (int64_t)(intptr_t)(__bridge_retained void*)event;
-    }
-}
-
-static int64_t gorget_metal_create_shared_event(int64_t device_h) {
-    @autoreleasepool {
-        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
-        id<MTLSharedEvent> event = [device newSharedEvent];
-        return (int64_t)(intptr_t)(__bridge_retained void*)event;
     }
 }
 
@@ -13020,23 +12999,9 @@ static void gorget_metal_pipeline_set_color_attachment_blending(int64_t desc_h, 
 }
 
 // ── Device Feature Queries ──────────────────────────────────
+// gorget_metal_device_supports_family — already defined above
+// gorget_metal_device_name — already defined above
 
-static int64_t gorget_metal_device_supports_family(int64_t device_h, int64_t family) {
-    @autoreleasepool {
-        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
-        if (@available(macOS 10.15, iOS 13.0, *)) {
-            return [device supportsFamily:(MTLGPUFamily)family] ? 1 : 0;
-        }
-        return 0;
-    }
-}
-static Str gorget_metal_device_name(int64_t device_h) {
-    @autoreleasepool {
-        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
-        const char* name = [[device name] UTF8String];
-        return gorget_str_from_cstr(name ? name : "unknown");
-    }
-}
 static int64_t gorget_metal_device_registry_id(int64_t device_h) {
     @autoreleasepool {
         id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
@@ -13051,37 +13016,8 @@ static int64_t gorget_metal_device_current_allocated_size(int64_t device_h) {
 }
 
 // ── Full Stencil Configuration ──────────────────────────────
+// gorget_metal_create_depth_stencil_full — already defined above
 
-static int64_t gorget_metal_create_depth_stencil_full(int64_t device_h, int64_t depth_compare, int64_t depth_write,
-    int64_t front_compare, int64_t front_fail, int64_t front_dfail, int64_t front_dpass, int64_t front_rmask, int64_t front_wmask,
-    int64_t back_compare, int64_t back_fail, int64_t back_dfail, int64_t back_dpass, int64_t back_rmask, int64_t back_wmask) {
-    @autoreleasepool {
-        id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
-        MTLDepthStencilDescriptor* desc = [[MTLDepthStencilDescriptor alloc] init];
-        desc.depthCompareFunction = (MTLCompareFunction)depth_compare;
-        desc.depthWriteEnabled = (BOOL)depth_write;
-        // Front stencil
-        MTLStencilDescriptor* front = [[MTLStencilDescriptor alloc] init];
-        front.stencilCompareFunction = (MTLCompareFunction)front_compare;
-        front.stencilFailureOperation = (MTLStencilOperation)front_fail;
-        front.depthFailureOperation = (MTLStencilOperation)front_dfail;
-        front.depthStencilPassOperation = (MTLStencilOperation)front_dpass;
-        front.readMask = (uint32_t)front_rmask;
-        front.writeMask = (uint32_t)front_wmask;
-        desc.frontFaceStencil = front;
-        // Back stencil
-        MTLStencilDescriptor* back = [[MTLStencilDescriptor alloc] init];
-        back.stencilCompareFunction = (MTLCompareFunction)back_compare;
-        back.stencilFailureOperation = (MTLStencilOperation)back_fail;
-        back.depthFailureOperation = (MTLStencilOperation)back_dfail;
-        back.depthStencilPassOperation = (MTLStencilOperation)back_dpass;
-        back.readMask = (uint32_t)back_rmask;
-        back.writeMask = (uint32_t)back_wmask;
-        desc.backFaceStencil = back;
-        id<MTLDepthStencilState> state = [device newDepthStencilStateWithDescriptor:desc];
-        return (int64_t)(intptr_t)(__bridge_retained void*)state;
-    }
-}
 static void gorget_metal_encoder_set_stencil_front_back_ref(int64_t encoder_h, int64_t front_ref, int64_t back_ref) {
     @autoreleasepool {
         id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)encoder_h;

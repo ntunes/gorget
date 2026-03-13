@@ -345,6 +345,7 @@ fn map_stdlib_name(name: &str) -> &str {
         "File__close" => "gorget_file_close",
         // Str methods (Type__method → gorget_str_method)
         "Str__hash" => "gorget_str_hash",
+        "Str__slice" => "gorget_str_slice",
         // SDL: sdl_foo → gorget_sdl_foo
         "sdl_init" => "gorget_sdl_init",
         "sdl_quit" => "gorget_sdl_quit",
@@ -759,7 +760,7 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
         out.push_str(c_runtime::AUDIO_RUNTIME);
     }
     // Zlib/Deflate compression runtime
-    if all_call_names.iter().any(|n| n.starts_with("gorget_zlib_")) {
+    if all_call_names.iter().any(|n| n.starts_with("gorget_zlib_") || n.starts_with("gorget_deflate_") || n.starts_with("gorget_crc32_")) {
         out.push_str(c_runtime::COMPRESS_RUNTIME);
     }
     // Metal runtime (macOS only — Objective-C wrappers)
@@ -11002,7 +11003,7 @@ fn try_inline_method(func_name: &str) -> Option<InlineMethod> {
             "unwrap" => Some(InlineMethod::ResultUnwrap),
             "expect" => Some(InlineMethod::ResultExpect),
             "is_ok" => Some(InlineMethod::ResultIsOk),
-            "is_err" => Some(InlineMethod::ResultIsErr),
+            "is_err" | "is_error" => Some(InlineMethod::ResultIsErr),
             "unwrap_or" => Some(InlineMethod::ResultUnwrapOr),
             "unwrap_err" => Some(InlineMethod::ResultUnwrapErr),
             "map" => Some(InlineMethod::ResultMap),
