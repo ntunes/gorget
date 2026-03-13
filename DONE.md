@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-03-13] **Static str literal initializer fix** — `static str x = "hello"` now generates `gorget_str_from_literal(...)` in `__gorget_init_globals()` instead of `{0}`. Fixed Metal shader sources being empty at runtime.
+
 - [2026-03-12] **Frontend code review round 2** — (1) Removed dead `!matches!(Token::EqEq)` condition in `parse_call_arg`. (2) Escape span consistency: use `backslash_pos` in catch-all branch. (3) Removed redundant `i = pos + 1` in `scan_char_literal`. (4) Improved error message: "expected string" → "expected quote after string prefix". (5) Added `debug_assert!(start <= end)` to `Span::new`. (6) Descriptive `unreachable!()` messages in `parse_postfix` and `parse_const_item`. (7) Documented `try_parse` error retention design.
 
 - [2026-03-12] **Frontend code review: lexer, parser, AST cleanup** — (1) Removed dead `LexErrorKind::InvalidIndentation` variant (never emitted). (2) Fixed `split_interpolation_spec` depth counters going negative on malformed input — changed from `i32` to `u32` with `saturating_sub`. (3) Fixed fragile nested string skip in interpolation scanning — closing quote advancement now explicit with `continue`. (4) Fixed `contains_it()` not walking pattern expressions — `it` inside `Pattern::Literal` in `Is` or `Match` patterns now triggers implicit closure wrapping. (5) Extracted `emit_pending_newline()` helper to deduplicate 3 identical blocks in `process_indentation`. (6) Added `Keyword::Async` to `is_expr_start()` for completeness.

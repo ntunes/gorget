@@ -10,7 +10,7 @@
 
 ## Medium
 
-- **Gorget Arena: link stage** — All 99 C compilation errors fixed. Remaining: link errors for missing SDL2_image/SDL2_ttf libraries (not installed in this environment). Once SDL2 dev packages are available, the binary should link. [updated: 2026-03-12]
+- **Gorget Arena: GL backend (Linux)** — macOS Metal build compiles and runs. Linux GL build has 20 remaining type mismatch errors (GLContext vs GorgetGLContext, Str vs GorgetString in GL function args). [updated: 2026-03-13]
 
 - **Borrow checker: imported module functions not checked** — The borrow checker at `borrow.rs:4413` only iterates top-level `module.items` (entry file functions). Functions inside `Item::Module` wrappers (imported files) are not borrow-checked. This means ownership annotations in imported files are never validated — only the entry file's call sites are checked. Fix: recurse into `Item::Module` nodes in the borrow checker's main loop. [added: 2026-03-12]
 
@@ -32,7 +32,13 @@
 
 - **Generic identity on Vector causes double-free**: `identity[Vector[int]](v)` where `T identity[T](T x): return x` causes a double-free at runtime. Move types passed through generic value-return functions don't properly transfer ownership — the caller and callee both try to drop the collection. [added: 2026-03-11]
 
-- **Static str literal initializer produces zero-initialized memory**: `static str greeting = "hello"` generates `{0}` in C instead of a proper `gorget_str_from_literal("hello")` call, causing segfault when the static str is printed. Numeric statics work fine. [added: 2026-03-11]
+- **C backend: const qualifier on borrow locals**: Borrowing a `const` struct field (e.g. `&self.normal` where self is `const T*`) produces `const T*` but the destination local is declared as `T*`. Not a runtime bug (we don't mutate), but the codegen should propagate `const` qualifiers. Currently suppressed with `-Wno-discarded-qualifiers`/`-Wno-incompatible-pointer-types-discards-qualifiers`. [added: 2026-03-13]
+
+- **C backend: uninitialized return variable in some functions**: At least one generated function has `_0` used uninitialized as a return value. The codegen should ensure all return locals are zero-initialized. Currently suppressed with `-Wuninitialized` not being fatal. [added: 2026-03-13]
+
+- **Metal runtime: ObjC method signature for drawIndexedPrimitives with indirect buffer**: `drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:` not found by clang. Either wrong selector name or missing protocol cast on encoder. Could crash if called. Suppressed with `-Wno-objc-method-access`. [added: 2026-03-13]
+
+- **Metal runtime: update deprecated APIs**: `sampleCount` → `rasterSampleCount`, `useResource:usage:` → `useResource:usage:stages:`, `useHeap:` → `useHeap:stages:`. Still functional but deprecated since macOS 13.0. [added: 2026-03-13]
 
 - **`shared static` support**: `public static shared int counter = 0` — thread-safe module-level statics. Requires adding `SharedKind` field to `StaticDecl`, atomic/mutex global codegen in C backend (atomic globals, constructor-initialized mutexes), and wiring lock/unlock into `GlobalAssign` emission. Workaround: use explicit `Mutex[int]` or `Atomic[int]` as the static type. [added: 2026-03-10]
 

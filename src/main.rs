@@ -520,6 +520,8 @@ fn try_build_ir(
             .arg("-Wno-unused-variable")
             .arg("-Wno-unused-function")
             .arg("-Wno-unused-label")
+            .arg("-Wno-unused-but-set-variable")
+            .arg("-Wno-discarded-qualifiers")
             .arg("-ffunction-sections")
             .arg("-fdata-sections")
             .arg("-o")
@@ -528,6 +530,11 @@ fn try_build_ir(
         #[cfg(target_os = "macos")]
         if needs_metal {
             cc_cmd.arg("-x").arg("objective-c");
+            cc_cmd.arg("-Wno-deprecated-declarations");
+            cc_cmd.arg("-Wno-objc-method-access");
+            cc_cmd.arg("-Wno-arc-bridge-casts-disallowed-in-nonarc");
+            cc_cmd.arg("-Wno-incompatible-pointer-types-discards-qualifiers");
+            cc_cmd.arg("-Wno-nonnull");
         }
         cc_cmd.arg(&c_path)
             .arg("-lm");
@@ -636,6 +643,7 @@ fn try_build_ir(
             .arg("-Wno-unused-parameter")
             .arg("-Wno-unused-variable")
             .arg("-Wno-unused-function")
+            .arg("-Wno-unused-but-set-variable")
             .arg("-o")
             .arg(shared_path)
             .arg(&shared_c_path)
@@ -688,6 +696,7 @@ fn try_build_ir(
             .arg("-std=c11").arg("-shared").arg("-fPIC")
             .arg("-Wall").arg("-Wextra")
             .arg("-Wno-unused-parameter").arg("-Wno-unused-variable").arg("-Wno-unused-function")
+            .arg("-Wno-unused-but-set-variable")
             .arg("-o").arg(&guest_lib_path)
             .arg(&guest_c_path).arg("-lm");
         if options.sanitize {
@@ -707,6 +716,7 @@ fn try_build_ir(
         host_cmd.arg("-std=c11")
             .arg("-Wall").arg("-Wextra")
             .arg("-Wno-unused-parameter").arg("-Wno-unused-variable").arg("-Wno-unused-function")
+            .arg("-Wno-unused-but-set-variable")
             .arg("-o").arg(&exe_path)
             .arg(&host_c_path).arg("-lm").arg("-ldl");
         if options.overflow_wrap || gir_module.runtime.overflow_wrap { host_cmd.arg("-fwrapv"); }
@@ -740,6 +750,8 @@ fn try_build_ir(
         .arg("-Wno-unused-variable")
         .arg("-Wno-unused-function")
         .arg("-Wno-unused-label")
+        .arg("-Wno-unused-but-set-variable")
+        .arg("-Wno-discarded-qualifiers")
         .arg("-ffunction-sections")
         .arg("-fdata-sections")
         .arg("-o")
@@ -748,6 +760,11 @@ fn try_build_ir(
     #[cfg(target_os = "macos")]
     if needs_metal {
         cc_cmd.arg("-x").arg("objective-c");
+        cc_cmd.arg("-Wno-deprecated-declarations");
+        cc_cmd.arg("-Wno-objc-method-access");
+        cc_cmd.arg("-Wno-arc-bridge-casts-disallowed-in-nonarc");
+        cc_cmd.arg("-Wno-incompatible-pointer-types-discards-qualifiers");
+        cc_cmd.arg("-Wno-nonnull");
     }
     cc_cmd.arg(&c_path)
         .arg("-lm");
