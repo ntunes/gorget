@@ -5385,6 +5385,14 @@ fn bare_param_mutation_error() {
 }
 
 #[test]
+fn bare_param_method_error() {
+    check_gg_fails(
+        "bare_param_method_error.gg",
+        "cannot mutate bare parameter",
+    );
+}
+
+#[test]
 fn lifetime_use_after_move_error() {
     check_gg_fails(
         "lifetime_use_after_move_error.gg",

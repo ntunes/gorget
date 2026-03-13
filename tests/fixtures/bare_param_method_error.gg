@@ -1,0 +1,13 @@
+struct Items:
+    int count
+
+equip Items:
+    void add(&self):
+        self.count = self.count + 1
+
+void process(Items items):
+    items.add()
+
+void main():
+    Items i = Items(count=0)
+    process(i)

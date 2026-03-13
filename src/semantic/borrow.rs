@@ -257,12 +257,30 @@ fn is_ast_type_ref(ty: &Type, scopes: &ScopeTable, ref_structs: &FxHashSet<DefId
     }
 }
 
+/// Recursively collect all `Spanned<Item>`s, descending into `Item::Module` wrappers
+/// so that imported-module contents are visited by every borrow-checker pass.
+fn all_spanned_items(items: &[Spanned<Item>]) -> Vec<&Spanned<Item>> {
+    let mut result = Vec::new();
+    collect_spanned_items(items, &mut result);
+    result
+}
+
+fn collect_spanned_items<'a>(items: &'a [Spanned<Item>], out: &mut Vec<&'a Spanned<Item>>) {
+    for item in items {
+        if let Item::Module { items: inner, .. } = &item.node {
+            collect_spanned_items(inner, out);
+        } else {
+            out.push(item);
+        }
+    }
+}
+
 /// Scan the module's struct definitions and compute which structs contain
 /// reference-type fields (directly or transitively). Returns their DefIds.
 fn compute_ref_type_structs(module: &Module, scopes: &ScopeTable) -> FxHashSet<DefId> {
     // Collect all struct defs with their DefId and fields
     let mut struct_infos: Vec<(DefId, &[Spanned<FieldDef>])> = Vec::new();
-    for item in &module.items {
+    for item in all_spanned_items(&module.items) {
         if let Item::Struct(s) = &item.node {
             if let Some(def_id) = scopes.lookup_from_scope(ScopeId(0), &s.name.node) {
                 struct_infos.push((def_id, &s.fields));
@@ -300,7 +318,7 @@ fn compute_struct_field_ref_flags(
     ref_type_structs: &FxHashSet<DefId>,
 ) -> FxHashMap<DefId, Vec<bool>> {
     let mut result = FxHashMap::default();
-    for item in &module.items {
+    for item in all_spanned_items(&module.items) {
         if let Item::Struct(s) = &item.node {
             if let Some(def_id) = scopes.lookup_from_scope(ScopeId(0), &s.name.node) {
                 if ref_type_structs.contains(&def_id) {
@@ -1632,10 +1650,28 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Expr::MethodCall {
-                receiver, args, ..
+                receiver, method, args, ..
             } => {
                 self.check_expr(receiver);
                 self.check_call_aliasing(args);
+
+                // Check if calling a &self method on a bare (immutable) parameter
+                if let Some(param_name) = self.check_bare_param_mutation(receiver) {
+                    if let Some(&method_def_id) = self.method_resolutions.get(&method.span.start) {
+                        if let Some(info) = self.function_info.get(&method_def_id) {
+                            if info.param_ownerships.first() == Some(&Ownership::MutableBorrow) {
+                                self.error(
+                                    SemanticErrorKind::MutationOfBareParam {
+                                        name: param_name,
+                                        detail: "cannot call mutating method on immutable parameter".to_string(),
+                                    },
+                                    expr.span,
+                                );
+                            }
+                        }
+                    }
+                }
+
                 // Detect qualified enum variant constructors: EnumName.VariantName(args)
                 // When the receiver resolves to an Enum def, treat args as implicitly consumed.
                 let is_enum_constructor = if let Expr::Identifier(_) = &receiver.node {
@@ -7643,6 +7679,84 @@ void process(Outer o):
         assert!(
             has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "o")),
             "expected MutationOfBareParam for nested field assign, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn bare_param_method_call_rejected() {
+        let source = "\
+struct Items:
+    int count
+
+equip Items:
+    void add(&self):
+        self.count = self.count + 1
+
+void process(Items items):
+    items.add()
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "items")),
+            "expected MutationOfBareParam for &self method call on bare param, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn bare_param_non_mutating_method_allowed() {
+        let source = "\
+struct Items:
+    int count
+
+equip Items:
+    int get_count(self):
+        return self.count
+
+void process(Items items):
+    int c = items.get_count()
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
+            "unexpected MutationOfBareParam for bare self method: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn bare_param_in_closure_rejected() {
+        let source = "\
+struct Point:
+    int x
+
+void process(Point p):
+    auto f = ():
+        p.x = 10
+    f()
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "p")),
+            "expected MutationOfBareParam for closure capturing bare param, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn bare_param_in_match_rejected() {
+        let source = "\
+struct Point:
+    int x
+
+void process(Point p, int v):
+    match v:
+        case 1:
+            p.x = 10
+        else:
+            p.x = 20
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "p")),
+            "expected MutationOfBareParam for field assign in match arm, got: {:?}", errors
         );
     }
 }
