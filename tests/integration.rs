@@ -9,19 +9,27 @@ use gorget::lexer::token::{StringKind, StringLiteral, StringSegment, Token};
 use gorget::parser::ast::*;
 use gorget::span::Spanned;
 
+/// Default timeout for the build step (60 seconds).
+const BUILD_TIMEOUT: Duration = Duration::from_secs(60);
 /// Default timeout for compiled test binaries (30 seconds).
 const TEST_BINARY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Run a command with a timeout. Returns the output or panics if the process
 /// hangs beyond the deadline.
 fn run_with_timeout(cmd: &mut Command, fixture: &str) -> std::process::Output {
+    run_with_deadline(cmd, fixture, TEST_BINARY_TIMEOUT)
+}
+
+/// Run a command with a specific timeout duration. Returns the output or panics
+/// if the process hangs beyond the deadline.
+fn run_with_deadline(cmd: &mut Command, fixture: &str, timeout: Duration) -> std::process::Output {
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to execute compiled binary");
 
-    let deadline = std::time::Instant::now() + TEST_BINARY_TIMEOUT;
+    let deadline = std::time::Instant::now() + timeout;
 
     // Poll the child in a loop with short sleeps
     loop {
@@ -36,7 +44,7 @@ fn run_with_timeout(cmd: &mut Command, fixture: &str) -> std::process::Output {
                     child.wait().ok();
                     panic!(
                         "Test binary for {fixture} timed out after {}s",
-                        TEST_BINARY_TIMEOUT.as_secs()
+                        timeout.as_secs()
                     );
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -44,6 +52,12 @@ fn run_with_timeout(cmd: &mut Command, fixture: &str) -> std::process::Output {
             Err(e) => panic!("Failed to wait on child for {fixture}: {e}"),
         }
     }
+}
+
+/// Run a build command with BUILD_TIMEOUT. Wraps any Command that should not
+/// block indefinitely (e.g. `cargo run -- build`).
+fn build_with_timeout(cmd: &mut Command, fixture: &str) -> std::process::Output {
+    run_with_deadline(cmd, fixture, BUILD_TIMEOUT)
 }
 
 /// Build and run a `.gg` fixture, asserting its stdout matches `expected`.
@@ -63,11 +77,12 @@ fn run_gg(fixture: &str, expected: &str) {
     let exe_path = dir.join(stem);
 
     // 1. Build: cargo run -- build <fixture>
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "build"])
+            .arg(&fixture_path),
+        fixture,
+    );
 
     assert!(
         build.status.success(),
@@ -714,11 +729,12 @@ fn gg_run_command() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures/hello.gg");
 
-    let output = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "run"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let output = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "run"])
+            .arg(&fixture_path),
+        "hello.gg",
+    );
 
     assert!(
         output.status.success(),
@@ -1041,11 +1057,12 @@ fn run_gg_with_args(fixture: &str, binary_args: &[&str], expected: &str) {
     let exe_path = dir.join(stem);
 
     // 1. Build
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "build"])
+            .arg(&fixture_path),
+        fixture,
+    );
 
     assert!(
         build.status.success(),
@@ -1099,11 +1116,12 @@ fn run_gg_with_stdin(fixture: &str, stdin_data: &str, expected: &str) {
     let exe_path = dir.join(stem);
 
     // 1. Build
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "build"])
+            .arg(&fixture_path),
+        fixture,
+    );
 
     assert!(
         build.status.success(),
@@ -1184,11 +1202,12 @@ fn run_gg_dir(dir_name: &str, main_file: &str, expected: &str) {
     let exe_path = dir_path.join(stem);
 
     // 1. Build: cargo run -- build <dir/main.gg>
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build"])
-        .arg(&main_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "build"])
+            .arg(&main_path),
+        &format!("{dir_name}/{main_file}"),
+    );
 
     assert!(
         build.status.success(),
@@ -2302,11 +2321,12 @@ fn run_gg_panics(fixture: &str, expected_stderr: &str) {
     let exe_path = dir.join(stem);
 
     // 1. Build: cargo run -- build <fixture>
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "build"])
+            .arg(&fixture_path),
+        fixture,
+    );
 
     assert!(
         build.status.success(),
@@ -2479,11 +2499,12 @@ fn run_gg_with_flags(fixture: &str, flags: &[&str], expected: &str) {
     // 1. Build: cargo run -- build <flags> <fixture>
     let mut build_args = vec!["run", "--quiet", "--", "build"];
     build_args.extend(flags.iter());
-    let build = Command::new(env!("CARGO"))
-        .args(&build_args)
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(&build_args)
+            .arg(&fixture_path),
+        fixture,
+    );
 
     assert!(
         build.status.success(),
@@ -2595,11 +2616,12 @@ fn run_gg_panics_with_flags(fixture: &str, flags: &[&str], expected_stderr: &str
     // 1. Build with flags
     let mut build_args = vec!["run", "--quiet", "--", "build"];
     build_args.extend(flags.iter());
-    let build = Command::new(env!("CARGO"))
-        .args(&build_args)
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(&build_args)
+            .arg(&fixture_path),
+        fixture,
+    );
 
     assert!(
         build.status.success(),
@@ -2688,11 +2710,12 @@ fn check_gg_fails(fixture: &str, expected_stderr: &str) {
         fixture_path.display()
     );
 
-    let output = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "check"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let output = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "check"])
+            .arg(&fixture_path),
+        fixture,
+    );
 
     assert!(
         !output.status.success(),
@@ -3075,11 +3098,12 @@ fn run_example(name: &str, expected: &str) {
     );
 
     // 1. Build
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build"])
-        .arg(&source_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "build"])
+            .arg(&source_path),
+        name,
+    );
 
     assert!(
         build.status.success(),
@@ -3627,11 +3651,12 @@ fn trace_directive() {
     let trace_path = dir.join("trace_test.trace.jsonl");
 
     // 1. Build
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "build"])
+            .arg(&fixture_path),
+        "trace_test.gg",
+    );
 
     assert!(
         build.status.success(),
@@ -3698,11 +3723,12 @@ fn trace_cli_flag() {
     let trace_path = dir.join("functions.trace.jsonl");
 
     // Build with --trace
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build", "--trace"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "build", "--trace"])
+            .arg(&fixture_path),
+        "functions.gg",
+    );
 
     assert!(
         build.status.success(),
@@ -3745,11 +3771,12 @@ fn trace_no_trace_flag() {
     let trace_path = dir.join("trace_test.trace.jsonl");
 
     // Build with --no-trace (overrides directive)
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build", "--no-trace"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "build", "--no-trace"])
+            .arg(&fixture_path),
+        "trace_test.gg",
+    );
 
     assert!(
         build.status.success(),
@@ -3785,11 +3812,12 @@ fn trace_in_test_mode() {
     let trace_path = dir.join("test_basic.trace.jsonl");
 
     // Run with gg test --trace
-    let run = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "test", "--trace"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let run = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "test", "--trace"])
+            .arg(&fixture_path),
+        "test_basic.gg",
+    );
 
     assert!(
         run.status.success(),
@@ -4241,10 +4269,11 @@ fn run_gg_test_with_flags(
         args.push(f);
     }
 
-    let output = Command::new(env!("CARGO"))
-        .args(&args)
-        .output()
-        .expect("failed to run cargo");
+    let output = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(&args),
+        fixture,
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -4479,11 +4508,12 @@ fn test_report_subcommand() {
     let _ = std::fs::remove_file(&trace_path);
     let _ = std::fs::remove_file(&report_path);
 
-    let run = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "test", "--trace"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run gg test --trace");
+    let run = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "test", "--trace"])
+            .arg(&fixture_path),
+        "test_basic.gg",
+    );
 
     assert!(
         run.status.success(),
@@ -4494,11 +4524,12 @@ fn test_report_subcommand() {
     assert!(trace_path.exists(), "Trace file should exist after gg test --trace");
 
     // 2. Run `gg report` on the trace file
-    let report_run = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "report"])
-        .arg(&trace_path)
-        .output()
-        .expect("failed to run gg report");
+    let report_run = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "report"])
+            .arg(&trace_path),
+        "test_basic.gg (report)",
+    );
 
     assert!(
         report_run.status.success(),
@@ -4545,11 +4576,12 @@ fn test_report_flag_on_test() {
     let _ = std::fs::remove_file(&trace_path);
     let _ = std::fs::remove_file(&report_path);
 
-    let run = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "test", "--report", "html"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run gg test --report html");
+    let run = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "test", "--report", "html"])
+            .arg(&fixture_path),
+        "test_basic.gg (report html)",
+    );
 
     assert!(
         run.status.success(),
@@ -5197,11 +5229,12 @@ fn hot_reload_basic() {
     assert!(fixture_path.exists(), "Fixture not found: {}", fixture_path.display());
 
     // 1. Build with --hot-reload
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build", "--hot-reload"])
-        .arg(&fixture_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "build", "--hot-reload"])
+            .arg(&fixture_path),
+        "hot_reload_basic.gg",
+    );
 
     assert!(
         build.status.success(),
@@ -6234,11 +6267,12 @@ fn build_gg_dir(dir_name: &str, main_file: &str) -> (PathBuf, PathBuf) {
     let c_path = dir_path.join(format!("{stem}.c"));
     let exe_path = dir_path.join(stem);
 
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build"])
-        .arg(&main_path)
-        .output()
-        .expect("failed to run cargo");
+    let build = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "build"])
+            .arg(&main_path),
+        &format!("{dir_name}/{main_file}"),
+    );
 
     assert!(
         build.status.success(),
@@ -6442,91 +6476,75 @@ fn lexer_comparison() {
             .collect();
 
         // Gorget side: run the driver binary
-        let output = Command::new(&driver_exe).arg(fixture).output();
+        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(fixture),
+            &fname,
+        );
 
-        match output {
-            Ok(out) if out.status.success() => {
-                let gorget_tokens: Vec<String> = String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .filter(|s| !is_comment_token(s))
-                    .map(|s| s.to_string())
+        if out.status.success() {
+            let gorget_tokens: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|s| !is_comment_token(s))
+                .map(|s| s.to_string())
+                .collect();
+
+            // Find first divergence
+            let mut first_diff = None;
+            let max_len = rust_tokens.len().max(gorget_tokens.len());
+            for i in 0..max_len {
+                let r = rust_tokens.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+                let g = gorget_tokens
+                    .get(i)
+                    .map(|s| s.as_str())
+                    .unwrap_or("<missing>");
+                if !canonical_token_eq(r, g) {
+                    first_diff = Some(i);
+                    break;
+                }
+            }
+
+            if let Some(diff_idx) = first_diff {
+                // Collect context: 2 tokens before and 3 after the divergence
+                let start = diff_idx.saturating_sub(2);
+                let end = (diff_idx + 3).min(max_len);
+                let rust_context: Vec<String> = (start..end)
+                    .map(|i| {
+                        let prefix = if i == diff_idx { ">>  " } else { "    " };
+                        format!(
+                            "{prefix}[{i}] {}",
+                            rust_tokens
+                                .get(i)
+                                .map(|s| s.as_str())
+                                .unwrap_or("<missing>")
+                        )
+                    })
+                    .collect();
+                let gorget_context: Vec<String> = (start..end)
+                    .map(|i| {
+                        let prefix = if i == diff_idx { ">>  " } else { "    " };
+                        format!(
+                            "{prefix}[{i}] {}",
+                            gorget_tokens
+                                .get(i)
+                                .map(|s| s.as_str())
+                                .unwrap_or("<missing>")
+                        )
+                    })
                     .collect();
 
-                // Find first divergence
-                let mut first_diff = None;
-                let max_len = rust_tokens.len().max(gorget_tokens.len());
-                for i in 0..max_len {
-                    let r = rust_tokens.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
-                    let g = gorget_tokens
-                        .get(i)
-                        .map(|s| s.as_str())
-                        .unwrap_or("<missing>");
-                    if !canonical_token_eq(r, g) {
-                        first_diff = Some(i);
-                        break;
-                    }
-                }
-
-                if let Some(diff_idx) = first_diff {
-                    // Collect context: 2 tokens before and 3 after the divergence
-                    let start = diff_idx.saturating_sub(2);
-                    let end = (diff_idx + 3).min(max_len);
-                    let rust_context: Vec<String> = (start..end)
-                        .map(|i| {
-                            let prefix = if i == diff_idx { ">>  " } else { "    " };
-                            format!(
-                                "{prefix}[{i}] {}",
-                                rust_tokens
-                                    .get(i)
-                                    .map(|s| s.as_str())
-                                    .unwrap_or("<missing>")
-                            )
-                        })
-                        .collect();
-                    let gorget_context: Vec<String> = (start..end)
-                        .map(|i| {
-                            let prefix = if i == diff_idx { ">>  " } else { "    " };
-                            format!(
-                                "{prefix}[{i}] {}",
-                                gorget_tokens
-                                    .get(i)
-                                    .map(|s| s.as_str())
-                                    .unwrap_or("<missing>")
-                            )
-                        })
-                        .collect();
-
-                    mismatches.push(Mismatch {
-                        fixture: fixture
-                            .file_name()
-                            .unwrap()
-                            .to_string_lossy()
-                            .to_string(),
-                        first_diff: diff_idx,
-                        rust_len: rust_tokens.len(),
-                        gorget_len: gorget_tokens.len(),
-                        rust_context,
-                        gorget_context,
-                    });
-                }
+                mismatches.push(Mismatch {
+                    fixture: fname.clone(),
+                    first_diff: diff_idx,
+                    rust_len: rust_tokens.len(),
+                    gorget_len: gorget_tokens.len(),
+                    rust_context,
+                    gorget_context,
+                });
             }
-            Ok(out) => {
-                let name = fixture
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                crashes.push((name, stderr));
-            }
-            Err(e) => {
-                let name = fixture
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-                crashes.push((name, format!("exec error: {e}")));
-            }
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            crashes.push((fname, stderr));
         }
         compared += 1;
     }
@@ -9437,69 +9455,53 @@ fn parser_comparison() {
         let rust_output = format_module_canonical(&module);
 
         // Gorget side: run the driver binary
-        let output = Command::new(&driver_exe).arg(fixture).output();
+        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(fixture),
+            &fname,
+        );
 
-        match output {
-            Ok(out) if out.status.success() => {
-                let gorget_output = String::from_utf8_lossy(&out.stdout)
-                    .trim_end()
-                    .to_string();
+        if out.status.success() {
+            let gorget_output = String::from_utf8_lossy(&out.stdout)
+                .trim_end()
+                .to_string();
 
-                let rust_lines: Vec<&str> = rust_output.lines().collect();
-                let gorget_lines: Vec<&str> = gorget_output.lines().collect();
+            let rust_lines: Vec<&str> = rust_output.lines().collect();
+            let gorget_lines: Vec<&str> = gorget_output.lines().collect();
 
-                // Find first line divergence
-                let mut first_diff = None;
-                let max_lines = rust_lines.len().max(gorget_lines.len());
-                for i in 0..max_lines {
-                    let r = rust_lines.get(i).unwrap_or(&"<missing>");
-                    let g = gorget_lines.get(i).unwrap_or(&"<missing>");
-                    if r != g {
-                        first_diff = Some(i);
-                        break;
-                    }
-                }
-
-                if let Some(diff_line) = first_diff {
-                    mismatches.push(Mismatch {
-                        fixture: fixture
-                            .file_name()
-                            .unwrap()
-                            .to_string_lossy()
-                            .to_string(),
-                        first_diff_line: diff_line,
-                        rust_line: rust_lines
-                            .get(diff_line)
-                            .unwrap_or(&"<missing>")
-                            .to_string(),
-                        gorget_line: gorget_lines
-                            .get(diff_line)
-                            .unwrap_or(&"<missing>")
-                            .to_string(),
-                        rust_total: rust_lines.len(),
-                        gorget_total: gorget_lines.len(),
-                    });
-                } else {
-                    matched += 1;
+            // Find first line divergence
+            let mut first_diff = None;
+            let max_lines = rust_lines.len().max(gorget_lines.len());
+            for i in 0..max_lines {
+                let r = rust_lines.get(i).unwrap_or(&"<missing>");
+                let g = gorget_lines.get(i).unwrap_or(&"<missing>");
+                if r != g {
+                    first_diff = Some(i);
+                    break;
                 }
             }
-            Ok(out) => {
-                let name = fixture
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                crashes.push((name, stderr));
+
+            if let Some(diff_line) = first_diff {
+                mismatches.push(Mismatch {
+                    fixture: fname.clone(),
+                    first_diff_line: diff_line,
+                    rust_line: rust_lines
+                        .get(diff_line)
+                        .unwrap_or(&"<missing>")
+                        .to_string(),
+                    gorget_line: gorget_lines
+                        .get(diff_line)
+                        .unwrap_or(&"<missing>")
+                        .to_string(),
+                    rust_total: rust_lines.len(),
+                    gorget_total: gorget_lines.len(),
+                });
+            } else {
+                matched += 1;
             }
-            Err(e) => {
-                let name = fixture
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-                crashes.push((name, format!("exec error: {e}")));
-            }
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            crashes.push((fname, stderr));
         }
         compared += 1;
     }
@@ -9728,72 +9730,59 @@ fn resolver_comparison() {
         let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
 
         // Gorget side: run the driver binary
-        let output = Command::new(&driver_exe).arg(fixture).output();
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(fixture),
+            &fname,
+        );
 
-        match output {
-            Ok(out) if out.status.success() => {
-                let gorget_output = String::from_utf8_lossy(&out.stdout)
-                    .trim_end()
-                    .to_string();
+        if out.status.success() {
+            let gorget_output = String::from_utf8_lossy(&out.stdout)
+                .trim_end()
+                .to_string();
 
-                // Normalize: extract DEF + RES lines (skip SCOPE — structural AST diffs)
-                let (rust_defs, rust_res) = normalize_resolver_output(&rust_output);
-                let (gorget_defs, gorget_res) = normalize_resolver_output(&gorget_output);
+            // Normalize: extract DEF + RES lines (skip SCOPE — structural AST diffs)
+            let (rust_defs, rust_res) = normalize_resolver_output(&rust_output);
+            let (gorget_defs, gorget_res) = normalize_resolver_output(&gorget_output);
 
-                // Combine DEF + RES for comparison
-                let mut rust_lines = rust_defs;
-                rust_lines.extend(rust_res);
-                let mut gorget_lines = gorget_defs;
-                gorget_lines.extend(gorget_res);
+            // Combine DEF + RES for comparison
+            let mut rust_lines = rust_defs;
+            rust_lines.extend(rust_res);
+            let mut gorget_lines = gorget_defs;
+            gorget_lines.extend(gorget_res);
 
-                // Find first line divergence
-                let mut first_diff = None;
-                let max_lines = rust_lines.len().max(gorget_lines.len());
-                for i in 0..max_lines {
-                    let r = rust_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
-                    let g = gorget_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
-                    if r != g {
-                        first_diff = Some(i);
-                        break;
-                    }
-                }
-
-                if let Some(diff_line) = first_diff {
-                    mismatches.push(Mismatch {
-                        fixture: fname.clone(),
-                        first_diff_line: diff_line,
-                        rust_line: rust_lines
-                            .get(diff_line)
-                            .cloned()
-                            .unwrap_or_else(|| "<missing>".to_string()),
-                        gorget_line: gorget_lines
-                            .get(diff_line)
-                            .cloned()
-                            .unwrap_or_else(|| "<missing>".to_string()),
-                        rust_total: rust_lines.len(),
-                        gorget_total: gorget_lines.len(),
-                    });
-                } else {
-                    matched += 1;
+            // Find first line divergence
+            let mut first_diff = None;
+            let max_lines = rust_lines.len().max(gorget_lines.len());
+            for i in 0..max_lines {
+                let r = rust_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+                let g = gorget_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+                if r != g {
+                    first_diff = Some(i);
+                    break;
                 }
             }
-            Ok(out) => {
-                let name = fixture
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                crashes.push((name, stderr));
+
+            if let Some(diff_line) = first_diff {
+                mismatches.push(Mismatch {
+                    fixture: fname.clone(),
+                    first_diff_line: diff_line,
+                    rust_line: rust_lines
+                        .get(diff_line)
+                        .cloned()
+                        .unwrap_or_else(|| "<missing>".to_string()),
+                    gorget_line: gorget_lines
+                        .get(diff_line)
+                        .cloned()
+                        .unwrap_or_else(|| "<missing>".to_string()),
+                    rust_total: rust_lines.len(),
+                    gorget_total: gorget_lines.len(),
+                });
+            } else {
+                matched += 1;
             }
-            Err(e) => {
-                let name = fixture
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-                crashes.push((name, format!("exec error: {e}")));
-            }
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            crashes.push((fname.clone(), stderr));
         }
         compared += 1;
     }
@@ -10025,70 +10014,57 @@ fn type_comparison() {
         let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
 
         // Gorget side: run the driver binary
-        let output = Command::new(&driver_exe).arg(fixture).output();
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(fixture),
+            &fname,
+        );
 
-        match output {
-            Ok(out) if out.status.success() => {
-                let gorget_output = String::from_utf8_lossy(&out.stdout)
-                    .trim_end()
-                    .to_string();
+        if out.status.success() {
+            let gorget_output = String::from_utf8_lossy(&out.stdout)
+                .trim_end()
+                .to_string();
 
-                // Normalize: extract "name" = type pairs (strip def_id for order-independent comparison)
-                let rust_lines = normalize_type_output(&rust_output);
-                let gorget_lines = normalize_type_output(&gorget_output);
+            // Normalize: extract "name" = type pairs (strip def_id for order-independent comparison)
+            let rust_lines = normalize_type_output(&rust_output);
+            let gorget_lines = normalize_type_output(&gorget_output);
 
-                // Extract name=type pairs, ignoring def_id ordering
-                let extract_pairs = |lines: &[String]| -> std::collections::HashSet<String> {
-                    lines.iter().filter_map(|line| {
-                        // TYPE <id> "name" = type → "name" = type
-                        if let Some(quote_start) = line.find('"') {
-                            Some(line[quote_start..].to_string())
-                        } else {
-                            None
-                        }
-                    }).collect()
-                };
-                let rust_set = extract_pairs(&rust_lines);
-                let gorget_set = extract_pairs(&gorget_lines);
+            // Extract name=type pairs, ignoring def_id ordering
+            let extract_pairs = |lines: &[String]| -> std::collections::HashSet<String> {
+                lines.iter().filter_map(|line| {
+                    // TYPE <id> "name" = type → "name" = type
+                    if let Some(quote_start) = line.find('"') {
+                        Some(line[quote_start..].to_string())
+                    } else {
+                        None
+                    }
+                }).collect()
+            };
+            let rust_set = extract_pairs(&rust_lines);
+            let gorget_set = extract_pairs(&gorget_lines);
 
-                if rust_set == gorget_set {
-                    matched += 1;
-                } else if rust_set.is_subset(&gorget_set) {
-                    // Gorget has all of Rust's entries plus extras — count as superset match
-                    superset_matched += 1;
-                } else {
-                    // Find first difference for reporting
-                    let rust_only: Vec<_> = rust_set.difference(&gorget_set).cloned().collect();
-                    let gorget_only: Vec<_> = gorget_set.difference(&rust_set).cloned().collect();
-                    let rust_line = rust_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
-                    let gorget_line = gorget_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
-                    mismatches.push(Mismatch {
-                        fixture: fname.clone(),
-                        first_diff_line: 0,
-                        rust_line: format!("only in Rust ({}): {}", rust_only.len(), rust_line),
-                        gorget_line: format!("only in Gorget ({}): {}", gorget_only.len(), gorget_line),
-                        rust_total: rust_lines.len(),
-                        gorget_total: gorget_lines.len(),
-                    });
-                }
+            if rust_set == gorget_set {
+                matched += 1;
+            } else if rust_set.is_subset(&gorget_set) {
+                // Gorget has all of Rust's entries plus extras — count as superset match
+                superset_matched += 1;
+            } else {
+                // Find first difference for reporting
+                let rust_only: Vec<_> = rust_set.difference(&gorget_set).cloned().collect();
+                let gorget_only: Vec<_> = gorget_set.difference(&rust_set).cloned().collect();
+                let rust_line = rust_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
+                let gorget_line = gorget_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
+                mismatches.push(Mismatch {
+                    fixture: fname.clone(),
+                    first_diff_line: 0,
+                    rust_line: format!("only in Rust ({}): {}", rust_only.len(), rust_line),
+                    gorget_line: format!("only in Gorget ({}): {}", gorget_only.len(), gorget_line),
+                    rust_total: rust_lines.len(),
+                    gorget_total: gorget_lines.len(),
+                });
             }
-            Ok(out) => {
-                let name = fixture
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                crashes.push((name, stderr));
-            }
-            Err(e) => {
-                let name = fixture
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
-                crashes.push((name, format!("exec error: {e}")));
-            }
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            crashes.push((fname.clone(), stderr));
         }
         compared += 1;
     }
@@ -10983,10 +10959,11 @@ fn run_gg_bench(fixture: &str, expected_fragments: &[&str]) {
     let c_path = dir.join(format!("{stem}.c"));
     let exe_path = dir.join(stem);
 
-    let output = Command::new(env!("CARGO"))
-        .args(&["run", "--quiet", "--", "test", "--bench", fixture_path.to_str().unwrap()])
-        .output()
-        .expect("failed to run cargo");
+    let output = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(&["run", "--quiet", "--", "test", "--bench", fixture_path.to_str().unwrap()]),
+        fixture,
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -11975,12 +11952,13 @@ fn test_snapshot_save_and_diff() {
     let _ = std::fs::remove_dir_all(&snapshot_dir);
 
     // 1. Save snapshot "v1"
-    let run = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "test"])
-        .arg(&fixture_path)
-        .args(["--snapshot", "save", "v1"])
-        .output()
-        .expect("failed to run gg test --snapshot save v1");
+    let run = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "test"])
+            .arg(&fixture_path)
+            .args(["--snapshot", "save", "v1"]),
+        "snapshot_basic.gg (save v1)",
+    );
 
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert!(
@@ -12000,56 +11978,61 @@ fn test_snapshot_save_and_diff() {
     assert!(v1_content.contains("\"greeting\": \"hello world\""), "Should contain greeting");
 
     // 3. Save another snapshot (same values) as "v2"
-    let run = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "test"])
-        .arg(&fixture_path)
-        .args(["--snapshot", "save", "v2"])
-        .output()
-        .expect("failed to run gg test --snapshot save v2");
+    let run = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "test"])
+            .arg(&fixture_path)
+            .args(["--snapshot", "save", "v2"]),
+        "snapshot_basic.gg (save v2)",
+    );
     assert!(run.status.success(), "snapshot save v2 failed");
 
     // 4. Diff v1 vs v2 — should be identical (exit 0)
-    let run = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "test"])
-        .arg(&fixture_path)
-        .args(["--snapshot", "diff", "v1", "v2"])
-        .output()
-        .expect("failed to run gg test --snapshot diff");
+    let run = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "test"])
+            .arg(&fixture_path)
+            .args(["--snapshot", "diff", "v1", "v2"]),
+        "snapshot_basic.gg (diff v1 v2)",
+    );
 
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert!(run.status.success(), "diff of identical snapshots should exit 0");
     assert!(stdout.contains("(identical)"), "Should show identical:\n{stdout}");
 
     // 5. List snapshots
-    let run = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "test"])
-        .arg(&fixture_path)
-        .args(["--snapshot", "list"])
-        .output()
-        .expect("failed to run gg test --snapshot list");
+    let run = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "test"])
+            .arg(&fixture_path)
+            .args(["--snapshot", "list"]),
+        "snapshot_basic.gg (list)",
+    );
 
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert!(stdout.contains("v1"), "List should include v1");
     assert!(stdout.contains("v2"), "List should include v2");
 
     // 6. Show a snapshot
-    let run = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "test"])
-        .arg(&fixture_path)
-        .args(["--snapshot", "show", "v1"])
-        .output()
-        .expect("failed to run gg test --snapshot show");
+    let run = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "test"])
+            .arg(&fixture_path)
+            .args(["--snapshot", "show", "v1"]),
+        "snapshot_basic.gg (show v1)",
+    );
 
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert!(stdout.contains("\"result\": 5"), "Show should display snapshot content");
 
     // 7. Delete a snapshot
-    let run = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "test"])
-        .arg(&fixture_path)
-        .args(["--snapshot", "delete", "v2"])
-        .output()
-        .expect("failed to run gg test --snapshot delete");
+    let run = build_with_timeout(
+        Command::new(env!("CARGO"))
+            .args(["run", "--quiet", "--", "test"])
+            .arg(&fixture_path)
+            .args(["--snapshot", "delete", "v2"]),
+        "snapshot_basic.gg (delete v2)",
+    );
 
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert!(stdout.contains("Deleted snapshot 'v2'"), "Should confirm deletion");
