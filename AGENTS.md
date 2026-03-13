@@ -49,6 +49,9 @@ cargo test               # all tests
 - Match uses `case`: `match x: case 1: ... else: ...`
 - Enum variants are qualified: `Color.Red()` not `Red()` (prelude variants `Ok`, `Error`, `Some`, `None` stay bare)
 - `meta` keyword for compile-time evaluation — see `docs/language-reference.md` for full builtin list
+- Mutable borrow (`&`) and move (`!`) sigils go immediately before the argument name, not before the type:
+  `void modify(Message &msg)` ✓ — `void modify(&Message msg)` ✗
+  `void consume(Message !msg)` ✓ — `void consume(!Message msg)` ✗
 
 **Always use type-first Gorget syntax** in code, plans, and examples: `int x = 5`, `str greet(str name)`.
 

@@ -48,7 +48,7 @@ compare(msg, msg)    # two immutable borrows of msg — allowed
 To modify a value through a borrow, use `&`:
 
 ```gorget
-void set_priority(&Message msg, int priority):
+void set_priority(Message &msg, int priority):
     msg.priority = priority
 
 void main():
@@ -222,7 +222,7 @@ code.
 |---------|--------|---------|
 | Immutable borrow | `f(x)` | Read access, original stays valid |
 | Mutable borrow | `f(&x)` or `f(mutable x)` | Write access, exclusive |
-| Mutable parameter | `void f(&Type x)` | Declares mutable borrow |
+| Mutable parameter | `void f(Type &x)` | Declares mutable borrow |
 | Auto-borrowing | `x.method()` | Compiler inserts borrow for `self`/`&self` |
 | Lifetime annotation | `live str s` | Explicit borrow tracking |
 | Named lifetimes | `live(name) str s` | Grouped lifetime relationships |

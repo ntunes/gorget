@@ -58,10 +58,10 @@ ownership chapter, but here's the quick version:
 void read(Message msg):         # immutable borrow (default)
     print(msg.subject)
 
-void modify(&Message msg):      # mutable borrow
+void modify(Message &msg):      # mutable borrow
     msg.priority = 5
 
-void consume(!Message msg):     # move — caller gives up ownership
+void consume(Message !msg):     # move — caller gives up ownership
     archive(msg)
 ```
 

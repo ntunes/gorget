@@ -73,7 +73,7 @@ Functions declare how they receive values:
 void read(Message msg):         # borrows (default)
     print(msg.text)
 
-void consume(!Message msg):     # takes ownership
+void consume(Message !msg):     # takes ownership
     archive(msg)
 ```
 
@@ -229,7 +229,7 @@ If any branch moves a variable, the compiler treats it as moved after the branch
 |---------|--------|---------|
 | Copy type | `int b = a` | Implicit copy, both valid |
 | Move | `!expr` or `move expr` | Transfer ownership |
-| Move parameter | `void f(!Type name)` | Function takes ownership |
+| Move parameter | `void f(Type !name)` | Function takes ownership |
 | Use after move | — | Compile error |
 | Drop | `equip T with Drop: void drop(!self)` | Cleanup on scope exit |
 | `with` statement | `with expr as name:` | Scoped resource management |
