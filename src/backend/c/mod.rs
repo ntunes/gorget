@@ -5561,10 +5561,12 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
                 if t == "void" { "int64_t".to_string() } else { t }
             }
         };
+        // Zero-initialize return local (_0) to avoid uninitialized warnings
+        let init = if local_id == 0 { " = {0}" } else { "" };
         if let Some(ref hint) = local.name_hint {
-            let _ = writeln!(out, "    {c_type} _{local_id}; /* {hint} */");
+            let _ = writeln!(out, "    {c_type} _{local_id}{init}; /* {hint} */");
         } else {
-            let _ = writeln!(out, "    {c_type} _{local_id};");
+            let _ = writeln!(out, "    {c_type} _{local_id}{init};");
         }
     }
 
