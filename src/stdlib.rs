@@ -3085,13 +3085,12 @@ fn gen_metal_module() -> Module {
     items.push(fn_item(extern_fn("metal_pipeline_set_color_attachment_blending", &[("desc", ty_int()), ("index", ty_int()), ("enabled", ty_int()), ("src_rgb", ty_int()), ("dst_rgb", ty_int()), ("src_alpha", ty_int()), ("dst_alpha", ty_int())], ty_void(), "gorget_metal_pipeline_set_color_attachment_blending")));
 
     // ── Device Feature Queries ────────────────────────────────────
-    items.push(fn_item(extern_fn("metal_device_supports_family", &[("device", ty_int()), ("family", ty_int())], ty_bool(), "gorget_metal_device_supports_family")));
-    items.push(fn_item(extern_fn("metal_device_name", &[("device", ty_int())], ty_str(), "gorget_metal_device_name")));
+    // metal_device_supports_family and metal_device_name already defined in Tier 1
     items.push(fn_item(extern_fn("metal_device_registry_id", &[("device", ty_int())], ty_int(), "gorget_metal_device_registry_id")));
     items.push(fn_item(extern_fn("metal_device_current_allocated_size", &[("device", ty_int())], ty_int(), "gorget_metal_device_current_allocated_size")));
 
     // ── Full Stencil Configuration ────────────────────────────────
-    items.push(fn_item(extern_fn("metal_create_depth_stencil_full", &[("device", ty_int()), ("depth_compare", ty_int()), ("depth_write", ty_int()), ("front_stencil_compare", ty_int()), ("front_stencil_fail", ty_int()), ("front_depth_fail", ty_int()), ("front_depth_pass", ty_int()), ("front_read_mask", ty_int()), ("front_write_mask", ty_int()), ("back_stencil_compare", ty_int()), ("back_stencil_fail", ty_int()), ("back_depth_fail", ty_int()), ("back_depth_pass", ty_int()), ("back_read_mask", ty_int()), ("back_write_mask", ty_int())], ty_int(), "gorget_metal_create_depth_stencil_full")));
+    // metal_create_depth_stencil_full already defined in Tier 1
     // Set front and back stencil reference values separately
     items.push(fn_item(extern_fn("metal_encoder_set_stencil_front_back_ref", &[("encoder", ty_int()), ("front_ref", ty_int()), ("back_ref", ty_int())], ty_void(), "gorget_metal_encoder_set_stencil_front_back_ref")));
 
@@ -3232,13 +3231,11 @@ fn gen_metal_module() -> Module {
     items.push(fn_item(extern_fn("metal_make_aliasable", &[("resource", ty_int())], ty_void(), "gorget_metal_make_aliasable")));
 
     // ── Fence / Event Synchronization (Metal 2+) ────────────
-    items.push(fn_item(extern_fn("metal_create_fence", &[("device", ty_int())], ty_int(), "gorget_metal_create_fence")));
+    // metal_create_fence, metal_create_event, metal_create_shared_event,
+    // metal_command_buffer_encode_signal_event, metal_command_buffer_encode_wait_event
+    // already defined in Tier 1
     items.push(fn_item(extern_fn("metal_render_encoder_update_fence", &[("encoder", ty_int()), ("fence", ty_int()), ("stages", ty_int())], ty_void(), "gorget_metal_render_enc_update_fence")));
     items.push(fn_item(extern_fn("metal_render_encoder_wait_for_fence", &[("encoder", ty_int()), ("fence", ty_int()), ("stages", ty_int())], ty_void(), "gorget_metal_render_enc_wait_fence")));
-    items.push(fn_item(extern_fn("metal_create_event", &[("device", ty_int())], ty_int(), "gorget_metal_create_event")));
-    items.push(fn_item(extern_fn("metal_create_shared_event", &[("device", ty_int())], ty_int(), "gorget_metal_create_shared_event")));
-    items.push(fn_item(extern_fn("metal_command_buffer_encode_signal_event", &[("cmd_buf", ty_int()), ("event", ty_int()), ("value", ty_int())], ty_void(), "gorget_metal_cmd_buf_signal_event")));
-    items.push(fn_item(extern_fn("metal_command_buffer_encode_wait_event", &[("cmd_buf", ty_int()), ("event", ty_int()), ("value", ty_int())], ty_void(), "gorget_metal_cmd_buf_wait_event")));
 
     // ── Timestamps & Counters (Metal 2.3+) ──────────────────
     items.push(fn_item(extern_fn("metal_create_counter_sample_buffer", &[("device", ty_int()), ("count", ty_int())], ty_int(), "gorget_metal_create_counter_sample_buffer")));
@@ -3275,26 +3272,6 @@ fn gen_metal_module() -> Module {
     items.push(const_item("MTL_ACCEL_STRUCT_USAGE_NONE", 0));
     items.push(const_item("MTL_ACCEL_STRUCT_USAGE_REFIT", 1));
     items.push(const_item("MTL_ACCEL_STRUCT_USAGE_PREFER_FAST_BUILD", 2));
-    // GPU family constants (for metal_device_supports_family)
-    items.push(const_item("MTL_GPU_FAMILY_APPLE1", 1001));
-    items.push(const_item("MTL_GPU_FAMILY_APPLE2", 1002));
-    items.push(const_item("MTL_GPU_FAMILY_APPLE3", 1003));
-    items.push(const_item("MTL_GPU_FAMILY_APPLE4", 1004));
-    items.push(const_item("MTL_GPU_FAMILY_APPLE5", 1005));
-    items.push(const_item("MTL_GPU_FAMILY_APPLE6", 1006));
-    items.push(const_item("MTL_GPU_FAMILY_APPLE7", 1007));
-    items.push(const_item("MTL_GPU_FAMILY_APPLE8", 1008));
-    items.push(const_item("MTL_GPU_FAMILY_APPLE9", 1009));
-    items.push(const_item("MTL_GPU_FAMILY_COMMON1", 3001));
-    items.push(const_item("MTL_GPU_FAMILY_COMMON2", 3002));
-    items.push(const_item("MTL_GPU_FAMILY_COMMON3", 3003));
-    items.push(const_item("MTL_GPU_FAMILY_MAC2", 2002));
-    items.push(const_item("MTL_GPU_FAMILY_METAL3", 5001));
-    // Visibility result mode
-    items.push(const_item("MTL_VISIBILITY_RESULT_DISABLED", 0));
-    items.push(const_item("MTL_VISIBILITY_RESULT_BOOLEAN", 1));
-    items.push(const_item("MTL_VISIBILITY_RESULT_COUNTING", 2));
-
     Module {
         items,
         span: Span::dummy(),

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::errors::ParseError;
 use crate::parser::ast::{
-    Block, CallArg, Expr, FunctionBody, FunctionDef, ImportStmt, Item, Module,
+    Block, CallArg, Expr, FunctionBody, FunctionDef, ImportStmt, Item, MetaIf, Module,
     Pattern, Stmt,
 };
 use crate::parser::Parser;
@@ -85,28 +85,125 @@ pub fn resolve_import_path(base: &Path, segments: &[String]) -> PathBuf {
 /// Returns `(dotted_path_segments, span)` for each import.
 pub fn extract_imports(module: &Module) -> Vec<(Vec<String>, Span)> {
     let mut imports = Vec::new();
-    for item in &module.items {
-        if let Item::Import(import) = &item.node {
-            match import {
-                ImportStmt::Simple { path, span } => {
-                    let segments: Vec<String> = path.iter().map(|s| s.node.clone()).collect();
-                    imports.push((segments, *span));
+    extract_imports_from_items(&module.items, &mut imports);
+    imports
+}
+
+/// Recursively extract imports from items, including inside `meta if` blocks.
+/// For `meta if platform()` conditions, we evaluate at load time to only load
+/// modules for the current platform. For other meta if conditions, we conservatively
+/// extract imports from all branches.
+fn extract_imports_from_items(items: &[Spanned<Item>], imports: &mut Vec<(Vec<String>, Span)>) {
+    for item in items {
+        match &item.node {
+            Item::Import(import) => {
+                match import {
+                    ImportStmt::Simple { path, span } => {
+                        let segments: Vec<String> = path.iter().map(|s| s.node.clone()).collect();
+                        imports.push((segments, *span));
+                    }
+                    ImportStmt::Grouped { path, span, .. } => {
+                        let segments: Vec<String> = path.iter().map(|s| s.node.clone()).collect();
+                        imports.push((segments, *span));
+                    }
+                    ImportStmt::From { path, span, .. } => {
+                        let segments: Vec<String> = path.iter().map(|s| s.node.clone()).collect();
+                        imports.push((segments, *span));
+                    }
                 }
-                ImportStmt::Grouped { path, span, .. } => {
-                    // `import a.b.{X, Y}` — the module to load is `a.b`
-                    let segments: Vec<String> = path.iter().map(|s| s.node.clone()).collect();
-                    imports.push((segments, *span));
+            }
+            Item::MetaIf(meta_if) => {
+                extract_imports_from_meta_if(meta_if, imports);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Extract imports from a `meta if` block, evaluating `platform()` conditions
+/// at load time to avoid loading platform-irrelevant modules.
+fn extract_imports_from_meta_if(meta_if: &MetaIf, imports: &mut Vec<(Vec<String>, Span)>) {
+    // Try to evaluate the condition as a platform check
+    match eval_platform_condition(&meta_if.condition.node) {
+        Some(true) => {
+            // Condition is true — only extract from then branch
+            extract_imports_from_items(&meta_if.then_items, imports);
+        }
+        Some(false) => {
+            // Condition is false — try elif branches, then else
+            for (cond, branch_items) in &meta_if.elif_branches {
+                match eval_platform_condition(&cond.node) {
+                    Some(true) => {
+                        extract_imports_from_items(branch_items, imports);
+                        return;
+                    }
+                    Some(false) => continue,
+                    None => {
+                        // Can't evaluate — conservatively include this and remaining
+                        extract_imports_from_items(branch_items, imports);
+                    }
                 }
-                ImportStmt::From { path, span, .. } => {
-                    // `from a.b import X` — the module to load is `a.b`
-                    let segments: Vec<String> = path.iter().map(|s| s.node.clone()).collect();
-                    imports.push((segments, *span));
-                }
+            }
+            if let Some(else_items) = &meta_if.else_items {
+                extract_imports_from_items(else_items, imports);
+            }
+        }
+        None => {
+            // Can't evaluate condition — conservatively extract from all branches
+            extract_imports_from_items(&meta_if.then_items, imports);
+            for (_cond, branch_items) in &meta_if.elif_branches {
+                extract_imports_from_items(branch_items, imports);
+            }
+            if let Some(else_items) = &meta_if.else_items {
+                extract_imports_from_items(else_items, imports);
             }
         }
     }
-    imports
 }
+
+/// Try to evaluate a `platform() == "..."` or `platform() != "..."` condition
+/// at load time. Returns `Some(bool)` if evaluable, `None` otherwise.
+fn eval_platform_condition(expr: &Expr) -> Option<bool> {
+    let current_platform = if cfg!(target_os = "macos") { "macos" }
+        else if cfg!(target_os = "linux") { "linux" }
+        else if cfg!(target_os = "windows") { "windows" }
+        else { "unknown" };
+
+    use crate::parser::ast::BinaryOp as BinOp;
+
+    match expr {
+        Expr::BinaryOp { op, left, right, .. } => {
+            // Check for `platform() == "..."` or `platform() != "..."`
+            let extract_platform_str = |a: &Expr, b: &Expr| -> Option<String> {
+                if let Expr::Call { callee, args, .. } = a {
+                    if args.is_empty() {
+                        if let Expr::Identifier(n) = &callee.node {
+                            if n == "platform" {
+                                if let Expr::StringLiteral(sl) = b {
+                                    return Some(sl.as_plain_text());
+                                }
+                            }
+                        }
+                    }
+                }
+                None
+            };
+            let string_val = extract_platform_str(&left.node, &right.node)
+                .or_else(|| extract_platform_str(&right.node, &left.node));
+            let string_val = match string_val {
+                Some(s) => s,
+                None => return None,
+            };
+            match op {
+                BinOp::Eq => Some(current_platform == string_val.as_str()),
+                BinOp::Neq => Some(current_platform != string_val.as_str()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 
 impl ModuleLoader {
     pub fn new() -> Self {

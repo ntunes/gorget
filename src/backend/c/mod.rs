@@ -521,7 +521,14 @@ fn returns_cstr(name: &str) -> bool {
         | "getenv" | "gorget_getenv"
         | "gorget_regex_match_text" | "gorget_regex_pattern_str"
         | "gorget_sdl_get_error"
-        | "gorget_gl_get_shader_info_log" | "gorget_gl_get_program_info_log"
+    )
+}
+
+/// Functions whose C runtime implementation returns `Str` directly (not `const char*`).
+/// These need the local type overridden to `Str` but do NOT need `gorget_str_from_cstr` wrapping.
+fn returns_str_direct(name: &str) -> bool {
+    matches!(name,
+        "gorget_gl_get_shader_info_log" | "gorget_gl_get_program_info_log"
         | "gorget_gl_get_string"
         | "gl_get_shader_info_log" | "gl_get_program_info_log" | "gl_get_string"
     )

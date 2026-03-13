@@ -9391,9 +9391,7 @@ static inline void gorget_gl_clip_plane(int64_t plane, const GorgetArray* eq) {
 // ── Draw Control ────────────────────────────────────────
 
 static inline void gorget_gl_draw_buffer(int64_t mode) { glDrawBuffer((GLenum)mode); }
-static inline void gorget_gl_read_pixels(int64_t x, int64_t y, int64_t w, int64_t h, int64_t format, int64_t type, const GorgetArray* data) {
-    glReadPixels((GLint)x, (GLint)y, (GLsizei)w, (GLsizei)h, (GLenum)format, (GLenum)type, data ? data->data : NULL);
-}
+// gorget_gl_read_pixels defined below in "Read Pixels" section
 static inline void gorget_gl_finish(void) { glFinish(); }
 static inline void gorget_gl_flush(void) { glFlush(); }
 
@@ -9759,9 +9757,7 @@ static inline void gorget_gl_tex_storage_2d(int64_t target, int64_t levels, int6
 static inline void gorget_gl_tex_storage_3d(int64_t target, int64_t levels, int64_t format, int64_t width, int64_t height, int64_t depth) {
     glTexStorage3D((GLenum)target, (GLsizei)levels, (GLenum)format, (GLsizei)width, (GLsizei)height, (GLsizei)depth);
 }
-static inline void gorget_gl_tex_sub_image_2d(int64_t target, int64_t level, int64_t x, int64_t y, int64_t width, int64_t height, int64_t format, int64_t type, const GorgetArray* data) {
-    glTexSubImage2D((GLenum)target, (GLint)level, (GLint)x, (GLint)y, (GLsizei)width, (GLsizei)height, (GLenum)format, (GLenum)type, data ? data->data : NULL);
-}
+// gorget_gl_tex_sub_image_2d already defined above
 
 // ── Buffer Storage (GL 4.4+) ────────────────────────────────
 
