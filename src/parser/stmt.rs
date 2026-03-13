@@ -31,8 +31,6 @@ fn make_var_decl(
 impl Parser {
     /// Parse a statement.
     pub fn parse_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
-        let start = self.peek_span();
-
         match self.peek().clone() {
             // Compile-time meta statements (delayed evaluation in generic bodies)
             Token::Keyword(Keyword::Meta) => self.parse_meta_stmt(),
@@ -40,7 +38,8 @@ impl Parser {
             // Explicit control flow keywords
             Token::Keyword(Keyword::Return) => self.parse_return_stmt(),
             Token::Keyword(Keyword::Throw) => self.parse_throw_stmt(),
-            // "on error:" — contextual keyword (on is an identifier, not a keyword)
+            // "on error:" — both `on` and `error` are contextual identifiers
+            // (`on` is commonly used in user code; lowercase `error` is not the `Error` keyword)
             Token::Identifier(ref s) if s == "on"
                 && matches!(self.peek_ahead(1), Token::Identifier(e) if e == "error") =>
             {
@@ -49,18 +48,8 @@ impl Parser {
             Token::Keyword(Keyword::Assert) => self.parse_assert_stmt(),
             Token::Keyword(Keyword::Snapshot) => self.parse_snapshot_stmt(),
             Token::Keyword(Keyword::Break) => self.parse_break_stmt(),
-            Token::Keyword(Keyword::Continue) => {
-                self.advance();
-                let end = self.previous_span();
-                self.consume_newline();
-                Ok(Spanned::new(Stmt::Continue, start.merge(end)))
-            }
-            Token::Keyword(Keyword::Pass) => {
-                self.advance();
-                let end = self.previous_span();
-                self.consume_newline();
-                Ok(Spanned::new(Stmt::Pass, start.merge(end)))
-            }
+            Token::Keyword(Keyword::Continue) => self.parse_simple_stmt(Stmt::Continue),
+            Token::Keyword(Keyword::Pass) => self.parse_simple_stmt(Stmt::Pass),
 
             // Control flow statements
             Token::Keyword(Keyword::If) => self.parse_if_stmt(),
@@ -93,6 +82,15 @@ impl Parser {
             // Expression statement (or assignment)
             _ => self.parse_expr_or_assign_stmt(),
         }
+    }
+
+    /// Parse a keyword-only statement (e.g., `continue`, `pass`): advance, consume newline.
+    fn parse_simple_stmt(&mut self, stmt: Stmt) -> Result<Spanned<Stmt>, ParseError> {
+        let start = self.peek_span();
+        self.advance();
+        let end = self.previous_span();
+        self.consume_newline();
+        Ok(Spanned::new(stmt, start.merge(end)))
     }
 
     fn parse_return_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
@@ -132,8 +130,8 @@ impl Parser {
 
     fn parse_on_error_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
-        self.advance(); // consume "on"
-        self.advance(); // consume "error"
+        self.advance(); // consume "on" (contextual identifier)
+        self.advance(); // consume "error" (contextual identifier)
         if self.check(&Token::Colon) {
             // Block form: on error:\n    stmts
             let body = self.parse_block()?;
@@ -347,19 +345,8 @@ impl Parser {
                 None
             };
 
-            // Check if this is a single-expression arm or a block arm
             self.expect(&Token::Colon)?;
-            let body = if self.check(&Token::Newline) {
-                // Block arm
-                let block = self.parse_block_body(arm_start)?;
-                let span = block.span;
-                Spanned::new(Expr::Block(block), span)
-            } else {
-                // Expression arm on same line
-                let expr = self.parse_expr()?;
-                self.consume_newline();
-                expr
-            };
+            let body = self.parse_arm_body(arm_start)?;
 
             let arm_end = body.span;
             arms.push(MatchItem::Arm(MatchArm {
@@ -844,15 +831,7 @@ impl Parser {
         };
 
         self.expect(&Token::Colon)?;
-        let body = if self.check(&Token::Newline) {
-            let block = self.parse_block_body(arm_start)?;
-            let span = block.span;
-            Spanned::new(Expr::Block(block), span)
-        } else {
-            let expr = self.parse_expr()?;
-            self.consume_newline();
-            expr
-        };
+        let body = self.parse_arm_body(arm_start)?;
 
         let arm_end = body.span;
         let arm_template = MatchArm { pattern, guard, body, span: arm_start.merge(arm_end) };

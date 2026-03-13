@@ -299,6 +299,7 @@ pub enum Keyword {
     Async,
     Await,
     Spawn,
+    Blocking,
     Select,
     Shared,
 
@@ -419,6 +420,7 @@ impl Keyword {
             Keyword::Async => "async",
             Keyword::Await => "await",
             Keyword::Spawn => "spawn",
+            Keyword::Blocking => "blocking",
             Keyword::Select => "select",
             Keyword::Shared => "shared",
             Keyword::Unsafe => "unsafe",
@@ -522,6 +524,7 @@ impl Keyword {
             "async" => Some(Keyword::Async),
             "await" => Some(Keyword::Await),
             "spawn" => Some(Keyword::Spawn),
+            "blocking" => Some(Keyword::Blocking),
             "select" => Some(Keyword::Select),
             "shared" => Some(Keyword::Shared),
             "unsafe" => Some(Keyword::Unsafe),
@@ -644,8 +647,8 @@ pub enum Token {
     // End of file
     Eof,
 
-    // Error recovery
-    Error(String),
+    // Error recovery (details are in Lexer::errors, not in the token)
+    Error,
 }
 
 impl fmt::Display for Token {
@@ -715,7 +718,7 @@ impl fmt::Display for Token {
             Token::DocComment(_) => write!(f, "doc comment"),
             Token::Comment(_) => write!(f, "comment"),
             Token::Eof => write!(f, "end of file"),
-            Token::Error(msg) => write!(f, "error: {msg}"),
+            Token::Error => write!(f, "error"),
         }
     }
 }

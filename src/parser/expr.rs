@@ -446,31 +446,18 @@ impl Parser {
                 ))
             }
 
-            // Spawn
+            // Spawn / Spawn blocking
             Token::Keyword(Keyword::Spawn) => {
                 self.advance();
-                // Check for `spawn blocking <expr>`
-                let is_blocking = matches!(self.peek(), Token::Identifier(s) if s == "blocking");
-                if is_blocking {
-                    self.advance(); // consume "blocking"
-                }
+                let is_blocking = self.match_keyword(Keyword::Blocking);
                 let operand = self.parse_expr_bp(2)?;
                 let end = operand.span;
-                if is_blocking {
-                    Ok(Spanned::new(
-                        Expr::SpawnBlocking {
-                            expr: Box::new(operand),
-                        },
-                        start.merge(end),
-                    ))
+                let expr_node = if is_blocking {
+                    Expr::SpawnBlocking { expr: Box::new(operand) }
                 } else {
-                    Ok(Spanned::new(
-                        Expr::Spawn {
-                            expr: Box::new(operand),
-                        },
-                        start.merge(end),
-                    ))
-                }
+                    Expr::Spawn { expr: Box::new(operand) }
+                };
+                Ok(Spanned::new(expr_node, start.merge(end)))
             }
 
             // Prefix await
@@ -889,14 +876,7 @@ impl Parser {
                     let error_name = self.expect_identifier()?;
                     self.expect(&Token::RParen)?;
                     self.expect(&Token::Colon)?;
-                    let transform = if self.match_token(&Token::Newline) {
-                        self.expect(&Token::Indent)?;
-                        let block = self.parse_block()?;
-                        let end = self.previous_span();
-                        Spanned::new(Expr::Do { body: block }, start.merge(end))
-                    } else {
-                        self.parse_expr()?
-                    };
+                    let transform = self.parse_body_or_expr(start)?;
                     (Some((error_type, error_name)), transform)
                 } else {
                     // Bare form: rethrow expr
@@ -920,14 +900,7 @@ impl Parser {
                 let error_name = self.expect_identifier()?;
                 self.expect(&Token::RParen)?;
                 self.expect(&Token::Colon)?;
-                let recovery = if self.match_token(&Token::Newline) {
-                    self.expect(&Token::Indent)?;
-                    let block = self.parse_block()?;
-                    let end = self.previous_span();
-                    Spanned::new(Expr::Do { body: block }, start.merge(end))
-                } else {
-                    self.parse_expr()?
-                };
+                let recovery = self.parse_body_or_expr(start)?;
                 let end = recovery.span;
                 Ok(Spanned::new(
                     Expr::Catch {

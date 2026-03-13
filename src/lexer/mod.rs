@@ -47,6 +47,25 @@ enum EscapeResult {
     Eof,
 }
 
+/// Classify a byte as a string prefix, given the byte that follows it.
+/// Returns `Some(true)` for prefixes that start a string literal (route to `scan_string_literal`),
+/// `Some(false)` for `b'` which starts a byte literal (route to `scan_byte_literal`),
+/// or `None` if the byte is not a string/byte-literal prefix.
+fn string_prefix_kind(byte: u8, next: u8) -> Option<bool> {
+    match byte {
+        b'r' | b'c' if next == b'"' => Some(true),
+        b'b' if next == b'"' => Some(true),
+        b'b' if next == b'\'' => Some(false), // byte literal
+        b'f' if next == b'"' || next == b'\'' => Some(true),
+        _ => None,
+    }
+}
+
+/// Returns true if `bytes[i]` starts a string/byte-literal prefix sequence.
+fn is_string_prefix(bytes: &[u8], i: usize) -> bool {
+    i + 1 < bytes.len() && string_prefix_kind(bytes[i], bytes[i + 1]).is_some()
+}
+
 impl<'src> Lexer<'src> {
     pub fn new(source: &'src str) -> Self {
         Self::new_with_offset(source, 0)
@@ -289,24 +308,16 @@ impl<'src> Lexer<'src> {
                     i = new_end;
                 }
 
-                // Raw string r"...", byte string b"...", cstr string c"...", or format string f"..."/f'...'
-                b'r' | b'b' | b'c' if i + 1 < bytes.len() && bytes[i + 1] == b'"' => {
-                    let (tok, new_end) = self.scan_string_literal(i);
-                    let span = self.span(i, new_end);
-                    self.pending.push_back(Spanned::new(tok, span));
-                    i = new_end;
-                }
-
-                b'f' if i + 1 < bytes.len() && (bytes[i + 1] == b'"' || bytes[i + 1] == b'\'') => {
-                    let (tok, new_end) = self.scan_string_literal(i);
-                    let span = self.span(i, new_end);
-                    self.pending.push_back(Spanned::new(tok, span));
-                    i = new_end;
-                }
-
-                // Byte literal b'A', b'\n', etc.
-                b'b' if i + 1 < bytes.len() && bytes[i + 1] == b'\'' => {
-                    let (tok, new_end) = self.scan_byte_literal(i);
+                // Prefixed string/byte literals: r"...", b"...", b'X', c"...", f"...", f'...'
+                b'r' | b'b' | b'c' | b'f' if i + 1 < bytes.len()
+                    && string_prefix_kind(bytes[i], bytes[i + 1]).is_some() =>
+                {
+                    let is_string = string_prefix_kind(bytes[i], bytes[i + 1]).unwrap();
+                    let (tok, new_end) = if is_string {
+                        self.scan_string_literal(i)
+                    } else {
+                        self.scan_byte_literal(i)
+                    };
                     let span = self.span(i, new_end);
                     self.pending.push_back(Spanned::new(tok, span));
                     i = new_end;
@@ -329,21 +340,7 @@ impl<'src> Lexer<'src> {
                         && bytes[i] != b'"'
                         && bytes[i] != b'\''
                         && bytes[i] != b'#'
-                        && !(bytes[i] == b'r'
-                            && i + 1 < bytes.len()
-                            && bytes[i + 1] == b'"')
-                        && !(bytes[i] == b'b'
-                            && i + 1 < bytes.len()
-                            && bytes[i + 1] == b'"')
-                        && !(bytes[i] == b'b'
-                            && i + 1 < bytes.len()
-                            && bytes[i + 1] == b'\'')
-                        && !(bytes[i] == b'c'
-                            && i + 1 < bytes.len()
-                            && bytes[i + 1] == b'"')
-                        && !(bytes[i] == b'f'
-                            && i + 1 < bytes.len()
-                            && (bytes[i + 1] == b'"' || bytes[i + 1] == b'\''))
+                        && !is_string_prefix(bytes, i)
                     {
                         i += 1;
                     }
@@ -395,7 +392,7 @@ impl<'src> Lexer<'src> {
     }
 
     /// Parse an integer literal with the given radix and prefix length.
-    fn parse_int_literal(&mut self, slice: &str, prefix_len: usize, radix: u32, name: &str, span: Span) -> Token {
+    fn parse_int_literal(&mut self, slice: &str, prefix_len: usize, radix: u32, span: Span) -> Token {
         let clean: String = slice[prefix_len..].chars().filter(|c| *c != '_').collect();
         match i64::from_str_radix(&clean, radix) {
             Ok(n) => Token::IntLiteral(n),
@@ -404,7 +401,7 @@ impl<'src> Lexer<'src> {
                     kind: LexErrorKind::InvalidNumericLiteral(slice.to_string()),
                     span,
                 });
-                Token::Error(format!("invalid {name}: {slice}"))
+                Token::Error
             }
         }
     }
@@ -412,10 +409,10 @@ impl<'src> Lexer<'src> {
     /// Convert a raw token + its slice into a final Token.
     fn convert_raw_token(&mut self, raw: RawToken, slice: &str, span: Span) -> Option<Token> {
         Some(match raw {
-            RawToken::IntLiteral => self.parse_int_literal(slice, 0, 10, "integer", span),
-            RawToken::HexLiteral => self.parse_int_literal(slice, 2, 16, "hex", span),
-            RawToken::OctalLiteral => self.parse_int_literal(slice, 2, 8, "octal", span),
-            RawToken::BinaryLiteral => self.parse_int_literal(slice, 2, 2, "binary", span),
+            RawToken::IntLiteral => self.parse_int_literal(slice, 0, 10, span),
+            RawToken::HexLiteral => self.parse_int_literal(slice, 2, 16, span),
+            RawToken::OctalLiteral => self.parse_int_literal(slice, 2, 8, span),
+            RawToken::BinaryLiteral => self.parse_int_literal(slice, 2, 2, span),
             RawToken::FloatLiteral => {
                 let clean: String = slice.chars().filter(|c| *c != '_').collect();
                 match clean.parse::<f64>() {
@@ -425,7 +422,7 @@ impl<'src> Lexer<'src> {
                             kind: LexErrorKind::InvalidNumericLiteral(slice.to_string()),
                             span,
                         });
-                        Token::Error(format!("invalid float: {slice}"))
+                        Token::Error
                     }
                 }
             }
@@ -584,7 +581,7 @@ impl<'src> Lexer<'src> {
 
         // Expect opening quote (either " or ')
         if i >= bytes.len() || (bytes[i] != b'"' && bytes[i] != b'\'') {
-            return (Token::Error("expected quote after string prefix".to_string()), i);
+            return (Token::Error, i);
         }
         let quote_char = bytes[i];
 
@@ -759,11 +756,10 @@ impl<'src> Lexer<'src> {
                 kind: LexErrorKind::UnterminatedCharLiteral,
                 span: self.span(pos, i),
             });
-            return (Token::Error("unterminated char".to_string()), i);
+            return (Token::Error, i);
         }
 
         // Multi-char (or empty `''`) single-quoted string → StringLiteral::Normal (raw str).
-        // Restart from just after the opening `'` and collect until matching `'`.
         let mut literal = String::new();
 
         loop {
@@ -780,25 +776,16 @@ impl<'src> Lexer<'src> {
                 break;
             }
 
-            // Escape sequences (single-quoted strings allow \', \\, \n, etc.)
-            if bytes[i] == b'\\' {
-                i += 1;
-                match self.parse_escape(bytes, &mut i, EscapeContext::SingleQuoted) {
-                    EscapeResult::Char(c) => literal.push(c),
-                    EscapeResult::Eof => {
-                        self.errors.push(LexError {
-                            kind: LexErrorKind::UnterminatedString,
-                            span: self.span(pos, i),
-                        });
-                        break;
-                    }
+            match self.parse_one_quoted_char(bytes, i, pos) {
+                Ok((ch, new_i)) => {
+                    literal.push(ch);
+                    i = new_i;
                 }
-                continue;
+                Err(new_i) => {
+                    i = new_i;
+                    break;
+                }
             }
-
-            let ch = self.source[i..].chars().next().unwrap();
-            literal.push(ch);
-            i += ch.len_utf8();
         }
 
         let token = Token::StringLiteral(StringLiteral {
@@ -806,6 +793,27 @@ impl<'src> Lexer<'src> {
             segments: vec![StringSegment::Literal(literal)],
         });
         (token, i)
+    }
+
+    /// Parse one character (literal or escaped) from a single-quoted context.
+    /// Returns `Ok((char, new_pos))` on success, or `Err(new_pos)` on EOF/unterminated.
+    fn parse_one_quoted_char(&mut self, bytes: &[u8], i: usize, literal_start: usize) -> Result<(char, usize), usize> {
+        if bytes[i] == b'\\' {
+            let mut j = i + 1;
+            match self.parse_escape(bytes, &mut j, EscapeContext::SingleQuoted) {
+                EscapeResult::Char(c) => Ok((c, j)),
+                EscapeResult::Eof => {
+                    self.errors.push(LexError {
+                        kind: LexErrorKind::UnterminatedString,
+                        span: self.span(literal_start, j),
+                    });
+                    Err(j)
+                }
+            }
+        } else {
+            let ch = self.source[i..].chars().next().unwrap();
+            Ok((ch, i + ch.len_utf8()))
+        }
     }
 
     /// Scan a byte literal `b'A'`, `b'\n'` etc. starting at `pos` (the `b`).
@@ -820,35 +828,24 @@ impl<'src> Lexer<'src> {
                 kind: LexErrorKind::UnterminatedCharLiteral,
                 span: self.span(pos, i),
             });
-            return (Token::Error("unterminated byte literal".to_string()), i);
+            return (Token::Error, i);
         }
 
         // Parse one char or escape sequence.
-        let (byte_val, after) = if bytes[i] == b'\\' {
-            let mut j = i + 1;
-            match self.parse_escape(bytes, &mut j, EscapeContext::SingleQuoted) {
-                EscapeResult::Char(c) => {
-                    if c as u32 > 255 {
-                        self.errors.push(LexError {
-                            kind: LexErrorKind::InvalidEscapeSequence("byte literal: escape value > 255".to_string()),
-                            span: self.span(pos, j),
-                        });
-                        (0u8, j)
-                    } else {
-                        (c as u8, j)
-                    }
-                }
-                EscapeResult::Eof => {
-                    self.errors.push(LexError {
-                        kind: LexErrorKind::UnterminatedCharLiteral,
-                        span: self.span(pos, i),
-                    });
-                    return (Token::Error("unterminated byte literal".to_string()), i + 1);
-                }
-            }
+        let (ch, after) = match self.parse_one_quoted_char(bytes, i, pos) {
+            Ok(result) => result,
+            Err(end) => return (Token::Error, end),
+        };
+
+        // Validate byte range
+        let byte_val = if ch as u32 > 255 {
+            self.errors.push(LexError {
+                kind: LexErrorKind::InvalidEscapeSequence("byte literal: escape value > 255".to_string()),
+                span: self.span(pos, after),
+            });
+            0u8
         } else {
-            let b = bytes[i];
-            (b, i + 1)
+            ch as u8
         };
 
         // Expect closing '
@@ -859,7 +856,7 @@ impl<'src> Lexer<'src> {
                 kind: LexErrorKind::UnterminatedCharLiteral,
                 span: self.span(pos, after),
             });
-            (Token::Error("byte literal: expected closing quote".to_string()), after)
+            (Token::Error, after)
         }
     }
 

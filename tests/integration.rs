@@ -6347,7 +6347,7 @@ fn describe_token_canonical_rust(token: &Token) -> String {
         Token::DocComment(text) => format!("doc:{text}"),
         Token::Comment(text) => format!("comment:{text}"),
         Token::Eof => "EOF".into(),
-        Token::Error(msg) => format!("error:{msg}"),
+        Token::Error => "error".into(),
     }
 }
 

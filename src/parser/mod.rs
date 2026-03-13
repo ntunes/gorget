@@ -309,6 +309,32 @@ impl Parser {
         self.match_token(&Token::Newline);
     }
 
+    /// Parse a body that is either an indented block (→ `Expr::Do`) or a
+    /// single expression on the same line. Used by rethrow and catch.
+    pub fn parse_body_or_expr(&mut self, start: Span) -> Result<Spanned<Expr>, ParseError> {
+        if self.check(&Token::Newline) {
+            let block = self.parse_block_body(start)?;
+            let span = block.span;
+            Ok(Spanned::new(Expr::Do { body: block }, span))
+        } else {
+            self.parse_expr()
+        }
+    }
+
+    /// Parse a match-arm body: indented block (→ `Expr::Block`) or inline
+    /// expression (consumed newline). Used by match arms and meta-for match items.
+    pub fn parse_arm_body(&mut self, start: Span) -> Result<Spanned<Expr>, ParseError> {
+        if self.check(&Token::Newline) {
+            let block = self.parse_block_body(start)?;
+            let span = block.span;
+            Ok(Spanned::new(Expr::Block(block), span))
+        } else {
+            let expr = self.parse_expr()?;
+            self.consume_newline();
+            Ok(expr)
+        }
+    }
+
     // ── Top-Level Parsing ─────────────────────────────────────
 
     /// Parse a complete module (top-level items).
