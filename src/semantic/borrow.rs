@@ -357,7 +357,7 @@ struct BorrowChecker<'a> {
     /// These must not escape the arena scope.
     arena_scoped_vars: FxHashSet<DefId>,
     /// Expression type map from the type checker (for lifetime tracking).
-    _expr_types: &'a FxHashMap<Span, TypeId>,
+    expr_types: &'a FxHashMap<Span, TypeId>,
     /// Current function's body scope (for scope-aware variable lookup).
     current_fn_scope: Option<ScopeId>,
 
@@ -481,7 +481,7 @@ impl<'a> BorrowChecker<'a> {
             loop_local_defs: Vec::new(),
             arena_depth: 0,
             arena_scoped_vars: FxHashSet::default(),
-            _expr_types: expr_types,
+            expr_types: expr_types,
             current_fn_scope: None,
             method_resolutions,
             ref_type_structs,
@@ -841,10 +841,17 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
+            // Struct constructors always produce fresh data — never borrow from args.
+            // Generic collection constructors (Dict, Vector, Set, etc.) reach this path
+            // because they aren't rewritten to StructLiteral by post-resolution.
+            let def = self.scopes.get_def(def_id);
+            if def.kind == DefKind::Struct {
+                return BorrowOrigin::Static;
+            }
+
             // Callable variable calls: `h(req)` where `h: Callable[T(...)]`.
             // We can't inspect h's body, so propagate conservatively from h's own
             // captured origin (analogous to method receiver) plus all arg origins.
-            let def = self.scopes.get_def(def_id);
             if def.kind == DefKind::Variable {
                 let callable_origin = self.compute_expr_origin(callee);
                 let mut origins = vec![callable_origin];
@@ -3473,6 +3480,14 @@ impl<'a> BorrowChecker<'a> {
                     (false, None)
                 }
             } else {
+                // Value types (int, float, bool, etc.) are always safe to pass to spawned tasks
+                if let Some(&tid) = self.expr_types.get(&arg.node.value.span) {
+                    if !types::is_reference_type(tid, self.types, &self.ref_type_structs)
+                        && !types::is_callable_type(tid, self.types)
+                    {
+                        continue;
+                    }
+                }
                 (!matches!(self.compute_expr_origin(&arg.node.value), BorrowOrigin::Static), None)
             };
             if is_borrowed {
@@ -3767,7 +3782,7 @@ fn compute_all_return_borrows(
     function_info: &mut FxHashMap<DefId, FunctionInfo>,
     ref_type_structs: &FxHashSet<DefId>,
 ) {
-    for item in &module.items {
+    for item in all_spanned_items(&module.items) {
         match &item.node {
             Item::Function(f) => {
                 compute_function_return_borrows(f, scopes, types, resolution_map, function_info, ref_type_structs);

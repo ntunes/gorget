@@ -294,7 +294,7 @@ void http_server_write_response_ka(Socket &conn, HttpServerResponse resp, bool k
 # ── Connection handlers ───────────────────────────────────────
 
 # Legacy single-request handler (kept for backward compat — httpserver_basic uses it directly).
-void http_server_handle_conn(Socket conn, Callable[HttpServerResponse(HttpRequest)] handler):
+void http_server_handle_conn(Socket !conn, Callable[HttpServerResponse(HttpRequest)] handler):
     Result[HttpRequest, str] r = http_server_parse_request(&conn)
     match r:
         case Ok(req):
@@ -309,7 +309,7 @@ void http_server_handle_conn(Socket conn, Callable[HttpServerResponse(HttpReques
 #   - client sends "Connection: close"
 #   - read times out (SO_RCVTIMEO set via timeout_ms)
 #   - parse error (malformed request, EOF)
-async void http_server_handle_conn_ka(Socket conn, Callable[HttpServerResponse(HttpRequest)] handler, int timeout_ms):
+async void http_server_handle_conn_ka(Socket !conn, Callable[HttpServerResponse(HttpRequest)] handler, int timeout_ms):
     conn.set_timeout(timeout_ms)
     bool alive = true
     while alive:
@@ -330,7 +330,7 @@ async void http_server_handle_conn_ka(Socket conn, Callable[HttpServerResponse(H
 
 # Like http_server_handle_conn_ka but enforces a per-connection request limit.
 # max_requests = 0 means unlimited (same as http_server_handle_conn_ka).
-async void http_server_handle_conn_ka_limited(Socket conn, Callable[HttpServerResponse(HttpRequest)] handler, int timeout_ms, int max_requests):
+async void http_server_handle_conn_ka_limited(Socket !conn, Callable[HttpServerResponse(HttpRequest)] handler, int timeout_ms, int max_requests):
     conn.set_timeout(timeout_ms)
     bool alive = true
     int req_count = 0
@@ -439,7 +439,7 @@ void http_server_write_response_tls_ka(TlsSocket &conn, HttpServerResponse resp,
     conn.write_str(resp.body)
 
 # Keep-alive connection handler for TLS sockets.
-async void http_server_handle_conn_tls_ka(TlsSocket conn, Callable[HttpServerResponse(HttpRequest)] handler, int timeout_ms):
+async void http_server_handle_conn_tls_ka(TlsSocket !conn, Callable[HttpServerResponse(HttpRequest)] handler, int timeout_ms):
     conn.set_timeout(timeout_ms)
     bool alive = true
     while alive:
@@ -460,7 +460,7 @@ async void http_server_handle_conn_tls_ka(TlsSocket conn, Callable[HttpServerRes
 
 # Like http_server_handle_conn_tls_ka but enforces a per-connection request limit.
 # max_requests = 0 means unlimited.
-async void http_server_handle_conn_tls_ka_limited(TlsSocket conn, Callable[HttpServerResponse(HttpRequest)] handler, int timeout_ms, int max_requests):
+async void http_server_handle_conn_tls_ka_limited(TlsSocket !conn, Callable[HttpServerResponse(HttpRequest)] handler, int timeout_ms, int max_requests):
     conn.set_timeout(timeout_ms)
     bool alive = true
     int req_count = 0
@@ -525,7 +525,7 @@ equip HttpServer:
             Result[Socket, str] ar = srv.accept()
             if ar.is_ok():
                 Socket client = ar.unwrap()
-                group.spawn(spawn http_server_handle_conn_ka_limited(client, handler, self.keep_alive_timeout_ms, self.max_requests_per_conn))
+                group.spawn(spawn http_server_handle_conn_ka_limited(!client, handler, self.keep_alive_timeout_ms, self.max_requests_per_conn))
 
     # TLS accept loop with per-connection keep-alive.
     async void serve_tls(self, Callable[HttpServerResponse(HttpRequest)] handler):
@@ -538,7 +538,7 @@ equip HttpServer:
             Result[TlsSocket, str] ar = srv.accept()
             if ar.is_ok():
                 TlsSocket client = ar.unwrap()
-                group.spawn(spawn http_server_handle_conn_tls_ka_limited(client, handler, self.keep_alive_timeout_ms, self.max_requests_per_conn))
+                group.spawn(spawn http_server_handle_conn_tls_ka_limited(!client, handler, self.keep_alive_timeout_ms, self.max_requests_per_conn))
 
     # Bind and accept exactly n connections, then close the socket and return.
     # Useful for testing and graceful shutdown scenarios.
@@ -553,7 +553,7 @@ equip HttpServer:
             Result[Socket, str] ar = srv.accept()
             if ar.is_ok():
                 Socket client = ar.unwrap()
-                group.spawn(spawn http_server_handle_conn_ka_limited(client, handler, self.keep_alive_timeout_ms, self.max_requests_per_conn))
+                group.spawn(spawn http_server_handle_conn_ka_limited(!client, handler, self.keep_alive_timeout_ms, self.max_requests_per_conn))
                 i = i + 1
         group.join()
         srv.close()
