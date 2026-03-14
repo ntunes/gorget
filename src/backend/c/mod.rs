@@ -766,6 +766,21 @@ static GorgetString gorget_regex_replace_pat(const char* pattern, const char* su
     }
     // Image loading runtime (stb_image)
     if all_call_names.iter().any(|n| n.starts_with("gorget_image_")) {
+        // stb_image configuration — must come before the header
+        out.push_str("\n#define STB_IMAGE_IMPLEMENTATION\n");
+        out.push_str("#define STBI_NO_STDIO\n");
+        out.push_str("#define STBI_ONLY_PNG\n");
+        out.push_str("#define STBI_ONLY_JPEG\n");
+        out.push_str("#define STBI_ONLY_TGA\n");
+        out.push_str("#define STBI_ONLY_BMP\n");
+        out.push_str("#define GORGET_HAS_STB_IMAGE 1\n");
+        out.push_str("#pragma GCC diagnostic push\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wsign-compare\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wshift-negative-value\"\n");
+        out.push_str(c_runtime::STB_IMAGE_SOURCE);
+        out.push_str("\n#pragma GCC diagnostic pop\n");
         out.push_str(c_runtime::IMAGE_RUNTIME);
     }
     // Audio runtime (SDL2_mixer)

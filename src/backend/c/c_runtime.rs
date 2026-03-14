@@ -9962,67 +9962,12 @@ static inline int64_t gorget_gl_is_framebuffer(int64_t fb) { return (int64_t)glI
 // Embeds stb_image.h (public domain) for loading PNG/JPG/TGA/BMP.
 
 pub const IMAGE_RUNTIME: &str = r#"
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_NO_STDIO
-#define STBI_ONLY_PNG
-#define STBI_ONLY_JPEG
-#define STBI_ONLY_TGA
-#define STBI_ONLY_BMP
+// stb_image.h is embedded above (STB_IMAGE_SOURCE) with full
+// PNG/JPEG/TGA/BMP support.  The defines below were set before it.
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-
-// ─── Minimal stb_image subset ───────────────────────────────
-// Full stb_image.h is too large to embed inline; these wrappers
-// use the system stb_image if available, otherwise provide a
-// minimal TGA loader for Q3 assets.
-
-#ifdef __has_include
-#if __has_include("stb_image.h")
-#include "stb_image.h"
-#define GORGET_HAS_STB_IMAGE 1
-#endif
-#endif
-
-#ifndef GORGET_HAS_STB_IMAGE
-// Minimal TGA loader fallback — supports uncompressed 24/32-bit TGA
-// which is the primary format in Q3/OpenArena assets.
-static unsigned char* gorget_tga_load(const unsigned char* buf, int len, int* w, int* h, int* channels, int desired) {
-    if (len < 18) return NULL;
-    int id_len = buf[0];
-    int color_type = buf[2]; // 2 = uncompressed true-color
-    if (color_type != 2) return NULL;
-    *w = buf[12] | (buf[13] << 8);
-    *h = buf[14] | (buf[15] << 8);
-    int bpp = buf[16]; // bits per pixel
-    *channels = bpp / 8;
-    if (*channels != 3 && *channels != 4) return NULL;
-    int img_size = (*w) * (*h) * (*channels);
-    const unsigned char* src = buf + 18 + id_len;
-    if (18 + id_len + img_size > len) return NULL;
-    int out_ch = desired > 0 ? desired : *channels;
-    unsigned char* out = (unsigned char*)malloc((*w) * (*h) * out_ch);
-    if (!out) return NULL;
-    for (int i = 0; i < (*w) * (*h); i++) {
-        int si = i * (*channels);
-        int di = i * out_ch;
-        out[di + 0] = src[si + 2]; // TGA is BGR
-        out[di + 1] = src[si + 1];
-        out[di + 2] = src[si + 0];
-        if (out_ch >= 4) {
-            out[di + 3] = (*channels >= 4) ? src[si + 3] : 255;
-        }
-    }
-    *channels = out_ch;
-    return out;
-}
-#define stbi_load_from_memory(buf, len, w, h, ch, desired) gorget_tga_load(buf, len, w, h, ch, desired)
-#define stbi_image_free free
-#define stbi_failure_reason() "unsupported format (no stb_image)"
-#define stbi_set_flip_vertically_on_load(x) ((void)0)
-#endif
-
-#pragma GCC diagnostic pop
 
 // Load image from file path
 static inline void gorget_image_load(Str path, int64_t* out_tag, int64_t* out_width, int64_t* out_height, int64_t* out_channels, GorgetArray* out_data, Str* out_err) {
@@ -13062,6 +13007,11 @@ static void gorget_metal_encoder_set_stencil_front_back_ref(int64_t encoder_h, i
 
 #endif /* __APPLE__ */
 "#;
+
+/// stb_image.h (public domain) — full image loading for PNG/JPEG/TGA/BMP.
+/// Embedded directly so every platform gets JPEG support without needing
+/// stb_image.h installed on the system include path.
+pub const STB_IMAGE_SOURCE: &str = include_str!("stb_image.h");
 
 pub const SQLITE_AMALGAMATION: &str = include_str!("sqlite3/sqlite3.c");
 
