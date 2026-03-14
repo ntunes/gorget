@@ -11354,12 +11354,16 @@ static void gorget_metal_encoder_set_fragment_bytes(int64_t enc_h, const GorgetA
 
 static void gorget_metal_encoder_set_fragment_texture(int64_t enc_h, int64_t tex_h, int64_t index) {
     @autoreleasepool {
-        id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)enc_h;
-        id<MTLTexture> tex = (__bridge id<MTLTexture>)(void*)(intptr_t)tex_h;
-        if (!tex) {
-            fprintf(stderr, "gorget: NULL Metal texture at index %lld\n", (long long)index);
+        // Guard: Metal texture handles are ObjC pointers — must be valid heap addresses.
+        // On ARM64 macOS, heap starts well above 0x10000. Values like 0, 1, or small
+        // integers indicate data corruption (e.g. a boolean or tag leaking into a handle slot).
+        if ((uintptr_t)tex_h < 0x10000u) {
+            fprintf(stderr, "gorget: invalid Metal texture handle %lld (0x%llx) at index %lld — skipping bind\n",
+                    (long long)tex_h, (unsigned long long)tex_h, (long long)index);
             return;
         }
+        id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)enc_h;
+        id<MTLTexture> tex = (__bridge id<MTLTexture>)(void*)(intptr_t)tex_h;
         [enc setFragmentTexture:tex atIndex:(NSUInteger)index];
     }
 }
@@ -11684,6 +11688,11 @@ static void gorget_metal_encoder_set_depth_bias(int64_t enc_h, double depth_bias
 
 static void gorget_metal_encoder_set_vertex_texture(int64_t enc_h, int64_t tex_h, int64_t index) {
     @autoreleasepool {
+        if ((uintptr_t)tex_h < 0x10000u) {
+            fprintf(stderr, "gorget: invalid Metal vertex texture handle %lld (0x%llx) at index %lld — skipping\n",
+                    (long long)tex_h, (unsigned long long)tex_h, (long long)index);
+            return;
+        }
         id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)enc_h;
         id<MTLTexture> tex = (__bridge id<MTLTexture>)(void*)(intptr_t)tex_h;
         [enc setVertexTexture:tex atIndex:(NSUInteger)index];
