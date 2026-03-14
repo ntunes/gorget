@@ -76,6 +76,12 @@ pub enum SemanticWarningKind {
     ClosureCapturesWithBinding {
         var_name: String,
     },
+    /// Statement after unconditional return/break/continue/throw.
+    UnreachableCode,
+    /// Local variable declared but never read.
+    UnusedVariable { name: String },
+    /// Imported name never referenced in code.
+    UnusedImport { name: String },
 }
 
 impl std::fmt::Display for SemanticWarning {
@@ -105,6 +111,15 @@ impl std::fmt::Display for SemanticWarning {
             }
             SemanticWarningKind::ClosureCapturesWithBinding { var_name } => {
                 write!(f, "closure captures `with`-tracked `{var_name}` — captured value may become stale after yield")
+            }
+            SemanticWarningKind::UnreachableCode => {
+                write!(f, "unreachable code after diverging statement")
+            }
+            SemanticWarningKind::UnusedVariable { name } => {
+                write!(f, "unused variable `{name}` — prefix with `_` to suppress")
+            }
+            SemanticWarningKind::UnusedImport { name } => {
+                write!(f, "unused import `{name}`")
             }
         }
     }

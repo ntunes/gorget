@@ -197,61 +197,9 @@ const BLOCKING_CALL_NAMES: &[&str] = &[
     "readdir", "http_get", "http_post", "http_put", "http_delete",
 ];
 
-fn is_blocking_call_name(expr: &Expr) -> bool {
-    if let Expr::Identifier(name) = expr {
-        BLOCKING_CALL_NAMES.contains(&name.as_str())
-    } else {
-        false
-    }
-}
-
-/// Recursively checks whether an expression tree contains a yield point
-/// (an `await` call or a blocking call like `sleep`, `read_file`, etc.).
-/// Does NOT recurse into closures — they execute in a separate scheduling context.
-fn expr_contains_yield_point(expr: &Spanned<Expr>) -> bool {
-    match &expr.node {
-        Expr::Await { .. } => true,
-        Expr::Call { callee, args, .. } => {
-            if is_blocking_call_name(&callee.node) {
-                return true;
-            }
-            expr_contains_yield_point(callee)
-                || args.iter().any(|a| expr_contains_yield_point(&a.node.value))
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            expr_contains_yield_point(receiver)
-                || args.iter().any(|a| expr_contains_yield_point(&a.node.value))
-        }
-        Expr::BinaryOp { left, right, .. }
-        | Expr::DefaultOp { lhs: left, rhs: right } => {
-            expr_contains_yield_point(left) || expr_contains_yield_point(right)
-        }
-        Expr::UnaryOp { operand, .. }
-        | Expr::As { expr: operand, .. }
-        | Expr::MutableBorrow { expr: operand }
-        | Expr::Move { expr: operand }
-        | Expr::Deref { expr: operand }
-        | Expr::Is { expr: operand, .. } => expr_contains_yield_point(operand),
-        Expr::FieldAccess { object, .. }
-        | Expr::TupleFieldAccess { object, .. }
-        | Expr::OptionalChain { object, .. } => expr_contains_yield_point(object),
-        Expr::Index { object, index } => {
-            expr_contains_yield_point(object) || expr_contains_yield_point(index)
-        }
-        Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
-            elems.iter().any(|e| expr_contains_yield_point(e))
-        }
-        Expr::If { condition, then_branch, else_branch, elif_branches, .. } => {
-            expr_contains_yield_point(condition)
-                || expr_contains_yield_point(then_branch)
-                || elif_branches.iter().any(|(c, b)| expr_contains_yield_point(c) || expr_contains_yield_point(b))
-                || else_branch.as_ref().map_or(false, |e| expr_contains_yield_point(e))
-        }
-        // Closures execute separately — don't recurse
-        Expr::Closure { .. } => false,
-        _ => false,
-    }
-}
+// NOTE: `is_blocking_call_name` and `expr_contains_yield_point` are now
+// purity-aware methods on BorrowChecker. BLOCKING_CALL_NAMES above is still
+// used by `is_yield_point_call` for backwards compatibility.
 
 // ─── Copy Type Detection ───────────────────────────────────
 
@@ -549,6 +497,12 @@ struct BorrowChecker<'a> {
     /// Depth of `with` blocks (for detecting spawn inside `with`).
     with_depth: usize,
 
+    /// Inferred function purity (for yield-point detection in `with` blocks).
+    fn_purity: &'a super::purity::PurityByName,
+
+    /// Tracks local variable declarations for unused-variable detection.
+    /// Maps DefId → (name, span, is_used). Reset per function.
+    local_var_usage: FxHashMap<DefId, (String, Span, bool)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -568,6 +522,7 @@ impl<'a> BorrowChecker<'a> {
         method_resolutions: &'a FxHashMap<usize, DefId>,
         ref_type_structs: FxHashSet<DefId>,
         struct_field_ref_flags: FxHashMap<DefId, Vec<bool>>,
+        fn_purity: &'a super::purity::PurityByName,
     ) -> Self {
         Self {
             scopes,
@@ -612,6 +567,8 @@ impl<'a> BorrowChecker<'a> {
             with_shared_tracked: FxHashSet::default(),
             with_guarded_conditions: Vec::new(),
             with_depth: 0,
+            fn_purity,
+            local_var_usage: FxHashMap::default(),
         }
     }
 
@@ -1495,6 +1452,79 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// Determine whether a callee expression represents a yield point (a call
+    /// that may suspend or release the shared-variable token).
+    ///
+    /// Uses purity inference: Pure/ReadOnly/MutatesArgs calls are proven safe.
+    /// HasSideEffects user-defined functions are treated as yield points.
+    /// Unknown/extern functions fall back to the hardcoded BLOCKING_CALL_NAMES list
+    /// for backwards compatibility (builtins like `print` are not yield points).
+    fn is_yield_point_call(&self, callee: &Expr) -> bool {
+        if let Expr::Identifier(name) = callee {
+            // Backwards compat: hardcoded blocking calls are always yield points
+            if BLOCKING_CALL_NAMES.contains(&name.as_str()) {
+                return true;
+            }
+            // Check purity: Pure/ReadOnly/MutatesArgs → definitely not a yield point
+            // HasSideEffects user-defined function → yield point
+            if let Some(purity) = self.fn_purity.get(name.as_str()) {
+                return matches!(purity, super::purity::Purity::HasSideEffects);
+            }
+            // Not in purity map (extern/builtin) and not in blocking list → not a yield point
+            return false;
+        }
+        // Non-identifier callee (e.g. closure call) → not a yield point
+        false
+    }
+
+    /// Check whether an expression tree contains a yield point (await or
+    /// blocking/side-effecting call). Purity-aware: pure/read-only calls
+    /// are never treated as yield points.
+    fn expr_contains_yield_point(&self, expr: &Spanned<Expr>) -> bool {
+        match &expr.node {
+            Expr::Await { .. } => true,
+            Expr::Call { callee, args, .. } => {
+                if self.is_yield_point_call(&callee.node) {
+                    return true;
+                }
+                self.expr_contains_yield_point(callee)
+                    || args.iter().any(|a| self.expr_contains_yield_point(&a.node.value))
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.expr_contains_yield_point(receiver)
+                    || args.iter().any(|a| self.expr_contains_yield_point(&a.node.value))
+            }
+            Expr::BinaryOp { left, right, .. }
+            | Expr::DefaultOp { lhs: left, rhs: right } => {
+                self.expr_contains_yield_point(left) || self.expr_contains_yield_point(right)
+            }
+            Expr::UnaryOp { operand, .. }
+            | Expr::As { expr: operand, .. }
+            | Expr::MutableBorrow { expr: operand }
+            | Expr::Move { expr: operand }
+            | Expr::Deref { expr: operand }
+            | Expr::Is { expr: operand, .. } => self.expr_contains_yield_point(operand),
+            Expr::FieldAccess { object, .. }
+            | Expr::TupleFieldAccess { object, .. }
+            | Expr::OptionalChain { object, .. } => self.expr_contains_yield_point(object),
+            Expr::Index { object, index } => {
+                self.expr_contains_yield_point(object) || self.expr_contains_yield_point(index)
+            }
+            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+                elems.iter().any(|e| self.expr_contains_yield_point(e))
+            }
+            Expr::If { condition, then_branch, else_branch, elif_branches, .. } => {
+                self.expr_contains_yield_point(condition)
+                    || self.expr_contains_yield_point(then_branch)
+                    || elif_branches.iter().any(|(c, b)| self.expr_contains_yield_point(c) || self.expr_contains_yield_point(b))
+                    || else_branch.as_ref().map_or(false, |e| self.expr_contains_yield_point(e))
+            }
+            // Closures execute separately — don't recurse
+            Expr::Closure { .. } => false,
+            _ => false,
+        }
+    }
+
     /// Check a condition expression for uses of stale-shared-derived locals.
     /// Returns the stale info and the span where the stale local is used in the condition.
     fn find_stale_in_condition(&self, expr: &Spanned<Expr>) -> Option<(SharedDerivedInfo, Span)> {
@@ -1570,14 +1600,31 @@ impl<'a> BorrowChecker<'a> {
             Expr::IntLiteral(_)
             | Expr::FloatLiteral(_)
             | Expr::BoolLiteral(_)
-            | Expr::StringLiteral(_)
             | Expr::NoneLiteral
             | Expr::SelfExpr
             | Expr::It => {}
 
+            Expr::StringLiteral(lit) => {
+                // Phase 3: Mark variables used in f-string interpolation as used
+                for seg in &lit.segments {
+                    if let crate::lexer::token::StringSegment::Interpolation(var_name, _) = seg {
+                        // Look up the variable by name and mark as used
+                        if let Some(def_id) = self.find_def_by_name(var_name) {
+                            if let Some(entry) = self.local_var_usage.get_mut(&def_id) {
+                                entry.2 = true;
+                            }
+                        }
+                    }
+                }
+            }
+
             Expr::Identifier(var_name) => {
                 // Check that the variable is still live
                 if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                    // Phase 3: Mark variable as used
+                    if let Some(entry) = self.local_var_usage.get_mut(&def_id) {
+                        entry.2 = true;
+                    }
                     let kind = self.scopes.get_def(def_id).kind;
                     if kind == DefKind::Variable {
                         self.check_use(def_id, expr.span);
@@ -1753,7 +1800,7 @@ impl<'a> BorrowChecker<'a> {
 
                 // §3.4 Stale-condition: blocking calls release the token just like await.
                 if self.current_function_is_async {
-                    if is_blocking_call_name(&callee.node) {
+                    if self.is_yield_point_call(&callee.node) {
                         let call_span = expr.span;
                         let drained: Vec<_> = self.shared_derived.drain().collect();
                         for (def_id, mut info) in drained {
@@ -2278,6 +2325,26 @@ impl<'a> BorrowChecker<'a> {
                 // Mark new bindings as Live
                 self.mark_pattern_live_spanned(pattern);
 
+                // Phase 3: Register local variable for unused-variable tracking
+                if let Pattern::Binding(name) = &pattern.node {
+                    if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span)
+                        .or_else(|| self.find_def_by_name(name))
+                    {
+                        self.local_var_usage.insert(def_id, (name.clone(), pattern.span, false));
+                    }
+                } else if let Pattern::Tuple(bindings) = &pattern.node {
+                    // Tuple destructuring: register each binding
+                    for binding in bindings {
+                        if let Pattern::Binding(name) = &binding.node {
+                            if let Some(def_id) = self.scopes.lookup_def_by_span(name, binding.span)
+                                .or_else(|| self.find_def_by_name(name))
+                            {
+                                self.local_var_usage.insert(def_id, (name.clone(), binding.span, false));
+                            }
+                        }
+                    }
+                }
+
                 // Track shared bindings for CFA
                 if *shared != crate::parser::ast::SharedKind::None {
                     if let Pattern::Binding(name) = &pattern.node {
@@ -2493,7 +2560,7 @@ impl<'a> BorrowChecker<'a> {
                         if self.current_function_is_async && self.with_shared_tracked.contains(&def_id) {
                             let rhs_names = self.find_with_tracked_in_condition(value);
                             let target_name = self.scopes.get_def(def_id).name.clone();
-                            if rhs_names.contains(&target_name) && expr_contains_yield_point(value) {
+                            if rhs_names.contains(&target_name) && self.expr_contains_yield_point(value) {
                                 self.stale_warnings.push(super::errors::SemanticWarning {
                                     kind: super::errors::SemanticWarningKind::CompoundYieldRace {
                                         shared_name: target_name,
@@ -3209,6 +3276,22 @@ impl<'a> BorrowChecker<'a> {
         let mut block_closure_defs: Vec<DefId> = Vec::new();
 
         for stmt in &block.stmts {
+            // Phase 2: Unreachable code — if the previous statement unconditionally
+            // diverged, any subsequent non-meta statement is unreachable.
+            if self.diverged {
+                // Skip meta blocks (they're compile-time constructs, not runtime code)
+                let is_meta = matches!(&stmt.node,
+                    Stmt::MetaFor { .. } | Stmt::MetaIf { .. }
+                );
+                if !is_meta {
+                    self.stale_warnings.push(super::errors::SemanticWarning {
+                        kind: super::errors::SemanticWarningKind::UnreachableCode,
+                        span: stmt.span,
+                    });
+                    break; // Stop checking — unreachable code shouldn't trigger cascading errors
+                }
+            }
+
             self.check_stmt(stmt);
 
             // Track closure variables that were declared in this block.
@@ -3868,6 +3951,7 @@ impl<'a> BorrowChecker<'a> {
         self.mut_capture_owners.clear();
         self.with_guarded_conditions.clear();
         self.with_depth = 0;
+        self.local_var_usage.clear();
 
         // Set scope-aware lookup context for this function
         self.current_fn_scope = self.function_body_scopes
@@ -3945,6 +4029,20 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(expr);
             }
             FunctionBody::Declaration | FunctionBody::Extern(_) => {}
+        }
+
+        // Phase 3: Emit unused variable warnings (skip in imported modules)
+        if self.imported_module_depth == 0 {
+            for (_, (name, span, is_used)) in &self.local_var_usage {
+                if !is_used && !name.starts_with('_') {
+                    self.stale_warnings.push(super::errors::SemanticWarning {
+                        kind: super::errors::SemanticWarningKind::UnusedVariable {
+                            name: name.clone(),
+                        },
+                        span: *span,
+                    });
+                }
+            }
         }
 
     }
@@ -4709,11 +4807,16 @@ pub fn check_module(
     // Pass 5a: compute return_borrows_from for each function
     compute_all_return_borrows(module, scopes, types, resolution_map, function_info, &ref_type_structs);
 
+    // Pass 5b½: Purity inference — lightweight AST walk (moved before borrow check
+    // so purity info is available for yield-point detection in `with` blocks).
+    let purity_by_name = infer_purity(module, scopes, resolution_map);
+
     // Pass 5b: full borrow check with origin tracking
     let mut checker = BorrowChecker::new(
         scopes, types, resolution_map, function_info, function_body_scopes,
         expr_types,
         method_resolutions, ref_type_structs, struct_field_ref_flags,
+        &purity_by_name,
     );
 
     check_items_recursive(&mut checker, &module.items);
@@ -4748,11 +4851,24 @@ pub fn check_module(
         }
     }
 
+    // Phase 4: Unused import detection
+    // Collect imported DefIds from the AST, then check if they appear in resolution_map values.
+    let used_def_ids: FxHashSet<DefId> = resolution_map.values().copied().collect();
+    let mut imported_defs: Vec<(DefId, String, Span)> = Vec::new();
+    collect_imported_defs(&module.items, scopes, &mut imported_defs);
+    for (def_id, name, span) in &imported_defs {
+        if !used_def_ids.contains(def_id) && !name.starts_with('_') {
+            warnings.push(super::errors::SemanticWarning {
+                kind: super::errors::SemanticWarningKind::UnusedImport {
+                    name: name.clone(),
+                },
+                span: *span,
+            });
+        }
+    }
+
     warnings.extend(checker.stale_warnings);
     errors.extend(checker.errors);
-
-    // Pass 5c: Purity inference — lightweight AST walk
-    let purity_by_name = infer_purity(module, scopes, resolution_map);
 
     (checker.shared_out, warnings, purity_by_name)
 }
@@ -4826,6 +4942,51 @@ fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
                 checker.pending_capture_set = None;
                 checker.check_block(&s.body);
             }
+            _ => {}
+        }
+    }
+}
+
+// ─── Phase 4: Unused Import Collection ──────────────────────
+
+/// Collect DefIds for imported names (non-recursive — only top-level imports,
+/// not imports inside `Item::Module` wrappers which are from imported files).
+fn collect_imported_defs(
+    items: &[Spanned<Item>],
+    scopes: &ScopeTable,
+    out: &mut Vec<(DefId, String, Span)>,
+) {
+    for item in items {
+        match &item.node {
+            Item::Import(import) => {
+                match import {
+                    ImportStmt::Simple { path, .. } => {
+                        if let Some(last) = path.last() {
+                            if let Some(def_id) = scopes.lookup(&last.node) {
+                                out.push((def_id, last.node.clone(), last.span));
+                            }
+                        }
+                    }
+                    ImportStmt::Grouped { names, .. } => {
+                        for name in names {
+                            if let Some(def_id) = scopes.lookup(&name.node) {
+                                out.push((def_id, name.node.clone(), name.span));
+                            }
+                        }
+                    }
+                    ImportStmt::From { names, glob_types, .. } => {
+                        for name in names {
+                            if let Some(def_id) = scopes.lookup(&name.node) {
+                                out.push((def_id, name.node.clone(), name.span));
+                            }
+                        }
+                        // Skip glob_types — enum type imports are used implicitly
+                        // through their variants, which may not appear in resolution_map
+                        let _ = glob_types;
+                    }
+                }
+            }
+            // Don't recurse into Item::Module — imported module code has its own imports
             _ => {}
         }
     }
@@ -8494,5 +8655,261 @@ void process(Point p, int v):
             has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "p")),
             "expected MutationOfBareParam for field assign in match arm, got: {:?}", errors
         );
+    }
+
+    // ─── Phase 1: Purity Integration Tests ───────────────────
+
+    #[test]
+    fn pure_call_in_with_block_no_warning() {
+        // A pure function call inside a `with` block should NOT trigger a warning
+        let source = "\
+int double(int x) = x * 2
+
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        if x > 0:
+            int y = double(x)
+    t.await()
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { .. }
+            )),
+            "expected no WithCheckThenAct warning for pure call, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn blocking_call_in_with_block_warns() {
+        // A blocking call inside a `with` block SHOULD trigger a warning
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        if x > 0:
+            str data = read_file(\"test.txt\")
+    t.await()
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { .. }
+            )),
+            "expected WithCheckThenAct warning for blocking call, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn impure_user_fn_in_with_block_warns() {
+        // A user-defined function with side effects inside a `with` block
+        // should trigger a warning (it calls write_file which is HasSideEffects)
+        let source = "\
+void save(str data):
+    write_file(\"out.txt\", data)
+
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        if x > 0:
+            save(\"data\")
+    t.await()
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { .. }
+            )),
+            "expected WithCheckThenAct warning for impure user function, got: {:?}", warnings
+        );
+    }
+
+    // ─── Phase 2: Unreachable Code Tests ─────────────────────
+
+    #[test]
+    fn unreachable_after_return() {
+        let source = "\
+void main():
+    return
+    int x = 5
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UnreachableCode
+            )),
+            "expected UnreachableCode warning after return, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn unreachable_after_break() {
+        let source = "\
+void main():
+    for i in 0..10:
+        break
+        int x = 5
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UnreachableCode
+            )),
+            "expected UnreachableCode warning after break, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn unreachable_after_continue() {
+        let source = "\
+void main():
+    for i in 0..10:
+        continue
+        int x = 5
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UnreachableCode
+            )),
+            "expected UnreachableCode warning after continue, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn no_unreachable_after_conditional_return() {
+        let source = "\
+void main():
+    int x = 5
+    if x > 0:
+        return
+    int y = 10
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UnreachableCode
+            )),
+            "expected no UnreachableCode after conditional return, got: {:?}", warnings
+        );
+    }
+
+    // ─── Phase 3: Unused Variable Tests ──────────────────────
+
+    #[test]
+    fn unused_local_warns() {
+        let source = "\
+void main():
+    int x = 5
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UnusedVariable { name, .. }
+                if name == "x"
+            )),
+            "expected UnusedVariable warning for x, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn used_local_no_warning() {
+        let source = "\
+void main():
+    int x = 5
+    print(x)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UnusedVariable { .. }
+            )),
+            "expected no UnusedVariable warning, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn underscore_prefix_suppressed() {
+        let source = "\
+void main():
+    int _x = 5
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UnusedVariable { .. }
+            )),
+            "expected no UnusedVariable for _x prefix, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn param_not_warned_unused() {
+        // Parameters should not trigger unused variable warnings
+        let source = "\
+void process(int x):
+    pass
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UnusedVariable { name, .. }
+                if name == "x"
+            )),
+            "expected no UnusedVariable for parameter, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn used_in_fstring_no_warning() {
+        let source = "\
+void main():
+    int x = 42
+    str s = f\"{x}\"
+    print(s)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UnusedVariable { name, .. }
+                if name == "x"
+            )),
+            "expected no UnusedVariable for variable used in f-string, got: {:?}", warnings
+        );
+    }
+
+    // ─── Phase 4: Unused Import Tests ────────────────────────
+
+    #[test]
+    fn unused_import_warns() {
+        // Note: this test uses a from-import of a function that's defined in the source
+        // but never called. Since `helper` is defined, the resolver will find it.
+        let source = "\
+int helper() = 42
+
+void main():
+    pass
+";
+        // For unused import, we need actual import statements. Since test fixtures
+        // don't have multi-file imports, we verify the warning kind Display works.
+        let kind = crate::semantic::errors::SemanticWarningKind::UnusedImport { name: "helper".to_string() };
+        let warning = crate::semantic::errors::SemanticWarning {
+            kind,
+            span: crate::span::Span::new(0, 6),
+        };
+        assert!(warning.to_string().contains("unused import `helper`"));
     }
 }

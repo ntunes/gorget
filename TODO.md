@@ -18,7 +18,7 @@
 
 - **`register_collection_alias` TypeMetadata: cannot use Resource until field move-zeroing exists** — Phase 6 of the ABI plan intended to change `TypeMetadata::default()` to `CopySemantics::Resource`. However, this makes `needs_drop()` emit scope-end drops for collection locals, and the IR doesn't emit move-zeroing for field reads, causing double-frees (e.g., `drop_field_move_zero` fixture). Blocked on adding move-zeroing for resource-type field reads in the IR lowering. [added: 2026-03-14]
 
-- **`meta is_pure(fn_name)` builtin** — Purity inference is computed in Pass 5c (borrow checking) but `meta` evaluation happens earlier (Pass 0). Chicken-and-egg problem. Options: (1) move meta evaluation after borrow checking for `is_pure` only, (2) two-phase meta where purity queries are deferred, (3) expose purity only at IR/codegen level (current state). [added: 2026-03-14]
+- **`meta is_pure(fn_name)` builtin** — Purity inference is now computed in Pass 5b½ (before borrow check, after resolve/typecheck) but `meta` evaluation happens earlier (Pass 0). Chicken-and-egg problem. Options: (1) move meta evaluation after borrow checking for `is_pure` only, (2) two-phase meta where purity queries are deferred, (3) expose purity only at IR/codegen level (current state). [added: 2026-03-14, updated: 2026-03-14]
 
 
 - **If-expression `elif` branches: parser limitation**: The parser doesn't support `elif` in inline if-expressions (only `if cond: expr else: expr`). The IR lowering now handles elif branches if the parser passes them through. Workaround: use nested `else: if`: `if a == 1: 10 else: if a == 2: 20 else: 30`. [updated: 2026-03-11]

@@ -260,6 +260,14 @@ impl ErrorReporter {
             notes.push("copy the value before spawning, or pass the underlying shared variable with `&`".to_string());
         }
 
+        if let SemanticWarningKind::UnusedVariable { name } = &warn.kind {
+            notes.push(format!("prefix the variable name with `_` to suppress: `_{name}`"));
+        }
+
+        if let SemanticWarningKind::UnusedImport { name } = &warn.kind {
+            notes.push(format!("remove the import of `{name}` or use it in code"));
+        }
+
         let mut diag = diagnostic::Diagnostic::warning()
             .with_message(warn.to_string())
             .with_labels(labels);
