@@ -722,7 +722,9 @@ impl GenericCollector {
         mapper: &TypeMapper,
         registry: &mut TypeRegistry,
         fn_sigs: &mut FxHashMap<String, (Vec<TypeId>, TypeId)>,
+        fn_param_ownerships: &mut FxHashMap<String, Vec<crate::parser::ast::Ownership>>,
     ) {
+        use crate::parser::ast::{Ownership, FunctionBody};
         for (base_name, type_args, mangled_name, kind) in &self.instances {
             if !matches!(kind, TemplateKind::Function) {
                 continue;
@@ -730,19 +732,70 @@ impl GenericCollector {
             if let Some(template) = self.fn_templates.get(base_name) {
                 let subs = build_type_substitutions(template.generic_params.as_ref(), type_args);
                 let ret_type = substitute_and_map(mapper, &template.return_type.node, &subs);
+
+                // Detect bare Move-type params that are directly returned.
+                // Upgrade these from Borrow to Move to prevent double-free.
+                let mut move_override_params: std::collections::HashSet<String> = std::collections::HashSet::new();
+                if registry.is_resource_type(ret_type) {
+                    let returned_param_name = match &template.body {
+                        FunctionBody::Expression(expr) => {
+                            if let Expr::Identifier(name) = &expr.node {
+                                Some(name.as_str())
+                            } else { None }
+                        }
+                        FunctionBody::Block(block) => {
+                            if block.stmts.len() == 1 {
+                                if let Stmt::Return(Some(expr)) = &block.stmts[0].node {
+                                    if let Expr::Identifier(name) = &expr.node {
+                                        Some(name.as_str())
+                                    } else { None }
+                                } else { None }
+                            } else { None }
+                        }
+                        _ => None,
+                    };
+                    if let Some(name) = returned_param_name {
+                        for p in &template.params {
+                            if !p.node.is_meta_op
+                                && p.node.name.node == name
+                                && p.node.ownership == Ownership::Borrow
+                            {
+                                let base = substitute_and_map(mapper, &p.node.type_.node, &subs);
+                                if registry.is_resource_type(base) {
+                                    move_override_params.insert(name.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let param_types: Vec<TypeId> = template.params.iter()
                     .filter(|p| !p.node.is_meta_op) // meta op params have no runtime slot
                     .map(|p| {
                         let base = substitute_and_map(mapper, &p.node.type_.node, &subs);
                         // MutableBorrow params become MutPtr in the GIR
-                        if matches!(p.node.ownership, crate::parser::ast::Ownership::MutableBorrow) {
+                        if matches!(p.node.ownership, Ownership::MutableBorrow) {
                             registry.insert(GirType::MutPtr(base))
                         } else {
                             base
                         }
                     })
                     .collect();
+
+                // Register param ownerships so lower_call_arg uses correct semantics
+                let param_ownerships: Vec<Ownership> = template.params.iter()
+                    .filter(|p| !p.node.is_meta_op)
+                    .map(|p| {
+                        if move_override_params.contains(&p.node.name.node) {
+                            Ownership::Move
+                        } else {
+                            p.node.ownership
+                        }
+                    })
+                    .collect();
+
                 fn_sigs.insert(mangled_name.clone(), (param_types, ret_type));
+                fn_param_ownerships.insert(mangled_name.clone(), param_ownerships);
             }
         }
     }

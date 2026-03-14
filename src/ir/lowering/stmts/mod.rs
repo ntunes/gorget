@@ -548,6 +548,20 @@ fn lower_return(
         } else {
             builder.assign(Place::local(LocalId(0)), operand);
         }
+        // For move-overridden generic params: zero the source through the pointer
+        // to transfer ownership to the caller and prevent double-free.
+        if !ctx.move_override_params.is_empty() {
+            if let Expr::Identifier(name) = &expr.node {
+                if ctx.move_override_params.contains(name.as_str()) {
+                    if let Some((local_id, _)) = ctx.lookup_local(name.as_str()) {
+                        builder.move_zero(crate::ir::instructions::Place {
+                            local: local_id,
+                            projections: vec![crate::ir::instructions::Projection::Deref],
+                        });
+                    }
+                }
+            }
+        }
         // Postcondition checks: `assert return <expr>` — check before returning
         emit_postcondition_checks(ctx, builder);
 

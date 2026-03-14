@@ -2220,8 +2220,9 @@ fn compute_type_overrides(
     func: &Function,
     registry: &TypeRegistry,
     module: &Module,
-) -> std::collections::HashMap<usize, String> {
+) -> (std::collections::HashMap<usize, String>, std::collections::HashSet<usize>) {
     let mut type_overrides: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    let mut const_borrow_locals: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for _pass in 0..3 {
     let prev_count = type_overrides.len();
     for block in &func.blocks {
@@ -2735,6 +2736,10 @@ fn compute_type_overrides(
                     // Store as pointer type for IndexLoad lookups
                     if resolved != "int64_t" && resolved != "void" {
                         type_overrides.insert(dst.0 as usize, format!("{}*", resolved));
+                        // Track immutable borrows for const declaration qualifier
+                        if matches!(inst, Instruction::Borrow { .. }) {
+                            const_borrow_locals.insert(dst.0 as usize);
+                        }
                     }
                 }
                 // FieldLoad: propagate known struct field types
@@ -2855,7 +2860,7 @@ fn compute_type_overrides(
     // Convergence: stop when no new overrides were added
     if type_overrides.len() == prev_count { break; }
     } // end multi-pass loop
-    type_overrides
+    (type_overrides, const_borrow_locals)
 }
 
 
@@ -4215,7 +4220,7 @@ fn emit_coroutine(
     let task_name = if is_void { "Task__void".to_string() } else { format!("Task__{ret_c}") };
     let frame_name = format!("__Frame_{fn_name}");
     let state_ids = coroutine_state_ids(func);
-    let mut type_overrides = compute_type_overrides(func, registry, module);
+    let (mut type_overrides, _const_borrow_locals) = compute_type_overrides(func, registry, module);
 
     // Parameter locals (indices 1..=N) are stored by value in the coroutine frame,
     // even though the function signature passes Move types by Ptr/MutPtr.
@@ -5491,7 +5496,7 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
 
     // Pre-scan: find locals assigned by constructors/type-defs and override their types.
     // Run multiple passes until convergence so assignment chains propagate correctly.
-    let type_overrides = compute_type_overrides(func, registry, module);
+    let (type_overrides, const_borrow_locals) = compute_type_overrides(func, registry, module);
 
 
     // Pre-scan: find UNIT_TYPE locals that are referenced as operands.
@@ -5587,6 +5592,18 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
                 // UNIT_TYPE locals that are referenced need a concrete type
                 if t == "void" { "int64_t".to_string() } else { t }
             }
+        };
+        // Apply const qualifier for immutable borrow locals.
+        // Skip Option/Result types — OAT macros use __typeof__(*ptr) which
+        // inherits const and breaks assignments to the temporary.
+        let c_type = if const_borrow_locals.contains(&local_id)
+            && !c_type.starts_with("const ")
+            && !c_type.starts_with("Option_")
+            && !c_type.starts_with("Result_")
+        {
+            format!("const {c_type}")
+        } else {
+            c_type
         };
         // Zero-initialize return local (_0) to avoid uninitialized warnings
         let init = if local_id == 0 { " = {0}" } else { "" };
@@ -6546,7 +6563,7 @@ fn emit_instruction(
                     }
                     base
                 } else {
-                    format_args_with_coercion(args, func, registry, type_overrides, &c_name, all_functions)
+                    format_args_with_coercion(args, func, registry, type_overrides, &c_name, all_functions, &module.fn_param_abis)
                 };
                 let ret_cstr = returns_cstr(mapped_name);
                 // Str__slice: gorget_str_slice takes Str by value, not Str*.
@@ -6935,7 +6952,7 @@ fn emit_instruction(
                     base
                 } else {
                     let c_name_for_coercion = mangle_name(func_name);
-                    format_args_with_coercion(args, func, registry, type_overrides, &c_name_for_coercion, all_functions)
+                    format_args_with_coercion(args, func, registry, type_overrides, &c_name_for_coercion, all_functions, &module.fn_param_abis)
                 };
                 let ret_cstr = returns_cstr(func_name);
                 if let Some(dst_id) = dst {
@@ -7403,8 +7420,19 @@ fn emit_instruction(
 
         Instruction::MoveZero { place } => {
             let place_str = format_place(place, registry);
-            let local_type = func.locals[place.local.0 as usize].type_id;
-            let type_name = format_type(local_type, registry);
+            let mut zeroed_type = func.locals[place.local.0 as usize].type_id;
+            // Walk projections to resolve the actual type being zeroed
+            for proj in &place.projections {
+                match proj {
+                    Projection::Deref => {
+                        if let Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) = registry.get(zeroed_type) {
+                            zeroed_type = *inner;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let type_name = format_type(zeroed_type, registry);
             let _ = writeln!(out, "        memset(&{place_str}, 0, sizeof({type_name}));");
         }
 
@@ -13031,7 +13059,9 @@ fn format_args_with_coercion(
     args: &[Operand], func: &Function, registry: &TypeRegistry,
     type_overrides: &std::collections::HashMap<usize, String>,
     target_name: &str, all_functions: &[Function],
+    fn_param_abis: &rustc_hash::FxHashMap<String, Vec<crate::ir::lowering::context::ParamABI>>,
 ) -> String {
+    use crate::ir::lowering::context::ParamABI;
     // Look up the target function's parameter types
     let target_params: Option<&[TypeId]> = all_functions.iter()
         .find(|f| mangle_name(&f.name) == target_name)
@@ -13083,19 +13113,31 @@ fn format_args_with_coercion(
                         let is_ptr = local_type_id.map_or(false, |tid| {
                             matches!(registry.get(tid), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)))
                         });
-                        let target_is_ptr = target_params
-                            .and_then(|params| params.get(arg_idx))
-                            .map_or(false, |&tid| {
-                                matches!(registry.get(tid), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)))
-                            });
+
+                        // Use ParamABI as single source of truth when available
+                        let param_abi = fn_param_abis.get(target_name)
+                            .and_then(|abis| abis.get(arg_idx))
+                            .copied();
+
+                        let target_is_ptr = if let Some(abi) = param_abi {
+                            matches!(abi, ParamABI::ByPtr | ParamABI::ByMutPtr)
+                        } else {
+                            // Fallback: derive from target function's IR param types
+                            target_params
+                                .and_then(|params| params.get(arg_idx))
+                                .map_or(false, |&tid| {
+                                    matches!(registry.get(tid), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)))
+                                })
+                        };
+                        let has_abi_or_params = param_abi.is_some() || target_params.is_some();
                         // Auto-deref pointer args: when the target function's param
-                        // types are known, deref if the param is a value type.
+                        // types are known (via ABI or IR), deref if the param is a value type.
                         // When unknown (inline wrappers not in all_functions), deref
                         // arg 0 ONLY for Channel types — their wrappers take self by
                         // value (Channel__T = GorgetChannel*), so MutPtr(Channel__T)
                         // needs one deref. Other types (Guard, Shared, RwLock) take
                         // self by pointer, so their MutPtr refs should stay as-is.
-                        let should_deref = if target_params.is_some() {
+                        let should_deref = if has_abi_or_params {
                             !target_is_ptr
                         } else if arg_idx == 0 {
                             // Only auto-deref self for channel-pointer types
@@ -13114,7 +13156,7 @@ fn format_args_with_coercion(
                         // Take address when target expects a pointer but arg is a value type.
                         // This happens when the IR dereferences a borrow and then passes
                         // the resulting value to a function that still expects a pointer param.
-                        let should_addr = target_params.is_some() && target_is_ptr && !is_ptr;
+                        let should_addr = has_abi_or_params && target_is_ptr && !is_ptr;
                         if is_ptr && should_deref && place.projections.is_empty() {
                             parts.push(format!("(*{arg_str})"));
                         } else if should_addr {

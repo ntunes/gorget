@@ -141,6 +141,8 @@ pub struct Module {
     pub source_code: Option<String>,
     /// Backend-specific runtime feature flags and type lists.
     pub runtime: RuntimeFeatures,
+    /// Single source of truth for how each function's params are passed (by value, const ptr, mut ptr).
+    pub fn_param_abis: rustc_hash::FxHashMap<String, Vec<crate::ir::lowering::context::ParamABI>>,
 }
 
 impl Module {
@@ -154,6 +156,7 @@ impl Module {
             source_filename: None,
             source_code: None,
             runtime: RuntimeFeatures::default(),
+            fn_param_abis: rustc_hash::FxHashMap::default(),
         }
     }
 

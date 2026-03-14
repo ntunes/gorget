@@ -92,10 +92,13 @@ pub(super) fn lower_call_arg(
             val
         }
         Ownership::Borrow if callee_passes_by_ptr => {
-            // Bare call-site: always emit const Ptr, never MutPtr.
-            // If the callee expects & or !, the borrow checker catches
-            // the mismatch — the IR must not silently upgrade to MutPtr.
-            let use_mut_ptr = false;
+            // Bare call-site: emit const Ptr by default.
+            // Exception: when the callee's param ownership is Move (e.g., generic functions
+            // that return a Move-type parameter directly), use MutPtr to transfer ownership.
+            let callee_param_ownership = ctx.fn_param_ownerships.get(callee_name)
+                .and_then(|ownerships| ownerships.get(arg_idx))
+                .copied();
+            let use_mut_ptr = matches!(callee_param_ownership, Some(Ownership::Move));
             // GlobalRef → GlobalRefPtr: emit &global_name directly.
             if let Operand::Constant(Constant::GlobalRef(name)) = &val {
                 return Operand::Constant(Constant::GlobalRefPtr(name.clone()));
@@ -109,6 +112,8 @@ pub(super) fn lower_call_arg(
                         let ptr_type = ctx.register_mut_ptr_type(local_type);
                         let dst = builder.add_local(ptr_type, None);
                         builder.emit_borrow_mut(dst, place.clone());
+                        // Mark source as moved — callee takes ownership
+                        ctx.drops.mark_moved(place.local);
                         return FunctionBuilder::copy(dst);
                     } else {
                         let ptr_type = ctx.register_ptr_type(local_type);

@@ -521,8 +521,7 @@ fn try_build_ir(
             .arg("-Wno-unused-function")
             .arg("-Wno-unused-label")
             .arg("-Wno-unused-but-set-variable")
-            .arg("-Wno-discarded-qualifiers")          // GCC
-            .arg("-Wno-ignored-qualifiers")             // clang
+            // const qualifiers are now correctly emitted for borrow locals
             .arg("-Wno-sometimes-uninitialized")        // clang: conditional branch init
             .arg("-Wno-unknown-warning-option")         // suppress GCC/clang flag mismatch
             .arg("-ffunction-sections")

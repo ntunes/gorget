@@ -1,7 +1,7 @@
 use crate::ir::builder::FunctionBuilder;
 use crate::ir::instructions::*;
 use crate::ir::types::*;
-use crate::parser::ast::{self, FunctionBody, FunctionDef, GenericParam, Ownership, Type};
+use crate::parser::ast::{self, Expr, FunctionBody, FunctionDef, GenericParam, Ownership, Stmt, Type};
 use crate::semantic::meta::{self as meta, DelayedMetaContext, MetaValue};
 use crate::span::Spanned;
 
@@ -403,6 +403,45 @@ pub fn lower_generic_function(
     // Map return type with substitutions
     let return_type = substitute_and_map_type(ctx, &template.return_type.node, &subs);
 
+    // Pre-scan: detect bare Move-type params that are directly returned.
+    // These need Move (not Borrow) semantics to avoid double-free.
+    // In expression bodies `T f[T](T x) = x`, or block bodies with `return x`,
+    // a borrow param would create a shallow copy without transferring ownership.
+    let mut move_override_params: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if ctx.type_registry.is_resource_type(return_type) {
+        let returned_param_name = match &template.body {
+            FunctionBody::Expression(expr) => {
+                if let Expr::Identifier(name) = &expr.node {
+                    Some(name.as_str())
+                } else { None }
+            }
+            FunctionBody::Block(block) => {
+                // Check for single-statement `return x` blocks
+                if block.stmts.len() == 1 {
+                    if let Stmt::Return(Some(expr)) = &block.stmts[0].node {
+                        if let Expr::Identifier(name) = &expr.node {
+                            Some(name.as_str())
+                        } else { None }
+                    } else { None }
+                } else { None }
+            }
+            _ => None,
+        };
+        if let Some(name) = returned_param_name {
+            for p in &template.params {
+                if !p.node.is_meta_op
+                    && p.node.name.node == name
+                    && p.node.ownership == Ownership::Borrow
+                {
+                    let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
+                    if ctx.type_registry.is_resource_type(base_type) {
+                        move_override_params.insert(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
     // Map parameters with substitutions — skip meta op params (no runtime representation),
     // MutableBorrow params become MutPtr; Borrow params of Move types also become MutPtr
     let params: Vec<(TypeId, Option<String>)> = template
@@ -411,7 +450,12 @@ pub fn lower_generic_function(
         .filter(|p| !p.node.is_meta_op)
         .map(|p| {
             let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
-            let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
+            let ownership = if move_override_params.contains(&p.node.name.node) {
+                Ownership::Move
+            } else {
+                p.node.ownership
+            };
+            let gir_type = ctx.resolve_param_type(base_type, ownership);
             (gir_type, Some(p.node.name.node.clone()))
         })
         .collect();
@@ -427,6 +471,9 @@ pub fn lower_generic_function(
     // (meta op params carry no runtime value and are skipped).
     ctx.clear_locals();
     ctx.callable_return_types.clear();
+    // Store move_override_params in context so return-statement lowering can zero sources.
+    // Must be set AFTER clear_locals() which resets it.
+    ctx.move_override_params = move_override_params.clone();
 
     let mut local_idx: u32 = 0;
     for p in template.params.iter() {
@@ -436,11 +483,16 @@ pub fn lower_generic_function(
         local_idx += 1;
         let local_id = LocalId(local_idx);
         let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
-        let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
+        let ownership = if move_override_params.contains(&p.node.name.node) {
+            Ownership::Move
+        } else {
+            p.node.ownership
+        };
+        let gir_type = ctx.resolve_param_type(base_type, ownership);
         ctx.register_local(&p.node.name.node, local_id, gir_type);
-        if ctx.is_ref_param(base_type, p.node.ownership) {
+        if ctx.is_ref_param(base_type, ownership) {
             ctx.ref_locals.insert(local_id, base_type);
-        } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
+        } else if ctx.is_mut_ref_param(base_type, ownership) {
             ctx.mut_capture_locals.insert(local_id, base_type);
         }
         // Track callable parameter return types for indirect call lowering
@@ -462,7 +514,12 @@ pub fn lower_generic_function(
         drop_idx += 1;
         let local_id = LocalId(drop_idx);
         let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
-        let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
+        let ownership = if move_override_params.contains(&p.node.name.node) {
+            Ownership::Move
+        } else {
+            p.node.ownership
+        };
+        let gir_type = ctx.resolve_param_type(base_type, ownership);
         ctx.drops.register_param(local_id, gir_type, &ctx.type_registry);
     }
 
@@ -473,6 +530,18 @@ pub fn lower_generic_function(
 
             let last_block_idx = builder.current_block.0 as usize;
             if builder.blocks[last_block_idx].terminator.is_none() {
+                // For move-overridden params in block bodies with implicit return:
+                // zero the source through the pointer to prevent caller double-free.
+                if !move_override_params.is_empty() {
+                    for name in &move_override_params {
+                        if let Some((local_id, _)) = ctx.lookup_local(name) {
+                            builder.move_zero(Place {
+                                local: local_id,
+                                projections: vec![Projection::Deref],
+                            });
+                        }
+                    }
+                }
                 ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
                 if return_type == UNIT_TYPE {
                     builder.ret(FunctionBuilder::const_unit());
@@ -487,6 +556,18 @@ pub fn lower_generic_function(
         FunctionBody::Expression(expr) => {
             let operand = lower_expr(ctx, &mut builder, expr);
             builder.assign(Place::local(LocalId(0)), operand);
+            // For move-overridden params: zero the source through the pointer
+            // to prevent the caller from double-freeing.
+            if !move_override_params.is_empty() {
+                if let Expr::Identifier(name) = &expr.node {
+                    if let Some((local_id, _)) = ctx.lookup_local(name) {
+                        builder.move_zero(Place {
+                            local: local_id,
+                            projections: vec![Projection::Deref],
+                        });
+                    }
+                }
+            }
             ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }

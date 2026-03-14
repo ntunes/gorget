@@ -215,6 +215,9 @@ pub struct LoweringContext<'a> {
     /// Accumulated `assert return` postcondition expressions.
     /// Checked at every `return` site before the value is returned.
     pub postconditions: Vec<(crate::span::Spanned<crate::parser::ast::Expr>, Option<crate::span::Spanned<crate::parser::ast::Expr>>)>,
+    /// Parameters upgraded from Borrow to Move in generic functions that return them directly.
+    /// The return path must zero the source through the pointer to prevent caller double-free.
+    pub move_override_params: std::collections::HashSet<String>,
 }
 
 
@@ -256,6 +259,7 @@ impl<'a> LoweringContext<'a> {
             with_shared_refresh: Vec::new(),
             on_error_blocks: Vec::new(),
             postconditions: Vec::new(),
+            move_override_params: std::collections::HashSet::new(),
         }
     }
 
@@ -332,6 +336,7 @@ impl<'a> LoweringContext<'a> {
         self.shared.locals.clear();
         self.with_shared_refresh.clear();
         self.postconditions.clear();
+        self.move_override_params.clear();
     }
 
     /// Take the locals map, leaving it empty. Used for save/restore during async variant generation.
