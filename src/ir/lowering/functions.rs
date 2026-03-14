@@ -37,7 +37,7 @@ pub fn lower_function(
     };
 
     // Map parameters — MutableBorrow params become MutPtr types;
-    // Borrow params of Move types also become MutPtr (auto-borrow to avoid value copy)
+    // Resource-type params are passed by pointer (const Ptr for bare, MutPtr for &)
     let params: Vec<(TypeId, Option<&str>)> = func
         .params
         .iter()
@@ -50,7 +50,7 @@ pub fn lower_function(
         .collect();
 
     // Register standalone function signature in fn_sigs with BASE types
-    // (before MutPtr wrapping) so callers can detect auto-borrow parameters
+    // (before pointer wrapping) so callers can detect resource-type parameters
     // and forward pointers instead of copying structs.
     if !ctx.fn_sigs.contains_key(name) {
         let base_param_types: Vec<TypeId> = func

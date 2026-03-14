@@ -757,7 +757,7 @@ pub fn lower_module(
     traits::register_unregistered_trait_equip_sigs(&mut ctx, &trait_info, ast_module);
 
     // Populate gir_equip_methods: walk all equip blocks and mark methods with GIR-lowered
-    // bodies (Block or Expression). This determines caller-side auto-borrow for method calls.
+    // bodies (Block or Expression). This determines caller-side pass-by-pointer for method calls.
     populate_gir_equip_methods(&mut ctx, ast_module, &generic_collector);
 
     // Re-scan monomorphized enum variants: trait sig registration (above) may create new

@@ -554,7 +554,13 @@ auto name = "hello"  # inferred as String
 - Lock guards (`Guard[T]`, `ReadGuard[T]`, `WriteGuard[T]`)
 - Structs containing Resource-type fields (automatically upgraded)
 
-Resource types are always passed by pointer to avoid expensive copies. Bare parameters use `const T*` (read-only); `&` parameters use `T*` (mutable).
+#### Passing Convention
+
+**Trivial types** are passed by value (copied onto the callee's stack). This includes small value structs like `Vec3` — copying 24 bytes is cheaper than the indirection overhead of a pointer.
+
+**Resource types** are passed by pointer to avoid expensive deep copies. Bare parameters use `const T*` (read-only); `&` parameters use `T*` (mutable). The caller must write `&arg` at the call site when the callee declares `&` — this is the caller's explicit acknowledgment that the argument may be mutated.
+
+> **Design note:** An earlier design considered passing *all* structs by pointer (including trivial ones like `Vec3`). This was discarded because small value types are cheaper to copy than to indirect through a pointer, and value semantics avoid aliasing concerns.
 
 ---
 

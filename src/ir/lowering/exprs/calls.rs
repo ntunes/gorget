@@ -41,11 +41,11 @@ pub(super) fn lower_call_arg(
         .unwrap_or(false);
 
     // The callee expects a pointer for this param if:
-    // 1. The param base type is a struct (all structs pass by pointer), OR
+    // 1. The param base type is a resource type (passed by pointer), OR
     // 2. The param has explicit & (MutableBorrow) ownership (even for primitives)
-    let callee_auto_borrows = callee_is_move_param || callee_param_is_mut_borrow;
+    let callee_passes_by_ptr = callee_is_move_param || callee_param_is_mut_borrow;
 
-    // Special case: &name where name is already an auto-borrowed param (pointer).
+    // Special case: &name where name is already a pass-by-pointer param.
     // Skip the auto-deref that Identifier would do — just forward the pointer.
     // Only forward when the call site explicitly has & — bare args must not
     // silently forward a MutPtr.
@@ -88,7 +88,7 @@ pub(super) fn lower_call_arg(
             }
             val
         }
-        Ownership::Borrow if callee_auto_borrows => {
+        Ownership::Borrow if callee_passes_by_ptr => {
             // Bare call-site: always emit const Ptr, never MutPtr.
             // If the callee expects & or !, the borrow checker catches
             // the mismatch — the IR must not silently upgrade to MutPtr.
@@ -131,7 +131,7 @@ pub(super) fn lower_call_arg(
                     return FunctionBuilder::copy(dst);
                 }
             }
-            Operand::Constant(Constant::Unit) // unreachable: callee_expects_auto_borrow implies callee_param_type.is_some()
+            Operand::Constant(Constant::Unit) // unreachable: callee_passes_by_ptr implies callee_param_type.is_some()
         }
         Ownership::Move if callee_is_move_param => {
             // Move of a Move-type value: callee expects MutPtr. Emit borrow_mut.

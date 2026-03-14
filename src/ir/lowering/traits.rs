@@ -42,7 +42,7 @@ pub struct VTableMethod {
     /// Used for the vtable FnPtr signature and wrapper function params.
     pub param_types: Vec<TypeId>,
     /// Base (unresolved) parameter types for fn_sigs registration.
-    /// auto-borrow checks at call sites need the base Move type to trigger.
+    /// pass-by-pointer checks at call sites need the base type to detect resource types.
     pub base_param_types: Vec<TypeId>,
     /// Method return type.
     pub return_type: TypeId,
@@ -108,7 +108,7 @@ pub fn register_trait_types(
 
                     // Build full parameter list: void* self + other params
                     // param_types uses resolve_param_type (for vtable FnPtr + wrapper fn signature).
-                    // base_param_types uses map_ast_type (for fn_sigs auto-borrow at call sites).
+                    // base_param_types uses map_ast_type (for fn_sigs pass-by-pointer at call sites).
                     let mut param_types = vec![self_type];
                     let mut base_param_types = vec![self_type];
                     for p in &method_def.params {
@@ -246,7 +246,7 @@ pub fn register_trait_equip_sigs(
                     .iter()
                     .find(|m| m.name == *method_name)
                 {
-                    // Use base_param_types for fn_sigs so auto-borrow
+                    // Use base_param_types for fn_sigs so pass-by-pointer
                     // triggers correctly at call sites (is_resource_type check).
                     ctx.fn_sigs.insert(
                         mangled,
@@ -664,8 +664,8 @@ fn lower_trait_method_body(
         let vtable_type = vtable_method.param_types[vt_idx];
         let base_type = vtable_method.base_param_types[vt_idx];
         ctx.register_local(&p.node.name.node, LocalId(param_idx), vtable_type);
-        // If this param was auto-borrowed (base is Move, vtable type is MutPtr),
-        // mark in mut_capture_locals so nested calls don't double-borrow.
+        // If this param is passed by pointer (base is resource type, vtable type is MutPtr),
+        // mark in mut_capture_locals so nested calls don't double-wrap.
         if vtable_type != base_type {
             ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }

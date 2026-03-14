@@ -1118,7 +1118,7 @@ pub(super) fn lower_method_call(
                                 let recv_self = if let Operand::Copy(ref p) | Operand::Move(ref p) = recv {
                                     let local_type = builder.locals[p.local.0 as usize].type_id;
                                     if matches!(ctx.type_registry.get(local_type), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))) {
-                                        // Already a pointer (auto-borrowed param) — forward directly
+                                        // Already a pointer (pass-by-pointer param) — forward directly
                                         FunctionBuilder::copy(p.local)
                                     } else {
                                         let ptr_type = ctx.register_ptr_type(
@@ -1271,10 +1271,10 @@ pub(super) fn lower_method_call(
                 .unwrap_or(mangled.clone())
         };
 
-        // Auto-borrow non-self method args via lower_call_arg.
-        // Only pass callee param types for GIR-lowered equip methods (which auto-borrow
-        // Move-type Borrow params). C runtime methods take values by value, so passing
-        // None prevents auto-borrow for those.
+        // Pass-by-pointer non-self method args via lower_call_arg.
+        // Only pass callee param types for GIR-lowered equip methods (which pass
+        // resource-type params by pointer). C runtime methods take values by value, so
+        // passing None prevents pass-by-pointer for those.
         let is_gir_method = ctx.gir_equip_methods.contains(&effective_name);
         let method_param_types: Vec<TypeId> = if is_gir_method {
             ctx.fn_sigs.get(effective_name.as_str())

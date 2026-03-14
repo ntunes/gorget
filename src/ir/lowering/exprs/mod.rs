@@ -1712,9 +1712,9 @@ pub fn resolve_none_tag(ctx: &LoweringContext, type_id: TypeId) -> i32 {
 /// Lower a call argument, respecting ownership (MutableBorrow creates a BorrowMut).
 ///
 /// `callee_param_type` is the callee's declared parameter type from fn_sigs.
-/// When the callee has a Borrow-ownership Move-type param, it auto-borrows to MutPtr,
-/// so the caller must also auto-borrow. We use the callee's param type (not the caller's
-/// local type) to decide, avoiding mismatches like passing String to a function taking str.
+/// When the callee has a resource-type param, it's passed by pointer (const Ptr for bare,
+/// MutPtr for &). We use the callee's param type (not the caller's local type) to decide,
+/// avoiding mismatches like passing String to a function taking str.
 fn lower_match_expr(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,

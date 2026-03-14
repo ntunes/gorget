@@ -188,7 +188,7 @@ pub struct LoweringContext<'a> {
     /// Used by infer_type_name_from_operand_full to dispatch methods on globals.
     pub global_type_names: FxHashMap<String, String>,
     /// Set of equip method names that are GIR-lowered (not extern/C-runtime).
-    /// Used by lower_method_call to decide whether to auto-borrow Move-type args.
+    /// Used by lower_method_call to decide whether to pass resource-type args by pointer.
     pub gir_equip_methods: rustc_hash::FxHashSet<String>,
     /// Active `with shared_var:` auto-refresh bindings.
     /// Maps the with-binding local → the shared facade local it mirrors.
@@ -474,9 +474,9 @@ impl<'a> LoweringContext<'a> {
             || (matches!(ownership, Ownership::Move) && self.type_registry.is_resource_type(base_type))
     }
 
-    /// Whether this param ownership + type combination results in any pointer passing.
-    /// Used for backwards-compatible checks that previously used is_auto_borrowed.
-    pub fn is_auto_borrowed(&self, base_type: TypeId, ownership: Ownership) -> bool {
+    /// Whether this param ownership + type combination results in pass-by-pointer.
+    /// Resource types and &-annotated params are passed by pointer.
+    pub fn is_passed_by_ptr(&self, base_type: TypeId, ownership: Ownership) -> bool {
         self.is_ref_param(base_type, ownership) || self.is_mut_ref_param(base_type, ownership)
     }
 
