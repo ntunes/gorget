@@ -1032,6 +1032,81 @@ fn bare_param_immutable() {
 }
 
 #[test]
+fn struct_vector_bare_param() {
+    run_gg(
+        "struct_vector_bare_param.gg",
+        "\
+id=42
+len=4
+v[0]=100
+v[1]=200
+v[2]=300
+v[3]=400
+trailer=99
+sum=1000
+inner_id=42
+inner_v[2]=300",
+    );
+}
+
+#[test]
+fn struct_vector_bare_param2() {
+    run_gg(
+        "struct_vector_bare_param2.gg",
+        "\
+Built: vbo=42 ebo=84 white=999
+  face_draws: 5
+  lightmaps: 3
+  diffuse: 5
+  shaders: 2
+--- Pass 1 ---
+  bind diffuse[0]=100
+  bind lightmap[0]=1000
+  bind diffuse[1]=200
+  bind lightmap[1]=2000
+  bind diffuse[2]=300
+  bind lightmap[2]=3000
+  bind diffuse[3]=400
+  bind diffuse[4]=500
+--- Pass 2 (verify data stable) ---
+  bind diffuse[0]=100
+  bind lightmap[0]=1000
+  bind diffuse[1]=200
+  bind lightmap[1]=2000
+  bind diffuse[2]=300
+  bind lightmap[2]=3000
+  bind diffuse[3]=400
+  bind diffuse[4]=500
+--- Multi 3x ---
+  bind diffuse[0]=100
+  bind lightmap[0]=1000
+  bind diffuse[1]=200
+  bind lightmap[1]=2000
+  bind diffuse[2]=300
+  bind lightmap[2]=3000
+  bind diffuse[3]=400
+  bind diffuse[4]=500
+  bind diffuse[0]=100
+  bind lightmap[0]=1000
+  bind diffuse[1]=200
+  bind lightmap[1]=2000
+  bind diffuse[2]=300
+  bind lightmap[2]=3000
+  bind diffuse[3]=400
+  bind diffuse[4]=500
+  bind diffuse[0]=100
+  bind lightmap[0]=1000
+  bind diffuse[1]=200
+  bind lightmap[1]=2000
+  bind diffuse[2]=300
+  bind lightmap[2]=3000
+  bind diffuse[3]=400
+  bind diffuse[4]=500
+done",
+    );
+}
+
+#[test]
 fn ownership_showcase() {
     run_gg(
         "ownership_showcase.gg",

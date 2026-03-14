@@ -533,6 +533,7 @@ fn try_build_ir(
         #[cfg(target_os = "macos")]
         if needs_metal {
             cc_cmd.arg("-x").arg("objective-c");
+            cc_cmd.arg("-fno-objc-arc"); // Metal handles are cast to int64_t — ARC would release them
             cc_cmd.arg("-Wno-deprecated-declarations");
             cc_cmd.arg("-Wno-objc-method-access");
             cc_cmd.arg("-Wno-arc-bridge-casts-disallowed-in-nonarc");

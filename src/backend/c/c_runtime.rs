@@ -11356,6 +11356,10 @@ static void gorget_metal_encoder_set_fragment_texture(int64_t enc_h, int64_t tex
     @autoreleasepool {
         id<MTLRenderCommandEncoder> enc = (__bridge id<MTLRenderCommandEncoder>)(void*)(intptr_t)enc_h;
         id<MTLTexture> tex = (__bridge id<MTLTexture>)(void*)(intptr_t)tex_h;
+        if (!tex) {
+            fprintf(stderr, "gorget: NULL Metal texture at index %lld\n", (long long)index);
+            return;
+        }
         [enc setFragmentTexture:tex atIndex:(NSUInteger)index];
     }
 }
