@@ -5972,8 +5972,8 @@ static inline GorgetSDLEvent gorget_sdl_poll_event(void) {
                 result.key_code = (int64_t)e.key.keysym.sym;
                 break;
             case SDL_MOUSEMOTION:
-                result.mouse_x = (int64_t)e.motion.x;
-                result.mouse_y = (int64_t)e.motion.y;
+                result.mouse_x = (int64_t)e.motion.xrel;
+                result.mouse_y = (int64_t)e.motion.yrel;
                 break;
             case SDL_MOUSEBUTTONDOWN:
             case SDL_MOUSEBUTTONUP:
