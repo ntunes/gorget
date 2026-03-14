@@ -392,6 +392,12 @@ struct BorrowChecker<'a> {
     invalidated_origins: FxHashSet<DefId>,
     /// Current function's return type (if it's a reference type).
     current_return_type_id: Option<TypeId>,
+    /// Depth of Item::Module nesting. When > 0, we're checking an imported module's
+    /// code. DanglingReturn checks are skipped because (a) imported code is validated
+    /// by its own project's borrow checker, and (b) cross-module origin tracking has
+    /// limitations — built-in methods (unwrap, get, etc.) aren't in method_resolutions,
+    /// so origin tracking falls back to conservative Local origins, causing false positives.
+    imported_module_depth: usize,
     /// Current function's param (DefId, param_index) pairs.
     current_param_def_ids: Vec<(DefId, usize)>,
 
@@ -507,6 +513,7 @@ impl<'a> BorrowChecker<'a> {
             var_origins: FxHashMap::default(),
             invalidated_origins: FxHashSet::default(),
             current_return_type_id: None,
+            imported_module_depth: 0,
             current_param_def_ids: Vec::new(),
             active_outlives: Vec::new(),
             reassignment_invalidated: FxHashMap::default(),
@@ -2658,6 +2665,11 @@ impl<'a> BorrowChecker<'a> {
 
                     // Lifetime check: if the function returns a reference or callable type,
                     // verify the return expression doesn't reference local data.
+                    // Skip for imported module functions: their borrow safety is validated by
+                    // their own project's checker, and cross-module origin tracking has
+                    // limitations (built-in methods like unwrap() aren't in method_resolutions,
+                    // causing false Local origins for Result/Option variables).
+                    if self.imported_module_depth == 0 {
                     if let Some(ret_type_id) = self.current_return_type_id {
                         if types::is_reference_type(ret_type_id, self.types, &self.ref_type_structs)
                             || types::is_callable_type(ret_type_id, self.types)
@@ -2692,6 +2704,7 @@ impl<'a> BorrowChecker<'a> {
                             }
                         }
                     }
+                    } // imported_module_depth == 0
                 }
                 self.diverged = true;
             }
@@ -3773,7 +3786,9 @@ impl<'a> BorrowChecker<'a> {
                 self.check_block(block);
             }
             FunctionBody::Expression(expr) => {
-                // Expression-body functions: also validate dangling returns
+                // Expression-body functions: also validate dangling returns.
+                // Skip for imported module functions (same rationale as Stmt::Return above).
+                if self.imported_module_depth == 0 {
                 if let Some(ret_type_id) = self.current_return_type_id {
                     if types::is_reference_type(ret_type_id, self.types, &self.ref_type_structs)
                         || types::is_callable_type(ret_type_id, self.types)
@@ -3808,6 +3823,7 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
                 }
+                } // imported_module_depth == 0
                 self.check_expr(expr);
             }
             FunctionBody::Declaration | FunctionBody::Extern(_) => {}
@@ -4623,7 +4639,9 @@ fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
     for item in items {
         match &item.node {
             Item::Module { items: inner, .. } => {
+                checker.imported_module_depth += 1;
                 check_items_recursive(checker, inner);
+                checker.imported_module_depth -= 1;
             }
             Item::Function(f) => {
                 checker.check_function(f);
