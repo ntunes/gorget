@@ -449,6 +449,9 @@ struct BorrowChecker<'a> {
     with_guarded_conditions: Vec<(String, Span, WithGuardKind)>,
     /// Depth of `with` blocks (for detecting spawn inside `with`).
     with_depth: usize,
+    /// Depth of imported module nesting. When > 0, suppress error reporting
+    /// (we still analyze for metadata, but don't report errors in library code).
+    imported_module_depth: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -511,10 +514,16 @@ impl<'a> BorrowChecker<'a> {
             with_shared_tracked: FxHashSet::default(),
             with_guarded_conditions: Vec::new(),
             with_depth: 0,
+            imported_module_depth: 0,
         }
     }
 
     fn error(&mut self, kind: SemanticErrorKind, span: Span) {
+        // Suppress errors in imported module code — we analyze for metadata
+        // but don't report errors for library code.
+        if self.imported_module_depth > 0 {
+            return;
+        }
         self.errors.push(SemanticError { kind, span });
     }
 
@@ -838,6 +847,13 @@ impl<'a> BorrowChecker<'a> {
                     {
                         return BorrowOrigin::Static;
                     }
+                }
+                // Function body was analyzed but no borrows found and not explicitly static.
+                // The return value is fresh data (e.g., newly constructed ref-type value).
+                // Only applies to functions with bodies — bodyless functions with ambiguous
+                // elision (multiple ref params, no `live`) should remain Unknown.
+                if info.has_body {
+                    return BorrowOrigin::Static;
                 }
             }
 
@@ -3143,7 +3159,9 @@ impl<'a> BorrowChecker<'a> {
                     .or_else(|| self.find_def_by_name(name));
                 if let Some(def_id) = def_id {
                     self.mark_live(def_id);
-                    // Only assign origin to reference-type or callable-type bindings
+                    // Only assign scrutinee origin to reference-type or callable-type bindings.
+                    // Non-reference bindings own their data (moved out of the scrutinee),
+                    // so they have Local origin. Reference bindings borrow from the scrutinee.
                     if let Some(type_id) = self.scopes.get_def(def_id).type_id {
                         if types::is_reference_type(type_id, self.types, &self.ref_type_structs)
                             || types::is_callable_type(type_id, self.types)
@@ -4536,8 +4554,53 @@ pub fn check_module(
         method_resolutions, ref_type_structs, struct_field_ref_flags,
     );
 
-    for item in &module.items {
+    check_items_recursive(&mut checker, &module.items);
+
+    // Final CFA pass: assign default strategies for shared vars not yet decided.
+    // - If a shared var is spawned AND locally written → upgrade to ArcMutex
+    //   (main thread writes + spawned thread reads = data race without mutex)
+    // - If a shared var is spawned but never locally written → keep cfa_at_spawn's decision
+    // - If a shared var is never spawned → ArcMutex if written, ArcOnly if read-only
+    let mut warnings = Vec::new();
+    for (&def_id, (_, name, span)) in &checker.shared_var_defs {
+        let entry = checker.shared_out.entry(def_id).or_insert_with(|| {
+            // Not spawned at all — decide based on local writes
+            if checker.shared_written.contains(&def_id) {
+                super::SharedStrategy::ArcMutex
+            } else {
+                super::SharedStrategy::ArcOnly
+            }
+        });
+        // If spawned as ArcOnly but locally written, upgrade to ArcMutex
+        if *entry == super::SharedStrategy::ArcOnly && checker.shared_written.contains(&def_id) {
+            *entry = super::SharedStrategy::ArcMutex;
+        }
+        // Warn if a shared var never crosses a concurrency boundary
+        if !checker.shared_spawned.contains(&def_id) {
+            warnings.push(super::errors::SemanticWarning {
+                kind: super::errors::SemanticWarningKind::UnnecessaryShared {
+                    name: name.clone(),
+                },
+                span: *span,
+            });
+        }
+    }
+
+    warnings.extend(checker.stale_warnings);
+    errors.extend(checker.errors);
+    (checker.shared_out, warnings)
+}
+
+/// Recursively check items, tracking imported module depth to suppress errors
+/// in library code while still analyzing for metadata.
+fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
+    for item in items {
         match &item.node {
+            Item::Module { items: inner, .. } => {
+                checker.imported_module_depth += 1;
+                check_items_recursive(checker, inner);
+                checker.imported_module_depth -= 1;
+            }
             Item::Function(f) => {
                 checker.check_function(f);
             }
@@ -4601,40 +4664,6 @@ pub fn check_module(
             _ => {}
         }
     }
-
-    // Final CFA pass: assign default strategies for shared vars not yet decided.
-    // - If a shared var is spawned AND locally written → upgrade to ArcMutex
-    //   (main thread writes + spawned thread reads = data race without mutex)
-    // - If a shared var is spawned but never locally written → keep cfa_at_spawn's decision
-    // - If a shared var is never spawned → ArcMutex if written, ArcOnly if read-only
-    let mut warnings = Vec::new();
-    for (&def_id, (_, name, span)) in &checker.shared_var_defs {
-        let entry = checker.shared_out.entry(def_id).or_insert_with(|| {
-            // Not spawned at all — decide based on local writes
-            if checker.shared_written.contains(&def_id) {
-                super::SharedStrategy::ArcMutex
-            } else {
-                super::SharedStrategy::ArcOnly
-            }
-        });
-        // If spawned as ArcOnly but locally written, upgrade to ArcMutex
-        if *entry == super::SharedStrategy::ArcOnly && checker.shared_written.contains(&def_id) {
-            *entry = super::SharedStrategy::ArcMutex;
-        }
-        // Warn if a shared var never crosses a concurrency boundary
-        if !checker.shared_spawned.contains(&def_id) {
-            warnings.push(super::errors::SemanticWarning {
-                kind: super::errors::SemanticWarningKind::UnnecessaryShared {
-                    name: name.clone(),
-                },
-                span: *span,
-            });
-        }
-    }
-
-    warnings.extend(checker.stale_warnings);
-    errors.extend(checker.errors);
-    (checker.shared_out, warnings)
 }
 
 #[cfg(test)]
