@@ -230,7 +230,7 @@ err.unwrap_or_else((str e): 0)  # 0 — lazy: closure only called on Error
 
 ok.is_ok()              # true
 err.is_error()          # true
-err.unwrap_err()        # "fail" — extract error, panics if Ok
+err.unwrap_error()      # "fail" — extract error, panics if Ok
 ```
 
 ### Transforming Results
@@ -270,7 +270,7 @@ Result[int, str] from_err = err.or(alt)   # Ok(77) — falls back to alt
 | `expect(msg)` | Extract value, panic with message if `Error` | — |
 | `unwrap_or(default)` | Extract value or return default | Eager |
 | `unwrap_or_else(f)` | Extract value or compute default from error | Lazy |
-| `unwrap_err()` | Extract error, panic if `Ok` | — |
+| `unwrap_error()` | Extract error, panic if `Ok` | — |
 | `is_ok()` | True if `Ok` | — |
 | `is_error()` | True if `Error` | — |
 | `map(f)` | Transform success value | Lazy |
@@ -346,6 +346,6 @@ If "it's not there" is the only information needed, use `Option`.
 | `??` | Default operator (lazy) | Provide fallback value |
 | `Result[T, E]` | Success or typed error | `unwrap`, `map`, `map_err`, `and_then` |
 | `Ok(value)` | Wraps a success | Pattern matching, `is` checks |
-| `Error(reason)` | Wraps an error | `unwrap_err`, `map_err` |
+| `Error(reason)` | Wraps an error | `unwrap_error`, `map_err` |
 | `unwrap_or(v)` | Default on failure (eager) | Both `Option` and `Result` |
 | `unwrap_or_else(f)` | Default on failure (lazy) | Both `Option` and `Result` |

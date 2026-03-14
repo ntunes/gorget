@@ -70,14 +70,14 @@ async void main():
     if r1.is_ok():
         check("method", r1.unwrap().body_text == "GET")
     else:
-        print("FAIL: " + r1.unwrap_err())
+        print("FAIL: " + r1.unwrap_error())
 
     # 2. Query string in path → split correctly
     Result[HttpResponse, str] r2 = get(base + "/query?key=value&a=1")
     if r2.is_ok():
         check("query", r2.unwrap().body_text == "key=value&a=1")
     else:
-        print("FAIL: " + r2.unwrap_err())
+        print("FAIL: " + r2.unwrap_error())
 
     # 3. POST with Content-Length body parsed
     Dict[str, str] post_hdrs = Dict[str, str]()
@@ -85,7 +85,7 @@ async void main():
     if r3.is_ok():
         check("body", r3.unwrap().body_text == "hello")
     else:
-        print("FAIL: " + r3.unwrap_err())
+        print("FAIL: " + r3.unwrap_error())
 
     # 4. Custom header accessible in handler
     Dict[str, str] custom_hdrs = Dict[str, str]()
@@ -94,7 +94,7 @@ async void main():
     if r4.is_ok():
         check("header", r4.unwrap().body_text == "myvalue")
     else:
-        print("FAIL: " + r4.unwrap_err())
+        print("FAIL: " + r4.unwrap_error())
 
     # 5. Header names lowercased by parser (send X-Case, server checks x-case)
     Dict[str, str] upper_hdrs = Dict[str, str]()
@@ -103,6 +103,6 @@ async void main():
     if r5.is_ok():
         check("lowercase", r5.unwrap().body_text == "lower")
     else:
-        print("FAIL: " + r5.unwrap_err())
+        print("FAIL: " + r5.unwrap_error())
 
     srv.await()

@@ -52,12 +52,12 @@ void main():
     print(f"{ok.unwrap_or_else((str e): 0)}")
     print(f"{err.unwrap_or_else((str e): 99)}")
 
-    # unwrap_err
-    print(err.unwrap_err())
+    # unwrap_error
+    print(err.unwrap_error())
 
     # map_err
     Result[int, str] mapped_err = err.map_err((str e): "mapped")
-    print(mapped_err.unwrap_err())
+    print(mapped_err.unwrap_error())
 
     # or
     Result[int, str] alt_ok = Ok(77)

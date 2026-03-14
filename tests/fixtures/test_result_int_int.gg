@@ -1,5 +1,5 @@
 # Test Result[int, int] — both type params the same.
-# Exercises unwrap_err suffix-stripping when Ok and Err types match.
+# Exercises unwrap_error suffix-stripping when Ok and Err types match.
 
 void main():
     Result[int, int] ok_val = Ok(42)
@@ -11,9 +11,9 @@ void main():
     print(err_val.is_ok())
     print(err_val.is_error())
 
-    # --- unwrap / unwrap_err ---
+    # --- unwrap / unwrap_error ---
     print(ok_val.unwrap())
-    print(err_val.unwrap_err())
+    print(err_val.unwrap_error())
 
     # --- unwrap_or ---
     print(ok_val.unwrap_or(0))
@@ -24,21 +24,21 @@ void main():
     print(mapped.unwrap())
     Result[int, int] mapped_err = err_val.map((int x): x * 2)
     print(mapped_err.is_error())
-    print(mapped_err.unwrap_err())
+    print(mapped_err.unwrap_error())
 
     # --- map_err ---
     Result[int, int] me1 = ok_val.map_err((int e): e + 1)
     print(me1.unwrap())
     Result[int, int] me2 = err_val.map_err((int e): e + 1)
-    print(me2.unwrap_err())
+    print(me2.unwrap_error())
 
     # --- and_then ---
     Result[int, int] at1 = ok_val.and_then((int x): Ok(x + 8))
     print(at1.unwrap())
     Result[int, int] at2 = ok_val.and_then((int x): Error(x))
-    print(at2.unwrap_err())
+    print(at2.unwrap_error())
     Result[int, int] at3 = err_val.and_then((int x): Ok(0))
-    print(at3.unwrap_err())
+    print(at3.unwrap_error())
 
     # --- or ---
     Result[int, int] or1 = ok_val.or(Ok(0))

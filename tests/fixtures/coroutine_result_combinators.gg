@@ -14,7 +14,7 @@ async int test_result_combinators():
     Result[int, str] or2 = err_val.or(Ok(99))
     print(or2.unwrap())
     Result[int, str] or3 = err_val.or(Error("worse"))
-    print(or3.unwrap_err())
+    print(or3.unwrap_error())
 
     # --- or_else: Error→closure ---
     Result[int, str] ore1 = ok_val.or_else((str e): Ok(0))
@@ -22,13 +22,13 @@ async int test_result_combinators():
     Result[int, str] ore2 = err_val.or_else((str e): Ok(77))
     print(ore2.unwrap())
     Result[int, str] ore3 = err_val.or_else((str e): Error("replaced"))
-    print(ore3.unwrap_err())
+    print(ore3.unwrap_error())
 
     # --- map_err: Error→transformed, Ok→passthrough ---
     Result[int, str] me1 = ok_val.map_err((str e): e.to_upper())
     print(me1.unwrap())
     Result[int, str] me2 = err_val.map_err((str e): e.to_upper())
-    print(me2.unwrap_err())
+    print(me2.unwrap_error())
 
     # --- unwrap_or_else ---
     int uoe1 = ok_val.unwrap_or_else((str e): -1)
@@ -40,9 +40,9 @@ async int test_result_combinators():
     Result[int, str] at1 = ok_val.and_then((int x): Ok(x * 5))
     print(at1.unwrap())
     Result[int, str] at2 = ok_val.and_then((int x): Error("fail"))
-    print(at2.unwrap_err())
+    print(at2.unwrap_error())
     Result[int, str] at3 = err_val.and_then((int x): Ok(x * 5))
-    print(at3.unwrap_err())
+    print(at3.unwrap_error())
 
     # --- chaining: map then unwrap_or ---
     int chain = ok_val.map((int x): x * 3).unwrap_or(0)

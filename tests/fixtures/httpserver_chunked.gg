@@ -49,7 +49,7 @@ async void main():
     # Open a raw socket and send a chunked POST manually
     Result[Socket, str] cr = socket_connect("127.0.0.1", port)
     if cr.is_error():
-        print("FAIL: connect: " + cr.unwrap_err())
+        print("FAIL: connect: " + cr.unwrap_error())
         print("FAIL: body")
         srv.await()
         return

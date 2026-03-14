@@ -1742,8 +1742,8 @@ fn infer_collection_method_return_type(
                 .or_else(|| ctx.type_mapper.lookup_named(ok_name))
                 .unwrap_or(I64_TYPE)
         }
-        "unwrap_err" if type_name.starts_with("Result__") => {
-            // unwrap_err returns the Err type (E from Result[T, E])
+        "unwrap_error" if type_name.starts_with("Result__") => {
+            // unwrap_error returns the Err type (E from Result[T, E])
             // Parse from the right: try stripping known Error type suffixes
             let rest = &type_name["Result__".len()..];
             let err_name = ["__Str", "__int64_t", "__bool", "__double"].iter()

@@ -4675,10 +4675,10 @@ impl<'m> Interpreter<'m> {
                         _ => self.call_closure_value(closure, vec![], depth + 1)?,
                     }));
                 }
-                "unwrap_err" => {
+                "unwrap_error" => {
                     return Ok(Some(match opt_val {
                         Value::Enum { tag: 1, fields, .. } => fields.into_iter().next().unwrap_or(Value::Unit),
-                        _ => return Err(SimError::Panic("unwrap_err called on Ok".to_string())),
+                        _ => return Err(SimError::Panic("unwrap_error called on Ok".to_string())),
                     }));
                 }
                 _ => {}

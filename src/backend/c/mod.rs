@@ -9248,7 +9248,7 @@ fn emit_poll_inline_method(
             if let Some(dst_id) = dst {
                 let _ = writeln!(out,
                     "        f->_{id} = ({{ {type_name} __r = {self_str}; \
-                    if (__r.tag == 0) {{ fprintf(stderr, \"unwrap_err on Ok\\n\"); exit(1); }} \
+                    if (__r.tag == 0) {{ fprintf(stderr, \"unwrap_error on Ok\\n\"); exit(1); }} \
                     __r.data.Error._0; }});",
                     id = dst_id.0);
             }
@@ -11086,7 +11086,7 @@ fn try_inline_method(func_name: &str) -> Option<InlineMethod> {
             "is_ok" => Some(InlineMethod::ResultIsOk),
             "is_error" => Some(InlineMethod::ResultIsErr),
             "unwrap_or" => Some(InlineMethod::ResultUnwrapOr),
-            "unwrap_err" => Some(InlineMethod::ResultUnwrapErr),
+            "unwrap_error" => Some(InlineMethod::ResultUnwrapErr),
             "map" => Some(InlineMethod::ResultMap),
             "and_then" => Some(InlineMethod::ResultAndThen),
             "map_err" => Some(InlineMethod::ResultMapErr),
@@ -11729,11 +11729,11 @@ fn emit_inline_method(
             }
         }
         InlineMethod::ResultUnwrapErr => {
-            // unwrap_err: assert is_err, return error value
+            // unwrap_error: assert is_err, return error value
             if let Some(dst_id) = dst {
                 let _result_type = extract_type_from_method_call(func_name);
                 let _ = writeln!(out,
-                    "        if ({self_str}.tag == 0) {{ fprintf(stderr, \"gorget: panic: unwrap_err on Ok\\n\"); exit(1); }}");
+                    "        if ({self_str}.tag == 0) {{ fprintf(stderr, \"gorget: panic: unwrap_error on Ok\\n\"); exit(1); }}");
                 let _ = writeln!(out,
                     "        _{id} = {self_str}.data.Error._0;",
                     id = dst_id.0);

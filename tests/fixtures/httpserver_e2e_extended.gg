@@ -71,7 +71,7 @@ async void main():
         check("put status", resp1.status_code == 200)
         check("put body", resp1.body_text == "put-body")
     else:
-        print("FAIL: " + r1.unwrap_err())
+        print("FAIL: " + r1.unwrap_error())
         print("FAIL: put body")
 
     # 2. DELETE request → 200
@@ -80,7 +80,7 @@ async void main():
         HttpResponse resp2 = r2.unwrap()
         check("delete status", resp2.status_code == 200)
     else:
-        print("FAIL: " + r2.unwrap_err())
+        print("FAIL: " + r2.unwrap_error())
 
     # 3. Empty body POST → 200 + empty-ok
     Result[HttpResponse, str] r3 = post(base + "/empty", "", empty_hdrs)
@@ -88,7 +88,7 @@ async void main():
         HttpResponse resp3 = r3.unwrap()
         check("empty post", resp3.body_text == "empty-ok")
     else:
-        print("FAIL: " + r3.unwrap_err())
+        print("FAIL: " + r3.unwrap_error())
 
     # 4. Multiple custom response headers propagated to client
     Result[HttpResponse, str] r4 = get(base + "/multi-header", empty_hdrs)
@@ -97,7 +97,7 @@ async void main():
         check("multi-header-a", resp4.headers["x-header-a"] == "alpha")
         check("multi-header-b", resp4.headers["x-header-b"] == "beta")
     else:
-        print("FAIL: " + r4.unwrap_err())
+        print("FAIL: " + r4.unwrap_error())
         print("FAIL: multi-header-b")
 
     srv.await()

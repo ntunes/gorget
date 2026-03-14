@@ -93,6 +93,6 @@ void main():
 
     Result[Vector[int], str] err_vec = Error("no data")
     print(f"{err_vec.is_error()}")
-    # NOTE: unwrap_err() skipped — codegen bug assigns Str to int64_t
+    # NOTE: unwrap_error() skipped — codegen bug assigns Str to int64_t
 
     print("done")

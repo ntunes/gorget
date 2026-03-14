@@ -81,7 +81,7 @@ async void main():
         check("status 200", resp1.status_code == 200)
         check("body world", resp1.body_text == "world")
     else:
-        print("FAIL: " + r1.unwrap_err())
+        print("FAIL: " + r1.unwrap_error())
         print("FAIL: body")
 
     # 2. GET /json → correct Content-Type in response headers
@@ -91,7 +91,7 @@ async void main():
         check("json status", resp2.status_code == 200)
         check("json content-type", resp2.headers["content-type"] == "application/json")
     else:
-        print("FAIL: " + r2.unwrap_err())
+        print("FAIL: " + r2.unwrap_error())
         print("FAIL: content-type")
 
     # 3. POST /echo with body → body echoed
@@ -102,7 +102,7 @@ async void main():
         check("echo status", resp3.status_code == 200)
         check("echo body", resp3.body_text == "hello body")
     else:
-        print("FAIL: " + r3.unwrap_err())
+        print("FAIL: " + r3.unwrap_error())
         print("FAIL: echo body")
 
     # 4. Unknown path → 404
@@ -111,7 +111,7 @@ async void main():
         HttpResponse resp4 = r4.unwrap()
         check("404", resp4.status_code == 404)
     else:
-        print("FAIL: " + r4.unwrap_err())
+        print("FAIL: " + r4.unwrap_error())
 
     # 5. Custom response header propagated to client
     Result[HttpResponse, str] r5 = get(base + "/powered")
@@ -120,7 +120,7 @@ async void main():
         check("custom header status", resp5.status_code == 200)
         check("custom header value", resp5.headers["x-powered-by"] == "gorget")
     else:
-        print("FAIL: " + r5.unwrap_err())
+        print("FAIL: " + r5.unwrap_error())
         print("FAIL: custom header")
 
     # 6. Query string parsed by handler (path + ?q=gorget)
@@ -130,7 +130,7 @@ async void main():
         check("query status", resp6.status_code == 200)
         check("query body", resp6.body_text == "q=gorget")
     else:
-        print("FAIL: " + r6.unwrap_err())
+        print("FAIL: " + r6.unwrap_error())
         print("FAIL: query body")
 
     srv.await()

@@ -31,7 +31,7 @@ void main():
     # 5. map_err on Error transforms the error
     Result[int, str] e2 = Error("e1")
     Result[int, str] wrapped = e2.map_err((str s): "wrapped: " + s)
-    print(wrapped.unwrap_err())
+    print(wrapped.unwrap_error())
 
     # 5b. map_err on Ok passes through
     Result[int, str] ok_me = Ok(42).map_err((str s): "nope")
@@ -71,7 +71,7 @@ void main():
 
     # 10. map_err chaining
     Result[int, str] e10 = Error("raw")
-    str r10 = e10.map_err((str s): "a:" + s).map_err((str s): "b:" + s).unwrap_err()
+    str r10 = e10.map_err((str s): "a:" + s).map_err((str s): "b:" + s).unwrap_error()
     print(r10)
 
     # 11. unwrap_or_else with chain

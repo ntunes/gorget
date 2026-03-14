@@ -3219,7 +3219,7 @@ Same API as `Set` but does not preserve insertion order. Use when order is irrel
 | `map(f)` | `(T) → U → Result[U, E]` | Apply function to success value |
 | `and_then(f)` | `(T) → Result[U, E] → Result[U, E]` | Flat-map on success |
 | `or_else(f)` | `(E) → Result[T, F] → Result[T, F]` | Flat-map on error |
-| `unwrap_err()` | `→ E` | Extract error value (panics if `Ok`) |
+| `unwrap_error()` | `→ E` | Extract error value (panics if `Ok`) |
 | `map_err(f)` | `(E) → F → Result[T, F]` | Apply function to error value |
 | `or(other)` | `Result[T, E] → Result[T, E]` | Return `self` if `Ok`, otherwise `other` |
 

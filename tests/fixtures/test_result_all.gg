@@ -19,8 +19,8 @@ void main():
     print(f"{ok.unwrap_or(0)}")
     print(f"{err.unwrap_or(99)}")
 
-    # --- unwrap_err ---
-    print(err.unwrap_err())
+    # --- unwrap_error ---
+    print(err.unwrap_error())
 
     # --- unwrap_or_else ---
     print(f"{ok.unwrap_or_else((str e): 0)}")
@@ -34,7 +34,7 @@ void main():
 
     # --- map_err ---
     Result[int, str] err_mapped = err.map_err((str e): "mapped")
-    print(err_mapped.unwrap_err())
+    print(err_mapped.unwrap_error())
     Result[int, str] ok_map_err = ok.map_err((str e): "nope")
     print(f"{ok_map_err.unwrap()}")
 
@@ -56,12 +56,12 @@ void main():
     print(f"{or_else_err.unwrap()}")
     Result[int, str] or_else_err2 = err.or_else((str e): Error("still bad"))
     print(f"{or_else_err2.is_error()}")
-    print(or_else_err2.unwrap_err())
+    print(or_else_err2.unwrap_error())
 
     # --- and_then on Error passes through ---
     Result[int, str] and_err = err.and_then((int x): Ok(x + 1))
     print(f"{and_err.is_error()}")
-    print(and_err.unwrap_err())
+    print(and_err.unwrap_error())
 
     # --- or on Ok returns self ---
     Result[int, str] fallback = Error("nope")
@@ -69,7 +69,7 @@ void main():
 
     # --- map on Error passes through ---
     Result[int, str] map_pass = err.map((int x): x + 100)
-    print(map_pass.unwrap_err())
+    print(map_pass.unwrap_error())
 
     # --- map_err on Ok passes through ---
     Result[int, str] maperr_pass = ok.map_err((str e): "changed")

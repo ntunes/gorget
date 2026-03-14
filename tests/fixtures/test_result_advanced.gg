@@ -20,13 +20,13 @@ void main():
     # Error.or(Ok) returns the Ok fallback
     print(f"{err.or(fallback_ok).unwrap()}")
     # Error.or(Error) returns the second Error
-    print(err.or(fallback_err).unwrap_err())
+    print(err.or(fallback_err).unwrap_error())
     # Error.or(Error).or(Ok) chains correctly
     Result[int, str] err2 = Error("second")
     print(f"{err.or(err2).or(fallback_ok).unwrap()}")
     # Error.or(Error).or(Error) chains correctly
     Result[int, str] err3 = Error("third")
-    print(err.or(err2).or(err3).unwrap_err())
+    print(err.or(err2).or(err3).unwrap_error())
 
     # --- and_then chain: all Ok ---
     Result[int, str] chain1 = ok.and_then((int x): Ok(x + 1)).and_then((int x): Ok(x * 2))
@@ -34,12 +34,12 @@ void main():
 
     # --- and_then chain: original Error propagates through ---
     Result[int, str] chain2 = err.and_then((int x): Ok(x + 1)).and_then((int x): Ok(x * 2))
-    print(chain2.unwrap_err())
+    print(chain2.unwrap_error())
 
     # --- and_then: closure returns Error (bug #3 fixed: now propagates closure's error) ---
     Result[int, str] chain3 = ok.and_then((int x): Error("nope"))
     print(f"{chain3.is_error()}")
-    print(chain3.unwrap_err())
+    print(chain3.unwrap_error())
 
     # --- map -> and_then -> unwrap_or (same type, all int) ---
     int result1 = ok.map((int x): x * 2).and_then((int x): Ok(x + 1)).unwrap_or(0)
@@ -49,7 +49,7 @@ void main():
 
     # --- map_err ---
     Result[int, str] prefixed = err.map_err((str e): "wrapped")
-    print(prefixed.unwrap_err())
+    print(prefixed.unwrap_error())
     Result[int, str] ok_me = ok.map_err((str e): "wrapped")
     print(f"{ok_me.unwrap()}")
 
@@ -65,7 +65,7 @@ void main():
     Result[int, str] oe2 = err.or_else((str e): Ok(999))
     print(f"{oe2.unwrap()}")
     Result[int, str] oe3 = err.or_else((str e): Error("replaced"))
-    print(oe3.unwrap_err())
+    print(oe3.unwrap_error())
 
     # --- map with type conversion (int -> str) then match ---
     Result[str, str] as_str = ok.map((int x): "yes")

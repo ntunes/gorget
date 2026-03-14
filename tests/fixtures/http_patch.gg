@@ -50,7 +50,7 @@ async void main():
         check("status", resp.status_code == 200)
         check("body", resp.body_text == "patched:delta")
     else:
-        print("FAIL: " + r.unwrap_err())
+        print("FAIL: " + r.unwrap_error())
         print("FAIL: body")
 
     srv.await()

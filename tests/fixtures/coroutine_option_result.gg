@@ -77,8 +77,8 @@ async int do_result_work():
     Result[int, str] mapped_err = err_val.map((int x): x * 5)
     print(mapped_err.is_error())
 
-    # --- unwrap_err ---
-    print(err_val.unwrap_err())
+    # --- unwrap_error ---
+    print(err_val.unwrap_error())
 
     # --- map chain ---
     int chain_result = ok_val.map((int x): x * 3).unwrap_or(0)

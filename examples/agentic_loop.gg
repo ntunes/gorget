@@ -100,7 +100,7 @@ void main():
             Result[HttpResponse, str] resp = post(api_url, body_json, api_headers)
 
             if resp.is_error():
-                str err_msg = "Connection error: " + resp.unwrap_err()
+                str err_msg = "Connection error: " + resp.unwrap_error()
                 print(err_msg)
                 roles.pop()
                 contents.pop()
@@ -117,7 +117,7 @@ void main():
 
             Result[Json, str] parsed = json_parse(http_resp.body_text)
             if parsed.is_error():
-                str err_msg = "JSON error: " + parsed.unwrap_err()
+                str err_msg = "JSON error: " + parsed.unwrap_error()
                 print(err_msg)
                 roles.pop()
                 contents.pop()

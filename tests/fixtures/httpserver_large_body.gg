@@ -65,7 +65,7 @@ async void main():
         check("status", resp.status_code == 200)
         check("body_received", resp.body_text == "full")
     else:
-        print("FAIL: " + r.unwrap_err())
+        print("FAIL: " + r.unwrap_error())
         print("FAIL: body_received")
 
     srv.await()
