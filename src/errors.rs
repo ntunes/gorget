@@ -207,17 +207,18 @@ impl ErrorReporter {
         }
 
         if let SemanticWarningKind::WithCheckThenAct {
-            shared_name, condition_span, yield_span,
+            shared_names, condition_span, yield_span,
         } = &warn.kind {
+            let names = shared_names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
             labels.push(
                 Label::secondary(self.file_id, condition_span.start..condition_span.end)
-                    .with_message(format!("condition reads shared `{shared_name}` here")),
+                    .with_message(format!("condition reads shared {names} here")),
             );
             labels.push(
                 Label::secondary(self.file_id, yield_span.start..yield_span.end)
                     .with_message("yield point releases the lock — another task may invalidate the condition"),
             );
-            notes.push(format!("move the yield before the branch, or re-check `{shared_name}` after the yield"));
+            notes.push(format!("move the yield before the branch, or re-check {names} after the yield"));
         }
 
         if let SemanticWarningKind::StaleSharedWriteBack {

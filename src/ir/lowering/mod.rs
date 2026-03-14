@@ -639,6 +639,12 @@ pub fn lower_module(
                 .collect();
             ctx.fn_param_ownerships.insert(name.clone(), param_ownerships.clone());
 
+            // Compute unified ParamABI from base types + ownerships
+            let param_abis: Vec<context::ParamABI> = param_types.iter().zip(param_ownerships.iter())
+                .map(|(&base_type, ownership)| ctx.compute_param_abi(base_type, ownership.clone()))
+                .collect();
+            ctx.fn_param_abis.insert(name.clone(), param_abis.clone());
+
             // Record default parameter values
             let defaults: Vec<(usize, ast::Expr)> = func.params.iter()
                 .enumerate()
@@ -666,6 +672,7 @@ pub fn lower_module(
                 ctx.fn_sigs.insert(mangled.clone(), (param_types, ret_type));
                 ctx.fn_param_names.insert(mangled.clone(), param_names);
                 ctx.fn_param_ownerships.insert(mangled.clone(), param_ownerships);
+                ctx.fn_param_abis.insert(mangled.clone(), param_abis);
                 if !defaults.is_empty() {
                     ctx.fn_defaults.insert(mangled.clone(), defaults);
                 }

@@ -205,6 +205,54 @@ fn is_blocking_call_name(expr: &Expr) -> bool {
     }
 }
 
+/// Recursively checks whether an expression tree contains a yield point
+/// (an `await` call or a blocking call like `sleep`, `read_file`, etc.).
+/// Does NOT recurse into closures — they execute in a separate scheduling context.
+fn expr_contains_yield_point(expr: &Spanned<Expr>) -> bool {
+    match &expr.node {
+        Expr::Await { .. } => true,
+        Expr::Call { callee, args, .. } => {
+            if is_blocking_call_name(&callee.node) {
+                return true;
+            }
+            expr_contains_yield_point(callee)
+                || args.iter().any(|a| expr_contains_yield_point(&a.node.value))
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            expr_contains_yield_point(receiver)
+                || args.iter().any(|a| expr_contains_yield_point(&a.node.value))
+        }
+        Expr::BinaryOp { left, right, .. }
+        | Expr::DefaultOp { lhs: left, rhs: right } => {
+            expr_contains_yield_point(left) || expr_contains_yield_point(right)
+        }
+        Expr::UnaryOp { operand, .. }
+        | Expr::As { expr: operand, .. }
+        | Expr::MutableBorrow { expr: operand }
+        | Expr::Move { expr: operand }
+        | Expr::Deref { expr: operand }
+        | Expr::Is { expr: operand, .. } => expr_contains_yield_point(operand),
+        Expr::FieldAccess { object, .. }
+        | Expr::TupleFieldAccess { object, .. }
+        | Expr::OptionalChain { object, .. } => expr_contains_yield_point(object),
+        Expr::Index { object, index } => {
+            expr_contains_yield_point(object) || expr_contains_yield_point(index)
+        }
+        Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+            elems.iter().any(|e| expr_contains_yield_point(e))
+        }
+        Expr::If { condition, then_branch, else_branch, elif_branches, .. } => {
+            expr_contains_yield_point(condition)
+                || expr_contains_yield_point(then_branch)
+                || elif_branches.iter().any(|(c, b)| expr_contains_yield_point(c) || expr_contains_yield_point(b))
+                || else_branch.as_ref().map_or(false, |e| expr_contains_yield_point(e))
+        }
+        // Closures execute separately — don't recurse
+        Expr::Closure { .. } => false,
+        _ => false,
+    }
+}
+
 // ─── Copy Type Detection ───────────────────────────────────
 
 /// Returns true if a type is Copy (trivially copyable, no `!` needed).
@@ -298,15 +346,31 @@ fn collect_spanned_items<'a>(items: &'a [Spanned<Item>], out: &mut Vec<&'a Spann
 fn compute_ref_type_structs(module: &Module, scopes: &ScopeTable) -> FxHashSet<DefId> {
     // Collect all struct defs with their DefId and fields
     let mut struct_infos: Vec<(DefId, &[Spanned<FieldDef>])> = Vec::new();
+    // Collect all enum defs with their DefId and variant field types
+    let mut enum_infos: Vec<(DefId, Vec<&Type>)> = Vec::new();
     for item in all_spanned_items(&module.items) {
-        if let Item::Struct(s) = &item.node {
-            if let Some(def_id) = scopes.lookup_from_scope(ScopeId(0), &s.name.node) {
-                struct_infos.push((def_id, &s.fields));
+        match &item.node {
+            Item::Struct(s) => {
+                if let Some(def_id) = scopes.lookup_from_scope(ScopeId(0), &s.name.node) {
+                    struct_infos.push((def_id, &s.fields));
+                }
             }
+            Item::Enum(e) => {
+                if let Some(def_id) = scopes.lookup_from_scope(ScopeId(0), &e.name.node) {
+                    let field_types: Vec<&Type> = e.variants.iter()
+                        .flat_map(|v| match &v.node.fields {
+                            VariantFields::Tuple(types) => types.iter().map(|t| &t.node).collect::<Vec<_>>(),
+                            VariantFields::Unit => vec![],
+                        })
+                        .collect();
+                    enum_infos.push((def_id, field_types));
+                }
+            }
+            _ => {}
         }
     }
 
-    // Fixpoint iteration: keep adding structs until stable
+    // Fixpoint iteration: keep adding structs/enums until stable
     let mut ref_structs = FxHashSet::default();
     loop {
         let prev_len = ref_structs.len();
@@ -316,6 +380,17 @@ fn compute_ref_type_structs(module: &Module, scopes: &ScopeTable) -> FxHashSet<D
             }
             for field in *fields {
                 if is_ast_type_ref(&field.node.type_.node, scopes, &ref_structs) {
+                    ref_structs.insert(*def_id);
+                    break;
+                }
+            }
+        }
+        for (def_id, field_types) in &enum_infos {
+            if ref_structs.contains(def_id) {
+                continue;
+            }
+            for field_type in field_types {
+                if is_ast_type_ref(field_type, scopes, &ref_structs) {
                     ref_structs.insert(*def_id);
                     break;
                 }
@@ -470,7 +545,7 @@ struct BorrowChecker<'a> {
     /// Stack of (shared_name, condition_span, kind) for enclosing branches/loops
     /// whose condition/iterable references a `with`-tracked shared variable.
     /// Yield points inside these trigger check-then-act or iterator invalidation warnings.
-    with_guarded_conditions: Vec<(String, Span, WithGuardKind)>,
+    with_guarded_conditions: Vec<(Vec<String>, Span, WithGuardKind)>,
     /// Depth of `with` blocks (for detecting spawn inside `with`).
     with_depth: usize,
 }
@@ -1339,38 +1414,45 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
-    /// Find the first `with`-tracked shared variable referenced in a condition expression.
-    /// Returns (shared_name, DefId) if found.
-    fn find_with_tracked_in_condition(&self, expr: &Spanned<Expr>) -> Option<String> {
+    /// Find all `with`-tracked shared variables referenced in a condition expression.
+    fn find_with_tracked_in_condition(&self, expr: &Spanned<Expr>) -> Vec<String> {
         match &expr.node {
             Expr::Identifier(name) => {
                 if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
                     if self.with_shared_tracked.contains(&def_id) {
-                        return Some(name.clone());
+                        return vec![name.clone()];
                     }
                 }
-                None
+                vec![]
             }
             Expr::BinaryOp { left, right, .. }
             | Expr::DefaultOp { lhs: left, rhs: right } => {
-                self.find_with_tracked_in_condition(left)
-                    .or_else(|| self.find_with_tracked_in_condition(right))
+                let mut names = self.find_with_tracked_in_condition(left);
+                names.extend(self.find_with_tracked_in_condition(right));
+                names
             }
             Expr::UnaryOp { operand, .. } => self.find_with_tracked_in_condition(operand),
             Expr::Call { callee, args, .. } => {
-                self.find_with_tracked_in_condition(callee)
-                    .or_else(|| args.iter().find_map(|a| self.find_with_tracked_in_condition(&a.node.value)))
+                let mut names = self.find_with_tracked_in_condition(callee);
+                for a in args {
+                    names.extend(self.find_with_tracked_in_condition(&a.node.value));
+                }
+                names
             }
             Expr::MethodCall { receiver, args, .. } => {
-                self.find_with_tracked_in_condition(receiver)
-                    .or_else(|| args.iter().find_map(|a| self.find_with_tracked_in_condition(&a.node.value)))
+                let mut names = self.find_with_tracked_in_condition(receiver);
+                for a in args {
+                    names.extend(self.find_with_tracked_in_condition(&a.node.value));
+                }
+                names
             }
             Expr::FieldAccess { object, .. }
             | Expr::TupleFieldAccess { object, .. }
             | Expr::OptionalChain { object, .. } => self.find_with_tracked_in_condition(object),
             Expr::Index { object, index } => {
-                self.find_with_tracked_in_condition(object)
-                    .or_else(|| self.find_with_tracked_in_condition(index))
+                let mut names = self.find_with_tracked_in_condition(object);
+                names.extend(self.find_with_tracked_in_condition(index));
+                names
             }
             Expr::As { expr: inner, .. }
             | Expr::MutableBorrow { expr: inner }
@@ -1379,27 +1461,27 @@ impl<'a> BorrowChecker<'a> {
             | Expr::Is { expr: inner, .. } => self.find_with_tracked_in_condition(inner),
             Expr::TupleLiteral(elems)
             | Expr::ArrayLiteral(elems) => {
-                elems.iter().find_map(|e| self.find_with_tracked_in_condition(e))
+                elems.iter().flat_map(|e| self.find_with_tracked_in_condition(e)).collect()
             }
-            _ => None,
+            _ => vec![],
         }
     }
 
     /// Emit a check-then-act or iterator-invalidation warning if we are inside
     /// a branch/loop guarded by a `with`-tracked shared variable.
     fn check_with_check_then_act(&mut self, yield_span: Span) {
-        if let Some((shared_name, guard_span, kind)) = self.with_guarded_conditions.last().cloned() {
+        if let Some((shared_names, guard_span, kind)) = self.with_guarded_conditions.last().cloned() {
             let warning_kind = match kind {
                 WithGuardKind::BranchCondition => {
                     super::errors::SemanticWarningKind::WithCheckThenAct {
-                        shared_name,
+                        shared_names,
                         condition_span: guard_span,
                         yield_span,
                     }
                 }
                 WithGuardKind::Iteration => {
                     super::errors::SemanticWarningKind::SharedIteratorInvalidation {
-                        shared_name,
+                        shared_name: shared_names.into_iter().next().unwrap_or_default(),
                         iterable_span: guard_span,
                         yield_span,
                     }
@@ -2342,6 +2424,24 @@ impl<'a> BorrowChecker<'a> {
                                         .push(entry.def_id);
                                 }
                             }
+
+                            // §3.9 Closure capture of with binding: if a closure inside
+                            // a `with` block captures a with-tracked shared variable,
+                            // the captured value may become stale after a yield.
+                            if self.with_depth > 0 && self.current_function_is_async {
+                                for entry in &cs.captures {
+                                    if self.with_shared_tracked.contains(&entry.def_id) {
+                                        let var_name = self.scopes.get_def(entry.def_id).name.clone();
+                                        self.stale_warnings.push(super::errors::SemanticWarning {
+                                            kind: super::errors::SemanticWarningKind::ClosureCapturesWithBinding {
+                                                var_name,
+                                            },
+                                            span: pattern.span,
+                                        });
+                                    }
+                                }
+                            }
+
                             self.closure_capture_sets.insert(def_id, cs);
                         }
                     }
@@ -2383,6 +2483,23 @@ impl<'a> BorrowChecker<'a> {
                                         span: value.span,
                                     });
                                 }
+                            }
+                        }
+
+                        // §3.8 Compound yield race: `x = x + blocking_call()` reads x before
+                        // the yield (RHS), writes after. Detect when assigning to a with-tracked
+                        // var and the RHS both references the same var AND contains a yield point.
+                        if self.current_function_is_async && self.with_shared_tracked.contains(&def_id) {
+                            let rhs_names = self.find_with_tracked_in_condition(value);
+                            let target_name = self.scopes.get_def(def_id).name.clone();
+                            if rhs_names.contains(&target_name) && expr_contains_yield_point(value) {
+                                self.stale_warnings.push(super::errors::SemanticWarning {
+                                    kind: super::errors::SemanticWarningKind::CompoundYieldRace {
+                                        shared_name: target_name,
+                                        yield_span: value.span,
+                                    },
+                                    span: value.span,
+                                });
                             }
                         }
 
@@ -2737,8 +2854,8 @@ impl<'a> BorrowChecker<'a> {
 
                 // §3.7 Iterator invalidation: track if iterable is a with-tracked shared
                 let iter_guard = if self.current_function_is_async {
-                    self.find_with_tracked_in_condition(iterable)
-                        .map(|name| (name, iterable.span, WithGuardKind::Iteration))
+                    let names = self.find_with_tracked_in_condition(iterable);
+                    if names.is_empty() { None } else { Some((names, iterable.span, WithGuardKind::Iteration)) }
                 } else {
                     None
                 };
@@ -2785,8 +2902,8 @@ impl<'a> BorrowChecker<'a> {
 
                 // §3.5 Check-then-act: track if condition depends on with-tracked shared
                 let with_guard = if self.current_function_is_async {
-                    self.find_with_tracked_in_condition(condition)
-                        .map(|name| (name, condition.span, WithGuardKind::BranchCondition))
+                    let names = self.find_with_tracked_in_condition(condition);
+                    if names.is_empty() { None } else { Some((names, condition.span, WithGuardKind::BranchCondition)) }
                 } else {
                     None
                 };
@@ -2847,8 +2964,8 @@ impl<'a> BorrowChecker<'a> {
 
                 // §3.5 Check-then-act: track if condition depends on with-tracked shared
                 let with_guard = if self.current_function_is_async {
-                    self.find_with_tracked_in_condition(condition)
-                        .map(|name| (name, condition.span, WithGuardKind::BranchCondition))
+                    let names = self.find_with_tracked_in_condition(condition);
+                    if names.is_empty() { None } else { Some((names, condition.span, WithGuardKind::BranchCondition)) }
                 } else {
                     None
                 };
@@ -2871,8 +2988,8 @@ impl<'a> BorrowChecker<'a> {
                     self.mark_compound_is_origins(&cond.node);
 
                     let elif_guard = if self.current_function_is_async {
-                        self.find_with_tracked_in_condition(cond)
-                            .map(|name| (name, cond.span, WithGuardKind::BranchCondition))
+                        let names = self.find_with_tracked_in_condition(cond);
+                        if names.is_empty() { None } else { Some((names, cond.span, WithGuardKind::BranchCondition)) }
                     } else {
                         None
                     };
@@ -2910,8 +3027,8 @@ impl<'a> BorrowChecker<'a> {
 
                 // §3.5 Check-then-act: track if scrutinee depends on with-tracked shared
                 let with_guard = if self.current_function_is_async {
-                    self.find_with_tracked_in_condition(scrutinee)
-                        .map(|name| (name, scrutinee.span, WithGuardKind::BranchCondition))
+                    let names = self.find_with_tracked_in_condition(scrutinee);
+                    if names.is_empty() { None } else { Some((names, scrutinee.span, WithGuardKind::BranchCondition)) }
                 } else {
                     None
                 };
@@ -7400,8 +7517,8 @@ async void main():
         let warnings = check_warnings(source);
         assert!(
             has_warning(&warnings, |k| matches!(k,
-                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { shared_name, .. }
-                if shared_name == "x"
+                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { shared_names, .. }
+                if shared_names.contains(&"x".to_string())
             )),
             "expected WithCheckThenAct warning, got: {:?}", warnings
         );
@@ -7450,8 +7567,8 @@ async void main():
         let warnings = check_warnings(source);
         assert!(
             has_warning(&warnings, |k| matches!(k,
-                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { shared_name, .. }
-                if shared_name == "x"
+                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { shared_names, .. }
+                if shared_names.contains(&"x".to_string())
             )),
             "expected WithCheckThenAct warning for blocking call, got: {:?}", warnings
         );
@@ -7475,10 +7592,175 @@ async void main():
         let warnings = check_warnings(source);
         assert!(
             has_warning(&warnings, |k| matches!(k,
-                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { shared_name, .. }
-                if shared_name == "x"
+                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { shared_names, .. }
+                if shared_names.contains(&"x".to_string())
             )),
             "expected WithCheckThenAct warning for while loop, got: {:?}", warnings
+        );
+    }
+
+    // ─── §3.5b Multi-Variable Invariant Tests ─────────────────
+
+    #[test]
+    fn with_check_then_act_names_both_shared_vars() {
+        let source = "\
+async void worker(int &a, int &b):
+    a = a + 1
+    b = b + 1
+
+async void main():
+    shared int x = 0
+    shared int y = 0
+    Task[void] t = spawn worker(&x, &y)
+    with x, y:
+        if x > 0 and y < 100:
+            sleep(50)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::WithCheckThenAct { shared_names, .. }
+                if shared_names.contains(&"x".to_string()) && shared_names.contains(&"y".to_string())
+            )),
+            "expected WithCheckThenAct naming both x and y, got: {:?}", warnings
+        );
+    }
+
+    // ─── §3.8 Compound Yield Race Tests ─────────────────────────
+
+    #[test]
+    fn compound_yield_race_warns() {
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        x = x + sleep(1)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::CompoundYieldRace { shared_name, .. }
+                if shared_name == "x"
+            )),
+            "expected CompoundYieldRace warning, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn compound_yield_race_no_warn_without_yield() {
+        // No yield in RHS — no race
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        x = x + 1
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::CompoundYieldRace { .. }
+            )),
+            "expected no CompoundYieldRace warning, got: {:?}", warnings
+        );
+    }
+
+    // ─── §3.9 Closure Captures With Binding Tests ───────────────
+
+    #[test]
+    fn closure_captures_with_binding_warns() {
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        auto f = ((): x > 0)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::ClosureCapturesWithBinding { var_name, .. }
+                if var_name == "x"
+            )),
+            "expected ClosureCapturesWithBinding warning, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn closure_captures_with_binding_no_warn_outside_with() {
+        // Closure captures shared var but NOT inside a `with` block
+        let source = "\
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    int local = 42
+    auto f = ((): local > 0)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::ClosureCapturesWithBinding { .. }
+            )),
+            "expected no ClosureCapturesWithBinding warning, got: {:?}", warnings
+        );
+    }
+
+    // ─── Phase 2: Generic Container Origin Tracking ───────────
+
+    #[test]
+    fn result_str_param_no_dangling_return() {
+        // Result[str, str] param: unwrap() returns str with Param origin — should be safe
+        let source = "\
+enum Result[T, E]:
+    Ok(T)
+    Error(E)
+
+str unwrap_ok(Result[str, str] r):
+    match r:
+        case Ok(s):
+            return s
+        else:
+            return \"error\"
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "expected no DanglingReturn for Result[str, str] param, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn option_str_param_no_dangling_return() {
+        // Option[str] param: unwrap yields str with Param origin — should be safe
+        let source = "\
+enum Option[T]:
+    Some(T)
+    None
+
+str unwrap_opt(Option[str] o):
+    match o:
+        case Some(s):
+            return s
+        else:
+            return \"none\"
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "expected no DanglingReturn for Option[str] param, got: {:?}", errors
         );
     }
 

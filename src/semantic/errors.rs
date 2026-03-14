@@ -31,8 +31,8 @@ pub enum SemanticWarningKind {
     /// A yield point occurs inside a branch whose condition depends on a
     /// `with`-tracked shared variable — check-then-act race.
     WithCheckThenAct {
-        /// The shared variable name used in the condition.
-        shared_name: String,
+        /// The shared variable names used in the condition.
+        shared_names: Vec<String>,
         /// Span of the condition expression.
         condition_span: Span,
         /// The yield point inside the branch body.
@@ -65,6 +65,17 @@ pub enum SemanticWarningKind {
         shared_name: String,
         spawn_span: Span,
     },
+    /// A compound assignment reads a shared variable before a yield point
+    /// in the same expression, then writes the result back — TOCTOU race.
+    CompoundYieldRace {
+        shared_name: String,
+        yield_span: Span,
+    },
+    /// A closure inside a `with` block captures a `with`-tracked binding.
+    /// If a yield occurs between creation and invocation, the captured value is stale.
+    ClosureCapturesWithBinding {
+        var_name: String,
+    },
 }
 
 impl std::fmt::Display for SemanticWarning {
@@ -76,8 +87,9 @@ impl std::fmt::Display for SemanticWarning {
             SemanticWarningKind::StaleSharedCondition { local_name, shared_name, .. } => {
                 write!(f, "`{local_name}` derived from shared `{shared_name}` may be stale after await")
             }
-            SemanticWarningKind::WithCheckThenAct { shared_name, .. } => {
-                write!(f, "yield inside branch guarded by shared `{shared_name}` — condition may no longer hold")
+            SemanticWarningKind::WithCheckThenAct { shared_names, .. } => {
+                let names = shared_names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
+                write!(f, "yield inside branch guarded by shared {names} — condition may no longer hold")
             }
             SemanticWarningKind::StaleSharedWriteBack { local_name, target_shared_name, .. } => {
                 write!(f, "writing stale `{local_name}` to shared `{target_shared_name}` — lost update after yield")
@@ -87,6 +99,12 @@ impl std::fmt::Display for SemanticWarning {
             }
             SemanticWarningKind::SpawnWithTrackedBinding { shared_name, .. } => {
                 write!(f, "spawning task with `with`-tracked `{shared_name}` — spawned task runs outside `with` lock scope")
+            }
+            SemanticWarningKind::CompoundYieldRace { shared_name, .. } => {
+                write!(f, "compound assignment reads shared `{shared_name}` before yield and writes after — race condition")
+            }
+            SemanticWarningKind::ClosureCapturesWithBinding { var_name } => {
+                write!(f, "closure captures `with`-tracked `{var_name}` — captured value may become stale after yield")
             }
         }
     }

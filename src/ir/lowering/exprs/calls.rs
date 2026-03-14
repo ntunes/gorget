@@ -8,7 +8,7 @@ use crate::parser::ast::{self, Expr, Ownership};
 use crate::parser::Parser;
 use crate::span::Spanned;
 
-use super::super::context::LoweringContext;
+use super::super::context::{LoweringContext, ParamABI};
 use super::{lower_expr, infer_operand_type_full, is_resource_type_local,
             ensure_box_type_def, ensure_mutex_type_def, ensure_shared_type_def,
             ensure_task_group_type_def,
@@ -22,24 +22,31 @@ pub(super) fn lower_call_arg(
     callee_name: &str,
     arg_idx: usize,
 ) -> Operand {
-    // Whether the callee's parameter is a Move type (passed by pointer)
-    let callee_is_move_param = callee_param_type
-        .map(|pt| ctx.type_registry.is_resource_type(pt))
-        .unwrap_or(false);
-
-    // Check if the callee's param has explicit MutableBorrow (&) or Move (!) ownership.
-    let callee_param_ownership = ctx.fn_param_ownerships.get(callee_name)
-        .and_then(|ownerships| ownerships.get(arg_idx))
+    // Look up the unified ParamABI (single source of truth when available).
+    let abi = ctx.fn_param_abis.get(callee_name)
+        .and_then(|abis| abis.get(arg_idx))
         .copied();
 
-    let callee_param_is_mut_borrow = callee_param_ownership
-        .map(|o| matches!(o, Ownership::MutableBorrow))
-        .unwrap_or(false);
+    // Whether the callee's parameter is a Move type (passed by pointer).
+    // Use ParamABI when available, fall back to type-based derivation for extern/runtime fns.
+    let callee_is_move_param = match abi {
+        Some(abi) => matches!(abi, ParamABI::ByPtr | ParamABI::ByMutPtr),
+        None => callee_param_type.map(|pt| ctx.type_registry.is_resource_type(pt)).unwrap_or(false),
+    };
 
-    // The callee expects a pointer for this param if:
-    // 1. The param base type is a resource type (passed by pointer), OR
-    // 2. The param has explicit & (MutableBorrow) ownership (even for primitives)
-    let callee_passes_by_ptr = callee_is_move_param || callee_param_is_mut_borrow;
+    // The callee expects a pointer for this param.
+    let callee_passes_by_ptr = match abi {
+        Some(abi) => abi != ParamABI::ByValue,
+        None => {
+            let callee_param_ownership = ctx.fn_param_ownerships.get(callee_name)
+                .and_then(|ownerships| ownerships.get(arg_idx))
+                .copied();
+            let callee_param_is_mut_borrow = callee_param_ownership
+                .map(|o| matches!(o, Ownership::MutableBorrow))
+                .unwrap_or(false);
+            callee_is_move_param || callee_param_is_mut_borrow
+        }
+    };
 
     // Special case: &name where name is already a pass-by-pointer param.
     // Skip the auto-deref that Identifier would do — just forward the pointer.

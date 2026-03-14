@@ -11,6 +11,19 @@ use super::types::TypeMapper;
 
 use crate::ir::types::BlockId;
 
+/// How a function parameter is passed at the C ABI level.
+/// Single source of truth — replaces scattered re-derivation in lower_call_arg
+/// and format_args_with_coercion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamABI {
+    /// Passed by value (copy types, small primitives).
+    ByValue,
+    /// Passed by const pointer (`const T*` in C). Bare resource-type params.
+    ByPtr,
+    /// Passed by mutable pointer (`T*` in C). `&` (MutableBorrow) or `!` (Move) on resource types.
+    ByMutPtr,
+}
+
 /// Metadata for a shared variable's hidden local and wrapper.
 #[derive(Debug, Clone, Copy)]
 pub struct SharedLocalInfo {
@@ -168,6 +181,9 @@ pub struct LoweringContext<'a> {
     /// Function parameter ownerships: fn_name → Vec<Ownership> (in declaration order).
     /// Used by token wrapper generation to determine lock type per shared arg.
     pub fn_param_ownerships: FxHashMap<String, Vec<crate::parser::ast::Ownership>>,
+    /// Unified parameter ABI: fn_name → Vec<ParamABI> (in declaration order).
+    /// Single source of truth for how each parameter is passed at the C ABI level.
+    pub fn_param_abis: FxHashMap<String, Vec<ParamABI>>,
     /// If current function uses `throws`, the Result TypeId for wrapping return/throw.
     pub current_throws_result_type: Option<TypeId>,
     /// Target type hint for the current expression being lowered.
@@ -229,6 +245,7 @@ impl<'a> LoweringContext<'a> {
             fn_defaults: FxHashMap::default(),
             fn_param_names: FxHashMap::default(),
             fn_param_ownerships: FxHashMap::default(),
+            fn_param_abis: FxHashMap::default(),
             current_throws_result_type: None,
             expected_type: None,
             closure_param_type_hints: Vec::new(),
@@ -459,6 +476,17 @@ impl<'a> LoweringContext<'a> {
             Ownership::Move if is_move => self.register_mut_ptr_type(base_type),
             Ownership::Borrow if is_move => self.register_ptr_type(base_type),
             _ => base_type,
+        }
+    }
+
+    /// Compute the ABI for a single parameter from its base type and ownership.
+    pub fn compute_param_abi(&self, base_type: TypeId, ownership: Ownership) -> ParamABI {
+        let is_move = self.type_registry.is_resource_type(base_type);
+        match ownership {
+            Ownership::MutableBorrow => ParamABI::ByMutPtr,
+            Ownership::Move if is_move => ParamABI::ByMutPtr,
+            Ownership::Borrow if is_move => ParamABI::ByPtr,
+            _ => ParamABI::ByValue,
         }
     }
 
