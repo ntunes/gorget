@@ -9216,6 +9216,7 @@ static inline void gorget_gl_blend_func(int64_t s, int64_t d) { glBlendFunc((GLe
 static inline void gorget_gl_depth_func(int64_t f) { glDepthFunc((GLenum)f); }
 static inline void gorget_gl_depth_mask(int64_t flag) { glDepthMask((GLboolean)flag); }
 static inline void gorget_gl_cull_face(int64_t mode) { glCullFace((GLenum)mode); }
+static inline void gorget_gl_front_face(int64_t mode) { glFrontFace((GLenum)mode); }
 static inline void gorget_gl_viewport(int64_t x, int64_t y, int64_t w, int64_t h) { glViewport((GLint)x, (GLint)y, (GLsizei)w, (GLsizei)h); }
 static inline void gorget_gl_scissor(int64_t x, int64_t y, int64_t w, int64_t h) { glScissor((GLint)x, (GLint)y, (GLsizei)w, (GLsizei)h); }
 static inline void gorget_gl_clear(int64_t mask) { glClear((GLbitfield)mask); }

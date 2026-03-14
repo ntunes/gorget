@@ -1895,6 +1895,9 @@ fn gen_gl_module() -> Module {
     items.push(const_item("GL_FRONT", 0x0404));
     items.push(const_item("GL_BACK", 0x0405));
     items.push(const_item("GL_FRONT_AND_BACK", 0x0408));
+    // Front face winding
+    items.push(const_item("GL_CW", 0x0900));
+    items.push(const_item("GL_CCW", 0x0901));
     // Clear bits
     items.push(const_item("GL_COLOR_BUFFER_BIT", 0x4000));
     items.push(const_item("GL_DEPTH_BUFFER_BIT", 0x0100));
@@ -2047,6 +2050,7 @@ fn gen_gl_module() -> Module {
     items.push(fn_item(extern_fn("gl_depth_func", &[("func", ty_int())], ty_void(), "gorget_gl_depth_func")));
     items.push(fn_item(extern_fn("gl_depth_mask", &[("flag", ty_int())], ty_void(), "gorget_gl_depth_mask")));
     items.push(fn_item(extern_fn("gl_cull_face", &[("mode", ty_int())], ty_void(), "gorget_gl_cull_face")));
+    items.push(fn_item(extern_fn("gl_front_face", &[("mode", ty_int())], ty_void(), "gorget_gl_front_face")));
     items.push(fn_item(extern_fn("gl_viewport", &[("x", ty_int()), ("y", ty_int()), ("w", ty_int()), ("h", ty_int())], ty_void(), "gorget_gl_viewport")));
     items.push(fn_item(extern_fn("gl_scissor", &[("x", ty_int()), ("y", ty_int()), ("w", ty_int()), ("h", ty_int())], ty_void(), "gorget_gl_scissor")));
     items.push(fn_item(extern_fn("gl_clear", &[("mask", ty_int())], ty_void(), "gorget_gl_clear")));
