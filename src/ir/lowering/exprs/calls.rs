@@ -45,11 +45,11 @@ pub(super) fn lower_call_arg(
     // 2. The param has explicit & (MutableBorrow) ownership (even for primitives)
     let callee_auto_borrows = callee_is_move_param || callee_param_is_mut_borrow;
 
-    // Special case: &name or bare name where name is already an auto-borrowed param (pointer).
+    // Special case: &name where name is already an auto-borrowed param (pointer).
     // Skip the auto-deref that Identifier would do — just forward the pointer.
-    if matches!(arg.node.ownership, Ownership::MutableBorrow)
-        || (matches!(arg.node.ownership, Ownership::Borrow) && callee_auto_borrows)
-    {
+    // Only forward when the call site explicitly has & — bare args must not
+    // silently forward a MutPtr.
+    if matches!(arg.node.ownership, Ownership::MutableBorrow) {
         if let Expr::Identifier(name) = &arg.node.value.node {
             if let Some((local_id, _)) = ctx.lookup_local(name) {
                 let is_already_ptr = {
@@ -89,9 +89,10 @@ pub(super) fn lower_call_arg(
             val
         }
         Ownership::Borrow if callee_auto_borrows => {
-            // Struct param: pass as pointer. Use const Ptr if callee has bare Borrow ownership,
-            // MutPtr if callee has & or ! ownership.
-            let use_mut_ptr = callee_param_is_mut_borrow || callee_param_is_move;
+            // Bare call-site: always emit const Ptr, never MutPtr.
+            // If the callee expects & or !, the borrow checker catches
+            // the mismatch — the IR must not silently upgrade to MutPtr.
+            let use_mut_ptr = false;
             // GlobalRef → GlobalRefPtr: emit &global_name directly.
             if let Operand::Constant(Constant::GlobalRef(name)) = &val {
                 return Operand::Constant(Constant::GlobalRefPtr(name.clone()));
