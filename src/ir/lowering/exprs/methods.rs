@@ -1376,9 +1376,14 @@ pub(super) fn lower_method_call(
                 }
             }
         }
-        // For index_of/find on strings/collections (NOT Regex), register Option[int] return type
+        // For index_of/find on strings/collections (NOT Regex or user-defined types), register Option[int] return type
         let is_regex_receiver = type_name == "Regex" || type_name == "GorgetRegex";
-        if matches!(method_name, "index_of" | "find") && !is_regex_receiver {
+        let is_collection_or_string = type_name.starts_with("Vector__") || type_name == "GorgetArray"
+            || type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") || type_name == "GorgetMap"
+            || type_name.starts_with("Set__") || type_name.starts_with("HashSet__") || type_name == "GorgetSet"
+            || type_name == "Str" || type_name == "GorgetString"
+            || type_name == "Bytes" || type_name == "GorgetBytes";
+        if matches!(method_name, "index_of" | "find") && !is_regex_receiver && is_collection_or_string {
             let option_name = "Option__int64_t";
             if ctx.lookup_type_by_name(option_name).is_none() {
                 ctx.ensure_option_type_registered(option_name, I64_TYPE);
@@ -1409,8 +1414,8 @@ pub(super) fn lower_method_call(
                     || type_name.starts_with("Set__") || type_name.starts_with("HashSet__"))
             {
                 BOOL_TYPE
-            } else if matches!(method_name, "index_of" | "find") && !is_regex_receiver {
-                // Only override to Option__int64_t for collection/string find, NOT Regex.find()
+            } else if matches!(method_name, "index_of" | "find") && !is_regex_receiver && is_collection_or_string {
+                // Only override to Option__int64_t for collection/string find, NOT user-defined find methods
                 ctx.lookup_type_by_name("Option__int64_t").unwrap_or(ret)
             } else {
                 ret
@@ -1530,8 +1535,8 @@ fn infer_collection_method_return_type(
     match method_name {
         // Methods returning int
         "len" | "count" | "capacity" | "hash" | "binary_search" => I64_TYPE,
-        // Methods returning Option[int]
-        "index_of" | "find" => {
+        // Methods returning Option[int] — only for collection/string types
+        "index_of" | "find" if is_vector || is_dict || is_set || is_string => {
             ctx.lookup_type_by_name("Option__int64_t").unwrap_or(I64_TYPE)
         }
         // Methods returning bool
