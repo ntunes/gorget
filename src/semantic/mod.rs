@@ -3,6 +3,7 @@ pub mod derive;
 pub mod errors;
 pub mod ids;
 pub mod meta;
+pub mod purity;
 pub mod resolve;
 pub mod rewrite;
 pub mod scope;
@@ -57,6 +58,8 @@ pub struct AnalysisResult {
     pub shared_bindings: FxHashMap<DefId, SharedStrategy>,
     /// Non-fatal warnings (e.g., unnecessary `shared`).
     pub warnings: Vec<SemanticWarning>,
+    /// Inferred function purity: name → Purity level.
+    pub fn_purity: purity::PurityByName,
 }
 
 /// Run all semantic analysis passes on a parsed module.
@@ -197,7 +200,7 @@ pub fn analyze_with_source_dir(
     );
 
     // Pass 5: Borrow checking (two sub-passes: 5a computes return_borrows_from, 5b does full check)
-    let (shared_bindings, warnings) = borrow::check_module(
+    let (shared_bindings, warnings, fn_purity) = borrow::check_module(
         module,
         &scopes,
         &types,
@@ -223,5 +226,6 @@ pub fn analyze_with_source_dir(
         method_resolutions,
         shared_bindings,
         warnings,
+        fn_purity,
     }
 }

@@ -143,6 +143,8 @@ pub struct Module {
     pub runtime: RuntimeFeatures,
     /// Single source of truth for how each function's params are passed (by value, const ptr, mut ptr).
     pub fn_param_abis: rustc_hash::FxHashMap<String, Vec<crate::ir::lowering::context::ParamABI>>,
+    /// Inferred function purity: name → Purity level.
+    pub fn_purity: crate::semantic::purity::PurityByName,
 }
 
 impl Module {
@@ -157,6 +159,7 @@ impl Module {
             source_code: None,
             runtime: RuntimeFeatures::default(),
             fn_param_abis: rustc_hash::FxHashMap::default(),
+            fn_purity: rustc_hash::FxHashMap::default(),
         }
     }
 

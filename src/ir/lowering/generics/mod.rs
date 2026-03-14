@@ -723,6 +723,7 @@ impl GenericCollector {
         registry: &mut TypeRegistry,
         fn_sigs: &mut FxHashMap<String, (Vec<TypeId>, TypeId)>,
         fn_param_ownerships: &mut FxHashMap<String, Vec<crate::parser::ast::Ownership>>,
+        fn_param_abis: &mut FxHashMap<String, Vec<super::context::ParamABI>>,
     ) {
         use crate::parser::ast::{Ownership, FunctionBody};
         for (base_name, type_args, mangled_name, kind) in &self.instances {
@@ -794,8 +795,29 @@ impl GenericCollector {
                     })
                     .collect();
 
+                // Compute ParamABI for monomorphized generic functions
+                let abis: Vec<super::context::ParamABI> = template.params.iter()
+                    .filter(|p| !p.node.is_meta_op)
+                    .map(|p| {
+                        let ownership = if move_override_params.contains(&p.node.name.node) {
+                            Ownership::Move
+                        } else {
+                            p.node.ownership
+                        };
+                        let base = substitute_and_map(mapper, &p.node.type_.node, &subs);
+                        let is_move = registry.is_resource_type(base);
+                        match ownership {
+                            Ownership::MutableBorrow => super::context::ParamABI::ByMutPtr,
+                            Ownership::Move if is_move => super::context::ParamABI::ByMutPtr,
+                            Ownership::Borrow if is_move => super::context::ParamABI::ByPtr,
+                            _ => super::context::ParamABI::ByValue,
+                        }
+                    })
+                    .collect();
+
                 fn_sigs.insert(mangled_name.clone(), (param_types, ret_type));
                 fn_param_ownerships.insert(mangled_name.clone(), param_ownerships);
+                fn_param_abis.insert(mangled_name.clone(), abis);
             }
         }
     }
@@ -806,8 +828,9 @@ impl GenericCollector {
         mapper: &mut TypeMapper,
         registry: &mut TypeRegistry,
         fn_sigs: &mut FxHashMap<String, (Vec<TypeId>, TypeId)>,
+        fn_param_abis: &mut FxHashMap<String, Vec<super::context::ParamABI>>,
     ) {
-        self.register_equip_sigs_with_defaults(mapper, registry, fn_sigs, None);
+        self.register_equip_sigs_with_defaults(mapper, registry, fn_sigs, fn_param_abis, None);
     }
 
     /// Register monomorphized equip method signatures, including default trait methods.
@@ -821,9 +844,10 @@ impl GenericCollector {
         mapper: &mut TypeMapper,
         registry: &mut TypeRegistry,
         fn_sigs: &mut FxHashMap<String, (Vec<TypeId>, TypeId)>,
+        fn_param_abis: &mut FxHashMap<String, Vec<super::context::ParamABI>>,
         ast_module: Option<&crate::parser::ast::Module>,
     ) {
-        use crate::parser::ast::{Item, TraitItem, FunctionBody};
+        use crate::parser::ast::{Item, Ownership, TraitItem, FunctionBody};
         for (base_name, type_args, mangled_type_name, kind) in &self.instances {
             if !matches!(kind, TemplateKind::Struct | TemplateKind::Enum) {
                 continue;
@@ -840,18 +864,36 @@ impl GenericCollector {
                             .map(|p| p.node.name.node == "self")
                             .unwrap_or(false);
                         let mut param_types = Vec::new();
+                        let mut abis = Vec::new();
                         if has_self {
                             let self_type_id = mapper.lookup_named(mangled_type_name).unwrap_or(UNIT_TYPE);
                             let self_ptr_type = registry.insert(GirType::Ptr(self_type_id));
                             param_types.push(self_ptr_type);
+                            let self_is_mutable = method.node.params.first()
+                                .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow))
+                                .unwrap_or(false);
+                            abis.push(if self_is_mutable {
+                                super::context::ParamABI::ByMutPtr
+                            } else {
+                                super::context::ParamABI::ByPtr
+                            });
                         }
                         for p in &method.node.params {
                             if p.node.name.node == "self" {
                                 continue;
                             }
-                            param_types.push(substitute_and_map_mut(mapper, registry, &p.node.type_.node, &subs));
+                            let base = substitute_and_map_mut(mapper, registry, &p.node.type_.node, &subs);
+                            param_types.push(base);
+                            let is_move = registry.is_resource_type(base);
+                            abis.push(match p.node.ownership {
+                                Ownership::MutableBorrow => super::context::ParamABI::ByMutPtr,
+                                Ownership::Move if is_move => super::context::ParamABI::ByMutPtr,
+                                Ownership::Borrow if is_move => super::context::ParamABI::ByPtr,
+                                _ => super::context::ParamABI::ByValue,
+                            });
                         }
-                        fn_sigs.insert(method_mangled, (param_types, ret_type));
+                        fn_sigs.insert(method_mangled.clone(), (param_types, ret_type));
+                        fn_param_abis.insert(method_mangled, abis);
                         implemented.push(method.node.name.node.clone());
                     }
                     // Also register signatures for default trait methods
@@ -873,11 +915,21 @@ impl GenericCollector {
                                                 let self_type_id = mapper.lookup_named(mangled_type_name).unwrap_or(UNIT_TYPE);
                                                 let self_ptr_type = registry.insert(GirType::Ptr(self_type_id));
                                                 let mut param_types = vec![self_ptr_type];
+                                                let mut abis = vec![super::context::ParamABI::ByPtr]; // default methods: self by const ptr
                                                 for p in &dm.params {
                                                     if p.node.name.node == "self" { continue; }
-                                                    param_types.push(substitute_and_map_mut(mapper, registry, &p.node.type_.node, &subs));
+                                                    let base = substitute_and_map_mut(mapper, registry, &p.node.type_.node, &subs);
+                                                    param_types.push(base);
+                                                    let is_move = registry.is_resource_type(base);
+                                                    abis.push(match p.node.ownership {
+                                                        Ownership::MutableBorrow => super::context::ParamABI::ByMutPtr,
+                                                        Ownership::Move if is_move => super::context::ParamABI::ByMutPtr,
+                                                        Ownership::Borrow if is_move => super::context::ParamABI::ByPtr,
+                                                        _ => super::context::ParamABI::ByValue,
+                                                    });
                                                 }
-                                                fn_sigs.insert(m_mangled, (param_types, ret_type));
+                                                fn_sigs.insert(m_mangled.clone(), (param_types, ret_type));
+                                                fn_param_abis.insert(m_mangled, abis);
                                             }
                                         }
                                     }

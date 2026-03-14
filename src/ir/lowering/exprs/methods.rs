@@ -1377,13 +1377,9 @@ pub(super) fn lower_method_call(
             }
         }
         // For index_of/find on strings/collections (NOT Regex or user-defined types), register Option[int] return type
-        let is_regex_receiver = type_name == "Regex" || type_name == "GorgetRegex";
-        let is_collection_or_string = type_name.starts_with("Vector__") || type_name == "GorgetArray"
-            || type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") || type_name == "GorgetMap"
-            || type_name.starts_with("Set__") || type_name.starts_with("HashSet__") || type_name == "GorgetSet"
-            || type_name == "Str" || type_name == "GorgetString"
-            || type_name == "Bytes" || type_name == "GorgetBytes";
-        if matches!(method_name, "index_of" | "find") && !is_regex_receiver && is_collection_or_string {
+        let sentinel_method_key = format!("{type_name}__{method_name}");
+        let is_sentinel_wrapped = ctx.sentinel_to_option_methods.contains(&sentinel_method_key);
+        if is_sentinel_wrapped {
             let option_name = "Option__int64_t";
             if ctx.lookup_type_by_name(option_name).is_none() {
                 ctx.ensure_option_type_registered(option_name, I64_TYPE);
@@ -1414,8 +1410,8 @@ pub(super) fn lower_method_call(
                     || type_name.starts_with("Set__") || type_name.starts_with("HashSet__"))
             {
                 BOOL_TYPE
-            } else if matches!(method_name, "index_of" | "find") && !is_regex_receiver && is_collection_or_string {
-                // Only override to Option__int64_t for collection/string find, NOT user-defined find methods
+            } else if is_sentinel_wrapped {
+                // Stdlib sentinel-to-Option wrapping for find/index_of
                 ctx.lookup_type_by_name("Option__int64_t").unwrap_or(ret)
             } else {
                 ret

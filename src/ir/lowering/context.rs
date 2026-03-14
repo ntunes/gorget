@@ -218,6 +218,10 @@ pub struct LoweringContext<'a> {
     /// Parameters upgraded from Borrow to Move in generic functions that return them directly.
     /// The return path must zero the source through the pointer to prevent caller double-free.
     pub move_override_params: std::collections::HashSet<String>,
+    /// Methods whose -1 sentinel return should be wrapped into Option[int].
+    /// Populated during registration for stdlib collection/string `find`/`index_of` methods.
+    /// User-defined methods default to NOT being in this set.
+    pub sentinel_to_option_methods: rustc_hash::FxHashSet<String>,
 }
 
 
@@ -260,6 +264,7 @@ impl<'a> LoweringContext<'a> {
             on_error_blocks: Vec::new(),
             postconditions: Vec::new(),
             move_override_params: std::collections::HashSet::new(),
+            sentinel_to_option_methods: rustc_hash::FxHashSet::default(),
         }
     }
 

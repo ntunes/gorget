@@ -449,6 +449,58 @@ fn longer<'a>(x: &'a str, y: &'a str) -> &'a str {
 
 ---
 
+### 3.7 Purity Inference
+
+The compiler automatically infers whether a function has side effects — with **zero annotations**. This is computed during borrow checking (Pass 5) alongside lifetime and ownership analysis, since the same whole-body walk that tracks borrows can also observe reads, writes, and calls.
+
+#### Purity Levels
+
+Every function is assigned one of four purity levels, from purest to most effectful:
+
+| Level | Meaning | Example |
+|-------|---------|---------|
+| **Pure** | Reads only its arguments, calls only pure functions, no globals or IO | `int double(int x) = x * 2` |
+| **ReadOnly** | May read global variables but never mutates them, no IO | `int get_threshold(): return GLOBAL_MAX` |
+| **MutatesArgs** | May mutate `&` or `!` parameters but no globals or IO | `void push(Vector[int] &v, int x): v.push(x)` |
+| **HasSideEffects** | Anything else: IO, global mutation, shared variable access, extern calls | `void greet(str name): print(f"hello {name}")` |
+
+Purity levels form a lattice ordered by increasing impurity. When a function calls another, its purity is the *join* (least-pure) of its local purity and all callee purities. This means purity propagates conservatively through the call graph.
+
+#### How Inference Works
+
+Purity inference runs in two phases:
+
+1. **Local analysis** — walk each function's body and observe:
+   - Does it read a global? → at least `ReadOnly`
+   - Does it write a global? → `HasSideEffects`
+   - Does it mutate a `&` parameter? → at least `MutatesArgs`
+   - Does it call an extern or unknown function? → `HasSideEffects`
+   - Does it access a `shared` variable? → `HasSideEffects`
+
+2. **Call-graph propagation** — fixed-point iteration over the call graph:
+   - For each function, join its local purity with the purity of every callee
+   - Repeat until no purity levels change (converges because the lattice is finite and join is monotone)
+
+**Conservative defaults:** Unknown callees (closures, trait objects, extern functions) are assumed `HasSideEffects`. This is always safe — purity is informational, never a constraint that blocks compilation.
+
+#### Why Purity Matters
+
+Purity inference enables several compiler optimizations and safety guarantees:
+
+- **Compile-time evaluation** — pure functions can safely run during `meta` evaluation
+- **Parallel safety** — pure functions on disjoint data can run in parallel without synchronization
+- **Shared variable optimization** — pure function calls inside `with shared_var:` blocks don't need to release the synchronization token (no yield point needed)
+- **Memoization** — the compiler can cache pure function results when inputs repeat
+- **API stability** — purity changes are semantically breaking changes; the compiler can warn when a function's purity level regresses between versions
+
+#### Design Philosophy
+
+No other systems language infers function purity at compile time without annotations. Haskell tracks effects but requires the programmer to use monads. Rust has no purity tracking. D has `pure` as a keyword. Gorget's approach is fully automatic — write normal code and the compiler tells you what's pure.
+
+The key insight is that borrow checking already walks every expression in every function body. Adding purity observation to this existing walk is almost free — it's a few extra flags per function, not a new pass.
+
+---
+
 ## 4. Type System
 
 ### 4.1 Structs

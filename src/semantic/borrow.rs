@@ -548,6 +548,7 @@ struct BorrowChecker<'a> {
     with_guarded_conditions: Vec<(Vec<String>, Span, WithGuardKind)>,
     /// Depth of `with` blocks (for detecting spawn inside `with`).
     with_depth: usize,
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3945,6 +3946,7 @@ impl<'a> BorrowChecker<'a> {
             }
             FunctionBody::Declaration | FunctionBody::Extern(_) => {}
         }
+
     }
 }
 
@@ -4699,7 +4701,7 @@ pub fn check_module(
     expr_types: &FxHashMap<Span, TypeId>,
     method_resolutions: &FxHashMap<usize, DefId>,
     errors: &mut Vec<SemanticError>,
-) -> (FxHashMap<DefId, super::SharedStrategy>, Vec<super::errors::SemanticWarning>) {
+) -> (FxHashMap<DefId, super::SharedStrategy>, Vec<super::errors::SemanticWarning>, super::purity::PurityByName) {
     // Phase 4: compute which structs have reference-type fields
     let ref_type_structs = compute_ref_type_structs(module, scopes);
     let struct_field_ref_flags = compute_struct_field_ref_flags(module, scopes, &ref_type_structs);
@@ -4748,7 +4750,11 @@ pub fn check_module(
 
     warnings.extend(checker.stale_warnings);
     errors.extend(checker.errors);
-    (checker.shared_out, warnings)
+
+    // Pass 5c: Purity inference — lightweight AST walk
+    let purity_by_name = infer_purity(module, scopes, resolution_map);
+
+    (checker.shared_out, warnings, purity_by_name)
 }
 
 /// Recursively check items, descending into `Item::Module` wrappers.
@@ -4822,6 +4828,368 @@ fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
             }
             _ => {}
         }
+    }
+}
+
+// ─── Pass 5c: Purity inference ──────────────────────────────
+
+/// Infer purity for all functions in a module.
+///
+/// Two-pass approach:
+/// 1. First pass: compute local purity (ignoring callee purity) for each function.
+/// 2. Second pass: propagate callee purity through the call graph (fixed-point).
+fn infer_purity(
+    module: &Module,
+    scopes: &ScopeTable,
+    resolution_map: &ResolutionMap,
+) -> super::purity::PurityByName {
+    use super::purity::{Purity, PurityByName};
+
+    let mut result: PurityByName = PurityByName::default();
+    let mut call_graph: FxHashMap<String, Vec<String>> = FxHashMap::default(); // caller → callees
+
+    // Pass 1: Compute local purity for each function
+    infer_purity_items(&module.items, scopes, resolution_map, &mut result, &mut call_graph);
+
+    // Pass 2: Propagate callee purity (fixed-point iteration)
+    // Each function's purity is the join of its local purity and all callees' purity.
+    let mut changed = true;
+    let mut iterations = 0;
+    while changed && iterations < 100 {
+        changed = false;
+        iterations += 1;
+        for (caller, callees) in &call_graph {
+            let mut new_purity = result.get(caller).copied().unwrap_or(Purity::Pure);
+            for callee in callees {
+                let callee_purity = result.get(callee).copied()
+                    .unwrap_or(Purity::HasSideEffects); // unknown callee → impure
+                new_purity = new_purity.join(callee_purity);
+            }
+            if let Some(existing) = result.get_mut(caller) {
+                if *existing != new_purity {
+                    *existing = new_purity;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Walk AST items and compute local purity for each function.
+fn infer_purity_items(
+    items: &[Spanned<Item>],
+    scopes: &ScopeTable,
+    resolution_map: &ResolutionMap,
+    result: &mut super::purity::PurityByName,
+    call_graph: &mut FxHashMap<String, Vec<String>>,
+) {
+    for item in items {
+        match &item.node {
+            Item::Module { items: inner, .. } => {
+                infer_purity_items(inner, scopes, resolution_map, result, call_graph);
+            }
+            Item::Function(f) => {
+                let (purity, callees) = infer_function_purity(f, scopes, resolution_map);
+                result.insert(f.name.node.clone(), purity);
+                if !callees.is_empty() {
+                    call_graph.insert(f.name.node.clone(), callees);
+                }
+            }
+            Item::Equip(equip) => {
+                let type_name = match &equip.type_.node {
+                    Type::Named { name, .. } => name.node.clone(),
+                    _ => continue,
+                };
+                for method in &equip.items {
+                    let mangled = format!("{}__{}", type_name, method.node.name.node);
+                    let (purity, callees) = infer_function_purity(&method.node, scopes, resolution_map);
+                    result.insert(mangled.clone(), purity);
+                    if !callees.is_empty() {
+                        call_graph.insert(mangled, callees);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Infer local purity for a single function definition.
+/// Returns (local_purity, list_of_callee_names).
+fn infer_function_purity(
+    func: &FunctionDef,
+    scopes: &ScopeTable,
+    resolution_map: &ResolutionMap,
+) -> (super::purity::Purity, Vec<String>) {
+    use super::purity::{Purity, PurityAccumulator};
+
+    let mut acc = PurityAccumulator::new();
+    let mut callees = Vec::new();
+
+    // Extern/Declaration functions are impure by default
+    match &func.body {
+        FunctionBody::Extern(_) | FunctionBody::Declaration => {
+            return (Purity::HasSideEffects, callees);
+        }
+        _ => {}
+    }
+
+    // &/! params mean function may mutate args
+    for param in &func.params {
+        if matches!(param.node.ownership, Ownership::MutableBorrow | Ownership::Move) {
+            acc.mutates_param();
+            break;
+        }
+    }
+
+    // Walk the body
+    match &func.body {
+        FunctionBody::Block(block) => {
+            purity_walk_block(block, scopes, resolution_map, &mut acc, &mut callees);
+        }
+        FunctionBody::Expression(expr) => {
+            purity_walk_expr(expr, scopes, resolution_map, &mut acc, &mut callees);
+        }
+        _ => {}
+    }
+
+    (acc.finish(), callees)
+}
+
+/// Walk a block for purity analysis.
+fn purity_walk_block(
+    block: &Block,
+    scopes: &ScopeTable,
+    resolution_map: &ResolutionMap,
+    acc: &mut super::purity::PurityAccumulator,
+    callees: &mut Vec<String>,
+) {
+    for stmt in &block.stmts {
+        purity_walk_stmt(&stmt.node, scopes, resolution_map, acc, callees);
+    }
+}
+
+/// Walk a statement for purity analysis.
+fn purity_walk_stmt(
+    stmt: &Stmt,
+    scopes: &ScopeTable,
+    resolution_map: &ResolutionMap,
+    acc: &mut super::purity::PurityAccumulator,
+    callees: &mut Vec<String>,
+) {
+    match stmt {
+        Stmt::VarDecl { value, .. } => {
+            purity_walk_expr(value, scopes, resolution_map, acc, callees);
+        }
+        Stmt::Assign { target, value } => {
+            // Check if target is a global
+            if let Expr::Identifier(_) = &target.node {
+                if let Some(&def_id) = resolution_map.get(&target.span.start) {
+                    let kind = scopes.get_def(def_id).kind;
+                    if kind == DefKind::Static {
+                        acc.writes_global();
+                    }
+                }
+            }
+            purity_walk_expr(target, scopes, resolution_map, acc, callees);
+            purity_walk_expr(value, scopes, resolution_map, acc, callees);
+        }
+        Stmt::CompoundAssign { target, value, .. } => {
+            if let Expr::Identifier(_) = &target.node {
+                if let Some(&def_id) = resolution_map.get(&target.span.start) {
+                    let kind = scopes.get_def(def_id).kind;
+                    if kind == DefKind::Static {
+                        acc.writes_global();
+                    }
+                }
+            }
+            purity_walk_expr(target, scopes, resolution_map, acc, callees);
+            purity_walk_expr(value, scopes, resolution_map, acc, callees);
+        }
+        Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            purity_walk_expr(expr, scopes, resolution_map, acc, callees);
+        }
+        Stmt::Expr(expr) => {
+            purity_walk_expr(expr, scopes, resolution_map, acc, callees);
+        }
+        Stmt::If { condition, then_body, elif_branches, else_body } => {
+            purity_walk_expr(condition, scopes, resolution_map, acc, callees);
+            purity_walk_block(then_body, scopes, resolution_map, acc, callees);
+            for (cond, block) in elif_branches {
+                purity_walk_expr(cond, scopes, resolution_map, acc, callees);
+                purity_walk_block(block, scopes, resolution_map, acc, callees);
+            }
+            if let Some(block) = else_body {
+                purity_walk_block(block, scopes, resolution_map, acc, callees);
+            }
+        }
+        Stmt::While { condition, body, else_body } => {
+            purity_walk_expr(condition, scopes, resolution_map, acc, callees);
+            purity_walk_block(body, scopes, resolution_map, acc, callees);
+            if let Some(block) = else_body {
+                purity_walk_block(block, scopes, resolution_map, acc, callees);
+            }
+        }
+        Stmt::For { iterable, body, else_body, .. } => {
+            purity_walk_expr(iterable, scopes, resolution_map, acc, callees);
+            purity_walk_block(body, scopes, resolution_map, acc, callees);
+            if let Some(block) = else_body {
+                purity_walk_block(block, scopes, resolution_map, acc, callees);
+            }
+        }
+        Stmt::Match { scrutinee, arms, else_arm } => {
+            purity_walk_expr(scrutinee, scopes, resolution_map, acc, callees);
+            for item in arms {
+                if let Some(arm) = item.arm() {
+                    if let Some(guard) = &arm.guard {
+                        purity_walk_expr(guard, scopes, resolution_map, acc, callees);
+                    }
+                    purity_walk_expr(&arm.body, scopes, resolution_map, acc, callees);
+                }
+            }
+            if let Some(block) = else_arm {
+                purity_walk_block(block, scopes, resolution_map, acc, callees);
+            }
+        }
+        Stmt::With { body, .. } => {
+            acc.accesses_shared(); // `with` blocks access shared state
+            purity_walk_block(body, scopes, resolution_map, acc, callees);
+        }
+        Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } | Stmt::OnError { body } => {
+            purity_walk_block(body, scopes, resolution_map, acc, callees);
+        }
+        Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
+            purity_walk_expr(condition, scopes, resolution_map, acc, callees);
+            if let Some(msg) = message {
+                purity_walk_expr(msg, scopes, resolution_map, acc, callees);
+            }
+        }
+        Stmt::Item(item) => {
+            if let Item::Function(_) = &**item {
+                // Nested function — purity is computed separately; skip body
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Walk an expression for purity analysis.
+/// Uses a generic sub-expression visitor to avoid coupling to every AST variant.
+fn purity_walk_expr(
+    expr: &Spanned<Expr>,
+    scopes: &ScopeTable,
+    resolution_map: &ResolutionMap,
+    acc: &mut super::purity::PurityAccumulator,
+    callees: &mut Vec<String>,
+) {
+    match &expr.node {
+        Expr::Identifier(_) => {
+            // Check if reading a global variable
+            if let Some(&def_id) = resolution_map.get(&expr.span.start) {
+                let kind = scopes.get_def(def_id).kind;
+                if kind == DefKind::Static {
+                    acc.reads_global();
+                }
+            }
+        }
+        Expr::Call { callee, args, .. } => {
+            // Record callee name for call graph propagation
+            if let Expr::Identifier(name) = &callee.node {
+                callees.push(name.clone());
+            } else if let Expr::Path { segments } = &callee.node {
+                if let Some(last) = segments.last() {
+                    callees.push(last.node.clone());
+                }
+            }
+            purity_walk_expr(callee, scopes, resolution_map, acc, callees);
+            for arg in args {
+                purity_walk_expr(&arg.node.value, scopes, resolution_map, acc, callees);
+            }
+        }
+        Expr::MethodCall { receiver, method, args, .. } => {
+            let method_name = method.node.clone();
+            callees.push(method_name);
+            purity_walk_expr(receiver, scopes, resolution_map, acc, callees);
+            for arg in args {
+                purity_walk_expr(&arg.node.value, scopes, resolution_map, acc, callees);
+            }
+        }
+        Expr::Await { expr: inner } | Expr::Spawn { expr: inner } | Expr::SpawnBlocking { expr: inner } => {
+            acc.accesses_shared();
+            purity_walk_expr(inner, scopes, resolution_map, acc, callees);
+        }
+        _ => {
+            // Generic sub-expression walk for all other variants
+            visit_expr_children(expr, |child| {
+                purity_walk_expr(child, scopes, resolution_map, acc, callees);
+            });
+        }
+    }
+}
+
+/// Visit all direct child expressions of an expression node.
+/// This avoids having to enumerate every AST variant for purity walking.
+fn visit_expr_children(expr: &Spanned<Expr>, mut visit: impl FnMut(&Spanned<Expr>)) {
+    match &expr.node {
+        Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
+        | Expr::NoneLiteral | Expr::SelfExpr | Expr::It | Expr::Identifier(_)
+        | Expr::Path { .. } => {}
+        Expr::BinaryOp { left, right, .. } => { visit(left); visit(right); }
+        Expr::UnaryOp { operand, .. } => visit(operand),
+        Expr::MutableBorrow { expr: inner } | Expr::Move { expr: inner }
+        | Expr::Deref { expr: inner } => visit(inner),
+        Expr::Rethrow { expr: inner, transform, .. } => { visit(inner); visit(transform); }
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
+            visit(condition); visit(then_branch);
+            for (cond, body) in elif_branches { visit(cond); visit(body); }
+            if let Some(e) = else_branch { visit(e); }
+        }
+        Expr::Index { object, index } => { visit(object); visit(index); }
+        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => visit(object),
+        Expr::TupleLiteral(items) | Expr::ArrayLiteral(items) => {
+            for item in items { visit(item); }
+        }
+        Expr::StructLiteral { args, .. } => {
+            for arg in args { visit(arg); }
+        }
+        Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => visit(body),
+        Expr::ListComprehension { expr, iterable, condition, .. } => {
+            visit(expr); visit(iterable);
+            if let Some(c) = condition { visit(c); }
+        }
+        Expr::As { expr: inner, .. } | Expr::Is { expr: inner, .. } => visit(inner),
+        Expr::Range { start, end, .. } => {
+            if let Some(s) = start { visit(s); }
+            if let Some(e) = end { visit(e); }
+        }
+        Expr::StringLiteral(_) => {
+            // Interpolation segments are text-only at the AST level; no child exprs to walk
+        }
+        Expr::Call { callee, args, .. } => {
+            visit(callee);
+            for arg in args { visit(&arg.node.value); }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            visit(receiver);
+            for arg in args { visit(&arg.node.value); }
+        }
+        Expr::Await { expr: inner } | Expr::Spawn { expr: inner } | Expr::SpawnBlocking { expr: inner } => {
+            visit(inner);
+        }
+        Expr::Match { scrutinee, arms, else_arm } => {
+            visit(scrutinee);
+            for arm in arms {
+                if let Some(guard) = &arm.guard { visit(guard); }
+                visit(&arm.body);
+            }
+            if let Some(e) = else_arm { visit(e); }
+        }
+        Expr::DictLiteral(pairs) => {
+            for (k, v) in pairs { visit(k); visit(v); }
+        }
+        _ => {} // remaining niche variants — conservative (treated as pure)
     }
 }
 

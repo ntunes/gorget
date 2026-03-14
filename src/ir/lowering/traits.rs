@@ -18,6 +18,11 @@ use super::exprs::lower_expr;
 use super::generics;
 use super::stmts::lower_block;
 
+/// Return the stored ParamABI entries for a vtable method.
+fn vtable_abis(vtable_method: &VTableMethod) -> Vec<super::context::ParamABI> {
+    vtable_method.param_abis.clone()
+}
+
 /// Information about a trait's vtable layout.
 pub struct TraitVTableInfo {
     /// Name of the VTable struct type (e.g., "Shape_VTable").
@@ -48,6 +53,8 @@ pub struct VTableMethod {
     pub return_type: TypeId,
     /// Whether self is `&self` (mutable borrow).
     pub self_is_mutable: bool,
+    /// Per-parameter ABI (self + non-self params). Computed from ownership at trait definition.
+    pub param_abis: Vec<super::context::ParamABI>,
 }
 
 /// Pre-scan: register VTable and TraitObj types for all non-generic trait definitions.
@@ -111,6 +118,11 @@ pub fn register_trait_types(
                     // base_param_types uses map_ast_type (for fn_sigs pass-by-pointer at call sites).
                     let mut param_types = vec![self_type];
                     let mut base_param_types = vec![self_type];
+                    let mut param_abis = vec![if self_is_mutable {
+                        super::context::ParamABI::ByMutPtr
+                    } else {
+                        super::context::ParamABI::ByPtr
+                    }];
                     for p in &method_def.params {
                         if p.node.name.node == "self" {
                             continue;
@@ -119,6 +131,7 @@ pub fn register_trait_types(
                         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
                         param_types.push(gir_type);
                         base_param_types.push(base_type);
+                        param_abis.push(ctx.compute_param_abi(base_type, p.node.ownership));
                     }
 
                     // Create function pointer type in the registry
@@ -134,6 +147,7 @@ pub fn register_trait_types(
                         base_param_types,
                         return_type,
                         self_is_mutable,
+                        param_abis,
                     });
                 }
             }
@@ -249,12 +263,14 @@ pub fn register_trait_equip_sigs(
                     // Use base_param_types for fn_sigs so pass-by-pointer
                     // triggers correctly at call sites (is_resource_type check).
                     ctx.fn_sigs.insert(
-                        mangled,
+                        mangled.clone(),
                         (
                             vtable_method.base_param_types.clone(),
                             vtable_method.return_type,
                         ),
                     );
+                    // Compute ABI from vtable method info
+                    ctx.fn_param_abis.insert(mangled, vtable_abis(vtable_method));
                 } else {
                     // Method not in this trait's vtable — likely inherited from parent trait.
                     // Register as Type__method for direct dispatch.
@@ -264,17 +280,29 @@ pub fn register_trait_equip_sigs(
                         .unwrap_or(false);
                     let ret_type = ctx.type_mapper.map_ast_type(&method_def.return_type.node);
                     let mut param_types = Vec::new();
+                    let mut abis = Vec::new();
                     if has_self {
                         let self_type_id = ctx.type_mapper.map_ast_type(&equip.type_.node);
                         let self_ptr_type = ctx.register_ptr_type(self_type_id);
                         param_types.push(self_ptr_type);
+                        let self_is_mutable = method_def.params.first()
+                            .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow))
+                            .unwrap_or(false);
+                        abis.push(if self_is_mutable {
+                            super::context::ParamABI::ByMutPtr
+                        } else {
+                            super::context::ParamABI::ByPtr
+                        });
                     }
                     for p in &method_def.params {
                         if p.node.name.node == "self" { continue; }
-                        param_types.push(ctx.type_mapper.map_ast_type(&p.node.type_.node));
+                        let base = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                        param_types.push(base);
+                        abis.push(ctx.compute_param_abi(base, p.node.ownership));
                     }
                     let direct_name = format!("{type_name}__{method_name}");
-                    ctx.fn_sigs.insert(direct_name, (param_types, ret_type));
+                    ctx.fn_sigs.insert(direct_name.clone(), (param_types, ret_type));
+                    ctx.fn_param_abis.insert(direct_name, abis);
                 }
             }
 
@@ -288,12 +316,13 @@ pub fn register_trait_equip_sigs(
                     vtable_method.name
                 );
                 ctx.fn_sigs.insert(
-                    mangled,
+                    mangled.clone(),
                     (
                         vtable_method.base_param_types.clone(),
                         vtable_method.return_type,
                     ),
                 );
+                ctx.fn_param_abis.insert(mangled, vtable_abis(vtable_method));
             }
 
             // Register sigs for parent trait default methods as Type__method
@@ -317,11 +346,15 @@ pub fn register_trait_equip_sigs(
                                 let self_type_id = ctx.type_mapper.map_ast_type(&equip.type_.node);
                                 let self_ptr_type = ctx.register_ptr_type(self_type_id);
                                 let mut param_types = vec![self_ptr_type];
+                                let mut abis = vec![super::context::ParamABI::ByPtr];
                                 for p in &method_def.params {
                                     if p.node.name.node == "self" { continue; }
-                                    param_types.push(ctx.type_mapper.map_ast_type(&p.node.type_.node));
+                                    let base = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                                    param_types.push(base);
+                                    abis.push(ctx.compute_param_abi(base, p.node.ownership));
                                 }
-                                ctx.fn_sigs.insert(direct_name, (param_types, ret_type));
+                                ctx.fn_sigs.insert(direct_name.clone(), (param_types, ret_type));
+                                ctx.fn_param_abis.insert(direct_name, abis);
                             }
                         }
                     }
@@ -827,6 +860,7 @@ pub fn register_unregistered_trait_equip_sigs(
                     .unwrap_or(false);
 
                 let mut param_types = Vec::new();
+                let mut abis = Vec::new();
                 if has_self {
                     let self_type_id =
                         ctx.type_mapper.map_ast_type(&equip.type_.node);
@@ -847,14 +881,19 @@ pub fn register_unregistered_trait_equip_sigs(
                         ctx.register_ptr_type(self_type_id)
                     };
                     param_types.push(self_ptr_type);
+                    abis.push(if self_is_mutable {
+                        super::context::ParamABI::ByMutPtr
+                    } else {
+                        super::context::ParamABI::ByPtr
+                    });
                 }
                 for p in &method_def.params {
                     if p.node.name.node == "self" {
                         continue;
                     }
-                    param_types.push(
-                        ctx.type_mapper.map_ast_type(&p.node.type_.node),
-                    );
+                    let base = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                    param_types.push(base);
+                    abis.push(ctx.compute_param_abi(base, p.node.ownership));
                 }
 
                 if has_self {
@@ -864,7 +903,8 @@ pub fn register_unregistered_trait_equip_sigs(
                         method_def.name.node
                     );
                     ctx.fn_sigs
-                        .insert(mangled, (param_types, ret_type));
+                        .insert(mangled.clone(), (param_types, ret_type));
+                    ctx.fn_param_abis.insert(mangled, abis);
                 } else {
                     // Static methods: use Trait_for_Type__method to avoid conflicts
                     let mangled = mangle_trait_equip_name(
@@ -874,7 +914,8 @@ pub fn register_unregistered_trait_equip_sigs(
                         ctx,
                     );
                     ctx.fn_sigs
-                        .insert(mangled, (param_types, ret_type));
+                        .insert(mangled.clone(), (param_types, ret_type));
+                    ctx.fn_param_abis.insert(mangled, abis);
                 }
             }
 
@@ -900,6 +941,7 @@ pub fn register_unregistered_trait_equip_sigs(
                             .map(|p| p.node.name.node == "self")
                             .unwrap_or(false);
                         let mut param_types = Vec::new();
+                        let mut abis = Vec::new();
                         if has_self {
                             let self_type_id = ctx.type_mapper.map_ast_type(&equip.type_.node);
                             let self_is_mutable = default_method.params.first()
@@ -914,18 +956,27 @@ pub fn register_unregistered_trait_equip_sigs(
                                 ctx.register_ptr_type(self_type_id)
                             };
                             param_types.push(self_ptr_type);
+                            abis.push(if self_is_mutable {
+                                super::context::ParamABI::ByMutPtr
+                            } else {
+                                super::context::ParamABI::ByPtr
+                            });
                         }
                         for p in &default_method.params {
                             if p.node.name.node == "self" { continue; }
                             let subst_p = generics::substitute_type_pub(&p.node.type_.node, &self_subs_sig);
-                            param_types.push(ctx.type_mapper.map_ast_type_mut(&subst_p, &mut ctx.type_registry));
+                            let base = ctx.type_mapper.map_ast_type_mut(&subst_p, &mut ctx.type_registry);
+                            param_types.push(base);
+                            abis.push(ctx.compute_param_abi(base, p.node.ownership));
                         }
                         if has_self {
                             let mangled = format!("{type_name}__{method_name}");
-                            ctx.fn_sigs.insert(mangled, (param_types, ret_type));
+                            ctx.fn_sigs.insert(mangled.clone(), (param_types, ret_type));
+                            ctx.fn_param_abis.insert(mangled, abis);
                         } else {
                             let mangled = mangle_trait_equip_name(trait_type, &type_name, method_name, ctx);
-                            ctx.fn_sigs.insert(mangled, (param_types, ret_type));
+                            ctx.fn_sigs.insert(mangled.clone(), (param_types, ret_type));
+                            ctx.fn_param_abis.insert(mangled, abis);
                         }
                     }
                 }

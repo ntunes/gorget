@@ -544,7 +544,11 @@ pub(super) fn register_collection_alias(
         };
         registry.add_type_def(type_def);
     } else {
-        // Register a simple struct TypeDef so the C backend can find it and emit collection alias
+        // Register a simple struct TypeDef so the C backend can find it and emit collection alias.
+        // NOTE: We use default metadata (CopySemantics::Copy) here even though collections are
+        // technically resource types. Changing to Resource would make needs_drop() emit scope-end
+        // drops, but the IR doesn't emit move-zeroing for field reads, causing double-frees.
+        // The C backend already identifies collections via is_resource_name() hardcoded prefixes.
         let type_def = TypeDef {
             name: mangled_name.to_string(),
             kind: TypeDefKind::Struct(StructDef { fields: vec![] }),

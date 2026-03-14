@@ -684,7 +684,7 @@ pub fn lower_module(
     }
 
     // Register monomorphized function signatures
-    generic_collector.register_fn_sigs(&ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_ownerships);
+    generic_collector.register_fn_sigs(&ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_ownerships, &mut ctx.fn_param_abis);
 
     // Pre-scan: register non-generic equip method signatures
     for item in &ast_module.items {
@@ -736,6 +736,25 @@ pub fn lower_module(
 
                     ctx.fn_sigs.insert(mangled.clone(), (param_types, ret_type));
 
+                    // Compute and insert ParamABI for equip methods
+                    let mut param_abis = Vec::new();
+                    if has_self {
+                        let self_is_mutable = method_def.params.first()
+                            .map(|p| matches!(p.node.ownership, ast::Ownership::MutableBorrow))
+                            .unwrap_or(false);
+                        param_abis.push(if self_is_mutable {
+                            context::ParamABI::ByMutPtr
+                        } else {
+                            context::ParamABI::ByPtr
+                        });
+                    }
+                    for p in &method_def.params {
+                        if p.node.name.node == "self" { continue; }
+                        let base = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                        param_abis.push(ctx.compute_param_abi(base, p.node.ownership));
+                    }
+                    ctx.fn_param_abis.insert(mangled.clone(), param_abis);
+
                     // Register extern binding for equip methods (e.g., UdpSocket__local_addr → gorget_udp_local_addr)
                     if let FunctionBody::Extern(c_symbol) = &method_def.body {
                         ctx.extern_bindings.insert(mangled, c_symbol.clone());
@@ -747,7 +766,7 @@ pub fn lower_module(
 
     // Register monomorphized equip method signatures (including default trait methods)
     generic_collector.register_equip_sigs_with_defaults(
-        &mut ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, Some(ast_module));
+        &mut ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_abis, Some(ast_module));
 
     // Register built-in method signatures for Option/Result instantiations.
     // These methods are inlined by the C backend (not real functions), but
@@ -1087,6 +1106,9 @@ pub fn lower_module(
 
     // Thread ParamABI data to the module for C backend consumption
     module.fn_param_abis = ctx.fn_param_abis.clone();
+
+    // Thread purity data to the module
+    module.fn_purity = ctx.analysis.fn_purity.clone();
 
     module
 }
@@ -1899,7 +1921,7 @@ fn register_builtin_enum_method_sigs(
     use crate::ir::types::TypeDefKind;
 
     // Collect signatures first (to avoid borrow conflicts on ctx)
-    let mut sigs_to_add: Vec<(String, Vec<TypeId>, TypeId)> = Vec::new();
+    let mut sigs_to_add: Vec<(String, Vec<TypeId>, TypeId, Vec<context::ParamABI>)> = Vec::new();
 
     for (base_name, mangled_name) in collector.type_instances() {
         let type_def = ctx.type_registry.get_type_def(mangled_name);
@@ -1922,12 +1944,13 @@ fn register_builtin_enum_method_sigs(
                 .map(|f| f.type_id)
                 .unwrap_or(I64_TYPE);
 
+            use context::ParamABI::*;
             let self_param = vec![self_ptr];
-            sigs_to_add.push((format!("{mangled_name}__unwrap"), self_param.clone(), inner_type));
-            sigs_to_add.push((format!("{mangled_name}__expect"), vec![self_ptr, ctx.type_mapper.str_type], inner_type));
-            sigs_to_add.push((format!("{mangled_name}__unwrap_or"), vec![self_ptr, inner_type], inner_type));
-            sigs_to_add.push((format!("{mangled_name}__is_some"), self_param.clone(), BOOL_TYPE));
-            sigs_to_add.push((format!("{mangled_name}__is_none"), self_param, BOOL_TYPE));
+            sigs_to_add.push((format!("{mangled_name}__unwrap"), self_param.clone(), inner_type, vec![ByPtr]));
+            sigs_to_add.push((format!("{mangled_name}__expect"), vec![self_ptr, ctx.type_mapper.str_type], inner_type, vec![ByPtr, ByValue]));
+            sigs_to_add.push((format!("{mangled_name}__unwrap_or"), vec![self_ptr, inner_type], inner_type, vec![ByPtr, ByValue]));
+            sigs_to_add.push((format!("{mangled_name}__is_some"), self_param.clone(), BOOL_TYPE, vec![ByPtr]));
+            sigs_to_add.push((format!("{mangled_name}__is_none"), self_param, BOOL_TYPE, vec![ByPtr]));
         } else if base_name == "Result" {
             let ok_type = variants.iter()
                 .find(|v| v.name == "Ok")
@@ -1935,17 +1958,19 @@ fn register_builtin_enum_method_sigs(
                 .map(|f| f.type_id)
                 .unwrap_or(I64_TYPE);
 
+            use context::ParamABI::*;
             let self_param = vec![self_ptr];
-            sigs_to_add.push((format!("{mangled_name}__unwrap"), self_param.clone(), ok_type));
-            sigs_to_add.push((format!("{mangled_name}__expect"), vec![self_ptr, ctx.type_mapper.str_type], ok_type));
-            sigs_to_add.push((format!("{mangled_name}__unwrap_or"), vec![self_ptr, ok_type], ok_type));
-            sigs_to_add.push((format!("{mangled_name}__is_ok"), self_param.clone(), BOOL_TYPE));
-            sigs_to_add.push((format!("{mangled_name}__is_err"), self_param, BOOL_TYPE));
+            sigs_to_add.push((format!("{mangled_name}__unwrap"), self_param.clone(), ok_type, vec![ByPtr]));
+            sigs_to_add.push((format!("{mangled_name}__expect"), vec![self_ptr, ctx.type_mapper.str_type], ok_type, vec![ByPtr, ByValue]));
+            sigs_to_add.push((format!("{mangled_name}__unwrap_or"), vec![self_ptr, ok_type], ok_type, vec![ByPtr, ByValue]));
+            sigs_to_add.push((format!("{mangled_name}__is_ok"), self_param.clone(), BOOL_TYPE, vec![ByPtr]));
+            sigs_to_add.push((format!("{mangled_name}__is_err"), self_param, BOOL_TYPE, vec![ByPtr]));
         }
     }
 
-    for (name, params, ret) in sigs_to_add {
-        ctx.fn_sigs.insert(name, (params, ret));
+    for (name, params, ret, abis) in sigs_to_add {
+        ctx.fn_sigs.insert(name.clone(), (params, ret));
+        ctx.fn_param_abis.insert(name, abis);
     }
 }
 
@@ -1971,6 +1996,15 @@ fn register_collection_method_sigs(
             })
             .unwrap_or(I64_TYPE);
 
+        // Helper: insert fn_sigs + fn_param_abis (self by ptr, rest by value)
+        let mut insert_collection_sig = |name: String, params: Vec<TypeId>, ret: TypeId| {
+            let abis: Vec<context::ParamABI> = params.iter().enumerate()
+                .map(|(i, _)| if i == 0 { context::ParamABI::ByPtr } else { context::ParamABI::ByValue })
+                .collect();
+            ctx.fn_sigs.insert(name.clone(), (params, ret));
+            ctx.fn_param_abis.insert(name, abis);
+        };
+
         match base_name {
             "Vector" => {
                 let sigs = vec![
@@ -1987,7 +2021,7 @@ fn register_collection_method_sigs(
                     (format!("{mangled_name}__iter"), vec![self_ptr], array_type),
                 ];
                 for (name, params, ret) in sigs {
-                    ctx.fn_sigs.insert(name, (params, ret));
+                    insert_collection_sig(name, params, ret);
                 }
             }
             "Dict" | "HashMap" => {
@@ -1999,7 +2033,7 @@ fn register_collection_method_sigs(
                     (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE),
                 ];
                 for (name, params, ret) in sigs {
-                    ctx.fn_sigs.insert(name, (params, ret));
+                    insert_collection_sig(name, params, ret);
                 }
             }
             "Set" | "HashSet" => {
@@ -2011,11 +2045,23 @@ fn register_collection_method_sigs(
                     (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE),
                 ];
                 for (name, params, ret) in sigs {
-                    ctx.fn_sigs.insert(name, (params, ret));
+                    insert_collection_sig(name, params, ret);
                 }
             }
             _ => {}
         }
+
+        // Register sentinel-to-Option wrapping for find/index_of on collections
+        if matches!(base_name, "Vector" | "Dict" | "HashMap" | "Set" | "HashSet") {
+            ctx.sentinel_to_option_methods.insert(format!("{mangled_name}__find"));
+            ctx.sentinel_to_option_methods.insert(format!("{mangled_name}__index_of"));
+        }
+    }
+
+    // Register sentinel-to-Option for Str/Bytes/GorgetString/GorgetBytes/GorgetArray builtins
+    for base in &["Str", "GorgetString", "Bytes", "GorgetBytes", "GorgetArray"] {
+        ctx.sentinel_to_option_methods.insert(format!("{base}__find"));
+        ctx.sentinel_to_option_methods.insert(format!("{base}__index_of"));
     }
 }
 
