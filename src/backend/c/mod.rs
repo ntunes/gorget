@@ -2469,11 +2469,20 @@ fn compute_type_overrides(
                 Instruction::Assign { dst, value } => {
                     // Handle float constant assignments for type override propagation
                     // Only F64/F32 — other constants (Str, Bool) are handled by the IR type system
-                    if matches!(value, Operand::Constant(Constant::F64(_)) | Operand::Constant(Constant::F32(_))) {
+                    // Only apply to simple locals (no projections) — a projected dst like
+                    // _1[Deref, Field(4)] means we're writing to a field, not the local itself.
+                    if dst.projections.is_empty()
+                        && matches!(value, Operand::Constant(Constant::F64(_)) | Operand::Constant(Constant::F32(_)))
+                    {
                         let dst_idx = dst.local.0 as usize;
                         type_overrides.entry(dst_idx).or_insert_with(|| "double".to_string());
                     }
                     if let Operand::Copy(src_place) | Operand::Move(src_place) = value {
+                        // Skip type propagation when dst has projections (writing to a field,
+                        // not the local itself) — overriding the base local's type would be wrong.
+                        if !dst.projections.is_empty() {
+                            continue;
+                        }
                         let src_idx = src_place.local.0 as usize;
                         let dst_idx = dst.local.0 as usize;
                         // If source place has a Deref projection, strip pointer from type

@@ -34,6 +34,8 @@
 - **Variable shadowing in nested scopes aliases storage**: Reusing the same variable name in an inner named scope compiles but the C backend appears to alias the storage, so the outer variable's value gets overwritten after the inner scope exits. [added: 2026-03-11]
 
 
+- **C backend: `compute_type_overrides` should use TypeIds, not string manipulation**: The type override system in `src/backend/c/mod.rs` infers C types for GIR locals by string-matching formatted type names — stripping `*` suffixes, matching `"const "` prefixes, looking up struct fields by string name. This is fragile (e.g., the `dst.projections` bug where writing a float to a struct field through a borrow corrupted the borrow's type override to `"double"`). Refactor to track `TypeId`s from the GIR type registry throughout, only formatting to C strings at declaration time. [added: 2026-03-14]
+
 - **C backend: uninitialized return variable in some functions**: At least one generated function has `_0` used uninitialized as a return value. The codegen should ensure all return locals are zero-initialized. Currently suppressed with `-Wuninitialized` not being fatal. [added: 2026-03-13]
 
 - **Metal runtime: ObjC method signature for drawIndexedPrimitives with indirect buffer**: `drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:` not found by clang. Either wrong selector name or missing protocol cast on encoder. Could crash if called. Suppressed with `-Wno-objc-method-access`. [added: 2026-03-13]
