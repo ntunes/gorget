@@ -6,5 +6,9 @@ void main():
     print(f"{err.unwrap_or(99)}")
     if ok.is_ok():
         print("ok is ok")
-    if err.is_err():
+    if err.is_error():
         print("err is err")
+    if err.is_error():
+        print("err is error")
+    if not ok.is_error():
+        print("ok is not error")

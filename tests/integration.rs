@@ -1641,7 +1641,9 @@ fn result_methods() {
 10
 99
 ok is ok
-err is err",
+err is err
+err is error
+ok is not error",
     );
 }
 

@@ -38,7 +38,7 @@ void main():
 
     # --- and_then: closure returns Error (bug #3 fixed: now propagates closure's error) ---
     Result[int, str] chain3 = ok.and_then((int x): Error("nope"))
-    print(f"{chain3.is_err()}")
+    print(f"{chain3.is_error()}")
     print(chain3.unwrap_err())
 
     # --- map -> and_then -> unwrap_or (same type, all int) ---
@@ -75,7 +75,7 @@ void main():
         else:
             print("no")
     Result[str, str] err_as_str = err.map((int x): "yes")
-    print(f"{err_as_str.is_err()}")
+    print(f"{err_as_str.is_error()}")
 
     # --- Cross-type map_err (str -> int) then match ---
     Result[int, int] coded = err.map_err((str e): e.len())

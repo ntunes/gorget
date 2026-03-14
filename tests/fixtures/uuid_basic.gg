@@ -36,6 +36,6 @@ void main():
     print(f"{gen_ver}")
     # Test invalid parse
     Result[UUID, str] bad = UUID.parse("not-a-uuid")
-    bool is_err = bad.is_err()
+    bool is_err = bad.is_error()
     print(f"{is_err}")
     print("done")

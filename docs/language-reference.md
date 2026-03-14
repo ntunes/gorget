@@ -3215,7 +3215,7 @@ Same API as `Set` but does not preserve insertion order. Use when order is irrel
 | `unwrap_or(default)` | `T → T` | Extract value or return default (eager) |
 | `unwrap_or_else(f)` | `(E) → T → T` | Extract value or compute default from error (lazy) |
 | `is_ok()` | `→ bool` | True if `Ok` |
-| `is_err()` | `→ bool` | True if `Error` |
+| `is_error()` | `→ bool` | True if `Error` |
 | `map(f)` | `(T) → U → Result[U, E]` | Apply function to success value |
 | `and_then(f)` | `(T) → Result[U, E] → Result[U, E]` | Flat-map on success |
 | `or_else(f)` | `(E) → Result[T, F] → Result[T, F]` | Flat-map on error |

@@ -46,7 +46,7 @@ void test_direct():
     # 2. Invalid JSON → Err
     HttpRequest req2 = HttpRequest("POST", "/", "", "HTTP/1.1", Dict[str, str](), "not json", Dict[str, str]())
     Result[Json, str] r2 = req2.json()
-    check("json_parse_err", r2.is_err())
+    check("json_parse_err", r2.is_error())
 
     # 3. of_json sets Content-Type: application/json
     Dict[str, Json] obj3 = Dict[str, Json]()

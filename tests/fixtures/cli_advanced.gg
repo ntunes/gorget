@@ -17,7 +17,7 @@ void main():
     Vector[str] a2 = Vector[str]()
     a2.push("--out")
     auto r2 = c2.parse(a2)
-    print(r2.is_err())
+    print(r2.is_error())
 
     # Multiple positionals
     CliParser c3 = CliParser.new("app3", "desc3")

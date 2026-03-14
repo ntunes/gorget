@@ -62,7 +62,7 @@ void main():
     print(f"{has_idx_on_obj}")
     # Parse error
     Result[Json, str] bad_result = json_parse("not json")
-    bool is_err_val = bad_result.is_err()
+    bool is_err_val = bad_result.is_error()
     print(f"{is_err_val}")
     # Unicode escapes
     str json_uni = "[\"\\u0041\", \"\\u0048\\u0069\", \"\\u0041bc\"]"

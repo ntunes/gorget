@@ -48,7 +48,7 @@ void main():
     Vector[str] argv4 = Vector[str]()
     argv4.push("--unknown")
     auto r4 = cli4.parse(argv4)
-    bool is_err = r4.is_err()
+    bool is_err = r4.is_error()
     print(f"{is_err}")
 
     print("done")

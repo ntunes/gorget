@@ -39,10 +39,10 @@ void main():
 
     # 6. is_ok / is_err
     print(f"{Ok(42).is_ok()}")
-    print(f"{Ok(42).is_err()}")
+    print(f"{Ok(42).is_error()}")
     Result[int, str] ex = Error("x")
     print(f"{ex.is_ok()}")
-    print(f"{ex.is_err()}")
+    print(f"{ex.is_error()}")
 
     # 7. Long chain: map -> and_then -> unwrap_or
     int r7 = Ok(3).map((int x): x * 10).and_then((int x): Ok(x + 7)).unwrap_or(-1)

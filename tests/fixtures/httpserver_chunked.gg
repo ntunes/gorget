@@ -22,7 +22,7 @@ HttpServerResponse handle(HttpRequest req):
 
 async void serve_n(int port, int n):
     Result[ServerSocket, str] bind_r = server_socket_bind("127.0.0.1", port)
-    if bind_r.is_err():
+    if bind_r.is_error():
         return
     ServerSocket srv = bind_r.unwrap()
     int i = 0
@@ -48,7 +48,7 @@ async void main():
 
     # Open a raw socket and send a chunked POST manually
     Result[Socket, str] cr = socket_connect("127.0.0.1", port)
-    if cr.is_err():
+    if cr.is_error():
         print("FAIL: connect: " + cr.unwrap_err())
         print("FAIL: body")
         srv.await()
@@ -78,7 +78,7 @@ async void main():
     bool reading_hdrs = true
     while reading_hdrs:
         Result[str, str] hl_r = conn.read_line()
-        if hl_r.is_err():
+        if hl_r.is_error():
             reading_hdrs = false
         else:
             str hl = hl_r.unwrap()

@@ -229,7 +229,7 @@ err.unwrap_or(99)       # 99
 err.unwrap_or_else((str e): 0)  # 0 — lazy: closure only called on Error
 
 ok.is_ok()              # true
-err.is_err()            # true
+err.is_error()          # true
 err.unwrap_err()        # "fail" — extract error, panics if Ok
 ```
 
@@ -272,7 +272,7 @@ Result[int, str] from_err = err.or(alt)   # Ok(77) — falls back to alt
 | `unwrap_or_else(f)` | Extract value or compute default from error | Lazy |
 | `unwrap_err()` | Extract error, panic if `Ok` | — |
 | `is_ok()` | True if `Ok` | — |
-| `is_err()` | True if `Error` | — |
+| `is_error()` | True if `Error` | — |
 | `map(f)` | Transform success value | Lazy |
 | `map_err(f)` | Transform error value | Lazy |
 | `and_then(f)` | Flat-map on success | Lazy |

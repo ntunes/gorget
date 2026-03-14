@@ -4,7 +4,7 @@ from std.collections import Vector
 void main():
     # ── Error: unterminated quoted field ──
     Result[Vector[Vector[str]], str] r_err = parse("\"unclosed")
-    bool csv_is_err = r_err.is_err()
+    bool csv_is_err = r_err.is_error()
     print(f"{csv_is_err}")
 
     # ── has_column / column_index ──

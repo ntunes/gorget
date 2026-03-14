@@ -998,9 +998,9 @@ pub(super) fn lower_method_call(
         }
     }
 
-    // .is_some() / .is_none() / .is_ok() / .is_err() on Option/Result → tag check
+    // .is_some() / .is_none() / .is_ok() / .is_error() on Option/Result → tag check
     // On non-Option/Result types → pass-through (return false)
-    if matches!(method_name, "is_some" | "is_none" | "is_ok" | "is_err") {
+    if matches!(method_name, "is_some" | "is_none" | "is_ok" | "is_error") {
         let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
         let is_option_or_result = type_name.as_ref()
             .map(|n| n.starts_with("Option") || n.starts_with("Result"))

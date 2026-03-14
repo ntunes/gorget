@@ -7,9 +7,9 @@ void main():
 
     # --- is_ok / is_err ---
     print(ok_val.is_ok())
-    print(ok_val.is_err())
+    print(ok_val.is_error())
     print(err_val.is_ok())
-    print(err_val.is_err())
+    print(err_val.is_error())
 
     # --- unwrap / unwrap_err ---
     print(ok_val.unwrap())
@@ -23,7 +23,7 @@ void main():
     Result[int, int] mapped = ok_val.map((int x): x * 2)
     print(mapped.unwrap())
     Result[int, int] mapped_err = err_val.map((int x): x * 2)
-    print(mapped_err.is_err())
+    print(mapped_err.is_error())
     print(mapped_err.unwrap_err())
 
     # --- map_err ---

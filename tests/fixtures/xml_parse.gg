@@ -76,7 +76,7 @@ void main():
 
     # Parse error
     Result[XmlNode, str] bad_result = xml_parse("<unclosed>")
-    bool is_err = bad_result.is_err()
+    bool is_err = bad_result.is_error()
     print(f"{is_err}")
 
     print("done")

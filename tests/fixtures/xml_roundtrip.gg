@@ -16,7 +16,7 @@ void main():
 
     # ── Error: mismatched closing tag ──
     Result[XmlNode, str] r3 = xml_parse("<a></b>")
-    bool r3_err = r3.is_err()
+    bool r3_err = r3.is_error()
     print(f"{r3_err}")
 
     # ── Processing instruction skipped ──
@@ -25,7 +25,7 @@ void main():
 
     # ── Error: unterminated comment ──
     Result[XmlNode, str] r5 = xml_parse("<!-- unterminated")
-    bool r5_err = r5.is_err()
+    bool r5_err = r5.is_error()
     print(f"{r5_err}")
 
     # ── Roundtrip: &gt; in text ──

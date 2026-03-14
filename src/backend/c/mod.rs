@@ -11084,7 +11084,7 @@ fn try_inline_method(func_name: &str) -> Option<InlineMethod> {
             "unwrap" => Some(InlineMethod::ResultUnwrap),
             "expect" => Some(InlineMethod::ResultExpect),
             "is_ok" => Some(InlineMethod::ResultIsOk),
-            "is_err" | "is_error" => Some(InlineMethod::ResultIsErr),
+            "is_error" => Some(InlineMethod::ResultIsErr),
             "unwrap_or" => Some(InlineMethod::ResultUnwrapOr),
             "unwrap_err" => Some(InlineMethod::ResultUnwrapErr),
             "map" => Some(InlineMethod::ResultMap),

@@ -48,12 +48,12 @@ void main():
     # Error path: invalid AES key size
     Vector[uint8] bad_key = bytes_from_str("short")
     Result[CipherContext, str] bad_aes = crypto_aes_ctr_new(bad_key, iv)
-    if bad_aes.is_err():
+    if bad_aes.is_error():
         print("aes error ok")
 
     # Error path: unsupported HMAC algorithm
     Result[Vector[uint8], str] bad_hmac = crypto_hmac("md5", key, msg)
-    if bad_hmac.is_err():
+    if bad_hmac.is_error():
         print("hmac error ok")
 
     print("done")

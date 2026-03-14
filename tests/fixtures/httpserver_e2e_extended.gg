@@ -35,7 +35,7 @@ HttpServerResponse handle(HttpRequest req):
 
 async void serve_n(int port, int n):
     Result[ServerSocket, str] bind_r = server_socket_bind("127.0.0.1", port)
-    if bind_r.is_err():
+    if bind_r.is_error():
         return
     ServerSocket srv = bind_r.unwrap()
     TaskGroup group = TaskGroup()

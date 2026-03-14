@@ -11,9 +11,9 @@ void main():
 
     # --- is_ok / is_err ---
     print(f"{ok.is_ok()}")
-    print(f"{ok.is_err()}")
+    print(f"{ok.is_error()}")
     print(f"{err.is_ok()}")
-    print(f"{err.is_err()}")
+    print(f"{err.is_error()}")
 
     # --- unwrap_or ---
     print(f"{ok.unwrap_or(0)}")
@@ -30,7 +30,7 @@ void main():
     Result[int, str] doubled = ok.map((int x): x * 2)
     print(f"{doubled.unwrap()}")
     Result[int, str] mapped_err = err.map((int x): x * 2)
-    print(f"{mapped_err.is_err()}")
+    print(f"{mapped_err.is_error()}")
 
     # --- map_err ---
     Result[int, str] err_mapped = err.map_err((str e): "mapped")
@@ -42,7 +42,7 @@ void main():
     Result[int, str] chained = ok.and_then((int x): Ok(x + 1))
     print(f"{chained.unwrap()}")
     Result[int, str] chain_to_err = ok.and_then((int x): Error("oops"))
-    print(f"{chain_to_err.is_err()}")
+    print(f"{chain_to_err.is_error()}")
 
     # --- or ---
     Result[int, str] alt = Ok(77)
@@ -55,12 +55,12 @@ void main():
     Result[int, str] or_else_err = err.or_else((str e): Ok(999))
     print(f"{or_else_err.unwrap()}")
     Result[int, str] or_else_err2 = err.or_else((str e): Error("still bad"))
-    print(f"{or_else_err2.is_err()}")
+    print(f"{or_else_err2.is_error()}")
     print(or_else_err2.unwrap_err())
 
     # --- and_then on Error passes through ---
     Result[int, str] and_err = err.and_then((int x): Ok(x + 1))
-    print(f"{and_err.is_err()}")
+    print(f"{and_err.is_error()}")
     print(and_err.unwrap_err())
 
     # --- or on Ok returns self ---

@@ -41,12 +41,12 @@ void main():
 
     # check is_ok/is_err on each
     for r in res_list:
-        print(f"{r.is_ok()},{r.is_err()}")
+        print(f"{r.is_ok()},{r.is_error()}")
 
     # count successes and failures via filter
     Vector[Result[int, str]] oks = res_list.filter((Result[int, str] r): r.is_ok())
     print(f"ok_count:{oks.len()}")
-    Vector[Result[int, str]] errs = res_list.filter((Result[int, str] r): r.is_err())
+    Vector[Result[int, str]] errs = res_list.filter((Result[int, str] r): r.is_error())
     print(f"err_count:{errs.len()}")
 
     # --- 3. Dict[str, Option[int]] ---
@@ -92,7 +92,7 @@ void main():
     print(f"{unwrapped.get(2).unwrap()}")
 
     Result[Vector[int], str] err_vec = Error("no data")
-    print(f"{err_vec.is_err()}")
+    print(f"{err_vec.is_error()}")
     # NOTE: unwrap_err() skipped — codegen bug assigns Str to int64_t
 
     print("done")

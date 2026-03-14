@@ -2985,7 +2985,7 @@ impl<'a> TypeChecker<'a> {
             "Result" => match method {
                 "unwrap" | "unwrap_or" | "expect" | "unwrap_or_else" => Some(elem_type()),
                 "unwrap_err" => Some(val_type()),
-                "is_ok" | "is_err" => Some(self.types.bool_id),
+                "is_ok" | "is_error" => Some(self.types.bool_id),
                 "map" | "and_then" | "or_else" | "or" | "map_err" => Some(receiver_type),
                 _ => None,
             },

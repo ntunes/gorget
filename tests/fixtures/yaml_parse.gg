@@ -121,7 +121,7 @@ void main():
     # ── Error case ───────────────────────────────────────────
     str yaml_bad_input = r"{unclosed: true"
     Result[Yaml, str] yaml_bad = parse(yaml_bad_input)
-    bool yaml_is_err = yaml_bad.is_err()
+    bool yaml_is_err = yaml_bad.is_error()
     print(f"{yaml_is_err}")
 
     # ── Phase 2: Literal block scalar ─────────────────────
@@ -320,7 +320,7 @@ void main():
     # ── Phase 5: Unknown escape → error (bug fix) ─────────────
     str yaml_p5_be = "v: \"hello\\qworld\"\n"
     Result[Yaml, str] yaml_p5_ber = parse(yaml_p5_be)
-    bool yaml_p5_be_err = yaml_p5_ber.is_err()
+    bool yaml_p5_be_err = yaml_p5_ber.is_error()
     print(f"{yaml_p5_be_err}")
 
     # ── Phase 5: Known escape sequences ───────────────────────
@@ -335,27 +335,27 @@ void main():
 
     # ── Phase 5: Error — unterminated double-quoted string ────
     str yaml_p5_e1 = "v: \"unclosed\n"
-    bool yaml_p5_e1_f = parse(yaml_p5_e1).is_err()
+    bool yaml_p5_e1_f = parse(yaml_p5_e1).is_error()
     print(f"{yaml_p5_e1_f}")
 
     # ── Phase 5: Error — unterminated single-quoted string ────
     str yaml_p5_e2 = "v: 'unclosed\n"
-    bool yaml_p5_e2_f = parse(yaml_p5_e2).is_err()
+    bool yaml_p5_e2_f = parse(yaml_p5_e2).is_error()
     print(f"{yaml_p5_e2_f}")
 
     # ── Phase 5: Error — unterminated flow sequence ───────────
     str yaml_p5_e3 = "[1, 2, 3\n"
-    bool yaml_p5_e3_f = parse(yaml_p5_e3).is_err()
+    bool yaml_p5_e3_f = parse(yaml_p5_e3).is_error()
     print(f"{yaml_p5_e3_f}")
 
     # ── Phase 5: Error — unterminated flow mapping ────────────
     str yaml_p5_e4 = r"{a: 1, b: 2"
-    bool yaml_p5_e4_f = parse(yaml_p5_e4).is_err()
+    bool yaml_p5_e4_f = parse(yaml_p5_e4).is_error()
     print(f"{yaml_p5_e4_f}")
 
     # ── Phase 5: Error — undefined alias ──────────────────────
     str yaml_p5_e5 = "v: *nonexistent\n"
-    bool yaml_p5_e5_f = parse(yaml_p5_e5).is_err()
+    bool yaml_p5_e5_f = parse(yaml_p5_e5).is_error()
     print(f"{yaml_p5_e5_f}")
 
     # ── Phase 5: Empty value → null ───────────────────────────

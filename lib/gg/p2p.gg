@@ -273,7 +273,7 @@ struct Node:
 
 Result[Node, str] p2p_create_node(str bind_addr, int bind_port):
     Result[UdpSocket, str] sock_result = udp_bind(bind_addr, bind_port)
-    if sock_result.is_err():
+    if sock_result.is_error():
         return Error(sock_result.unwrap_err())
     UdpSocket sock = sock_result.unwrap()
     KeyPair ident = p2p_generate_identity()
@@ -304,7 +304,7 @@ Result[bool, str] p2p_send_raw(Node &node, str host, int port, int msg_type, Vec
     node.next_nonce = node.next_nonce + 1
     Vector[uint8] packet = p2p_encode_message(msg_type, nonce, node.identity.peer_id, payload)
     Result[int, str] send_result = node.socket.sendto(packet, host, port)
-    if send_result.is_err():
+    if send_result.is_error():
         return Error(send_result.unwrap_err())
     return Ok(true)
 
@@ -349,12 +349,12 @@ Result[bool, str] p2p_enable_discovery(Node &node, DiscoveryConfig config):
     node.disc_socket.close()
     # Create a new one bound to the multicast port
     Result[UdpSocket, str] ds = udp_bind("0.0.0.0", config.multicast_port)
-    if ds.is_err():
+    if ds.is_error():
         return Error(ds.unwrap_err())
     node.disc_socket = ds.unwrap()
     node.disc_socket.set_multicast_loopback(true)
     Result[bool, str] join = node.disc_socket.join_multicast(config.multicast_group)
-    if join.is_err():
+    if join.is_error():
         return Error(join.unwrap_err())
     node.disc_enabled = true
     node.disc_group = config.multicast_group
@@ -1367,7 +1367,7 @@ Result[int, str] p2p_rpc_send_request(Node &node, int stream_id, Vector[uint8] d
     rpc_buf = bytes_concat(rpc_buf, p2p_make_u32(cid))
     rpc_buf = bytes_concat(rpc_buf, data)
     Result[int, str] send_res = p2p_stream_send_frame(&node, stream_id, rpc_buf)
-    if send_res.is_err():
+    if send_res.is_error():
         return Error(send_res.unwrap_err())
     return Ok(cid)
 
@@ -1377,7 +1377,7 @@ Result[int, str] p2p_rpc_send_response(Node &node, int stream_id, int correlatio
     rpc_buf = bytes_concat(rpc_buf, p2p_make_u32(correlation_id))
     rpc_buf = bytes_concat(rpc_buf, data)
     Result[int, str] send_res = p2p_stream_send_frame(&node, stream_id, rpc_buf)
-    if send_res.is_err():
+    if send_res.is_error():
         return Error(send_res.unwrap_err())
     return Ok(correlation_id)
 
@@ -1770,13 +1770,13 @@ void p2p_stream_tick(Node &node):
 
 P2PEvent p2p_poll_socket(Node &node, UdpSocket &sock):
     Result[UdpPacket, str] recv_result = sock.recvfrom(65536)
-    if recv_result.is_err():
+    if recv_result.is_error():
         return p2p_no_event()
 
     UdpPacket pkt = recv_result.unwrap()
 
     Result[Message, str] decode_result = p2p_decode_message(pkt.data)
-    if decode_result.is_err():
+    if decode_result.is_error():
         return p2p_no_event()
 
     Message msg = decode_result.unwrap()

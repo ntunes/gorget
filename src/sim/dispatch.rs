@@ -4596,7 +4596,7 @@ impl<'m> Interpreter<'m> {
                     let is_ok = matches!(&opt_val, Value::Enum { tag: 0, .. });
                     return Ok(Some(Value::Bool(is_ok)));
                 }
-                "is_err" => {
+                "is_error" => {
                     let is_err = !matches!(&opt_val, Value::Enum { tag: 0, .. });
                     return Ok(Some(Value::Bool(is_err)));
                 }

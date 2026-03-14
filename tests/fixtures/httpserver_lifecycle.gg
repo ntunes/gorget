@@ -53,7 +53,7 @@ async void main():
     sleep(0.5).await()
 
     Result[Socket, str] cr = socket_connect("127.0.0.1", port2)
-    if cr.is_err():
+    if cr.is_error():
         print("FAIL: connect")
         srv2.await()
         return
@@ -68,7 +68,7 @@ async void main():
     bool reading_hdrs = true
     while reading_hdrs:
         Result[str, str] line_r = conn.read_line()
-        if line_r.is_err():
+        if line_r.is_error():
             reading_hdrs = false
         else:
             str line = line_r.unwrap()
@@ -95,7 +95,7 @@ async void main():
     # Attempt to read — should get EOF (Ok("")) because server closed the connection.
     Result[str, str] resp2_r = conn.read_line()
     bool closed = false
-    if resp2_r.is_err():
+    if resp2_r.is_error():
         closed = true
     else:
         str resp2_line = resp2_r.unwrap()

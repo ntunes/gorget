@@ -61,9 +61,9 @@ async int do_result_work():
 
     # --- is_ok / is_err ---
     print(ok_val.is_ok())
-    print(ok_val.is_err())
+    print(ok_val.is_error())
     print(err_val.is_ok())
-    print(err_val.is_err())
+    print(err_val.is_error())
 
     # --- unwrap_or ---
     int or1 = ok_val.unwrap_or(0)
@@ -75,7 +75,7 @@ async int do_result_work():
     Result[int, str] mapped = ok_val.map((int x): x * 5)
     print(mapped.unwrap())
     Result[int, str] mapped_err = err_val.map((int x): x * 5)
-    print(mapped_err.is_err())
+    print(mapped_err.is_error())
 
     # --- unwrap_err ---
     print(err_val.unwrap_err())

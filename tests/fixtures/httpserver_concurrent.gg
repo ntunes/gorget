@@ -34,7 +34,7 @@ async void serve_n(int port, int n):
 async void client_task(int port, Channel[int] results):
     sleep(0.5).await()
     Result[Socket, str] cr = socket_connect("127.0.0.1", port)
-    if cr.is_err():
+    if cr.is_error():
         results.send(0)
         return
     Socket c = cr.unwrap()
