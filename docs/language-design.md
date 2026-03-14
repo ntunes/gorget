@@ -670,7 +670,7 @@ equip Point:
         return Point(0.0, 0.0)
 ```
 
-Method calls **auto-borrow** (no &/! at call sites for methods).
+Method receivers are **auto-borrowed**: the compiler automatically takes a reference to the receiver based on the method's `self` declaration — immutable borrow for `self`, mutable borrow for `&self`, move for `!self`. No `&` or `!` annotation is needed at the method call site. This is the one exception to Gorget's rule that `&` must appear at the call site to acknowledge mutation — method signatures are part of the API contract, and requiring explicit borrows on every method call would make chaining and fluent APIs impractical (`(&(&items).filter(f)).map(g)`).
 
 ### 4.6 Equipping Traits
 

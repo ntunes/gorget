@@ -2494,7 +2494,7 @@ When a method is called on a value, the compiler resolves it in this order:
 
 If multiple traits provide a method with the same name, the implementation is ambiguous and must be disambiguated.
 
-Self parameters are **auto-borrowed**: the compiler automatically borrows the receiver at the appropriate mode (`self` = immutable borrow, `&self` = mutable borrow, `!self` = move). No `&`/`!` annotation is needed at the method call site.
+Self parameters are **auto-borrowed**: the compiler automatically borrows the receiver based on the method's `self` declaration — immutable borrow for `self`, mutable borrow for `&self`, move for `!self`. No `&`/`!` annotation is needed at the method call site. This is the one place where Gorget relaxes its rule that `&` must appear at the call site to acknowledge mutation — requiring explicit borrows on every method call would make chaining and fluent APIs impractical.
 
 ---
 
