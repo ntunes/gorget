@@ -574,7 +574,8 @@ equip Plane:
         Vec3 ab = b.sub(a)
         Vec3 ac = c.sub(a)
         Vec3 n = ab.cross(ac).normalize()
-        return Plane(n, 0.0 - n.dot(a))
+        float d = 0.0 - n.dot(a)
+        return Plane(n, d)
 
     float distance_to_point(self, Vec3 p):
         return self.normal.dot(p) + self.d

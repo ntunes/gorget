@@ -454,13 +454,13 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                 ResolvedType ert = get_rtype_at(types.types, expected_type)
                 match ert:
                     case RTFunction(ptypes, _, _):
-                        expected_params = ptypes
+                        expected_params = !ptypes
                     case RTCallableTrait(inner_fn):
                         if inner_fn >= 0 and inner_fn < types.types.len():
                             ResolvedType ifn = get_rtype_at(types.types, inner_fn)
                             match ifn:
                                 case RTFunction(ptypes, _, _):
-                                    expected_params = ptypes
+                                    expected_params = !ptypes
                                 else:
                                     pass
                     case RTMutCallableTrait(inner_fn):
@@ -468,7 +468,7 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                             ResolvedType ifn = get_rtype_at(types.types, inner_fn)
                             match ifn:
                                 case RTFunction(ptypes, _, _):
-                                    expected_params = ptypes
+                                    expected_params = !ptypes
                                 else:
                                     pass
                     case RTConsumeCallableTrait(inner_fn):
@@ -476,7 +476,7 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                             ResolvedType ifn = get_rtype_at(types.types, inner_fn)
                             match ifn:
                                 case RTFunction(ptypes, _, _):
-                                    expected_params = ptypes
+                                    expected_params = !ptypes
                                 else:
                                     pass
                     case RTBoxedCallable(kind_name, inner_fn):
@@ -484,7 +484,7 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                             ResolvedType ifn = get_rtype_at(types.types, inner_fn)
                             match ifn:
                                 case RTFunction(ptypes, _, _):
-                                    expected_params = ptypes
+                                    expected_params = !ptypes
                                 else:
                                     pass
                     else:
@@ -524,7 +524,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                 ResolvedType ct = get_rtype_at(types.types, callee_type)
                 match ct:
                     case RTFunction(ptypes, _, _):
-                        call_param_types = ptypes
+                        call_param_types = !ptypes
                     else:
                         pass
             int ai = 0
@@ -698,10 +698,7 @@ void resolve_call_in_expr(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, T
                                                         new_ret = get_int_at(new_params, 0)
                                                 else:
                                                     pass
-                                        # Update function type and param defs
-                                        int new_fn_type = types.add_type(RTFunction(new_params, ownerships, new_ret))
-                                        scopes.set_def_type(callee_def, new_fn_type)
-                                        # Also update param defs with concrete types
+                                        # Update param defs with concrete types before moving new_params
                                         int pi = 0
                                         while pi < new_params.len():
                                             int np_tid = get_int_at(new_params, pi)
@@ -711,6 +708,9 @@ void resolve_call_in_expr(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, T
                                                 # and update it to the concrete type
                                                 resolve_param_type_var(old_ptid, np_tid, scope_id, &scopes, &types)
                                             pi = pi + 1
+                                        # Update function type
+                                        int new_fn_type = types.add_type(RTFunction(!new_params, ownerships, new_ret))
+                                        scopes.set_def_type(callee_def, new_fn_type)
                                 else:
                                     pass
                 else:
@@ -1031,13 +1031,12 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 SpannedExpr wexpr = with_exprs.get(wi).unwrap()
                 str wname = with_names.get(wi).unwrap()
                 # Unwrap EAs — the parser wraps `expr as name` into EAs(expr, name)
-                SpannedExpr actual_expr = wexpr
                 match wexpr.expr:
                     case EAs(inner, _):
-                        actual_expr = SpannedExpr((*inner).expr, (*inner).span)
+                        wexpr = SpannedExpr((*inner).expr, (*inner).span)
                     else:
                         pass
-                int wtype = infer_expr_type(actual_expr, scopes, &types, ctx)
+                int wtype = infer_expr_type(wexpr, scopes, &types, ctx)
                 if wtype >= 0:
                     int wdef = scopes.lookup_in_subtree(scope_id, wname)
                     if wdef >= 0:

@@ -3372,8 +3372,34 @@ pub fn check_module(
     // Pre-pass: register function signatures so callers can infer return types.
     // This must run before body checking so that e.g. `auto x = imported_fn()`
     // can resolve the function's type.
-    for item in &module.items {
+    register_signatures_recursive(&mut checker, &module.items);
+
+    check_items_recursive_tc(&mut checker, &module.items);
+
+    // Resolve type variables in DefInfos so codegen sees concrete types.
+    // Uses deep resolution to handle composite types like Function([Var, Var], Var).
+    for i in 0..checker.scopes.def_count() {
+        let def_id = DefId(i as u32);
+        if let Some(tid) = checker.scopes.get_def(def_id).type_id {
+            let resolved = checker.resolve_type_deep(tid);
+            if resolved != tid {
+                checker.scopes.get_def_mut(def_id).type_id = Some(resolved);
+            }
+        }
+    }
+
+    errors.extend(checker.errors);
+    (checker.expr_types, checker.method_resolutions)
+}
+
+/// Recursively register function signatures, descending into `Item::Module` wrappers
+/// so that imported module code has type information available.
+fn register_signatures_recursive(checker: &mut TypeChecker, items: &[Spanned<Item>]) {
+    for item in items {
         match &item.node {
+            Item::Module { items: inner, .. } => {
+                register_signatures_recursive(checker, inner);
+            }
             Item::Function(f) => {
                 checker.register_function_signature(f);
             }
@@ -3389,7 +3415,6 @@ pub fn check_module(
                         }
                     }
                 }
-                // Set current_self_type so Self params resolve to the equip target
                 checker.current_self_type = types::ast_type_to_resolved(
                     &impl_block.type_.node,
                     impl_block.type_.span,
@@ -3407,9 +3432,21 @@ pub fn check_module(
             _ => {}
         }
     }
+}
 
-    for item in &module.items {
+/// Recursively type-check items, descending into `Item::Module` wrappers
+/// so that imported module code populates `expr_types` and `method_resolutions`.
+fn check_items_recursive_tc(checker: &mut TypeChecker, items: &[Spanned<Item>]) {
+    for item in items {
         match &item.node {
+            Item::Module { items: inner, .. } => {
+                // Type-check imported module code to populate expr_types/method_resolutions
+                // but discard any type errors — library code may have false positives
+                // in a foreign scope context.
+                let error_count = checker.errors.len();
+                check_items_recursive_tc(checker, inner);
+                checker.errors.truncate(error_count);
+            }
             Item::Function(f) => {
                 checker.check_function(f);
             }
@@ -3425,7 +3462,6 @@ pub fn check_module(
                         }
                     }
                 }
-                // Set current_self_type so SelfExpr resolves to the equip target type
                 checker.current_self_type = types::ast_type_to_resolved(
                     &impl_block.type_.node,
                     impl_block.type_.span,
@@ -3473,21 +3509,6 @@ pub fn check_module(
             _ => {}
         }
     }
-
-    // Resolve type variables in DefInfos so codegen sees concrete types.
-    // Uses deep resolution to handle composite types like Function([Var, Var], Var).
-    for i in 0..checker.scopes.def_count() {
-        let def_id = DefId(i as u32);
-        if let Some(tid) = checker.scopes.get_def(def_id).type_id {
-            let resolved = checker.resolve_type_deep(tid);
-            if resolved != tid {
-                checker.scopes.get_def_mut(def_id).type_id = Some(resolved);
-            }
-        }
-    }
-
-    errors.extend(checker.errors);
-    (checker.expr_types, checker.method_resolutions)
 }
 
 #[cfg(test)]

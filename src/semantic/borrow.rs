@@ -60,6 +60,12 @@ enum BorrowOrigin {
     Param { #[allow(dead_code)] param_index: usize, def_id: DefId },
     /// Local variable — scope-limited, can't escape the function.
     Local(DefId),
+    /// Match binding — owns data extracted from the scrutinee.
+    /// `binding_def_id` is this binding's DefId (for move/invalidation tracking).
+    /// `scrutinee_origin` is the matched expression's origin (for lifetime/return checks).
+    /// `is_ref` is true when the binding has a reference type (str, &T, etc.),
+    /// meaning it borrows from the scrutinee rather than owning the data.
+    MatchBinding { binding_def_id: DefId, scrutinee_origin: Box<BorrowOrigin>, is_ref: bool },
     /// Call result — inherits origins from callee's `return_borrows_from` args.
     CallResult(Vec<BorrowOrigin>),
     /// Conservative fallback — treated as potentially local in Phase 1,
@@ -74,6 +80,11 @@ impl BorrowOrigin {
         match self {
             BorrowOrigin::Local(_) => true,
             BorrowOrigin::Unknown => true,
+            // Only reference-type bindings borrow from the scrutinee.
+            // Non-reference bindings own their extracted data independently.
+            BorrowOrigin::MatchBinding { scrutinee_origin, is_ref, .. } => {
+                if *is_ref { scrutinee_origin.contains_local() } else { false }
+            }
             BorrowOrigin::CallResult(origins) => origins.iter().any(|o| o.contains_local()),
             _ => false,
         }
@@ -83,6 +94,8 @@ impl BorrowOrigin {
     fn references_def(&self, target: DefId) -> bool {
         match self {
             BorrowOrigin::Local(def_id) | BorrowOrigin::Param { def_id, .. } => *def_id == target,
+            // Only check the binding itself, NOT the scrutinee — sibling bindings are independent
+            BorrowOrigin::MatchBinding { binding_def_id, .. } => *binding_def_id == target,
             BorrowOrigin::CallResult(origins) => origins.iter().any(|o| o.references_def(target)),
             BorrowOrigin::Static | BorrowOrigin::Unknown => false,
         }
@@ -92,6 +105,7 @@ impl BorrowOrigin {
     fn local_names(&self, scopes: &ScopeTable) -> Vec<String> {
         match self {
             BorrowOrigin::Local(def_id) => vec![scopes.get_def(*def_id).name.clone()],
+            BorrowOrigin::MatchBinding { binding_def_id, .. } => vec![scopes.get_def(*binding_def_id).name.clone()],
             BorrowOrigin::Unknown => vec!["<unresolved origin>".to_string()],
             BorrowOrigin::CallResult(origins) => {
                 origins.iter().flat_map(|o| o.local_names(scopes)).collect()
@@ -104,6 +118,9 @@ impl BorrowOrigin {
     fn contains_unknown(&self) -> bool {
         match self {
             BorrowOrigin::Unknown => true,
+            BorrowOrigin::MatchBinding { scrutinee_origin, is_ref, .. } => {
+                if *is_ref { scrutinee_origin.contains_unknown() } else { false }
+            }
             BorrowOrigin::CallResult(origins) => origins.iter().any(|o| o.contains_unknown()),
             _ => false,
         }
@@ -113,6 +130,7 @@ impl BorrowOrigin {
     fn source_def_ids(&self) -> Vec<DefId> {
         match self {
             BorrowOrigin::Param { def_id, .. } | BorrowOrigin::Local(def_id) => vec![*def_id],
+            BorrowOrigin::MatchBinding { binding_def_id, .. } => vec![*binding_def_id],
             BorrowOrigin::CallResult(origins) => {
                 origins.iter().flat_map(|o| o.source_def_ids()).collect()
             }
@@ -449,9 +467,6 @@ struct BorrowChecker<'a> {
     with_guarded_conditions: Vec<(String, Span, WithGuardKind)>,
     /// Depth of `with` blocks (for detecting spawn inside `with`).
     with_depth: usize,
-    /// Depth of imported module nesting. When > 0, suppress error reporting
-    /// (we still analyze for metadata, but don't report errors in library code).
-    imported_module_depth: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -514,16 +529,10 @@ impl<'a> BorrowChecker<'a> {
             with_shared_tracked: FxHashSet::default(),
             with_guarded_conditions: Vec::new(),
             with_depth: 0,
-            imported_module_depth: 0,
         }
     }
 
     fn error(&mut self, kind: SemanticErrorKind, span: Span) {
-        // Suppress errors in imported module code — we analyze for metadata
-        // but don't report errors for library code.
-        if self.imported_module_depth > 0 {
-            return;
-        }
         self.errors.push(SemanticError { kind, span });
     }
 
@@ -3159,16 +3168,19 @@ impl<'a> BorrowChecker<'a> {
                     .or_else(|| self.find_def_by_name(name));
                 if let Some(def_id) = def_id {
                     self.mark_live(def_id);
-                    // Only assign scrutinee origin to reference-type or callable-type bindings.
-                    // Non-reference bindings own their data (moved out of the scrutinee),
-                    // so they have Local origin. Reference bindings borrow from the scrutinee.
-                    if let Some(type_id) = self.scopes.get_def(def_id).type_id {
-                        if types::is_reference_type(type_id, self.types, &self.ref_type_structs)
-                            || types::is_callable_type(type_id, self.types)
-                        {
-                            self.var_origins.insert(def_id, scrutinee_origin.clone());
-                        }
-                    }
+                    // All match bindings get MatchBinding origin. In Gorget, match
+                    // destructuring always moves data out of the scrutinee (no `ref`
+                    // patterns), so bindings own their data. `is_ref` is false: the
+                    // binding's lifetime is independent of the scrutinee's lifetime.
+                    // The scrutinee_origin is still stored for diagnostics and for
+                    // reference/callable bindings where the data itself is a borrow.
+                    let is_ref = self.scopes.get_def(def_id).type_id
+                        .map_or(false, |tid| types::is_callable_type(tid, self.types));
+                    self.var_origins.insert(def_id, BorrowOrigin::MatchBinding {
+                        binding_def_id: def_id,
+                        scrutinee_origin: Box::new(scrutinee_origin.clone()),
+                        is_ref,
+                    });
                 }
             }
             Pattern::Constructor { fields, .. } => {
@@ -3489,10 +3501,20 @@ impl<'a> BorrowChecker<'a> {
                     if self.shared_var_defs.contains_key(&def_id) {
                         (false, None)
                     } else {
-                        let borrowed = self.var_origins
-                            .get(&def_id)
-                            .map_or(false, |o| !matches!(o, BorrowOrigin::Static));
-                        (borrowed, Some(name.clone()))
+                        // Check the variable's type — value types and callables are safe to pass to spawn
+                        let type_safe = self.scopes.get_def(def_id).type_id
+                            .map_or(false, |tid| {
+                                types::is_callable_type(tid, self.types)
+                                || !types::is_reference_type(tid, self.types, &self.ref_type_structs)
+                            });
+                        if type_safe {
+                            (false, None)
+                        } else {
+                            let borrowed = self.var_origins
+                                .get(&def_id)
+                                .map_or(false, |o| !matches!(o, BorrowOrigin::Static));
+                            (borrowed, Some(name.clone()))
+                        }
                     }
                 } else {
                     (false, None)
@@ -3505,6 +3527,11 @@ impl<'a> BorrowChecker<'a> {
                     {
                         continue;
                     }
+                } else if matches!(arg.node.value.node, Expr::FieldAccess { .. } | Expr::TupleFieldAccess { .. }) {
+                    // Field access without type info — can't determine if the field is a
+                    // reference type. Skip conservatively to avoid false positives from
+                    // value-type field accesses (int, float, etc.) on params.
+                    continue;
                 }
                 (!matches!(self.compute_expr_origin(&arg.node.value), BorrowOrigin::Static), None)
             };
@@ -4591,15 +4618,12 @@ pub fn check_module(
     (checker.shared_out, warnings)
 }
 
-/// Recursively check items, tracking imported module depth to suppress errors
-/// in library code while still analyzing for metadata.
+/// Recursively check items, descending into `Item::Module` wrappers.
 fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
     for item in items {
         match &item.node {
             Item::Module { items: inner, .. } => {
-                checker.imported_module_depth += 1;
                 check_items_recursive(checker, inner);
-                checker.imported_module_depth -= 1;
             }
             Item::Function(f) => {
                 checker.check_function(f);

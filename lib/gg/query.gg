@@ -462,7 +462,7 @@ private Vector[Json] query_segments(Json doc, Vector[Segment] segments):
         Segment seg = segments.get(si).unwrap()
         Vector[Json] next = Vector[Json]()
         query_step(current, seg, &next)
-        current = next
+        current = !next
         si = si + 1
     return current
 
