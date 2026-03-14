@@ -36,10 +36,6 @@ pub(super) fn lower_call_arg(
         .map(|o| matches!(o, Ownership::MutableBorrow))
         .unwrap_or(false);
 
-    let callee_param_is_move = callee_param_ownership
-        .map(|o| matches!(o, Ownership::Move))
-        .unwrap_or(false);
-
     // The callee expects a pointer for this param if:
     // 1. The param base type is a resource type (passed by pointer), OR
     // 2. The param has explicit & (MutableBorrow) ownership (even for primitives)
