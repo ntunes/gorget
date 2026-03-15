@@ -14,8 +14,14 @@ const BUILD_TIMEOUT: Duration = Duration::from_secs(60);
 /// Default timeout for compiled test binaries (30 seconds).
 const TEST_BINARY_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Path to the pre-built `gg` binary, resolved by cargo test.
-const GG_BIN: &str = env!("CARGO_BIN_EXE_gg");
+/// Build and run gg via cargo to ensure we use the non-test-profile binary.
+/// CARGO_BIN_EXE_gg provides the test-profile binary (compiled with --tests),
+/// which may differ from the normal binary due to cfg(test) or profile settings.
+fn gg_command(subcommand: &str) -> Command {
+    let mut cmd = Command::new(env!("CARGO"));
+    cmd.args(["run", "--quiet", "--", subcommand]);
+    cmd
+}
 
 /// Run a command with a timeout. Returns the output or panics if the process
 /// hangs beyond the deadline.
@@ -104,8 +110,7 @@ fn run_gg(fixture: &str, expected: &str) {
 
     // 1. Build: gg build <fixture>
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("build")
+        gg_command("build")
             .arg(&fixture_path),
         fixture,
     );
@@ -756,8 +761,7 @@ fn gg_run_command() {
     let fixture_path = manifest_dir.join("tests/fixtures/hello.gg");
 
     let output = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("run")
+        gg_command("run")
             .arg(&fixture_path),
         "hello.gg",
     );
@@ -1170,8 +1174,7 @@ fn run_gg_with_args(fixture: &str, binary_args: &[&str], expected: &str) {
 
     // 1. Build
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("build")
+        gg_command("build")
             .arg(&fixture_path),
         fixture,
     );
@@ -1229,8 +1232,7 @@ fn run_gg_with_stdin(fixture: &str, stdin_data: &str, expected: &str) {
 
     // 1. Build
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("build")
+        gg_command("build")
             .arg(&fixture_path),
         fixture,
     );
@@ -1336,8 +1338,7 @@ fn run_gg_dir(dir_name: &str, main_file: &str, expected: &str) {
 
     // 1. Build: gg build <dir/main.gg>
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("build")
+        gg_command("build")
             .arg(&main_path),
         &format!("{dir_name}/{main_file}"),
     );
@@ -2457,8 +2458,7 @@ fn run_gg_panics(fixture: &str, expected_stderr: &str) {
 
     // 1. Build: gg build <fixture>
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("build")
+        gg_command("build")
             .arg(&fixture_path),
         fixture,
     );
@@ -2632,12 +2632,10 @@ fn run_gg_with_flags(fixture: &str, flags: &[&str], expected: &str) {
     let exe_path = dir.join(stem);
 
     // 1. Build: gg build <flags> <fixture>
-    let mut build_args = vec!["build"];
-    build_args.extend(flags.iter());
+    let mut cmd = gg_command("build");
+    for f in flags { cmd.arg(f); }
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .args(&build_args)
-            .arg(&fixture_path),
+        cmd.arg(&fixture_path),
         fixture,
     );
 
@@ -2749,12 +2747,10 @@ fn run_gg_panics_with_flags(fixture: &str, flags: &[&str], expected_stderr: &str
     let exe_path = dir.join(stem);
 
     // 1. Build with flags
-    let mut build_args = vec!["build"];
-    build_args.extend(flags.iter());
+    let mut cmd = gg_command("build");
+    for f in flags { cmd.arg(f); }
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .args(&build_args)
-            .arg(&fixture_path),
+        cmd.arg(&fixture_path),
         fixture,
     );
 
@@ -2846,8 +2842,7 @@ fn check_gg_fails(fixture: &str, expected_stderr: &str) {
     );
 
     let output = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("check")
+        gg_command("check")
             .arg(&fixture_path),
         fixture,
     );
@@ -3234,8 +3229,7 @@ fn run_example(name: &str, expected: &str) {
 
     // 1. Build
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("build")
+        gg_command("build")
             .arg(&source_path),
         name,
     );
@@ -3787,8 +3781,7 @@ fn trace_directive() {
 
     // 1. Build
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("build")
+        gg_command("build")
             .arg(&fixture_path),
         "trace_test.gg",
     );
@@ -3859,8 +3852,8 @@ fn trace_cli_flag() {
 
     // Build with --trace
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .args(["build", "--trace"])
+        gg_command("build")
+            .arg("--trace")
             .arg(&fixture_path),
         "functions.gg",
     );
@@ -3907,8 +3900,8 @@ fn trace_no_trace_flag() {
 
     // Build with --no-trace (overrides directive)
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .args(["build", "--no-trace"])
+        gg_command("build")
+            .arg("--no-trace")
             .arg(&fixture_path),
         "trace_test.gg",
     );
@@ -3948,8 +3941,8 @@ fn trace_in_test_mode() {
 
     // Run with gg test --trace
     let run = build_with_timeout(
-        Command::new(GG_BIN)
-            .args(["test", "--trace"])
+        gg_command("test")
+            .arg("--trace")
             .arg(&fixture_path),
         "test_basic.gg",
     );
@@ -4389,24 +4382,23 @@ fn run_gg_test_with_flags(
     let exe_path = dir.join(stem);
 
     // Build args: gg test <fixture> [--tag <tag>]... [--exclude-tag <tag>]... [--filter <substr>]
-    let mut args: Vec<&str> = vec!["test"];
-    args.push(fixture_path.to_str().unwrap());
+    let mut cmd = gg_command("test");
+    cmd.arg(fixture_path.to_str().unwrap());
     for tag in tags {
-        args.push("--tag");
-        args.push(tag);
+        cmd.arg("--tag");
+        cmd.arg(tag);
     }
     for tag in exclude_tags {
-        args.push("--exclude-tag");
-        args.push(tag);
+        cmd.arg("--exclude-tag");
+        cmd.arg(tag);
     }
     if let Some(f) = filter {
-        args.push("--filter");
-        args.push(f);
+        cmd.arg("--filter");
+        cmd.arg(f);
     }
 
     let output = build_with_timeout(
-        Command::new(GG_BIN)
-            .args(&args),
+        &mut cmd,
         fixture,
     );
 
@@ -4644,8 +4636,8 @@ fn test_report_subcommand() {
     let _ = std::fs::remove_file(&report_path);
 
     let run = build_with_timeout(
-        Command::new(GG_BIN)
-            .args(["test", "--trace"])
+        gg_command("test")
+            .arg("--trace")
             .arg(&fixture_path),
         "test_basic.gg",
     );
@@ -4660,8 +4652,7 @@ fn test_report_subcommand() {
 
     // 2. Run `gg report` on the trace file
     let report_run = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("report")
+        gg_command("report")
             .arg(&trace_path),
         "test_basic.gg (report)",
     );
@@ -4712,8 +4703,8 @@ fn test_report_flag_on_test() {
     let _ = std::fs::remove_file(&report_path);
 
     let run = build_with_timeout(
-        Command::new(GG_BIN)
-            .args(["test", "--report", "html"])
+        gg_command("test")
+            .args(["--report", "html"])
             .arg(&fixture_path),
         "test_basic.gg (report html)",
     );
@@ -5365,8 +5356,8 @@ fn hot_reload_basic() {
 
     // 1. Build with --hot-reload
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .args(["build", "--hot-reload"])
+        gg_command("build")
+            .arg("--hot-reload")
             .arg(&fixture_path),
         "hot_reload_basic.gg",
     );
@@ -6419,8 +6410,7 @@ fn build_gg_dir(dir_name: &str, main_file: &str) -> (PathBuf, PathBuf) {
     let exe_path = dir_path.join(stem);
 
     let build = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("build")
+        gg_command("build")
             .arg(&main_path),
         &format!("{dir_name}/{main_file}"),
     );
@@ -11111,8 +11101,8 @@ fn run_gg_bench(fixture: &str, expected_fragments: &[&str]) {
     let exe_path = dir.join(stem);
 
     let output = build_with_timeout(
-        Command::new(GG_BIN)
-            .args(&["test", "--bench", fixture_path.to_str().unwrap()]),
+        gg_command("test")
+            .args(["--bench", fixture_path.to_str().unwrap()]),
         fixture,
     );
 
@@ -12104,8 +12094,7 @@ fn test_snapshot_save_and_diff() {
 
     // 1. Save snapshot "v1"
     let run = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("test")
+        gg_command("test")
             .arg(&fixture_path)
             .args(["--snapshot", "save", "v1"]),
         "snapshot_basic.gg (save v1)",
@@ -12130,8 +12119,7 @@ fn test_snapshot_save_and_diff() {
 
     // 3. Save another snapshot (same values) as "v2"
     let run = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("test")
+        gg_command("test")
             .arg(&fixture_path)
             .args(["--snapshot", "save", "v2"]),
         "snapshot_basic.gg (save v2)",
@@ -12140,8 +12128,7 @@ fn test_snapshot_save_and_diff() {
 
     // 4. Diff v1 vs v2 — should be identical (exit 0)
     let run = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("test")
+        gg_command("test")
             .arg(&fixture_path)
             .args(["--snapshot", "diff", "v1", "v2"]),
         "snapshot_basic.gg (diff v1 v2)",
@@ -12153,8 +12140,7 @@ fn test_snapshot_save_and_diff() {
 
     // 5. List snapshots
     let run = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("test")
+        gg_command("test")
             .arg(&fixture_path)
             .args(["--snapshot", "list"]),
         "snapshot_basic.gg (list)",
@@ -12166,8 +12152,7 @@ fn test_snapshot_save_and_diff() {
 
     // 6. Show a snapshot
     let run = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("test")
+        gg_command("test")
             .arg(&fixture_path)
             .args(["--snapshot", "show", "v1"]),
         "snapshot_basic.gg (show v1)",
@@ -12178,8 +12163,7 @@ fn test_snapshot_save_and_diff() {
 
     // 7. Delete a snapshot
     let run = build_with_timeout(
-        Command::new(GG_BIN)
-            .arg("test")
+        gg_command("test")
             .arg(&fixture_path)
             .args(["--snapshot", "delete", "v2"]),
         "snapshot_basic.gg (delete v2)",

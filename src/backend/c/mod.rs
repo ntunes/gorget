@@ -10652,6 +10652,8 @@ fn try_emit_callable_indirect_call(
 }
 
 /// Emit a function pointer cast + indirect call through local _{param_idx}.
+/// Uses FnPtr type info (when available) to determine if struct params should
+/// be passed by pointer (matching the `__adapt_*` adapter convention).
 fn emit_indirect_callable(
     out: &mut String,
     param_idx: usize,
@@ -10661,21 +10663,50 @@ fn emit_indirect_callable(
     registry: &TypeRegistry,
     type_overrides: &std::collections::HashMap<usize, String>,
 ) -> bool {
-    // The first arg in the GIR call is the callable local itself (env pointer).
-    // Remaining args are the actual function arguments.
-    // Build arg types: first is void* (env), rest from operands
+    // Extract FnPtr param types from the callable local (if available).
+    // These include Ptr/MutPtr wrapping for Move types, matching the adapter ABI.
+    let fnptr_params: Option<Vec<TypeId>> = func.locals.get(param_idx)
+        .and_then(|local| match registry.get(local.type_id) {
+            Some(GirType::FnPtr { params, .. }) => Some(params.clone()),
+            _ => None,
+        });
+
     let mut arg_c_types = Vec::new();
     let mut arg_strs = Vec::new();
     for (i, arg) in args.iter().enumerate() {
-        let arg_str = format_operand(arg, func, registry);
+        let mut arg_str = format_operand(arg, func, registry);
         let arg_type = if i == 0 {
             // First arg is the callable env pointer — always void*
             "void*".to_string()
+        } else if let Some(ref fp) = fnptr_params {
+            // Use the FnPtr's param types — these include Ptr/MutPtr wrapping
+            // for Move types, matching the adapter function's signature.
+            if i < fp.len() {
+                let fp_type = fp[i];
+                let t = format_type(fp_type, registry);
+                // If the FnPtr param is a pointer but the arg is a value, take address.
+                let is_ptr_param = matches!(registry.get(fp_type), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)));
+                if is_ptr_param {
+                    let arg_is_already_ptr = match arg {
+                        Operand::Copy(p) | Operand::Move(p) => {
+                            let local_type = func.locals[p.local.0 as usize].type_id;
+                            matches!(registry.get(local_type), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)))
+                        }
+                        _ => false,
+                    };
+                    if !arg_is_already_ptr {
+                        arg_str = format!("&{arg_str}");
+                    }
+                }
+                if t == "void" { "int64_t".to_string() } else { t }
+            } else {
+                "int64_t".to_string()
+            }
         } else {
-            match arg {
+            // No FnPtr info — derive type from operand.
+            let raw_type = match arg {
                 Operand::Copy(p) | Operand::Move(p) => {
                     let t = effective_c_type(p.local.0 as usize, func, registry, type_overrides);
-                    // void means UNIT_TYPE (unresolved) — fallback to int64_t
                     if t == "void" { "int64_t".to_string() } else { t }
                 }
                 Operand::Constant(c) => match c {
@@ -10685,7 +10716,8 @@ fn emit_indirect_callable(
                     Constant::Str(_) => "Str".to_string(),
                     _ => "int64_t".to_string(),
                 },
-            }
+            };
+            raw_type
         };
         arg_c_types.push(arg_type);
         arg_strs.push(arg_str);
