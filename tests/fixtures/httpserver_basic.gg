@@ -9,8 +9,7 @@ HttpServerResponse handle(HttpRequest req):
         return HttpServerResponse.ok("world")
     return HttpServerResponse.not_found()
 
-async void serve_once(int port):
-    ServerSocket srv = server_socket_bind("127.0.0.1", port).unwrap()
+async void serve_once(ServerSocket !srv):
     Socket client = srv.accept().unwrap()
     srv.close()
     Result[HttpRequest, str] r = http_server_parse_request(&client)
@@ -23,8 +22,9 @@ async void serve_once(int port):
 
 async void main():
     signal_ignore(SIGPIPE)
-    int port = 18081
-    Task[void] t = spawn serve_once(port)
+    ServerSocket srv = server_socket_bind("127.0.0.1", 0).unwrap()
+    int port = srv.local_port()
+    Task[void] t = spawn serve_once(!srv)
     sleep(0.5).await()
 
     Socket c = socket_connect("127.0.0.1", port).unwrap()

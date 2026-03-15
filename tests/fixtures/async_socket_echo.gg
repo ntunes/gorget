@@ -2,8 +2,7 @@
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
 from std.time import sleep
 
-async void echo_server(int port):
-    ServerSocket srv = server_socket_bind("127.0.0.1", port).unwrap()
+async void echo_server(ServerSocket !srv):
     Socket conn = srv.accept().unwrap()
     srv.close()
     conn.set_timeout(2000)
@@ -12,14 +11,15 @@ async void echo_server(int port):
     conn.close()
 
 async void main():
-    int port = 18099
-    Task[void] srv = spawn echo_server(port)
+    ServerSocket srv = server_socket_bind("127.0.0.1", 0).unwrap()
+    int port = srv.local_port()
+    Task[void] server = spawn echo_server(!srv)
     sleep(0.05).await()
 
     Socket c = socket_connect("127.0.0.1", port).unwrap()
     c.write_str("hello\n")
     str reply = c.read_line().unwrap()
     c.close()
-    srv.await()
+    server.await()
     print(f"{reply.len()}")
     print("got reply")

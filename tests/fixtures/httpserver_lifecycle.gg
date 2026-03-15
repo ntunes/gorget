@@ -1,7 +1,7 @@
-# Test: Server lifecycle — HttpServer.serve_n and max_requests_per_conn.
+# Test: Server lifecycle — serve_n and max_requests_per_conn.
 #
 # Validates:
-#   1. HttpServer.serve_n accepts exactly n connections and returns cleanly.
+#   1. Server accepts exactly n connections and returns cleanly.
 #      Two GET requests succeed (both 200).
 #   2. max_requests_per_conn = 1: server closes the connection after the first
 #      request even when the client sent Connection: keep-alive. A second read
@@ -11,7 +11,7 @@
 # Expected output:
 #   ok\nok\nok
 
-from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka, HttpServer
+from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka, http_server_handle_conn_ka_limited
 from gg.http import get, HttpResponse
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
 from std.bytes import bytes_to_str
@@ -28,34 +28,59 @@ void check(str label, bool ok):
     else:
         print("ok")
 
+async void serve_n(ServerSocket !srv, int n):
+    TaskGroup group = TaskGroup()
+    int i = 0
+    while i < n:
+        Result[Socket, str] ar = srv.accept()
+        if ar.is_ok():
+            Socket client = ar.unwrap()
+            group.spawn(spawn http_server_handle_conn_ka(!client, handle, 500))
+            i = i + 1
+    group.join()
+    srv.close()
+
+async void serve_n_limited(ServerSocket !srv, int n, int max_req):
+    TaskGroup group = TaskGroup()
+    int i = 0
+    while i < n:
+        Result[Socket, str] ar = srv.accept()
+        if ar.is_ok():
+            Socket client = ar.unwrap()
+            group.spawn(spawn http_server_handle_conn_ka_limited(!client, handle, 5000, max_req))
+            i = i + 1
+    group.join()
+    srv.close()
+
 async void main():
     signal_ignore(SIGPIPE)
     # ── Test 1 & 2: serve_n with 2 normal connections ──────────
-    int port1 = 18096
-    HttpServer s1 = HttpServer.with_max_requests("127.0.0.1", port1, 0)
-    Task[void] srv1 = spawn s1.accept_n(handle, 2)
+    ServerSocket srv1 = server_socket_bind("127.0.0.1", 0).unwrap()
+    int port1 = srv1.local_port()
+    Task[void] server1 = spawn serve_n(!srv1, 2)
     sleep(0.5).await()
 
     # Both get requests use Connection: close → 2 separate connections
-    Result[HttpResponse, str] r1a = get("http://127.0.0.1:18096/ping")
+    str base1 = "http://127.0.0.1:" + int_to_str(port1)
+    Result[HttpResponse, str] r1a = get(base1 + "/ping")
     check("serve_n_req1", r1a.is_ok() and r1a.unwrap().status_code == 200)
 
-    Result[HttpResponse, str] r1b = get("http://127.0.0.1:18096/ping")
+    Result[HttpResponse, str] r1b = get(base1 + "/ping")
     check("serve_n_req2", r1b.is_ok() and r1b.unwrap().status_code == 200)
 
-    srv1.await()
+    server1.await()
 
     # ── Test 3: max_requests_per_conn = 1 closes after 1st ─────
-    int port2 = 18097
     # Server accepts 1 connection, closes after 1 request (max_requests=1)
-    HttpServer s2 = HttpServer.with_max_requests("127.0.0.1", port2, 1)
-    Task[void] srv2 = spawn s2.accept_n(handle, 1)
+    ServerSocket srv2 = server_socket_bind("127.0.0.1", 0).unwrap()
+    int port2 = srv2.local_port()
+    Task[void] server2 = spawn serve_n_limited(!srv2, 1, 1)
     sleep(0.5).await()
 
     Result[Socket, str] cr = socket_connect("127.0.0.1", port2)
     if cr.is_error():
         print("FAIL: connect")
-        srv2.await()
+        server2.await()
         return
     Socket conn = cr.unwrap()
 
@@ -104,4 +129,4 @@ async void main():
     check("max_req_closes", closed)
 
     conn.close()
-    srv2.await()
+    server2.await()

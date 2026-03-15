@@ -33,11 +33,7 @@ HttpServerResponse handle(HttpRequest req):
         return resp
     return HttpServerResponse.not_found()
 
-async void serve_n(int port, int n):
-    Result[ServerSocket, str] bind_r = server_socket_bind("127.0.0.1", port)
-    if bind_r.is_error():
-        return
-    ServerSocket srv = bind_r.unwrap()
+async void serve_n(ServerSocket !srv, int n):
     TaskGroup group = TaskGroup()
     int i = 0
     while i < n:
@@ -57,8 +53,9 @@ void check(str label, bool ok):
 
 async void main():
     signal_ignore(SIGPIPE)
-    int port = 18088
-    Task[void] srv = spawn serve_n(port, 4)
+    ServerSocket srv = server_socket_bind("127.0.0.1", 0).unwrap()
+    int port = srv.local_port()
+    Task[void] server = spawn serve_n(!srv, 4)
     sleep(0.5).await()
 
     str base = "http://127.0.0.1:" + int_to_str(port)
@@ -100,4 +97,4 @@ async void main():
         print("FAIL: " + r4.unwrap_error())
         print("FAIL: multi-header-b")
 
-    srv.await()
+    server.await()

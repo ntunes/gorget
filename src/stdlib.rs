@@ -1260,6 +1260,7 @@ fn gen_socket_module() -> Module {
     items.push(equip_block("ServerSocket", vec![
         extern_method("accept", Ownership::MutableBorrow, &[], ty_result(ty_socket(), ty_str()), "gorget_server_socket_accept"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_server_socket_close"),
+        extern_method("local_port", Ownership::Borrow, &[], ty_int(), "gorget_server_socket_local_port"),
         // Non-blocking accept — for use in spawned/coroutine context
         extern_method("nb_accept", Ownership::MutableBorrow, &[], ty_result(ty_socket(), ty_str()), "gorget_socket_async_accept"),
     ]));

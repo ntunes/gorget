@@ -40,11 +40,7 @@ HttpServerResponse handle(HttpRequest req):
 
 # ── Server: accept exactly n connections then exit ─────────────
 
-async void serve_n(int port, int n):
-    Result[ServerSocket, str] bind_r = server_socket_bind("127.0.0.1", port)
-    if bind_r.is_error():
-        return
-    ServerSocket srv = bind_r.unwrap()
+async void serve_n(ServerSocket !srv, int n):
     TaskGroup group = TaskGroup()
     int i = 0
     while i < n:
@@ -66,10 +62,11 @@ void check(str label, bool ok):
 
 async void main():
     signal_ignore(SIGPIPE)
-    int port = 18086
+    ServerSocket srv = server_socket_bind("127.0.0.1", 0).unwrap()
+    int port = srv.local_port()
 
     # 6 requests → 6 connections (each get/post sends Connection: close)
-    Task[void] srv = spawn serve_n(port, 6)
+    Task[void] server = spawn serve_n(!srv, 6)
     sleep(0.5).await()
 
     str base = "http://127.0.0.1:" + int_to_str(port)
@@ -133,4 +130,4 @@ async void main():
         print("FAIL: " + r6.unwrap_error())
         print("FAIL: query body")
 
-    srv.await()
+    server.await()

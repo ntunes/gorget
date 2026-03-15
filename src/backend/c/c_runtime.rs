@@ -7128,6 +7128,15 @@ static void gorget_server_socket_close(GorgetServerSocket* srv) {
     }
 }
 
+static int64_t gorget_server_socket_local_port(GorgetServerSocket* srv) {
+    struct sockaddr_in sa;
+    socklen_t len = sizeof(sa);
+    if (getsockname(srv->fd, (struct sockaddr*)&sa, &len) == 0) {
+        return (int64_t)ntohs(sa.sin_port);
+    }
+    return -1;
+}
+
 // Set server socket to non-blocking mode (for async accept)
 static void gorget_server_socket_set_nonblocking(GorgetServerSocket* srv) {
     if (srv->fd >= 0) {

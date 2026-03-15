@@ -11,8 +11,7 @@ HttpServerResponse handle(HttpRequest req):
     return HttpServerResponse.ok("")
 
 # Server that handles a single connection in keep-alive mode.
-async void serve_ka(int port):
-    ServerSocket srv = server_socket_bind("127.0.0.1", port).unwrap()
+async void serve_ka(ServerSocket !srv):
     Socket conn = srv.accept().unwrap()
     srv.close()
     conn.set_timeout(2000)
@@ -34,8 +33,9 @@ async void serve_ka(int port):
 
 async void main():
     signal_ignore(SIGPIPE)
-    int port = 18083
-    Task[void] srv = spawn serve_ka(port)
+    ServerSocket srv = server_socket_bind("127.0.0.1", 0).unwrap()
+    int port = srv.local_port()
+    Task[void] server = spawn serve_ka(!srv)
     sleep(0.5).await()
 
     Socket c = socket_connect("127.0.0.1", port).unwrap()
@@ -59,7 +59,7 @@ async void main():
     String line2 = c.read_line().unwrap()
     c.close()
 
-    srv.await()
+    server.await()
 
     print(line1.starts_with("HTTP/1.1 200"))
     print(line2.starts_with("HTTP/1.1 200"))

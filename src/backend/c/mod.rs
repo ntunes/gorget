@@ -314,6 +314,7 @@ fn map_stdlib_name(name: &str) -> &str {
         "server_socket_bind" => "gorget_server_socket_bind",
         "ServerSocket__accept" => "gorget_server_socket_accept",
         "ServerSocket__close" => "gorget_server_socket_close",
+        "ServerSocket__local_port" => "gorget_server_socket_local_port",
         // Socket methods
         "Socket__read" => "gorget_socket_read",
         "Socket__read_exact" => "gorget_socket_read_exact",

@@ -20,8 +20,7 @@ async void handle_conn(Socket !conn):
     conn.close()
 
 # Server that accepts exactly n connections concurrently, then exits.
-async void serve_n(int port, int n):
-    ServerSocket srv = server_socket_bind("127.0.0.1", port).unwrap()
+async void serve_n(ServerSocket !srv, int n):
     TaskGroup group = TaskGroup()
     int i = 0
     while i < n:
@@ -50,8 +49,9 @@ async void client_task(int port, Channel[int] results):
 
 async void main():
     signal_ignore(SIGPIPE)
-    int port = 18082
-    Task[void] srv = spawn serve_n(port, 2)
+    ServerSocket srv = server_socket_bind("127.0.0.1", 0).unwrap()
+    int port = srv.local_port()
+    Task[void] server = spawn serve_n(!srv, 2)
 
     Channel[int] results = Channel[int](2)
     TaskGroup clients = TaskGroup()
@@ -63,5 +63,5 @@ async void main():
     int b = results.recv()
     results.close()
 
-    srv.await()
+    server.await()
     print(a + b)
