@@ -11,8 +11,16 @@ use gorget::span::Spanned;
 
 /// Default timeout for the build step (60 seconds).
 const BUILD_TIMEOUT: Duration = Duration::from_secs(60);
-/// Default timeout for compiled test binaries (30 seconds).
-const TEST_BINARY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Timeout for compiled test binaries. Override with GG_TEST_TIMEOUT_SECS env var
+/// for slower environments (e.g. CI).
+fn test_binary_timeout() -> Duration {
+    Duration::from_secs(
+        std::env::var("GG_TEST_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30),
+    )
+}
 
 /// Build and run gg via cargo to ensure we use the non-test-profile binary.
 /// CARGO_BIN_EXE_gg provides the test-profile binary (compiled with --tests),
@@ -26,7 +34,7 @@ fn gg_command(subcommand: &str) -> Command {
 /// Run a command with a timeout. Returns the output or panics if the process
 /// hangs beyond the deadline.
 fn run_with_timeout(cmd: &mut Command, fixture: &str) -> std::process::Output {
-    run_with_deadline(cmd, fixture, TEST_BINARY_TIMEOUT)
+    run_with_deadline(cmd, fixture, test_binary_timeout())
 }
 
 /// Run a command with a specific timeout duration. Returns the output or panics
@@ -1275,7 +1283,7 @@ fn run_gg_with_stdin(fixture: &str, stdin_data: &str, expected: &str) {
         buf
     });
 
-    let deadline = std::time::Instant::now() + TEST_BINARY_TIMEOUT;
+    let deadline = std::time::Instant::now() + test_binary_timeout();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -1283,7 +1291,7 @@ fn run_gg_with_stdin(fixture: &str, stdin_data: &str, expected: &str) {
                 if std::time::Instant::now() >= deadline {
                     child.kill().ok();
                     child.wait().ok();
-                    panic!("Test binary for {fixture} timed out after {}s", TEST_BINARY_TIMEOUT.as_secs());
+                    panic!("Test binary for {fixture} timed out after {}s", test_binary_timeout().as_secs());
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
