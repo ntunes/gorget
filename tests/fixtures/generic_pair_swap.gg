@@ -1,0 +1,14 @@
+struct Pair[T, U]:
+    T first
+    U second
+
+Pair[U, T] swap_pair[T, U](Pair[T, U] p):
+    return Pair[U, T](p.second, p.first)
+
+void main():
+    Pair[int, str] p = Pair[int, str](1, "hello")
+    print(p.first)
+    print(p.second)
+    auto swapped = swap_pair[int, str](p)
+    print(swapped.first)
+    print(swapped.second)

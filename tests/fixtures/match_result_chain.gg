@@ -1,0 +1,20 @@
+Result[int, str] parse(str s):
+    if s == "42":
+        return Ok(42)
+    return Error(f"bad: {s}")
+
+void main():
+    auto r1 = parse("42")
+    auto r2 = parse("abc")
+
+    match r1:
+        case Ok(v):
+            print(f"got {v}")
+        case Error(e):
+            print(f"err: {e}")
+
+    match r2:
+        case Ok(v):
+            print(f"got {v}")
+        case Error(e):
+            print(f"err: {e}")

@@ -1,0 +1,6 @@
+void main():
+    auto sq = (int x): x * x
+    int total = 0
+    for i in 0..5:
+        total = total + sq(i)
+    print(total)

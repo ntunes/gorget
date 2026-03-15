@@ -1,0 +1,10 @@
+int process() throws str:
+    on error print("cleanup 1")
+    on error print("cleanup 2")
+    on error print("cleanup 3")
+    throw "fail"
+
+void main():
+    int r = process() catch (e): -1
+    print(r)
+    print("done")

@@ -1,0 +1,20 @@
+enum Shape:
+    Circle(float)
+    Rect(float, float)
+
+str describe(Shape s):
+    match s:
+        case Circle(r) if r > 10.0:
+            return "big circle"
+        case Circle(r):
+            return "small circle"
+        case Rect(w, h) if w == h:
+            return "square"
+        case Rect(w, h):
+            return "rectangle"
+
+void main():
+    print(describe(Shape.Circle(15.0)))
+    print(describe(Shape.Circle(3.0)))
+    print(describe(Shape.Rect(5.0, 5.0)))
+    print(describe(Shape.Rect(3.0, 7.0)))

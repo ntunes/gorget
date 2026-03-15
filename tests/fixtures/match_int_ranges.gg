@@ -1,0 +1,16 @@
+str grade(int score):
+    match score:
+        case 100:
+            return "perfect"
+        case 90:
+            return "A"
+        case 80:
+            return "B"
+        else:
+            return "other"
+
+void main():
+    print(grade(100))
+    print(grade(90))
+    print(grade(80))
+    print(grade(50))

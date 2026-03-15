@@ -1,0 +1,14 @@
+str classify(int n) throws str:
+    if n < 0:
+        throw "negative"
+    if n == 0:
+        return "zero"
+    if n % 2 == 0:
+        return "even"
+    return "odd"
+
+void main():
+    print(classify(0) catch (e): "err")
+    print(classify(4) catch (e): "err")
+    print(classify(7) catch (e): "err")
+    print(classify(-3) catch (e): "err")

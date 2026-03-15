@@ -13612,3 +13612,343 @@ true
 done",
     );
 }
+
+#[test]
+fn struct_copy_pass_twice() {
+    run_gg(
+        "struct_copy_pass_twice.gg",
+        "0.000000",
+    );
+}
+
+// ── Copy/move edge cases ──
+
+#[test]
+fn copy_struct_multiple_args() {
+    run_gg(
+        "copy_struct_multiple_args.gg",
+        "14.000000\n1.000000",
+    );
+}
+
+#[test]
+fn copy_struct_in_loop() {
+    run_gg(
+        "copy_struct_in_loop.gg",
+        "35",
+    );
+}
+
+#[test]
+fn copy_struct_nested() {
+    run_gg(
+        "copy_struct_nested.gg",
+        "25.000000\n0.000000\n3.000000",
+    );
+}
+
+#[test]
+fn copy_struct_return() {
+    run_gg(
+        "copy_struct_return.gg",
+        "127\n0\n127\n255",
+    );
+}
+
+#[test]
+fn copy_struct_match() {
+    run_gg(
+        "copy_struct_match.gg",
+        "square\n10\nrect\n5",
+    );
+}
+
+#[test]
+fn copy_struct_closure_capture() {
+    run_gg(
+        "copy_struct_closure_capture.gg",
+        "480000\n800",
+    );
+}
+
+#[test]
+fn move_reassign_after() {
+    run_gg(
+        "move_reassign_after.gg",
+        "3\n2",
+    );
+}
+
+#[test]
+fn move_in_branch() {
+    run_gg(
+        "move_in_branch.gg",
+        "3\ndone",
+    );
+}
+
+#[test]
+fn copy_enum_primitive_payload() {
+    run_gg(
+        "copy_enum_primitive_payload.gg",
+        "N\nN\nN",
+    );
+}
+
+#[test]
+fn copy_mixed_struct_fields() {
+    run_gg(
+        "copy_mixed_struct_fields.gg",
+        "210.000000\n210.000000\n0",
+    );
+}
+
+// ── Error handling edge cases ──
+
+#[test]
+fn error_catch_chain() {
+    run_gg(
+        "error_catch_chain.gg",
+        "0\n10\n99",
+    );
+}
+
+#[test]
+fn error_on_error_ordering() {
+    run_gg(
+        "error_on_error_ordering.gg",
+        "cleanup 3\ncleanup 2\ncleanup 1\n-1\ndone",
+    );
+}
+
+#[test]
+fn error_rethrow_transform() {
+    run_gg(
+        "error_rethrow_transform.gg",
+        "42\n-1\nport error: not a number",
+    );
+}
+
+#[test]
+fn error_raw_nested() {
+    run_gg(
+        "error_raw_nested.gg",
+        "5\ndivision by zero",
+    );
+}
+
+#[test]
+fn error_catch_in_expression() {
+    run_gg(
+        "error_catch_in_expression.gg",
+        "25",
+    );
+}
+
+#[test]
+fn error_on_error_no_error() {
+    run_gg(
+        "error_on_error_no_error.gg",
+        "working\ndone",
+    );
+}
+
+#[test]
+fn error_propagation_chain() {
+    run_gg(
+        "error_propagation_chain.gg",
+        "-1",
+    );
+}
+
+#[test]
+fn error_conditional_throw() {
+    run_gg(
+        "error_conditional_throw.gg",
+        "zero\neven\nodd\nerr",
+    );
+}
+
+#[test]
+fn error_catch_with_value() {
+    run_gg(
+        "error_catch_with_value.gg",
+        "42\n-1\nerror: empty input",
+    );
+}
+
+#[test]
+fn error_result_methods() {
+    run_gg(
+        "error_result_methods.gg",
+        "5\n-1\ntrue\nfalse\ntrue",
+    );
+}
+
+// ── Closure edge cases ──
+
+#[test]
+fn closure_returning_closure() {
+    run_gg(
+        "closure_returning_closure.gg",
+        "8\n13",
+    );
+}
+
+#[test]
+fn closure_capture_loop_var() {
+    run_gg(
+        "closure_capture_loop_var.gg",
+        "30",
+    );
+}
+
+#[test]
+fn closure_as_callback() {
+    run_gg(
+        "closure_as_callback.gg",
+        "18",
+    );
+}
+
+#[test]
+fn closure_mutable_capture() {
+    run_gg(
+        "closure_mutable_capture.gg",
+        "15\n30\n29",
+    );
+}
+
+#[test]
+fn closure_higher_order_chain() {
+    run_gg(
+        "closure_higher_order_chain.gg",
+        "220",
+    );
+}
+
+// ── Generic edge cases ──
+
+#[test]
+fn generic_identity() {
+    run_gg(
+        "generic_identity.gg",
+        "42\nhello\n3.140000\ntrue",
+    );
+}
+
+#[test]
+fn generic_pair_swap() {
+    run_gg(
+        "generic_pair_swap.gg",
+        "1\nhello\nhello\n1",
+    );
+}
+
+#[test]
+fn generic_vector_of_structs() {
+    run_gg(
+        "generic_vector_of_structs.gg",
+        "270",
+    );
+}
+
+#[test]
+fn generic_option_chain() {
+    run_gg(
+        "generic_option_chain.gg",
+        "10\n0\ntrue\nfalse\nfalse\ntrue",
+    );
+}
+
+#[test]
+fn generic_nested_collections() {
+    run_gg(
+        "generic_nested_collections.gg",
+        "3\n2\n3\n5",
+    );
+}
+
+// ── Pattern matching edge cases ──
+
+#[test]
+fn match_nested_option() {
+    run_gg(
+        "match_nested_option.gg",
+        "value: 42\ninner none\nouter none",
+    );
+}
+
+#[test]
+fn match_result_chain() {
+    run_gg(
+        "match_result_chain.gg",
+        "got 42\nerr: bad: abc",
+    );
+}
+
+#[test]
+fn match_enum_guard() {
+    run_gg(
+        "match_enum_guard.gg",
+        "big circle\nsmall circle\nsquare\nrectangle",
+    );
+}
+
+#[test]
+fn match_tuple_destructure() {
+    run_gg(
+        "match_tuple_destructure.gg",
+        "2\n1\n10\n20\n30",
+    );
+}
+
+#[test]
+fn match_int_ranges() {
+    run_gg(
+        "match_int_ranges.gg",
+        "perfect\nA\nB\nother",
+    );
+}
+
+// ── Borrow edge cases ──
+
+#[test]
+fn borrow_method_chain() {
+    run_gg(
+        "borrow_method_chain.gg",
+        "8\n3\n6\n8",
+    );
+}
+
+#[test]
+fn borrow_struct_field_access() {
+    run_gg(
+        "borrow_struct_field_access.gg",
+        "Alice\n0\n1\nAlice\n100\n2\nAlice\n200\n3",
+    );
+}
+
+#[test]
+fn borrow_multiple_fields() {
+    run_gg(
+        "borrow_multiple_fields.gg",
+        "3\n4\n12\n12\ntrue",
+    );
+}
+
+#[test]
+fn match_enum_multiple_variants() {
+    run_gg(
+        "match_enum_multiple_variants.gg",
+        "weekday\nweekend\nweekend\nweekday",
+    );
+}
+
+#[test]
+fn borrow_after_method_mut() {
+    run_gg(
+        "borrow_after_method_mut.gg",
+        "3\n1\n4\n4\n10",
+    );
+}

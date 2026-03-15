@@ -1,0 +1,11 @@
+struct Pt:
+    float x
+    float y
+
+float dist(Pt a, Pt b):
+    return (a.x - b.x) + (a.y - b.y)
+
+void main():
+    Pt p = Pt(1.0, 2.0)
+    float d = dist(p, p)
+    print(d)

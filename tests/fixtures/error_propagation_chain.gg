@@ -1,0 +1,14 @@
+int step1() throws str:
+    throw "oops"
+
+int step2() throws str:
+    int x = step1()
+    return x + 1
+
+int step3() throws str:
+    int x = step2()
+    return x + 1
+
+void main():
+    int result = step3() catch (e): -1
+    print(result)
