@@ -1473,7 +1473,27 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
             let elem_c = generic_elem_c_type(ty);
             format!("gorget_array_new(sizeof({elem_c}))")
         }
-        _ => return GlobalInit::Zeroed,
+        _ => {
+            // Generic struct constructor: if callee matches type name and all
+            // args are literals, emit a C compound literal at runtime.
+            // e.g. Vec3(-15.0, -24.0, -15.0) → (Vec3){-15.0, -24.0, -15.0}
+            if callee_name == type_name {
+                let all_literal = match expr {
+                    Expr::StructLiteral { args, .. } =>
+                        args.iter().all(|a| is_literal_arg(&a.node)),
+                    Expr::Call { args, .. } =>
+                        args.iter().all(|a| is_literal_arg(&a.node.value.node)),
+                    _ => false,
+                };
+                if all_literal && !literal_args.is_empty() {
+                    let args_str = literal_args.join(", ");
+                    return GlobalInit::RuntimeCall(
+                        format!("({type_name}){{{args_str}}}")
+                    );
+                }
+            }
+            return GlobalInit::Zeroed;
+        }
     };
 
     GlobalInit::RuntimeCall(c_call)
@@ -1487,8 +1507,25 @@ fn eval_literal_arg(expr: &crate::parser::ast::Expr) -> String {
         Expr::FloatLiteral(f) => f.to_string(),
         Expr::BoolLiteral(b) => if *b { "1".to_string() } else { "0".to_string() },
         Expr::StringLiteral(s) => format!("\"{}\"", s.as_plain_text()),
+        // Negative literals: -5, -3.14
+        Expr::UnaryOp { op: crate::parser::ast::UnaryOp::Neg, operand } => {
+            match &operand.node {
+                Expr::IntLiteral(n) => format!("-{n}"),
+                Expr::FloatLiteral(f) => format!("-{f}"),
+                _ => "0".to_string(),
+            }
+        }
         _ => "0".to_string(),
     }
+}
+
+/// Check if an expression is a compile-time evaluable literal (including negated literals).
+fn is_literal_arg(expr: &crate::parser::ast::Expr) -> bool {
+    use crate::parser::ast::Expr;
+    matches!(expr,
+        Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_) | Expr::StringLiteral(_)
+    ) || matches!(expr, Expr::UnaryOp { op: crate::parser::ast::UnaryOp::Neg, operand }
+        if matches!(operand.node, Expr::IntLiteral(_) | Expr::FloatLiteral(_)))
 }
 
 /// Extract the Nth generic argument's C type name (0-indexed).
