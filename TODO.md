@@ -2,6 +2,8 @@
 
 ## High
 
+- **C backend: missing drop insertion for Move-type locals (Vector, Str)**: The drop insertion pass does not emit `gorget_array_free` / `gorget_str_free` for many local variables of Move types at scope exit. Confirmed by inspecting generated C: `gpu_draw_textured_quads` creates a `GorgetArray` local for vertex data but returns without freeing it. This causes ~180KB/frame leak in the arena project from accumulated small Vector[uint8] and Str allocations in GPU draw helpers, HUD rendering, and string formatting. Affects all programs with short-lived Vector/Str locals in loops. Root cause: likely the GIR type for these locals is UNIT_TYPE or I64_TYPE (not recognized as a droppable type), so the drop insertion pass skips them. [added: 2026-03-14]
+
 - **LIR backend: Phase 2 — reach parity**: **430/565 A/B tests passing (76.1%)**, up from 422. Remaining 135 failures: ~60 shared/spawn/stress/httpserver/p2p (concurrency infrastructure), ~15 TOML/XML/YAML/query/UUID (nested struct method return type), ~15 dataframe/tensor (complex domain), ~10 SEGFAULT/ABORT (double-free, null deref), ~10 WRONG_OUTPUT (drops, closures, Box deref, encoding bytes), ~10 BUILD_FAIL (Str↔GorgetString type mismatch, regex struct). Key blockers: (1) spawn infrastructure (~35+ tests), (2) user-defined method struct return types in LIR (TOML/XML etc.), (3) InlineC element access for small types (uint8 bytes). [updated: 2026-03-14]
 
 - **LIR backend: Phase 4 — default backend switch**: Once all A/B tests pass through LIR, flip default: no flag = LIR→C, `--backend=gir` selects old path. Feature-gate fallback for hot-reload and `--shared` builds. [added: 2026-03-11]
@@ -159,6 +161,8 @@
 - **Duplicate `infer_expr` call in `check_block`**: `check_block` calls `check_stmt(stmt)` then also calls `infer_expr(expr)` for `Stmt::Expr` to get block return type. This double-invocation causes duplicate errors from newly added diagnostics (e.g., NotAFunction fires twice). Fix: cache the result from `check_stmt` or skip the second `infer_expr`. [added: 2026-03-15]
 
 ## Low
+
+- **Gorget Arena: deformVertexes CPU vertex modification** — Phase 11 parsing and evaluation functions are complete (DeformType enum, `deformVertexes wave/bulge/move/autosprite/autosprite2` parsing, `eval_deform_wave()`/`eval_deform_move()`). However, actual CPU-side vertex buffer modification is deferred — requires dynamic vertex buffer architecture for re-uploading modified vertices each frame for affected faces. Currently BSP vertices are uploaded once to GPU at load time. [added: 2026-03-15]
 
 - **Named/labeled arguments at call sites**: Allow `=` syntax for labeling arguments: `str.slice(from=2, to=5)`, `transfer(buf=!owned)`, `process(data=&vec)`. Pure sugar — desugars to positional args by matching label to parameter name. Sigils (`&`/`!`) go on the value side only (mandatory, as with positional calls); labels are bare names. Labeled args freely mixable with positional: `connect("localhost", port=8080)`. Parser needs: `IDENT '=' Expr` as an argument form; semantic check maps labels to positions and rejects duplicates/unknowns. [added: 2026-03-11]
 
