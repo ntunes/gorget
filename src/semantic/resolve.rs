@@ -229,6 +229,24 @@ fn collect_top_level_inner(
     }
 }
 
+/// Reject required parameters that follow a parameter with a default value.
+/// Positional call-site resolution is ambiguous otherwise.
+pub(super) fn validate_default_param_ordering(params: &[Spanned<Param>], errors: &mut Vec<SemanticError>) {
+    let mut seen_default = false;
+    for p in params {
+        if p.node.default.is_some() {
+            seen_default = true;
+        } else if seen_default {
+            errors.push(SemanticError {
+                kind: SemanticErrorKind::RequiredAfterDefault {
+                    name: p.node.name.node.clone(),
+                },
+                span: p.node.name.span,
+            });
+        }
+    }
+}
+
 /// Reject `&` and `!` parameter modes on `str` — it's Copy, pointer-sized,
 /// and immutable, so mutable borrows and moves are meaningless.
 pub(super) fn validate_str_param_modes(params: &[Spanned<Param>], errors: &mut Vec<SemanticError>) {
@@ -303,6 +321,7 @@ fn collect_item(
                         .collect();
 
                     validate_str_param_modes(&f.params, errors);
+                    validate_default_param_ordering(&f.params, errors);
 
                     let generic_param_names = extract_generic_param_names(&f.generic_params);
                     let trait_bounds = extract_generic_bounds(&f.generic_params);
@@ -491,6 +510,7 @@ fn collect_item(
                             })
                             .collect();
                         validate_str_param_modes(&f.params, errors);
+                        validate_default_param_ordering(&f.params, errors);
                         let generic_param_names = extract_generic_param_names(&f.generic_params);
                         let trait_bounds = extract_generic_bounds(&f.generic_params);
                         let outlives_bounds = extract_outlives_bounds(&f.where_clause);
@@ -2062,5 +2082,29 @@ struct Point:
         // Variants should NOT be in scope (enum is private)
         assert!(scopes.lookup("Active").is_none(), "Active variant should not be imported from private enum");
         assert!(scopes.lookup("Inactive").is_none(), "Inactive variant should not be imported from private enum");
+    }
+
+    #[test]
+    fn required_after_default_rejected() {
+        let (_, _, errors) = parse_and_collect("int foo(int a = 1, int b) = a + b\n");
+        assert_eq!(errors.len(), 1);
+        match &errors[0].kind {
+            SemanticErrorKind::RequiredAfterDefault { name } => {
+                assert_eq!(name, "b");
+            }
+            other => panic!("expected RequiredAfterDefault, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn defaults_at_end_accepted() {
+        let (_, _, errors) = parse_and_collect("int foo(int a, int b = 2, int c = 3) = a + b + c\n");
+        assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+    }
+
+    #[test]
+    fn no_defaults_accepted() {
+        let (_, _, errors) = parse_and_collect("int foo(int a, int b) = a + b\n");
+        assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
     }
 }

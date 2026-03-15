@@ -5,7 +5,7 @@ use crate::span::Span;
 
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, TypeId};
-use super::resolve::{ResolutionMap, validate_str_param_modes};
+use super::resolve::{ResolutionMap, validate_default_param_ordering, validate_str_param_modes};
 use super::scope::{DefKind, ScopeTable};
 use super::types::{self, TypeTable};
 
@@ -524,6 +524,7 @@ fn collect_trait(
     for item in &trait_def.items {
         if let TraitItem::Method(method) = &item.node {
             validate_str_param_modes(&method.params, errors);
+            validate_default_param_ordering(&method.params, errors);
             let sig = build_function_sig(method, scopes, types);
             let has_body = !matches!(method.body, FunctionBody::Declaration | FunctionBody::Extern(_));
             has_default_body.insert(method.name.node.clone(), has_body);

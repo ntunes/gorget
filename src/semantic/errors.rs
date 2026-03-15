@@ -400,6 +400,9 @@ pub enum SemanticErrorKind {
 
     /// Public function exposes a private type in its signature.
     PrivateTypeInPublicSignature { type_name: String, fn_name: String, position: String },
+
+    /// Required parameter follows a parameter with a default value.
+    RequiredAfterDefault { name: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -686,6 +689,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::PrivateTypeInPublicSignature { type_name, fn_name, position } => {
                 write!(f, "public function `{fn_name}` has private type `{type_name}` in its {position}")
+            }
+            SemanticErrorKind::RequiredAfterDefault { name } => {
+                write!(f, "required parameter `{name}` follows a parameter with a default value")
             }
         }
     }
