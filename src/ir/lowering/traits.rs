@@ -1097,13 +1097,15 @@ fn lower_static_trait_method(
     // Use map_ast_type_mut to auto-register generic instantiations like Option[Color].
     let return_type = ctx.type_mapper.map_ast_type_mut(&method.return_type.node, &mut ctx.type_registry);
 
-    // Build parameters (skip self if somehow present)
+    // Build parameters (skip self if somehow present).
+    // Apply resolve_param_type to wrap Move-type params in Ptr/MutPtr based on ownership.
     let params: Vec<(TypeId, Option<String>)> = method
         .params
         .iter()
         .filter(|p| p.node.name.node != "self")
         .map(|p| {
-            let gir_type = ctx.type_mapper.map_ast_type_mut(&p.node.type_.node, &mut ctx.type_registry);
+            let base_type = ctx.type_mapper.map_ast_type_mut(&p.node.type_.node, &mut ctx.type_registry);
+            let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
             (gir_type, Some(p.node.name.node.clone()))
         })
         .collect();
@@ -1114,11 +1116,16 @@ fn lower_static_trait_method(
     let mut builder = FunctionBuilder::new(mangled, return_type, &param_refs);
     ctx.clear_locals();
 
-    // Register params starting at _1 (use already-mapped types from `params`)
+    // Register params starting at _1, tracking pointer-wrapped params to avoid double-wrapping
     let mut param_idx = 1u32;
-    for (gir_type, name) in &params {
-        if let Some(name) = name {
-            ctx.register_local(name, LocalId(param_idx), *gir_type);
+    for (i, p) in method.params.iter().filter(|p| p.node.name.node != "self").enumerate() {
+        let (gir_type, _) = &params[i];
+        ctx.register_local(&p.node.name.node, LocalId(param_idx), *gir_type);
+        let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+        if ctx.is_ref_param(base_type, p.node.ownership) {
+            ctx.ref_locals.insert(LocalId(param_idx), base_type);
+        } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
+            ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }
         param_idx += 1;
     }

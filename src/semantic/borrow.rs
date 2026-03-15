@@ -9757,7 +9757,7 @@ void main():
     fn unused_import_warns() {
         // Note: this test uses a from-import of a function that's defined in the source
         // but never called. Since `helper` is defined, the resolver will find it.
-        let source = "\
+        let _source = "\
 int helper() = 42
 
 void main():
