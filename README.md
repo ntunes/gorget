@@ -1,8 +1,8 @@
 # Gorget
 
-A compiled language where safe code looks clean and clean code is safe.
+A compiled language that aims to make safe code easy to write — and easy to read.
 
-Gorget compiles to native binaries through C. It enforces ownership and borrowing at compile time — no garbage collector, no runtime cost — while keeping the syntax minimal enough that programs read like pseudocode.
+Gorget compiles to native binaries through C. It uses ownership and borrowing to manage memory at compile time — no garbage collector, no runtime cost — while keeping syntax minimal enough that programs read like pseudocode.
 
 ```
 void main():
@@ -14,14 +14,19 @@ $ gg run hello.gg
 Hello, World!
 ```
 
-> Gorget is in active development. Expect breaking changes before 1.0.
+> Gorget is in active development. The language is expressive enough to self-host its own lexer, parser, and type checker, but it hasn't seen production use yet. Expect breaking changes before 1.0.
 
 ## Why Gorget
 
-Most safe languages pay for safety with syntax. Gorget doesn't.
+We think safe languages shouldn't have to be verbose. Gorget is our attempt to get there.
 
-- **Ownership without annotations** — the borrow checker works without lifetime parameters in function signatures. Borrows and moves are visible at call sites (`&` for mutable borrow, `!` for move), not buried in type signatures.
-- **Compile-time meta system** — no macros, no codegen scripts. `meta` blocks run at compile time with full access to type introspection: field iteration, variant expansion, conditional compilation. Derive traits, generate match arms, embed files — all in the language itself.
+- **Ownership without lifetime annotations** — the borrow checker works without lifetime parameters in function signatures. Borrows and moves are marked at call sites (`&` for mutable borrow, `!` for move), so ownership transfers are visible where they happen.
+- **Error handling that stays out of the way** — functions declare `throws` and errors propagate automatically. No `?` at every call site, no `try` blocks wrapping your logic. When you do need control, `catch`, `rethrow`, and `on error` give you exactly the level of handling you need — from a one-line fallback to full error transformation.
+- **Shared variables with compiler-checked concurrency** — `shared int count = 0` gives you thread-safe mutable state. The compiler selects the right synchronization primitive (atomic, mutex, or rwlock), releases locks at suspension points, acquires them in consistent order to prevent deadlocks, and warns about stale reads, check-then-act races, and lost updates.
+- **Compile-time meta system** — `meta` blocks run at compile time with full type introspection: iterate fields, expand variants, conditionally compile. No macros, no codegen scripts — just the language itself.
+- **Automatic purity inference** — every function is classified as Pure, ReadOnly, MutatesArgs, or HasSideEffects through call-graph analysis. No annotations needed. The compiler uses this to prove that certain operations (like calls inside `with` blocks) are safe.
+- **Contracts** — `assert return` lets you write postconditions directly in function bodies. Preconditions and postconditions are checked at runtime by default, stripped in release builds.
+- **Rich static analysis** — beyond type checking: warns on unchecked `.unwrap()`, variables that could be `const`, unnecessarily mutable borrows, unused imports, unreachable code, and suggests corrections for typos.
 - **Batteries included** — HTTP, JSON, CSV, XML, YAML, TOML, SQLite, regex, crypto, and more ship in the standard library. One import, no package hunting for basics.
 - **One toolchain** — `gg build`, `gg test`, `gg fmt`, `gg sim`, `gg add`. No external build system, no formatter choice, no test framework decision.
 
@@ -87,20 +92,6 @@ float area(Shape s):
             return w * h
 ```
 
-### Error handling
-
-```gorget
-from gg.http import get, HttpResponse
-
-void main():
-    Result[HttpResponse, str] result = get("https://httpbin.org/get")
-    match result:
-        case Ok(resp):
-            print("Status: {resp.status_code}")
-        case Error(e):
-            print("Error: {e}")
-```
-
 ### Ownership and borrowing
 
 ```gorget
@@ -125,6 +116,99 @@ void main():
     msg.set_priority(5)  # mutable borrow — modify in place
     send(!msg)           # move — msg is now dead
     # preview(msg)       # compile error: use of moved value `msg`
+```
+
+### Error handling
+
+Errors propagate automatically — no `?` or `try` needed. When you want control, pick the right tool:
+
+```gorget
+# Errors propagate up through throwing functions automatically
+Config load_config(str path) throws str:
+    str content = read_file(path)     # throws? we throw too — automatically
+    Config cfg = parse(content)       # same here
+    return cfg
+
+# catch — recover with a fallback
+void main():
+    int port = parse_port(input) catch: 8080
+
+# rethrow — transform errors with context
+Config load(str path) throws AppError:
+    str content = read_file(path) rethrow (str e): AppError.Io("reading {path}: {e}")
+    return parse(content) rethrow (str e): AppError.Parse(e)
+
+# on error — cleanup that only runs on failure (like Zig's errdefer)
+void process(str path) throws str:
+    File f = File.open(path)
+    on error f.close()
+    str data = f.read_all()           # if this throws, f.close() runs
+    transform(data)
+
+# raw — drop to manual Result handling when you need full control
+void main():
+    match raw load_config("app.conf"):
+        case Ok(cfg):
+            serve(cfg)
+        case Error(e):
+            print("failed: {e}")
+```
+
+### Shared variables
+
+Thread-safe mutable state with automatic synchronization. The compiler selects the right primitive, warns about races, and prevents deadlocks by construction:
+
+```gorget
+async void main():
+    shared int count = 0
+
+    Task[void] t1 = spawn increment(&count, 1000)
+    Task[void] t2 = spawn increment(&count, 1000)
+    t1.await()
+    t2.await()
+
+    with count:
+        print(count)    # 2000 — lock held, value is fresh
+
+async void increment(int &count, int n):
+    for i in 0..n:
+        count += 1      # auto-locked, incremented, auto-unlocked
+```
+
+### Compile-time meta
+
+```gorget
+# Derive common traits — no boilerplate
+@derive(Equatable, Displayable, Cloneable)
+struct Point:
+    float x
+    float y
+
+# Iterate fields at compile time
+void describe_fields[T]():
+    meta for fname, ftype in fields(T):
+        print(f"{fname}:{ftype}")
+
+# Conditional compilation over types
+void count_numeric_fields[T]():
+    auto count = 0
+    meta for fname, ftype in fields(T):
+        meta if ftype is numeric:
+            count += 1
+    print(count)
+```
+
+### Contracts
+
+```gorget
+int clamp(int value, int lo, int hi):
+    assert lo <= hi                    # precondition
+    assert return >= lo                # postcondition
+    assert return <= hi                # postcondition
+
+    if value < lo: return lo
+    if value > hi: return hi
+    return value
 ```
 
 ### Traits
@@ -152,19 +236,6 @@ void main():
     int total = nums.fold(0, (int acc, int x): acc + x)
 ```
 
-### Contracts
-
-```gorget
-int clamp(int value, int lo, int hi):
-    assert lo <= hi                    # precondition
-    assert return >= lo                # postcondition
-    assert return <= hi                # postcondition
-
-    if value < lo: return lo
-    if value > hi: return hi
-    return value
-```
-
 ### Async and channels
 
 ```gorget
@@ -189,6 +260,10 @@ async void main():
     int result = cons.await()
     print(result)   # 45
 ```
+
+## Self-Hosting
+
+Gorget's lexer, parser, and name resolver are implemented in Gorget itself and pass comparison tests against the Rust originals at 100%. The self-hosted type checker is at 99.8%. This is both a test of the language's expressiveness and a practical validation of the compiler's correctness — any bug in code generation shows up as a self-host mismatch.
 
 ## CLI
 
@@ -262,8 +337,8 @@ Test files use `test` blocks with `assert` for contracts, `@should_panic` for ex
 
 ```bash
 cargo build                                        # build the compiler
-cargo test --lib                                   # ~913 unit tests
-cargo test --test integration -- --test-threads=4  # ~709 integration tests
+cargo test --lib                                   # ~975 unit tests
+cargo test --test integration -- --test-threads=4  # ~714 integration tests
 ```
 
 Integration tests live in `tests/fixtures/*.gg` — each is a self-contained program with deterministic stdout.
