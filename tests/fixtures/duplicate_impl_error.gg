@@ -1,0 +1,13 @@
+trait Sortable:
+    bool less(self, Self other)
+
+equip int with Sortable:
+    bool less(self, int other):
+        return self < other
+
+equip int with Sortable:
+    bool less(self, int other):
+        return self < other
+
+void main():
+    pass

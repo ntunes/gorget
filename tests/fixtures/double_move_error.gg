@@ -1,0 +1,7 @@
+void consume(String !x):
+    pass
+
+void main():
+    String s = "hello"
+    consume(!s)
+    consume(!s)

@@ -14179,3 +14179,186 @@ fn struct_nested_access() {
         "1\ntest\n42",
     );
 }
+
+// ══════════════════════════════════════════════════════════════
+// Negative tests: Type errors
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn type_mismatch_assign_error() {
+    check_gg_fails("type_mismatch_assign_error.gg", "type mismatch");
+}
+
+#[test]
+fn type_mismatch_return_error() {
+    check_gg_fails("type_mismatch_return_error.gg", "type mismatch");
+}
+
+#[test]
+fn type_mismatch_arg_error() {
+    check_gg_fails("type_mismatch_arg_error.gg", "type mismatch");
+}
+
+#[test]
+fn wrong_arg_count_error() {
+    check_gg_fails("wrong_arg_count_error.gg", "wrong number of arguments");
+}
+
+#[test]
+fn non_exhaustive_match_error() {
+    check_gg_fails("non_exhaustive_match_error.gg", "non-exhaustive match");
+}
+
+#[test]
+fn value_out_of_range_error() {
+    check_gg_fails("value_out_of_range_error.gg", "out of range");
+}
+
+#[test]
+fn non_printable_interpolation_error() {
+    check_gg_fails("non_printable_interpolation_error.gg", "cannot interpolate");
+}
+
+// ══════════════════════════════════════════════════════════════
+// Negative tests: Scope/control flow errors
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn undefined_name_error() {
+    check_gg_fails("undefined_name_error.gg", "undefined name");
+}
+
+#[test]
+fn duplicate_definition_error() {
+    check_gg_fails("duplicate_definition_error.gg", "duplicate definition");
+}
+
+#[test]
+fn throw_in_non_throwing_error() {
+    check_gg_fails(
+        "throw_in_non_throwing_error.gg",
+        "throw in function that doesn't declare `throws`",
+    );
+}
+
+#[test]
+fn required_after_default_error() {
+    check_gg_fails(
+        "required_after_default_error.gg",
+        "follows a parameter with a default value",
+    );
+}
+
+#[test]
+fn assignment_to_const_nested_error() {
+    check_gg_fails(
+        "assignment_to_const_nested_error.gg",
+        "cannot assign to constant",
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Negative tests: Trait errors
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn missing_trait_method_error() {
+    check_gg_fails("missing_trait_method_error.gg", "is missing method");
+}
+
+#[test]
+fn method_signature_mismatch_error() {
+    check_gg_fails("method_signature_mismatch_error.gg", "signature doesn't match");
+}
+
+#[test]
+fn duplicate_impl_error() {
+    check_gg_fails("duplicate_impl_error.gg", "duplicate implementation");
+}
+
+#[test]
+fn unsatisfied_trait_bound_error() {
+    check_gg_fails("unsatisfied_trait_bound_error.gg", "does not satisfy trait bound");
+}
+
+#[test]
+fn derive_from_multi_field_error() {
+    check_gg_fails("derive_from_multi_field_error.gg", "requires exactly one field");
+}
+
+// ══════════════════════════════════════════════════════════════
+// Negative tests: Ownership/borrow errors
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn use_after_move_error() {
+    check_gg_fails("use_after_move_error.gg", "use of moved value");
+}
+
+#[test]
+fn move_without_operator_error() {
+    check_gg_fails("move_without_operator_error.gg", "non-Copy type requires `!` or `move`");
+}
+
+#[test]
+fn double_move_error() {
+    check_gg_fails("double_move_error.gg", "moved more than once");
+}
+
+#[test]
+fn move_in_loop_error() {
+    check_gg_fails("move_in_loop_error.gg", "cannot move");
+}
+
+#[test]
+fn borrow_conflict_error() {
+    check_gg_fails("borrow_conflict_error.gg", "borrow conflict");
+}
+
+#[test]
+fn read_while_mut_captured_error() {
+    check_gg_fails("read_while_mut_captured_error.gg", "cannot read");
+}
+
+#[test]
+fn write_while_mut_captured_error() {
+    check_gg_fails("write_while_mut_captured_error.gg", "cannot write");
+}
+
+#[test]
+fn ownership_mismatch_error() {
+    check_gg_fails("ownership_mismatch_error.gg", "ownership mismatch");
+}
+
+// ══════════════════════════════════════════════════════════════
+// Negative tests: Async/spawn errors
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn await_outside_async_error() {
+    check_gg_fails("await_outside_async_error.gg", "can only be used inside an `async` function");
+}
+
+#[test]
+fn spawn_non_future_error() {
+    check_gg_fails("spawn_non_future_error.gg", "requires a `Future[T]` value");
+}
+
+#[test]
+fn borrow_across_await_error() {
+    check_gg_fails("borrow_across_await_error.gg", "cannot use reference");
+}
+
+// ══════════════════════════════════════════════════════════════
+// Negative tests: Miscellaneous errors
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn main_throws_non_int_error() {
+    check_gg_fails("main_throws_non_int_error.gg", "can only throw `int`");
+}
+
+#[test]
+fn positional_after_named_error() {
+    check_gg_fails("positional_after_named_error.gg", "positional argument cannot follow");
+}

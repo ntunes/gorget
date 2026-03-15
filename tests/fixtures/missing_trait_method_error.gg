@@ -1,0 +1,12 @@
+trait Printable:
+    str to_string(self)
+
+struct Point:
+    int x
+    int y
+
+equip Point with Printable:
+    pass
+
+void main():
+    pass

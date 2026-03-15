@@ -1,0 +1,10 @@
+enum Color:
+    Red
+    Green
+    Blue
+
+void main():
+    Color c = Color.Red()
+    match c:
+        case Color.Red():
+            print("red")

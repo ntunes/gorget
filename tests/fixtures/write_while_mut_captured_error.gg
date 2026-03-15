@@ -1,0 +1,5 @@
+void main():
+    int count = 0
+    MutCallable[void()] f = ():
+        count += 1
+    count = 10

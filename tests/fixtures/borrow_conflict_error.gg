@@ -1,0 +1,6 @@
+void takes_ref(Vector[int] &a, Vector[int] &b):
+    a.push(1)
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    takes_ref(&v, &v)

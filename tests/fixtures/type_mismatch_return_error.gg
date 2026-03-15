@@ -1,0 +1,5 @@
+int foo():
+    return "bad"
+
+void main():
+    int x = foo()

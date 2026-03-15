@@ -1,0 +1,6 @@
+void takes_move(String !s):
+    pass
+
+void main():
+    String s = "hello"
+    takes_move(&s)

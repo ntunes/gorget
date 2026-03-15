@@ -1,0 +1,7 @@
+@derive(From)
+struct Pair:
+    int x
+    int y
+
+void main():
+    pass

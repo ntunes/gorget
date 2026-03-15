@@ -1,0 +1,11 @@
+trait Hashable:
+    int hash(self)
+
+void use_hash[Hashable T](T val):
+    print(val.hash())
+
+struct NoHash:
+    int x
+
+void main():
+    use_hash[NoHash](NoHash(1))

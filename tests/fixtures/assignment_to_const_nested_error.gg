@@ -1,0 +1,4 @@
+void main():
+    if true:
+        const int x = 5
+        x = 10

@@ -1,0 +1,5 @@
+void f():
+    throw "fail"
+
+void main():
+    pass

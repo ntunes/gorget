@@ -1,0 +1,3 @@
+void main():
+    String s = "hello"
+    String t = s
