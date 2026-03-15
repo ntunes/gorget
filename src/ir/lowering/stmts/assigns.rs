@@ -83,9 +83,11 @@ pub(super) fn lower_assign(
                         local: local_id,
                         projections: vec![Projection::Deref],
                     };
-                    builder.assign(deref_place, operand);
+                    builder.assign(deref_place, operand.clone());
+                    super::maybe_emit_field_move_zero(ctx, builder, &operand);
                 } else {
-                    builder.assign(Place::local(local_id), operand);
+                    builder.assign(Place::local(local_id), operand.clone());
+                    super::maybe_emit_field_move_zero(ctx, builder, &operand);
                 }
             } else if ctx.global_names.contains(name.as_str()) {
                 // Module-level static variable — emit GlobalAssign

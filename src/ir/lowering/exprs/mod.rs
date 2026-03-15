@@ -1479,9 +1479,21 @@ fn lower_field_access(
                 if type_name == "GorgetString" && field_name == "data" {
                     return obj;
                 }
+                // Track field loads for move-zeroing on owned locals AND mutable borrows.
+                // Skip only const (immutable) pointer access where we can't zero the source.
+                let is_owned_or_mut = match ctx.type_registry.get(local_type_id) {
+                    Some(GirType::Ptr(_)) => false,  // const borrow — read-only
+                    _ => true,  // owned, MutPtr, or non-pointer
+                };
                 // First try the struct_fields cache
                 if let Some((field_idx, field_type)) = ctx.lookup_field(type_name, field_name) {
-                    let dst = builder.field_load(base_place, field_idx, field_type);
+                    let dst = builder.field_load(base_place.clone(), field_idx, field_type);
+                    // Track resource-type field loads for move-zeroing
+                    if is_owned_or_mut && ctx.type_registry.is_resource_type(field_type) {
+                        let mut field_place = base_place;
+                        field_place.projections.push(Projection::Field(field_idx));
+                        ctx.field_load_origins.insert(dst, (field_place, field_type));
+                    }
                     return FunctionBuilder::copy(dst);
                 }
                 // Fallback: read directly from TypeDef (handles dynamically-registered
@@ -1490,7 +1502,12 @@ fn lower_field_access(
                     if let TypeDefKind::Struct(ref s) = type_def.kind {
                         for (i, field) in s.fields.iter().enumerate() {
                             if field.name == field_name {
-                                let dst = builder.field_load(base_place, i as u32, field.type_id);
+                                let dst = builder.field_load(base_place.clone(), i as u32, field.type_id);
+                                if is_owned_or_mut && ctx.type_registry.is_resource_type(field.type_id) {
+                                    let mut field_place = base_place;
+                                    field_place.projections.push(Projection::Field(i as u32));
+                                    ctx.field_load_origins.insert(dst, (field_place, field.type_id));
+                                }
                                 return FunctionBuilder::copy(dst);
                             }
                         }

@@ -3684,8 +3684,9 @@ fn emit_poll_inst(
                         } else {
                             format!("{c_fn}({args_str})")
                         };
+                        let ok_type = resolve_oat_inner_type(&dst_c, "Ok", registry).unwrap_or_else(|| "int64_t".to_string());
                         let _ = writeln!(out,
-                            "        f->_{id} = ({{ __typeof__(f->_{id}.data.Ok._0) __raw = {raw_capture}; \
+                            "        f->_{id} = ({{ {ok_type} __raw = {raw_capture}; \
                             const char* __err = {err_fn}(); \
                             {dst_c} __wr; if (__err) {{ __wr.tag = 1; __wr.data.Error._0 = gorget_str_from_cstr(__err); }} \
                             else {{ __wr.tag = 0; __wr.data.Ok._0 = __raw; }} __wr; }});");
@@ -3861,8 +3862,9 @@ fn emit_poll_inst(
                         } else {
                             format!("{c_fn}({args_str})")
                         };
+                        let ok_type = resolve_oat_inner_type(&dst_c, "Ok", registry).unwrap_or_else(|| "int64_t".to_string());
                         let _ = writeln!(out,
-                            "        f->_{id} = ({{ __typeof__(f->_{id}.data.Ok._0) __raw = {raw_capture}; \
+                            "        f->_{id} = ({{ {ok_type} __raw = {raw_capture}; \
                             const char* __err = {err_fn}(); \
                             {dst_c} __wr; if (__err) {{ __wr.tag = 1; __wr.data.Error._0 = gorget_str_from_cstr(__err); }} \
                             else {{ __wr.tag = 0; __wr.data.Ok._0 = __raw; }} __wr; }});");
@@ -3898,8 +3900,29 @@ fn emit_poll_inst(
 
         Instruction::MoveZero { place } => {
             let place_str = fmt_place_poll(place, func, registry);
-            let local_type = func.locals[place.local.0 as usize].type_id;
-            let type_name = format_type(local_type, registry);
+            let mut zeroed_type = func.locals[place.local.0 as usize].type_id;
+            for proj in &place.projections {
+                match proj {
+                    Projection::Deref => {
+                        if let Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) = registry.get(zeroed_type) {
+                            zeroed_type = *inner;
+                        }
+                    }
+                    Projection::Field(idx) => {
+                        if let Some(GirType::Named(name)) = registry.get(zeroed_type) {
+                            if let Some(td) = registry.get_type_def(name) {
+                                if let TypeDefKind::Struct(ref s) = td.kind {
+                                    if let Some(field) = s.fields.get(*idx as usize) {
+                                        zeroed_type = field.type_id;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let type_name = format_type(zeroed_type, registry);
             let _ = writeln!(out, "        memset(&{place_str}, 0, sizeof({type_name}));");
         }
 
@@ -5315,6 +5338,23 @@ fn runtime_type_name(name: &str) -> Option<&'static str> {
     }
 }
 
+/// Resolve the inner payload C type for an OAT (Option/Result) type.
+/// `variant` is "Ok", "Error", or "Some".
+/// Returns the C type string for the inner `_0` field, or None if not found.
+fn resolve_oat_inner_type(c_type: &str, variant: &str, registry: &TypeRegistry) -> Option<String> {
+    let td = registry.get_type_def(c_type)?;
+    if let TypeDefKind::Enum(ref e) = td.kind {
+        for v in &e.variants {
+            if v.name == variant {
+                if let Some(field) = v.fields.first() {
+                    return Some(format_type(field.type_id, registry));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Map a collection type name to its C runtime type.
 fn collection_type_alias(name: &str) -> Option<&'static str> {
     if name.starts_with("Vector__") { return Some("GorgetArray"); }
@@ -5603,12 +5643,8 @@ fn emit_function(out: &mut String, func: &Function, module: &Module) {
             }
         };
         // Apply const qualifier for immutable borrow locals.
-        // Skip Option/Result types — OAT macros use __typeof__(*ptr) which
-        // inherits const and breaks assignments to the temporary.
         let c_type = if const_borrow_locals.contains(&local_id)
             && !c_type.starts_with("const ")
-            && !c_type.starts_with("Option_")
-            && !c_type.starts_with("Result_")
         {
             format!("const {c_type}")
         } else {
@@ -6520,9 +6556,10 @@ fn emit_instruction(
                         } else {
                             format!("{func_name_mapped}({args_str})")
                         };
+                        let ok_type = resolve_oat_inner_type(&c_type, "Ok", registry).unwrap_or_else(|| "int64_t".to_string());
                         let _ = writeln!(out,
                             "        _{id} = ({{ {c_type} __wr; \
-                            if (GORGET_TRY) {{ __typeof__(_{id}.data.Ok._0) __raw = {raw_expr}; GORGET_CATCH_END; \
+                            if (GORGET_TRY) {{ {ok_type} __raw = {raw_expr}; GORGET_CATCH_END; \
                             __wr.tag = 0; __wr.data.Ok._0 = __raw; }} \
                             else {{ GorgetError __err = GORGET_CATCH_ERROR(); GORGET_CATCH_END; \
                             __wr.tag = 1; __wr.data.Error._0 = gorget_str_from_cstr(__err.message); }} \
@@ -6646,8 +6683,9 @@ fn emit_instruction(
                                     else {{ __opt.tag = 1; }} __opt; }});",
                                     id = dst_id.0);
                             } else {
+                                let some_type = resolve_oat_inner_type(&c_type, "Some", registry).unwrap_or_else(|| "int64_t".to_string());
                                 let _ = writeln!(out,
-                                    "        _{id} = ({{ __typeof__(_{id}.data.Some._0) __raw = {c_name}({args_str}); \
+                                    "        _{id} = ({{ {some_type} __raw = {c_name}({args_str}); \
                                     {c_type} __opt; if (__raw >= 0) {{ __opt.tag = 0; __opt.data.Some._0 = __raw; }} \
                                     else {{ __opt.tag = 1; }} __opt; }});",
                                     id = dst_id.0);
@@ -6883,9 +6921,10 @@ fn emit_instruction(
                         } else {
                             format!("{func_name_mapped}({args_str})")
                         };
+                        let ok_type = resolve_oat_inner_type(&c_type, "Ok", registry).unwrap_or_else(|| "int64_t".to_string());
                         if let Some(err_fn) = last_error_fn(func_name_mapped) {
                             let _ = writeln!(out,
-                                "        _{id} = ({{ __typeof__(_{id}.data.Ok._0) __raw = {raw_expr}; \
+                                "        _{id} = ({{ {ok_type} __raw = {raw_expr}; \
                                 const char* __err = {err_fn}(); \
                                 {c_type} __wr; if (__err) {{ __wr.tag = 1; __wr.data.Error._0 = gorget_str_from_cstr(__err); }} \
                                 else {{ __wr.tag = 0; __wr.data.Ok._0 = __raw; }} __wr; }});",
@@ -6893,7 +6932,7 @@ fn emit_instruction(
                         } else {
                             let _ = writeln!(out,
                                 "        _{id} = ({{ {c_type} __wr; \
-                                if (GORGET_TRY) {{ __typeof__(_{id}.data.Ok._0) __raw = {raw_expr}; GORGET_CATCH_END; \
+                                if (GORGET_TRY) {{ {ok_type} __raw = {raw_expr}; GORGET_CATCH_END; \
                                 __wr.tag = 0; __wr.data.Ok._0 = __raw; }} \
                                 else {{ GorgetError __err = GORGET_CATCH_ERROR(); GORGET_CATCH_END; \
                                 __wr.tag = 1; __wr.data.Error._0 = gorget_str_from_cstr(__err.message); }} \
@@ -6904,8 +6943,9 @@ fn emit_instruction(
                         let _ = writeln!(out, "        _{id} = gorget_str_from_cstr({func_name_mapped}({args_str}));", id = dst_id.0);
                     } else if c_type.starts_with("Option__") {
                         // Option wrapping: C returns raw value, wrap in Option (>= 0 → Some, else None)
+                        let some_type = resolve_oat_inner_type(&c_type, "Some", registry).unwrap_or_else(|| "int64_t".to_string());
                         let _ = writeln!(out,
-                            "        _{id} = ({{ __typeof__(_{id}.data.Some._0) __raw = {func_name_mapped}({args_str}); \
+                            "        _{id} = ({{ {some_type} __raw = {func_name_mapped}({args_str}); \
                             {c_type} __opt; if (__raw >= 0) {{ __opt.tag = 0; __opt.data.Some._0 = __raw; }} \
                             else {{ __opt.tag = 1; }} __opt; }});",
                             id = dst_id.0);
@@ -6995,9 +7035,10 @@ fn emit_instruction(
                             } else {
                                 format!("{func_name}({args_str})")
                             };
+                            let ok_type = resolve_oat_inner_type(&c_type, "Ok", registry).unwrap_or_else(|| "int64_t".to_string());
                             if let Some(err_fn) = last_error_fn(func_name) {
                                 let _ = writeln!(out,
-                                    "        _{id} = ({{ __typeof__(_{id}.data.Ok._0) __raw = {raw_capture}; \
+                                    "        _{id} = ({{ {ok_type} __raw = {raw_capture}; \
                                     const char* __err = {err_fn}(); \
                                     {c_type} __wr; if (__err) {{ __wr.tag = 1; __wr.data.Error._0 = gorget_str_from_cstr(__err); }} \
                                     else {{ __wr.tag = 0; __wr.data.Ok._0 = __raw; }} __wr; }});",
@@ -7005,7 +7046,7 @@ fn emit_instruction(
                             } else {
                                 let _ = writeln!(out,
                                     "        _{id} = ({{ {c_type} __wr; \
-                                    if (GORGET_TRY) {{ __typeof__(_{id}.data.Ok._0) __raw = {raw_capture}; GORGET_CATCH_END; \
+                                    if (GORGET_TRY) {{ {ok_type} __raw = {raw_capture}; GORGET_CATCH_END; \
                                     __wr.tag = 0; __wr.data.Ok._0 = __raw; }} \
                                     else {{ GorgetError __err = GORGET_CATCH_ERROR(); GORGET_CATCH_END; \
                                     __wr.tag = 1; __wr.data.Error._0 = gorget_str_from_cstr(__err.message); }} \
@@ -7024,8 +7065,9 @@ fn emit_instruction(
                                 .map(|f| format_type(f.return_type, registry));
                             !called_ret.as_ref().map_or(false, |r| r.starts_with("Option__"))
                         } {
+                            let some_type = resolve_oat_inner_type(&c_type, "Some", registry).unwrap_or_else(|| "int64_t".to_string());
                             let _ = writeln!(out,
-                                "        _{id} = ({{ __typeof__(_{id}.data.Some._0) __raw = {func_name}({args_str}); \
+                                "        _{id} = ({{ {some_type} __raw = {func_name}({args_str}); \
                                 {c_type} __opt; if (__raw >= 0) {{ __opt.tag = 0; __opt.data.Some._0 = __raw; }} \
                                 else {{ __opt.tag = 1; }} __opt; }});",
                                 id = dst_id.0);
@@ -7042,8 +7084,9 @@ fn emit_instruction(
                             } else {
                                 format!("{func_name}({args_str})")
                             };
+                            let ok_type = resolve_oat_inner_type(&c_type, "Ok", registry).unwrap_or_else(|| "int64_t".to_string());
                             let _ = writeln!(out,
-                                "        _{id} = ({{ __typeof__(_{id}.data.Ok._0) __raw = {raw_capture}; \
+                                "        _{id} = ({{ {ok_type} __raw = {raw_capture}; \
                                 {c_type} __wr; __wr.tag = 0; __wr.data.Ok._0 = __raw; __wr; }});",
                                 id = dst_id.0);
                         } else {
@@ -7428,7 +7471,7 @@ fn emit_instruction(
         }
 
         Instruction::MoveZero { place } => {
-            let place_str = format_place(place, registry);
+            let place_str = format_place_typed(place, Some(func), registry);
             let mut zeroed_type = func.locals[place.local.0 as usize].type_id;
             // Walk projections to resolve the actual type being zeroed
             for proj in &place.projections {
@@ -7436,6 +7479,18 @@ fn emit_instruction(
                     Projection::Deref => {
                         if let Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) = registry.get(zeroed_type) {
                             zeroed_type = *inner;
+                        }
+                    }
+                    Projection::Field(idx) => {
+                        // Resolve field type from struct TypeDef
+                        if let Some(GirType::Named(name)) = registry.get(zeroed_type) {
+                            if let Some(td) = registry.get_type_def(name) {
+                                if let TypeDefKind::Struct(ref s) = td.kind {
+                                    if let Some(field) = s.fields.get(*idx as usize) {
+                                        zeroed_type = field.type_id;
+                                    }
+                                }
+                            }
                         }
                     }
                     _ => {}
@@ -10947,8 +11002,9 @@ fn try_emit_result_wrapped_call(
         format!("{c_func}({args_str})")
     };
 
+    let ok_type = resolve_oat_inner_type(&c_type, "Ok", registry).unwrap_or_else(|| "int64_t".to_string());
     let _ = writeln!(out,
-        "        _{id} = ({{ __typeof__(_{id}.data.Ok._0) __raw = {raw_capture}; \
+        "        _{id} = ({{ {ok_type} __raw = {raw_capture}; \
         const char* __err = {err_fn}(); \
         {c_type} __wr; if (__err) {{ __wr.tag = 1; __wr.data.Error._0 = gorget_str_from_cstr(__err); }} \
         else {{ __wr.tag = 0; __wr.data.Ok._0 = __raw; }} __wr; }});",
@@ -11652,9 +11708,10 @@ fn emit_inline_method(
         InlineMethod::OptionAndThen => {
             // and_then(f): if Some, return f(value); else None
             if let Some(dst_id) = dst {
+                let self_type = self_effective_type(&args, func, registry, type_overrides, self_ptr);
                 let (closure_str, call_fn) = closure_call_info(&args, func, registry, type_overrides, 1);
                 let _ = writeln!(out,
-                    "        _{id} = ({{ __typeof__({self_str}) __oat; \
+                    "        _{id} = ({{ {self_type} __oat; \
                     if ({self_str}.tag == 0) {{ __oat = {call_fn}(&{closure_str}, {self_str}.data.Some._0); }} \
                     else {{ __oat.tag = 1; }} __oat; }});",
                     id = dst_id.0);
@@ -11694,11 +11751,11 @@ fn emit_inline_method(
         }
         InlineMethod::OptionFilter => {
             // filter(f): if Some and f(value), return self; else None
-            // Use __typeof__ on self (not dst) since dst may have wrong GIR type
             if let Some(dst_id) = dst {
+                let self_type = self_effective_type(&args, func, registry, type_overrides, self_ptr);
                 let (closure_str, call_fn) = closure_call_info(&args, func, registry, type_overrides, 1);
                 let _ = writeln!(out,
-                    "        _{id} = ({{ __typeof__({self_str}) __of; \
+                    "        _{id} = ({{ {self_type} __of; \
                     if ({self_str}.tag == 0 && {call_fn}(&{closure_str}, {self_str}.data.Some._0)) {{ __of = {self_str}; }} \
                     else {{ __of.tag = 1; }} __of; }});",
                     id = dst_id.0);
@@ -11725,9 +11782,12 @@ fn emit_inline_method(
             // flatten: Option[Option[T]] → Option[T]
             // If outer is None, return None. If inner is None, return None. Else return inner.
             if let Some(dst_id) = dst {
+                let self_type = self_effective_type(&args, func, registry, type_overrides, self_ptr);
+                let inner_type = resolve_oat_inner_type(&self_type, "Some", registry)
+                    .unwrap_or_else(|| "int64_t".to_string());
                 let _ = writeln!(out,
                     "        _{id} = ({self_str}.tag == 0) ? {self_str}.data.Some._0 : \
-                    ({{ __typeof__({self_str}.data.Some._0) __fl_none; __fl_none.tag = 1; __fl_none; }});",
+                    ({{ {inner_type} __fl_none; __fl_none.tag = 1; __fl_none; }});",
                     id = dst_id.0);
             }
         }
@@ -11892,6 +11952,30 @@ fn is_self_pointer(args: &[Operand], func: &Function, registry: &TypeRegistry) -
         }
     }
     false
+}
+
+/// Get the effective C type of the self argument, stripping pointer wrapper if needed.
+fn self_effective_type(
+    args: &[Operand], func: &Function, registry: &TypeRegistry,
+    type_overrides: &std::collections::HashMap<usize, String>, is_ptr: bool,
+) -> String {
+    if let Some(Operand::Copy(place) | Operand::Move(place)) = args.first() {
+        let idx = place.local.0 as usize;
+        let mut ct = effective_c_type(idx, func, registry, type_overrides);
+        if is_ptr {
+            // Strip pointer: Ptr(T) → T
+            if let Some(stripped) = ct.strip_suffix('*') {
+                ct = stripped.to_string();
+            }
+            // Also strip const prefix from pointer-deref result
+            if let Some(stripped) = ct.strip_prefix("const ") {
+                ct = stripped.to_string();
+            }
+        }
+        ct
+    } else {
+        "int64_t".to_string()
+    }
 }
 
 fn has_float_arg_with_overrides(args: &[Operand], func: &Function, type_overrides: &std::collections::HashMap<usize, String>) -> bool {
@@ -12411,8 +12495,9 @@ fn emit_collection_method_call(
                 );
             } else if c_type.starts_with("Option__") {
                 // Option wrapping for runtime functions that return raw int (index_of, find, etc.)
+                let some_type = resolve_oat_inner_type(&c_type, "Some", registry).unwrap_or_else(|| "int64_t".to_string());
                 let _ = writeln!(out,
-                    "        _{id} = ({{ __typeof__(_{id}.data.Some._0) __raw = {runtime_fn}({args_str}); \
+                    "        _{id} = ({{ {some_type} __raw = {runtime_fn}({args_str}); \
                     {c_type} __opt; if (__raw >= 0) {{ __opt.tag = 0; __opt.data.Some._0 = __raw; }} \
                     else {{ __opt.tag = 1; }} __opt; }});",
                     id = dst_id.0);
@@ -13128,25 +13213,18 @@ fn format_args_with_coercion(
                             .and_then(|abis| abis.get(arg_idx))
                             .copied();
 
-                        let target_is_ptr = if let Some(abi) = param_abi {
-                            matches!(abi, ParamABI::ByPtr | ParamABI::ByMutPtr)
-                        } else {
-                            // Fallback: derive from target function's IR param types
-                            target_params
-                                .and_then(|params| params.get(arg_idx))
-                                .map_or(false, |&tid| {
-                                    matches!(registry.get(tid), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)))
-                                })
-                        };
-                        let has_abi_or_params = param_abi.is_some() || target_params.is_some();
-                        // Auto-deref pointer args: when the target function's param
-                        // types are known (via ABI or IR), deref if the param is a value type.
-                        // When unknown (inline wrappers not in all_functions), deref
+                        // ParamABI is the single source of truth for how params are passed.
+                        // Extern C functions without ABI entries default to by-value.
+                        let target_is_ptr = param_abi
+                            .map(|abi| matches!(abi, ParamABI::ByPtr | ParamABI::ByMutPtr))
+                            .unwrap_or(false);
+                        let has_abi = param_abi.is_some();
+                        // Auto-deref pointer args: when ABI is known, deref if param
+                        // is a value type. When unknown (extern C wrappers), deref
                         // arg 0 ONLY for Channel types — their wrappers take self by
                         // value (Channel__T = GorgetChannel*), so MutPtr(Channel__T)
-                        // needs one deref. Other types (Guard, Shared, RwLock) take
-                        // self by pointer, so their MutPtr refs should stay as-is.
-                        let should_deref = if has_abi_or_params {
+                        // needs one deref.
+                        let should_deref = if has_abi {
                             !target_is_ptr
                         } else if arg_idx == 0 {
                             // Only auto-deref self for channel-pointer types
@@ -13163,9 +13241,7 @@ fn format_args_with_coercion(
                             false
                         };
                         // Take address when target expects a pointer but arg is a value type.
-                        // This happens when the IR dereferences a borrow and then passes
-                        // the resulting value to a function that still expects a pointer param.
-                        let should_addr = has_abi_or_params && target_is_ptr && !is_ptr;
+                        let should_addr = has_abi && target_is_ptr && !is_ptr;
                         if is_ptr && should_deref && place.projections.is_empty() {
                             parts.push(format!("(*{arg_str})"));
                         } else if should_addr {

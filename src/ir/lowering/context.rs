@@ -222,6 +222,9 @@ pub struct LoweringContext<'a> {
     /// Populated during registration for stdlib collection/string `find`/`index_of` methods.
     /// User-defined methods default to NOT being in this set.
     pub sentinel_to_option_methods: rustc_hash::FxHashSet<String>,
+    /// Maps temp locals from field_load → (source_field_place, field_type).
+    /// Used by VarDecl/Assign to emit MoveZero after extracting resource-type fields.
+    pub field_load_origins: FxHashMap<LocalId, (crate::ir::instructions::Place, TypeId)>,
 }
 
 
@@ -265,6 +268,7 @@ impl<'a> LoweringContext<'a> {
             postconditions: Vec::new(),
             move_override_params: std::collections::HashSet::new(),
             sentinel_to_option_methods: rustc_hash::FxHashSet::default(),
+            field_load_origins: FxHashMap::default(),
         }
     }
 
@@ -516,6 +520,19 @@ impl<'a> LoweringContext<'a> {
     /// Resource types and &-annotated params are passed by pointer.
     pub fn is_passed_by_ptr(&self, base_type: TypeId, ownership: Ownership) -> bool {
         self.is_ref_param(base_type, ownership) || self.is_mut_ref_param(base_type, ownership)
+    }
+
+    /// If the given local came from a resource-type field load, emit MoveZero for the
+    /// source field to prevent double-free. Call this whenever a field_load temp is
+    /// consumed (via assignment, function call, push, etc.).
+    pub fn emit_field_origin_zero(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        local: LocalId,
+    ) {
+        if let Some((field_place, _)) = self.field_load_origins.remove(&local) {
+            builder.move_zero(field_place);
+        }
     }
 
     /// Populate the struct_fields cache from the TypeRegistry.

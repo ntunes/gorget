@@ -404,6 +404,7 @@ pub(super) fn lower_call(
                             && is_resource_type_local(place.local, builder, &ctx.type_registry)
                         {
                             builder.move_zero(place.clone());
+                            ctx.emit_field_origin_zero(builder, place.local);
                             ctx.drops.mark_moved(place.local);
                         }
                     }
@@ -803,6 +804,7 @@ pub(super) fn lower_call(
         // MoveZero Move-ownership args to transfer ownership (prevent double-free)
         for place in &move_zero_locals {
             builder.move_zero(place.clone());
+            ctx.emit_field_origin_zero(builder, place.local);
             ctx.drops.mark_moved(place.local);
         }
 

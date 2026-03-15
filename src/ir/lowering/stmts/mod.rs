@@ -15,6 +15,20 @@ use super::context::{LoweringContext, SharedLocalInfo, SharedLocalKind};
 use super::drops::DropScopeKind;
 use super::exprs::{lower_expr, infer_operand_type_full, maybe_auto_propagate};
 
+/// If the operand came from a resource-type field load, emit a MoveZero for the source field
+/// to prevent double-free. Call this after assigning the operand to its destination.
+fn maybe_emit_field_move_zero(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    operand: &Operand,
+) {
+    let source_local = match operand {
+        Operand::Copy(place) | Operand::Move(place) => place.local,
+        _ => return,
+    };
+    ctx.emit_field_origin_zero(builder, source_local);
+}
+
 /// Lower a block of statements.
 pub fn lower_block(
     ctx: &mut LoweringContext,
@@ -23,6 +37,10 @@ pub fn lower_block(
 ) {
     for stmt in &block.stmts {
         lower_stmt(ctx, builder, stmt);
+        // Clear unconsumed field_load_origins. Only VarDecl/Assign consume them
+        // via maybe_emit_field_move_zero. Field loads used as method receivers
+        // (e.g., h.data.push(x)) create dead temps that should not trigger zeroing.
+        ctx.field_load_origins.clear();
     }
 }
 
@@ -243,7 +261,9 @@ fn lower_var_decl(
                     ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
                 }
             }
-            builder.assign(Place::local(local_id), operand);
+            builder.assign(Place::local(local_id), operand.clone());
+            // Emit MoveZero for resource-type field loads to prevent double-free
+            maybe_emit_field_move_zero(ctx, builder, &operand);
         }
 
         Pattern::Tuple(parts) => {

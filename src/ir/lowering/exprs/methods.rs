@@ -1487,7 +1487,24 @@ pub(super) fn lower_method_call(
         // MoveZero Move-ownership args to transfer ownership (prevent double-free)
         for place in &move_zero_locals {
             builder.move_zero(place.clone());
+            ctx.emit_field_origin_zero(builder, place.local);
             ctx.drops.mark_moved(place.local);
+        }
+
+        // Zero source fields for resource-type args that came from field loads.
+        // This handles e.g. items.push(h.data) where the C backend zeros the temp
+        // but not the source field h.data — the struct's scope-end drop would
+        // double-free the field without this.
+        if is_mutating {
+            for op in &lowered_method_args {
+                if let Operand::Copy(place) | Operand::Move(place) = op {
+                    if place.projections.is_empty()
+                        && is_resource_type_local(place.local, builder, &ctx.type_registry)
+                    {
+                        ctx.emit_field_origin_zero(builder, place.local);
+                    }
+                }
+            }
         }
 
         result
