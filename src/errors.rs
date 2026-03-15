@@ -91,73 +91,116 @@ impl std::fmt::Display for ParseError {
 pub struct ErrorReporter {
     files: SimpleFiles<String, String>,
     file_id: usize,
+    /// For multi-file projects: sorted list of (base_offset, source_len, file_id).
+    /// Used to map global spans back to file-local offsets.
+    file_ranges: Vec<(usize, usize, usize)>,
 }
 
 impl ErrorReporter {
     pub fn new(filename: String, source: String) -> Self {
         let mut files = SimpleFiles::new();
         let file_id = files.add(filename, source);
-        Self { files, file_id }
+        Self { files, file_id, file_ranges: Vec::new() }
+    }
+
+    /// Create a reporter for multi-file projects.
+    /// `file_infos` is a list of (filename, source, base_offset) for each module,
+    /// in the order they were loaded.  Spans in the AST use global byte offsets;
+    /// this constructor lets the reporter map them back to file-local positions.
+    pub fn new_multi(file_infos: Vec<(String, String, usize)>) -> Self {
+        let mut files = SimpleFiles::new();
+        let mut file_ranges = Vec::new();
+        let mut first_file_id = 0;
+        for (i, (name, source, base_offset)) in file_infos.iter().enumerate() {
+            let len = source.len();
+            let fid = files.add(name.clone(), source.clone());
+            if i == 0 {
+                first_file_id = fid;
+            }
+            file_ranges.push((*base_offset, len, fid));
+        }
+        // Sort by base_offset for binary search
+        file_ranges.sort_by_key(|(off, _, _)| *off);
+        Self { files, file_id: first_file_id, file_ranges }
+    }
+
+    /// Map a global byte offset to (file_id, file-local offset).
+    fn resolve_offset(&self, global: usize) -> (usize, usize) {
+        if self.file_ranges.is_empty() {
+            return (self.file_id, global);
+        }
+        // Binary search: find the last file_range whose base_offset <= global
+        let idx = match self.file_ranges.binary_search_by_key(&global, |(off, _, _)| *off) {
+            Ok(i) => i,
+            Err(i) => i.saturating_sub(1),
+        };
+        let (base, _len, fid) = self.file_ranges[idx];
+        (fid, global.saturating_sub(base))
+    }
+
+    /// Create a primary label for a span, resolving to the correct file.
+    fn primary_label(&self, span: Span) -> Label<usize> {
+        let (fid, local_start) = self.resolve_offset(span.start);
+        let local_end = local_start + (span.end - span.start);
+        Label::primary(fid, local_start..local_end)
+    }
+
+    /// Create a secondary label for a span, resolving to the correct file.
+    fn secondary_label(&self, span: Span) -> Label<usize> {
+        let (fid, local_start) = self.resolve_offset(span.start);
+        let local_end = local_start + (span.end - span.start);
+        Label::secondary(fid, local_start..local_end)
     }
 
     pub fn report_lex_error(&self, err: &LexError) {
         let diag = diagnostic::Diagnostic::error()
             .with_message(err.to_string())
-            .with_labels(vec![Label::primary(
-                self.file_id,
-                err.span.start..err.span.end,
-            )]);
+            .with_labels(vec![self.primary_label(err.span)]);
         self.emit(&diag);
     }
 
     pub fn report_parse_error(&self, err: &ParseError) {
         let diag = diagnostic::Diagnostic::error()
             .with_message(err.to_string())
-            .with_labels(vec![Label::primary(
-                self.file_id,
-                err.span.start..err.span.end,
-            )]);
+            .with_labels(vec![self.primary_label(err.span)]);
         self.emit(&diag);
     }
 
     pub fn report_semantic_error(&self, err: &crate::semantic::errors::SemanticError) {
         use crate::semantic::errors::SemanticErrorKind;
 
-        let mut labels = vec![Label::primary(
-            self.file_id,
-            err.span.start..err.span.end,
-        )];
+        let mut labels = vec![self.primary_label(err.span)];
 
         // Add secondary labels for errors that reference other locations.
         match &err.kind {
             SemanticErrorKind::DuplicateDefinition { original, .. } => {
                 labels.push(
-                    Label::secondary(self.file_id, original.start..original.end)
+                    self.secondary_label(*original)
                         .with_message("originally defined here"),
                 );
             }
             SemanticErrorKind::UseAfterMove { moved_at, .. } => {
                 labels.push(
-                    Label::secondary(self.file_id, moved_at.start..moved_at.end)
+                    self.secondary_label(*moved_at)
                         .with_message("value moved here"),
                 );
             }
             SemanticErrorKind::DoubleMove { first_move, .. } => {
                 labels.push(
-                    Label::secondary(self.file_id, first_move.start..first_move.end)
+                    self.secondary_label(*first_move)
                         .with_message("first move here"),
                 );
             }
             SemanticErrorKind::UseAfterSourceMoved { moved_at, source_name, .. } => {
                 labels.push(
-                    Label::secondary(self.file_id, moved_at.start..moved_at.end)
+                    self.secondary_label(*moved_at)
                         .with_message(format!("`{source_name}` moved here")),
                 );
             }
             SemanticErrorKind::DanglingReturn { local_declared_at, local_name, .. } => {
                 if let Some(decl_span) = local_declared_at {
                     labels.push(
-                        Label::secondary(self.file_id, decl_span.start..decl_span.end)
+                        self.secondary_label(*decl_span)
                             .with_message(format!("`{local_name}` declared here — will be dropped when function returns")),
                     );
                 }
@@ -165,7 +208,7 @@ impl ErrorReporter {
             SemanticErrorKind::TemporaryBorrow { temp_at, callee, .. } => {
                 if let Some(temp_span) = temp_at {
                     labels.push(
-                        Label::secondary(self.file_id, temp_span.start..temp_span.end)
+                        self.secondary_label(*temp_span)
                             .with_message(format!("temporary from `{callee}()` created here — dropped at end of statement")),
                     );
                 }
@@ -181,10 +224,7 @@ impl ErrorReporter {
 
     pub fn report_semantic_warning(&self, warn: &crate::semantic::errors::SemanticWarning) {
         use crate::semantic::errors::SemanticWarningKind;
-        let mut labels = vec![Label::primary(
-            self.file_id,
-            warn.span.start..warn.span.end,
-        )];
+        let mut labels = vec![self.primary_label(warn.span)];
         let mut notes = Vec::new();
 
         // Add secondary labels for multi-span warnings.
@@ -193,13 +233,13 @@ impl ErrorReporter {
         } = &warn.kind {
             if let Some(ds) = derivation_span {
                 labels.push(
-                    Label::secondary(self.file_id, ds.start..ds.end)
+                    self.secondary_label(*ds)
                         .with_message(format!("read from shared `{shared_name}` here")),
                 );
             }
             if let Some(aws) = await_span {
                 labels.push(
-                    Label::secondary(self.file_id, aws.start..aws.end)
+                    self.secondary_label(*aws)
                         .with_message("token released at this await — value may have changed"),
                 );
             }
@@ -211,11 +251,11 @@ impl ErrorReporter {
         } = &warn.kind {
             let names = shared_names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
             labels.push(
-                Label::secondary(self.file_id, condition_span.start..condition_span.end)
+                self.secondary_label(*condition_span)
                     .with_message(format!("condition reads shared {names} here")),
             );
             labels.push(
-                Label::secondary(self.file_id, yield_span.start..yield_span.end)
+                self.secondary_label(*yield_span)
                     .with_message("yield point releases the lock — another task may invalidate the condition"),
             );
             notes.push(format!("move the yield before the branch, or re-check {names} after the yield"));
@@ -226,13 +266,13 @@ impl ErrorReporter {
         } = &warn.kind {
             if let Some(ds) = derivation_span {
                 labels.push(
-                    Label::secondary(self.file_id, ds.start..ds.end)
+                    self.secondary_label(*ds)
                         .with_message(format!("value derived from shared `{source_shared_name}` here")),
                 );
             }
             if let Some(ys) = yield_span {
                 labels.push(
-                    Label::secondary(self.file_id, ys.start..ys.end)
+                    self.secondary_label(*ys)
                         .with_message("yield point here — value is now stale"),
                 );
             }
@@ -243,11 +283,11 @@ impl ErrorReporter {
             shared_name, iterable_span, yield_span,
         } = &warn.kind {
             labels.push(
-                Label::secondary(self.file_id, iterable_span.start..iterable_span.end)
+                self.secondary_label(*iterable_span)
                     .with_message(format!("iterating over shared `{shared_name}` here")),
             );
             labels.push(
-                Label::secondary(self.file_id, yield_span.start..yield_span.end)
+                self.secondary_label(*yield_span)
                     .with_message("yield point releases the lock — collection may change between iterations"),
             );
             notes.push(format!("collect into a local copy before iterating, or move the yield outside the loop"));

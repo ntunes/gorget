@@ -13,10 +13,13 @@ use gorget::manifest::{self, DepSpec, Manifest};
 use gorget::parser::Parser;
 use gorget::resolver;
 
+/// File info for multi-file error reporting: (display_name, source, base_offset).
+type FileInfo = (String, String, usize);
+
 /// Load imported modules and merge them into a single module.
-/// Returns `(merged_module, concatenated_source)` where the concatenated source
-/// covers all modules with offsets matching the spans in the merged AST.
-fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Module, dep_paths: HashMap<String, PathBuf>) -> (gorget::parser::ast::Module, String) {
+/// Returns `(merged_module, file_infos)` where file_infos maps each module's
+/// source to its filename and byte offset for accurate cross-file diagnostics.
+fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Module, dep_paths: HashMap<String, PathBuf>) -> (gorget::parser::ast::Module, Vec<FileInfo>) {
     let input_path = Path::new(filename).canonicalize().unwrap_or_else(|e| {
         eprintln!("Error resolving path {filename}: {e}");
         process::exit(1);
@@ -54,14 +57,18 @@ fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Modul
             process::exit(1);
         });
 
-    // Build concatenated source text matching the span offsets assigned during loading.
-    // Each module's source is separated by "\n" (matching the +1 offset gaps in the loader).
-    let concat_source = modules.iter()
-        .map(|(_, _, src, _)| src.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
+    // Build file info for each module: (display_name, source, base_offset).
+    // Offsets match the loader's assignment: entry at 0, each subsequent module
+    // at previous_end + 1 (the +1 gap matches the loader's separator).
+    let mut file_infos: Vec<FileInfo> = Vec::new();
+    let mut offset = 0usize;
+    for (path, _segments, src, _module) in &modules {
+        let display_name = path.display().to_string();
+        file_infos.push((display_name, src.clone(), offset));
+        offset += src.len() + 1; // +1 for separator gap
+    }
 
-    (loader::merge_modules(modules), concat_source)
+    (loader::merge_modules(modules), file_infos)
 }
 
 /// Resolve package dependencies for a source file, returning dep_paths.
@@ -377,13 +384,15 @@ fn try_build_ir(
     }
 
     // Load imported modules recursively and merge
-    let (mut module, concat_source) = load_imports(filename, source, module, dep_paths);
+    let (mut module, file_infos) = load_imports(filename, source, module, dep_paths);
+    // Concatenated source for feature-flag detection (.contains() checks below).
+    let concat_source: String = file_infos.iter().map(|(_, src, _)| src.as_str()).collect::<Vec<_>>().join("\n");
 
     let source_dir = std::path::Path::new(filename).parent().map(|p| p.to_path_buf());
     let result = gorget::semantic::analyze_with_source_dir(&mut module, features, source_dir);
 
     if !result.errors.is_empty() {
-        let reporter = ErrorReporter::new(filename.to_string(), concat_source.clone());
+        let reporter = ErrorReporter::new_multi(file_infos.clone());
         for err in &result.errors {
             reporter.report_semantic_error(err);
         }
@@ -392,7 +401,7 @@ fn try_build_ir(
 
     // Display warnings (non-fatal)
     if !result.warnings.is_empty() {
-        let reporter = ErrorReporter::new(filename.to_string(), concat_source.clone());
+        let reporter = ErrorReporter::new_multi(file_infos.clone());
         for warn in &result.warnings {
             reporter.report_semantic_warning(warn);
         }
@@ -1533,7 +1542,7 @@ fn main() {
 
             // Load imported modules recursively and merge
             let dep_paths = resolve_deps_for_file(filename);
-            let (mut module, concat_source) = load_imports(filename, &source, module, dep_paths);
+            let (mut module, file_infos) = load_imports(filename, &source, module, dep_paths);
 
             let source_dir = std::path::Path::new(filename).parent().map(|p| p.to_path_buf());
             let result = gorget::semantic::analyze_with_source_dir(&mut module, &features, source_dir);
@@ -1544,14 +1553,14 @@ fn main() {
 
             if result.errors.is_empty() {
                 if !result.warnings.is_empty() {
-                    let reporter = ErrorReporter::new(filename.clone(), concat_source.clone());
+                    let reporter = ErrorReporter::new_multi(file_infos);
                     for warn in &result.warnings {
                         reporter.report_semantic_warning(warn);
                     }
                 }
                 println!("OK: no semantic errors");
             } else {
-                let reporter = ErrorReporter::new(filename.clone(), concat_source);
+                let reporter = ErrorReporter::new_multi(file_infos);
                 for err in &result.errors {
                     reporter.report_semantic_error(err);
                 }
@@ -2029,13 +2038,14 @@ fn main() {
             }
 
             let dep_paths = resolve_deps_for_file(filename);
-            let (mut module, concat_source) = load_imports(filename, &source, module, dep_paths);
+            let (mut module, file_infos) = load_imports(filename, &source, module, dep_paths);
+            let concat_source: String = file_infos.iter().map(|(_, src, _)| src.as_str()).collect::<Vec<_>>().join("\n");
 
             let source_dir = std::path::Path::new(&filename).parent().map(|p| p.to_path_buf());
             let result = gorget::semantic::analyze_with_source_dir(&mut module, &features, source_dir);
 
             if !result.errors.is_empty() {
-                let reporter = gorget::errors::ErrorReporter::new(filename.clone(), concat_source);
+                let reporter = gorget::errors::ErrorReporter::new_multi(file_infos);
                 for err in &result.errors {
                     reporter.report_semantic_error(err);
                 }
@@ -2044,7 +2054,7 @@ fn main() {
             }
 
             if !result.warnings.is_empty() {
-                let reporter = gorget::errors::ErrorReporter::new(filename.clone(), concat_source.clone());
+                let reporter = gorget::errors::ErrorReporter::new_multi(file_infos.clone());
                 for warn in &result.warnings {
                     reporter.report_semantic_warning(warn);
                 }
