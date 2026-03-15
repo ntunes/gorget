@@ -1,0 +1,13 @@
+struct Vec3:
+    float x
+    float y
+    float z
+
+float dot(Vec3 a, Vec3 b):
+    return a.x * b.x + a.y * b.y + a.z * b.z
+
+void main():
+    Vec3 v = Vec3(1.0, 2.0, 3.0)
+    float d = dot(v, v)
+    print(d)
+    print(v.x)

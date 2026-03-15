@@ -1,0 +1,28 @@
+enum Weekday:
+    Mon()
+    Tue()
+    Wed()
+    Thu()
+    Fri()
+    Sat()
+    Sun()
+
+bool is_weekend(Weekday d):
+    match d:
+        case Sat():
+            return true
+        case Sun():
+            return true
+        else:
+            return false
+
+str day_type(Weekday d):
+    if is_weekend(d):
+        return "weekend"
+    return "weekday"
+
+void main():
+    print(day_type(Weekday.Mon()))
+    print(day_type(Weekday.Sat()))
+    print(day_type(Weekday.Sun()))
+    print(day_type(Weekday.Fri()))

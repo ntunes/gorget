@@ -1,0 +1,11 @@
+(int, int) swap(int a, int b) = (b, a)
+
+void main():
+    auto x, y = swap(1, 2)
+    print(x)
+    print(y)
+
+    auto a, b, c = (10, 20, 30)
+    print(a)
+    print(b)
+    print(c)

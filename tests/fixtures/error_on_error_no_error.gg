@@ -1,0 +1,8 @@
+int process() throws str:
+    on error print("should not print")
+    print("working")
+    return 1
+
+void main():
+    int r = process() catch (e): -1
+    print("done")

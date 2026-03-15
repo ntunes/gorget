@@ -1,0 +1,18 @@
+struct Dims:
+    int w
+    int h
+
+str classify(Dims d):
+    if d.w == d.h:
+        return "square"
+    else:
+        return "rect"
+
+void main():
+    Dims d = Dims(10, 10)
+    str shape = classify(d)
+    print(shape)
+    print(d.w)
+    Dims d2 = Dims(3, 5)
+    print(classify(d2))
+    print(d2.h)

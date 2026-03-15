@@ -1,0 +1,7 @@
+T identity[T](T x) = x
+
+void main():
+    print(identity[int](42))
+    print(identity[str]("hello"))
+    print(identity[float](3.14))
+    print(identity[bool](true))

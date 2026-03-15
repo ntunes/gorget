@@ -1,0 +1,13 @@
+int half(int x) throws str:
+    if x % 2 != 0:
+        throw "not even"
+    return x / 2
+
+void main():
+    auto r1 = half(10)
+    auto r2 = half(7)
+    print(r1.unwrap_or(-1))
+    print(r2.unwrap_or(-1))
+    print(r1.is_ok())
+    print(r2.is_ok())
+    print(r2.is_error())

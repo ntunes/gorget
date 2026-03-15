@@ -1,0 +1,16 @@
+struct Point:
+    float x
+    float y
+
+float distance_sq(Point a, Point b):
+    float dx = a.x - b.x
+    float dy = a.y - b.y
+    return dx * dx + dy * dy
+
+void main():
+    Point origin = Point(0.0, 0.0)
+    Point p = Point(3.0, 4.0)
+    float d = distance_sq(origin, p)
+    print(d)
+    print(origin.x)
+    print(p.x)

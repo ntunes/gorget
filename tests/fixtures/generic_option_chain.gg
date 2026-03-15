@@ -1,0 +1,12 @@
+void main():
+    Option[int] a = Some(10)
+    Option[int] b = None
+
+    int va = a.unwrap_or(0)
+    int vb = b.unwrap_or(0)
+    print(va)
+    print(vb)
+    print(a.is_some())
+    print(b.is_some())
+    print(a.is_none())
+    print(b.is_none())

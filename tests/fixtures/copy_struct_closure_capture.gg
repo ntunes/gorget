@@ -1,0 +1,9 @@
+struct Config:
+    int width
+    int height
+
+void main():
+    Config c = Config(800, 600)
+    auto area = (): c.width * c.height
+    print(area())
+    print(c.width)

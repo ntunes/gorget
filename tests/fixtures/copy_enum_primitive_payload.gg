@@ -1,0 +1,24 @@
+enum Direction:
+    North
+    South
+    East
+    West
+
+str name(Direction d):
+    str result = ""
+    match d:
+        case North:
+            result = "N"
+        case South:
+            result = "S"
+        case East:
+            result = "E"
+        case West:
+            result = "W"
+    return result
+
+void main():
+    Direction d = Direction.North()
+    print(name(d))
+    print(name(d))
+    print(name(d))

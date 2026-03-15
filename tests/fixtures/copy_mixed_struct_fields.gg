@@ -1,0 +1,16 @@
+struct Rect:
+    int x
+    int y
+    float width
+    float height
+
+float area(Rect r):
+    return r.width * r.height
+
+void main():
+    Rect r = Rect(0, 0, 10.5, 20.0)
+    float a1 = area(r)
+    float a2 = area(r)
+    print(a1)
+    print(a2)
+    print(r.x)

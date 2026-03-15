@@ -29,6 +29,8 @@
 
 - **Inline `None()` without typed variable produces garbage**: Using bare `None()` in expressions without first binding to a typed `Option[T]` variable causes uninitialized variable warnings and garbage output in the C backend. Workaround: `Option[int] n = None()` then use `n`. [added: 2026-03-11]
 
+- **IIFE (immediately-invoked closure) produces garbage**: `((int x): x * x)(5)` compiles without error but the result variable is uninitialized in generated C — C compiler warns `'_1' is used uninitialized`. The closure call result is never stored into the destination local. Workaround: assign closure to a variable first, then call it. [added: 2026-03-15]
+
 - **Vector[int] sort treats negatives as unsigned**: `sort()` on `[-5, 3, -10, 0, 7, -1]` produces `[0, 3, 7, -10, -5, -1]` instead of `[-10, -5, -1, 0, 3, 7]`. The int comparator `__gorget_cmp_i64` looks correct (signed compare), so the issue may be in how the vector stores or casts int elements to the comparator. Documented in `test_vector_sort_methods.gg`. [added: 2026-03-11]
 
 - **Variable shadowing in nested scopes aliases storage**: Reusing the same variable name in an inner named scope compiles but the C backend appears to alias the storage, so the outer variable's value gets overwritten after the inner scope exits. [added: 2026-03-11]
