@@ -251,16 +251,21 @@ impl<'a> SsaBuilder<'a> {
     /// Patch terminators: for each jump/branch to a block with params,
     /// provide the reaching definition from the predecessor.
     fn patch_terminators(&mut self) {
-        // First, ensure current_def is populated for all (pred, slot) pairs
-        // we'll need. For slots not directly accessed in a block, we walk up
-        // the predecessor chain to find the reaching definition.
-        let phis: Vec<(BlockId, SlotId)> = self.incomplete_phis.keys().copied().collect();
-        for (target_bb, slot) in &phis {
-            let preds = self.preds[target_bb.0 as usize].clone();
-            for pred_bb in preds {
-                if !self.current_def.contains_key(&(pred_bb, *slot)) {
-                    let val = self.find_reaching_def(*slot, pred_bb);
-                    self.current_def.insert((pred_bb, *slot), val);
+        // Iteratively resolve reaching definitions and create new phis as needed.
+        // When a predecessor block has multiple preds with conflicting definitions,
+        // a new block param (phi) must be created there, which may cascade.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let phis: Vec<(BlockId, SlotId)> = self.incomplete_phis.keys().copied().collect();
+            for (target_bb, slot) in &phis {
+                let preds = self.preds[target_bb.0 as usize].clone();
+                for pred_bb in preds {
+                    if !self.current_def.contains_key(&(pred_bb, *slot)) {
+                        let val = self.resolve_reaching_def(*slot, pred_bb);
+                        self.current_def.insert((pred_bb, *slot), val);
+                        changed = true;
+                    }
                 }
             }
         }
@@ -269,6 +274,7 @@ impl<'a> SsaBuilder<'a> {
         // the block params (which were added by add_block_param in discovery order).
         // Then for each predecessor, collect args in that same order.
         // First, build a map: target_bb → [slot in param order]
+        let phis: Vec<(BlockId, SlotId)> = self.incomplete_phis.keys().copied().collect();
         let mut target_slots: HashMap<BlockId, Vec<SlotId>> = HashMap::new();
         for &(target_bb, slot) in &phis {
             target_slots.entry(target_bb).or_default().push(slot);
@@ -317,21 +323,50 @@ impl<'a> SsaBuilder<'a> {
         }
     }
 
-    /// Find the reaching definition of a slot at a block, walking up predecessors.
-    /// Unlike read_variable, this does NOT create new block params.
-    fn find_reaching_def(&self, slot: SlotId, bb: BlockId) -> ValueId {
+    /// Resolve the reaching definition of a slot at a block, creating new
+    /// block params (phis) when predecessors disagree.
+    fn resolve_reaching_def(&mut self, slot: SlotId, bb: BlockId) -> ValueId {
         if let Some(&val) = self.current_def.get(&(bb, slot)) {
             return val;
         }
         if let Some(&val) = self.block_params.get(&(bb, slot)) {
             return val;
         }
-        let preds = &self.preds[bb.0 as usize];
-        if preds.len() == 1 {
-            return self.find_reaching_def(slot, preds[0]);
+        let preds = self.preds[bb.0 as usize].clone();
+        if preds.is_empty() {
+            // Entry block — undefined, use zero.
+            let val = self.func.next_value();
+            let ty = self.func.slots[slot.0 as usize].ty.clone();
+            self.func.blocks[bb.0 as usize].insts.insert(0,
+                Inst::IConst { dst: val, ty, value: 0 });
+            self.current_def.insert((bb, slot), val);
+            return val;
         }
-        // Unreachable for well-formed code — slot should have been defined somewhere.
-        ValueId(0)
+        if preds.len() == 1 {
+            let pred = preds[0];
+            let val = self.resolve_reaching_def(slot, pred);
+            self.current_def.insert((bb, slot), val);
+            return val;
+        }
+        // Multiple predecessors — check if they all agree.
+        let mut vals: Vec<ValueId> = Vec::new();
+        let mut all_resolved = true;
+        for &pred in &preds {
+            if let Some(&val) = self.current_def.get(&(pred, slot)) {
+                vals.push(val);
+            } else if let Some(&val) = self.block_params.get(&(pred, slot)) {
+                vals.push(val);
+            } else {
+                all_resolved = false;
+            }
+        }
+        if all_resolved && !vals.is_empty() && vals.iter().all(|v| *v == vals[0]) {
+            // All predecessors agree — no phi needed.
+            self.current_def.insert((bb, slot), vals[0]);
+            return vals[0];
+        }
+        // Predecessors disagree or not all resolved — create a block param (phi).
+        self.add_block_param(slot, bb)
     }
 }
 
@@ -470,7 +505,7 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
         | Inst::StrLit { .. }
         | Inst::ParamRef { .. }
         | Inst::Trap { .. }
-        | Inst::Nop => {}
+        | Inst::Nop | Inst::InlineC { .. } => {}
     }
 }
 

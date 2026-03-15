@@ -73,6 +73,7 @@ fn write_global_init(f: &mut fmt::Formatter<'_>, init: &LirGlobalInit) -> fmt::R
         LirGlobalInit::Zeroed => write!(f, " = zeroed"),
         LirGlobalInit::Bytes(bytes) => write!(f, " = bytes[{}]", bytes.len()),
         LirGlobalInit::FuncAddr(fid) => write!(f, " = {fid}"),
+        LirGlobalInit::RuntimeCall(expr) => write!(f, " = runtime_call({expr})"),
         LirGlobalInit::Struct { struct_id, fields } => {
             write!(f, " = {struct_id} {{")?;
             for (i, field) in fields.iter().enumerate() {
@@ -263,6 +264,13 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
         }
 
         Inst::Nop => write!(f, "nop"),
+        Inst::InlineC { dst, code } => {
+            if let Some(d) = dst {
+                write!(f, "{d} = inline_c \"{}\"", code.replace('"', "\\\""))
+            } else {
+                write!(f, "inline_c \"{}\"", code.replace('"', "\\\""))
+            }
+        }
     }
 }
 

@@ -94,6 +94,53 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("drop_fn".into(), LirType::Ptr),
             ],
         },
+        // GorgetMap — hash map backing Dict[K,V] and HashMap[K,V]
+        StructDef {
+            name: "GorgetMap".into(),
+            fields: vec![
+                ("keys".into(), LirType::Ptr),
+                ("values".into(), LirType::Ptr),
+                ("states".into(), LirType::Ptr),
+                ("count".into(), LirType::I64),
+                ("cap".into(), LirType::I64),
+                ("key_size".into(), LirType::I64),
+                ("val_size".into(), LirType::I64),
+                ("alloc".into(), LirType::Ptr),
+                ("order".into(), LirType::Ptr),
+                ("order_len".into(), LirType::I64),
+                ("tombstones".into(), LirType::I64),
+                ("hash_fn".into(), LirType::Ptr),
+                ("eq_fn".into(), LirType::Ptr),
+            ],
+        },
+        // GorgetSet — typedef alias for GorgetMap, backs Set[T] and HashSet[T]
+        StructDef {
+            name: "GorgetSet".into(),
+            fields: vec![
+                ("keys".into(), LirType::Ptr),
+                ("values".into(), LirType::Ptr),
+                ("states".into(), LirType::Ptr),
+                ("count".into(), LirType::I64),
+                ("cap".into(), LirType::I64),
+                ("key_size".into(), LirType::I64),
+                ("val_size".into(), LirType::I64),
+                ("alloc".into(), LirType::Ptr),
+                ("order".into(), LirType::Ptr),
+                ("order_len".into(), LirType::I64),
+                ("tombstones".into(), LirType::I64),
+                ("hash_fn".into(), LirType::Ptr),
+                ("eq_fn".into(), LirType::Ptr),
+            ],
+        },
+        // GorgetRange — range iterator
+        StructDef {
+            name: "GorgetRange".into(),
+            fields: vec![
+                ("start".into(), LirType::I64),
+                ("end".into(), LirType::I64),
+                ("step".into(), LirType::I64),
+            ],
+        },
     ]
 }
 
@@ -128,7 +175,7 @@ mod tests {
     #[test]
     fn builtin_structs() {
         let defs = builtin_struct_defs();
-        assert!(defs.len() >= 6);
+        assert!(defs.len() >= 9);
         assert_eq!(defs[0].name, "Str");
         assert_eq!(defs[0].fields.len(), 2);
         assert_eq!(defs[1].name, "GorgetString");

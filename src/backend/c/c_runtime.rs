@@ -85,6 +85,25 @@ static _Thread_local GorgetAllocator* __gorget_current_alloc = &__gorget_global_
 #define GORGET_CALLOC(count, elem_size) \
     ({ void* __p = GORGET_ALLOC((count) * (elem_size)); memset(__p, 0, (count) * (elem_size)); __p; })
 
+// ── Scoped allocator push/pop (stub for LIR backend) ──
+// The old C backend manages scoped allocators inline. These stubs allow
+// the LIR backend to emit push/pop calls without generating link errors.
+#define GORGET_ALLOC_STACK_MAX 16
+static _Thread_local GorgetAllocator* __gorget_alloc_stack[GORGET_ALLOC_STACK_MAX];
+static _Thread_local int __gorget_alloc_stack_top = 0;
+
+static inline void __gorget_push_allocator(void* alloc) {
+    if (__gorget_alloc_stack_top < GORGET_ALLOC_STACK_MAX) {
+        __gorget_alloc_stack[__gorget_alloc_stack_top++] = __gorget_current_alloc;
+    }
+    __gorget_current_alloc = (GorgetAllocator*)alloc;
+}
+static inline void __gorget_pop_allocator(void) {
+    if (__gorget_alloc_stack_top > 0) {
+        __gorget_current_alloc = __gorget_alloc_stack[--__gorget_alloc_stack_top];
+    }
+}
+
 // ── Arena Allocator ──────────────────────────────────────────
 typedef struct GorgetArenaBlock {
     void*  data;
@@ -3568,6 +3587,19 @@ static inline void gorget_condvar_wait_guard(void* cv_opaque, gorget_guard_t* g)
     pthread_cond_t* cond = (pthread_cond_t*)cv_opaque;
     pthread_cond_wait(cond, &g->mutex->lock);
 }
+
+// Guard helpers for LIR backend — generic void*-based accessors.
+// gorget_guard_get returns a pointer to the guarded data (caller dereferences to T).
+static inline void* gorget_guard_get(gorget_guard_t* g) { return g->ptr; }
+// gorget_guard_set copies `size` bytes from `val` into the guarded data.
+static inline void gorget_guard_set(gorget_guard_t* g, void* val, size_t size) { memcpy(g->ptr, val, size); }
+// gorget_guard_get_ptr returns a mutable pointer to the guarded data.
+static inline void* gorget_guard_get_ptr(gorget_guard_t* g) { return g->ptr; }
+
+// gorget_mutex_lock_to: output-pointer variant for LIR backend (struct-return via pointer).
+static inline void gorget_mutex_lock_to(GorgetMutex* m, gorget_guard_t* out) {
+    *out = gorget_mutex_lock(m);
+}
 "#;
 
 /// I/O Reactor: timerfd (Linux) / kqueue (macOS) backed sleep that uses the GorgetWaker protocol.
@@ -4280,6 +4312,13 @@ static inline void* gorget_array_get(const GorgetArray* arr, size_t index) {
     return (char*)arr->data + index * arr->elem_size;
 }
 
+// Non-panicking bounds-checked get — returns NULL for out-of-bounds.
+// Used by the LIR backend for Vector.get() → Option[T].
+static inline void* gorget_array_safe_get(const GorgetArray* arr, int64_t index) {
+    if (index < 0 || (size_t)index >= arr->len) return NULL;
+    return (char*)arr->data + (size_t)index * arr->elem_size;
+}
+
 static inline size_t gorget_array_len(const GorgetArray* arr) {
     return arr->len;
 }
@@ -4303,6 +4342,56 @@ static inline void gorget_array_remove(GorgetArray* arr, size_t index) {
                 (arr->len - index - 1) * arr->elem_size);
     }
     arr->len--;
+}
+
+// Remove element at index and return pointer to a static copy of it.
+// The returned pointer is valid until the next gorget_array_remove_opt call.
+static inline void* gorget_array_remove_opt(GorgetArray* arr, size_t index) {
+    static _Thread_local char __remove_buf[256];
+    if (index >= arr->len) return NULL;
+    void* elem = (char*)arr->data + index * arr->elem_size;
+    size_t sz = arr->elem_size < 256 ? arr->elem_size : 256;
+    memcpy(__remove_buf, elem, sz);
+    if (index + 1 < arr->len) {
+        memmove((char*)arr->data + index * arr->elem_size,
+                (char*)arr->data + (index + 1) * arr->elem_size,
+                (arr->len - index - 1) * arr->elem_size);
+    }
+    arr->len--;
+    return __remove_buf;
+}
+
+static inline bool gorget_array_is_empty(const GorgetArray* arr) {
+    return arr->len == 0;
+}
+
+// Pop the last element and return a pointer to it (caller must deref before next mutation).
+static inline void* gorget_array_pop(GorgetArray* arr) {
+    if (arr->len == 0) {
+        fprintf(stderr, "gorget: panic: pop from empty array\n");
+        exit(1);
+    }
+    arr->len--;
+    return (char*)arr->data + arr->len * arr->elem_size;
+}
+
+// Pop the last element, returning NULL on empty (safe for Option wrapping).
+static inline void* gorget_array_safe_pop(GorgetArray* arr) {
+    if (arr->len == 0) return NULL;
+    arr->len--;
+    return (char*)arr->data + arr->len * arr->elem_size;
+}
+
+// Return a pointer to the first element.
+static inline void* gorget_array_first(const GorgetArray* arr) {
+    if (arr->len == 0) return NULL;
+    return arr->data;
+}
+
+// Return a pointer to the last element.
+static inline void* gorget_array_last(const GorgetArray* arr) {
+    if (arr->len == 0) return NULL;
+    return (char*)arr->data + (arr->len - 1) * arr->elem_size;
 }
 
 static inline void gorget_array_clear(GorgetArray* arr) {
@@ -4617,30 +4706,51 @@ static inline void __gorget_map_grow(GorgetMap* m) {
     m->keys = GORGET_CALLOC(new_cap, m->key_size);
     m->values = m->val_size > 0 ? GORGET_CALLOC(new_cap, m->val_size) : NULL;
     m->states = (uint8_t*)GORGET_CALLOC(new_cap, 1);
-    m->order = (size_t*)GORGET_CALLOC(new_cap, sizeof(size_t));
+    m->order = old_order ? (size_t*)GORGET_CALLOC(new_cap, sizeof(size_t)) : NULL;
     m->cap = new_cap;
     m->count = 0;
     m->order_len = 0;
     m->tombstones = 0;
 
-    // Reinsert in insertion order to preserve ordering
-    for (size_t oi = 0; oi < old_order_len; oi++) {
-        size_t i = old_order[oi];
-        if (old_states[i] != 1) continue;
-        const void* key = (const char*)old_keys + i * m->key_size;
-        uint64_t h = __GORGET_MAP_HASH(m, key);
-        size_t idx = (size_t)(h % new_cap);
-        while (m->states[idx] != 0) {
-            idx = (idx + 1) % new_cap;
+    // Reinsert existing elements
+    if (old_order) {
+        // Ordered mode: reinsert in insertion order to preserve ordering
+        for (size_t oi = 0; oi < old_order_len; oi++) {
+            size_t i = old_order[oi];
+            if (old_states[i] != 1) continue;
+            const void* key = (const char*)old_keys + i * m->key_size;
+            uint64_t h = __GORGET_MAP_HASH(m, key);
+            size_t idx = (size_t)(h % new_cap);
+            while (m->states[idx] != 0) {
+                idx = (idx + 1) % new_cap;
+            }
+            memcpy((char*)m->keys + idx * m->key_size, key, m->key_size);
+            if (m->val_size > 0) {
+                const void* val = (const char*)old_values + i * m->val_size;
+                memcpy((char*)m->values + idx * m->val_size, val, m->val_size);
+            }
+            m->states[idx] = 1;
+            m->order[m->order_len++] = idx;
+            m->count++;
         }
-        memcpy((char*)m->keys + idx * m->key_size, key, m->key_size);
-        if (m->val_size > 0) {
-            const void* val = (const char*)old_values + i * m->val_size;
-            memcpy((char*)m->values + idx * m->val_size, val, m->val_size);
+    } else {
+        // Unordered mode: bucket scan to reinsert all occupied slots
+        for (size_t i = 0; i < old_cap; i++) {
+            if (old_states[i] != 1) continue;
+            const void* key = (const char*)old_keys + i * m->key_size;
+            uint64_t h = __GORGET_MAP_HASH(m, key);
+            size_t idx = (size_t)(h % new_cap);
+            while (m->states[idx] != 0) {
+                idx = (idx + 1) % new_cap;
+            }
+            memcpy((char*)m->keys + idx * m->key_size, key, m->key_size);
+            if (m->val_size > 0) {
+                const void* val = (const char*)old_values + i * m->val_size;
+                memcpy((char*)m->values + idx * m->val_size, val, m->val_size);
+            }
+            m->states[idx] = 1;
+            m->count++;
         }
-        m->states[idx] = 1;
-        m->order[m->order_len++] = idx;
-        m->count++;
     }
 
     a->dealloc(a->ctx, old_keys, old_cap * m->key_size);
@@ -4821,11 +4931,110 @@ static inline void gorget_map_free(GorgetMap* m) {
     m->tombstones = 0;
 }
 
+static inline bool gorget_map_is_empty(const GorgetMap* m) { return m->count == 0; }
+
+static inline GorgetMap gorget_map_clone(const GorgetMap* src) {
+    GorgetAllocator* a = __gorget_current_alloc;
+    GorgetMap dst;
+    memset(&dst, 0, sizeof(dst));
+    dst.key_size = src->key_size;
+    dst.val_size = src->val_size;
+    dst.hash_fn = src->hash_fn;
+    dst.eq_fn = src->eq_fn;
+    dst.alloc = a;
+    if (src->cap > 0) {
+        dst.keys = a->alloc(a->ctx, src->cap * src->key_size);
+        dst.values = a->alloc(a->ctx, src->cap * src->val_size);
+        dst.states = a->alloc(a->ctx, src->cap);
+        memcpy(dst.keys, src->keys, src->cap * src->key_size);
+        memcpy(dst.values, src->values, src->cap * src->val_size);
+        memcpy(dst.states, src->states, src->cap);
+        dst.cap = src->cap;
+        dst.count = src->count;
+        dst.tombstones = src->tombstones;
+        if (src->order && src->order_len > 0) {
+            dst.order = a->alloc(a->ctx, src->cap * sizeof(size_t));
+            memcpy(dst.order, src->order, src->order_len * sizeof(size_t));
+            dst.order_len = src->order_len;
+        }
+    }
+    return dst;
+}
+
+// Ordered iteration: keys → GorgetArray
+static inline GorgetArray gorget_map_keys(const GorgetMap* m) {
+    GorgetArray result = gorget_array_new(m->key_size);
+    if (m->order != NULL) {
+        for (size_t oi = 0; oi < m->order_len; oi++) {
+            size_t i = m->order[oi];
+            if (m->states[i] != 1) continue;
+            gorget_array_push(&result, (char*)m->keys + i * m->key_size);
+        }
+    } else {
+        for (size_t i = 0; i < m->cap; i++) {
+            if (m->states[i] == 1) {
+                gorget_array_push(&result, (char*)m->keys + i * m->key_size);
+            }
+        }
+    }
+    return result;
+}
+
+// Ordered iteration: values → GorgetArray
+static inline GorgetArray gorget_map_values(const GorgetMap* m) {
+    GorgetArray result = gorget_array_new(m->val_size);
+    if (m->order != NULL) {
+        for (size_t oi = 0; oi < m->order_len; oi++) {
+            size_t i = m->order[oi];
+            if (m->states[i] != 1) continue;
+            gorget_array_push(&result, (char*)m->values + i * m->val_size);
+        }
+    } else {
+        for (size_t i = 0; i < m->cap; i++) {
+            if (m->states[i] == 1) {
+                gorget_array_push(&result, (char*)m->values + i * m->val_size);
+            }
+        }
+    }
+    return result;
+}
+
+// Ordered iteration: items (key+value pairs) → GorgetArray
+// Each element is key_size + val_size bytes: key followed by value.
+static inline GorgetArray gorget_map_items(const GorgetMap* m) {
+    size_t item_size = m->key_size + m->val_size;
+    GorgetArray result = gorget_array_new(item_size);
+    // Allocate a temporary buffer for assembling each item
+    char* tmp = (char*)alloca(item_size);
+    if (m->order != NULL) {
+        for (size_t oi = 0; oi < m->order_len; oi++) {
+            size_t i = m->order[oi];
+            if (m->states[i] != 1) continue;
+            memcpy(tmp, (char*)m->keys + i * m->key_size, m->key_size);
+            memcpy(tmp + m->key_size, (char*)m->values + i * m->val_size, m->val_size);
+            gorget_array_push(&result, tmp);
+        }
+    } else {
+        for (size_t i = 0; i < m->cap; i++) {
+            if (m->states[i] == 1) {
+                memcpy(tmp, (char*)m->keys + i * m->key_size, m->key_size);
+                memcpy(tmp + m->key_size, (char*)m->values + i * m->val_size, m->val_size);
+                gorget_array_push(&result, tmp);
+            }
+        }
+    }
+    return result;
+}
+
 // ── GorgetSet (thin wrapper over GorgetMap) ───────────────────
 typedef GorgetMap GorgetSet;
 
 static inline GorgetSet gorget_set_new(size_t elem_size) {
     return gorget_map_new(elem_size, 0);
+}
+
+static inline GorgetSet gorget_set_new_str(void) {
+    return gorget_map_new_str(0);
 }
 
 // Ordered Set: preserves insertion order (like Dict vs HashMap)
@@ -4856,6 +5065,8 @@ static inline void gorget_set_clear(GorgetSet* s) {
 static inline size_t gorget_set_len(const GorgetSet* s) {
     return gorget_map_len(s);
 }
+
+static inline bool gorget_set_is_empty(const GorgetSet* s) { return gorget_map_is_empty(s); }
 
 static inline void gorget_set_free(GorgetSet* s) {
     gorget_map_free(s);
@@ -4892,6 +5103,11 @@ static inline GorgetSet gorget_set_clone(const GorgetSet* src) {
     dst.states = (uint8_t*)a->alloc(a->ctx, src->cap);
     memcpy(dst.states, src->states, src->cap);
     return dst;
+}
+
+// Set → GorgetArray (ordered iteration via gorget_map_keys since Set is a Map with val_size=0)
+static inline GorgetArray gorget_set_to_array(const GorgetSet* s) {
+    return gorget_map_keys(s);
 }
 
 // ── Error Handling (setjmp/longjmp) ─────────────────────────
@@ -5398,6 +5614,7 @@ static inline const char* gorget_codepoint_to_utf8(int64_t cp) {
     }
     return out;
 }
+
 
 // ── getenv / setenv / getcwd / platform ──────────────────────
 static inline const char* gorget_getenv(const char* name) {
@@ -8707,6 +8924,21 @@ static inline void gorget_write_guard_release(gorget_write_guard_t* g) {
     pthread_rwlock_unlock(&rw->lock);
     g->rwlock = NULL; g->ptr = NULL;
     gorget_rwlock_wake_waiters(rw);
+}
+
+// ReadGuard / WriteGuard helpers for LIR backend — generic void*-based accessors.
+static inline void* gorget_read_guard_get(gorget_read_guard_t* g) { return g->ptr; }
+static inline void* gorget_read_guard_get_ptr(gorget_read_guard_t* g) { return g->ptr; }
+static inline void* gorget_write_guard_get(gorget_write_guard_t* g) { return g->ptr; }
+static inline void gorget_write_guard_set(gorget_write_guard_t* g, void* val, size_t size) { memcpy(g->ptr, val, size); }
+static inline void* gorget_write_guard_get_ptr(gorget_write_guard_t* g) { return g->ptr; }
+
+// gorget_rwlock_read_to / gorget_rwlock_write_to: output-pointer variants for LIR backend.
+static inline void gorget_rwlock_read_to(GorgetRWLock* rw, gorget_read_guard_t* out) {
+    *out = gorget_rwlock_read(rw);
+}
+static inline void gorget_rwlock_write_to(GorgetRWLock* rw, gorget_write_guard_t* out) {
+    *out = gorget_rwlock_write(rw);
 }
 
 // ── CondVar ──

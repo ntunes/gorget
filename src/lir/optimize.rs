@@ -101,13 +101,22 @@ fn find_live_functions(module: &LirModule) -> HashSet<FuncId> {
     let mut live = HashSet::new();
     let mut worklist: Vec<FuncId> = Vec::new();
 
-    // Roots: main, any function whose name starts with "__test", and
-    // any function referenced by globals.
+    // Roots: main, __test*, __suite_*, __Closure_N__call, and spawned functions.
+    // __Closure_N__call functions are dispatched indirectly through
+    // GorgetClosure.fn_ptr — not visible in the LIR call graph.
+    // Spawned functions are called from generated __spawn_run_X helpers
+    // (emitted by the C backend), not from LIR Call instructions.
+    let spawned_names: HashSet<&str> = module.spawned_fns.iter()
+        .map(|sf| sf.fn_name.as_str())
+        .chain(module.thread_spawned_fns.iter().map(|tf| tf.fn_name.as_str()))
+        .collect();
     for (i, func) in module.functions.iter().enumerate() {
         let fid = FuncId(i as u32);
         if func.name == "main"
             || func.name.starts_with("__test")
             || func.name.starts_with("__suite_")
+            || func.name.contains("__call")
+            || spawned_names.contains(func.name.as_str())
         {
             if live.insert(fid) {
                 worklist.push(fid);
@@ -212,6 +221,15 @@ pub fn eliminate_dead_globals(module: &mut LirModule) -> usize {
         }
     }
 
+    // Keep globals that contain function addresses (e.g., vtable constants).
+    // These may be referenced indirectly (e.g., through pointer casts in the C backend)
+    // rather than through explicit GlobalAddr instructions.
+    for (i, global) in module.globals.iter().enumerate() {
+        if global_has_func_addrs(&global.init) {
+            referenced.insert(GlobalId(i as u32));
+        }
+    }
+
     let original = module.globals.len();
     let mut i = 0;
     module.globals.retain(|_| {
@@ -221,6 +239,15 @@ pub fn eliminate_dead_globals(module: &mut LirModule) -> usize {
     });
 
     original - module.globals.len()
+}
+
+/// Check if a global initializer contains any FuncAddr references.
+fn global_has_func_addrs(init: &LirGlobalInit) -> bool {
+    match init {
+        LirGlobalInit::FuncAddr(_) => true,
+        LirGlobalInit::Struct { fields, .. } => fields.iter().any(|f| global_has_func_addrs(f)),
+        _ => false,
+    }
 }
 
 // ── Dead Code Elimination ───────────────────────────────────────────────────
@@ -376,8 +403,12 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
 
     match inst {
         // Integer arithmetic
-        Inst::Add { dst, lhs, rhs, .. } => {
+        Inst::Add { dst, lhs, rhs, overflow, .. } => {
             if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
+                // Don't fold if overflow would trap at runtime.
+                if *overflow == Overflow::Trap && a.checked_add(b).is_none() {
+                    return None;
+                }
                 return Some(Inst::IConst { dst: *dst, value: a.wrapping_add(b), ty });
             }
             if let (Some((a, ty)), Some((b, _))) = (get_float(*lhs), get_float(*rhs)) {
@@ -385,8 +416,11 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
             }
             None
         }
-        Inst::Sub { dst, lhs, rhs, .. } => {
+        Inst::Sub { dst, lhs, rhs, overflow, .. } => {
             if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
+                if *overflow == Overflow::Trap && a.checked_sub(b).is_none() {
+                    return None;
+                }
                 return Some(Inst::IConst { dst: *dst, value: a.wrapping_sub(b), ty });
             }
             if let (Some((a, ty)), Some((b, _))) = (get_float(*lhs), get_float(*rhs)) {
@@ -394,8 +428,11 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
             }
             None
         }
-        Inst::Mul { dst, lhs, rhs, .. } => {
+        Inst::Mul { dst, lhs, rhs, overflow, .. } => {
             if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
+                if *overflow == Overflow::Trap && a.checked_mul(b).is_none() {
+                    return None;
+                }
                 return Some(Inst::IConst { dst: *dst, value: a.wrapping_mul(b), ty });
             }
             if let (Some((a, ty)), Some((b, _))) = (get_float(*lhs), get_float(*rhs)) {
@@ -897,7 +934,8 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
         Inst::SlotLoad { .. } | Inst::SlotAddr { .. } => {}
         Inst::IConst { .. } | Inst::FConst { .. } | Inst::BoolConst { .. }
         | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. }
-        | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::Nop => {}
+        | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::Nop
+        | Inst::InlineC { .. } => {}
         Inst::Add { lhs, rhs, .. } | Inst::Sub { lhs, rhs, .. }
         | Inst::Mul { lhs, rhs, .. } | Inst::Div { lhs, rhs, .. }
         | Inst::Rem { lhs, rhs, .. } | Inst::Mod { lhs, rhs, .. } => {

@@ -56,6 +56,8 @@ struct FuncLowering<'a> {
     module_globals: &'a [LirGlobal],
     /// Synthetic externs discovered during lowering (for unknown Call targets).
     pending_externs: Vec<LirExtern>,
+    /// Whether `directive overflow=wrap` is active (integer overflow wraps).
+    overflow_wrap: bool,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -110,7 +112,7 @@ impl<'a> LoweringContext<'a> {
             let gid = self.module.add_global(LirGlobal {
                 name: global.name.clone(),
                 ty: map_gir_type_with_structs(&global.type_id, &self.gir.type_registry, Some(&self.struct_reg)),
-                init: lower_global_init(&global.init),
+                init: lower_global_init(&global.init, &self.func_index),
                 is_const: false, // GIR doesn't distinguish const vs mut globals
             });
             self.global_index.insert(global.name.clone(), gid);
@@ -131,6 +133,7 @@ impl<'a> LoweringContext<'a> {
                     &self.global_index,
                     &self.module.structs,
                     &self.module.globals,
+                    self.gir.runtime.overflow_wrap,
                 );
                 fl.lower();
                 all_pending_externs.extend(fl.pending_externs.drain(..));
@@ -154,6 +157,66 @@ impl<'a> LoweringContext<'a> {
             self.module.add_function(func);
         }
 
+        // Populate spawned_fns metadata for the LIR→C backend to generate
+        // blocking spawn/await helper functions.
+        for (fn_name, params, ret_type) in &self.gir.runtime.spawned_fns {
+            let ret_c = gir_type_to_c(*ret_type, &self.gir.type_registry);
+            let lir_params: Vec<(String, String)> = params.iter().map(|(name, type_id)| {
+                let c_ty = spawn_param_c_type(*type_id, &self.gir.type_registry);
+                (name.clone(), c_ty)
+            }).collect();
+            // Detect params that are passed by mutable reference in the actual function.
+            let actual_fn = self.gir.functions.iter().find(|f| f.name == *fn_name);
+            let ref_param_indices: Vec<usize> = params.iter().enumerate().filter_map(|(i, (_, stored_type))| {
+                actual_fn.and_then(|f| {
+                    f.params.get(i).and_then(|&actual_type| {
+                        if actual_type != *stored_type {
+                            if let Some(GirType::MutPtr(inner)) = self.gir.type_registry.get(actual_type) {
+                                if *inner == *stored_type { return Some(i); }
+                            }
+                        }
+                        None
+                    })
+                })
+            }).collect();
+            self.module.spawned_fns.push(SpawnedFn {
+                fn_name: fn_name.clone(),
+                params: lir_params,
+                ret_c_type: ret_c,
+                ref_param_indices,
+            });
+        }
+
+        // Populate thread_spawned_fns from GIR runtime.
+        for (fn_name, ret_type) in &self.gir.runtime.thread_spawned_fns {
+            let ret_c = gir_type_to_c(*ret_type, &self.gir.type_registry);
+            self.module.thread_spawned_fns.push(crate::lir::ThreadSpawnedFn {
+                fn_name: fn_name.clone(),
+                ret_c_type: ret_c,
+            });
+        }
+
+        // Copy test/bench metadata from GIR runtime.
+        for t in &self.gir.runtime.test_fns {
+            self.module.test_fns.push(crate::lir::LirTestFn {
+                fn_name: t.fn_name.clone(),
+                display_name: t.display_name.clone(),
+                should_panic: t.should_panic,
+                expected_panic_msg: t.expected_panic_msg.clone(),
+                skipped: t.skipped,
+                skip_reason: t.skip_reason.clone(),
+                timeout_ms: t.timeout_ms,
+            });
+        }
+        for b in &self.gir.runtime.bench_fns {
+            self.module.bench_fns.push(crate::lir::LirBenchFn {
+                fn_name: b.fn_name.clone(),
+                display_name: b.display_name.clone(),
+            });
+        }
+        self.module.has_suite_setup = self.gir.runtime.has_suite_setup;
+        self.module.has_suite_teardown = self.gir.runtime.has_suite_teardown;
+
         self.module
     }
 
@@ -170,6 +233,26 @@ impl<'a> LoweringContext<'a> {
                     self.struct_reg.register(&def.name, runtime_sid);
                     continue;
                 }
+            }
+
+            // Opaque-pointer concurrency types (Mutex, Shared, Channel, RWLock)
+            // are typedef'd as pointers in C — skip struct creation so LIR uses Ptr.
+            if is_opaque_pointer_type(&def.name) {
+                continue;
+            }
+
+            // Guard struct types need a fixed layout: { ptr owner; ptr data; }
+            if is_guard_struct_type(&def.name) {
+                let fields = vec![
+                    ("owner".into(), LirType::Ptr),
+                    ("ptr".into(), LirType::Ptr),
+                ];
+                let sid = self.module.add_struct(StructDef {
+                    name: def.name.clone(),
+                    fields,
+                });
+                self.struct_reg.register(&def.name, sid);
+                continue;
             }
 
             match &def.kind {
@@ -218,7 +301,7 @@ impl<'a> LoweringContext<'a> {
 /// Map generic collection type names to their runtime struct name.
 /// Returns None for non-collection types.
 fn collection_runtime_type(name: &str) -> Option<&'static str> {
-    if name.starts_with("Vector__") || name.starts_with("Shared__Vector__") {
+    if name.starts_with("Vector__") {
         return Some("GorgetArray");
     }
     if name.starts_with("Dict__") || name.starts_with("GorgetDict__") {
@@ -237,6 +320,54 @@ fn collection_runtime_type(name: &str) -> Option<&'static str> {
     None
 }
 
+/// Maps Gorget type names to their C runtime struct names for opaque types.
+fn opaque_runtime_type_name(name: &str) -> Option<&'static str> {
+    match name {
+        "Socket" => Some("GorgetSocket"),
+        "ServerSocket" => Some("GorgetServerSocket"),
+        "TlsSocket" => Some("GorgetTlsSocket"),
+        "TlsServerSocket" => Some("GorgetTlsServerSocket"),
+        "UdpSocket" => Some("GorgetUdpSocket"),
+        "UdpAddr" => Some("GorgetUdpAddr"),
+        "Semaphore" => Some("GorgetSemaphore"),
+        "WaitGroup" => Some("GorgetWaitGroup"),
+        "OnceFlag" => Some("GorgetOnceFlag"),
+        "Barrier" => Some("GorgetBarrier"),
+        "CondVar" => Some("GorgetCondVar"),
+        "AtomicInt" => Some("GorgetAtomicInt"),
+        "AtomicBool" => Some("GorgetAtomicBool"),
+        "Process" => Some("GorgetProcess"),
+        _ => None,
+    }
+}
+
+/// Returns true if the type name is an opaque-pointer concurrency type
+/// (Mutex, Shared, Channel, RWLock). These are pointer wrappers at
+/// runtime — they should NOT be lowered as structs, but rather skipped
+/// so `map_gir_type_with_structs` falls through to `Ptr`.
+fn is_opaque_pointer_type(name: &str) -> bool {
+    name.starts_with("Mutex__")
+        || name.starts_with("Shared__")
+        || name.starts_with("Weak__")
+        || name.starts_with("Channel__")
+        || name.starts_with("RWLock__")
+        || name.starts_with("Thread__")
+        || matches!(
+            name,
+            "Barrier" | "CondVar" | "AtomicInt" | "AtomicBool"
+            | "Process" | "Thread"
+            | "Semaphore" | "WaitGroup" | "OnceFlag"
+        )
+}
+
+/// Returns true if the type name is a guard struct that needs a fixed
+/// layout: `{ void* owner; void* ptr; }` (two pointers).
+fn is_guard_struct_type(name: &str) -> bool {
+    name.starts_with("Guard__")
+        || name.starts_with("ReadGuard__")
+        || name.starts_with("WriteGuard__")
+}
+
 impl<'a> FuncLowering<'a> {
     fn new(
         gir_func: &'a ir::Function,
@@ -246,6 +377,7 @@ impl<'a> FuncLowering<'a> {
         global_index: &'a std::collections::HashMap<String, GlobalId>,
         module_structs: &'a [StructDef],
         module_globals: &'a [LirGlobal],
+        overflow_wrap: bool,
     ) -> Self {
         let params: Vec<LirType> = gir_func
             .params
@@ -282,6 +414,7 @@ impl<'a> FuncLowering<'a> {
             module_structs,
             module_globals,
             pending_externs: Vec::new(),
+            overflow_wrap,
         }
     }
 
@@ -335,39 +468,24 @@ impl<'a> FuncLowering<'a> {
                 // emitting NullPtr (which becomes memset(0) ⇒ tag=0 = wrong variant),
                 // emit proper enum init with the correct tag ordinal.
                 if let Operand::Constant(Constant::Null) = value {
-                    if dst.projections.is_empty() {
-                        let local_idx = dst.local.0 as usize;
-                        if local_idx < self.gir_func.locals.len() {
-                            let gir_ty = self.gir_func.locals[local_idx].type_id;
-                            if let Some((struct_id, tag_ordinal)) = self.find_enum_null_variant(gir_ty) {
-                                let slot = self.local_to_slot[local_idx];
-                                let base = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
-                                    dst: base,
-                                    slot,
-                                });
-                                // Set tag to the null variant ordinal (e.g. None=1).
-                                let tag_val = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                                    dst: tag_val,
-                                    ty: LirType::I32,
-                                    value: tag_ordinal as i64,
-                                });
-                                let tag_ptr = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-                                    dst: tag_ptr,
-                                    base,
-                                    struct_id,
-                                    field: 0,
-                                });
-                                self.lir_func.block_mut(bb).insts.push(Inst::Store {
-                                    ptr: tag_ptr,
-                                    value: tag_val,
-                                });
-                                return;
-                            }
-                        }
+                    // Try to materialize a proper enum null variant (tag set, payload zeroed)
+                    // instead of emitting raw NullPtr which would become memcpy-from-NULL.
+                    if let Some(()) = self.try_materialize_null_for_assign(dst, bb) {
+                        return;
                     }
+                }
+                // Special-case: Option/Result source → non-Option/Result dest.
+                // The GIR C backend implicitly extracts the payload field (e.g.
+                // `_21 = _23.data.Some._0`). We must do the same: emit an
+                // EnumFieldLoad-style extraction instead of a raw copy.
+                if let Some(val) = self.try_enum_payload_extract(dst, value, bb) {
+                    self.store_to_place(dst, val, bb);
+                    return;
+                }
+                // Special-case: Box[Trait] ← Box[Concrete] trait object construction.
+                // The GIR C backend wraps this as (TraitObj){.data = src, .vtable = &vtable}.
+                if self.try_trait_object_construct(dst, value, bb) {
+                    return;
                 }
                 let val = self.lower_operand(value, bb);
                 self.store_to_place(dst, val, bb);
@@ -382,11 +500,36 @@ impl<'a> FuncLowering<'a> {
             } => {
                 let l = self.lower_operand(lhs, bb);
                 let r = self.lower_operand(rhs, bb);
-                let result = self.lir_func.next_value();
-                let ty = map_gir_type_with_structs(type_id, self.gir_types, Some(self.struct_reg));
-                let inst = lower_binop(result, *op, l, r, ty);
-                self.lir_func.block_mut(bb).insts.push(inst);
-                self.store_to_local(*dst, result, bb);
+
+                // Check for Vector + Vector → clone lhs then extend with rhs
+                let is_vector_add = *op == GirBinOp::Add && matches!(
+                    self.gir_types.get(*type_id),
+                    Some(GirType::Named(name)) if name.starts_with("Vector__")
+                );
+
+                if is_vector_add {
+                    // Emit: result = gorget_array_clone(&lhs); gorget_array_extend(&result, &rhs);
+                    // The c_lir backend handles &-address-of for array functions via
+                    // takes_array_ptr_args / collection_self_by_ptr.
+                    let result = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: Some(result),
+                        name: "gorget_array_clone".to_string(),
+                        args: vec![l],
+                    });
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: "gorget_array_extend".to_string(),
+                        args: vec![result, r],
+                    });
+                    self.store_to_local(*dst, result, bb);
+                } else {
+                    let result = self.lir_func.next_value();
+                    let ty = map_gir_type_with_structs(type_id, self.gir_types, Some(self.struct_reg));
+                    let inst = lower_binop(result, *op, l, r, ty, self.overflow_wrap);
+                    self.lir_func.block_mut(bb).insts.push(inst);
+                    self.store_to_local(*dst, result, bb);
+                }
             }
 
             Instruction::UnOp {
@@ -467,10 +610,9 @@ impl<'a> FuncLowering<'a> {
 
             // -- Calls --
             Instruction::Call { dst, func, args } => {
-                let lir_args: Vec<ValueId> =
-                    args.iter().map(|a| self.lower_operand(a, bb)).collect();
-
                 if let Some(fid) = self.func_index.get(func) {
+                    let lir_args: Vec<ValueId> =
+                        args.iter().map(|a| self.lower_operand(a, bb)).collect();
                     let result = dst.map(|_| self.lir_func.next_value());
                     self.lir_func.block_mut(bb).insts.push(Inst::Call {
                         dst: result,
@@ -485,114 +627,194 @@ impl<'a> FuncLowering<'a> {
                     // Map monomorphized collection/method names to runtime function names.
                     let emit_name = map_monomorphized_to_runtime(func)
                         .unwrap_or_else(|| func.clone());
-                    // Derive return type from destination local.
-                    let ret_ty = dst.map(|d| {
-                        let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
-                        map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
-                    }).unwrap_or(LirType::Void);
-                    let is_void_ret = matches!(ret_ty, LirType::Void);
-                    let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
-                    let arg_types: Vec<LirType> = args.iter().map(|a| self.operand_lir_type(a)).collect();
-                    self.ensure_extern(&emit_name, &arg_types, &ret_ty);
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: result,
-                        name: emit_name,
-                        args: lir_args,
-                    });
-                    if let (Some(d), Some(r)) = (*dst, result) {
-                        self.store_to_local(d, r, bb);
+                    // For collection/concurrency methods that take self by pointer,
+                    // if the first arg is a GlobalRef, emit GlobalAddr (pointer)
+                    // instead of GlobalAddr+Load (copy), so mutations affect the global.
+                    let needs_self_by_ptr = is_self_by_ptr_method(func);
+                    let lir_args: Vec<ValueId> =
+                        args.iter().enumerate().map(|(i, a)| {
+                            if i == 0 && needs_self_by_ptr {
+                                if let Operand::Constant(Constant::GlobalRef(name)) = a {
+                                    if let Some(&gid) = self.global_index.get(name) {
+                                        let addr = self.lir_func.next_value();
+                                        self.lir_func.block_mut(bb).insts.push(
+                                            Inst::GlobalAddr { dst: addr, global: gid },
+                                        );
+                                        return addr;
+                                    }
+                                }
+                            }
+                            // Null arg to collection push/set/send → properly tagged enum slot
+                            if matches!(a, Operand::Constant(Constant::Null)) && i > 0 {
+                                if let Some(slot_addr) = self.materialize_null_enum_for_collection_arg(func, bb) {
+                                    return slot_addr;
+                                }
+                            }
+                            self.lower_operand(a, bb)
+                        }).collect();
+                    // Dispatch abs/min/max to float variants when args are float.
+                    let emit_name = if matches!(emit_name.as_str(), "gorget_abs" | "gorget_min" | "gorget_max") {
+                        let has_float_arg = args.iter().any(|a| {
+                            matches!(self.operand_lir_type(a), LirType::F32 | LirType::F64)
+                        });
+                        if has_float_arg {
+                            match emit_name.as_str() {
+                                "gorget_abs" => "gorget_fabs".to_string(),
+                                "gorget_min" => "gorget_fmin".to_string(),
+                                "gorget_max" => "gorget_fmax".to_string(),
+                                _ => emit_name,
+                            }
+                        } else { emit_name }
+                    } else { emit_name };
+                    // regex_compile (without flags) needs a NULL second arg
+                    let mut lir_args = lir_args;
+                    if emit_name == "gorget_regex_compile" && !func.contains("compile_with") {
+                        let null_val = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_val });
+                        lir_args.push(null_val);
+                    }
+                    // Type-aware dispatch for bare `len` free function
+                    let mut len_handled = false;
+                    let emit_name = if func == "len" && args.len() == 1 {
+                        let arg_type = self.operand_gir_type_name(&args[0]);
+                        if arg_type.as_deref().map_or(false, |n| n.starts_with("Vector__") || n == "GorgetArray") {
+                            "gorget_array_len".to_string()
+                        } else if arg_type.as_deref().map_or(false, |n| n.starts_with("Dict__") || n.starts_with("HashMap__") || n == "GorgetMap") {
+                            "gorget_map_len".to_string()
+                        } else if arg_type.as_deref().map_or(false, |n| n.starts_with("Set__") || n.starts_with("HashSet__") || n == "GorgetSet") {
+                            "gorget_set_len".to_string()
+                        } else if arg_type.as_deref().map_or(false, |n| n == "str" || n == "Str") {
+                            "gorget_str_codepoint_count".to_string()
+                        } else if arg_type.as_deref().map_or(false, |n| n == "String" || n == "GorgetString") {
+                            "gorget_str_codepoint_count".to_string()
+                        } else if let Some(type_name) = arg_type.as_deref() {
+                            // User type: dispatch to TypeName__len as a direct Call if available
+                            let method_name = format!("{type_name}__len");
+                            if let Some(&fid) = self.func_index.get(method_name.as_str()) {
+                                let result = dst.map(|_| self.lir_func.next_value());
+                                self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                                    dst: result,
+                                    func: fid,
+                                    args: lir_args.clone(),
+                                });
+                                if let (Some(d), Some(r)) = (*dst, result) {
+                                    self.store_to_local(d, r, bb);
+                                }
+                                len_handled = true;
+                            }
+                            method_name
+                        } else {
+                            emit_name
+                        }
+                    } else {
+                        emit_name
+                    };
+                    // gorget_regex_find/split take 3 args but GIR only passes 2 — inject default 0
+                    if (emit_name == "gorget_regex_find" || emit_name == "gorget_regex_split") && lir_args.len() == 2 {
+                        let zero_val = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                            dst: zero_val, ty: LirType::I64, value: 0,
+                        });
+                        lir_args.push(zero_val);
+                    }
+                    // Delegate to the shared extern-call emitter (same logic as CallExtern).
+                    if !len_handled {
+                        self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
                     }
                 }
             }
 
             Instruction::CallExtern { dst, func, args } => {
+                // If the callee is actually a defined function in this module (GIR uses
+                // call_extern for user-defined iterator/trait methods), emit a direct Call.
+                if let Some(fid) = self.func_index.get(func) {
+                    let lir_args: Vec<ValueId> =
+                        args.iter().map(|a| self.lower_operand(a, bb)).collect();
+                    let result = dst.map(|_| self.lir_func.next_value());
+                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                        dst: result,
+                        func: *fid,
+                        args: lir_args,
+                    });
+                    if let (Some(d), Some(r)) = (*dst, result) {
+                        self.store_to_local(d, r, bb);
+                    }
+                } else {
                 // Remap monomorphized names to runtime equivalents
                 // (e.g., Vector__int64_t__push → gorget_array_push).
-                let emit_name = map_monomorphized_to_runtime(func)
+                let mut emit_name = map_monomorphized_to_runtime(func)
                     .unwrap_or_else(|| func.clone());
+                // Dispatch abs/min/max to float variants (fabs/fmin/fmax) when args are float.
+                if matches!(emit_name.as_str(), "gorget_abs" | "gorget_min" | "gorget_max") {
+                    let has_float_arg = args.iter().any(|a| {
+                        let ty = self.operand_lir_type(a);
+                        matches!(ty, LirType::F32 | LirType::F64)
+                    });
+                    if has_float_arg {
+                        emit_name = match emit_name.as_str() {
+                            "gorget_abs" => "gorget_fabs".to_string(),
+                            "gorget_min" => "gorget_fmin".to_string(),
+                            "gorget_max" => "gorget_fmax".to_string(),
+                            _ => emit_name,
+                        };
+                    }
+                }
+                // regex_compile (without flags) needs a NULL second arg
+                let regex_compile_needs_null = emit_name == "gorget_regex_compile"
+                    && !func.contains("compile_with");
+
                 let is_printf_like = emit_name == "printf" || emit_name == "fprintf_stderr"
                     || emit_name == "gorget_string_format" || emit_name == "gorget_string_format_alloc"
                     || emit_name == "snprintf" || emit_name == "sprintf";
-                let mut lir_args: Vec<ValueId> = if is_printf_like {
+                let lir_args: Vec<ValueId> = if is_printf_like {
                     // For printf, expand Str-typed args into (int)len, data pairs.
                     self.lower_printf_args(args, bb)
                 } else {
-                    args.iter().map(|a| self.lower_operand(a, bb)).collect()
-                };
-
-                // Collection constructors need synthesized sizeof arguments.
-                // gorget_array_new(elem_size), gorget_set_new(elem_size)
-                if (emit_name == "gorget_array_new" || emit_name == "gorget_set_new")
-                    && lir_args.is_empty()
-                {
-                    let elem_sz = elem_size_from_monomorphized(func).unwrap_or(8) as i64;
-                    let sz_val = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                        dst: sz_val,
-                        ty: LirType::I64,
-                        value: elem_sz,
-                    });
-                    lir_args.push(sz_val);
-                }
-                // gorget_map_new(key_size, val_size) — Dict needs two sizeof args.
-                if emit_name == "gorget_map_new" && lir_args.is_empty() {
-                    let (key_sz, val_sz) = dict_elem_sizes_from_monomorphized(func);
-                    let k = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                        dst: k,
-                        ty: LirType::I64,
-                        value: key_sz as i64,
-                    });
-                    let v = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                        dst: v,
-                        ty: LirType::I64,
-                        value: val_sz as i64,
-                    });
-                    lir_args.push(k);
-                    lir_args.push(v);
-                }
-                // gorget_array_contains needs elem_size appended — derive from
-                // the element arg (index 1 in the original args).
-                if emit_name == "gorget_array_contains" && args.len() >= 2 {
-                    let elem_lir_ty = self.operand_lir_type(&args[1]);
-                    let elem_sz = lir_type_sizeof(&elem_lir_ty) as i64;
-                    let sz_val = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                        dst: sz_val,
-                        ty: LirType::I64,
-                        value: elem_sz,
-                    });
-                    lir_args.push(sz_val);
-                }
-
-                // Derive arg types from GIR operand types (for proper extern declarations).
-                let arg_types: Vec<LirType> = if is_printf_like {
-                    lir_args.iter().map(|_| LirType::Ptr).collect()
-                } else {
-                    // Include any synthesized args (sizeof constants).
-                    let mut types: Vec<LirType> = args.iter().map(|a| self.operand_lir_type(a)).collect();
-                    while types.len() < lir_args.len() {
-                        types.push(LirType::I64); // sizeof args
+                    {
+                    // For collection/concurrency methods that take self by pointer,
+                    // if the first arg is a GlobalRef, emit GlobalAddr (pointer)
+                    // instead of GlobalAddr+Load (copy), so mutations affect the global.
+                    let needs_self_by_ptr = is_self_by_ptr_method(func);
+                    args.iter().enumerate().map(|(i, a)| {
+                        if i == 0 && needs_self_by_ptr {
+                            if let Operand::Constant(Constant::GlobalRef(name)) = a {
+                                if let Some(&gid) = self.global_index.get(name) {
+                                    let addr = self.lir_func.next_value();
+                                    self.lir_func.block_mut(bb).insts.push(
+                                        Inst::GlobalAddr { dst: addr, global: gid },
+                                    );
+                                    return addr;
+                                }
+                            }
+                        }
+                        // Null arg to collection push/set/send → create a properly tagged
+                        // enum slot (e.g. None for Option) and pass its address, instead of
+                        // passing a raw NULL pointer that would crash memcpy in the runtime.
+                        if matches!(a, Operand::Constant(Constant::Null)) && i > 0 {
+                            if let Some(slot_addr) = self.materialize_null_enum_for_collection_arg(func, bb) {
+                                return slot_addr;
+                            }
+                        }
+                        self.lower_operand(a, bb)
+                    }).collect()
                     }
-                    types
                 };
-                // Ensure the extern has the correct return type (for collection constructors etc.)
-                let ret_ty = dst.map(|d| {
-                    let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
-                    map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
-                }).unwrap_or(LirType::Void);
-                self.ensure_extern(&emit_name, &arg_types, &ret_ty);
-                // Skip dst for void-returning functions (e.g. gorget_panic, abort).
-                let is_void_ret = matches!(ret_ty, LirType::Void);
-                let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                    dst: result,
-                    name: emit_name,
-                    args: lir_args,
-                });
-                if let (Some(d), Some(r)) = (*dst, result) {
-                    self.store_to_local(d, r, bb);
+                // Inject NULL flags for regex_compile (not compile_with)
+                let mut lir_args = lir_args;
+                if regex_compile_needs_null {
+                    let null_val = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_val });
+                    lir_args.push(null_val);
+                }
+                // gorget_regex_find/split take 3 args but GIR only passes 2 — inject default 0
+                if (emit_name == "gorget_regex_find" || emit_name == "gorget_regex_split") && lir_args.len() == 2 {
+                    let zero_val = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                        dst: zero_val, ty: LirType::I64, value: 0,
+                    });
+                    lir_args.push(zero_val);
+                }
+                self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
                 }
             }
 
@@ -630,7 +852,54 @@ impl<'a> FuncLowering<'a> {
                     slot,
                 });
 
+                // Look up struct field types for Null → enum promotion.
+                let field_type_ids: Vec<Option<GirTypeId>> = self.gir_types.get_type_def(type_name)
+                    .and_then(|td| {
+                        if let gir_types::TypeDefKind::Struct(sd) = &td.kind {
+                            Some(sd.fields.iter().map(|f| Some(f.type_id)).collect())
+                        } else { None }
+                    })
+                    .unwrap_or_else(|| vec![None; fields.len()]);
+
                 for (i, field_op) in fields.iter().enumerate() {
+                    // Special-case: Null operand for an enum-typed field (e.g. Option<T> = None).
+                    // Instead of emitting NullPtr (memcpy from NULL → segfault), properly
+                    // initialize the field with the null variant tag.
+                    if matches!(field_op, Operand::Constant(Constant::Null)) {
+                        if let Some(Some(fty)) = field_type_ids.get(i) {
+                            if let Some((field_enum_sid, tag_ordinal)) = self.find_enum_null_variant(*fty) {
+                                // The parent struct slot is zero-initialized (= {0}), so the
+                                // payload bytes are already zero.  We only need to set the tag
+                                // to the null-variant ordinal (e.g. None=1).
+                                let fptr = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                    dst: fptr,
+                                    base,
+                                    struct_id,
+                                    field: i as u32,
+                                });
+                                let tag_val = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                                    dst: tag_val,
+                                    ty: LirType::I32,
+                                    value: tag_ordinal as i64,
+                                });
+                                let tag_ptr = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                    dst: tag_ptr,
+                                    base: fptr,
+                                    struct_id: field_enum_sid,
+                                    field: 0,
+                                });
+                                self.lir_func.block_mut(bb).insts.push(Inst::Store {
+                                    ptr: tag_ptr,
+                                    value: tag_val,
+                                });
+                                continue;
+                            }
+                        }
+                    }
+
                     let val = self.lower_operand(field_op, bb);
                     let fptr = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
@@ -651,9 +920,20 @@ impl<'a> FuncLowering<'a> {
                 base,
                 field,
             } => {
-                let base_val = self.lower_place_addr(base, bb);
+                let mut base_val = self.lower_place_addr(base, bb);
                 // Use effective type after base projections (e.g., Deref→Field chain).
                 let effective_type = self.effective_place_type(base);
+                // If the effective type is a pointer (e.g., closure env param),
+                // load the pointer value first so FieldPtr operates on the struct, not the slot.
+                if let Some(GirType::Ptr(_) | GirType::MutPtr(_)) = self.gir_types.get(effective_type) {
+                    let deref = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: deref,
+                        ptr: base_val,
+                        ty: LirType::Ptr,
+                    });
+                    base_val = deref;
+                }
                 let struct_id = self.resolve_struct_id_for_field(effective_type, *field, self.module_structs);
                 let fptr = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
@@ -673,22 +953,154 @@ impl<'a> FuncLowering<'a> {
             }
 
             Instruction::IndexLoad { dst, base, index } => {
-                let base_val = self.lower_place_addr(base, bb);
-                let idx = self.lower_operand(index, bb);
-                let elem_ptr = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
-                    dst: elem_ptr,
-                    base: base_val,
-                    index: idx,
-                    elem_size: 8, // default to 8; refined later
-                });
-                let result = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::Load {
-                    dst: result,
-                    ptr: elem_ptr,
-                    ty: LirType::I64, // default; refined later
-                });
-                self.store_to_local(*dst, result, bb);
+                // Determine base type name and index type to dispatch appropriately.
+                let base_type = self.effective_place_type(base);
+                let base_type_name = self.resolve_type_name(base_type);
+                let idx_type_name = match index {
+                    Operand::Copy(p) | Operand::Move(p) => {
+                        let ity = self.gir_func.locals[p.local.0 as usize].type_id;
+                        self.resolve_type_name(ity)
+                    }
+                    _ => String::new(),
+                };
+                let is_range = idx_type_name == "GorgetRange";
+                let is_str = base_type_name == "Str" || base_type_name == "GorgetString";
+                let is_array = base_type_name.starts_with("Vector__")
+                    || base_type_name == "GorgetArray";
+                let is_dict = base_type_name.starts_with("Dict__")
+                    || base_type_name.starts_with("GorgetMap")
+                    || base_type_name.starts_with("HashMap__");
+
+                if (is_str || is_array) && is_range {
+                    // Str[range] → gorget_str_slice(str, start, end)
+                    // Vector[range] → gorget_array_slice(&arr, start, end)
+                    let base_val = self.lower_place_addr(base, bb);
+                    let range_place = match index {
+                        Operand::Copy(p) | Operand::Move(p) => p,
+                        _ => unreachable!(),
+                    };
+                    let range_val = self.lower_place_addr(range_place, bb);
+                    let range_sid = self.struct_reg.lookup("GorgetRange").unwrap_or(StructId(0));
+                    let start_ptr = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                        dst: start_ptr, base: range_val, struct_id: range_sid, field: 0,
+                    });
+                    let start = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: start, ptr: start_ptr, ty: LirType::I64,
+                    });
+                    let end_ptr = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                        dst: end_ptr, base: range_val, struct_id: range_sid, field: 1,
+                    });
+                    let end = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: end, ptr: end_ptr, ty: LirType::I64,
+                    });
+                    let fn_name = if is_str { "gorget_str_slice" } else { "gorget_array_slice" };
+                    let dst_gir_ty = self.gir_func.locals[dst.0 as usize].type_id;
+                    let ret_ty = map_gir_type_with_structs(&dst_gir_ty, self.gir_types, Some(self.struct_reg));
+                    let str_ty = self.struct_reg.lookup("Str")
+                        .map(LirType::Struct).unwrap_or(LirType::Ptr);
+                    let arg_types = if is_str {
+                        vec![str_ty, LirType::I64, LirType::I64]
+                    } else {
+                        vec![LirType::Ptr, LirType::I64, LirType::I64]
+                    };
+                    self.ensure_extern(fn_name, &arg_types, &ret_ty);
+                    let result = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: Some(result),
+                        name: fn_name.to_string(),
+                        args: vec![base_val, start, end],
+                    });
+                    self.store_to_local(*dst, result, bb);
+                } else if is_str {
+                    // Str[int] → gorget_str_index(str, idx)
+                    let base_val = self.lower_place_addr(base, bb);
+                    let idx = self.lower_operand(index, bb);
+                    let dst_gir_ty = self.gir_func.locals[dst.0 as usize].type_id;
+                    let ret_ty = map_gir_type_with_structs(&dst_gir_ty, self.gir_types, Some(self.struct_reg));
+                    let str_ty = self.struct_reg.lookup("Str")
+                        .map(LirType::Struct).unwrap_or(LirType::Ptr);
+                    self.ensure_extern("gorget_str_index", &[str_ty, LirType::I64], &ret_ty);
+                    let result = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: Some(result),
+                        name: "gorget_str_index".to_string(),
+                        args: vec![base_val, idx],
+                    });
+                    self.store_to_local(*dst, result, bb);
+                } else if is_array || is_dict {
+                    // Vector[int] → gorget_array_get(&arr, idx)
+                    // Dict[key] → gorget_map_get(&map, &key)
+                    let base_val = self.lower_place_addr(base, bb);
+                    let idx = self.lower_operand(index, bb);
+                    let fn_name = if is_dict { "gorget_map_get" } else { "gorget_array_get" };
+                    self.ensure_extern(fn_name, &[LirType::Ptr, LirType::I64], &LirType::Ptr);
+                    let ptr_val = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: Some(ptr_val),
+                        name: fn_name.to_string(),
+                        args: vec![base_val, idx],
+                    });
+                    // gorget_array_get / gorget_map_get return void* pointing to the element.
+                    // Dereference it to get the actual element value.
+                    let dst_slot = self.local_to_slot[dst.0 as usize];
+                    let mut elem_ty = self.lir_func.slots[dst_slot.0 as usize].ty.clone();
+                    // Closures are 16 bytes (GorgetClosure) but may be typed as I64 in LIR.
+                    // Fix: re-derive from GIR type with struct registry to get the correct
+                    // struct type, so Load reads the full closure (not just 8 bytes).
+                    // Closures are 16 bytes (GorgetClosure) but typed as I64 in GIR/LIR.
+                    // When reading from a collection of closures, the Load with I64 reads
+                    // only 8 bytes (fn_ptr), corrupting subsequent memcpy of the full closure.
+                    // Fix: detect closure-element collections by base type name and use
+                    // the GorgetClosure struct type instead, so Load reads full 16 bytes.
+                    if matches!(elem_ty, LirType::I64) && (
+                        base_type_name.contains("Callable") || base_type_name.contains("FnPtr")
+                    ) {
+                        if let Some(sid) = self.struct_reg.lookup("GorgetClosure") {
+                            elem_ty = LirType::Struct(sid);
+                        }
+                    }
+                    let result = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: result,
+                        ty: elem_ty,
+                        ptr: ptr_val,
+                    });
+                    self.store_to_local(*dst, result, bb);
+                } else {
+                    // Fallback: generic element access via ElemPtr
+                    let base_val = self.lower_place_addr(base, bb);
+                    let idx = self.lower_operand(index, bb);
+                    let dst_slot = self.local_to_slot[dst.0 as usize];
+                    let elem_ty = self.lir_func.slots[dst_slot.0 as usize].ty.clone();
+                    let elem_size = match &elem_ty {
+                        LirType::Struct(sid) => {
+                            let sdef = &self.module_structs[sid.0 as usize];
+                            (sdef.fields.len() as u32) * 8
+                        }
+                        LirType::Bool | LirType::I8 | LirType::U8 => 1,
+                        LirType::I16 | LirType::U16 => 2,
+                        LirType::I32 | LirType::U32 | LirType::F32 => 4,
+                        _ => 8,
+                    };
+                    let elem_ptr = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
+                        dst: elem_ptr,
+                        base: base_val,
+                        index: idx,
+                        elem_size,
+                    });
+                    let result = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: result,
+                        ptr: elem_ptr,
+                        ty: elem_ty,
+                    });
+                    self.store_to_local(*dst, result, bb);
+                }
             }
 
             // -- Enum --
@@ -732,7 +1144,24 @@ impl<'a> FuncLowering<'a> {
 
                 // Store variant fields (offset: 1 + sum of preceding variant fields).
                 let field_offset = self.resolve_variant_field_offset(type_name, variant);
+                // Look up field types for Null → enum promotion (same as StructInit).
+                let variant_field_types = self.resolve_variant_field_types(type_name, variant);
                 for (i, field_op) in fields.iter().enumerate() {
+                    // Special-case: Null field for an enum type (e.g. Some(None)).
+                    if matches!(field_op, Operand::Constant(Constant::Null)) {
+                        if let Some(Some(fty)) = variant_field_types.get(i) {
+                            if let Some((field_enum_sid, fld_tag_ordinal)) = self.find_enum_null_variant(*fty) {
+                                let fptr = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                    dst: fptr, base, struct_id,
+                                    field: (field_offset + i) as u32,
+                                });
+                                self.emit_enum_tag_store(fptr, field_enum_sid, fld_tag_ordinal, bb);
+                                continue;
+                            }
+                        }
+                    }
+
                     let val = self.lower_operand(field_op, bb);
                     let fptr = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
@@ -744,6 +1173,57 @@ impl<'a> FuncLowering<'a> {
                     self.lir_func.block_mut(bb).insts.push(Inst::Store {
                         ptr: fptr,
                         value: val,
+                    });
+                }
+
+                // Post-init zero: after moving a resource-type local into an enum variant
+                // (e.g. Some(vec)), zero the source to prevent double-free. The enum now
+                // owns the data. This mirrors the old GIR→C backend's post-EnumInit zeroing.
+                // Collect slots to zero first to avoid borrow conflicts.
+                let slots_to_zero: Vec<(SlotId, i64)> = fields.iter().filter_map(|field_op| {
+                    if let Operand::Copy(place) | Operand::Move(place) = field_op {
+                        if place.projections.is_empty() {
+                            let local_idx = place.local.0 as usize;
+                            if local_idx < self.local_to_slot.len() {
+                                let src_slot = self.local_to_slot[local_idx];
+                                let src_ty = &self.lir_func.slots[src_slot.0 as usize].ty;
+                                if let LirType::Struct(sid) = src_ty {
+                                    let needs_zero = self.module_structs.get(sid.0 as usize)
+                                        .map_or(false, |s| matches!(s.name.as_str(),
+                                            "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetString" | "GorgetClosure"
+                                        ));
+                                    if needs_zero {
+                                        let byte_size = c_sizeof_lir_type(src_ty, &self.module_structs) as i64;
+                                        return Some((src_slot, byte_size));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    None
+                }).collect();
+                for (src_slot, byte_size) in slots_to_zero {
+                    let addr = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                        dst: addr,
+                        slot: src_slot,
+                    });
+                    let zero = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                        dst: zero,
+                        ty: LirType::I32,
+                        value: 0,
+                    });
+                    let size = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                        dst: size,
+                        ty: LirType::I64,
+                        value: byte_size,
+                    });
+                    self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+                        ptr: addr,
+                        byte: zero,
+                        size,
                     });
                 }
             }
@@ -799,6 +1279,7 @@ impl<'a> FuncLowering<'a> {
                 let type_name = self.resolve_type_name(gir_type_id);
                 let field_offset = self.resolve_variant_field_offset(&type_name, variant);
 
+
                 let fptr = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                     dst: fptr,
@@ -846,9 +1327,7 @@ impl<'a> FuncLowering<'a> {
 
             // -- Ownership / lifetime (pass-through as calls or nops) --
             Instruction::Drop { place } | Instruction::DropIfAlive { place } => {
-                // For now, emit as Nop. Phase 2.6 will elaborate drops into call sequences.
-                let _ = place;
-                self.lir_func.block_mut(bb).insts.push(Inst::Nop);
+                self.lower_drop(place, bb);
             }
 
             Instruction::MoveZero { place } => {
@@ -861,9 +1340,33 @@ impl<'a> FuncLowering<'a> {
                     value: 0,
                 });
                 let size = self.lir_func.next_value();
-                let slot_idx = place.local.0 as usize;
-                let slot_ty = &self.lir_func.slots[self.local_to_slot[slot_idx].0 as usize].ty;
-                let byte_size = super::types::scalar_size(slot_ty).unwrap_or(8) as i64;
+                // Resolve the actual type being zeroed, following projections.
+                let effective_ty = if place.projections.is_empty() {
+                    let slot_idx = place.local.0 as usize;
+                    self.lir_func.slots[self.local_to_slot[slot_idx].0 as usize].ty.clone()
+                } else {
+                    // Follow projections to find the leaf type.
+                    let mut gir_type = self.gir_func.locals[place.local.0 as usize].type_id;
+                    for proj in &place.projections {
+                        match proj {
+                            Projection::Field(field) => {
+                                gir_type = self.resolve_field_gir_type_id(gir_type, *field);
+                            }
+                            Projection::Deref => {
+                                gir_type = self.resolve_deref_gir_type_id(gir_type);
+                            }
+                            Projection::Index(_) => {
+                                // Index projection: element type unknown at this level.
+                                break;
+                            }
+                        }
+                    }
+                    map_gir_type_with_structs(&gir_type, self.gir_types, Some(self.struct_reg))
+                };
+                let byte_size = match &effective_ty {
+                    LirType::Struct(_) => c_sizeof_lir_type(&effective_ty, &self.module_structs) as i64,
+                    _ => super::types::scalar_size(&effective_ty).unwrap_or(8) as i64,
+                };
                 self.lir_func.block_mut(bb).insts.push(Inst::IConst {
                     dst: size,
                     ty: LirType::I64,
@@ -953,11 +1456,47 @@ impl<'a> FuncLowering<'a> {
             }
 
             Instruction::InlineC { code } => {
-                // InlineC has no LIR equivalent — it's a C-backend-specific escape hatch.
-                // Emit as a trap with a descriptive message for now.
-                self.lir_func.block_mut(bb).insts.push(Inst::Trap {
-                    msg: format!("InlineC not supported in LIR: {}", &code[..code.len().min(60)]),
-                });
+                // InlineC is a C-backend-specific escape hatch. Parse assignment patterns
+                // like `_X = (int64_t)_Y.field;` to wire up slot store for the destination.
+
+                // Emit SlotAddr for all slots referenced in the expression part.
+                // This prevents SSA from promoting those slots, since InlineC reads
+                // them by name (__sN) and SSA can't rewrite opaque C strings.
+                let expr_part = if let Some(eq_pos) = code.find(" = ") {
+                    &code[eq_pos + 3..]
+                } else {
+                    code.as_str()
+                };
+                self.mark_inline_c_referenced_slots(expr_part, bb);
+
+                let dst_val = if let Some(eq_pos) = code.find(" = ") {
+                    let dst_part = code[..eq_pos].trim().trim_start_matches('_');
+                    if let Ok(local_idx) = dst_part.parse::<u32>() {
+                        let slot = self.local_to_slot[local_idx as usize];
+                        let val = self.lir_func.next_value();
+                        // Emit InlineC with a dst, then store to slot.
+                        self.lir_func.block_mut(bb).insts.push(Inst::InlineC {
+                            dst: Some(val),
+                            code: code.clone(),
+                        });
+                        self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                            slot,
+                            value: val,
+                        });
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if !dst_val {
+                    // No assignment pattern — emit as passthrough without dst.
+                    self.lir_func.block_mut(bb).insts.push(Inst::InlineC {
+                        dst: None,
+                        code: code.clone(),
+                    });
+                }
             }
 
             Instruction::GlobalAssign { name, value } => {
@@ -1067,6 +1606,42 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
+    /// Emit SlotAddr for all GIR local references (`_N`) found in an InlineC
+    /// expression string. This marks those slots as address-taken so SSA will
+    /// not promote them — the InlineC code reads/writes them by name.
+    fn mark_inline_c_referenced_slots(&mut self, expr: &str, bb: BlockId) {
+        let bytes = expr.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'_'
+                && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
+            {
+                let start = i + 1;
+                let mut end = start;
+                while end < bytes.len() && bytes[end].is_ascii_digit() {
+                    end += 1;
+                }
+                if end > start
+                    && (end >= bytes.len() || !bytes[end].is_ascii_alphanumeric())
+                {
+                    if let Ok(local_idx) = expr[start..end].parse::<usize>() {
+                        if local_idx < self.local_to_slot.len() {
+                            let slot = self.local_to_slot[local_idx];
+                            let dummy = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                                dst: dummy,
+                                slot,
+                            });
+                        }
+                    }
+                    i = end;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+    }
+
     // ── Operand lowering ────────────────────────────────────────────────────
 
     /// Lower a GIR operand, emitting load instructions into block `bb`.
@@ -1094,13 +1669,326 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
+    /// Shared extern-call emitter used by both `Instruction::Call` (unresolved)
+    /// and `Instruction::CallExtern`.  Handles sizeof synthesis for collection
+    /// and concurrency constructors, and struct-return rewriting for mutex lock /
+    /// rwlock read/write.
+    fn emit_extern_call(
+        &mut self,
+        original_name: &str,  // GIR name (before mapping) — used for sizeof extraction
+        emit_name: &str,      // runtime name (after mapping)
+        dst: &Option<ir::types::LocalId>,
+        args: &[Operand],
+        mut lir_args: Vec<ValueId>,
+        bb: BlockId,
+    ) {
+        // Guard/ReadGuard/WriteGuard get/get_ptr: inline as FieldPtr + Load
+        // instead of calling the runtime function. This preserves the concrete
+        // inner type through the LIR so the c_lir backend emits correct code.
+        // gorget_guard_get(guard*) → load guard->ptr, then load *(T*)ptr
+        // gorget_guard_get_ptr(guard*) → load guard->ptr (returns void*)
+        if matches!(emit_name, "gorget_guard_get" | "gorget_read_guard_get" | "gorget_write_guard_get") {
+            if let Some(d) = *dst {
+                let guard_ptr = lir_args[0]; // pointer to guard struct
+                // Look up the guard struct type from the original GIR name.
+                // E.g., "Guard__int64_t__get" → struct name "Guard__int64_t".
+                let guard_struct_name = original_name.rsplit_once("__")
+                    .map(|(prefix, _method)| prefix);
+                let guard_sid = guard_struct_name
+                    .and_then(|name| self.struct_reg.lookup(name));
+                if let Some(sid) = guard_sid {
+                    // Determine the concrete inner type from the destination local.
+                    let inner_ty = {
+                        let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+                        map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
+                    };
+                    // Load the `ptr` field (field index 1: "ptr")
+                    let ptr_val = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                        dst: ptr_val,
+                        base: guard_ptr,
+                        struct_id: sid,
+                        field: 1,
+                    });
+                    let data_ptr = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: data_ptr,
+                        ptr: ptr_val,
+                        ty: LirType::Ptr,
+                    });
+                    // Dereference to the concrete inner type.
+                    let result = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: result,
+                        ptr: data_ptr,
+                        ty: inner_ty,
+                    });
+                    self.store_to_local(d, result, bb);
+                    return;
+                }
+                // Fallthrough: if we can't find the struct, use the runtime call.
+            }
+        }
+
+        // gorget_guard_get_ptr / gorget_read_guard_get_ptr / gorget_write_guard_get_ptr:
+        // return the raw data pointer (no final dereference).
+        if matches!(emit_name, "gorget_guard_get_ptr" | "gorget_read_guard_get_ptr" | "gorget_write_guard_get_ptr") {
+            if let Some(d) = *dst {
+                let guard_ptr = lir_args[0];
+                // Derive method name from emit_name to correctly strip from original_name.
+                // E.g., emit_name "gorget_guard_get_ptr" → method "get_ptr",
+                //        original_name "Guard__int64_t__get_ptr" → struct "Guard__int64_t".
+                // rsplit_once("__") would incorrectly split "get_ptr" at the underscore.
+                let method = if emit_name.starts_with("gorget_write_guard_") {
+                    &emit_name["gorget_write_guard_".len()..]
+                } else if emit_name.starts_with("gorget_read_guard_") {
+                    &emit_name["gorget_read_guard_".len()..]
+                } else {
+                    &emit_name["gorget_guard_".len()..]
+                };
+                let suffix = format!("__{method}");
+                let guard_struct_name = original_name.strip_suffix(&suffix);
+                let guard_sid = guard_struct_name
+                    .and_then(|name| self.struct_reg.lookup(name));
+                if let Some(sid) = guard_sid {
+                    let ptr_val = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                        dst: ptr_val,
+                        base: guard_ptr,
+                        struct_id: sid,
+                        field: 1,
+                    });
+                    let data_ptr = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: data_ptr,
+                        ptr: ptr_val,
+                        ty: LirType::Ptr,
+                    });
+                    self.store_to_local(d, data_ptr, bb);
+                    return;
+                }
+            }
+        }
+
+        // gorget_shared_get(shared*) → dereference the inner data pointer.
+        // gorget_shared_get_ptr returns the raw void* — handled via normal call.
+        // For shared_get, we can't inline it (the data pointer is inside the
+        // GorgetShared control block), so we leave it as a runtime call.
+
+        // Track override for the emitted function name (e.g., map_new → map_new_str).
+        let mut actual_emit_name: Option<String> = None;
+
+        // Collection constructors need synthesized sizeof arguments.
+        // gorget_array_new(elem_size), gorget_set_new/gorget_ordered_set_new(elem_size)
+        if (emit_name == "gorget_array_new" || emit_name == "gorget_set_new" || emit_name == "gorget_ordered_set_new")
+            && lir_args.is_empty()
+        {
+            // For Set with Str elements, use *_str() variant which sets
+            // up the string hash function (no size arg needed).
+            if emit_name == "gorget_set_new" || emit_name == "gorget_ordered_set_new" {
+                let elem_type = set_elem_type_from_monomorphized(original_name);
+                if elem_type.as_deref() == Some("Str") || elem_type.as_deref() == Some("GorgetString") {
+                    let str_variant = if emit_name == "gorget_ordered_set_new" {
+                        "gorget_ordered_set_new_str"
+                    } else {
+                        "gorget_set_new_str"
+                    };
+                    actual_emit_name = Some(str_variant.into());
+                }
+            }
+            if actual_emit_name.is_none() {
+                let elem_sz = elem_size_from_monomorphized(original_name, self.module_structs).unwrap_or(8) as i64;
+                let sz_val = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                    dst: sz_val,
+                    ty: LirType::I64,
+                    value: elem_sz,
+                });
+                lir_args.push(sz_val);
+            }
+        }
+        // gorget_map_new / gorget_dict_new — need sizeof args.
+        // For Str/GorgetString keys, use _str variant which
+        // sets up the string hash function.
+        if (emit_name == "gorget_map_new" || emit_name == "gorget_dict_new") && lir_args.is_empty() {
+            let is_dict = emit_name == "gorget_dict_new";
+            let (key_sz, val_sz) = dict_elem_sizes_from_monomorphized(original_name, self.module_structs);
+            let key_type = dict_key_type_from_monomorphized(original_name);
+            if key_type.as_deref() == Some("Str") || key_type.as_deref() == Some("GorgetString") {
+                // Use _str variant for string keys.
+                let str_variant = if is_dict { "gorget_dict_new_str" } else { "gorget_map_new_str" };
+                actual_emit_name = Some(str_variant.into());
+                let v = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                    dst: v,
+                    ty: LirType::I64,
+                    value: val_sz as i64,
+                });
+                lir_args.push(v);
+            } else {
+                let k = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                    dst: k,
+                    ty: LirType::I64,
+                    value: key_sz as i64,
+                });
+                let v = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                    dst: v,
+                    ty: LirType::I64,
+                    value: val_sz as i64,
+                });
+                lir_args.push(k);
+                lir_args.push(v);
+            }
+        }
+        let emit_name = actual_emit_name.as_deref().unwrap_or(emit_name);
+        // gorget_array_contains needs elem_size appended.
+        if emit_name == "gorget_array_contains" && args.len() >= 2 {
+            let elem_lir_ty = self.operand_lir_type(&args[1]);
+            let elem_sz = lir_type_sizeof(&elem_lir_ty) as i64;
+            let sz_val = self.lir_func.next_value();
+            self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                dst: sz_val,
+                ty: LirType::I64,
+                value: elem_sz,
+            });
+            lir_args.push(sz_val);
+        }
+
+        // Concurrency constructors: gorget_mutex_new(size, &val),
+        // gorget_shared_new(size, &val), gorget_rwlock_new(size, &val).
+        // The GIR emits a single arg (the initial value). We prepend sizeof.
+        if matches!(emit_name, "gorget_mutex_new" | "gorget_shared_new" | "gorget_rwlock_new")
+            && lir_args.len() == 1
+        {
+            let elem_sz = concurrency_elem_size(original_name, self.module_structs).unwrap_or(8) as i64;
+            let sz_val = self.lir_func.next_value();
+            self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                dst: sz_val,
+                ty: LirType::I64,
+                value: elem_sz,
+            });
+            lir_args.insert(0, sz_val);
+        }
+
+        // gorget_channel_new(capacity, elem_size) — GIR passes (capacity).
+        if emit_name == "gorget_channel_new" && lir_args.len() == 1 {
+            let elem_sz = concurrency_elem_size(original_name, self.module_structs).unwrap_or(8) as i64;
+            let sz_val = self.lir_func.next_value();
+            self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                dst: sz_val,
+                ty: LirType::I64,
+                value: elem_sz,
+            });
+            lir_args.push(sz_val);
+        }
+
+        // gorget_guard_set(guard, &val, sizeof) and gorget_write_guard_set
+        if matches!(emit_name, "gorget_guard_set" | "gorget_write_guard_set")
+            && lir_args.len() == 2
+        {
+            let elem_sz = concurrency_elem_size(original_name, self.module_structs).unwrap_or(8) as i64;
+            let sz_val = self.lir_func.next_value();
+            self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                dst: sz_val,
+                ty: LirType::I64,
+                value: elem_sz,
+            });
+            lir_args.push(sz_val);
+        }
+
+        // gorget_mutex_lock / gorget_rwlock_read / gorget_rwlock_write return
+        // structs by value — use `_to` output-pointer variants instead.
+        if matches!(emit_name, "gorget_mutex_lock" | "gorget_rwlock_read" | "gorget_rwlock_write") {
+            if let Some(d) = *dst {
+                let to_name = format!("{emit_name}_to");
+                let slot = self.local_to_slot[d.0 as usize];
+                let slot_ptr = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                    dst: slot_ptr,
+                    slot,
+                });
+                lir_args.push(slot_ptr);
+                let mut arg_types: Vec<LirType> = args.iter().map(|a| self.operand_lir_type(a)).collect();
+                arg_types.push(LirType::Ptr);
+                self.ensure_extern(&to_name, &arg_types, &LirType::Void);
+                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    dst: None,
+                    name: to_name,
+                    args: lir_args,
+                });
+                return;
+            }
+        }
+
+        // Derive arg types from GIR operand types (for proper extern declarations).
+        let is_printf_like = emit_name == "printf" || emit_name == "fprintf_stderr"
+            || emit_name == "gorget_string_format" || emit_name == "gorget_string_format_alloc"
+            || emit_name == "snprintf" || emit_name == "sprintf";
+        let arg_types: Vec<LirType> = if is_printf_like {
+            lir_args.iter().map(|_| LirType::Ptr).collect()
+        } else {
+            let mut types: Vec<LirType> = args.iter().map(|a| self.operand_lir_type(a)).collect();
+            while types.len() < lir_args.len() {
+                types.push(LirType::I64);
+            }
+            types
+        };
+        let ret_ty = dst.map(|d| {
+            let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+            map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
+        }).unwrap_or(LirType::Void);
+        // __callable_N and __gorget_closure_call_N use function-scoped local IDs.
+        // Different functions can have __callable_3 with different return types.
+        // Make the extern name unique per function to avoid type conflicts.
+        let actual_emit_name = if emit_name.starts_with("__callable_") || emit_name.starts_with("__gorget_closure_call_") {
+            format!("{}__{}", emit_name, self.lir_func.name.replace("::", "__"))
+        } else {
+            emit_name.to_string()
+        };
+        self.ensure_extern(&actual_emit_name, &arg_types, &ret_ty);
+        let is_void_ret = matches!(ret_ty, LirType::Void);
+        let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
+        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+            dst: result,
+            name: actual_emit_name,
+            args: lir_args,
+        });
+        if let (Some(d), Some(r)) = (*dst, result) {
+            self.store_to_local(d, r, bb);
+        }
+    }
+
     /// Lower printf/fprintf args, expanding Str-typed operands to (int)len, data.
     fn lower_printf_args(&mut self, args: &[Operand], bb: BlockId) -> Vec<ValueId> {
         let mut lir_args = Vec::new();
+        // Pre-scan: which args (1-based) are Str-typed? We need this to fix the format string.
+        let str_arg_indices: Vec<bool> = args.iter().enumerate()
+            .map(|(i, a)| i > 0 && self.operand_is_str(a))
+            .collect();
+        let has_str_args = str_arg_indices.iter().any(|&b| b);
+
         for (i, arg) in args.iter().enumerate() {
             if i == 0 {
-                // First arg is always the format string (const char*) — pass as-is.
-                lir_args.push(self.lower_operand(arg, bb));
+                // First arg is always the format string (const char*).
+                // If any subsequent args are Str, fix the format string:
+                // replace corresponding %lld with %.*s.
+                if has_str_args {
+                    if let Operand::Constant(Constant::Str(fmt_str)) = arg {
+                        let fixed = fix_printf_str_format(fmt_str, &str_arg_indices[1..]);
+                        let fixed_val = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::StrLit {
+                            dst: fixed_val,
+                            value: fixed,
+                        });
+                        lir_args.push(fixed_val);
+                    } else {
+                        lir_args.push(self.lower_operand(arg, bb));
+                    }
+                } else {
+                    lir_args.push(self.lower_operand(arg, bb));
+                }
             } else if self.operand_is_str(arg) {
                 // Str-typed arg: expand to (int)len, (const char*)data for %.*s.
                 if let Operand::Copy(place) | Operand::Move(place) = arg {
@@ -1196,7 +2084,12 @@ impl<'a> FuncLowering<'a> {
             // Projected place — compute address then load.
             let addr = self.lower_place_addr(place, bb);
             let ty = self.resolve_place_type(place);
-            if ty.is_aggregate() {
+            // For Box deref of aggregate types (e.g. Box[Str]), we must emit a Load
+            // because the pointer points to heap data that needs to be read.
+            let is_box_deref = place.projections.first() == Some(&Projection::Deref)
+                && self.gir_types.get(self.gir_func.locals[place.local.0 as usize].type_id)
+                    .map_or(false, |t| matches!(t, GirType::Named(n) if n.starts_with("Box__")));
+            if ty.is_aggregate() && !is_box_deref {
                 addr // aggregates: the address IS the value
             } else {
                 let dst = self.lir_func.next_value();
@@ -1206,6 +2099,258 @@ impl<'a> FuncLowering<'a> {
                     ty,
                 });
                 dst
+            }
+        }
+    }
+
+    /// Elaborate a GIR Drop/DropIfAlive into LIR call sequences.
+    fn lower_drop(&mut self, place: &Place, bb: BlockId) {
+        use crate::ir::types::DropStrategy;
+
+        let local_idx = place.local.0 as usize;
+        let type_id = self.gir_func.locals[local_idx].type_id;
+
+        // Look up the type name and drop strategy from the type registry.
+        let (type_name, strategy) = if let Some(GirType::Named(name)) = self.gir_types.get(type_id) {
+            let strat = if let Some(type_def) = self.gir_types.get_type_def(name) {
+                type_def.metadata.drop_strategy.clone()
+            } else {
+                DropStrategy::None
+            };
+            (Some(name.clone()), strat)
+        } else {
+            (None, DropStrategy::None)
+        };
+
+        match strategy {
+            DropStrategy::None => {
+                self.lir_func.block_mut(bb).insts.push(Inst::Nop);
+            }
+            DropStrategy::Trivial(ref fn_name) if fn_name == "free" => {
+                let slot = self.local_to_slot[local_idx];
+                let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
+
+                // Check if this is a trait-object Box (struct with data+vtable)
+                // vs a regular Box (raw pointer). Trait boxes need free(val.data).
+                let is_trait_box = type_name.as_deref()
+                    .and_then(|n| n.strip_prefix("Box__"))
+                    .map(|inner| {
+                        self.gir_types.get_type_def(&format!("{inner}_TraitObj")).is_some()
+                    })
+                    .unwrap_or(false);
+
+                if is_trait_box {
+                    // Trait box: free the .data field
+                    let addr = self.lower_place_addr(place, bb);
+                    // Find the struct_id for this Box type
+                    if let Some(sid) = self.struct_reg.lookup(type_name.as_deref().unwrap_or("")) {
+                        let data_ptr = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                            dst: data_ptr,
+                            base: addr,
+                            struct_id: sid,
+                            field: 0, // data is field 0
+                        });
+                        let data_val = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                            dst: data_val,
+                            ptr: data_ptr,
+                            ty: LirType::Ptr,
+                        });
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: None,
+                            name: "free".to_string(),
+                            args: vec![data_val],
+                        });
+                    } else {
+                        // Fallback: just free the whole value
+                        let val = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::SlotLoad {
+                            dst: val, slot, ty: slot_ty,
+                        });
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: None,
+                            name: "free".to_string(),
+                            args: vec![val],
+                        });
+                    }
+                } else {
+                    // Regular Box: check if inner type has a custom drop, call it first.
+                    // Box__Tracked → inner = "Tracked", look up Tracked's drop strategy.
+                    let inner_name = type_name.as_deref()
+                        .and_then(|n| n.strip_prefix("Box__"));
+                    if let Some(inner) = inner_name {
+                        use crate::ir::types::DropStrategy as DS;
+                        let inner_drop = self.gir_types.get_type_def(inner)
+                            .map(|td| td.metadata.drop_strategy.clone())
+                            .unwrap_or(DS::None);
+                        let inner_drop_fn = match &inner_drop {
+                            DS::Custom(fn_name) => Some(fn_name.clone()),
+                            DS::Trivial(fn_name) if fn_name != "free" => Some(fn_name.clone()),
+                            _ => None,
+                        };
+                        if let Some(drop_fn) = inner_drop_fn {
+                            // Call inner drop: drop_fn(box_ptr)
+                            // box_ptr IS the pointer to the inner value (Box is just a pointer)
+                            let box_val = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::SlotLoad {
+                                dst: box_val, slot, ty: slot_ty.clone(),
+                            });
+                            if let Some(&fid) = self.func_index.get(drop_fn.as_str()) {
+                                self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                                    dst: None, func: fid, args: vec![box_val],
+                                });
+                            } else {
+                                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                    dst: None, name: drop_fn, args: vec![box_val],
+                                });
+                            }
+                        }
+                    }
+                    // Then free the allocation
+                    let val = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::SlotLoad {
+                        dst: val, slot, ty: slot_ty,
+                    });
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: "free".to_string(),
+                        args: vec![val],
+                    });
+                }
+            }
+            DropStrategy::Trivial(ref fn_name) => {
+                // Trivial drop: single free/cleanup call. fn_name(&place)
+                let addr = self.lower_place_addr(place, bb);
+
+                // For collection types (Vector, Set, Dict), emit a special extern call
+                // that tells the backend to generate element-level drops before freeing.
+                // The name encodes the element drop function:
+                //   __gorget_array_drop_elems__ElemDrop (for Vector)
+                //   __gorget_map_drop_vals__ValDrop (for Dict)
+                let is_array_free = fn_name == "gorget_array_free";
+                let is_map_free = fn_name == "gorget_map_free";
+                if is_array_free || is_map_free {
+                    let elem_type_name = type_name.as_deref().and_then(|tn| {
+                        if is_array_free {
+                            tn.strip_prefix("Vector__").or_else(|| tn.strip_prefix("Deque__"))
+                        } else {
+                            tn.strip_prefix("Dict__").or_else(|| tn.strip_prefix("HashMap__"))
+                                .and_then(|rest| {
+                                    rest.find("__").map(|idx| &rest[idx + 2..])
+                                })
+                        }
+                    });
+
+                    if let Some(elem_name) = elem_type_name {
+                        use crate::ir::types::DropStrategy as DS;
+                        let elem_drop = self.gir_types.get_type_def(elem_name)
+                            .map(|td| td.metadata.drop_strategy.clone())
+                            .unwrap_or(DS::None);
+                        let elem_drop_fn = match &elem_drop {
+                            DS::Trivial(fn_name) => Some(fn_name.clone()),
+                            DS::Custom(fn_name) => Some(fn_name.clone()),
+                            DS::Recursive => {
+                                // For Recursive elements, only emit drop if there's an actual
+                                // function in the module (user-defined or generated).
+                                let name = format!("{elem_name}__drop");
+                                if self.func_index.contains_key(name.as_str()) {
+                                    Some(name)
+                                } else {
+                                    None
+                                }
+                            }
+                            DS::None => None,
+                        };
+                        if let Some(drop_fn) = elem_drop_fn {
+                            let tag = if is_array_free {
+                                format!("__gorget_array_drop_elems__{drop_fn}")
+                            } else {
+                                format!("__gorget_map_drop_vals__{drop_fn}")
+                            };
+                            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                dst: None,
+                                name: tag,
+                                args: vec![addr],
+                            });
+                        }
+                    }
+                }
+
+                if let Some(&fid) = self.func_index.get(fn_name.as_str()) {
+                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                        dst: None, func: fid, args: vec![addr],
+                    });
+                } else {
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None, name: fn_name.clone(), args: vec![addr],
+                    });
+                }
+            }
+            DropStrategy::Custom(ref fn_name) => {
+                // Custom drop: call user drop, then drop fields recursively.
+                let addr = self.lower_place_addr(place, bb);
+                if let Some(&fid) = self.func_index.get(fn_name.as_str()) {
+                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                        dst: None, func: fid, args: vec![addr],
+                    });
+                } else {
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None, name: fn_name.clone(), args: vec![addr],
+                    });
+                }
+                // Also drop fields (same as Recursive).
+                self.lower_field_drops(place, &type_name, bb);
+            }
+            DropStrategy::Recursive => {
+                self.lower_field_drops(place, &type_name, bb);
+            }
+        }
+    }
+
+    /// Emit field-by-field drops for a struct value (used by Recursive and Custom strategies).
+    fn lower_field_drops(&mut self, place: &Place, type_name: &Option<String>, bb: BlockId) {
+        use crate::ir::types::DropStrategy;
+        if let Some(type_name) = type_name {
+            if let Some(type_def) = self.gir_types.get_type_def(type_name) {
+                if let crate::ir::types::TypeDefKind::Struct(ref sdef) = type_def.kind {
+                    let base_addr = self.lower_place_addr(place, bb);
+                    let struct_id = self.struct_reg.lookup(type_name).unwrap_or(StructId(0));
+                    for (field_idx, field) in sdef.fields.iter().enumerate() {
+                        let field_type_name = match self.gir_types.get(field.type_id) {
+                            Some(GirType::Named(n)) => Some(n.clone()),
+                            _ => None,
+                        };
+                        let field_drop = field_type_name.as_ref().and_then(|n| {
+                            self.gir_types.get_type_def(n).map(|td| td.metadata.drop_strategy.clone())
+                        }).unwrap_or(DropStrategy::None);
+                        let drop_fn = match &field_drop {
+                            DropStrategy::Trivial(fn_name) | DropStrategy::Custom(fn_name) => Some(fn_name.clone()),
+                            DropStrategy::Recursive => {
+                                field_type_name.as_ref().map(|n| format!("{n}__drop"))
+                            }
+                            DropStrategy::None => None,
+                        };
+                        if let Some(drop_fn_name) = drop_fn {
+                            let field_ptr = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                dst: field_ptr,
+                                base: base_addr,
+                                struct_id,
+                                field: field_idx as u32,
+                            });
+                            if let Some(&fid) = self.func_index.get(drop_fn_name.as_str()) {
+                                self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                                    dst: None, func: fid, args: vec![field_ptr],
+                                });
+                            } else {
+                                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                    dst: None, name: drop_fn_name, args: vec![field_ptr],
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1292,7 +2437,7 @@ impl<'a> FuncLowering<'a> {
             Constant::Unit => Inst::IConst { dst, ty: LirType::I32, value: 0 }, // unit = zero
             Constant::SizeOf(type_id) => {
                 let ty = map_gir_type_with_structs(type_id, self.gir_types, Some(self.struct_reg));
-                let size = super::types::scalar_size(&ty).unwrap_or(8);
+                let size = c_sizeof_lir_type(&ty, self.module_structs);
                 Inst::IConst { dst, ty: LirType::I64, value: size as i64 }
             }
             Constant::FuncRef(name) => {
@@ -1329,6 +2474,25 @@ impl<'a> FuncLowering<'a> {
     // ── Store helpers ───────────────────────────────────────────────────────
 
     /// Derive the LIR type of a GIR operand.
+    /// Get the GIR type name for an operand (for type-aware dispatch).
+    fn operand_gir_type_name(&self, operand: &Operand) -> Option<String> {
+        match operand {
+            Operand::Copy(place) | Operand::Move(place) => {
+                let idx = place.local.0 as usize;
+                if idx < self.gir_func.locals.len() {
+                    let gir_ty = self.gir_func.locals[idx].type_id;
+                    match self.gir_types.get(gir_ty) {
+                        Some(GirType::Named(name)) => Some(name.clone()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn operand_lir_type(&self, operand: &Operand) -> LirType {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => {
@@ -1372,6 +2536,14 @@ impl<'a> FuncLowering<'a> {
             return;
         }
 
+        // Detect newtype constructors: if the function name matches a struct name,
+        // the return type should be that struct (not i64 or i32 from GIR's extern decl).
+        let actual_ret = if let Some(sid) = self.struct_reg.lookup(name) {
+            LirType::Struct(sid)
+        } else {
+            ret_ty.clone()
+        };
+
         if let Some(existing) = self.pending_externs.iter_mut().find(|e| e.name == name) {
             // Merge param types: prefer aggregate/specific types over Ptr.
             for (i, new_ty) in arg_types.iter().enumerate() {
@@ -1382,15 +2554,15 @@ impl<'a> FuncLowering<'a> {
                 }
             }
             // Also update return type if existing is I64 and new is more specific.
-            if matches!(existing.return_type, LirType::I64) && !matches!(ret_ty, LirType::I64) {
-                existing.return_type = ret_ty.clone();
+            if matches!(existing.return_type, LirType::I64 | LirType::I32) && !matches!(actual_ret, LirType::I64 | LirType::I32) {
+                existing.return_type = actual_ret;
             }
             return;
         }
         self.pending_externs.push(LirExtern {
             name: name.to_string(),
             params: arg_types.to_vec(),
-            return_type: ret_ty.clone(),
+            return_type: actual_ret,
             is_variadic: false,
         });
     }
@@ -1454,7 +2626,12 @@ impl<'a> FuncLowering<'a> {
 
     fn resolve_type_name(&self, gir_type_id: GirTypeId) -> String {
         let gir_type = self.gir_types.get(gir_type_id);
-        if let Some(GirType::Named(name)) = gir_type {
+        // Unwrap Ptr/MutPtr to find the inner Named type.
+        let inner = match gir_type {
+            Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => self.gir_types.get(*inner),
+            other => other,
+        };
+        if let Some(GirType::Named(name)) = inner {
             name.clone()
         } else {
             String::new()
@@ -1463,7 +2640,12 @@ impl<'a> FuncLowering<'a> {
 
     fn resolve_field_type(&self, gir_type_id: GirTypeId, field: u32) -> LirType {
         let gir_type = self.gir_types.get(gir_type_id);
-        if let Some(GirType::Named(name)) = gir_type {
+        // Unwrap Ptr/MutPtr to find the inner Named type.
+        let inner_type = match gir_type {
+            Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => self.gir_types.get(*inner),
+            other => other,
+        };
+        if let Some(GirType::Named(name)) = inner_type {
             if let Some(def) = self.gir_types.get_type_def(name) {
                 if let gir_types::TypeDefKind::Struct(sdef) = &def.kind {
                     if let Some(f) = sdef.fields.get(field as usize) {
@@ -1494,6 +2676,17 @@ impl<'a> FuncLowering<'a> {
     fn resolve_deref_gir_type_id(&self, gir_type_id: GirTypeId) -> GirTypeId {
         match self.gir_types.get(gir_type_id) {
             Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => *inner,
+            Some(GirType::Named(name)) if name.starts_with("Box__") => {
+                // Box types are Named("Box__X") — the inner type is encoded in the name.
+                if let Some(type_def) = self.gir_types.get_type_def(name.as_str()) {
+                    if let crate::ir::types::TypeDefKind::Struct(ref s) = type_def.kind {
+                        if let Some(f) = s.fields.first() {
+                            return f.type_id;
+                        }
+                    }
+                }
+                gir_type_id // fallback — resolve_place_type has name-based fallback
+            }
             _ => gir_type_id, // fallback
         }
     }
@@ -1523,8 +2716,15 @@ impl<'a> FuncLowering<'a> {
         variant_name: &str,
         field: u32,
     ) -> LirType {
-        let gir_type = self.gir_types.get(gir_type_id);
-        if let Some(GirType::Named(name)) = gir_type {
+        // Unwrap Ptr/MutPtr to get to the Named enum type.
+        let mut tid = gir_type_id;
+        loop {
+            match self.gir_types.get(tid) {
+                Some(GirType::Ptr(inner) | GirType::MutPtr(inner)) => tid = *inner,
+                _ => break,
+            }
+        }
+        if let Some(GirType::Named(name)) = self.gir_types.get(tid) {
             if let Some(def) = self.gir_types.get_type_def(name) {
                 if let gir_types::TypeDefKind::Enum(edef) = &def.kind {
                     for v in &edef.variants {
@@ -1569,6 +2769,307 @@ impl<'a> FuncLowering<'a> {
         1
     }
 
+    /// Get the GIR type IDs for a specific variant's fields.
+    fn resolve_variant_field_types(&self, type_name: &str, variant_name: &str) -> Vec<Option<GirTypeId>> {
+        if let Some(def) = self.gir_types.get_type_def(type_name) {
+            if let gir_types::TypeDefKind::Enum(edef) = &def.kind {
+                for v in &edef.variants {
+                    if v.name == variant_name {
+                        return v.fields.iter().map(|f| Some(f.type_id)).collect();
+                    }
+                }
+            }
+        }
+        vec![]
+    }
+
+    /// Materialize a properly tagged null-variant enum for an Assign { dst, Null }.
+    /// Handles both simple locals (`dst.projections.is_empty()`) and projected
+    /// field assignments (`local.field[i] = Null`).
+    fn try_materialize_null_for_assign(&mut self, dst: &Place, bb: BlockId) -> Option<()> {
+        let local_idx = dst.local.0 as usize;
+        if local_idx >= self.gir_func.locals.len() { return None; }
+
+        // Resolve the target type through projections.
+        let gir_ty = if dst.projections.is_empty() {
+            self.gir_func.locals[local_idx].type_id
+        } else {
+            self.resolve_projected_gir_type(dst)?
+        };
+
+        let (struct_id, tag_ordinal) = self.find_enum_null_variant(gir_ty)?;
+
+        if dst.projections.is_empty() {
+            // Simple local: write tag into the local's slot.
+            let slot = self.local_to_slot[local_idx];
+            let base = self.lir_func.next_value();
+            self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base, slot });
+            self.emit_enum_tag_store(base, struct_id, tag_ordinal, bb);
+        } else {
+            // Projected field: compute the field address, then write tag there.
+            let base = self.lower_place_addr(dst, bb);
+            self.emit_enum_tag_store(base, struct_id, tag_ordinal, bb);
+        }
+        Some(())
+    }
+
+    /// When a GIR Assign copies from an Option/Result-typed source to a
+    /// non-Option/Result destination, the GIR C backend implicitly extracts
+    /// the payload (e.g. `_21 = _23.data.Some._0`).  We replicate this by
+    /// emitting FieldPtr(field=1) + Load on the source enum struct.
+    fn try_enum_payload_extract(
+        &mut self,
+        dst: &Place,
+        value: &Operand,
+        bb: BlockId,
+    ) -> Option<ValueId> {
+        // Only applies to Copy/Move of a simple local (no projections on source).
+        let src_local = match value {
+            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.local,
+            _ => return None,
+        };
+
+        let src_idx = src_local.0 as usize;
+        let dst_idx = dst.local.0 as usize;
+        if src_idx >= self.gir_func.locals.len() || dst_idx >= self.gir_func.locals.len() {
+            return None;
+        }
+
+        let src_type_id = self.gir_func.locals[src_idx].type_id;
+        let dst_type_id = self.gir_func.locals[dst_idx].type_id;
+
+        // Check: source is Option__* or Result__*, destination is NOT.
+        let src_name = match self.gir_types.get(src_type_id) {
+            Some(GirType::Named(n)) => n.clone(),
+            _ => return None,
+        };
+        let is_option = src_name.starts_with("Option__");
+        let is_result = src_name.starts_with("Result__");
+        if !is_option && !is_result {
+            return None;
+        }
+
+        // Destination must not be the same enum type.
+        let dst_is_same = match self.gir_types.get(dst_type_id) {
+            Some(GirType::Named(n)) => *n == src_name,
+            _ => false,
+        };
+        if dst_is_same {
+            return None;
+        }
+
+        // Also skip if destination is another Option/Result.
+        let dst_is_enum = match self.gir_types.get(dst_type_id) {
+            Some(GirType::Named(n)) => n.starts_with("Option__") || n.starts_with("Result__"),
+            _ => false,
+        };
+        if dst_is_enum {
+            return None;
+        }
+
+        // Extract the payload: field 1 for Option (Some_0), field 1 for Result (Ok_0).
+        let struct_id = self.resolve_struct_id(src_type_id);
+        let payload_field: u32 = 1;
+
+        let src_slot = self.local_to_slot[src_idx];
+        let base = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base, slot: src_slot });
+
+        let fptr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+            dst: fptr,
+            base,
+            struct_id,
+            field: payload_field,
+        });
+
+        let field_ty = self.resolve_enum_field_type(src_type_id, if is_option { "Some" } else { "Ok" }, 0);
+        let result = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+            dst: result,
+            ptr: fptr,
+            ty: field_ty,
+        });
+
+        Some(result)
+    }
+
+    /// Detect `Box[Trait] ← Box[Concrete]` assignments and construct the trait object
+    /// by setting field 0 (data) = src value and field 1 (vtable) = &Trait_for_Concrete_vtable.
+    fn try_trait_object_construct(
+        &mut self,
+        dst: &Place,
+        value: &Operand,
+        bb: BlockId,
+    ) -> bool {
+        let src_local = match value {
+            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.local,
+            _ => return false,
+        };
+        let src_idx = src_local.0 as usize;
+        let dst_idx = dst.local.0 as usize;
+        if src_idx >= self.gir_func.locals.len() || dst_idx >= self.gir_func.locals.len() {
+            return false;
+        }
+        let dst_type_id = self.gir_func.locals[dst_idx].type_id;
+        let src_type_id = self.gir_func.locals[src_idx].type_id;
+        let dst_name = match self.gir_types.get(dst_type_id) {
+            Some(GirType::Named(n)) => n.clone(),
+            _ => return false,
+        };
+        let src_name = match self.gir_types.get(src_type_id) {
+            Some(GirType::Named(n)) => n.clone(),
+            _ => return false,
+        };
+        // Both must be Box__ types with different inner types.
+        if !dst_name.starts_with("Box__") || !src_name.starts_with("Box__") {
+            return false;
+        }
+        let dst_inner = &dst_name[5..];
+        let src_inner = &src_name[5..];
+        if dst_inner == src_inner {
+            return false;
+        }
+        // Check that a VTable type exists for the trait (dst_inner is the trait name).
+        let vtable_type = format!("{dst_inner}_VTable");
+        if self.gir_types.get_type_def(&vtable_type).is_none() {
+            return false;
+        }
+        // Find the trait object struct (e.g. Describer_TraitObj).
+        let trait_obj_type = format!("{dst_inner}_TraitObj");
+        let trait_obj_sid = match self.struct_reg.lookup(&trait_obj_type) {
+            Some(sid) => sid,
+            None => return false,
+        };
+        // Find the vtable global (e.g. Describer_for_Widget_vtable).
+        let vtable_global_name = format!("{dst_inner}_for_{src_inner}_vtable");
+        let vtable_gid = match self.global_index.get(&vtable_global_name) {
+            Some(&gid) => gid,
+            None => return false,
+        };
+
+        // Construct the trait object:
+        // field 0 (data) = src value (cast to void*)
+        // field 1 (vtable) = &vtable_global
+        let dst_slot = self.local_to_slot[dst_idx];
+        let dst_base = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+            dst: dst_base,
+            slot: dst_slot,
+        });
+
+        // Load src value (Box__Concrete = void*).
+        // Box types are represented as LirType::Struct in LIR but are actually void*
+        // at runtime. lower_operand returns the slot address for aggregates, so we
+        // need to explicitly load the pointer value from the slot.
+        let src_slot = self.local_to_slot[src_idx];
+        let src_addr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+            dst: src_addr,
+            slot: src_slot,
+        });
+        let src_val = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+            dst: src_val,
+            ptr: src_addr,
+            ty: LirType::Ptr,
+        });
+
+        // Store data pointer (field 0).
+        let data_ptr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+            dst: data_ptr,
+            base: dst_base,
+            struct_id: trait_obj_sid,
+            field: 0,
+        });
+        self.lir_func.block_mut(bb).insts.push(Inst::Store {
+            ptr: data_ptr,
+            value: src_val,
+        });
+
+        // Store vtable pointer (field 1).
+        let vtable_addr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::GlobalAddr {
+            dst: vtable_addr,
+            global: vtable_gid,
+        });
+        let vtable_ptr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+            dst: vtable_ptr,
+            base: dst_base,
+            struct_id: trait_obj_sid,
+            field: 1,
+        });
+        self.lir_func.block_mut(bb).insts.push(Inst::Store {
+            ptr: vtable_ptr,
+            value: vtable_addr,
+        });
+
+        true
+    }
+
+    /// Emit instructions to set the tag field of an enum at `base` address.
+    fn emit_enum_tag_store(&mut self, base: ValueId, struct_id: StructId, tag_ordinal: usize, bb: BlockId) {
+        let tag_val = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+            dst: tag_val,
+            ty: LirType::I32,
+            value: tag_ordinal as i64,
+        });
+        let tag_ptr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+            dst: tag_ptr, base, struct_id, field: 0,
+        });
+        self.lir_func.block_mut(bb).insts.push(Inst::Store {
+            ptr: tag_ptr, value: tag_val,
+        });
+    }
+
+    /// Resolve the GIR type of a Place by walking projections.
+    fn resolve_projected_gir_type(&self, place: &Place) -> Option<GirTypeId> {
+        let mut current_type = self.gir_func.locals[place.local.0 as usize].type_id;
+        for proj in &place.projections {
+            match proj {
+                Projection::Field(field) => {
+                    if let Some(GirType::Named(name)) = self.gir_types.get(current_type) {
+                        if let Some(def) = self.gir_types.get_type_def(&name) {
+                            match &def.kind {
+                                gir_types::TypeDefKind::Struct(sdef) => {
+                                    if let Some(f) = sdef.fields.get(*field as usize) {
+                                        current_type = f.type_id;
+                                        continue;
+                                    }
+                                }
+                                gir_types::TypeDefKind::Enum(edef) => {
+                                    // Field 0 = tag, field 1+ = variant payloads
+                                    // The payload fields are numbered across variants.
+                                    let mut fi = 0u32;
+                                    for v in &edef.variants {
+                                        for vf in &v.fields {
+                                            fi += 1; // tag takes field 0
+                                            if fi == *field {
+                                                current_type = vf.type_id;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    return None;
+                }
+                Projection::Deref | Projection::Index(_) => {
+                    return None; // Conservative: can't resolve through deref/index.
+                }
+            }
+        }
+        Some(current_type)
+    }
+
     /// If `gir_ty` is an enum, find the first variant with no fields (the "null" variant,
     /// e.g. None for Option, Error for Result).  Returns `(StructId, tag_ordinal)`.
     fn find_enum_null_variant(&self, gir_ty: GirTypeId) -> Option<(StructId, usize)> {
@@ -1580,6 +3081,82 @@ impl<'a> FuncLowering<'a> {
                 for (i, v) in edef.variants.iter().enumerate() {
                     if v.fields.is_empty() {
                         return Some((struct_id, i));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// For a collection method call like `Vector__Option__int64_t__push`,
+    /// when a `Constant::Null` arg is passed as the element, create a properly
+    /// tagged enum slot on the stack and return its address.
+    /// Returns `None` if we can't determine the element type.
+    fn materialize_null_enum_for_collection_arg(&mut self, func_name: &str, bb: BlockId) -> Option<ValueId> {
+        // Extract the element type name from monomorphized call names.
+        // Patterns: Vector__ELEM__push, Vector__ELEM__set, Set__ELEM__add,
+        //           Heap__ELEM__push, gorget_channel_send, etc.
+        let elem_type_name = Self::extract_elem_type_from_method_name(func_name)?;
+
+        // Look up the struct and find the null variant (first fieldless variant).
+        let struct_id = self.struct_reg.lookup(&elem_type_name)?;
+        let lir_struct = self.module_structs.get(struct_id.0 as usize)?;
+
+        // Find the null variant tag by looking up the GIR type def.
+        let tag_ordinal = self.find_null_variant_tag_by_name(&elem_type_name)?;
+
+        // Create a temporary slot of the enum type.
+        let slot = self.lir_func.add_slot(LirType::Struct(struct_id), None);
+        let base = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base, slot });
+
+        // Zero-init the slot first (memset 0).
+        let zero = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+            dst: zero, ty: LirType::I32, value: 0,
+        });
+        // Set the tag field to the null variant ordinal.
+        let tag_val = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+            dst: tag_val, ty: LirType::I32, value: tag_ordinal as i64,
+        });
+        let tag_ptr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+            dst: tag_ptr, base, struct_id, field: 0,
+        });
+        self.lir_func.block_mut(bb).insts.push(Inst::Store {
+            ptr: tag_ptr, value: tag_val,
+        });
+        Some(base)
+    }
+
+    /// Find the null variant tag ordinal by struct name.
+    fn find_null_variant_tag_by_name(&self, name: &str) -> Option<usize> {
+        let def = self.gir_types.get_type_def(name)?;
+        if let gir_types::TypeDefKind::Enum(edef) = &def.kind {
+            for (i, v) in edef.variants.iter().enumerate() {
+                if v.fields.is_empty() {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract element type name from a monomorphized collection method name.
+    /// E.g., "Vector__Option__int64_t__push" → "Option__int64_t"
+    fn extract_elem_type_from_method_name(func_name: &str) -> Option<String> {
+        // Collection prefixes and their method suffixes
+        let prefixes = ["Vector__", "Set__", "Heap__", "HashSet__", "Deque__"];
+        let suffixes = ["__push", "__add", "__set", "__contains", "__remove",
+                        "__insert", "__index_of", "__binary_search"];
+        for prefix in &prefixes {
+            if let Some(rest) = func_name.strip_prefix(prefix) {
+                for suffix in &suffixes {
+                    if let Some(elem) = rest.strip_suffix(suffix) {
+                        if !elem.is_empty() {
+                            return Some(elem.to_string());
+                        }
                     }
                 }
             }
@@ -1611,11 +3188,36 @@ impl<'a> FuncLowering<'a> {
                     return LirType::I64; // fallback
                 }
                 Projection::Deref => {
-                    if let Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) =
-                        self.gir_types.get(current_type)
-                    {
-                        current_type = *inner;
+                    let resolved = self.resolve_deref_gir_type_id(current_type);
+                    if resolved == current_type {
+                        // resolve_deref_gir_type_id couldn't resolve — try Box name parsing
+                        if let Some(GirType::Named(name)) = self.gir_types.get(current_type) {
+                            if let Some(inner) = name.strip_prefix("Box__") {
+                                return match inner {
+                                    "int64_t" => LirType::I64,
+                                    "int32_t" => LirType::I32,
+                                    "int16_t" => LirType::I16,
+                                    "int8_t" => LirType::I8,
+                                    "uint8_t" => LirType::U8,
+                                    "double" => LirType::F64,
+                                    "float" => LirType::F32,
+                                    "bool" => LirType::Bool,
+                                    "Str" => LirType::Struct(
+                                        self.struct_reg.lookup("Str").unwrap_or(StructId(0))
+                                    ),
+                                    _ => {
+                                        // Named inner type — look up as struct
+                                        if let Some(sid) = self.struct_reg.lookup(inner) {
+                                            LirType::Struct(sid)
+                                        } else {
+                                            LirType::I64
+                                        }
+                                    }
+                                };
+                            }
+                        }
                     }
+                    current_type = resolved;
                 }
                 Projection::Index(_) => {
                     return LirType::I64; // default element type
@@ -1625,6 +3227,50 @@ impl<'a> FuncLowering<'a> {
 
         map_gir_type_with_structs(&current_type, self.gir_types, Some(self.struct_reg))
     }
+}
+
+/// Replace `%lld` with `%.*s` at positions where the arg is a Str.
+/// `is_str` is indexed from arg[1] onward (arg[0] is the format string).
+fn fix_printf_str_format(fmt: &str, is_str: &[bool]) -> String {
+    let mut result = String::with_capacity(fmt.len() + 8);
+    let mut arg_idx = 0usize;
+    let bytes = fmt.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 1 < bytes.len() {
+            if bytes[i + 1] == b'%' {
+                result.push_str("%%");
+                i += 2;
+                continue;
+            }
+            // Check if this is %lld
+            if i + 4 <= bytes.len() && &bytes[i..i+4] == b"%lld" {
+                if arg_idx < is_str.len() && is_str[arg_idx] {
+                    result.push_str("%.*s");
+                } else {
+                    result.push_str("%lld");
+                }
+                arg_idx += 1;
+                i += 4;
+                continue;
+            }
+            // Other format specifiers: scan past them
+            let start = i;
+            i += 1;
+            while i < bytes.len() && !bytes[i].is_ascii_alphabetic() && bytes[i] != b'%' {
+                i += 1;
+            }
+            if i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            result.push_str(&fmt[start..i]);
+            arg_idx += 1;
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    result
 }
 
 // ── Free functions ──────────────────────────────────────────────────────────
@@ -1671,12 +3317,27 @@ pub fn map_gir_type_with_structs(
             GirType::F64 => LirType::F64,
             GirType::Unit => LirType::Void,
             GirType::Ptr(_) | GirType::MutPtr(_) => LirType::Ptr,
-            GirType::FnPtr { .. } => LirType::Ptr,
+            GirType::FnPtr { .. } => {
+                // FnPtr in GIR is a GorgetClosure struct (fn_ptr + env).
+                if let Some(sr) = struct_reg {
+                    if let Some(sid) = sr.lookup("GorgetClosure") {
+                        return LirType::Struct(sid);
+                    }
+                }
+                LirType::Ptr
+            }
             GirType::Named(name) => {
                 // Named types are aggregates — resolve to Struct if registered.
                 if let Some(sr) = struct_reg {
                     if let Some(sid) = sr.lookup(name) {
                         return LirType::Struct(sid);
+                    }
+                    // Collection instantiations map to runtime structs.
+                    // e.g., Dict__int64_t__int64_t → GorgetMap
+                    if let Some(runtime_name) = collection_runtime_type(name) {
+                        if let Some(sid) = sr.lookup(runtime_name) {
+                            return LirType::Struct(sid);
+                        }
                     }
                 }
                 LirType::Ptr
@@ -1687,11 +3348,12 @@ pub fn map_gir_type_with_structs(
     }
 }
 
-fn lower_binop(dst: ValueId, op: GirBinOp, lhs: ValueId, rhs: ValueId, ty: LirType) -> Inst {
+fn lower_binop(dst: ValueId, op: GirBinOp, lhs: ValueId, rhs: ValueId, ty: LirType, overflow_wrap: bool) -> Inst {
+    let default_overflow = if overflow_wrap { Overflow::Wrap } else { Overflow::Trap };
     match op {
-        GirBinOp::Add => Inst::Add { dst, ty, lhs, rhs, overflow: Overflow::Trap },
-        GirBinOp::Sub => Inst::Sub { dst, ty, lhs, rhs, overflow: Overflow::Trap },
-        GirBinOp::Mul => Inst::Mul { dst, ty, lhs, rhs, overflow: Overflow::Trap },
+        GirBinOp::Add => Inst::Add { dst, ty, lhs, rhs, overflow: default_overflow },
+        GirBinOp::Sub => Inst::Sub { dst, ty, lhs, rhs, overflow: default_overflow },
+        GirBinOp::Mul => Inst::Mul { dst, ty, lhs, rhs, overflow: default_overflow },
         GirBinOp::Div => Inst::Div { dst, ty, lhs, rhs },
         GirBinOp::Rem => Inst::Rem { dst, ty, lhs, rhs },
         GirBinOp::Mod => Inst::Mod { dst, ty, lhs, rhs },
@@ -1752,6 +3414,8 @@ fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<(Vec<LirType>, 
         "gorget_str_slice" => Some((vec![s(), LirType::I64, LirType::I64], s())),
         "gorget_str_byte_slice" => Some((vec![s(), LirType::I64, LirType::I64], s())),
         "gorget_str_char_at" => Some((vec![s(), LirType::I64], s())),
+        "gorget_str_codepoint_at" => Some((vec![s(), LirType::I64], s())),
+        "gorget_utf8_codepoint_len_at" => Some((vec![s(), LirType::I64], LirType::I64)),
         "gorget_str_byte_at" => Some((vec![s(), LirType::I64], LirType::U8)),
         "gorget_str_byte_len" => Some((vec![s()], LirType::I64)),
         "gorget_str_codepoint_count" => Some((vec![s()], LirType::I64)),
@@ -1788,11 +3452,186 @@ fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<(Vec<LirType>, 
         "gorget_string_cstr" => Some((vec![LirType::Ptr], LirType::Ptr)),
         "gorget_string_concat" => Some((vec![LirType::Ptr, LirType::Ptr], g())),
         "gorget_string_append" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
-        "gorget_str_str" | "gorget_str_substring" => Some((vec![s(), s()], s())),
+        "gorget_str_str" => Some((vec![s(), s()], s())),
+        // (gorget_str_slice handled above, from Str__substring → gorget_str_slice mapping)
         "gorget_str_from_literal" => Some((vec![LirType::Ptr, LirType::I64], s())),
         "gorget_str_from_int" | "gorget_str_from_float" | "gorget_str_from_bool" => {
             Some((vec![LirType::I64], s()))
         }
+
+        // Collection methods
+        "gorget_array_new" => Some((vec![LirType::I64], arr_ty())),
+        "gorget_array_with_capacity" => Some((vec![LirType::I64, LirType::I64], arr_ty())),
+        "gorget_array_push" | "gorget_array_set" | "gorget_array_insert" => {
+            Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void))
+        }
+        "gorget_array_get" | "gorget_array_pop" | "gorget_array_first" | "gorget_array_last" => {
+            Some((vec![LirType::Ptr, LirType::I64], LirType::Ptr))
+        }
+        "gorget_array_safe_pop" => {
+            Some((vec![LirType::Ptr], LirType::Ptr))
+        }
+        "gorget_array_remove" => Some((vec![LirType::Ptr, LirType::I64], LirType::Void)),
+        "gorget_array_remove_opt" => Some((vec![LirType::Ptr, LirType::I64], LirType::Ptr)),
+        "gorget_array_len" => Some((vec![LirType::Ptr], LirType::I64)),
+        "gorget_array_contains" => Some((vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Bool)),
+        "gorget_array_is_empty" => Some((vec![LirType::Ptr], LirType::Bool)),
+        "gorget_array_index_of" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::I64)),
+        "gorget_array_binary_search" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::I64)),
+        "gorget_array_clear" | "gorget_array_free" | "gorget_array_reverse"
+        | "gorget_array_dedup" | "gorget_array_extend" | "gorget_array_reserve" => {
+            Some((vec![LirType::Ptr], LirType::Void))
+        }
+        "gorget_array_clone" | "gorget_array_slice" => Some((vec![LirType::Ptr], arr_ty())),
+        // Map methods (unordered)
+        "gorget_map_new" => Some((vec![LirType::I64, LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))))),
+        "gorget_map_new_str" => Some((vec![LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))))),
+        // Dict methods (ordered — only new differs; put/get/etc. use gorget_map_*)
+        "gorget_dict_new" => Some((vec![LirType::I64, LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))))),
+        "gorget_dict_new_str" => Some((vec![LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))))),
+        "gorget_map_put" => Some((vec![LirType::Ptr, LirType::Ptr, LirType::Ptr], LirType::Void)),
+        "gorget_map_get" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Ptr)),
+        "gorget_map_remove" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Bool)),
+        "gorget_map_contains" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Bool)),
+        "gorget_map_len" => Some((vec![LirType::Ptr], LirType::I64)),
+        "gorget_map_is_empty" => Some((vec![LirType::Ptr], LirType::Bool)),
+        "gorget_map_clear" | "gorget_map_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_map_clone" => Some((vec![LirType::Ptr], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))))),
+        "gorget_map_keys" | "gorget_map_values" | "gorget_map_items" => Some((vec![LirType::Ptr], arr_ty())),
+        // Set methods
+        "gorget_set_new" | "gorget_ordered_set_new" => Some((vec![LirType::I64], LirType::Struct(sr.lookup("GorgetSet").unwrap_or(StructId(0))))),
+        "gorget_set_new_str" | "gorget_ordered_set_new_str" => Some((vec![], LirType::Struct(sr.lookup("GorgetSet").unwrap_or(StructId(0))))),
+        "gorget_set_add" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
+        "gorget_set_contains" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Bool)),
+        "gorget_set_remove" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Bool)),
+        "gorget_set_len" => Some((vec![LirType::Ptr], LirType::I64)),
+        "gorget_set_is_empty" => Some((vec![LirType::Ptr], LirType::Bool)),
+        "gorget_set_clear" | "gorget_set_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_set_clone" => Some((vec![LirType::Ptr], LirType::Struct(sr.lookup("GorgetSet").unwrap_or(StructId(0))))),
+        "gorget_set_to_array" => Some((vec![LirType::Ptr], arr_ty())),
+        // Heap methods
+        "gorget_heap_new" => Some((vec![LirType::I64], LirType::Ptr)),
+        "gorget_heap_push" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
+        "gorget_heap_pop" | "gorget_heap_peek" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        "gorget_heap_len" => Some((vec![LirType::Ptr], LirType::I64)),
+        "gorget_heap_free" => Some((vec![LirType::Ptr], LirType::Void)),
+
+        // Mutex / Guard methods
+        "gorget_mutex_new" => Some((vec![LirType::I64, LirType::Ptr], LirType::Ptr)),
+        "gorget_mutex_lock" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        "gorget_mutex_lock_to" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
+        "gorget_mutex_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_guard_release" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_guard_get" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        "gorget_guard_set" => Some((vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Void)),
+        "gorget_guard_get_ptr" => Some((vec![LirType::Ptr], LirType::Ptr)),
+
+        // Shared methods
+        "gorget_shared_new" => Some((vec![LirType::I64, LirType::Ptr], LirType::Ptr)),
+        "gorget_shared_clone" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        "gorget_shared_drop" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_shared_get" | "gorget_shared_get_ptr" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        "gorget_shared_strong_count" => Some((vec![LirType::Ptr], LirType::I64)),
+        "gorget_shared_downgrade" => Some((vec![LirType::Ptr], LirType::Ptr)),
+
+        // Weak methods
+        "gorget_weak_clone" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        "gorget_weak_drop" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_weak_upgrade" => Some((vec![LirType::Ptr], LirType::I64)),
+
+        // Channel methods
+        "gorget_channel_new" => Some((vec![LirType::I64, LirType::I64], LirType::Ptr)),
+        "gorget_channel_send" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
+        "gorget_channel_recv" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
+        "gorget_channel_close" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_channel_len" | "gorget_channel_capacity" => Some((vec![LirType::Ptr], LirType::I64)),
+        "gorget_channel_is_closed" => Some((vec![LirType::Ptr], LirType::Bool)),
+        "gorget_channel_retain" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        "gorget_channel_release" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_channel_free" => Some((vec![LirType::Ptr], LirType::Void)),
+
+        // RWLock / ReadGuard / WriteGuard methods
+        "gorget_rwlock_new" => Some((vec![LirType::I64, LirType::Ptr], LirType::Ptr)),
+        "gorget_rwlock_read" | "gorget_rwlock_write" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        "gorget_rwlock_read_to" | "gorget_rwlock_write_to" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
+        "gorget_rwlock_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_read_guard_get" | "gorget_read_guard_get_ptr" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        "gorget_read_guard_release" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_write_guard_get" | "gorget_write_guard_get_ptr" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        "gorget_write_guard_set" => Some((vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Void)),
+        "gorget_write_guard_release" => Some((vec![LirType::Ptr], LirType::Void)),
+
+        // Allocator push/pop stubs
+        "__gorget_push_allocator" => Some((vec![LirType::Ptr], LirType::Void)),
+        "__gorget_pop_allocator" => Some((vec![], LirType::Void)),
+
+        // chr/ord
+        "gorget_char_chr" => Some((vec![LirType::I64], s())),
+        "gorget_str_ord" => Some((vec![s()], LirType::I64)),
+        // Conversion helpers
+        "gorget_int_to_str" => Some((vec![LirType::I64], LirType::Ptr)),
+        "gorget_float_to_str" => Some((vec![LirType::F64], LirType::Ptr)),
+        "gorget_bool_to_str" => {
+            Some((vec![LirType::Bool], LirType::Ptr))
+        }
+        "gorget_codepoint_to_utf8" => Some((vec![LirType::I64], LirType::Ptr)),
+        "gorget_int_to_float" => Some((vec![LirType::I64], LirType::F64)),
+        // I/O
+        "gorget_read_file" => Some((vec![LirType::Ptr], g())),
+        "gorget_write_file" | "gorget_append_file" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
+        "gorget_file_exists" | "gorget_is_dir" => Some((vec![LirType::Ptr], LirType::Bool)),
+        // Math (integer)
+        "gorget_abs" => Some((vec![LirType::I64], LirType::I64)),
+        "gorget_min" | "gorget_max" => Some((vec![LirType::I64, LirType::I64], LirType::I64)),
+        // Math (float)
+        "gorget_fabs" => Some((vec![LirType::F64], LirType::F64)),
+        "gorget_fmin" | "gorget_fmax" => Some((vec![LirType::F64, LirType::F64], LirType::F64)),
+        "gorget_sqrt" | "gorget_floor" | "gorget_ceil" | "gorget_round"
+        | "gorget_log" | "gorget_log2" | "gorget_log10"
+        | "gorget_sin" | "gorget_cos" | "gorget_tan"
+        | "gorget_asin" | "gorget_acos" | "gorget_atan" => {
+            Some((vec![LirType::F64], LirType::F64))
+        }
+        "gorget_pow" | "gorget_atan2" => Some((vec![LirType::F64, LirType::F64], LirType::F64)),
+        // Random
+        "gorget_rand" => Some((vec![], LirType::I64)),
+        "gorget_rand_range" => Some((vec![LirType::I64, LirType::I64], LirType::I64)),
+        "gorget_seed" => Some((vec![LirType::I64], LirType::Void)),
+        // Time
+        "gorget_time" | "gorget_time_ms" => Some((vec![], LirType::I64)),
+        "gorget_sleep_ms" | "gorget_reactor_sleep_ms" => Some((vec![LirType::I64], LirType::Void)),
+        "gorget_format_time" => Some((vec![LirType::I64, LirType::Ptr], LirType::Ptr)),
+        "gorget_parse_time" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::I64)),
+
+        // Barrier
+        "gorget_barrier_new" => Some((vec![LirType::I64], LirType::Ptr)),
+        "gorget_barrier_wait" | "gorget_barrier_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        // CondVar
+        "gorget_condvar_new" => Some((vec![], LirType::Ptr)),
+        "gorget_condvar_notify_one" | "gorget_condvar_notify_all" | "gorget_condvar_free" => {
+            Some((vec![LirType::Ptr], LirType::Void))
+        }
+        "gorget_condvar_wait_guard" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
+        // AtomicInt
+        "gorget_atomic_int_new" => Some((vec![LirType::I64], LirType::Ptr)),
+        "gorget_atomic_int_load" => Some((vec![LirType::Ptr], LirType::I64)),
+        "gorget_atomic_int_store" => Some((vec![LirType::Ptr, LirType::I64], LirType::Void)),
+        "gorget_atomic_int_add" | "gorget_atomic_int_sub" => Some((vec![LirType::Ptr, LirType::I64], LirType::I64)),
+        "gorget_atomic_int_compare_exchange" => Some((vec![LirType::Ptr, LirType::I64, LirType::I64], LirType::Bool)),
+        "gorget_atomic_int_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        // AtomicBool
+        "gorget_atomic_bool_new" => Some((vec![LirType::Bool], LirType::Ptr)),
+        "gorget_atomic_bool_load" => Some((vec![LirType::Ptr], LirType::Bool)),
+        "gorget_atomic_bool_store" => Some((vec![LirType::Ptr, LirType::Bool], LirType::Void)),
+        "gorget_atomic_bool_swap" => Some((vec![LirType::Ptr, LirType::Bool], LirType::Bool)),
+        "gorget_atomic_bool_compare_exchange" => Some((vec![LirType::Ptr, LirType::Bool, LirType::Bool], LirType::Bool)),
+        "gorget_atomic_bool_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        // Process
+        "gorget_process_spawn" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Ptr)),
+        "gorget_process_wait" | "gorget_process_pid" => Some((vec![LirType::Ptr], LirType::I64)),
+        "gorget_process_kill" | "gorget_process_close_stdin" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_process_write_stdin" => Some((vec![LirType::Ptr, s()], LirType::Void)),
+        "gorget_process_read_stdout" | "gorget_process_read_stderr" => Some((vec![LirType::Ptr], g())),
 
         // Panic / abort functions (void return)
         "gorget_panic" => Some((vec![LirType::Ptr], LirType::Void)),
@@ -1808,59 +3647,470 @@ fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<(Vec<LirType>, 
 /// E.g., `Vector__Str__push` → `gorget_array_push`,
 ///       `Dict__Str__int64_t__put` → `gorget_map_put`,
 ///       `GorgetString__to_upper` → `gorget_str_to_upper`.
+/// Returns true if `s` is a known C type name (indicating the "method" part of a
+/// monomorphized name is actually a type parameter, not a method name).
+fn is_type_name(s: &str) -> bool {
+    matches!(s, "int64_t" | "int32_t" | "int16_t" | "int8_t"
+        | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t"
+        | "double" | "float" | "bool" | "Str" | "GorgetString"
+        | "GorgetArray" | "GorgetMap" | "GorgetSet" | "void"
+        | "T" | "U" | "V")
+}
+
+/// Returns true if the GIR function name refers to a collection or concurrency
+/// method whose first argument (self) should be passed by pointer (GlobalAddr)
+/// rather than by value (GlobalAddr+Load). These are mutating methods on
+/// Vector, Dict, Set, HashMap, HashSet, Heap, Mutex, RWLock, etc.
+fn is_self_by_ptr_method(name: &str) -> bool {
+    // Collections and guards store their data inline (as struct values), so passing
+    // by pointer (GlobalAddr without Load) gives a pointer to the struct — correct
+    // for mutating methods.
+    //
+    // Mutex and RWLock are already POINTER types (GorgetMutex*, GorgetRWLock*),
+    // so the global holds a pointer value. Passing by value (GlobalAddr+Load) gives
+    // the pointer itself, which is what the runtime functions expect. Do NOT include
+    // Mutex__ or RWLock__ here — they should be passed by value.
+    //
+    // Guard/ReadGuard/WriteGuard ARE structs (gorget_guard_t etc.), so they need
+    // by-pointer passing for their mutating methods (get, set, drop/release).
+    name.starts_with("Vector__")
+        || name.starts_with("GorgetArray__")
+        || name.starts_with("Dict__")
+        || name.starts_with("HashMap__")
+        || name.starts_with("GorgetMap__")
+        || name.starts_with("Set__")
+        || name.starts_with("HashSet__")
+        || name.starts_with("GorgetSet__")
+        || name.starts_with("Heap__")
+        || name.starts_with("Guard__")
+        || name.starts_with("ReadGuard__")
+        || name.starts_with("WriteGuard__")
+        || name.starts_with("GorgetString__")
+        || name.starts_with("Str__")
+        || name.starts_with("Deque__")
+}
+
 fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
     // Vector__T__method → gorget_array_method
     // GorgetArray__method → gorget_array_method  (non-generic array calls)
+    // Higher-order methods (filter, map, fold, any, all, each, reduce, flat_map, find, find_index)
+    // are NOT runtime functions — they are generated inline by the c_lir backend.
+    // Keep them as their original monomorphized names so the backend can detect and generate them.
     if name.starts_with("Vector__") || name.starts_with("GorgetArray__") {
         let method = name.rsplit("__").next()?;
-        return Some(format!("gorget_array_{method}"));
+        // Guard: if the "method" is actually a type name (int64_t, double, etc.),
+        // this is a constructor call like Vector__int64_t(cap), not a method call.
+        // Keep the original name — the c_lir backend handles these constructors specially.
+        if is_type_name(method) {
+            return None;
+        }
+        match method {
+            "filter" | "map" | "flat_map" | "fold" | "reduce" | "any" | "all"
+            | "each" | "find" | "find_index" | "sorted" | "sort" | "unique" | "count" => return None,
+            // Vector.get() returns Option[T] — use safe (non-panicking) get.
+            "get" => return Some("gorget_array_safe_get".into()),
+            // Vector.pop() returns Option[T] — use safe (non-panicking) pop.
+            "pop" => return Some("gorget_array_safe_pop".into()),
+            _ => return Some(format!("gorget_array_{method}")),
+        }
     }
-    // Dict__K__V__method → gorget_map_method
-    // GorgetMap__method → gorget_map_method
+    // Dict__K__V__method → gorget_dict_new for "new", gorget_map_* for all others
+    // HashMap__K__V__method / GorgetMap__method → gorget_map_method (unordered)
+    // Higher-order methods (filter, fold, each, any, all, map) and non-runtime methods
+    // (update, get_or, get_or_put) keep their monomorphized names for inline codegen.
     if name.starts_with("Dict__") || name.starts_with("HashMap__") || name.starts_with("GorgetMap__") {
         let method = name.rsplit("__").next()?;
-        return Some(format!("gorget_map_{method}"));
+        match method {
+            "filter" | "fold" | "each" | "any" | "all" | "map"
+            | "update" | "get_or" | "get_or_put" => return None,
+            // Dict.new() needs gorget_dict_new (ordered); all other methods use gorget_map_*
+            "new" if name.starts_with("Dict__") => return Some("gorget_dict_new".into()),
+            "has" => return Some("gorget_map_contains".into()),
+            "set" => return Some("gorget_map_put".into()),
+            _ => return Some(format!("gorget_map_{method}")),
+        }
     }
     // Set__T__method → gorget_set_method
     // GorgetSet__method → gorget_set_method
+    // Higher-order methods and non-runtime set operations keep monomorphized names.
     if name.starts_with("Set__") || name.starts_with("HashSet__") || name.starts_with("GorgetSet__") {
         let method = name.rsplit("__").next()?;
-        return Some(format!("gorget_set_{method}"));
+        match method {
+            "filter" | "fold" | "each" | "any" | "all" | "map"
+            | "is_subset" | "is_superset"
+            | "union" | "intersection" | "difference" | "symmetric_difference" => return None,
+            "has" => return Some("gorget_set_contains".into()),
+            // Set.new() needs gorget_ordered_set_new (ordered); HashSet uses unordered.
+            "new" if name.starts_with("Set__") => return Some("gorget_ordered_set_new".into()),
+            "new_str" if name.starts_with("Set__") => return Some("gorget_ordered_set_new_str".into()),
+            _ => return Some(format!("gorget_set_{method}")),
+        }
     }
     // GorgetString__method → gorget_str_method (for string methods)
     if name.starts_with("GorgetString__") {
         let method = name.strip_prefix("GorgetString__")?;
         return Some(format!("gorget_str_{method}"));
     }
-    // Str__method → gorget_str_method
+    // Str__method → gorget_str_method (with fixups for name mismatches)
     if name.starts_with("Str__") {
         let method = name.strip_prefix("Str__")?;
-        return Some(format!("gorget_str_{method}"));
+        let mapped = format!("gorget_str_{method}");
+        // Fixup: these GIR method names don't match runtime function names.
+        return Some(match mapped.as_str() {
+            "gorget_str_substring" => "gorget_str_slice".into(),
+            _ => mapped,
+        });
     }
-    // Option__T__unwrap → __option_unwrap → gorget_option_unwrap
-    if name == "__option_unwrap" || name.contains("Option__") && name.ends_with("__unwrap") {
-        return Some("gorget_option_unwrap".to_string());
-    }
+    // Option/Result helpers are handled inline by the c_lir backend — don't map them.
     // Heap__T__method → gorget_heap_method
     if name.starts_with("Heap__") {
         let method = name.rsplit("__").next()?;
         return Some(format!("gorget_heap_{method}"));
     }
-    // Bare stdlib helpers → gorget_ prefixed runtime functions
-    match name {
-        "time_ms" => return Some("gorget_time_ms".to_string()),
-        "parse_int" => return Some("gorget_parse_int".to_string()),
-        "async_sleep" => return Some("gorget_sleep_ms".to_string()),
-        _ => {}
+    // Mutex__T__method → gorget_mutex_method  (new/lock/free)
+    // Guard__T__method → gorget_guard_method  (get/set/drop/get_ptr/release)
+    if name.starts_with("Mutex__") {
+        let method = name.rsplit("__").next()?;
+        return Some(format!("gorget_mutex_{method}"));
     }
-    None
+    if name.starts_with("Guard__") {
+        let method = name.rsplit("__").next()?;
+        // Guard__T__drop → gorget_guard_release (RAII drop = release the mutex)
+        if method == "drop" {
+            return Some("gorget_guard_release".into());
+        }
+        return Some(format!("gorget_guard_{method}"));
+    }
+    // Shared__T and Weak__T methods are NOT mapped — they have different calling
+    // conventions (monomorphized wrappers pass/return typed values, runtime uses void*).
+    // Inline wrappers are emitted by the c_lir backend.
+    if name.starts_with("Shared__") || name.starts_with("Weak__") {
+        return None;
+    }
+    // Channel__T methods are NOT mapped — they have different calling conventions
+    // (monomorphized wrappers pass values, runtime uses void*). Inline wrappers
+    // are emitted by the c_lir backend.
+    if name.starts_with("Channel__") {
+        return None;
+    }
+    // RWLock__T__method → gorget_rwlock_method  (new/read/write/free)
+    if name.starts_with("RWLock__") {
+        let method = name.rsplit("__").next()?;
+        return Some(format!("gorget_rwlock_{method}"));
+    }
+    // ReadGuard__T__method → gorget_read_guard_method  (get/get_ptr/drop)
+    if name.starts_with("ReadGuard__") {
+        let method = name.rsplit("__").next()?;
+        if method == "drop" {
+            return Some("gorget_read_guard_release".into());
+        }
+        return Some(format!("gorget_read_guard_{method}"));
+    }
+    // WriteGuard__T__method → gorget_write_guard_method  (get/set/get_ptr/drop)
+    if name.starts_with("WriteGuard__") {
+        let method = name.rsplit("__").next()?;
+        if method == "drop" {
+            return Some("gorget_write_guard_release".into());
+        }
+        return Some(format!("gorget_write_guard_{method}"));
+    }
+    // Bare stdlib helpers → gorget_ prefixed runtime functions.
+    // Bare stdlib helpers → gorget_ prefixed runtime functions.
+    // This mirrors map_stdlib_name() from the old C backend (src/backend/c/mod.rs).
+    let mapped = match name {
+        // Conversion
+        "int_to_str" => "gorget_int_to_str",
+        "float_to_str" => "gorget_float_to_str",
+        "bool_to_str" => "gorget_bool_to_str",
+        "int_to_float" => "gorget_int_to_float",
+        "ord" => "gorget_str_ord",
+        "chr" => "gorget_char_chr",
+        "parse_int" => "gorget_parse_int",
+        "parse_float" => "gorget_parse_float",
+        "print_no_newline" => "gorget_print_no_newline",
+        "codepoint_to_utf8" => "gorget_codepoint_to_utf8",
+        // File I/O
+        "read_file" => "gorget_read_file",
+        "write_file" => "gorget_write_file",
+        "append_file" => "gorget_append_file",
+        "file_exists" => "gorget_file_exists",
+        "delete_file" => "gorget_delete_file",
+        "file_size" => "gorget_file_size",
+        "is_dir" => "gorget_is_dir",
+        // Filesystem
+        "mkdir" => "gorget_mkdir",
+        "rmdir" => "gorget_rmdir",
+        "copy_file" => "gorget_copy_file",
+        "readdir" => "gorget_readdir",
+        "getcwd" => "gorget_getcwd",
+        // Path functions
+        "path_parent" => "gorget_path_parent",
+        "path_basename" => "gorget_path_basename",
+        "path_extension" => "gorget_path_extension",
+        "path_stem" => "gorget_path_stem",
+        "path_join" => "gorget_path_join",
+        "path_normalize" => "gorget_path_normalize",
+        "path_absolute" => "gorget_path_absolute",
+        "rename" => "gorget_rename",
+        // I/O
+        "readline" => "gorget_readline",
+        "input" => "gorget_input",
+        "getchar" => "gorget_getchar",
+        "term_cols" => "gorget_term_cols",
+        "term_rows" => "gorget_term_rows",
+        // CLI / process
+        "args" => "gorget_args",
+        "exec" => "gorget_exec",
+        "exec_output" => "gorget_exec_output",
+        "process_spawn" => "gorget_process_spawn",
+        "getpid" => "gorget_getpid",
+        // Process methods
+        "Process__wait" => "gorget_process_wait",
+        "Process__kill" => "gorget_process_kill",
+        "Process__pid" => "gorget_process_pid",
+        "Process__write_stdin" => "gorget_process_write_stdin",
+        "Process__close_stdin" => "gorget_process_close_stdin",
+        "Process__read_stdout" => "gorget_process_read_stdout",
+        "Process__read_stderr" => "gorget_process_read_stderr",
+        // Signal functions
+        "signal_trap" => "gorget_signal_trap",
+        "signal_check" => "gorget_signal_check",
+        "signal_wait" => "gorget_signal_wait",
+        "signal_ignore" => "gorget_signal_ignore",
+        "signal_reset" => "gorget_signal_reset",
+        "signal_send" => "gorget_signal_send",
+        // AtomicInt methods
+        "AtomicInt__new" => "gorget_atomic_int_new",
+        "AtomicInt__load" => "gorget_atomic_int_load",
+        "AtomicInt__store" => "gorget_atomic_int_store",
+        "AtomicInt__add" => "gorget_atomic_int_add",
+        "AtomicInt__sub" => "gorget_atomic_int_sub",
+        "AtomicInt__compare_exchange" => "gorget_atomic_int_compare_exchange",
+        "AtomicInt__free" => "gorget_atomic_int_free",
+        // AtomicBool methods
+        "AtomicBool__new" => "gorget_atomic_bool_new",
+        "AtomicBool__load" => "gorget_atomic_bool_load",
+        "AtomicBool__store" => "gorget_atomic_bool_store",
+        "AtomicBool__swap" => "gorget_atomic_bool_swap",
+        "AtomicBool__compare_exchange" => "gorget_atomic_bool_compare_exchange",
+        "AtomicBool__free" => "gorget_atomic_bool_free",
+        // Barrier methods
+        "Barrier__wait" => "gorget_barrier_wait",
+        // CondVar methods
+        "CondVar__notify_one" => "gorget_condvar_notify_one",
+        "CondVar__notify_all" => "gorget_condvar_notify_all",
+        "CondVar__wait" => "gorget_condvar_wait_guard",
+        // WaitGroup methods
+        "WaitGroup__new" => "gorget_waitgroup_new",
+        "WaitGroup__add" => "gorget_waitgroup_add",
+        "WaitGroup__done" => "gorget_waitgroup_done",
+        "WaitGroup__wait" => "gorget_waitgroup_wait",
+        "WaitGroup__free" => "gorget_waitgroup_free",
+        // Semaphore methods
+        "Semaphore__new" => "gorget_semaphore_new",
+        "Semaphore__acquire" => "gorget_semaphore_acquire",
+        "Semaphore__release" => "gorget_semaphore_release",
+        "Semaphore__try_acquire" => "gorget_semaphore_try_acquire",
+        "Semaphore__free" => "gorget_semaphore_free",
+        // OnceFlag methods
+        "OnceFlag__new" => "gorget_onceflag_new",
+        "OnceFlag__do_once" => "gorget_onceflag_do_once",
+        "OnceFlag__is_done" => "gorget_onceflag_is_done",
+        // std.thread
+        "current_thread_id" => "gorget_current_thread_id",
+        // Environment
+        "getenv" => "gorget_getenv",
+        "setenv" => "gorget_setenv",
+        "platform" => "gorget_platform",
+        // Time
+        "time" => "gorget_time",
+        "time_ms" => "gorget_time_ms",
+        "format_time" => "gorget_format_time",
+        "parse_time" => "gorget_parse_time",
+        "sleep_ms" => "gorget_sleep_ms",
+        "async_sleep" => "gorget_reactor_sleep_ms",
+        // Random
+        "rand" => "gorget_rand",
+        "rand_range" => "gorget_rand_range",
+        "seed" => "gorget_seed",
+        // Math
+        "abs" => "gorget_abs",
+        "min" => "gorget_min",
+        "max" => "gorget_max",
+        "sqrt" => "gorget_sqrt",
+        "floor" => "gorget_floor",
+        "ceil" => "gorget_ceil",
+        "round" => "gorget_round",
+        "log" => "gorget_log",
+        "log2" => "gorget_log2",
+        "log10" => "gorget_log10",
+        "pow" => "gorget_pow",
+        "sin" => "gorget_sin",
+        "cos" => "gorget_cos",
+        "tan" => "gorget_tan",
+        "asin" => "gorget_asin",
+        "acos" => "gorget_acos",
+        "atan" => "gorget_atan",
+        "atan2" => "gorget_atan2",
+        // Crypto
+        "crypto_sha256" => "gorget_crypto_sha256",
+        "crypto_sha1" => "gorget_crypto_sha1",
+        "crypto_hmac" => "gorget_crypto_hmac",
+        "crypto_random_bytes" => "gorget_crypto_random_bytes",
+        "crypto_aes_ctr_new" => "gorget_crypto_aes_ctr_new",
+        "crypto_bn_from_bytes" => "gorget_crypto_bn_from_bytes",
+        "crypto_bn_to_bytes" => "gorget_crypto_bn_to_bytes",
+        "crypto_bn_mod_exp" => "gorget_crypto_bn_mod_exp",
+        "crypto_rsa_load_public" => "gorget_crypto_rsa_load_public",
+        "crypto_rsa_verify" => "gorget_crypto_rsa_verify",
+        "crypto_ed25519_keygen" => "gorget_crypto_ed25519_keygen",
+        "crypto_ed25519_sign" => "gorget_crypto_ed25519_sign",
+        "crypto_ed25519_verify" => "gorget_crypto_ed25519_verify",
+        "crypto_x25519_keygen" => "gorget_crypto_x25519_keygen",
+        "crypto_x25519_keypair" => "gorget_crypto_x25519_keypair",
+        "crypto_x25519_shared" => "gorget_crypto_x25519_shared",
+        "crypto_x25519_shared_secret" => "gorget_crypto_x25519_shared_secret",
+        "crypto_x25519_dh" => "gorget_crypto_x25519_dh",
+        "crypto_hkdf_sha256" => "gorget_crypto_hkdf_sha256",
+        "crypto_aes_gcm_encrypt" => "gorget_crypto_aes_gcm_encrypt",
+        "crypto_aes_gcm_decrypt" => "gorget_crypto_aes_gcm_decrypt",
+        "X25519KeyPair__public_key" => "gorget_crypto_x25519_public",
+        "X25519KeyPair__private_key" => "gorget_crypto_x25519_private",
+        "CipherContext__encrypt" => "gorget_crypto_aes_ctr_encrypt",
+        "CipherContext__decrypt" => "gorget_crypto_aes_ctr_decrypt",
+        // Regex
+        "regex_compile" | "regex_compile_with" => "gorget_regex_compile",
+        "regex_is_match" => "gorget_regex_is_match_pat",
+        "regex_find" => "gorget_regex_find_pat",
+        "regex_match" => "gorget_regex_match",
+        "regex_find_all" => "gorget_regex_find_all",
+        "regex_replace" => "gorget_regex_replace_pat",
+        "Regex__is_match" => "gorget_regex_is_match",
+        "Regex__find" => "gorget_regex_find",
+        "Regex__find_at" => "gorget_regex_find_at",
+        "Regex__find_all" => "gorget_regex_find_all",
+        "Regex__replace" => "gorget_regex_replace",
+        "Regex__split" | "Regex__splitn" => "gorget_regex_split",
+        "Regex__fullmatch" => "gorget_regex_fullmatch",
+        "Regex__groups" => "gorget_regex_groups",
+        "Regex__free" => "gorget_regex_free",
+        "Match__group" => "gorget_regex_match_group",
+        "Match__group_by_name" => "gorget_regex_match_group_by_name",
+        // Socket
+        "socket_connect" => "gorget_socket_connect",
+        "socket_listen" => "gorget_socket_listen",
+        "tls_connect" => "gorget_tls_connect",
+        "tls_server_bind" => "gorget_tls_server_bind",
+        "TlsServerSocket__accept" => "gorget_tls_server_accept",
+        "TlsServerSocket__close" => "gorget_tls_server_close",
+        "TlsSocket__set_timeout" => "gorget_tls_set_timeout",
+        "udp_bind" => "gorget_udp_bind",
+        // Bytes / Encoding
+        "bytes_from_str" => "gorget_bytes_from_str",
+        "bytes_to_str" => "gorget_bytes_to_str",
+        "bytes_from_hex" => "gorget_bytes_from_hex",
+        "bytes_to_hex" => "gorget_bytes_to_hex",
+        "bytes_concat" => "gorget_bytes_concat",
+        "bytes_slice" => "gorget_bytes_slice",
+        "bytes_write_u16_be" => "gorget_bytes_write_u16_be",
+        "bytes_read_u16_be" => "gorget_bytes_read_u16_be",
+        "bytes_write_u32_be" => "gorget_bytes_write_u32_be",
+        "bytes_read_u32_be" => "gorget_bytes_read_u32_be",
+        "bytes_write_u16_le" => "gorget_bytes_write_u16_le",
+        "bytes_read_u16_le" => "gorget_bytes_read_u16_le",
+        "bytes_write_u32_le" => "gorget_bytes_write_u32_le",
+        "bytes_read_u32_le" => "gorget_bytes_read_u32_le",
+        "base64_encode" => "gorget_base64_encode",
+        "base64_decode" => "gorget_base64_decode",
+        "hex_encode" => "gorget_hex_encode",
+        "hex_decode" => "gorget_hex_decode",
+        "url_encode" => "gorget_url_encode",
+        "url_decode" => "gorget_url_decode",
+        // Allocator methods
+        "Arena__bytes_used" => "gorget_arena_bytes_used",
+        "Arena__checkpoint" => "gorget_arena_checkpoint",
+        "Arena__restore" => "gorget_arena_restore",
+        "Arena__reset" => "gorget_arena_reset",
+        "Arena__destroy" => "gorget_arena_destroy",
+        "TrackingAllocator__alloc_count" => "gorget_tracking_alloc_count",
+        "TrackingAllocator__free_count" => "gorget_tracking_free_count",
+        "TrackingAllocator__bytes_allocated" => "gorget_tracking_bytes_allocated",
+        "TrackingAllocator__bytes_freed" => "gorget_tracking_bytes_freed",
+        "TrackingAllocator__current_bytes" => "gorget_tracking_current_bytes",
+        "TrackingAllocator__peak_bytes" => "gorget_tracking_peak_bytes",
+        "TrackingAllocator__realloc_count" => "gorget_tracking_realloc_count",
+        "TrackingAllocator__reset" => "gorget_tracking_reset",
+        "TrackingAllocator__report" => "gorget_tracking_report",
+        "TrackingAllocator__destroy" => "gorget_tracking_destroy",
+        "PoolAllocator__used_blocks" => "gorget_pool_used_blocks",
+        "PoolAllocator__free_blocks" => "gorget_pool_free_blocks",
+        "PoolAllocator__total_blocks" => "gorget_pool_total_blocks",
+        "PoolAllocator__block_size" => "gorget_pool_block_size",
+        "PoolAllocator__reset" => "gorget_pool_reset",
+        "PoolAllocator__destroy" => "gorget_pool_destroy",
+        "TlsfAllocator__bytes_used" => "gorget_tlsf_bytes_used",
+        "TlsfAllocator__peak_bytes" => "gorget_tlsf_peak_bytes",
+        "TlsfAllocator__pool_size" => "gorget_tlsf_pool_size",
+        "TlsfAllocator__reset" => "gorget_tlsf_reset",
+        "TlsfAllocator__destroy" => "gorget_tlsf_destroy",
+        "FixedBufferAllocator__bytes_used" => "gorget_fba_bytes_used",
+        "FixedBufferAllocator__capacity" => "gorget_fba_capacity",
+        "FixedBufferAllocator__reset" => "gorget_fba_reset",
+        "FixedBufferAllocator__destroy" => "gorget_fba_destroy",
+        "FallbackAllocator__primary_count" => "gorget_fallback_primary_count",
+        "FallbackAllocator__fallback_count" => "gorget_fallback_fallback_count",
+        "FallbackAllocator__destroy" => "gorget_fallback_destroy",
+        // UdpSocket methods
+        "UdpSocket__sendto" => "gorget_udp_sendto",
+        "UdpSocket__recvfrom" => "gorget_udp_recvfrom",
+        "UdpSocket__join_multicast" => "gorget_udp_join_multicast",
+        "UdpSocket__poll" => "gorget_udp_poll",
+        "UdpSocket__set_nonblocking" => "gorget_udp_set_nonblocking",
+        "UdpSocket__leave_multicast" => "gorget_udp_leave_multicast",
+        "UdpSocket__set_multicast_loopback" => "gorget_udp_set_multicast_loopback",
+        "UdpSocket__local_addr" => "gorget_udp_local_addr",
+        "UdpSocket__close" => "gorget_udp_close",
+        // ServerSocket
+        "server_socket_bind" => "gorget_server_socket_bind",
+        "ServerSocket__accept" => "gorget_server_socket_accept",
+        "ServerSocket__close" => "gorget_server_socket_close",
+        // Socket methods
+        "Socket__read" => "gorget_socket_read",
+        "Socket__read_exact" => "gorget_socket_read_exact",
+        "Socket__write" => "gorget_socket_write",
+        "Socket__write_str" => "gorget_socket_write_str",
+        "Socket__read_line" => "gorget_socket_read_line",
+        "Socket__set_timeout" => "gorget_socket_set_timeout",
+        "Socket__close" => "gorget_socket_close",
+        // TlsSocket methods
+        "TlsSocket__read" => "gorget_tls_read",
+        "TlsSocket__read_exact" => "gorget_tls_read_exact",
+        "TlsSocket__write" => "gorget_tls_write",
+        "TlsSocket__write_str" => "gorget_tls_write_str",
+        "TlsSocket__read_line" => "gorget_tls_read_line",
+        "TlsSocket__close" => "gorget_tls_close",
+        // File methods
+        "File__create" => "gorget_file_create",
+        "File__open" => "gorget_file_open",
+        "File__write" => "gorget_file_write_handle",
+        "File__read_all" => "gorget_file_read_all",
+        "File__close" => "gorget_file_close",
+        // Str hash
+        "Str__hash" => "gorget_str_hash",
+        // Bare method names emitted by GIR without type prefix
+        // NOTE: "len" is handled via type-aware dispatch in the Call handler.
+        "chars" => "gorget_str_chars",
+        "bytes" => "gorget_str_bytes",
+        _ => return None,
+    };
+    Some(mapped.to_string())
 }
 
 /// Extract the element sizeof from a monomorphized collection constructor name.
 /// E.g., `Vector__int64_t__new` → sizeof(int64_t) = 8.
 /// Returns the size in bytes, or None if the name doesn't match.
-fn elem_size_from_monomorphized(name: &str) -> Option<usize> {
-    // Extract the type portion between the collection prefix and `__new`.
+fn elem_size_from_monomorphized(name: &str, structs: &[StructDef]) -> Option<usize> {
+    // Extract the type portion between the collection prefix and the method name.
     let type_str = if let Some(rest) = name.strip_prefix("Vector__") {
         rest.strip_suffix("__new")?
     } else if let Some(rest) = name.strip_prefix("Set__") {
@@ -1873,12 +4123,29 @@ fn elem_size_from_monomorphized(name: &str) -> Option<usize> {
         // Dict/HashMap constructors are handled by dict_elem_sizes_from_monomorphized.
         return None;
     };
-    Some(c_sizeof(type_str))
+    Some(c_sizeof_with_structs(type_str, structs))
+}
+
+/// Extract the inner-type sizeof from a monomorphized concurrency constructor or
+/// guard set call. Works for Mutex__T__new, Shared__T__new, RWLock__T__new,
+/// Channel__T__new, Guard__T__set, WriteGuard__T__set.
+fn concurrency_elem_size(name: &str, structs: &[StructDef]) -> Option<usize> {
+    // Try each prefix; the type sits between the prefix and the __method suffix.
+    for prefix in &["Mutex__", "Shared__", "RWLock__", "Channel__", "Guard__", "WriteGuard__"] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            // Find the last `__method` segment.
+            if let Some(idx) = rest.rfind("__") {
+                let type_str = &rest[..idx];
+                return Some(c_sizeof_with_structs(type_str, structs));
+            }
+        }
+    }
+    None
 }
 
 /// Extract key and value sizeof from a monomorphized Dict constructor name.
 /// E.g., `Dict__Str__int64_t__new` → (sizeof(Str), sizeof(int64_t)) = (16, 8).
-fn dict_elem_sizes_from_monomorphized(name: &str) -> (usize, usize) {
+fn dict_elem_sizes_from_monomorphized(name: &str, structs: &[StructDef]) -> (usize, usize) {
     // Dict__K__V__new or HashMap__K__V__new
     let rest = name.strip_prefix("Dict__")
         .or_else(|| name.strip_prefix("HashMap__"))
@@ -1891,10 +4158,29 @@ fn dict_elem_sizes_from_monomorphized(name: &str) -> (usize, usize) {
         if let Some(idx) = types.find("__") {
             let key = &types[..idx];
             let val = &types[idx + 2..];
-            return (c_sizeof(key), c_sizeof(val));
+            return (c_sizeof_with_structs(key, structs), c_sizeof_with_structs(val, structs));
         }
     }
     (8, 8) // fallback
+}
+
+/// Extract the key type name from a monomorphized Dict/HashMap name.
+/// E.g., `Dict__Str__int64_t__new` → Some("Str").
+fn dict_key_type_from_monomorphized(name: &str) -> Option<String> {
+    let rest = name.strip_prefix("Dict__")
+        .or_else(|| name.strip_prefix("HashMap__"))
+        .and_then(|r| r.strip_suffix("__new"))?;
+    let idx = rest.find("__")?;
+    Some(rest[..idx].to_string())
+}
+
+/// Extract the element type from a monomorphized Set/HashSet name.
+/// E.g., `Set__Str__new` → Some("Str").
+fn set_elem_type_from_monomorphized(name: &str) -> Option<String> {
+    let rest = name.strip_prefix("Set__")
+        .or_else(|| name.strip_prefix("HashSet__"))
+        .and_then(|r| r.strip_suffix("__new"))?;
+    Some(rest.to_string())
 }
 
 /// Return the sizeof of an LIR type in bytes (best-effort for 64-bit targets).
@@ -1911,7 +4197,8 @@ fn lir_type_sizeof(ty: &LirType) -> usize {
 }
 
 /// Map a GIR C type name to its sizeof in bytes.
-fn c_sizeof(type_name: &str) -> usize {
+/// `structs` is used to compute sizes of user-defined struct types.
+fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> usize {
     match type_name {
         "int64_t" | "uint64_t" | "double" => 8,
         "int32_t" | "uint32_t" | "float" => 4,
@@ -1919,26 +4206,172 @@ fn c_sizeof(type_name: &str) -> usize {
         "int8_t" | "uint8_t" | "bool" => 1,
         // Str is a (data_ptr, len) pair — 16 bytes on 64-bit
         "Str" => 16,
-        // GorgetString, GorgetArray, etc. are large structs — use pointer size
-        _ => 8,
+        _ => {
+            // Runtime collection structs: GorgetArray = {data, len, cap, elem_size, alloc} = 40 bytes
+            if type_name.starts_with("Vector__") || type_name == "GorgetArray" {
+                return 40;
+            }
+            // GorgetMap = 13 fields × 8 = 104 bytes (keys, values, states, count, cap, key_size, val_size, alloc, order, order_len, tombstones, hash_fn, eq_fn)
+            if type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") || type_name == "GorgetMap" {
+                return 104;
+            }
+            // GorgetSet aliases GorgetMap (same struct)
+            if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") || type_name == "GorgetSet" {
+                return 104;
+            }
+            // GorgetString = {data, len, cap, alloc} = 32 bytes
+            if type_name == "GorgetString" || type_name == "String" {
+                return 32;
+            }
+            // GorgetClosure / Callable = {fn_ptr, env} = 16 bytes
+            if type_name == "GorgetClosure" || type_name.starts_with("Callable__") || type_name.starts_with("Callable_") {
+                return 16;
+            }
+            // Tuple__T1__T2__... — sum of field sizes with 8-byte alignment per field
+            if let Some(rest) = type_name.strip_prefix("Tuple__") {
+                return c_sizeof_tuple_fields(rest, structs);
+            }
+            // Option__T — tag(4) + padding(4) + payload
+            if let Some(inner) = type_name.strip_prefix("Option__") {
+                let payload = c_sizeof_with_structs(inner, structs);
+                // struct { int32_t tag; <pad to 8>; T payload; }
+                return 8 + std::cmp::max(payload, 8);
+            }
+            // User-defined struct — look up in LIR struct definitions.
+            if let Some(sd) = structs.iter().find(|s| s.name == type_name) {
+                return c_sizeof_struct_from_fields(&sd.fields, structs);
+            }
+            // Pointer/opaque types default to 8
+            8
+        }
     }
 }
 
-fn lower_global_init(init: &ir::GlobalInit) -> LirGlobalInit {
+/// Compute the size of a struct from its LIR field definitions.
+fn c_sizeof_struct_from_fields(fields: &[(String, LirType)], structs: &[StructDef]) -> usize {
+    let mut total = 0usize;
+    for (_name, ty) in fields {
+        let field_sz = c_sizeof_lir_type(ty, structs);
+        let align = std::cmp::min(field_sz, 8);
+        if align > 0 {
+            total = (total + align - 1) / align * align;
+        }
+        total += field_sz;
+    }
+    // Align total to 8 bytes.
+    let align = 8;
+    total = (total + align - 1) / align * align;
+    total
+}
+
+/// Compute sizeof for an LirType.
+fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
+    match ty {
+        LirType::I8 | LirType::U8 | LirType::Bool => 1,
+        LirType::I16 | LirType::U16 => 2,
+        LirType::I32 | LirType::U32 => 4,
+        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr => 8,
+        LirType::F32 => 4,
+        LirType::Struct(sid) => {
+            if let Some(sd) = structs.get(sid.0 as usize) {
+                // For runtime structs whose LIR field list omits hidden C fields
+                // (e.g. the `alloc` pointer in GorgetArray/GorgetMap), use the
+                // authoritative hardcoded size rather than counting LIR fields.
+                let runtime_size = match sd.name.as_str() {
+                    // GorgetArray: {data, len, cap, elem_size, alloc} = 5 × 8 = 40
+                    "GorgetArray" => Some(40usize),
+                    // GorgetMap / GorgetSet: 13 fields × 8 = 104
+                    "GorgetMap" | "GorgetSet" => Some(104usize),
+                    // GorgetString: {data, len, cap, alloc} = 4 × 8 = 32
+                    "GorgetString" => Some(32usize),
+                    // Str: {data, len} = 2 × 8 = 16
+                    "Str" => Some(16usize),
+                    _ => None,
+                };
+                if let Some(sz) = runtime_size {
+                    return sz;
+                }
+                c_sizeof_struct_from_fields(&sd.fields, structs)
+            } else {
+                8
+            }
+        }
+        LirType::Void => 0,
+    }
+}
+
+/// Compute the size of a tuple from its mangled field types.
+/// `Tuple__int64_t__Str` → fields are [int64_t, Str] → 8 + 16 = 24.
+/// Fields are split on `__` but multi-word types like `int64_t` contain `_`
+/// (not `__`), so we split on `__` and rejoin single-underscore segments.
+fn c_sizeof_tuple_fields(fields_str: &str, structs: &[StructDef]) -> usize {
+    let mut total = 0usize;
+    // Split on __ delimiter.  Type names use single _ (int64_t, uint8_t).
+    for part in fields_str.split("__") {
+        if part.is_empty() { continue; }
+        let field_sz = c_sizeof_with_structs(part, structs);
+        // Align each field to its natural alignment (max 8).
+        let align = std::cmp::min(field_sz, 8);
+        if align > 0 {
+            total = (total + align - 1) / align * align;
+        }
+        total += field_sz;
+    }
+    // Align total to 8 bytes (struct padding).
+    let align = 8;
+    total = (total + align - 1) / align * align;
+    total
+}
+
+fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collections::HashMap<String, FuncId>) -> LirGlobalInit {
     match init {
         ir::GlobalInit::Zeroed => LirGlobalInit::Zeroed,
         ir::GlobalInit::Bytes(b) => LirGlobalInit::Bytes(b.clone()),
-        ir::GlobalInit::FnRef(_name) => {
-            // We'd need to look up the FuncId. For now, zeroed.
-            LirGlobalInit::Zeroed
+        ir::GlobalInit::FnRef(name) => {
+            if let Some(fid) = func_index.get(name) {
+                LirGlobalInit::FuncAddr(*fid)
+            } else {
+                LirGlobalInit::Zeroed
+            }
         }
         ir::GlobalInit::Struct { fields, .. } => {
             LirGlobalInit::Struct {
                 struct_id: StructId(0), // placeholder
-                fields: fields.iter().map(|(_, f)| lower_global_init(f)).collect(),
+                fields: fields.iter().map(|(_, f)| lower_global_init(f, func_index)).collect(),
             }
         }
-        ir::GlobalInit::RuntimeCall(_) => LirGlobalInit::Zeroed,
+        ir::GlobalInit::RuntimeCall(expr) => {
+            // Try to parse the expression as a numeric constant.
+            if let Ok(v) = expr.parse::<i64>() {
+                LirGlobalInit::Bytes(v.to_le_bytes().to_vec())
+            } else if let Ok(v) = expr.parse::<f64>() {
+                LirGlobalInit::Bytes(v.to_le_bytes().to_vec())
+            } else {
+                // Complex runtime call — remap function names to runtime equivalents.
+                let mut remapped = expr.clone();
+                if let Some(paren_pos) = remapped.find('(') {
+                    let func_name = &remapped[..paren_pos];
+                    if let Some(mapped) = map_monomorphized_to_runtime(func_name) {
+                        // Concurrency constructors need sizeof + address-of injected:
+                        // Mutex__T__new(val) → gorget_mutex_new(sizeof(T), &(T){val})
+                        if matches!(mapped.as_str(), "gorget_mutex_new" | "gorget_shared_new" | "gorget_rwlock_new") {
+                            let args_str = &remapped[paren_pos + 1..remapped.len() - 1]; // strip parens
+                            let elem_size = concurrency_elem_size(func_name, &[]).unwrap_or(8);
+                            // Use a compound literal with the element type for proper alignment
+                            let elem_type = func_name
+                                .strip_prefix("Mutex__").or_else(|| func_name.strip_prefix("Shared__"))
+                                .or_else(|| func_name.strip_prefix("RWLock__"))
+                                .and_then(|r| r.rsplit_once("__").map(|(t, _)| t))
+                                .unwrap_or("int64_t");
+                            remapped = format!("{mapped}(sizeof({elem_type}), &({elem_type}){{{args_str}}})");
+                        } else {
+                            remapped = format!("{mapped}{}", &remapped[paren_pos..]);
+                        }
+                    }
+                }
+                LirGlobalInit::RuntimeCall(remapped)
+            }
+        }
     }
 }
 
@@ -1946,6 +4379,57 @@ fn lower_global_init(init: &ir::GlobalInit) -> LirGlobalInit {
 pub fn lower_module(gir: &ir::Module) -> LirModule {
     let ctx = LoweringContext::new(gir);
     ctx.lower()
+}
+
+/// Convert a GIR TypeId to its C type name (for spawn metadata).
+fn gir_type_to_c(type_id: gir_types::TypeId, registry: &TypeRegistry) -> String {
+    use gir_types::*;
+    if type_id == BOOL_TYPE { return "bool".into(); }
+    if type_id == I8_TYPE { return "int8_t".into(); }
+    if type_id == I16_TYPE { return "int16_t".into(); }
+    if type_id == I32_TYPE { return "int32_t".into(); }
+    if type_id == I64_TYPE { return "int64_t".into(); }
+    if type_id == U8_TYPE { return "uint8_t".into(); }
+    if type_id == U16_TYPE { return "uint16_t".into(); }
+    if type_id == U32_TYPE { return "uint32_t".into(); }
+    if type_id == U64_TYPE { return "uint64_t".into(); }
+    if type_id == F32_TYPE { return "float".into(); }
+    if type_id == F64_TYPE { return "double".into(); }
+    if type_id == UNIT_TYPE { return "void".into(); }
+    if let Some(gir_type) = registry.get(type_id) {
+        match gir_type {
+            GirType::Ptr(inner) if *inner == U8_TYPE => "const char*".into(),
+            GirType::Ptr(inner) => format!("const {}*", gir_type_to_c(*inner, registry)),
+            GirType::MutPtr(inner) => format!("{}*", gir_type_to_c(*inner, registry)),
+            GirType::Named(name) => {
+                // Map collection instantiations to runtime struct names.
+                if let Some(rt) = collection_runtime_type(name) {
+                    rt.into()
+                } else if is_opaque_pointer_type(name) {
+                    // Opaque types are lowered to Ptr (void*) in LIR.
+                    "void*".into()
+                } else if let Some(rt) = opaque_runtime_type_name(name) {
+                    rt.into()
+                } else {
+                    name.clone()
+                }
+            }
+            GirType::FnPtr { .. } => "void*".into(),
+            _ => format!("int64_t"), // fallback
+        }
+    } else {
+        "int64_t".into()
+    }
+}
+
+/// Convert a GIR TypeId to C type for spawn context fields.
+/// Callable params (FnPtr) become void*; void becomes void*.
+fn spawn_param_c_type(type_id: gir_types::TypeId, registry: &TypeRegistry) -> String {
+    if matches!(registry.get(type_id), Some(GirType::FnPtr { .. })) {
+        return "void*".into();
+    }
+    let c = gir_type_to_c(type_id, registry);
+    if c == "void" { "void*".into() } else { c }
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 /// Build + run through the GIR C backend (normal path).
 /// Uses a `_gir` suffix to avoid colliding with `integration.rs` which
@@ -26,13 +27,46 @@ fn run_gir(fixture_path: &std::path::Path) -> Option<String> {
         return None;
     }
 
-    let run = Command::new(&exe_path).output().ok()?;
+    let run = run_with_timeout(&exe_path, Duration::from_secs(30))?;
     let stdout = String::from_utf8_lossy(&run.stdout).to_string();
 
     let _ = std::fs::remove_file(&exe_path);
     let _ = std::fs::remove_file(&c_path);
 
     Some(stdout)
+}
+
+/// Run an executable with a timeout. Returns None if it times out.
+fn run_with_timeout(exe: &std::path::Path, timeout: Duration) -> Option<std::process::Output> {
+    let mut child = Command::new(exe)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let _id = child.id();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        std::thread::sleep(timeout);
+        let _ = tx.send(());
+    });
+    // Poll: try wait in a loop with small sleeps
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                return child.wait_with_output().ok();
+            }
+            Ok(None) => {
+                if rx.try_recv().is_ok() {
+                    // Timeout reached — kill the process
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 /// Build through LIR→C backend (full pipeline including runtime), run, return stdout.
@@ -52,7 +86,7 @@ fn run_lir(fixture_path: &std::path::Path) -> Option<String> {
         return None;
     }
 
-    let run = Command::new(&exe_path).output().ok()?;
+    let run = run_with_timeout(&exe_path, Duration::from_secs(30))?;
     let stdout = String::from_utf8_lossy(&run.stdout).to_string();
 
     let _ = std::fs::remove_file(&exe_path);
@@ -650,3 +684,34 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_test_cleanup() { ab_test("test_cleanup.gg"); }
 #[test] fn lir_ab_test_failure() { ab_test("test_failure.gg"); }
 #[test] fn lir_ab_test_with_clause() { ab_test("test_with_clause.gg"); }
+#[test] fn lir_ab_closure_iife() { ab_test("closure_iife.gg"); }
+#[test] fn lir_ab_control_early_return() { ab_test("control_early_return.gg"); }
+#[test] fn lir_ab_control_match_in_loop() { ab_test("control_match_in_loop.gg"); }
+#[test] fn lir_ab_control_nested_loops() { ab_test("control_nested_loops.gg"); }
+#[test] fn lir_ab_control_nested_match() { ab_test("control_nested_match.gg"); }
+#[test] fn lir_ab_control_while_complex() { ab_test("control_while_complex.gg"); }
+#[test] fn lir_ab_default_params_basic() { ab_test("default_params_basic.gg"); }
+#[test] fn lir_ab_derive_equatable_enum() { ab_test("derive_equatable_enum.gg"); }
+#[test] fn lir_ab_dict_operations_edge() { ab_test("dict_operations_edge.gg"); }
+#[test] fn lir_ab_enum_single_variant() { ab_test("enum_single_variant.gg"); }
+#[test] fn lir_ab_enum_with_data_variants() { ab_test("enum_with_data_variants.gg"); }
+#[test] fn lir_ab_equip_multiple_traits() { ab_test("equip_multiple_traits.gg"); }
+#[test] fn lir_ab_expression_body_functions() { ab_test("expression_body_functions.gg"); }
+#[test] fn lir_ab_fstring_expressions() { ab_test("fstring_expressions.gg"); }
+#[test] fn lir_ab_generic_equip_method() { ab_test("generic_equip_method.gg"); }
+#[test] fn lir_ab_generic_trait_bound() { ab_test("generic_trait_bound.gg"); }
+#[test] fn lir_ab_numeric_division() { ab_test("numeric_division.gg"); }
+#[test] fn lir_ab_numeric_overflow_wrap() { ab_test("numeric_overflow_wrap.gg"); }
+#[test] fn lir_ab_option_result_nested() { ab_test("option_result_nested.gg"); }
+#[test] fn lir_ab_recursion_fibonacci() { ab_test("recursion_fibonacci.gg"); }
+#[test] fn lir_ab_recursion_mutual() { ab_test("recursion_mutual.gg"); }
+#[test] fn lir_ab_recursive_enum_tree() { ab_test("recursive_enum_tree.gg"); }
+#[test] fn lir_ab_shadowing_nested() { ab_test("shadowing_nested.gg"); }
+#[test] fn lir_ab_string_escape_sequences() { ab_test("string_escape_sequences.gg"); }
+#[test] fn lir_ab_string_methods_edge() { ab_test("string_methods_edge.gg"); }
+#[test] fn lir_ab_struct_nested_access() { ab_test("struct_nested_access.gg"); }
+#[test] fn lir_ab_struct_single_field() { ab_test("struct_single_field.gg"); }
+#[test] fn lir_ab_two_traits_basic() { ab_test("two_traits_basic.gg"); }
+#[test] fn lir_ab_type_alias_generic() { ab_test("type_alias_generic.gg"); }
+#[test] fn lir_ab_type_cast_numeric() { ab_test("type_cast_numeric.gg"); }
+#[test] fn lir_ab_vector_operations_edge() { ab_test("vector_operations_edge.gg"); }

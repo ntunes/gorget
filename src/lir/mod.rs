@@ -286,6 +286,11 @@ pub enum Inst {
     /// fprintf to a file descriptor.
     Fprintf { fd: ValueId, fmt: String, args: Vec<ValueId> },
 
+    // ── Backend-specific escape hatch ─────────────────────────────────
+    /// Inline C code passthrough. Used for collection field access patterns
+    /// that the GIR generates as raw C (e.g., `_x = (int64_t)_y.cap`).
+    InlineC { dst: Option<ValueId>, code: String },
+
     // ── No-op (source mapping placeholder) ──────────────────────────
     Nop,
 }
@@ -298,6 +303,7 @@ impl Inst {
             | Inst::Memcpy { .. } | Inst::BoundsCheck { .. } | Inst::DivCheck { .. }
             | Inst::Trap { .. } | Inst::Printf { .. } | Inst::Fprintf { .. }
             | Inst::Nop => None,
+            Inst::InlineC { dst, .. } => *dst,
 
             Inst::SlotLoad { dst, .. }
             | Inst::SlotAddr { dst, .. }
@@ -347,7 +353,8 @@ impl Inst {
             Inst::SlotLoad { .. } | Inst::SlotAddr { .. } => vec![],
             Inst::IConst { .. } | Inst::FConst { .. } | Inst::BoolConst { .. }
             | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. }
-            | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::Nop => vec![],
+            | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::Nop
+            | Inst::InlineC { .. } => vec![],
 
             Inst::Add { lhs, rhs, .. }
             | Inst::Sub { lhs, rhs, .. }
@@ -596,6 +603,9 @@ pub enum LirGlobalInit {
         struct_id: StructId,
         fields: Vec<LirGlobalInit>,
     },
+    /// Runtime call expression — must be evaluated before main.
+    /// The string is a C expression like `gorget_dict_new_str(sizeof(int64_t))`.
+    RuntimeCall(String),
 }
 
 // ── Externs ─────────────────────────────────────────────────────────────────
@@ -611,14 +621,65 @@ pub struct LirExtern {
 
 // ── Module ──────────────────────────────────────────────────────────────────
 
-/// Top-level LIR module.
+/// Metadata for a spawned (async) function.
 #[derive(Debug, Clone)]
+pub struct SpawnedFn {
+    /// Name of the function to spawn (e.g., "compute").
+    pub fn_name: String,
+    /// Parameter names and their C type names (e.g., [("data", "GorgetArray")]).
+    pub params: Vec<(String, String)>,
+    /// C type name for the return type (e.g., "int64_t"), or "void".
+    pub ret_c_type: String,
+    /// Whether any parameter is passed by mutable reference (&) in the actual function.
+    pub ref_param_indices: Vec<usize>,
+}
+
+/// Metadata for a test function, mirrored from GIR's TestFnInfo.
+#[derive(Debug, Clone)]
+pub struct LirTestFn {
+    pub fn_name: String,
+    pub display_name: String,
+    pub should_panic: bool,
+    pub expected_panic_msg: Option<String>,
+    pub skipped: bool,
+    pub skip_reason: Option<String>,
+    pub timeout_ms: Option<u64>,
+}
+
+/// Metadata for a benchmark function, mirrored from GIR's BenchFnInfo.
+#[derive(Debug, Clone)]
+pub struct LirBenchFn {
+    pub fn_name: String,
+    pub display_name: String,
+}
+
+/// Metadata for a thread-spawned function (std.thread).
+#[derive(Debug, Clone)]
+pub struct ThreadSpawnedFn {
+    /// Name of the function to spawn.
+    pub fn_name: String,
+    /// C type name for the return type (e.g., "int64_t"), or "void".
+    pub ret_c_type: String,
+}
+
 pub struct LirModule {
     pub structs: Vec<StructDef>,
     pub globals: Vec<LirGlobal>,
     pub functions: Vec<LirFunction>,
     pub externs: Vec<LirExtern>,
     pub source_filename: Option<String>,
+    /// Spawned functions metadata for generating spawn/await helpers.
+    pub spawned_fns: Vec<SpawnedFn>,
+    /// Thread-spawned functions metadata for generating thread spawn/join helpers.
+    pub thread_spawned_fns: Vec<ThreadSpawnedFn>,
+    /// Test functions (for test harness generation).
+    pub test_fns: Vec<LirTestFn>,
+    /// Benchmark functions (for bench harness generation).
+    pub bench_fns: Vec<LirBenchFn>,
+    /// Whether a suite_setup function exists.
+    pub has_suite_setup: bool,
+    /// Whether a suite_teardown function exists.
+    pub has_suite_teardown: bool,
 }
 
 impl LirModule {
@@ -629,6 +690,12 @@ impl LirModule {
             functions: Vec::new(),
             externs: Vec::new(),
             source_filename: None,
+            spawned_fns: Vec::new(),
+            thread_spawned_fns: Vec::new(),
+            test_fns: Vec::new(),
+            bench_fns: Vec::new(),
+            has_suite_setup: false,
+            has_suite_teardown: false,
         }
     }
 

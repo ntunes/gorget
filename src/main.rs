@@ -430,17 +430,27 @@ fn try_build_ir(
         return Ok(PathBuf::from(stem));
     }
 
-    // Dump LIR text if requested
+    // Dump LIR text if requested (pre-SSA if env var set)
     if emit_lir {
+        let pre_ssa = std::env::var("LIR_PRE_SSA").is_ok();
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
+        if pre_ssa {
+            print!("{}", gorget::lir::display::dump_module(&lir_module));
+            let input_path = Path::new(filename);
+            let stem = input_path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+            return Ok(PathBuf::from(stem));
+        }
+        let no_opt = std::env::var("LIR_NO_OPT").is_ok();
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
         }
-        let stats = gorget::lir::optimize::optimize_module(&mut lir_module);
-        eprintln!("; LIR opt: {} dead fns, {} dead globals, {} dead insts, {} folded, {} copies prop'd",
-            stats.dead_functions_eliminated, stats.dead_globals_eliminated,
-            stats.dead_instructions_eliminated, stats.constants_folded,
-            stats.copies_propagated);
+        if !no_opt {
+            let stats = gorget::lir::optimize::optimize_module(&mut lir_module);
+            eprintln!("; LIR opt: {} dead fns, {} dead globals, {} dead insts, {} folded, {} copies prop'd",
+                stats.dead_functions_eliminated, stats.dead_globals_eliminated,
+                stats.dead_instructions_eliminated, stats.constants_folded,
+                stats.copies_propagated);
+        }
         print!("{}", gorget::lir::display::dump_module(&lir_module));
         let errors = gorget::lir::validate::validate_module(&lir_module);
         if !errors.is_empty() {
