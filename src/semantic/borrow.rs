@@ -9,6 +9,17 @@ use super::resolve::{FunctionInfo, ResolutionMap};
 use super::scope::{DefKind, ScopeTable};
 use super::types::{self, ResolvedType, TypeTable};
 
+// ─── Fallible State (Option/Result tracking) ──────────────
+
+/// Whether an Option/Result variable has been guard-checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FallibleState {
+    /// Not yet checked with is_some/is_ok/match.
+    Unchecked,
+    /// Checked via guard (is_some, is_ok, match, etc.).
+    Checked,
+}
+
 // ─── Variable State ────────────────────────────────────────
 
 /// Tracks the ownership state of a variable.
@@ -184,6 +195,8 @@ struct BranchState {
     stale_shared_derived: FxHashMap<DefId, SharedDerivedInfo>,
     /// Whether this branch always diverges (return/break/continue/throw).
     diverges: bool,
+    /// Fallible (Option/Result) variable guard states.
+    fallible_states: FxHashMap<DefId, FallibleState>,
 }
 
 // ─── Blocking Call Detection ───────────────────────────────
@@ -503,6 +516,18 @@ struct BorrowChecker<'a> {
     /// Tracks local variable declarations for unused-variable detection.
     /// Maps DefId → (name, span, is_used). Reset per function.
     local_var_usage: FxHashMap<DefId, (String, Span, bool)>,
+
+    /// Tracks whether Option/Result variables have been guard-checked.
+    /// Maps DefId → FallibleState. Reset per function.
+    fallible_states: FxHashMap<DefId, FallibleState>,
+
+    /// Tracks which variables have been reassigned (for const promotion warnings).
+    var_reassigned: FxHashSet<DefId>,
+
+    /// Tracks which `&` (MutableBorrow) parameters have been actually mutated.
+    mut_param_mutated: FxHashSet<DefId>,
+    /// `&` parameters in the current function: (DefId, name, span).
+    current_mut_params: Vec<(DefId, String, Span)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -569,11 +594,26 @@ impl<'a> BorrowChecker<'a> {
             with_depth: 0,
             fn_purity,
             local_var_usage: FxHashMap::default(),
+            fallible_states: FxHashMap::default(),
+            var_reassigned: FxHashSet::default(),
+            mut_param_mutated: FxHashSet::default(),
+            current_mut_params: Vec::new(),
         }
     }
 
     fn error(&mut self, kind: SemanticErrorKind, span: Span) {
         self.errors.push(SemanticError { kind, span });
+    }
+
+    /// Returns the type name ("Option" or "Result") if the TypeId is an Option/Result type.
+    fn is_option_or_result_type(&self, type_id: TypeId) -> Option<String> {
+        if let ResolvedType::Generic(def_id, _) = self.types.get(type_id) {
+            let name = self.scopes.get_def(*def_id).name.clone();
+            if name == "Option" || name == "Result" {
+                return Some(name);
+            }
+        }
+        None
     }
 
     /// Mark a variable as Live (e.g., on declaration or reassignment).
@@ -1140,6 +1180,7 @@ impl<'a> BorrowChecker<'a> {
             shared_derived: self.shared_derived.clone(),
             stale_shared_derived: self.stale_shared_derived.clone(),
             diverges: self.diverged,
+            fallible_states: self.fallible_states.clone(),
         }
     }
 
@@ -1155,6 +1196,7 @@ impl<'a> BorrowChecker<'a> {
         self.shared_derived = state.shared_derived.clone();
         self.stale_shared_derived = state.stale_shared_derived.clone();
         self.diverged = state.diverges;
+        self.fallible_states = state.fallible_states.clone();
     }
 
     /// Merge multiple branch states: union var states (moved in either = moved),
@@ -1181,6 +1223,7 @@ impl<'a> BorrowChecker<'a> {
             self.mut_capture_owners = states[0].mut_capture_owners.clone();
             self.shared_derived = states[0].shared_derived.clone();
             self.stale_shared_derived = states[0].stale_shared_derived.clone();
+            self.fallible_states = states[0].fallible_states.clone();
             self.diverged = true;
             return;
         }
@@ -1194,6 +1237,7 @@ impl<'a> BorrowChecker<'a> {
         let mut merged_mut_owners = live[0].mut_capture_owners.clone();
         let mut merged_shared_derived = live[0].shared_derived.clone();
         let mut merged_stale_shared = live[0].stale_shared_derived.clone();
+        let mut merged_fallible = live[0].fallible_states.clone();
 
         for state in &live[1..] {
             // Merge var states: moved in either = moved
@@ -1245,6 +1289,17 @@ impl<'a> BorrowChecker<'a> {
             for (def_id, info) in &state.stale_shared_derived {
                 merged_stale_shared.entry(*def_id).or_insert_with(|| info.clone());
             }
+            // Merge fallible_states: conservative — unchecked in any branch = unchecked
+            for (def_id, fs) in &state.fallible_states {
+                match (merged_fallible.get(def_id), fs) {
+                    (Some(FallibleState::Unchecked), _) | (_, FallibleState::Unchecked) => {
+                        merged_fallible.insert(*def_id, FallibleState::Unchecked);
+                    }
+                    _ => {
+                        merged_fallible.entry(*def_id).or_insert(*fs);
+                    }
+                }
+            }
         }
 
         self.var_states = merged_vars;
@@ -1256,6 +1311,7 @@ impl<'a> BorrowChecker<'a> {
         self.mut_capture_owners = merged_mut_owners;
         self.shared_derived = merged_shared_derived;
         self.stale_shared_derived = merged_stale_shared;
+        self.fallible_states = merged_fallible;
         self.diverged = false;
     }
 
@@ -1762,6 +1818,8 @@ impl<'a> BorrowChecker<'a> {
                                         arg.span,
                                     );
                                 }
+                                // Track passing `&` param with `&` to callee as mutation
+                                self.mark_mut_param_if_applicable(&arg.node.value);
                             }
                             // For constructor calls, bare non-Copy identifier
                             // args are implicitly consumed (moved into fields).
@@ -1841,6 +1899,51 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
+                // Track `&` param mutation via &self method call
+                if let Some(def_id) = self.find_root_def_id(receiver) {
+                    let def = self.scopes.get_def(def_id);
+                    if def.is_param && def.param_ownership == Some(Ownership::MutableBorrow) {
+                        if let Some(&method_def_id) = self.method_resolutions.get(&method.span.start) {
+                            if let Some(info) = self.function_info.get(&method_def_id) {
+                                if info.param_ownerships.first() == Some(&Ownership::MutableBorrow) {
+                                    self.mut_param_mutated.insert(def_id);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fallible unwrap tracking: detect guard calls and unwrap on Option/Result
+                if let Expr::Identifier(_) = &receiver.node {
+                    if let Some(&recv_def_id) = self.resolution_map.get(&receiver.span.start) {
+                        let method_name = method.node.as_str();
+                        match method_name {
+                            "is_some" | "is_ok" | "is_none" | "is_err" => {
+                                if self.fallible_states.contains_key(&recv_def_id) {
+                                    self.fallible_states.insert(recv_def_id, FallibleState::Checked);
+                                }
+                            }
+                            "unwrap" | "expect" => {
+                                if let Some(&FallibleState::Unchecked) = self.fallible_states.get(&recv_def_id) {
+                                    let recv_def = self.scopes.get_def(recv_def_id);
+                                    let recv_name = recv_def.name.clone();
+                                    let type_name = recv_def.type_id
+                                        .and_then(|tid| self.is_option_or_result_type(tid))
+                                        .unwrap_or_else(|| "Option".to_string());
+                                    self.stale_warnings.push(super::errors::SemanticWarning {
+                                        kind: super::errors::SemanticWarningKind::UncheckedUnwrap {
+                                            name: recv_name,
+                                            type_name,
+                                        },
+                                        span: expr.span,
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
                 // Detect qualified enum variant constructors: EnumName.VariantName(args)
                 // When the receiver resolves to an Enum def, treat args as implicitly consumed.
                 let is_enum_constructor = if let Expr::Identifier(_) = &receiver.node {
@@ -1867,6 +1970,10 @@ impl<'a> BorrowChecker<'a> {
                             }
                         }
                         Ownership::MutableBorrow | Ownership::Borrow => {
+                            // Track passing `&` param with `&` to callee as mutation
+                            if arg.node.ownership == Ownership::MutableBorrow {
+                                self.mark_mut_param_if_applicable(&arg.node.value);
+                            }
                             // For qualified enum variant constructors, bare non-Copy
                             // identifier args are implicitly consumed (moved into fields).
                             if is_enum_constructor {
@@ -2345,6 +2452,20 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
+                // Track Option/Result variables for fallible unwrap detection
+                if let Pattern::Binding(name) = &pattern.node {
+                    if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span)
+                        .or_else(|| self.find_def_by_name(name))
+                    {
+                        let is_fallible = self.scopes.get_def(def_id).type_id
+                            .and_then(|tid| self.is_option_or_result_type(tid))
+                            .is_some();
+                        if is_fallible {
+                            self.fallible_states.insert(def_id, FallibleState::Unchecked);
+                        }
+                    }
+                }
+
                 // Track shared bindings for CFA
                 if *shared != crate::parser::ast::SharedKind::None {
                     if let Pattern::Binding(name) = &pattern.node {
@@ -2647,6 +2768,18 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
+                // Track reassignment for const promotion and `&` param mutation
+                if let Expr::Identifier(_) = &target.node {
+                    if let Some(&def_id) = self.resolution_map.get(&target.span.start) {
+                        self.var_reassigned.insert(def_id);
+                        // Direct assignment to `&` param counts as mutation
+                        let def = self.scopes.get_def(def_id);
+                        if def.is_param && def.param_ownership == Some(Ownership::MutableBorrow) {
+                            self.mut_param_mutated.insert(def_id);
+                        }
+                    }
+                }
+
                 // Check immutability/const constraints on identifier targets
                 match &target.node {
                     Expr::Identifier(target_var_name) => {
@@ -2681,6 +2814,11 @@ impl<'a> BorrowChecker<'a> {
                             // Phase 11: If the dependent variable itself is reassigned,
                             // clear its stale-borrow entry — it now has a fresh value.
                             self.reassignment_invalidated.remove(&def_id);
+
+                            // Reset fallible state on reassignment (new value is unchecked)
+                            if self.fallible_states.contains_key(&def_id) {
+                                self.fallible_states.insert(def_id, FallibleState::Unchecked);
+                            }
 
                             // Async: reassignment after await clears suspension-point invalidation.
                             self.await_invalidated.remove(&def_id);
@@ -2749,12 +2887,26 @@ impl<'a> BorrowChecker<'a> {
                                 target.span,
                             );
                         }
+                        // Track mutation of `&` params
+                        self.mark_mut_param_if_applicable(target);
                         self.check_expr(target);
                     }
                 }
             }
 
             Stmt::CompoundAssign { target, value, .. } => {
+                // Track reassignment for const promotion and `&` param mutation
+                if let Expr::Identifier(_) = &target.node {
+                    if let Some(&def_id) = self.resolution_map.get(&target.span.start) {
+                        self.var_reassigned.insert(def_id);
+                        let def = self.scopes.get_def(def_id);
+                        if def.is_param && def.param_ownership == Some(Ownership::MutableBorrow) {
+                            self.mut_param_mutated.insert(def_id);
+                        }
+                    }
+                }
+                // Track compound assignment to field/index on `&` param
+                self.mark_mut_param_if_applicable(target);
                 // Check immutability/const constraints on identifier targets
                 if let Expr::Identifier(target_var_name) = &target.node {
                     if let Some(&def_id) = self.resolution_map.get(&target.span.start) {
@@ -3092,6 +3244,15 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(scrutinee);
                 self.check_stale_condition(scrutinee);
                 let scrutinee_origin = self.compute_expr_origin(scrutinee);
+
+                // Mark matched Option/Result as Checked — destructuring proves variant handling
+                if let Expr::Identifier(_) = &scrutinee.node {
+                    if let Some(&scr_def_id) = self.resolution_map.get(&scrutinee.span.start) {
+                        if self.fallible_states.contains_key(&scr_def_id) {
+                            self.fallible_states.insert(scr_def_id, FallibleState::Checked);
+                        }
+                    }
+                }
 
                 // §3.5 Check-then-act: track if scrutinee depends on with-tracked shared
                 let with_guard = if self.current_function_is_async {
@@ -3484,6 +3645,16 @@ impl<'a> BorrowChecker<'a> {
             | Expr::Index { object, .. } => self.find_root_def_id(object),
             Expr::SelfExpr => self.resolution_map.get(&expr.span.start).copied(),
             _ => None,
+        }
+    }
+
+    /// If `expr`'s root is a `&` (MutableBorrow) parameter, mark it as mutated.
+    fn mark_mut_param_if_applicable(&mut self, expr: &Spanned<Expr>) {
+        if let Some(def_id) = self.find_root_def_id(expr) {
+            let def = self.scopes.get_def(def_id);
+            if def.is_param && def.param_ownership == Some(Ownership::MutableBorrow) {
+                self.mut_param_mutated.insert(def_id);
+            }
         }
     }
 
@@ -3952,6 +4123,10 @@ impl<'a> BorrowChecker<'a> {
         self.with_guarded_conditions.clear();
         self.with_depth = 0;
         self.local_var_usage.clear();
+        self.fallible_states.clear();
+        self.var_reassigned.clear();
+        self.mut_param_mutated.clear();
+        self.current_mut_params.clear();
 
         // Set scope-aware lookup context for this function
         self.current_fn_scope = self.function_body_scopes
@@ -3979,6 +4154,19 @@ impl<'a> BorrowChecker<'a> {
                 let is_ref = is_ast_type_ref(&param.node.type_.node, self.scopes, &self.ref_type_structs);
                 if is_ref {
                     self.var_origins.insert(def_id, BorrowOrigin::Param { param_index: i, def_id });
+                }
+
+                // Track Option/Result parameters as Unchecked for fallible unwrap detection
+                let param_def = self.scopes.get_def(def_id);
+                if let Some(type_id) = param_def.type_id {
+                    if self.is_option_or_result_type(type_id).is_some() {
+                        self.fallible_states.insert(def_id, FallibleState::Unchecked);
+                    }
+                }
+
+                // Track `&` (MutableBorrow) parameters for needless-mut detection
+                if param.node.ownership == Ownership::MutableBorrow {
+                    self.current_mut_params.push((def_id, param.node.name.node.clone(), param.node.name.span));
                 }
             }
         }
@@ -4042,6 +4230,42 @@ impl<'a> BorrowChecker<'a> {
                         span: *span,
                     });
                 }
+            }
+        }
+
+        // Emit needless mutable borrow warnings (skip in imported modules)
+        if self.imported_module_depth == 0 {
+            let mut_params = self.current_mut_params.clone();
+            for (def_id, name, span) in &mut_params {
+                if name.starts_with('_') { continue; }
+                if self.mut_param_mutated.contains(def_id) { continue; }
+                self.stale_warnings.push(super::errors::SemanticWarning {
+                    kind: super::errors::SemanticWarningKind::NeedlessMutableBorrow {
+                        name: name.clone(),
+                    },
+                    span: *span,
+                });
+            }
+        }
+
+        // Emit const promotion warnings (skip in imported modules)
+        if self.imported_module_depth == 0 {
+            for (def_id, (name, span, _)) in &self.local_var_usage {
+                if name.starts_with('_') { continue; }
+                if self.var_reassigned.contains(def_id) { continue; }
+                let def = self.scopes.get_def(*def_id);
+                if def.kind == DefKind::Const { continue; }
+                if def.is_param { continue; }
+                // Only warn for Copy types — non-Copy types can't be const
+                let is_copy = def.type_id
+                    .map_or(false, |tid| is_copy_type(tid, self.types, self.scopes));
+                if !is_copy { continue; }
+                self.stale_warnings.push(super::errors::SemanticWarning {
+                    kind: super::errors::SemanticWarningKind::CouldBeConst {
+                        name: name.clone(),
+                    },
+                    span: *span,
+                });
             }
         }
 
@@ -4867,10 +5091,157 @@ pub fn check_module(
         }
     }
 
+    // Phase 8: Private-in-public signature detection
+    check_private_in_public(&module.items, scopes, &mut checker.errors);
+
     warnings.extend(checker.stale_warnings);
     errors.extend(checker.errors);
 
     (checker.shared_out, warnings, purity_by_name)
+}
+
+// ─── Private-in-Public Detection ──────────────────────────
+
+/// Builtin/prelude type names that are always considered public.
+const BUILTIN_TYPE_NAMES: &[&str] = &[
+    "int", "int8", "int16", "int32", "int64",
+    "uint", "uint8", "uint16", "uint32", "uint64",
+    "float", "float32", "float64", "bool", "str", "String", "char",
+    "void", "Option", "Result", "Vector", "Dict", "Set", "HashSet", "HashMap",
+    "Channel", "Shared", "Weak", "Mutex", "Guard", "Future", "TaskGroup",
+    "Arena", "Slice", "Box",
+];
+
+/// Collect visibility of user-defined types from the AST.
+fn collect_type_visibility(items: &[Spanned<Item>]) -> FxHashMap<String, Visibility> {
+    let mut vis_map = FxHashMap::default();
+    for item in all_spanned_items(items) {
+        match &item.node {
+            Item::Struct(s) => {
+                vis_map.insert(s.name.node.clone(), s.visibility);
+            }
+            Item::Enum(e) => {
+                vis_map.insert(e.name.node.clone(), e.visibility);
+            }
+            Item::Trait(t) => {
+                vis_map.insert(t.name.node.clone(), t.visibility);
+            }
+            _ => {}
+        }
+    }
+    vis_map
+}
+
+/// Check if a type name refers to a private user-defined type.
+/// Returns the names of private types found.
+fn check_type_visibility(ty: &Type, type_vis: &FxHashMap<String, Visibility>) -> Vec<String> {
+    let mut private_types = Vec::new();
+    match ty {
+        Type::Named { name, generic_args } => {
+            if !BUILTIN_TYPE_NAMES.contains(&name.node.as_str()) {
+                if let Some(&vis) = type_vis.get(&name.node) {
+                    if vis == Visibility::Private {
+                        private_types.push(name.node.clone());
+                    }
+                }
+            }
+            // Recursively check generic type arguments
+            for arg in generic_args {
+                private_types.extend(check_type_visibility(&arg.node, type_vis));
+            }
+        }
+        Type::Tuple(elems) => {
+            for elem in elems {
+                private_types.extend(check_type_visibility(&elem.node, type_vis));
+            }
+        }
+        Type::Array { element, .. } | Type::Slice { element } => {
+            private_types.extend(check_type_visibility(&element.node, type_vis));
+        }
+        Type::Function { params, return_type, .. } => {
+            private_types.extend(check_type_visibility(&return_type.node, type_vis));
+            for param in params {
+                private_types.extend(check_type_visibility(&param.node, type_vis));
+            }
+        }
+        _ => {}
+    }
+    private_types
+}
+
+/// Check all public functions for private types in their signatures.
+fn check_private_in_public(
+    items: &[Spanned<Item>],
+    _scopes: &ScopeTable,
+    errors: &mut Vec<SemanticError>,
+) {
+    let type_vis = collect_type_visibility(items);
+
+    for item in all_spanned_items(items) {
+        match &item.node {
+            Item::Function(func) => {
+                if func.visibility != Visibility::Public {
+                    continue;
+                }
+                // Check return type
+                for private_type in check_type_visibility(&func.return_type.node, &type_vis) {
+                    errors.push(SemanticError {
+                        kind: SemanticErrorKind::PrivateTypeInPublicSignature {
+                            type_name: private_type,
+                            fn_name: func.name.node.clone(),
+                            position: "return type".to_string(),
+                        },
+                        span: func.return_type.span,
+                    });
+                }
+                // Check parameter types
+                for param in &func.params {
+                    for private_type in check_type_visibility(&param.node.type_.node, &type_vis) {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::PrivateTypeInPublicSignature {
+                                type_name: private_type,
+                                fn_name: func.name.node.clone(),
+                                position: "parameter".to_string(),
+                            },
+                            span: param.node.type_.span,
+                        });
+                    }
+                }
+            }
+            Item::Equip(impl_block) => {
+                for method in &impl_block.items {
+                    if method.node.visibility != Visibility::Public {
+                        continue;
+                    }
+                    // Check return type
+                    for private_type in check_type_visibility(&method.node.return_type.node, &type_vis) {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::PrivateTypeInPublicSignature {
+                                type_name: private_type,
+                                fn_name: method.node.name.node.clone(),
+                                position: "return type".to_string(),
+                            },
+                            span: method.node.return_type.span,
+                        });
+                    }
+                    // Check parameter types (skip self)
+                    for param in &method.node.params {
+                        for private_type in check_type_visibility(&param.node.type_.node, &type_vis) {
+                            errors.push(SemanticError {
+                                kind: SemanticErrorKind::PrivateTypeInPublicSignature {
+                                    type_name: private_type,
+                                    fn_name: method.node.name.node.clone(),
+                                    position: "parameter".to_string(),
+                                },
+                                span: param.node.type_.span,
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Recursively check items, descending into `Item::Module` wrappers.
@@ -8888,6 +9259,495 @@ void main():
                 if name == "x"
             )),
             "expected no UnusedVariable for variable used in f-string, got: {:?}", warnings
+        );
+    }
+
+    // ─── Phase 5: Fallible Unwrap Tests ───────────────────────
+
+    #[test]
+    fn unchecked_unwrap_warns() {
+        let source = "\
+Option[int] find_value() = Some(42)
+
+void main():
+    Option[int] x = find_value()
+    int v = x.unwrap()
+    print(f\"{v}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UncheckedUnwrap { name, .. }
+                if name == "x"
+            )),
+            "expected UncheckedUnwrap for x, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn checked_via_is_some_no_warn() {
+        let source = "\
+Option[int] find_value() = Some(42)
+
+void main():
+    Option[int] x = find_value()
+    if x.is_some():
+        int v = x.unwrap()
+        print(f\"{v}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UncheckedUnwrap { name, .. }
+                if name == "x"
+            )),
+            "expected no UncheckedUnwrap for x after is_some() guard, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn checked_via_match_no_warn() {
+        let source = "\
+Option[int] find_value() = Some(42)
+
+void main():
+    Option[int] x = find_value()
+    match x:
+        case Some(v):
+            print(f\"{v}\")
+        else:
+            print(\"none\")
+    int val = x.unwrap()
+    print(f\"{val}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UncheckedUnwrap { name, .. }
+                if name == "x"
+            )),
+            "expected no UncheckedUnwrap for x after match, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn unwrap_or_no_warn() {
+        let source = "\
+Option[int] find_value() = Some(42)
+
+void main():
+    Option[int] x = find_value()
+    int v = x.unwrap_or(0)
+    print(f\"{v}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UncheckedUnwrap { name, .. }
+                if name == "x"
+            )),
+            "expected no UncheckedUnwrap for unwrap_or, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn reassignment_resets_to_unchecked() {
+        let source = "\
+Option[int] find_value() = Some(42)
+
+void main():
+    Option[int] x = find_value()
+    if x.is_some():
+        pass
+    x = find_value()
+    int v = x.unwrap()
+    print(f\"{v}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UncheckedUnwrap { name, .. }
+                if name == "x"
+            )),
+            "expected UncheckedUnwrap after reassignment, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn option_param_starts_unchecked() {
+        let source = "\
+void process(Option[int] x):
+    int v = x.unwrap()
+    print(f\"{v}\")
+
+void main():
+    process(Some(42))
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UncheckedUnwrap { name, .. }
+                if name == "x"
+            )),
+            "expected UncheckedUnwrap for param, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn result_is_ok_no_warn() {
+        let source = "\
+Result[int, str] parse_num() = Ok(42)
+
+void main():
+    Result[int, str] r = parse_num()
+    if r.is_ok():
+        int v = r.unwrap()
+        print(f\"{v}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UncheckedUnwrap { name, .. }
+                if name == "r"
+            )),
+            "expected no UncheckedUnwrap for Result after is_ok() guard, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn checked_one_branch_only_still_warns() {
+        // Only checked in one branch — after merge, should remain checked
+        // (since calling is_some at all proves awareness)
+        let source = "\
+Option[int] find_value() = Some(42)
+
+void main():
+    Option[int] x = find_value()
+    if x.is_some():
+        print(\"found\")
+    int v = x.unwrap()
+    print(f\"{v}\")
+";
+        let warnings = check_warnings(source);
+        // After calling is_some(), the variable is marked Checked — unwrap is fine
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UncheckedUnwrap { name, .. }
+                if name == "x"
+            )),
+            "expected no UncheckedUnwrap after is_some() call, got: {:?}", warnings
+        );
+    }
+
+    // ─── Phase 8: Private-in-Public Tests ─────────────────────
+
+    #[test]
+    fn private_return_type_errors() {
+        let source = "\
+private struct InternalState:
+    int value
+
+InternalState create():
+    return InternalState(value=42)
+
+void main():
+    pass
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::PrivateTypeInPublicSignature { type_name, fn_name, position }
+                if type_name == "InternalState" && fn_name == "create" && position == "return type"
+            )),
+            "expected PrivateTypeInPublicSignature for return type, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn private_param_type_errors() {
+        let source = "\
+private struct InternalState:
+    int value
+
+void process(InternalState state):
+    print(f\"{state.value}\")
+
+void main():
+    pass
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::PrivateTypeInPublicSignature { type_name, fn_name, position }
+                if type_name == "InternalState" && fn_name == "process" && position == "parameter"
+            )),
+            "expected PrivateTypeInPublicSignature for parameter, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn public_type_in_public_fn_ok() {
+        let source = "\
+struct PublicState:
+    int value
+
+PublicState create():
+    return PublicState(value=42)
+
+void main():
+    pass
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::PrivateTypeInPublicSignature { .. }
+            )),
+            "expected no PrivateTypeInPublicSignature for public type, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn generic_private_type_caught() {
+        let source = "\
+private struct Secret:
+    int value
+
+Vector[Secret] get_secrets():
+    return []
+
+void main():
+    pass
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k,
+                SemanticErrorKind::PrivateTypeInPublicSignature { type_name, fn_name, .. }
+                if type_name == "Secret" && fn_name == "get_secrets"
+            )),
+            "expected PrivateTypeInPublicSignature for Vector[Secret], got: {:?}", errors
+        );
+    }
+
+    // ─── Phase 7: Needless Mutable Borrow Tests ───────────────
+
+    #[test]
+    fn needless_mut_param_warns() {
+        let source = "\
+void process(Vector[int] &items):
+    for item in items:
+        print(f\"{item}\")
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    process(&v)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
+                if name == "items"
+            )),
+            "expected NeedlessMutableBorrow for items, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn mut_param_with_field_assign_no_warn() {
+        let source = "\
+struct Point:
+    int x
+    int y
+
+void set_x(Point &p, int val):
+    p.x = val
+
+void main():
+    Point pt = Point(x=0, y=0)
+    set_x(&pt, 42)
+    print(f\"{pt.x}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
+                if name == "p"
+            )),
+            "expected no NeedlessMutableBorrow for p with field assignment, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn mut_param_passed_as_mut_no_warn() {
+        let source = "\
+void inner(Vector[int] &v):
+    v.append(1)
+
+void outer(Vector[int] &items):
+    inner(&items)
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    outer(&v)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
+                if name == "items"
+            )),
+            "expected no NeedlessMutableBorrow for items passed with &, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn mut_param_compound_assign_no_warn() {
+        let source = "\
+struct Counter:
+    int count
+
+void increment(Counter &c):
+    c.count += 1
+
+void main():
+    Counter c = Counter(count=0)
+    increment(&c)
+    print(f\"{c.count}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
+                if name == "c"
+            )),
+            "expected no NeedlessMutableBorrow for c with compound assign, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn mut_param_underscore_prefix_no_warn() {
+        let source = "\
+void process(Vector[int] &_items):
+    pass
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    process(&v)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
+                if name == "_items"
+            )),
+            "expected no NeedlessMutableBorrow for _items, got: {:?}", warnings
+        );
+    }
+
+    // ─── Phase 6: Const Promotion Tests ───────────────────────
+
+    #[test]
+    fn never_reassigned_int_warns() {
+        let source = "\
+void main():
+    int x = 42
+    print(f\"{x}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::CouldBeConst { name }
+                if name == "x"
+            )),
+            "expected CouldBeConst for x, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn reassigned_int_no_warn() {
+        let source = "\
+void main():
+    int x = 0
+    x = 42
+    print(f\"{x}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::CouldBeConst { name }
+                if name == "x"
+            )),
+            "expected no CouldBeConst for reassigned x, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn compound_assigned_no_warn() {
+        let source = "\
+void main():
+    int x = 0
+    x += 1
+    print(f\"{x}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::CouldBeConst { name }
+                if name == "x"
+            )),
+            "expected no CouldBeConst for compound-assigned x, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn non_copy_type_no_const_warn() {
+        let source = "\
+void main():
+    String s = \"hello\"
+    print(s)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::CouldBeConst { name }
+                if name == "s"
+            )),
+            "expected no CouldBeConst for non-Copy String, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn underscore_prefix_no_const_warn() {
+        let source = "\
+void main():
+    int _x = 42
+    pass
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::CouldBeConst { name }
+                if name == "_x"
+            )),
+            "expected no CouldBeConst for _x, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn param_no_const_warn() {
+        let source = "\
+void process(int x):
+    print(f\"{x}\")
+
+void main():
+    process(42)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::CouldBeConst { name }
+                if name == "x"
+            )),
+            "expected no CouldBeConst for parameter, got: {:?}", warnings
         );
     }
 

@@ -268,6 +268,18 @@ impl ErrorReporter {
             notes.push(format!("remove the import of `{name}` or use it in code"));
         }
 
+        if let SemanticWarningKind::UncheckedUnwrap { .. } = &warn.kind {
+            notes.push("check with `.is_some()` or use `match` to handle the None/Error case".to_string());
+        }
+
+        if let SemanticWarningKind::CouldBeConst { name } = &warn.kind {
+            notes.push(format!("declare as `const {name} = ...` if the value is known at compile time"));
+        }
+
+        if let SemanticWarningKind::NeedlessMutableBorrow { name } = &warn.kind {
+            notes.push(format!("if the function only reads from `{name}`, pass it as a bare parameter instead"));
+        }
+
         let mut diag = diagnostic::Diagnostic::warning()
             .with_message(warn.to_string())
             .with_labels(labels);

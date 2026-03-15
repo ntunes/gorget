@@ -82,6 +82,12 @@ pub enum SemanticWarningKind {
     UnusedVariable { name: String },
     /// Imported name never referenced in code.
     UnusedImport { name: String },
+    /// `.unwrap()` or `.expect()` called on Option/Result without prior guard.
+    UncheckedUnwrap { name: String, type_name: String },
+    /// Copy-type variable never reassigned — could be `const`.
+    CouldBeConst { name: String },
+    /// `&` parameter is never mutated in the function body.
+    NeedlessMutableBorrow { name: String },
 }
 
 impl std::fmt::Display for SemanticWarning {
@@ -120,6 +126,15 @@ impl std::fmt::Display for SemanticWarning {
             }
             SemanticWarningKind::UnusedImport { name } => {
                 write!(f, "unused import `{name}`")
+            }
+            SemanticWarningKind::UncheckedUnwrap { name, type_name } => {
+                write!(f, "calling `unwrap()` on `{name}` of type `{type_name}` without checking for None/Error first")
+            }
+            SemanticWarningKind::CouldBeConst { name } => {
+                write!(f, "variable `{name}` is never reassigned — consider `const`")
+            }
+            SemanticWarningKind::NeedlessMutableBorrow { name } => {
+                write!(f, "parameter `&{name}` is never mutated — consider removing `&`")
             }
         }
     }
@@ -382,6 +397,9 @@ pub enum SemanticErrorKind {
 
     /// Attempt to import a private item from a module.
     PrivateImport { name: String, module: String },
+
+    /// Public function exposes a private type in its signature.
+    PrivateTypeInPublicSignature { type_name: String, fn_name: String, position: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -665,6 +683,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::PrivateImport { name, module } => {
                 write!(f, "cannot import private item `{name}` from module `{module}`")
+            }
+            SemanticErrorKind::PrivateTypeInPublicSignature { type_name, fn_name, position } => {
+                write!(f, "public function `{fn_name}` has private type `{type_name}` in its {position}")
             }
         }
     }
