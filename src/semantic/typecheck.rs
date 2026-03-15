@@ -1578,7 +1578,9 @@ impl<'a> TypeChecker<'a> {
                             name.span,
                         );
                     } else if let Some(sfi) = self.struct_fields.get(&def_id) {
-                        if args.len() != sfi.fields.len() {
+                        // Skip opaque structs (0 user-visible fields) that may accept
+                        // constructor arguments via special type-checker handling.
+                        if !sfi.fields.is_empty() && args.len() != sfi.fields.len() {
                             self.error(
                                 SemanticErrorKind::WrongFieldCount {
                                     type_: name.node.clone(),

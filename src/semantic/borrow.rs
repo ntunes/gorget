@@ -528,6 +528,8 @@ struct BorrowChecker<'a> {
     mut_param_mutated: FxHashSet<DefId>,
     /// `&` parameters in the current function: (DefId, name, span).
     current_mut_params: Vec<(DefId, String, Span)>,
+    /// Whether to emit CouldBeConst warnings (opt-in via `--warn-const`).
+    warn_const: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -598,6 +600,7 @@ impl<'a> BorrowChecker<'a> {
             var_reassigned: FxHashSet::default(),
             mut_param_mutated: FxHashSet::default(),
             current_mut_params: Vec::new(),
+            warn_const: false,
         }
     }
 
@@ -1664,8 +1667,10 @@ impl<'a> BorrowChecker<'a> {
                 // Phase 3: Mark variables used in f-string interpolation as used
                 for seg in &lit.segments {
                     if let crate::lexer::token::StringSegment::Interpolation(var_name, _) = seg {
-                        // Look up the variable by name and mark as used
-                        if let Some(def_id) = self.find_def_by_name(var_name) {
+                        // Extract root variable name before first '.', '(', or '['
+                        // so that f"{obj.field}" marks `obj` as used
+                        let root = var_name.split(['.', '(', '[']).next().unwrap_or(var_name);
+                        if let Some(def_id) = self.find_def_by_name(root) {
                             if let Some(entry) = self.local_var_usage.get_mut(&def_id) {
                                 entry.2 = true;
                             }
@@ -1935,7 +1940,7 @@ impl<'a> BorrowChecker<'a> {
                                             name: recv_name,
                                             type_name,
                                         },
-                                        span: expr.span,
+                                        span: method.span,
                                     });
                                 }
                             }
@@ -4239,6 +4244,14 @@ impl<'a> BorrowChecker<'a> {
             for (def_id, name, span) in &mut_params {
                 if name.starts_with('_') { continue; }
                 if self.mut_param_mutated.contains(def_id) { continue; }
+                // Skip non-Copy (Move) types: `&` on a Move type is a borrow,
+                // removing it would move the value and break the caller.
+                let def = self.scopes.get_def(*def_id);
+                if let Some(type_id) = def.type_id {
+                    if !is_copy_type(type_id, self.types, self.scopes) {
+                        continue;
+                    }
+                }
                 self.stale_warnings.push(super::errors::SemanticWarning {
                     kind: super::errors::SemanticWarningKind::NeedlessMutableBorrow {
                         name: name.clone(),
@@ -4248,8 +4261,8 @@ impl<'a> BorrowChecker<'a> {
             }
         }
 
-        // Emit const promotion warnings (skip in imported modules)
-        if self.imported_module_depth == 0 {
+        // Emit const promotion warnings (opt-in via --warn-const, skip in imported modules)
+        if self.warn_const && self.imported_module_depth == 0 {
             for (def_id, (name, span, _)) in &self.local_var_usage {
                 if name.starts_with('_') { continue; }
                 if self.var_reassigned.contains(def_id) { continue; }
@@ -5023,6 +5036,7 @@ pub fn check_module(
     expr_types: &FxHashMap<Span, TypeId>,
     method_resolutions: &FxHashMap<usize, DefId>,
     errors: &mut Vec<SemanticError>,
+    warn_const: bool,
 ) -> (FxHashMap<DefId, super::SharedStrategy>, Vec<super::errors::SemanticWarning>, super::purity::PurityByName) {
     // Phase 4: compute which structs have reference-type fields
     let ref_type_structs = compute_ref_type_structs(module, scopes);
@@ -5042,6 +5056,7 @@ pub fn check_module(
         method_resolutions, ref_type_structs, struct_field_ref_flags,
         &purity_by_name,
     );
+    checker.warn_const = warn_const;
 
     check_items_recursive(&mut checker, &module.items);
 
@@ -8348,6 +8363,14 @@ void main():
         result.warnings
     }
 
+    fn check_warnings_with_const(source: &str) -> Vec<crate::semantic::errors::SemanticWarning> {
+        let mut parser = Parser::new(source);
+        let mut module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
+        let result = semantic::analyze_with_source_dir(&mut module, &[], None, true);
+        result.warnings
+    }
+
     fn has_warning(warnings: &[crate::semantic::errors::SemanticWarning], pred: impl Fn(&crate::semantic::errors::SemanticWarningKind) -> bool) -> bool {
         warnings.iter().any(|w| pred(&w.kind))
     }
@@ -9213,6 +9236,27 @@ void main():
     }
 
     #[test]
+    fn fstring_complex_expr_no_unused_warn() {
+        // Variables used in f-string complex expressions (e.g., f"{obj.method()}")
+        // should be marked as used even though the interpolation text is "obj.method()".
+        let source = "\
+Vector[int] get_items() = [1, 2, 3]
+
+void main():
+    Vector[int] items = get_items()
+    print(f\"{items.len()} items\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UnusedVariable { name, .. }
+                if name == "items"
+            )),
+            "expected no UnusedVariable for items used in f-string, got: {:?}", warnings
+        );
+    }
+
+    #[test]
     fn underscore_prefix_suppressed() {
         let source = "\
 void main():
@@ -9532,6 +9576,30 @@ void main():
 
     #[test]
     fn needless_mut_param_warns() {
+        // Use a Copy type (int) — `&` on Copy types is purely about mutability,
+        // so the warning should fire when the param is never mutated.
+        let source = "\
+void process(int &x):
+    print(f\"{x}\")
+
+void main():
+    int v = 42
+    process(&v)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
+                if name == "x"
+            )),
+            "expected NeedlessMutableBorrow for x, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn needless_mut_param_move_type_no_warn() {
+        // Non-Copy (Move) types: `&` is a borrow, not just mutability.
+        // Removing `&` would move the value, breaking the caller.
         let source = "\
 void process(Vector[int] &items):
     for item in items:
@@ -9543,11 +9611,11 @@ void main():
 ";
         let warnings = check_warnings(source);
         assert!(
-            has_warning(&warnings, |k| matches!(k,
+            !has_warning(&warnings, |k| matches!(k,
                 crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
                 if name == "items"
             )),
-            "expected NeedlessMutableBorrow for items, got: {:?}", warnings
+            "expected no NeedlessMutableBorrow for Move-type items, got: {:?}", warnings
         );
     }
 
@@ -9652,13 +9720,21 @@ void main():
     int x = 42
     print(f\"{x}\")
 ";
-        let warnings = check_warnings(source);
+        let warnings = check_warnings_with_const(source);
         assert!(
             has_warning(&warnings, |k| matches!(k,
                 crate::semantic::errors::SemanticWarningKind::CouldBeConst { name }
                 if name == "x"
             )),
             "expected CouldBeConst for x, got: {:?}", warnings
+        );
+        // Default (warn_const=false) should NOT emit CouldBeConst
+        let warnings_default = check_warnings(source);
+        assert!(
+            !has_warning(&warnings_default, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::CouldBeConst { .. }
+            )),
+            "expected no CouldBeConst by default, got: {:?}", warnings_default
         );
     }
 
@@ -9670,7 +9746,7 @@ void main():
     x = 42
     print(f\"{x}\")
 ";
-        let warnings = check_warnings(source);
+        let warnings = check_warnings_with_const(source);
         assert!(
             !has_warning(&warnings, |k| matches!(k,
                 crate::semantic::errors::SemanticWarningKind::CouldBeConst { name }
@@ -9688,7 +9764,7 @@ void main():
     x += 1
     print(f\"{x}\")
 ";
-        let warnings = check_warnings(source);
+        let warnings = check_warnings_with_const(source);
         assert!(
             !has_warning(&warnings, |k| matches!(k,
                 crate::semantic::errors::SemanticWarningKind::CouldBeConst { name }
@@ -9705,7 +9781,7 @@ void main():
     String s = \"hello\"
     print(s)
 ";
-        let warnings = check_warnings(source);
+        let warnings = check_warnings_with_const(source);
         assert!(
             !has_warning(&warnings, |k| matches!(k,
                 crate::semantic::errors::SemanticWarningKind::CouldBeConst { name }
@@ -9722,7 +9798,7 @@ void main():
     int _x = 42
     pass
 ";
-        let warnings = check_warnings(source);
+        let warnings = check_warnings_with_const(source);
         assert!(
             !has_warning(&warnings, |k| matches!(k,
                 crate::semantic::errors::SemanticWarningKind::CouldBeConst { name }
@@ -9741,7 +9817,7 @@ void process(int x):
 void main():
     process(42)
 ";
-        let warnings = check_warnings(source);
+        let warnings = check_warnings_with_const(source);
         assert!(
             !has_warning(&warnings, |k| matches!(k,
                 crate::semantic::errors::SemanticWarningKind::CouldBeConst { name }

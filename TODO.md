@@ -95,11 +95,7 @@
 
 - **Self-hosting type checker: 595/595 (100%) — COMPLETE.** Phases 1-18. [updated: 2026-03-10]
 
-- **Compiler: `const` not supported in function bodies but warned about**: The "could-be-const" diagnostic suggests `const x = ...` for local variables that are never reassigned, but the parser rejects `const x = ...` inside function bodies with "expected pattern, found '='". Either support `const` locals or suppress the warning for function-scoped variables. [added: 2026-03-15]
-
-- **Compiler: false positive "unused variable" for variables used in f-strings**: Variables like `box_tr`, `map_triggers`, `bot_health` trigger "unused variable" warnings despite being used on subsequent lines (typically in f-string interpolation or field access). The unused-variable analysis doesn't track usage through f-string expressions or some expression contexts. [added: 2026-03-15]
-
-- **Compiler: false positive "needless &" for Move-type parameters**: `&menu` parameter triggers "never mutated — consider removing &" but removing `&` would move the struct, breaking the caller's subsequent uses. The lint should not fire for Move types where `&` serves as a borrow (not just mutability). [added: 2026-03-15]
+- **Compiler: UncheckedUnwrap wrong span in imported files**: `.unwrap()` warnings in imported modules (pk3.gg, collision.gg, shader.gg, gpu_backend.gg) point at wrong lines (comments, function signatures). The `method.span` fix narrows the highlight to "unwrap" but byte offsets from imported files still map to incorrect lines. Root cause: multi-file import span offset mapping. [added: 2026-03-15]
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 

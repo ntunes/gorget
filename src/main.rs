@@ -389,7 +389,7 @@ fn try_build_ir(
     let concat_source: String = file_infos.iter().map(|(_, src, _)| src.as_str()).collect::<Vec<_>>().join("\n");
 
     let source_dir = std::path::Path::new(filename).parent().map(|p| p.to_path_buf());
-    let result = gorget::semantic::analyze_with_source_dir(&mut module, features, source_dir);
+    let result = gorget::semantic::analyze_with_source_dir(&mut module, features, source_dir, false);
 
     if !result.errors.is_empty() {
         let reporter = ErrorReporter::new_multi(file_infos.clone());
@@ -1456,6 +1456,7 @@ fn main() {
     let emit_c_lir = args.iter().any(|a| a == "--emit-c-lir");
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
+    let warn_const = args.iter().any(|a| a == "--warn-const");
     let use_lir_backend = args.iter().any(|a| a == "--backend=lir");
     let features = parse_features(&args);
     // Parse -o <path> for shared output
@@ -1555,7 +1556,7 @@ fn main() {
             let (mut module, file_infos) = load_imports(filename, &source, module, dep_paths);
 
             let source_dir = std::path::Path::new(filename).parent().map(|p| p.to_path_buf());
-            let result = gorget::semantic::analyze_with_source_dir(&mut module, &features, source_dir);
+            let result = gorget::semantic::analyze_with_source_dir(&mut module, &features, source_dir, warn_const);
 
             if show_borrows {
                 print_borrow_summary(&result);
@@ -2052,7 +2053,7 @@ fn main() {
             let concat_source: String = file_infos.iter().map(|(_, src, _)| src.as_str()).collect::<Vec<_>>().join("\n");
 
             let source_dir = std::path::Path::new(&filename).parent().map(|p| p.to_path_buf());
-            let result = gorget::semantic::analyze_with_source_dir(&mut module, &features, source_dir);
+            let result = gorget::semantic::analyze_with_source_dir(&mut module, &features, source_dir, false);
 
             if !result.errors.is_empty() {
                 let reporter = gorget::errors::ErrorReporter::new_multi(file_infos);

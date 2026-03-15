@@ -65,7 +65,7 @@ pub struct AnalysisResult {
 /// Run all semantic analysis passes on a parsed module.
 /// `features` is the list of enabled build-time feature flags (from `--feature` CLI args).
 pub fn analyze(module: &mut Module, features: &[String]) -> AnalysisResult {
-    analyze_with_source_dir(module, features, None)
+    analyze_with_source_dir(module, features, None, false)
 }
 
 /// Like [`analyze`], but also provides the source file's directory so that
@@ -74,6 +74,7 @@ pub fn analyze_with_source_dir(
     module: &mut Module,
     features: &[String],
     source_dir: Option<std::path::PathBuf>,
+    warn_const: bool,
 ) -> AnalysisResult {
     let mut scopes = ScopeTable::new();
     let mut types = TypeTable::new();
@@ -245,6 +246,7 @@ pub fn analyze_with_source_dir(
         &expr_types,
         &method_resolutions,
         &mut errors,
+        warn_const,
     );
 
     AnalysisResult {
