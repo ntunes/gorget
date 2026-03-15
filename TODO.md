@@ -29,7 +29,7 @@
 
 - **Inline `None()` without typed variable produces garbage**: Using bare `None()` in expressions without first binding to a typed `Option[T]` variable causes uninitialized variable warnings and garbage output in the C backend. Workaround: `Option[int] n = None()` then use `n`. [added: 2026-03-11]
 
-- **IIFE (immediately-invoked closure) produces garbage**: `((int x): x * x)(5)` compiles without error but the result variable is uninitialized in generated C — C compiler warns `'_1' is used uninitialized`. The closure call result is never stored into the destination local. Workaround: assign closure to a variable first, then call it. [added: 2026-03-15]
+
 
 - **Vector[int] sort treats negatives as unsigned**: `sort()` on `[-5, 3, -10, 0, 7, -1]` produces `[0, 3, 7, -10, -5, -1]` instead of `[-10, -5, -1, 0, 3, 7]`. The int comparator `__gorget_cmp_i64` looks correct (signed compare), so the issue may be in how the vector stores or casts int elements to the comparator. Documented in `test_vector_sort_methods.gg`. [added: 2026-03-11]
 
@@ -62,7 +62,7 @@
 
 - **Async Channel: rendezvous (capacity=0) poll_send ack**: Current poll_send for rendezvous channels treats deposit-into-slot as completion (no ack wait). True rendezvous semantics require two-phase state machine (deposit → wait for count==0). Low priority — buffered channels work correctly. [added: 2026-03-07]
 
-- **Second trait definition after equip block on same type causes "duplicate definition" error**: Defining two separate traits in the same file and equipping both on the same struct causes the resolver to report the second trait as a duplicate of the struct. E.g., `struct Circle: ...` then `trait A: ...` then `equip Circle with A: ...` then `trait B: ...` gives "duplicate definition of B" pointing at the struct. Workaround: use a single trait with multiple methods, or define traits in separate modules. Existing multi-trait files work because each trait is equipped on a different struct. [added: 2026-03-15]
+
 
 
 - **`gg sim` aliasing model — Tree Borrows tracking**: sim.md identifies this as the "core differentiator from naive interpreters." Implement borrow-level tracking to catch aliasing violations. Add `--tree-borrows` (default) and `--strict-aliasing` flags (stricter stacked-borrows model). Currently sim detects UB (bounds, uninit, etc.) but does not track borrow validity. [added: 2026-03-05]
@@ -149,6 +149,8 @@
 - **gg.xpath — XPath-style queries for XmlNode**: Move `find`/`find_all` from `gg.xml` to `gg.xpath`. Add path query support consistent with `gg.jsonpath` interface. [added: 2026-03-09]
 
 - **gorget-db — JSON document store**: MongoDB-lite REST API using gg.httpserver, gg.json, gg.jsonpath, std.signal, std.fs. POST/GET/DELETE/PUT/PATCH on `/db/{collection}/{id}` with query support. [added: 2026-03-09]
+
+- **Negative test fixtures (code that should fail to compile)**: Rust has thousands of `tests/ui/` error tests. Gorget has some `*_error.gg` fixtures but thin coverage. Categories to add: (1) **Ownership violations** — use after move, double move, move in loop, borrow+move conflict, move non-Copy without `!`. (2) **Borrow checker rejections** — mutable borrow of immutable param, overlapping borrows, dangling return, borrow across await. (3) **Type errors** — wrong arg count, type mismatch in assignment/return/call, non-exhaustive match, unknown field/method. (4) **Scope errors** — undefined name, duplicate definition, break/continue outside loop, return outside function, throw in non-throws function. (5) **Trait errors** — missing trait method, signature mismatch, orphan rule, unsatisfied bounds. (6) **Async errors** — await outside async, spawn non-future, spawn with borrowed ref. Use `check_gg_fails(fixture, expected_error_substring)` harness pattern. [added: 2026-03-15]
 
 ## Low
 

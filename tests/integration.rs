@@ -13811,6 +13811,14 @@ fn closure_higher_order_chain() {
     );
 }
 
+#[test]
+fn closure_iife() {
+    run_gg(
+        "closure_iife.gg",
+        "25\n10\nhello world",
+    );
+}
+
 // ── Generic edge cases ──
 
 #[test]
@@ -14063,6 +14071,14 @@ fn equip_multiple_traits() {
     run_gg(
         "equip_multiple_traits.gg",
         "circle r=5.000000\n78.539750",
+    );
+}
+
+#[test]
+fn two_traits_basic() {
+    run_gg(
+        "two_traits_basic.gg",
+        "circle\n78.500000",
     );
 }
 

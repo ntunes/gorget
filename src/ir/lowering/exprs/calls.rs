@@ -809,8 +809,47 @@ pub(super) fn lower_call(
         }
 
         result
+    } else if let Expr::Closure { params, body, is_move, .. } = &callee.node {
+        // IIFE: ((int x): x * x)(5) — inline closure called immediately
+        let mut cl = std::mem::take(&mut ctx.closures);
+        let closure_op = cl.lower_closure(ctx, builder, params, body, *is_move);
+        ctx.closures = cl;
+
+        if let Operand::Copy(ref place) | Operand::Move(ref place) = closure_op {
+            if place.projections.is_empty() {
+                let closure_local = place.local;
+                let closure_type_id = builder.locals[closure_local.0 as usize].type_id;
+                if let Some(type_name) = ctx.type_name_for_id(closure_type_id).map(|s| s.to_string()) {
+                    if let Some((call_fn, _, _)) = ctx.lookup_closure_info(&type_name) {
+                        let call_fn = call_fn.to_string();
+                        // Build args: pointer to closure struct + call arguments
+                        let ptr_type = ctx.type_registry.insert(GirType::Ptr(closure_type_id));
+                        let ptr_local = builder.add_local(ptr_type, None);
+                        builder.emit_borrow(ptr_local, Place::local(closure_local));
+                        let mut call_args = vec![FunctionBuilder::copy(ptr_local)];
+                        for arg in args {
+                            call_args.push(lower_expr(ctx, builder, &arg.node.value));
+                        }
+                        let ret_type = if let Some((_, ret)) = ctx.fn_sigs.get(call_fn.as_str()) {
+                            *ret
+                        } else {
+                            I64_TYPE
+                        };
+                        if ret_type == UNIT_TYPE {
+                            builder.call_void(&call_fn, call_args);
+                            return Operand::Constant(Constant::Unit);
+                        } else {
+                            let dst = builder.call(&call_fn, call_args, ret_type);
+                            return FunctionBuilder::copy(dst);
+                        }
+                    }
+                }
+            }
+        }
+        // Fallback if closure info not found
+        Operand::Constant(Constant::Unit)
     } else {
-        // Non-identifier callee — not handled in Phase 1
+        // Non-identifier, non-closure callee — not handled
         Operand::Constant(Constant::Unit)
     }
 }

@@ -1,0 +1,21 @@
+trait Drawable:
+    str draw(self)
+
+trait Measurable:
+    float measure(self)
+
+struct Circle:
+    float radius
+
+equip Circle with Drawable:
+    str draw(self):
+        return "circle"
+
+equip Circle with Measurable:
+    float measure(self):
+        return 3.14 * self.radius * self.radius
+
+void main():
+    Circle c = Circle(5.0)
+    print(c.draw())
+    print(c.measure())
