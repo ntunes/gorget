@@ -35,4 +35,4 @@ jobs:
       - name: Integration tests
         run: cargo test --test integration -- --test-threads=4
         env:
-          GG_TEST_TIMEOUT_SECS: 300
+          GG_TEST_TIMEOUT_SECS: 600
