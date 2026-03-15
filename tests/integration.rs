@@ -14362,3 +14362,23 @@ fn main_throws_non_int_error() {
 fn positional_after_named_error() {
     check_gg_fails("positional_after_named_error.gg", "positional argument cannot follow");
 }
+
+#[test]
+fn no_field_error() {
+    check_gg_fails("no_field_error.gg", "no field `z` found on type `Point`");
+}
+
+#[test]
+fn not_a_function_error() {
+    check_gg_fails("not_a_function_error.gg", "is not a function");
+}
+
+#[test]
+fn break_outside_loop_error() {
+    check_gg_fails("break_outside_loop_error.gg", "break outside of loop");
+}
+
+#[test]
+fn unknown_directive_error() {
+    check_gg_fails("unknown_directive_error.gg", "unknown directive");
+}

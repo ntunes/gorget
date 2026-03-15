@@ -5,7 +5,7 @@ use crate::span::{Span, Spanned};
 
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, ScopeId, TypeId};
-use super::resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap};
+use super::resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap, StructFieldInfo};
 use super::scope::{DefKind, ScopeKind, ScopeTable};
 use super::traits::TraitRegistry;
 use super::types::{self, ResolvedType, TypeTable};
@@ -213,6 +213,7 @@ struct TypeChecker<'a> {
     resolution_map: &'a ResolutionMap,
     function_info: &'a FxHashMap<DefId, FunctionInfo>,
     enum_variants: &'a FxHashMap<DefId, EnumVariantInfo>,
+    struct_fields: &'a FxHashMap<DefId, StructFieldInfo>,
     errors: Vec<SemanticError>,
     /// Substitution map: type variable ID -> resolved type ID.
     substitutions: FxHashMap<u32, TypeId>,
@@ -241,6 +242,8 @@ struct TypeChecker<'a> {
     /// Used for trait bound propagation: when a generic param `T` with bound `Numeric`
     /// is passed to a callee requiring `Numeric`, the bound is satisfied transitively.
     current_trait_bounds: Vec<(String, Vec<String>)>,
+    /// Nesting depth inside loops (for break/continue validation).
+    loop_depth: usize,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -251,6 +254,7 @@ impl<'a> TypeChecker<'a> {
         resolution_map: &'a ResolutionMap,
         function_info: &'a FxHashMap<DefId, FunctionInfo>,
         enum_variants: &'a FxHashMap<DefId, EnumVariantInfo>,
+        struct_fields: &'a FxHashMap<DefId, StructFieldInfo>,
         function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
     ) -> Self {
         Self {
@@ -260,6 +264,7 @@ impl<'a> TypeChecker<'a> {
             resolution_map,
             function_info,
             enum_variants,
+            struct_fields,
             errors: Vec::new(),
             substitutions: FxHashMap::default(),
             next_type_var: 0,
@@ -274,6 +279,7 @@ impl<'a> TypeChecker<'a> {
             function_body_scopes,
             current_fn_scope: None,
             current_trait_bounds: Vec::new(),
+            loop_depth: 0,
         }
     }
 
@@ -1069,6 +1075,16 @@ impl<'a> TypeChecker<'a> {
                                         }
                                         return self.types.error_id;
                                     }
+                                    DefKind::Variable | DefKind::Const | DefKind::Static => {
+                                        for arg in args {
+                                            self.infer_expr(&arg.node.value);
+                                        }
+                                        self.error(
+                                            SemanticErrorKind::NotAFunction { name: cname.clone() },
+                                            expr.span,
+                                        );
+                                        return self.types.error_id;
+                                    }
                                     _ => {}
                                 }
                             }
@@ -1132,17 +1148,36 @@ impl<'a> TypeChecker<'a> {
                             self.expr_types.insert(expr.span, ret_type);
                             ret_type
                         } else {
+                            // TODO: Emit NoMethodFound here once method resolution
+                            // covers all paths (equip, builtin, runtime). Currently
+                            // too many false positives from imported module methods
+                            // and runtime-only methods.
                             self.types.error_id
                         }
                     }
                 }
             }
 
-            Expr::FieldAccess { object, field: _ } => {
+            Expr::FieldAccess { object, field } => {
                 let object_type = self.infer_expr(object);
-                let _ = self.resolve_type(object_type);
-                // Field resolution requires knowing the struct definition.
-                // For now, return error type — full field checking requires struct info.
+                let resolved = self.resolve_type(object_type);
+                // Check if the field exists on the resolved type.
+                // Only check Defined (non-generic) structs to avoid false positives
+                // on wrapper/guard types like ReadGuard[T] that proxy field access.
+                if let ResolvedType::Defined(did) = self.types.get(resolved).clone() {
+                    if let Some(sfi) = self.struct_fields.get(&did) {
+                        if !sfi.fields.iter().any(|(name, _)| name == &field.node) {
+                            let type_name = self.describe_resolved_type(resolved);
+                            self.error(
+                                SemanticErrorKind::NoFieldFound {
+                                    field: field.node.clone(),
+                                    type_: type_name,
+                                },
+                                expr.span,
+                            );
+                        }
+                    }
+                }
                 self.types.error_id
             }
 
@@ -1771,6 +1806,9 @@ impl<'a> TypeChecker<'a> {
                 if let Some(expr) = expr {
                     self.infer_expr(expr);
                 }
+                if self.loop_depth == 0 {
+                    self.error(SemanticErrorKind::BreakOutsideLoop, stmt.span);
+                }
             }
 
             Stmt::Assert { condition, message } => {
@@ -1790,7 +1828,12 @@ impl<'a> TypeChecker<'a> {
                 self.infer_expr(value);
             }
 
-            Stmt::Continue | Stmt::Pass => {}
+            Stmt::Continue => {
+                if self.loop_depth == 0 {
+                    self.error(SemanticErrorKind::BreakOutsideLoop, stmt.span);
+                }
+            }
+            Stmt::Pass => {}
 
             Stmt::For {
                 pattern, iterable, body, else_body, ..
@@ -1856,7 +1899,9 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
 
+                self.loop_depth += 1;
                 self.check_block(body);
+                self.loop_depth -= 1;
                 if let Some(else_body) = else_body {
                     self.check_block(else_body);
                 }
@@ -1871,14 +1916,18 @@ impl<'a> TypeChecker<'a> {
                 self.unify(cond_type, self.types.bool_id, condition.span);
                 // Assign types to all `is` pattern bindings (including compound conditions)
                 self.assign_compound_is_types(condition);
+                self.loop_depth += 1;
                 self.check_block(body);
+                self.loop_depth -= 1;
                 if let Some(else_body) = else_body {
                     self.check_block(else_body);
                 }
             }
 
             Stmt::Loop { body } => {
+                self.loop_depth += 1;
                 self.check_block(body);
+                self.loop_depth -= 1;
             }
 
             Stmt::If {
@@ -3245,6 +3294,7 @@ impl<'a> TypeChecker<'a> {
         self.current_return_type = Some(return_type);
         self.current_function_throws = func.throws.is_some();
         self.current_function_is_async = func.qualifiers.is_async;
+        self.loop_depth = 0;
 
         // main() can only throw int (the process exit code)
         if func.name.node == "main" {
@@ -3364,10 +3414,11 @@ pub fn check_module(
     resolution_map: &ResolutionMap,
     function_info: &FxHashMap<DefId, FunctionInfo>,
     enum_variants: &FxHashMap<DefId, EnumVariantInfo>,
+    struct_fields: &FxHashMap<DefId, StructFieldInfo>,
     function_body_scopes: &FxHashMap<(String, usize), ScopeId>,
     errors: &mut Vec<SemanticError>,
 ) -> (FxHashMap<Span, TypeId>, FxHashMap<usize, DefId>) {
-    let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants, function_body_scopes);
+    let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants, struct_fields, function_body_scopes);
 
     // Pre-pass: register function signatures so callers can infer return types.
     // This must run before body checking so that e.g. `auto x = imported_fn()`

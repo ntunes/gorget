@@ -150,7 +150,13 @@
 
 - **gorget-db — JSON document store**: MongoDB-lite REST API using gg.httpserver, gg.json, gg.jsonpath, std.signal, std.fs. POST/GET/DELETE/PUT/PATCH on `/db/{collection}/{id}` with query support. [added: 2026-03-09]
 
-- **Negative test fixtures — remaining gaps**: 29 new `*_error.gg` fixtures added (2026-03-15). Still missing coverage at `gg check` time: `no_field`, `no_method` (only caught at linker), `not_a_function` (not caught), `break_outside_loop` (not caught), `return_outside_function` (parse error only), `unknown_directive` (not caught), `underivable_trait` e.g. `@derive(Hashable)` on struct with unhashable field (not caught), `spawn sync_fn()` (not caught), `private_in_public` (only caught by static analysis warning, not error), `borrow_on_copy` (not caught). These represent missing compiler diagnostics, not just missing tests. [updated: 2026-03-15]
+- **Negative test fixtures — remaining gaps**: 29 `*_error.gg` fixtures added (2026-03-15), plus 4 new diagnostics: `no_field` (Defined structs only), `not_a_function` (Variable/Const/Static), `break_outside_loop`, `unknown_directive` (item-level @attrs). Still missing: `no_method` (deferred — method resolution incomplete for equip/runtime methods, high false positive rate), `underivable_trait` (deferred — derive expansion runs before trait registry), `return_outside_function` (parse error only), `spawn sync_fn()` (not caught), `private_in_public` (warning only), `borrow_on_copy` (not caught). [updated: 2026-03-15]
+
+- **`NoMethodFound` diagnostic — deferred due to resolution gaps**: The type checker's method call fallback silently returns error_id when both `resolve_method()` and `builtin_method_type()` fail. Emitting `NoMethodFound` there causes ~140 false positives because: (1) equip methods use TypeId-based lookup which fails on imported types (TypeId mismatch), (2) runtime-only methods (e.g., `Arena.bytes_used()`) exist only in C backend. Fix requires either name-based method resolution or a registry of all valid methods per type. [added: 2026-03-15]
+
+- **`underivable_trait` diagnostic — deferred**: `@derive(Hashable)` on a struct with unhashable fields should error, but `expand_derives` runs before the trait registry is built (Pass 0 vs Pass 3). Field-level trait checking needs to run post-Pass 3. [added: 2026-03-15]
+
+- **Duplicate `infer_expr` call in `check_block`**: `check_block` calls `check_stmt(stmt)` then also calls `infer_expr(expr)` for `Stmt::Expr` to get block return type. This double-invocation causes duplicate errors from newly added diagnostics (e.g., NotAFunction fires twice). Fix: cache the result from `check_stmt` or skip the second `infer_expr`. [added: 2026-03-15]
 
 ## Low
 

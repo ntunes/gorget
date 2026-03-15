@@ -92,6 +92,11 @@ impl TraitRegistry {
         None
     }
 
+    /// Check if a type (by name) has any impl registered.
+    pub fn has_any_impl_by_name(&self, type_name: &str) -> bool {
+        self.impls.iter().any(|impl_info| impl_info.self_type_name == type_name)
+    }
+
     /// Check if a type (by name) has an implementation for a trait (by name).
     pub fn has_trait_impl_by_name(&self, type_name: &str, trait_name: &str) -> bool {
         if self.impls.iter().any(|impl_info| {

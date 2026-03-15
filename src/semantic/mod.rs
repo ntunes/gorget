@@ -140,6 +140,37 @@ pub fn analyze_with_source_dir(
         }
     }
 
+    // Validate item-level attributes (@derive, @tag, etc.)
+    fn validate_attributes(items: &[crate::span::Spanned<Item>], errors: &mut Vec<SemanticError>) {
+        for item in items {
+            let attrs: &[crate::span::Spanned<crate::parser::ast::Attribute>] = match &item.node {
+                Item::Struct(s) => &s.attributes,
+                Item::Enum(e) => &e.attributes,
+                Item::Function(f) => &f.attributes,
+                Item::Test(t) => &t.attributes,
+                Item::Module { items: inner, .. } => {
+                    validate_attributes(inner, errors);
+                    continue;
+                }
+                _ => continue,
+            };
+            for attr in attrs {
+                match attr.node.name.node.as_str() {
+                    "derive" | "tag" | "should_panic" | "skip" | "timeout" => {}
+                    _ => {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::UnknownDirective {
+                                name: format!("@{}", attr.node.name.node),
+                            },
+                            span: attr.span,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    validate_attributes(&module.items, &mut errors);
+
     // Validate test blocks
     {
         let mut seen_setup = false;
@@ -195,6 +226,7 @@ pub fn analyze_with_source_dir(
         &resolution_map,
         &resolve_ctx.function_info,
         &resolve_ctx.enum_variants,
+        &resolve_ctx.struct_fields,
         &resolve_ctx.function_body_scopes,
         &mut errors,
     );
