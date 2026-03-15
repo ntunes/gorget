@@ -211,7 +211,10 @@ pub fn analyze_with_source_dir(
     // Pass 2.5: Rewrite struct constructor calls to StructLiteral nodes.
     // After resolution we know which identifiers refer to structs, so we can
     // convert Call { callee: Identifier("Foo"), .. } → StructLiteral { name: "Foo", .. }.
-    rewrite::rewrite_struct_calls(module, &resolution_map, &scopes);
+    let rewrite_errors = rewrite::rewrite_struct_calls(module, &resolution_map, &scopes);
+    for (kind, span) in rewrite_errors {
+        errors.push(SemanticError { kind, span });
+    }
 
     // Pass 3: Build trait/impl registry
     let trait_registry =

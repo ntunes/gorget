@@ -14390,3 +14390,18 @@ fn break_outside_loop_error() {
 fn unknown_directive_error() {
     check_gg_fails("unknown_directive_error.gg", "unknown directive");
 }
+
+#[test]
+fn continue_outside_loop_error() {
+    check_gg_fails("continue_outside_loop_error.gg", "continue outside of loop");
+}
+
+#[test]
+fn duplicate_struct_field_error() {
+    check_gg_fails("duplicate_struct_field_error.gg", "duplicate field");
+}
+
+#[test]
+fn wrong_field_count_struct_error() {
+    check_gg_fails("wrong_field_count_struct_error.gg", "has 2 fields but 1");
+}

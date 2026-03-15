@@ -1,0 +1,7 @@
+struct Point:
+    float x
+    float y
+
+void main():
+    Point p = Point(x=1.0, x=2.0)
+    print(p.x)

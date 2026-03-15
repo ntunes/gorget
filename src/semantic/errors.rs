@@ -199,8 +199,11 @@ pub enum SemanticErrorKind {
         detail: String,
     },
 
-    /// Break/continue outside of loop.
+    /// Break outside of loop.
     BreakOutsideLoop,
+
+    /// Continue outside of loop.
+    ContinueOutsideLoop,
 
     /// Return outside of function.
     ReturnOutsideFunction,
@@ -403,6 +406,12 @@ pub enum SemanticErrorKind {
 
     /// Required parameter follows a parameter with a default value.
     RequiredAfterDefault { name: String },
+
+    /// Duplicate field in struct literal.
+    DuplicateStructField { field: String },
+
+    /// Wrong number of fields in struct literal.
+    WrongFieldCount { type_: String, expected: usize, found: usize },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -480,6 +489,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::BreakOutsideLoop => {
                 write!(f, "break outside of loop")
+            }
+            SemanticErrorKind::ContinueOutsideLoop => {
+                write!(f, "continue outside of loop")
             }
             SemanticErrorKind::ReturnOutsideFunction => {
                 write!(f, "return outside of function")
@@ -692,6 +704,12 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::RequiredAfterDefault { name } => {
                 write!(f, "required parameter `{name}` follows a parameter with a default value")
+            }
+            SemanticErrorKind::DuplicateStructField { field } => {
+                write!(f, "duplicate field `{field}` in struct literal")
+            }
+            SemanticErrorKind::WrongFieldCount { type_, expected, found } => {
+                write!(f, "`{type_}` has {expected} fields but {found} were supplied")
             }
         }
     }

@@ -1577,6 +1577,17 @@ impl<'a> TypeChecker<'a> {
                             },
                             name.span,
                         );
+                    } else if let Some(sfi) = self.struct_fields.get(&def_id) {
+                        if args.len() != sfi.fields.len() {
+                            self.error(
+                                SemanticErrorKind::WrongFieldCount {
+                                    type_: name.node.clone(),
+                                    expected: sfi.fields.len(),
+                                    found: args.len(),
+                                },
+                                name.span,
+                            );
+                        }
                     }
                     for arg in args {
                         self.infer_expr(arg);
@@ -1784,6 +1795,9 @@ impl<'a> TypeChecker<'a> {
             }
 
             Stmt::Return(expr) => {
+                if self.current_return_type.is_none() {
+                    self.error(SemanticErrorKind::ReturnOutsideFunction, stmt.span);
+                }
                 if let Some(expr) = expr {
                     let prev_hint = self.decl_type_hint;
                     self.decl_type_hint = self.current_return_type;
@@ -1830,7 +1844,7 @@ impl<'a> TypeChecker<'a> {
 
             Stmt::Continue => {
                 if self.loop_depth == 0 {
-                    self.error(SemanticErrorKind::BreakOutsideLoop, stmt.span);
+                    self.error(SemanticErrorKind::ContinueOutsideLoop, stmt.span);
                 }
             }
             Stmt::Pass => {}

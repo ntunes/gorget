@@ -8,8 +8,9 @@
 
 use crate::lexer::token::StringSegment;
 use crate::parser::ast::*;
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 
+use super::errors::SemanticErrorKind;
 use super::resolve::ResolutionMap;
 use super::scope::{DefKind, ScopeTable};
 
@@ -18,34 +19,36 @@ use super::scope::{DefKind, ScopeTable};
 /// For each `Expr::Call` whose callee is an `Expr::Identifier` that resolves
 /// to `DefKind::Struct`, replace the node with `Expr::StructLiteral`.
 /// Enum variant calls (`DefKind::Variant`) are NOT rewritten.
-pub fn rewrite_struct_calls(module: &mut Module, resolution_map: &ResolutionMap, scopes: &ScopeTable) {
+pub fn rewrite_struct_calls(module: &mut Module, resolution_map: &ResolutionMap, scopes: &ScopeTable) -> Vec<(SemanticErrorKind, Span)> {
+    let mut errors = Vec::new();
     for item in &mut module.items {
-        rewrite_item(&mut item.node, resolution_map, scopes);
+        rewrite_item(&mut item.node, resolution_map, scopes, &mut errors);
     }
+    errors
 }
 
-fn rewrite_item(item: &mut Item, res: &ResolutionMap, scopes: &ScopeTable) {
+fn rewrite_item(item: &mut Item, res: &ResolutionMap, scopes: &ScopeTable, errors: &mut Vec<(SemanticErrorKind, Span)>) {
     match item {
-        Item::Function(f) => rewrite_function(f, res, scopes),
+        Item::Function(f) => rewrite_function(f, res, scopes, errors),
         Item::Equip(eq) => {
             for method in &mut eq.items {
-                rewrite_function(&mut method.node, res, scopes);
+                rewrite_function(&mut method.node, res, scopes, errors);
             }
         }
-        Item::ConstDecl(c) => rewrite_expr(&mut c.value, res, scopes),
-        Item::StaticDecl(s) => rewrite_expr(&mut s.value, res, scopes),
+        Item::ConstDecl(c) => rewrite_expr(&mut c.value, res, scopes, errors),
+        Item::StaticDecl(s) => rewrite_expr(&mut s.value, res, scopes, errors),
         Item::Test(t) => {
-            rewrite_block(&mut t.body, res, scopes);
+            rewrite_block(&mut t.body, res, scopes, errors);
         }
         Item::Bench(b) => {
-            rewrite_block(&mut b.body, res, scopes);
+            rewrite_block(&mut b.body, res, scopes, errors);
         }
-        Item::SuiteSetup(s) => rewrite_block(&mut s.body, res, scopes),
-        Item::SuiteTeardown(s) => rewrite_block(&mut s.body, res, scopes),
+        Item::SuiteSetup(s) => rewrite_block(&mut s.body, res, scopes, errors),
+        Item::SuiteTeardown(s) => rewrite_block(&mut s.body, res, scopes, errors),
         Item::Trait(t) => {
             for trait_item in &mut t.items {
                 if let TraitItem::Method(f) = &mut trait_item.node {
-                    rewrite_function(f, res, scopes);
+                    rewrite_function(f, res, scopes, errors);
                 }
             }
         }
@@ -55,37 +58,37 @@ fn rewrite_item(item: &mut Item, res: &ResolutionMap, scopes: &ScopeTable) {
         | Item::MetaTypeFunc(_) | Item::MetaAssert(_) | Item::MetaIf(_) | Item::MetaLog(_) => {}
         Item::Module { items, .. } => {
             for si in items {
-                rewrite_item(&mut si.node, res, scopes);
+                rewrite_item(&mut si.node, res, scopes, errors);
             }
         }
     }
 }
 
-fn rewrite_function(f: &mut FunctionDef, res: &ResolutionMap, scopes: &ScopeTable) {
+fn rewrite_function(f: &mut FunctionDef, res: &ResolutionMap, scopes: &ScopeTable, errors: &mut Vec<(SemanticErrorKind, Span)>) {
     // Rewrite default parameter expressions
     for param in &mut f.params {
         if let Some(default) = &mut param.node.default {
-            rewrite_expr(default, res, scopes);
+            rewrite_expr(default, res, scopes, errors);
         }
     }
     match &mut f.body {
-        FunctionBody::Block(block) => rewrite_block(block, res, scopes),
-        FunctionBody::Expression(expr) => rewrite_expr(expr, res, scopes),
+        FunctionBody::Block(block) => rewrite_block(block, res, scopes, errors),
+        FunctionBody::Expression(expr) => rewrite_expr(expr, res, scopes, errors),
         FunctionBody::Declaration | FunctionBody::Extern(_) => {}
     }
 }
 
-fn rewrite_block(block: &mut Block, res: &ResolutionMap, scopes: &ScopeTable) {
+fn rewrite_block(block: &mut Block, res: &ResolutionMap, scopes: &ScopeTable, errors: &mut Vec<(SemanticErrorKind, Span)>) {
     for stmt in &mut block.stmts {
-        rewrite_stmt(&mut stmt.node, res, scopes);
+        rewrite_stmt(&mut stmt.node, res, scopes, errors);
     }
 }
 
-fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
+fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable, errors: &mut Vec<(SemanticErrorKind, Span)>) {
     match stmt {
-        Stmt::VarDecl { value, .. } => rewrite_expr(value, res, scopes),
+        Stmt::VarDecl { value, .. } => rewrite_expr(value, res, scopes, errors),
         Stmt::Expr(expr) => {
-            rewrite_expr(expr, res, scopes);
+            rewrite_expr(expr, res, scopes, errors);
             // Rewrite field_set(obj, "field", value) → obj.field = value
             if let Expr::Call { ref callee, ref args, .. } = expr.node {
                 if let Expr::Identifier(ref cname) = callee.node {
@@ -115,96 +118,96 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
             }
         }
         Stmt::Assign { target, value } => {
-            rewrite_expr(target, res, scopes);
-            rewrite_expr(value, res, scopes);
+            rewrite_expr(target, res, scopes, errors);
+            rewrite_expr(value, res, scopes, errors);
         }
         Stmt::CompoundAssign { target, value, .. } => {
-            rewrite_expr(target, res, scopes);
-            rewrite_expr(value, res, scopes);
+            rewrite_expr(target, res, scopes, errors);
+            rewrite_expr(value, res, scopes, errors);
         }
-        Stmt::Return(Some(expr)) => rewrite_expr(expr, res, scopes),
-        Stmt::Throw(expr) => rewrite_expr(expr, res, scopes),
-        Stmt::Break(Some(expr)) => rewrite_expr(expr, res, scopes),
+        Stmt::Return(Some(expr)) => rewrite_expr(expr, res, scopes, errors),
+        Stmt::Throw(expr) => rewrite_expr(expr, res, scopes, errors),
+        Stmt::Break(Some(expr)) => rewrite_expr(expr, res, scopes, errors),
         Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => {}
         Stmt::For { iterable, body, else_body, .. } => {
-            rewrite_expr(iterable, res, scopes);
-            rewrite_block(body, res, scopes);
-            if let Some(eb) = else_body { rewrite_block(eb, res, scopes); }
+            rewrite_expr(iterable, res, scopes, errors);
+            rewrite_block(body, res, scopes, errors);
+            if let Some(eb) = else_body { rewrite_block(eb, res, scopes, errors); }
         }
         Stmt::While { condition, body, else_body } => {
-            rewrite_expr(condition, res, scopes);
-            rewrite_block(body, res, scopes);
-            if let Some(eb) = else_body { rewrite_block(eb, res, scopes); }
+            rewrite_expr(condition, res, scopes, errors);
+            rewrite_block(body, res, scopes, errors);
+            if let Some(eb) = else_body { rewrite_block(eb, res, scopes, errors); }
         }
-        Stmt::Loop { body } => rewrite_block(body, res, scopes),
+        Stmt::Loop { body } => rewrite_block(body, res, scopes, errors),
         Stmt::If { condition, then_body, elif_branches, else_body } => {
-            rewrite_expr(condition, res, scopes);
-            rewrite_block(then_body, res, scopes);
+            rewrite_expr(condition, res, scopes, errors);
+            rewrite_block(then_body, res, scopes, errors);
             for (cond, body) in elif_branches {
-                rewrite_expr(cond, res, scopes);
-                rewrite_block(body, res, scopes);
+                rewrite_expr(cond, res, scopes, errors);
+                rewrite_block(body, res, scopes, errors);
             }
-            if let Some(eb) = else_body { rewrite_block(eb, res, scopes); }
+            if let Some(eb) = else_body { rewrite_block(eb, res, scopes, errors); }
         }
         Stmt::Match { scrutinee, arms, else_arm } => {
-            rewrite_expr(scrutinee, res, scopes);
+            rewrite_expr(scrutinee, res, scopes, errors);
             for arm in arms.iter_mut().filter_map(|i| i.arm_mut()) {
-                if let Some(guard) = &mut arm.guard { rewrite_expr(guard, res, scopes); }
-                rewrite_expr(&mut arm.body, res, scopes);
+                if let Some(guard) = &mut arm.guard { rewrite_expr(guard, res, scopes, errors); }
+                rewrite_expr(&mut arm.body, res, scopes, errors);
             }
-            if let Some(ea) = else_arm { rewrite_block(ea, res, scopes); }
+            if let Some(ea) = else_arm { rewrite_block(ea, res, scopes, errors); }
         }
         Stmt::Select { arms, else_arm } => {
             for arm in arms {
                 match &mut arm.op {
-                    SelectOp::Recv { channel, .. } => rewrite_expr(channel, res, scopes),
+                    SelectOp::Recv { channel, .. } => rewrite_expr(channel, res, scopes, errors),
                     SelectOp::Send { channel, value } => {
-                        rewrite_expr(channel, res, scopes);
-                        rewrite_expr(value, res, scopes);
+                        rewrite_expr(channel, res, scopes, errors);
+                        rewrite_expr(value, res, scopes, errors);
                     }
                 }
-                rewrite_block(&mut arm.body, res, scopes);
+                rewrite_block(&mut arm.body, res, scopes, errors);
             }
-            if let Some(ea) = else_arm { rewrite_block(ea, res, scopes); }
+            if let Some(ea) = else_arm { rewrite_block(ea, res, scopes, errors); }
         }
         Stmt::With { bindings, body } => {
             for binding in bindings {
-                rewrite_expr(&mut binding.expr, res, scopes);
+                rewrite_expr(&mut binding.expr, res, scopes, errors);
             }
-            rewrite_block(body, res, scopes);
+            rewrite_block(body, res, scopes, errors);
         }
-        Stmt::Unsafe { body } => rewrite_block(body, res, scopes),
-        Stmt::NamedScope { body, .. } => rewrite_block(body, res, scopes),
+        Stmt::Unsafe { body } => rewrite_block(body, res, scopes, errors),
+        Stmt::NamedScope { body, .. } => rewrite_block(body, res, scopes, errors),
         Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
-            rewrite_expr(condition, res, scopes);
-            if let Some(msg) = message { rewrite_expr(msg, res, scopes); }
+            rewrite_expr(condition, res, scopes, errors);
+            if let Some(msg) = message { rewrite_expr(msg, res, scopes, errors); }
         }
         Stmt::Snapshot { value, .. } => {
-            rewrite_expr(value, res, scopes);
+            rewrite_expr(value, res, scopes, errors);
         }
-        Stmt::Item(item) => rewrite_item(item, res, scopes),
+        Stmt::Item(item) => rewrite_item(item, res, scopes, errors),
         Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
             // Conditions are meta expressions — skip rewriting them; rewrite the bodies.
-            rewrite_block(then_body, res, scopes);
+            rewrite_block(then_body, res, scopes, errors);
             for (_, body) in elif_branches {
-                rewrite_block(body, res, scopes);
+                rewrite_block(body, res, scopes, errors);
             }
-            if let Some(eb) = else_body { rewrite_block(eb, res, scopes); }
+            if let Some(eb) = else_body { rewrite_block(eb, res, scopes, errors); }
         }
         Stmt::MetaFor { body, .. } => {
             // Range is a meta expression — skip; rewrite the body.
-            rewrite_block(body, res, scopes);
+            rewrite_block(body, res, scopes, errors);
         }
         Stmt::MetaMatch { arms, else_arm, .. } => {
             // Scrutinee and case exprs are meta expressions — skip; rewrite bodies only.
             for (_, body) in arms {
-                rewrite_block(body, res, scopes);
+                rewrite_block(body, res, scopes, errors);
             }
-            if let Some(eb) = else_arm { rewrite_block(eb, res, scopes); }
+            if let Some(eb) = else_arm { rewrite_block(eb, res, scopes, errors); }
         }
         Stmt::MetaWhile { body, .. } => {
             // Condition is a meta expression — skip; rewrite the body.
-            rewrite_block(body, res, scopes);
+            rewrite_block(body, res, scopes, errors);
         }
 
         Stmt::MetaConst { .. } => {
@@ -215,125 +218,125 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable) {
             // Compile-time diagnostic — removed before GIR lowering; skip.
         }
         Stmt::OnError { body } => {
-            rewrite_block(body, res, scopes);
+            rewrite_block(body, res, scopes, errors);
         }
     }
 }
 
-fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTable) {
+fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTable, errors: &mut Vec<(SemanticErrorKind, Span)>) {
     // First, recurse into sub-expressions
     match &mut expr.node {
-        Expr::UnaryOp { operand, .. } => rewrite_expr(operand, res, scopes),
+        Expr::UnaryOp { operand, .. } => rewrite_expr(operand, res, scopes, errors),
         Expr::BinaryOp { left, right, .. } => {
-            rewrite_expr(left, res, scopes);
-            rewrite_expr(right, res, scopes);
+            rewrite_expr(left, res, scopes, errors);
+            rewrite_expr(right, res, scopes, errors);
         }
         Expr::Call { callee, args, .. } => {
-            rewrite_expr(callee, res, scopes);
+            rewrite_expr(callee, res, scopes, errors);
             for arg in args {
-                rewrite_expr(&mut arg.node.value, res, scopes);
+                rewrite_expr(&mut arg.node.value, res, scopes, errors);
             }
         }
         Expr::MethodCall { receiver, args, .. } => {
-            rewrite_expr(receiver, res, scopes);
+            rewrite_expr(receiver, res, scopes, errors);
             for arg in args {
-                rewrite_expr(&mut arg.node.value, res, scopes);
+                rewrite_expr(&mut arg.node.value, res, scopes, errors);
             }
         }
         Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. }
         | Expr::OptionalChain { object, .. } => {
-            rewrite_expr(object, res, scopes);
+            rewrite_expr(object, res, scopes, errors);
         }
         Expr::Index { object, index } => {
-            rewrite_expr(object, res, scopes);
-            rewrite_expr(index, res, scopes);
+            rewrite_expr(object, res, scopes, errors);
+            rewrite_expr(index, res, scopes, errors);
         }
         Expr::DefaultOp { lhs, rhs } => {
-            rewrite_expr(lhs, res, scopes);
-            rewrite_expr(rhs, res, scopes);
+            rewrite_expr(lhs, res, scopes, errors);
+            rewrite_expr(rhs, res, scopes, errors);
         }
         Expr::Move { expr: inner }
         | Expr::MutableBorrow { expr: inner } | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner } | Expr::Spawn { expr: inner }
         | Expr::SpawnBlocking { expr: inner } | Expr::RawCapture { expr: inner } => {
-            rewrite_expr(inner, res, scopes);
+            rewrite_expr(inner, res, scopes, errors);
         }
         Expr::If { condition, then_branch, elif_branches, else_branch } => {
-            rewrite_expr(condition, res, scopes);
-            rewrite_expr(then_branch, res, scopes);
+            rewrite_expr(condition, res, scopes, errors);
+            rewrite_expr(then_branch, res, scopes, errors);
             for (cond, body) in elif_branches {
-                rewrite_expr(cond, res, scopes);
-                rewrite_expr(body, res, scopes);
+                rewrite_expr(cond, res, scopes, errors);
+                rewrite_expr(body, res, scopes, errors);
             }
-            if let Some(eb) = else_branch { rewrite_expr(eb, res, scopes); }
+            if let Some(eb) = else_branch { rewrite_expr(eb, res, scopes, errors); }
         }
         Expr::Match { scrutinee, arms, else_arm } => {
-            rewrite_expr(scrutinee, res, scopes);
+            rewrite_expr(scrutinee, res, scopes, errors);
             for arm in arms {
-                if let Some(guard) = &mut arm.guard { rewrite_expr(guard, res, scopes); }
-                rewrite_expr(&mut arm.body, res, scopes);
+                if let Some(guard) = &mut arm.guard { rewrite_expr(guard, res, scopes, errors); }
+                rewrite_expr(&mut arm.body, res, scopes, errors);
             }
-            if let Some(ea) = else_arm { rewrite_expr(ea, res, scopes); }
+            if let Some(ea) = else_arm { rewrite_expr(ea, res, scopes, errors); }
         }
         Expr::Block(block) | Expr::Do { body: block } => {
-            rewrite_block(block, res, scopes);
+            rewrite_block(block, res, scopes, errors);
         }
         Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
-            rewrite_expr(body, res, scopes);
+            rewrite_expr(body, res, scopes, errors);
         }
         Expr::ListComprehension { expr: comp_expr, iterable, condition, .. } => {
-            rewrite_expr(comp_expr, res, scopes);
-            rewrite_expr(iterable, res, scopes);
-            if let Some(cond) = condition { rewrite_expr(cond, res, scopes); }
+            rewrite_expr(comp_expr, res, scopes, errors);
+            rewrite_expr(iterable, res, scopes, errors);
+            if let Some(cond) = condition { rewrite_expr(cond, res, scopes, errors); }
         }
         Expr::DictComprehension { key, value, iterable, condition, .. } => {
-            rewrite_expr(key, res, scopes);
-            rewrite_expr(value, res, scopes);
-            rewrite_expr(iterable, res, scopes);
-            if let Some(cond) = condition { rewrite_expr(cond, res, scopes); }
+            rewrite_expr(key, res, scopes, errors);
+            rewrite_expr(value, res, scopes, errors);
+            rewrite_expr(iterable, res, scopes, errors);
+            if let Some(cond) = condition { rewrite_expr(cond, res, scopes, errors); }
         }
         Expr::SetComprehension { expr: comp_expr, iterable, condition, .. } => {
-            rewrite_expr(comp_expr, res, scopes);
-            rewrite_expr(iterable, res, scopes);
-            if let Some(cond) = condition { rewrite_expr(cond, res, scopes); }
+            rewrite_expr(comp_expr, res, scopes, errors);
+            rewrite_expr(iterable, res, scopes, errors);
+            if let Some(cond) = condition { rewrite_expr(cond, res, scopes, errors); }
         }
         Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
-            for elem in elems { rewrite_expr(elem, res, scopes); }
+            for elem in elems { rewrite_expr(elem, res, scopes, errors); }
         }
         Expr::DictLiteral(pairs) => {
             for (k, v) in pairs {
-                rewrite_expr(k, res, scopes);
-                rewrite_expr(v, res, scopes);
+                rewrite_expr(k, res, scopes, errors);
+                rewrite_expr(v, res, scopes, errors);
             }
         }
         Expr::StructLiteral { args, .. } => {
-            for arg in args { rewrite_expr(arg, res, scopes); }
+            for arg in args { rewrite_expr(arg, res, scopes, errors); }
         }
         Expr::As { expr: inner, .. } | Expr::Is { expr: inner, .. } => {
-            rewrite_expr(inner, res, scopes);
+            rewrite_expr(inner, res, scopes, errors);
         }
         Expr::Range { start, end, .. } => {
-            if let Some(s) = start { rewrite_expr(s, res, scopes); }
-            if let Some(e) = end { rewrite_expr(e, res, scopes); }
+            if let Some(s) = start { rewrite_expr(s, res, scopes, errors); }
+            if let Some(e) = end { rewrite_expr(e, res, scopes, errors); }
         }
         // Dot-shorthand: recurse into args
         Expr::DotShorthand { args, .. } => {
             for arg in args.iter_mut() {
-                rewrite_expr(&mut arg.node.value, res, scopes);
+                rewrite_expr(&mut arg.node.value, res, scopes, errors);
             }
         }
         Expr::MetaOpInfix { left, right, .. } => {
-            rewrite_expr(left, res, scopes);
-            rewrite_expr(right, res, scopes);
+            rewrite_expr(left, res, scopes, errors);
+            rewrite_expr(right, res, scopes, errors);
         }
         Expr::MetaOpToken(_) => {}
         Expr::Rethrow { expr, transform, .. } => {
-            rewrite_expr(expr, res, scopes);
-            rewrite_expr(transform, res, scopes);
+            rewrite_expr(expr, res, scopes, errors);
+            rewrite_expr(transform, res, scopes, errors);
         }
         Expr::Catch { expr, recovery, .. } => {
-            rewrite_expr(expr, res, scopes);
-            rewrite_expr(recovery, res, scopes);
+            rewrite_expr(expr, res, scopes, errors);
+            rewrite_expr(recovery, res, scopes, errors);
         }
         // Leaf nodes
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
@@ -415,6 +418,21 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
                     // Extract fields from the Call and build StructLiteral
                     let call = std::mem::replace(&mut expr.node, Expr::NoneLiteral);
                     if let Expr::Call { callee, generic_args, args } = call {
+                        // Check for duplicate named fields before stripping names
+                        let mut seen_names = rustc_hash::FxHashSet::default();
+                        for arg in &args {
+                            if let Some(ref name) = arg.node.name {
+                                if !seen_names.insert(name.node.clone()) {
+                                    errors.push((
+                                        SemanticErrorKind::DuplicateStructField {
+                                            field: name.node.clone(),
+                                        },
+                                        name.span,
+                                    ));
+                                }
+                            }
+                        }
+
                         let name_str = if let Expr::Identifier(n) = callee.node {
                             n
                         } else {
