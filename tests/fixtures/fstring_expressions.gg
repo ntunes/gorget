@@ -1,0 +1,11 @@
+void main():
+    int x = 42
+    float y = 3.14
+    str name = "world"
+    bool flag = true
+    print(f"int: {x}")
+    print(f"float: {y}")
+    print(f"str: {name}")
+    print(f"bool: {flag}")
+    print(f"expr: {x + 8}")
+    print(f"multi: {name} has {x} items")

@@ -1,0 +1,18 @@
+from std.collections import Vector
+
+struct Stack[T]:
+    Vector[T] items
+
+equip Stack[T]:
+    void push(self, T item):
+        self.items.push(item)
+
+    int size(self):
+        return self.items.len()
+
+void main():
+    Stack[int] s = Stack[int](Vector[int]())
+    s.push(10)
+    s.push(20)
+    s.push(30)
+    print(s.size())

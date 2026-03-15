@@ -1,0 +1,8 @@
+directive overflow=wrap
+
+void main():
+    int max = 9223372036854775807
+    print(max)
+    int wrapped = max + 1
+    print(wrapped)
+    print(wrapped == -max - 1)

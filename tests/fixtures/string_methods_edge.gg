@@ -1,0 +1,11 @@
+void main():
+    str empty = ""
+    print(empty.len())
+    print(empty.is_empty())
+
+    str s = "Hello, World!"
+    print(s.starts_with("Hello"))
+    print(s.ends_with("World!"))
+    print(s.contains("lo, W"))
+    print(s.to_upper())
+    print(s.to_lower())

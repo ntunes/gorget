@@ -1,0 +1,24 @@
+void main():
+    # int to float
+    int a = 42
+    float b = a as float
+    print(b)
+
+    # float to int (truncation)
+    float c = 3.7
+    int d = c as int
+    print(d)
+
+    # cast in arithmetic
+    float result = (5 as float) / 2.0
+    print(result)
+
+    # negative float to int
+    float neg = -7.9
+    int n = neg as int
+    print(n)
+
+    # large int to float
+    int big = 1000000
+    float f = big as float
+    print(f)

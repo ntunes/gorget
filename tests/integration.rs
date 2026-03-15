@@ -13811,6 +13811,14 @@ fn closure_higher_order_chain() {
     );
 }
 
+#[test]
+fn closure_iife() {
+    run_gg(
+        "closure_iife.gg",
+        "25\n10\nhello world",
+    );
+}
+
 // ── Generic edge cases ──
 
 #[test]
@@ -13934,5 +13942,240 @@ fn borrow_after_method_mut() {
     run_gg(
         "borrow_after_method_mut.gg",
         "3\n1\n4\n4\n10",
+    );
+}
+
+#[test]
+fn control_nested_loops() {
+    run_gg("control_nested_loops.gg", "15");
+}
+
+#[test]
+fn control_early_return() {
+    run_gg("control_early_return.gg", "4\n-1");
+}
+
+#[test]
+fn control_while_complex() {
+    run_gg("control_while_complex.gg", "9\n1");
+}
+
+#[test]
+fn numeric_overflow_wrap() {
+    run_gg(
+        "numeric_overflow_wrap.gg",
+        "9223372036854775807\n-9223372036854775808\ntrue",
+    );
+}
+
+#[test]
+fn numeric_division() {
+    run_gg("numeric_division.gg", "3\n1\n-3\n-1\n3.333333\n3");
+}
+
+#[test]
+fn string_methods_edge() {
+    run_gg(
+        "string_methods_edge.gg",
+        "0\ntrue\ntrue\ntrue\ntrue\nHELLO, WORLD!\nhello, world!",
+    );
+}
+
+#[test]
+fn fstring_expressions() {
+    run_gg(
+        "fstring_expressions.gg",
+        "int: 42\nfloat: 3.140000\nstr: world\nbool: true\nexpr: 50\nmulti: world has 42 items",
+    );
+}
+
+#[test]
+fn control_match_in_loop() {
+    run_gg("control_match_in_loop.gg", "12\n13");
+}
+
+#[test]
+fn control_nested_match() {
+    run_gg(
+        "control_nested_match.gg",
+        "zero\none\nother number\nempty string\nstring: hi",
+    );
+}
+
+#[test]
+fn string_escape_sequences() {
+    run_gg(
+        "string_escape_sequences.gg",
+        "11\nsay \"hi\"\nback\\slash\n11",
+    );
+}
+
+#[test]
+fn recursion_mutual() {
+    run_gg(
+        "recursion_mutual.gg",
+        "true\nfalse\ntrue\ntrue",
+    );
+}
+
+#[test]
+fn recursion_fibonacci() {
+    run_gg(
+        "recursion_fibonacci.gg",
+        "0\n1\n1\n2\n3\n5\n8\n13\n21\n34",
+    );
+}
+
+#[test]
+fn shadowing_nested() {
+    run_gg(
+        "shadowing_nested.gg",
+        "1\n2\n2",
+    );
+}
+
+#[test]
+fn default_params_basic() {
+    run_gg(
+        "default_params_basic.gg",
+        "8\n15\nhello Alice\nhello world",
+    );
+}
+
+#[test]
+fn method_chaining_builder() {
+    run_gg(
+        "method_chaining.gg",
+        "Window: 800x600",
+    );
+}
+
+#[test]
+fn vector_operations_edge() {
+    run_gg(
+        "vector_operations_edge.gg",
+        "0\ntrue\n1\nfalse\n42\na\nb\nc",
+    );
+}
+
+#[test]
+fn dict_operations_edge() {
+    run_gg(
+        "dict_operations_edge.gg",
+        "3\n1\n10\n3\n2\ntrue",
+    );
+}
+
+#[test]
+fn equip_multiple_traits() {
+    run_gg(
+        "equip_multiple_traits.gg",
+        "circle r=5.000000\n78.539750",
+    );
+}
+
+#[test]
+fn two_traits_basic() {
+    run_gg(
+        "two_traits_basic.gg",
+        "circle\n78.500000",
+    );
+}
+
+#[test]
+fn expression_body_functions() {
+    run_gg(
+        "expression_body_functions.gg",
+        "25\n27\nfalse\ntrue\nhello world\n20",
+    );
+}
+
+#[test]
+fn derive_equatable_enum() {
+    run_gg(
+        "derive_equatable_enum.gg",
+        "true\nfalse\ntrue\nfalse\nfalse",
+    );
+}
+
+// ── Type system edge cases ──
+
+#[test]
+fn type_alias_generic() {
+    run_gg(
+        "type_alias_generic.gg",
+        "3\n1",
+    );
+}
+
+#[test]
+fn enum_single_variant() {
+    run_gg(
+        "enum_single_variant.gg",
+        "212.000000",
+    );
+}
+
+#[test]
+fn struct_single_field() {
+    run_gg(
+        "struct_single_field.gg",
+        "42\n42\n42",
+    );
+}
+
+#[test]
+fn recursive_enum_tree() {
+    run_gg(
+        "recursive_enum_tree.gg",
+        "6",
+    );
+}
+
+#[test]
+fn generic_trait_bound() {
+    run_gg(
+        "generic_trait_bound.gg",
+        "true\nfalse\ntrue\nfalse",
+    );
+}
+
+#[test]
+fn type_cast_numeric() {
+    run_gg(
+        "type_cast_numeric.gg",
+        "42.000000\n3\n2.500000\n-7\n1000000.000000",
+    );
+}
+
+#[test]
+fn enum_with_data_variants() {
+    run_gg(
+        "enum_with_data_variants.gg",
+        "int: 42\nfloat: 3.140000\nstr: hello\nbool: true",
+    );
+}
+
+#[test]
+fn option_result_nested() {
+    run_gg(
+        "option_result_nested.gg",
+        "found: 42\nnot found\nerror: empty",
+    );
+}
+
+#[test]
+fn generic_equip_method() {
+    run_gg(
+        "generic_equip_method.gg",
+        "3",
+    );
+}
+
+#[test]
+fn struct_nested_access() {
+    run_gg(
+        "struct_nested_access.gg",
+        "1\ntest\n42",
     );
 }

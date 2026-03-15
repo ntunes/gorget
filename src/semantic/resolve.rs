@@ -2107,4 +2107,14 @@ struct Point:
         let (_, _, errors) = parse_and_collect("int foo(int a, int b) = a + b\n");
         assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
     }
+
+    #[test]
+    fn two_traits_same_file() {
+        let (scopes, _, errors) = parse_and_collect(
+            "trait Drawable:\n    str draw(self)\n\ntrait Measurable:\n    float measure(self)\n",
+        );
+        assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
+        assert!(scopes.lookup("Drawable").is_some());
+        assert!(scopes.lookup("Measurable").is_some());
+    }
 }

@@ -160,7 +160,7 @@ impl ScopeTable {
             // or a user-defined variant to shadow a built-in prelude variant (dummy span).
             if (existing.kind == DefKind::Import && kind != DefKind::Import)
                 || (existing.kind == DefKind::Import && existing.span == Span::dummy())
-                || (existing.kind == DefKind::Trait && existing.span == Span::dummy() && kind != DefKind::Trait)
+                || (existing.kind == DefKind::Trait && existing.span == Span::dummy())
                 || (existing.kind == DefKind::Variant && existing.span == Span::dummy() && kind == DefKind::Variant)
             {
                 let def_id = DefId(self.definitions.len() as u32);

@@ -1,0 +1,11 @@
+from std.collections import Vector
+
+type IntList = Vector[int]
+
+void main():
+    IntList nums = Vector[int]()
+    nums.push(1)
+    nums.push(2)
+    nums.push(3)
+    print(nums.len())
+    print(nums[0])

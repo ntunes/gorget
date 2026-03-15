@@ -1,0 +1,21 @@
+from std.collections import Vector
+
+void main():
+    # Empty vector operations
+    Vector[int] empty = Vector[int]()
+    print(empty.len())
+    print(empty.is_empty())
+
+    # Single element
+    empty.push(42)
+    print(empty.len())
+    print(empty.is_empty())
+    print(empty[0])
+
+    # Build up and iterate
+    Vector[str] names = Vector[str]()
+    names.push("a")
+    names.push("b")
+    names.push("c")
+    for name in names:
+        print(name)

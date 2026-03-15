@@ -1,0 +1,16 @@
+enum Tree:
+    Leaf(int)
+    Node(Box[Tree], int, Box[Tree])
+
+int tree_sum(Tree t):
+    match t:
+        case Leaf(v):
+            return v
+        case Node(left, v, right):
+            return tree_sum(*left) + v + tree_sum(*right)
+
+void main():
+    Tree leaf1 = Tree.Leaf(1)
+    Tree leaf3 = Tree.Leaf(3)
+    Tree root = Tree.Node(Box(leaf1), 2, Box(leaf3))
+    print(tree_sum(root))

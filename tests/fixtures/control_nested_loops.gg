@@ -1,0 +1,8 @@
+void main():
+    int count = 0
+    for i in 0..5:
+        for j in 0..5:
+            if j == 3:
+                break
+            count = count + 1
+    print(count)

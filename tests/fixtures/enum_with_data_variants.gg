@@ -1,0 +1,22 @@
+enum Value:
+    IntVal(int)
+    FloatVal(float)
+    StrVal(str)
+    BoolVal(bool)
+
+str describe(Value v):
+    match v:
+        case IntVal(n):
+            return f"int: {n}"
+        case FloatVal(f):
+            return f"float: {f}"
+        case StrVal(s):
+            return f"str: {s}"
+        case BoolVal(b):
+            return f"bool: {b}"
+
+void main():
+    print(describe(Value.IntVal(42)))
+    print(describe(Value.FloatVal(3.14)))
+    print(describe(Value.StrVal("hello")))
+    print(describe(Value.BoolVal(true)))

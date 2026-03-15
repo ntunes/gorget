@@ -1,0 +1,11 @@
+enum Celsius:
+    Value(float)
+
+float to_fahrenheit(Celsius c):
+    match c:
+        case Value(v):
+            return v * 1.8 + 32.0
+
+void main():
+    Celsius boiling = Celsius.Value(100.0)
+    print(to_fahrenheit(boiling))

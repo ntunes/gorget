@@ -1,0 +1,18 @@
+trait Describable:
+    str describe(self)
+    float measure(self)
+
+struct Circle:
+    float radius
+
+equip Circle with Describable:
+    str describe(self):
+        return f"circle r={self.radius}"
+
+    float measure(self):
+        return 3.14159 * self.radius * self.radius
+
+void main():
+    Circle c = Circle(5.0)
+    print(c.describe())
+    print(c.measure())

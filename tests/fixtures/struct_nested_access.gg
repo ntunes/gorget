@@ -1,0 +1,18 @@
+struct Inner:
+    int value
+
+struct Middle:
+    Inner inner
+    str name
+
+struct Outer:
+    Middle mid
+    int id
+
+void main():
+    Inner i = Inner(42)
+    Middle m = Middle(i, "test")
+    Outer o = Outer(m, 1)
+    print(o.id)
+    print(o.mid.name)
+    print(o.mid.inner.value)
