@@ -11,6 +11,7 @@ pub mod ssa;
 pub mod types;
 pub mod validate;
 
+use std::collections::HashMap;
 use std::fmt;
 
 // ── Identity types ──────────────────────────────────────────────────────────
@@ -662,6 +663,22 @@ pub struct ThreadSpawnedFn {
     pub ret_c_type: String,
 }
 
+/// An action to perform when dropping a collection element.
+/// Used by `elem_drop_recipes` to describe compound drops.
+#[derive(Debug, Clone)]
+pub enum ElemDropAction {
+    /// Call a function on the element/field pointer.
+    Call(String),
+    /// Access a struct field, then apply sub-actions to the field pointer.
+    Field {
+        struct_name: String,
+        field_idx: u32,
+        actions: Vec<ElemDropAction>,
+    },
+    /// Element is itself a collection; iterate sub-elements and apply actions.
+    SubElems(Vec<ElemDropAction>),
+}
+
 pub struct LirModule {
     pub structs: Vec<StructDef>,
     pub globals: Vec<LirGlobal>,
@@ -680,6 +697,10 @@ pub struct LirModule {
     pub has_suite_setup: bool,
     /// Whether a suite_teardown function exists.
     pub has_suite_teardown: bool,
+    /// Drop recipes for collection element types that need compound drops.
+    /// Keyed by GIR type name (e.g., "Container", "Wrapper", "Vector__Container").
+    /// The backend uses these to generate nested for-loops and field accesses.
+    pub elem_drop_recipes: HashMap<String, Vec<ElemDropAction>>,
 }
 
 impl LirModule {
@@ -696,6 +717,7 @@ impl LirModule {
             bench_fns: Vec::new(),
             has_suite_setup: false,
             has_suite_teardown: false,
+            elem_drop_recipes: HashMap::new(),
         }
     }
 

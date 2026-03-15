@@ -1918,32 +1918,40 @@ fn emit_spawn_helpers(out: &mut String, module: &LirModule) {
         writeln!(out, "    GORGET_FREE(__ctx, sizeof({ctx_name}));").unwrap();
         writeln!(out, "}}").unwrap();
 
-        // Spawn function — returns void* (LIR lowers Task__T as void*/Ptr)
+        // Spawn function — returns Task__T (matches GIR behavior).
+        // When the LIR destination is a Task struct, the caller uses the struct directly.
+        // When the LIR destination is void* (non-vector case), the call site wraps it.
+        let task_type_name = if is_void { "Task__void".to_string() } else { format!("Task__{ret_c}") };
         let param_decls: Vec<String> = sf.params.iter().map(|(name, c_type)| {
             let resolved = resolve_type(c_type);
             format!("{resolved} {name}")
         }).collect();
         let param_decl_str = param_decls.join(", ");
-        writeln!(out, "static inline void* __gorget_spawn_{fn_name}({param_decl_str}) {{").unwrap();
+        writeln!(out, "static inline {task_type_name} __gorget_spawn_{fn_name}({param_decl_str}) {{").unwrap();
         writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)GORGET_CALLOC(1, sizeof({ctx_name}));").unwrap();
         writeln!(out, "    __ctx->base.run = __spawn_run_{fn_name};").unwrap();
         writeln!(out, "    pthread_mutex_init(&__ctx->base.mtx, NULL);").unwrap();
         writeln!(out, "    pthread_cond_init(&__ctx->base.cond, NULL);").unwrap();
-        for (param_name, _) in &sf.params {
-            writeln!(out, "    __ctx->__{param_name} = {param_name};").unwrap();
+        for (param_name, c_type) in &sf.params {
+            // Clone Shared params (refcounted) to avoid dangling pointers.
+            if c_type.starts_with("Shared__") {
+                writeln!(out, "    __ctx->__{param_name} = {c_type}__clone({param_name});").unwrap();
+            } else {
+                writeln!(out, "    __ctx->__{param_name} = {param_name};").unwrap();
+            }
         }
-        writeln!(out, "    GORGET_BLOCKING_SUBMIT(&__ctx->base);").unwrap();
-        writeln!(out, "    return (void*)__ctx;").unwrap();
+        writeln!(out, "    GORGET_SCHEDULER_SUBMIT(&__ctx->base);").unwrap();
+        writeln!(out, "    return ({task_type_name}){{.__task = __ctx, .__drop = __spawn_drop_{fn_name}}};").unwrap();
         writeln!(out, "}}").unwrap();
 
-        // Await function — takes void* (LIR Task__T is lowered as void*)
+        // Await function — takes Task__T by value, extracts __task to get SpawnCtx.
         let resolved_ret = resolve_type(ret_c);
         if is_void {
-            writeln!(out, "static inline void __gorget_await_{fn_name}(void* __task_ptr) {{").unwrap();
+            writeln!(out, "static inline void __gorget_await_{fn_name}({task_type_name} task) {{").unwrap();
         } else {
-            writeln!(out, "static inline {resolved_ret} __gorget_await_{fn_name}(void* __task_ptr) {{").unwrap();
+            writeln!(out, "static inline {resolved_ret} __gorget_await_{fn_name}({task_type_name} task) {{").unwrap();
         }
-        writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)__task_ptr;").unwrap();
+        writeln!(out, "    {ctx_name}* __ctx = ({ctx_name}*)task.__task;").unwrap();
         writeln!(out, "    GORGET_SCHEDULER_WAIT(&__ctx->base);").unwrap();
         if !is_void {
             writeln!(out, "    {resolved_ret} result = __ctx->result;").unwrap();
@@ -3157,6 +3165,43 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 return;
             }
 
+            // ── Recipe-based compound element drop ──
+            // __gorget_array_drop_recipe__TypeName(addr) → compound drop per element
+            if let Some(type_name) = name.strip_prefix("__gorget_array_drop_recipe__") {
+                if !args.is_empty() {
+                    if let Some(recipe) = module.elem_drop_recipes.get(type_name) {
+                        let arr = v(args[0]);
+                        emit_recipe_array_drop(out, &arr, recipe, module, sn, 0);
+                    }
+                }
+                return;
+            }
+            if let Some(type_name) = name.strip_prefix("__gorget_map_drop_recipe__") {
+                if !args.is_empty() {
+                    if let Some(recipe) = module.elem_drop_recipes.get(type_name) {
+                        let map = v(args[0]);
+                        emit_recipe_map_drop(out, &map, recipe, module, sn, 0);
+                    }
+                }
+                return;
+            }
+
+            // ── DropIfAlive guard open/close ──
+            // __gorget_drop_if_alive_open__SIZE(addr) → memcmp guard opening
+            if let Some(size_str) = name.strip_prefix("__gorget_drop_if_alive_open__") {
+                if let Ok(byte_size) = size_str.parse::<usize>() {
+                    if !args.is_empty() {
+                        let addr = v(args[0]);
+                        write!(out, "{{ char __dia_z[{byte_size}] = {{0}}; if (memcmp({addr}, __dia_z, {byte_size}) != 0) {{").unwrap();
+                    }
+                }
+                return;
+            }
+            if name == "__gorget_drop_if_alive_close" {
+                write!(out, "}} }}").unwrap();
+                return;
+            }
+
             // ── Inline string codepoint helpers (synthetic GIR functions) ──
             if name == "gorget_utf8_codepoint_len_at" && args.len() == 2 {
                 // gorget_utf8_codepoint_len_at(Str s, int64_t byte_pos) → int64_t
@@ -4010,15 +4055,17 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 return;
             }
 
-            // ── __gorget_spawn_* → Task__T construction ──────────────
-            // spawn helpers return void* but the destination may be Task__T (struct).
-            // Wrap: dst = (Task__T){ spawn(...), __spawn_drop_fn }
+            // ── __gorget_spawn_* → Task__T handling ──────────────
+            // Spawn helpers now return Task__T. When LIR destination is a Task struct,
+            // simple assignment works. When LIR destination is void*, extract .__task.
             let is_spawn = emit_name.starts_with("__gorget_spawn_");
             let dst_is_task_struct = is_spawn && dst.map_or(false, |d| {
                 matches!(val_types.get(d.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Struct(sid)) if {
                     module.structs.get(sid.0 as usize).map_or(false, |s| s.name.starts_with("Task__"))
                 })
             });
+            // Non-struct Task destination (void*) — extract .__task from returned struct.
+            let dst_is_spawn_ptr = is_spawn && !dst_is_task_struct && dst.is_some();
 
             // ── Inline higher-order collection methods ─────────────
             // Vector/Dict/Set filter/map/fold/etc. must be inlined at each call
@@ -4493,20 +4540,18 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     write!(out, "{} = *({ty_name}*)", v(d)).unwrap();
                 }
             } else if dst_is_task_struct {
+                // Spawn now returns Task__T directly — simple assignment.
                 let d = dst.as_ref().unwrap();
                 let dst_ty = val_types[d.0 as usize].as_ref().unwrap();
                 let task_ty_name = c_type_named(dst_ty, sn);
-                let fn_name = emit_name.strip_prefix("__gorget_spawn_").unwrap_or(emit_name);
-                // Look up spawn param C types for collection coercion.
+                let fn_name_suffix = emit_name.strip_prefix("__gorget_spawn_").unwrap_or(emit_name);
                 let spawn_param_c_types: Vec<String> = module.spawned_fns.iter()
-                    .find(|sf| sf.fn_name == fn_name)
+                    .find(|sf| sf.fn_name == fn_name_suffix)
                     .map(|sf| sf.params.iter().map(|(_, ct)| ct.clone()).collect())
                     .unwrap_or_default();
-                // Emit: { void* __sp = spawn(args); dst = (Task__T){ __sp, __spawn_drop_fn }; }
-                write!(out, "{{ void* __sp = {}(", emit_name).unwrap();
+                write!(out, "{} = {}(", v(*d), emit_name).unwrap();
                 for (i, a) in emit_args.iter().enumerate() {
                     if i > 0 { write!(out, ", ").unwrap(); }
-                    // If spawn param is a collection type but the LIR value is void*, dereference.
                     let spawn_c_ty = spawn_param_c_types.get(i).map(|s| s.as_str());
                     let arg_is_ptr = matches!(val_types.get(a.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
                     if arg_is_ptr && matches!(spawn_c_ty, Some("GorgetArray" | "GorgetMap" | "GorgetSet")) {
@@ -4516,7 +4561,29 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
                     }
                 }
-                write!(out, "); {} = ({task_ty_name}){{ __sp, __spawn_drop_{fn_name} }}; }}", v(*d)).unwrap();
+                writeln!(out, ");").unwrap();
+                return;
+            } else if dst_is_spawn_ptr {
+                // Spawn returns Task__T but dst is void*. Extract .__task pointer.
+                let d = dst.as_ref().unwrap();
+                let fn_name_suffix = emit_name.strip_prefix("__gorget_spawn_").unwrap_or(emit_name);
+                let spawn_param_c_types: Vec<String> = module.spawned_fns.iter()
+                    .find(|sf| sf.fn_name == fn_name_suffix)
+                    .map(|sf| sf.params.iter().map(|(_, ct)| ct.clone()).collect())
+                    .unwrap_or_default();
+                write!(out, "{} = {}(", v(*d), emit_name).unwrap();
+                for (i, a) in emit_args.iter().enumerate() {
+                    if i > 0 { write!(out, ", ").unwrap(); }
+                    let spawn_c_ty = spawn_param_c_types.get(i).map(|s| s.as_str());
+                    let arg_is_ptr = matches!(val_types.get(a.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
+                    if arg_is_ptr && matches!(spawn_c_ty, Some("GorgetArray" | "GorgetMap" | "GorgetSet")) {
+                        write!(out, "*({}*){}", spawn_c_ty.unwrap(), v(*a)).unwrap();
+                    } else {
+                        let ext_param = ext_params.and_then(|p| p.get(i));
+                        emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                    }
+                }
+                writeln!(out, ").__task;").unwrap();
                 return;
             } else if let Some(d) = dst {
                 if !ret_is_void {
@@ -4547,8 +4614,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     write!(out, ", ").unwrap();
                 }
             }
-            // __gorget_await_* takes void* (the raw task pointer), but the
-            // LIR arg may be a Task__T struct. Extract .__task in that case.
+            // __gorget_await_* takes Task__T by value.
+            // When the LIR arg is a Task struct, pass directly.
+            // When the LIR arg is void* (non-vector case), construct a Task struct.
             let is_await = emit_name.starts_with("__gorget_await_");
 
             for (i, a) in emit_args.iter().enumerate() {
@@ -4557,17 +4625,42 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 }
                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                // For await helpers, extract .__task from Task struct arg.
+                // For await helpers, coerce arg to Task__T.
                 if is_await && i == 0 {
                     let is_task_struct = matches!(arg_ty, Some(LirType::Struct(sid)) if {
                         module.structs.get(sid.0 as usize).map_or(false, |s| s.name.starts_with("Task__"))
                     });
                     if is_task_struct {
-                        write!(out, "({v}).__task", v = v(*a)).unwrap();
+                        // Already a Task struct — pass by value.
+                        write!(out, "{}", v(*a)).unwrap();
                         continue;
                     } else if matches!(arg_ty, Some(LirType::Ptr)) {
-                        // Ptr — pass directly (already void*).
-                        write!(out, "{}", v(*a)).unwrap();
+                        // void* — could be:
+                        // 1. Pointer to a Task struct (from SlotAddr of aggregate Task slot)
+                        // 2. Raw SpawnCtx pointer (non-vector spawn, dst is void*)
+                        // Check if the pointer points to a Task struct via ptr_pointee.
+                        let pointee_is_task = ptr_pointee.get(a.0 as usize)
+                            .and_then(|t| t.as_ref())
+                            .map_or(false, |ty| matches!(ty, LirType::Struct(sid) if {
+                                module.structs.get(sid.0 as usize).map_or(false, |s| s.name.starts_with("Task__"))
+                            }));
+                        if pointee_is_task {
+                            // Dereference pointer to get Task struct value.
+                            let await_fn_name = emit_name.strip_prefix("__gorget_await_").unwrap_or("");
+                            let task_type = module.spawned_fns.iter()
+                                .find(|sf| sf.fn_name == await_fn_name)
+                                .map(|sf| if sf.ret_c_type == "void" { "Task__void".to_string() } else { format!("Task__{}", sf.ret_c_type) })
+                                .unwrap_or_else(|| "Task__void".to_string());
+                            write!(out, "*({task_type}*){}", v(*a)).unwrap();
+                        } else {
+                            // Raw SpawnCtx pointer — wrap in Task struct.
+                            let await_fn_name = emit_name.strip_prefix("__gorget_await_").unwrap_or("");
+                            let task_type = module.spawned_fns.iter()
+                                .find(|sf| sf.fn_name == await_fn_name)
+                                .map(|sf| if sf.ret_c_type == "void" { "Task__void".to_string() } else { format!("Task__{}", sf.ret_c_type) })
+                                .unwrap_or_else(|| "Task__void".to_string());
+                            write!(out, "({task_type}){{.__task = {v}, .__drop = NULL}}", v = v(*a)).unwrap();
+                        }
                         continue;
                     }
                 }
@@ -4779,11 +4872,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
             for &idx in zero_arg_indices {
                 if let Some(arg_val) = args.get(idx) {
                     if let Some(Some(LirType::Struct(pt_sid))) = ptr_pointee.get(arg_val.0 as usize) {
-                        // Only zero direct resource types (GorgetArray, GorgetMap, etc.).
-                        // Do NOT zero user structs that transitively contain resources —
-                        // the GIR's ownership model ensures the source won't be double-freed
-                        // (it gets overwritten on next iteration or goes out of scope without drop),
-                        // and zeroing too early would corrupt subsequent reads of the value.
+                        // Only zero direct resource types (GorgetArray, GorgetMap, etc.)
+                        // after push/set/send.  User structs containing resources are
+                        // handled via Custom/Recursive drop guards (memcmp zero check).
                         if is_direct_resource_type(*pt_sid, module) {
                             let sn_name = module.structs.get(pt_sid.0 as usize)
                                 .map(|s| c_type_named(&LirType::Struct(*pt_sid), sn))
@@ -6757,6 +6848,90 @@ impl super::Backend for CLirBackend {
             extension: "c",
         }
     }
+}
+
+/// Emit a recipe-based compound drop for array elements.
+/// Generates a for-loop over the array, applying each drop action to each element.
+fn emit_recipe_array_drop(
+    out: &mut String,
+    arr: &str,
+    actions: &[ElemDropAction],
+    module: &LirModule,
+    sn: &HashMap<u32, String>,
+    depth: usize,
+) {
+    let idx = format!("__di{}", if depth == 0 { String::new() } else { depth.to_string() });
+    write!(out, "for (size_t {idx} = 0; {idx} < ((GorgetArray*){arr})->len; {idx}++) {{ ").unwrap();
+    let elem = format!("gorget_array_get((GorgetArray*){arr}, {idx})");
+    emit_drop_actions(out, &elem, actions, module, sn, depth + 1);
+    write!(out, " }}").unwrap();
+}
+
+/// Emit a recipe-based compound drop for map values.
+fn emit_recipe_map_drop(
+    out: &mut String,
+    map: &str,
+    actions: &[ElemDropAction],
+    module: &LirModule,
+    sn: &HashMap<u32, String>,
+    depth: usize,
+) {
+    let idx = format!("__di{}", if depth == 0 { String::new() } else { depth.to_string() });
+    write!(out,
+        "for (size_t {idx} = 0; {idx} < ((GorgetMap*){map})->cap; {idx}++) {{ \
+         if (((GorgetMap*){map})->states[{idx}] == 1) {{ \
+         void* __val{depth} = (char*)((GorgetMap*){map})->values + {idx} * ((GorgetMap*){map})->val_size; ").unwrap();
+    emit_drop_actions(out, &format!("__val{depth}"), actions, module, sn, depth + 1);
+    write!(out, " }} }}").unwrap();
+}
+
+/// Emit a sequence of drop actions on a pointer to an element.
+fn emit_drop_actions(
+    out: &mut String,
+    elem_ptr: &str,
+    actions: &[ElemDropAction],
+    module: &LirModule,
+    sn: &HashMap<u32, String>,
+    depth: usize,
+) {
+    for action in actions {
+        match action {
+            ElemDropAction::Call(fn_name) => {
+                write!(out, "{fn_name}({elem_ptr}); ").unwrap();
+            }
+            ElemDropAction::Field { struct_name, field_idx, actions: sub_actions } => {
+                // Find the struct's C name and field offset
+                if let Some(field_access) = struct_field_access_expr(elem_ptr, struct_name, *field_idx, module, sn) {
+                    emit_drop_actions(out, &field_access, sub_actions, module, sn, depth);
+                }
+            }
+            ElemDropAction::SubElems(sub_actions) => {
+                // Element is itself a collection (GorgetArray*); iterate sub-elements
+                emit_recipe_array_drop(out, elem_ptr, sub_actions, module, sn, depth);
+            }
+        }
+    }
+}
+
+/// Generate a C expression to access a field of a struct pointer.
+/// Returns something like "(void*)&((__lir_s5*)ptr)->field_name" or offset-based access.
+fn struct_field_access_expr(
+    base_ptr: &str,
+    struct_name: &str,
+    field_idx: u32,
+    module: &LirModule,
+    sn: &HashMap<u32, String>,
+) -> Option<String> {
+    // Find the struct definition by original name
+    for (i, def) in module.structs.iter().enumerate() {
+        if def.name == struct_name {
+            let c_name = sn.get(&(i as u32)).cloned().unwrap_or_else(|| format!("__lir_s{i}"));
+            if let Some((field_name, _field_ty)) = def.fields.get(field_idx as usize) {
+                return Some(format!("(void*)&(({c_name}*){base_ptr})->{field_name}"));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

@@ -217,7 +217,158 @@ impl<'a> LoweringContext<'a> {
         self.module.has_suite_setup = self.gir.runtime.has_suite_setup;
         self.module.has_suite_teardown = self.gir.runtime.has_suite_teardown;
 
+        // Compute elem_drop_recipes for types that need compound drops.
+        self.compute_all_drop_recipes();
+
         self.module
+    }
+
+    /// Compute drop recipes for all types that need compound element drops.
+    /// A compound drop is needed when a type has Custom or Recursive drop and
+    /// also has fields that need dropping (e.g., Container with Custom drop + data: Vector).
+    fn compute_all_drop_recipes(&mut self) {
+        let type_defs: Vec<_> = self.gir.type_registry.type_defs().iter()
+            .map(|td| (td.name.clone(), td.metadata.drop_strategy.clone(), td.kind.clone()))
+            .collect();
+        for (name, _strategy, _kind) in &type_defs {
+            let actions = self.compute_drop_actions(name);
+            if !actions.is_empty() {
+                self.module.elem_drop_recipes.insert(name.clone(), actions);
+            }
+        }
+    }
+
+    /// Infer the drop strategy for a type, falling back to name-based detection
+    /// for collection types that don't have TypeDefs in the registry.
+    fn infer_drop_strategy(&self, type_name: &str) -> crate::ir::types::DropStrategy {
+        use crate::ir::types::DropStrategy;
+        // First try the type registry
+        if let Some(td) = self.gir.type_registry.get_type_def(type_name) {
+            return td.metadata.drop_strategy.clone();
+        }
+        // Collection types registered without TypeDef — infer from name
+        if type_name.starts_with("Vector__") || type_name.starts_with("Deque__") {
+            return DropStrategy::Trivial("gorget_array_free".to_string());
+        }
+        if type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") {
+            return DropStrategy::Trivial("gorget_map_free".to_string());
+        }
+        if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") {
+            return DropStrategy::Trivial("gorget_set_free".to_string());
+        }
+        if type_name.starts_with("Box__") {
+            return DropStrategy::Trivial("free".to_string());
+        }
+        DropStrategy::None
+    }
+
+    /// Compute the drop actions for a given type.
+    /// Returns empty if no compound drops are needed.
+    fn compute_drop_actions(&self, type_name: &str) -> Vec<ElemDropAction> {
+        use crate::ir::types::DropStrategy;
+        let strategy = self.infer_drop_strategy(type_name);
+        match strategy {
+            DropStrategy::None => vec![],
+            DropStrategy::Trivial(ref fn_name) if fn_name == "free" => {
+                // Box: just free. No compound drops needed.
+                vec![ElemDropAction::Call(fn_name.clone())]
+            }
+            DropStrategy::Trivial(ref fn_name) => {
+                // Collection free (gorget_array_free, gorget_map_free).
+                // Check if elements need dropping.
+                let is_array_free = fn_name == "gorget_array_free";
+                let is_map_free = fn_name == "gorget_map_free";
+                if is_array_free || is_map_free {
+                    let elem_type_name = if is_array_free {
+                        type_name.strip_prefix("Vector__")
+                            .or_else(|| type_name.strip_prefix("Deque__"))
+                    } else {
+                        type_name.strip_prefix("Dict__")
+                            .or_else(|| type_name.strip_prefix("HashMap__"))
+                            .and_then(|rest| rest.find("__").map(|idx| &rest[idx + 2..]))
+                    };
+                    if let Some(elem_name) = elem_type_name {
+                        let sub_actions = self.compute_drop_actions(elem_name);
+                        if sub_actions.is_empty() {
+                            // Simple element type, no compound drops needed
+                            vec![]
+                        } else {
+                            // Elements need compound drops: iterate sub-elements, then free
+                            let mut actions = vec![ElemDropAction::SubElems(sub_actions)];
+                            actions.push(ElemDropAction::Call(fn_name.clone()));
+                            actions
+                        }
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    vec![]
+                }
+            }
+            DropStrategy::Custom(ref fn_name) => {
+                // Custom drop + field drops.
+                let mut actions = vec![ElemDropAction::Call(fn_name.clone())];
+                let field_drops = self.compute_field_drop_actions(type_name);
+                actions.extend(field_drops);
+                actions
+            }
+            DropStrategy::Recursive => {
+                // No custom drop function, but fields need dropping.
+                self.compute_field_drop_actions(type_name)
+            }
+        }
+    }
+
+    /// Compute drop actions for each droppable field of a struct type.
+    fn compute_field_drop_actions(&self, type_name: &str) -> Vec<ElemDropAction> {
+        use crate::ir::types::DropStrategy;
+        let type_def = match self.gir.type_registry.get_type_def(type_name) {
+            Some(td) => td,
+            None => return vec![],
+        };
+        let sdef = match &type_def.kind {
+            crate::ir::types::TypeDefKind::Struct(s) => s,
+            _ => return vec![],
+        };
+        let mut actions = vec![];
+        for (field_idx, field) in sdef.fields.iter().enumerate() {
+            let field_type_name = match self.gir.type_registry.get(field.type_id) {
+                Some(GirType::Named(n)) => n.clone(),
+                _ => continue,
+            };
+            let field_drop = self.infer_drop_strategy(&field_type_name);
+            match field_drop {
+                DropStrategy::None => continue,
+                DropStrategy::Trivial(ref fn_name) => {
+                    // Check if this field (a collection) has elements that need compound drops
+                    let sub_actions = self.compute_drop_actions(&field_type_name);
+                    if sub_actions.is_empty() {
+                        actions.push(ElemDropAction::Field {
+                            struct_name: type_name.to_string(),
+                            field_idx: field_idx as u32,
+                            actions: vec![ElemDropAction::Call(fn_name.clone())],
+                        });
+                    } else {
+                        actions.push(ElemDropAction::Field {
+                            struct_name: type_name.to_string(),
+                            field_idx: field_idx as u32,
+                            actions: sub_actions,
+                        });
+                    }
+                }
+                DropStrategy::Custom(_) | DropStrategy::Recursive => {
+                    let sub_actions = self.compute_drop_actions(&field_type_name);
+                    if !sub_actions.is_empty() {
+                        actions.push(ElemDropAction::Field {
+                            struct_name: type_name.to_string(),
+                            field_idx: field_idx as u32,
+                            actions: sub_actions,
+                        });
+                    }
+                }
+            }
+        }
+        actions
     }
 
     fn lower_type_defs(&mut self) {
@@ -1066,10 +1217,38 @@ impl<'a> FuncLowering<'a> {
                     let result = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::Load {
                         dst: result,
-                        ty: elem_ty,
+                        ty: elem_ty.clone(),
                         ptr: ptr_val,
                     });
                     self.store_to_local(*dst, result, bb);
+
+                    // IndexLoad is a move — zero the array/dict slot to prevent
+                    // double-free when the collection is dropped.
+                    // Check if element type needs dropping (resource/move semantics).
+                    let elem_type_name = base_type_name
+                        .strip_prefix("Vector__")
+                        .or_else(|| base_type_name.strip_prefix("Dict__").and_then(|r| r.rsplit_once("__").map(|(_, v)| v)))
+                        .unwrap_or("");
+                    let elem_needs_zero = match self.infer_drop_strategy(elem_type_name) {
+                        crate::ir::types::DropStrategy::None => false,
+                        _ => true,
+                    };
+                    if elem_needs_zero {
+                        let byte_size = c_sizeof_lir_type(&elem_ty, &self.module_structs) as i64;
+                        if byte_size > 0 {
+                            let zero = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                                dst: zero, ty: LirType::I32, value: 0,
+                            });
+                            let sz = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                                dst: sz, ty: LirType::I64, value: byte_size,
+                            });
+                            self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+                                ptr: ptr_val, byte: zero, size: sz,
+                            });
+                        }
+                    }
                 } else {
                     // Fallback: generic element access via ElemPtr
                     let base_val = self.lower_place_addr(base, bb);
@@ -1326,7 +1505,11 @@ impl<'a> FuncLowering<'a> {
             }
 
             // -- Ownership / lifetime (pass-through as calls or nops) --
-            Instruction::Drop { place } | Instruction::DropIfAlive { place } => {
+            Instruction::Drop { place } => {
+                self.lower_drop(place, bb);
+            }
+
+            Instruction::DropIfAlive { place } => {
                 self.lower_drop(place, bb);
             }
 
@@ -1948,6 +2131,26 @@ impl<'a> FuncLowering<'a> {
             emit_name.to_string()
         };
         self.ensure_extern(&actual_emit_name, &arg_types, &ret_ty);
+
+        // Pre-drop for gorget_array_set: drop the old element before overwriting.
+        // The GIR backend does this inline; in LIR we emit the full drop sequence.
+        if emit_name == "gorget_array_set" && lir_args.len() >= 3 {
+            if let Some(elem_type) = collection_elem_type_from_name(original_name) {
+                if type_needs_drop(elem_type, self.gir_types, &self.func_index) {
+                    let arr_ptr = lir_args[0];
+                    let idx = lir_args[1];
+                    let old_ptr = self.lir_func.next_value();
+                    self.ensure_extern("gorget_array_get", &[LirType::Ptr, LirType::I64], &LirType::Ptr);
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: Some(old_ptr),
+                        name: "gorget_array_get".to_string(),
+                        args: vec![arr_ptr, idx],
+                    });
+                    self.emit_drop_at_ptr(old_ptr, elem_type, bb);
+                }
+            }
+        }
+
         let is_void_ret = matches!(ret_ty, LirType::Void);
         let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
@@ -1957,6 +2160,62 @@ impl<'a> FuncLowering<'a> {
         });
         if let (Some(d), Some(r)) = (*dst, result) {
             self.store_to_local(d, r, bb);
+        }
+
+        // Post-call zeroing: after push/set/send that consumes a value by move,
+        // zero the source local to prevent double-free at scope-end Drop.
+        // The GIR backend does this inline; we do it here in the LIR lowering
+        // because the GIR's MoveZero doesn't cover all push cases.
+        let consuming_arg_gir_idx: Option<usize> = match emit_name {
+            "gorget_array_push" | "gorget_set_add" | "gorget_heap_push" => Some(1),
+            "gorget_array_insert" | "gorget_array_set" | "gorget_map_put" => Some(2),
+            "gorget_channel_send" => Some(1),
+            _ => None,
+        };
+        if let Some(arg_idx) = consuming_arg_gir_idx {
+            if let Some(arg) = args.get(arg_idx) {
+                if let Operand::Copy(place) | Operand::Move(place) = arg {
+                    if place.projections.is_empty() {
+                        let local_idx = place.local.0 as usize;
+                        if local_idx < self.gir_func.locals.len() {
+                            let type_id = self.gir_func.locals[local_idx].type_id;
+                            if let Some(GirType::Named(name)) = self.gir_types.get(type_id) {
+                                // Only zero types that need dropping AND are user/struct types
+                                // (not primitive scalars). Direct resource types (GorgetArray etc.)
+                                // are already handled by the c_lir backend's post-push zero.
+                                let needs_zero = self.gir_types.get_type_def(name).map_or(false, |td| {
+                                    matches!(td.metadata.drop_strategy,
+                                        crate::ir::types::DropStrategy::Custom(_) |
+                                        crate::ir::types::DropStrategy::Recursive)
+                                });
+                                if needs_zero {
+                                    let slot = self.local_to_slot[local_idx];
+                                    let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
+                                    let byte_size = match &slot_ty {
+                                        LirType::Struct(_) => c_sizeof_lir_type(&slot_ty, &self.module_structs) as i64,
+                                        _ => super::types::scalar_size(&slot_ty).unwrap_or(8) as i64,
+                                    };
+                                    let addr = self.lir_func.next_value();
+                                    self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                                        dst: addr, slot,
+                                    });
+                                    let zero_val = self.lir_func.next_value();
+                                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                                        dst: zero_val, ty: LirType::I32, value: 0,
+                                    });
+                                    let size_val = self.lir_func.next_value();
+                                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                                        dst: size_val, ty: LirType::I64, value: byte_size,
+                                    });
+                                    self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+                                        ptr: addr, byte: zero_val, size: size_val,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2247,32 +2506,50 @@ impl<'a> FuncLowering<'a> {
                         let elem_drop = self.gir_types.get_type_def(elem_name)
                             .map(|td| td.metadata.drop_strategy.clone())
                             .unwrap_or(DS::None);
-                        let elem_drop_fn = match &elem_drop {
-                            DS::Trivial(fn_name) => Some(fn_name.clone()),
-                            DS::Custom(fn_name) => Some(fn_name.clone()),
-                            DS::Recursive => {
-                                // For Recursive elements, only emit drop if there's an actual
-                                // function in the module (user-defined or generated).
-                                let name = format!("{elem_name}__drop");
-                                if self.func_index.contains_key(name.as_str()) {
-                                    Some(name)
-                                } else {
-                                    None
-                                }
-                            }
-                            DS::None => None,
-                        };
-                        if let Some(drop_fn) = elem_drop_fn {
+
+                        // Check if this element type needs compound drops (Custom with
+                        // droppable fields, Recursive, or nested collection).
+                        let needs_recipe = self.elem_needs_compound_drop(elem_name);
+
+                        if needs_recipe {
+                            // Use recipe-based drop: the backend will look up the recipe
+                            // and generate nested for-loops and field accesses.
                             let tag = if is_array_free {
-                                format!("__gorget_array_drop_elems__{drop_fn}")
+                                format!("__gorget_array_drop_recipe__{elem_name}")
                             } else {
-                                format!("__gorget_map_drop_vals__{drop_fn}")
+                                format!("__gorget_map_drop_recipe__{elem_name}")
                             };
                             self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                                 dst: None,
                                 name: tag,
                                 args: vec![addr],
                             });
+                        } else {
+                            let elem_drop_fn = match &elem_drop {
+                                DS::Trivial(fn_name) => Some(fn_name.clone()),
+                                DS::Custom(fn_name) => Some(fn_name.clone()),
+                                DS::Recursive => {
+                                    let name = format!("{elem_name}__drop");
+                                    if self.func_index.contains_key(name.as_str()) {
+                                        Some(name)
+                                    } else {
+                                        None
+                                    }
+                                }
+                                DS::None => None,
+                            };
+                            if let Some(drop_fn) = elem_drop_fn {
+                                let tag = if is_array_free {
+                                    format!("__gorget_array_drop_elems__{drop_fn}")
+                                } else {
+                                    format!("__gorget_map_drop_vals__{drop_fn}")
+                                };
+                                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                    dst: None,
+                                    name: tag,
+                                    args: vec![addr],
+                                });
+                            }
                         }
                     }
                 }
@@ -2289,21 +2566,203 @@ impl<'a> FuncLowering<'a> {
             }
             DropStrategy::Custom(ref fn_name) => {
                 // Custom drop: call user drop, then drop fields recursively.
+                // Guard with memcmp zero check — if the struct was moved (zeroed),
+                // skip the drop entirely.  Mirrors GIR backend emit_drop_code.
                 let addr = self.lower_place_addr(place, bb);
+                let byte_size = self.compute_place_byte_size(place);
+                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    dst: None,
+                    name: format!("__gorget_drop_if_alive_open__{byte_size}"),
+                    args: vec![addr],
+                });
+                // Re-compute addr after the guard since we emitted new instructions.
+                let addr2 = self.lower_place_addr(place, bb);
                 if let Some(&fid) = self.func_index.get(fn_name.as_str()) {
                     self.lir_func.block_mut(bb).insts.push(Inst::Call {
-                        dst: None, func: fid, args: vec![addr],
+                        dst: None, func: fid, args: vec![addr2],
                     });
                 } else {
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None, name: fn_name.clone(), args: vec![addr],
+                        dst: None, name: fn_name.clone(), args: vec![addr2],
                     });
                 }
-                // Also drop fields (same as Recursive).
                 self.lower_field_drops(place, &type_name, bb);
+                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    dst: None,
+                    name: "__gorget_drop_if_alive_close".to_string(),
+                    args: vec![],
+                });
             }
             DropStrategy::Recursive => {
+                // Guard with memcmp zero check for recursive drops too.
+                let addr = self.lower_place_addr(place, bb);
+                let byte_size = self.compute_place_byte_size(place);
+                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    dst: None,
+                    name: format!("__gorget_drop_if_alive_open__{byte_size}"),
+                    args: vec![addr],
+                });
                 self.lower_field_drops(place, &type_name, bb);
+                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    dst: None,
+                    name: "__gorget_drop_if_alive_close".to_string(),
+                    args: vec![],
+                });
+            }
+        }
+    }
+
+    /// Compute the byte size of a place's type for memcmp zero checks.
+    fn compute_place_byte_size(&self, place: &Place) -> usize {
+        let local_idx = place.local.0 as usize;
+        let type_id = self.gir_func.locals[local_idx].type_id;
+        let lir_ty = map_gir_type_with_structs(&type_id, self.gir_types, Some(self.struct_reg));
+        match &lir_ty {
+            LirType::Struct(_) => c_sizeof_lir_type(&lir_ty, &self.module_structs),
+            _ => super::types::scalar_size(&lir_ty).unwrap_or(8) as usize,
+        }
+    }
+
+    /// Emit the full drop sequence for a type at a given pointer address.
+    /// Used for pre-drops (e.g., dropping old element before `gorget_array_set`).
+    /// The `type_name` is the GIR type name (e.g., "Container", "Vector__Container").
+    fn emit_drop_at_ptr(&mut self, ptr: ValueId, type_name: &str, bb: BlockId) {
+        use crate::ir::types::DropStrategy;
+        let type_def = match self.gir_types.get_type_def(type_name) {
+            Some(td) => td,
+            None => return,
+        };
+        let strategy = type_def.metadata.drop_strategy.clone();
+        match strategy {
+            DropStrategy::None => {}
+            DropStrategy::Trivial(ref fn_name) if fn_name == "free" => {
+                // Box-like: free the pointer
+                let val = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    dst: val, ptr, ty: LirType::Ptr,
+                });
+                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    dst: None, name: "free".to_string(), args: vec![val],
+                });
+            }
+            DropStrategy::Trivial(ref fn_name) => {
+                // Collection free: may need element-level drops first.
+                let is_array_free = fn_name == "gorget_array_free";
+                let is_map_free = fn_name == "gorget_map_free";
+                if is_array_free || is_map_free {
+                    let elem_type_name = if is_array_free {
+                        type_name.strip_prefix("Vector__").or_else(|| type_name.strip_prefix("Deque__"))
+                    } else {
+                        type_name.strip_prefix("Dict__").or_else(|| type_name.strip_prefix("HashMap__"))
+                            .and_then(|rest| rest.find("__").map(|idx| &rest[idx + 2..]))
+                    };
+                    if let Some(elem_name) = elem_type_name {
+                        let needs_recipe = self.elem_needs_compound_drop(elem_name);
+                        if needs_recipe {
+                            let tag = if is_array_free {
+                                format!("__gorget_array_drop_recipe__{elem_name}")
+                            } else {
+                                format!("__gorget_map_drop_recipe__{elem_name}")
+                            };
+                            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                dst: None, name: tag, args: vec![ptr],
+                            });
+                        } else {
+                            use crate::ir::types::DropStrategy as DS;
+                            let elem_drop = self.gir_types.get_type_def(elem_name)
+                                .map(|td| td.metadata.drop_strategy.clone())
+                                .unwrap_or(DS::None);
+                            let elem_drop_fn = match &elem_drop {
+                                DS::Trivial(f) => Some(f.clone()),
+                                DS::Custom(f) => Some(f.clone()),
+                                DS::Recursive => {
+                                    let name = format!("{elem_name}__drop");
+                                    if self.func_index.contains_key(name.as_str()) { Some(name) } else { None }
+                                }
+                                DS::None => None,
+                            };
+                            if let Some(drop_fn) = elem_drop_fn {
+                                let tag = if is_array_free {
+                                    format!("__gorget_array_drop_elems__{drop_fn}")
+                                } else {
+                                    format!("__gorget_map_drop_vals__{drop_fn}")
+                                };
+                                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                    dst: None, name: tag, args: vec![ptr],
+                                });
+                            }
+                        }
+                    }
+                }
+                if let Some(&fid) = self.func_index.get(fn_name.as_str()) {
+                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                        dst: None, func: fid, args: vec![ptr],
+                    });
+                } else {
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None, name: fn_name.clone(), args: vec![ptr],
+                    });
+                }
+            }
+            DropStrategy::Custom(ref fn_name) => {
+                if let Some(&fid) = self.func_index.get(fn_name.as_str()) {
+                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                        dst: None, func: fid, args: vec![ptr],
+                    });
+                } else {
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None, name: fn_name.clone(), args: vec![ptr],
+                    });
+                }
+                // Also drop fields recursively.
+                self.emit_field_drops_at_ptr(ptr, type_name, bb);
+            }
+            DropStrategy::Recursive => {
+                self.emit_field_drops_at_ptr(ptr, type_name, bb);
+            }
+        }
+    }
+
+    /// Emit field-by-field drops for a struct at a given pointer.
+    fn emit_field_drops_at_ptr(&mut self, base_ptr: ValueId, type_name: &str, bb: BlockId) {
+        use crate::ir::types::DropStrategy;
+        let type_def = match self.gir_types.get_type_def(type_name) {
+            Some(td) => td,
+            None => return,
+        };
+        if let crate::ir::types::TypeDefKind::Struct(ref sdef) = type_def.kind {
+            let struct_id = self.struct_reg.lookup(type_name).unwrap_or(StructId(0));
+            let fields: Vec<_> = sdef.fields.iter().enumerate().map(|(i, f)| {
+                let field_type_name = match self.gir_types.get(f.type_id) {
+                    Some(GirType::Named(n)) => Some(n.clone()),
+                    _ => None,
+                };
+                let drop_fn = field_type_name.as_ref().and_then(|n| {
+                    self.gir_types.get_type_def(n).map(|td| td.metadata.drop_strategy.clone())
+                }).unwrap_or(DropStrategy::None);
+                let fn_name = match &drop_fn {
+                    DropStrategy::Trivial(f) | DropStrategy::Custom(f) => Some(f.clone()),
+                    DropStrategy::Recursive => field_type_name.as_ref().map(|n| format!("{n}__drop")),
+                    DropStrategy::None => None,
+                };
+                (i as u32, fn_name)
+            }).collect();
+            for (field_idx, drop_fn_name) in fields {
+                if let Some(drop_fn) = drop_fn_name {
+                    let field_ptr = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                        dst: field_ptr, base: base_ptr, struct_id, field: field_idx,
+                    });
+                    if let Some(&fid) = self.func_index.get(drop_fn.as_str()) {
+                        self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                            dst: None, func: fid, args: vec![field_ptr],
+                        });
+                    } else {
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: None, name: drop_fn, args: vec![field_ptr],
+                        });
+                    }
+                }
             }
         }
     }
@@ -2353,6 +2812,86 @@ impl<'a> FuncLowering<'a> {
                 }
             }
         }
+    }
+
+    /// Infer drop strategy for a type, using name-based fallback for collection types.
+    fn infer_drop_strategy(&self, type_name: &str) -> crate::ir::types::DropStrategy {
+        use crate::ir::types::DropStrategy;
+        if let Some(td) = self.gir_types.get_type_def(type_name) {
+            return td.metadata.drop_strategy.clone();
+        }
+        if type_name.starts_with("Vector__") || type_name.starts_with("Deque__") {
+            return DropStrategy::Trivial("gorget_array_free".to_string());
+        }
+        if type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") {
+            return DropStrategy::Trivial("gorget_map_free".to_string());
+        }
+        if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") {
+            return DropStrategy::Trivial("gorget_set_free".to_string());
+        }
+        if type_name.starts_with("Box__") {
+            return DropStrategy::Trivial("free".to_string());
+        }
+        DropStrategy::None
+    }
+
+    /// Check if an element type needs compound drops (recipe-based).
+    /// True when the type has Custom drop with droppable fields, Recursive drop
+    /// (with or without explicit __drop fn), or is a collection with droppable elements.
+    fn elem_needs_compound_drop(&self, type_name: &str) -> bool {
+        use crate::ir::types::DropStrategy;
+        let strategy = self.infer_drop_strategy(type_name);
+        match &strategy {
+            DropStrategy::None => false,
+            DropStrategy::Trivial(fn_name) => {
+                // Collection with droppable elements that themselves need compound drops?
+                let is_collection_free = fn_name == "gorget_array_free" || fn_name == "gorget_map_free";
+                if !is_collection_free {
+                    return false;
+                }
+                // Check if inner elements need compound drops
+                let is_array = fn_name == "gorget_array_free";
+                let elem_name = if is_array {
+                    type_name.strip_prefix("Vector__").or_else(|| type_name.strip_prefix("Deque__"))
+                } else {
+                    type_name.strip_prefix("Dict__").or_else(|| type_name.strip_prefix("HashMap__"))
+                        .and_then(|rest| rest.find("__").map(|idx| &rest[idx + 2..]))
+                };
+                elem_name.map_or(false, |en| self.elem_needs_compound_drop(en))
+            }
+            DropStrategy::Custom(_) => {
+                // Check if the type has any droppable fields
+                self.type_has_droppable_fields(type_name)
+            }
+            DropStrategy::Recursive => {
+                // Recursive always needs compound drop (field-by-field)
+                true
+            }
+        }
+    }
+
+    /// Check if a struct type has any fields with non-None drop strategy.
+    fn type_has_droppable_fields(&self, type_name: &str) -> bool {
+        use crate::ir::types::DropStrategy;
+        let type_def = match self.gir_types.get_type_def(type_name) {
+            Some(td) => td,
+            None => return false,
+        };
+        let sdef = match &type_def.kind {
+            crate::ir::types::TypeDefKind::Struct(s) => s,
+            _ => return false,
+        };
+        for field in &sdef.fields {
+            let field_type_name = match self.gir_types.get(field.type_id) {
+                Some(GirType::Named(n)) => n.clone(),
+                _ => continue,
+            };
+            let field_drop = self.infer_drop_strategy(&field_type_name);
+            if !matches!(field_drop, DropStrategy::None) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Get the address of a GIR place.
@@ -4106,6 +4645,51 @@ fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
     Some(mapped.to_string())
 }
 
+/// Extract the element type name from a monomorphized collection method name.
+/// E.g., `Vector__Container__set` → "Container".
+/// E.g., `Vector__Vector__Container__set` → "Vector__Container".
+fn collection_elem_type_from_name(original_name: &str) -> Option<&str> {
+    let rest = original_name.strip_prefix("Vector__")
+        .or_else(|| original_name.strip_prefix("Set__"))
+        .or_else(|| original_name.strip_prefix("HashSet__"))
+        .or_else(|| original_name.strip_prefix("Heap__"))?;
+
+    // Strip method suffix: find rightmost `__` where suffix is all-lowercase
+    if let Some(pos) = rest.rfind("__") {
+        let suffix = &rest[pos + 2..];
+        if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+            let elem = &rest[..pos];
+            if !elem.is_empty() {
+                return Some(elem);
+            }
+        }
+    }
+    // No method suffix found — return whole rest
+    if !rest.is_empty() { Some(rest) } else { None }
+}
+
+/// Check if a GIR type needs dropping.
+fn type_needs_drop(
+    type_name: &str,
+    registry: &TypeRegistry,
+    func_index: &std::collections::HashMap<String, FuncId>,
+) -> bool {
+    use crate::ir::types::DropStrategy;
+    if let Some(type_def) = registry.get_type_def(type_name) {
+        match &type_def.metadata.drop_strategy {
+            DropStrategy::None => false,
+            DropStrategy::Trivial(_) | DropStrategy::Custom(_) => true,
+            DropStrategy::Recursive => {
+                let name = format!("{type_name}__drop");
+                func_index.contains_key(name.as_str())
+                    || matches!(type_def.kind, crate::ir::types::TypeDefKind::Struct(_))
+            }
+        }
+    } else {
+        false
+    }
+}
+
 /// Extract the element sizeof from a monomorphized collection constructor name.
 /// E.g., `Vector__int64_t__new` → sizeof(int64_t) = 8.
 /// Returns the size in bytes, or None if the name doesn't match.
@@ -4227,6 +4811,10 @@ fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> usize {
             if type_name == "GorgetClosure" || type_name.starts_with("Callable__") || type_name.starts_with("Callable_") {
                 return 16;
             }
+            // Task__T = { void* __task; void (*__drop)(void*); } = 16 bytes
+            if type_name.starts_with("Task__") {
+                return 16;
+            }
             // Tuple__T1__T2__... — sum of field sizes with 8-byte alignment per field
             if let Some(rest) = type_name.strip_prefix("Tuple__") {
                 return c_sizeof_tuple_fields(rest, structs);
@@ -4286,6 +4874,7 @@ fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
                     "GorgetString" => Some(32usize),
                     // Str: {data, len} = 2 × 8 = 16
                     "Str" => Some(16usize),
+                    _ if sd.name.starts_with("Task__") => Some(16usize),
                     _ => None,
                 };
                 if let Some(sz) = runtime_size {
