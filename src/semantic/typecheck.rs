@@ -1682,7 +1682,7 @@ impl<'a> TypeChecker<'a> {
 
     // ─── Statement Checking ────────────────────────────────
 
-    fn check_stmt(&mut self, stmt: &Spanned<Stmt>) {
+    fn check_stmt(&mut self, stmt: &Spanned<Stmt>) -> Option<TypeId> {
         match &stmt.node {
             Stmt::VarDecl {
                 type_, pattern, value, shared, ..
@@ -1760,7 +1760,7 @@ impl<'a> TypeChecker<'a> {
             }
 
             Stmt::Expr(expr) => {
-                self.infer_expr(expr);
+                return Some(self.infer_expr(expr));
             }
 
             Stmt::Assign { target, value } => {
@@ -2077,6 +2077,7 @@ impl<'a> TypeChecker<'a> {
                 self.check_block(body);
             }
         }
+        None
     }
 
     /// Check that a match on an enum type covers all variants.
@@ -2330,11 +2331,11 @@ impl<'a> TypeChecker<'a> {
         let mut last_type = self.types.void_id;
         let last_idx = block.stmts.len().saturating_sub(1);
         for (i, stmt) in block.stmts.iter().enumerate() {
-            self.check_stmt(stmt);
+            let stmt_type = self.check_stmt(stmt);
             // The "value" of a block is its last expression statement,
             // or a tail if/match with branches that end in expressions.
-            if let Stmt::Expr(expr) = &stmt.node {
-                last_type = self.infer_expr(expr);
+            if let Some(ty) = stmt_type {
+                last_type = ty;
             } else if i == last_idx {
                 last_type = self.infer_stmt_tail_type(&stmt.node);
             }
