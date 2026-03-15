@@ -62,6 +62,8 @@
 
 - **Async Channel: rendezvous (capacity=0) poll_send ack**: Current poll_send for rendezvous channels treats deposit-into-slot as completion (no ack wait). True rendezvous semantics require two-phase state machine (deposit → wait for count==0). Low priority — buffered channels work correctly. [added: 2026-03-07]
 
+- **Second trait definition after equip block on same type causes "duplicate definition" error**: Defining two separate traits in the same file and equipping both on the same struct causes the resolver to report the second trait as a duplicate of the struct. E.g., `struct Circle: ...` then `trait A: ...` then `equip Circle with A: ...` then `trait B: ...` gives "duplicate definition of B" pointing at the struct. Workaround: use a single trait with multiple methods, or define traits in separate modules. Existing multi-trait files work because each trait is equipped on a different struct. [added: 2026-03-15]
+
 
 - **`gg sim` aliasing model — Tree Borrows tracking**: sim.md identifies this as the "core differentiator from naive interpreters." Implement borrow-level tracking to catch aliasing violations. Add `--tree-borrows` (default) and `--strict-aliasing` flags (stricter stacked-borrows model). Currently sim detects UB (bounds, uninit, etc.) but does not track borrow validity. [added: 2026-03-05]
 

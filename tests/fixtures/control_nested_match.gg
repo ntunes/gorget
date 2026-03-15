@@ -1,0 +1,25 @@
+enum Outer:
+    A(int)
+    B(str)
+
+str classify(Outer o):
+    match o:
+        case A(n):
+            match n:
+                case 0:
+                    return "zero"
+                case 1:
+                    return "one"
+                else:
+                    return "other number"
+        case B(s):
+            if s == "":
+                return "empty string"
+            return f"string: {s}"
+
+void main():
+    print(classify(Outer.A(0)))
+    print(classify(Outer.A(1)))
+    print(classify(Outer.A(99)))
+    print(classify(Outer.B("")))
+    print(classify(Outer.B("hi")))

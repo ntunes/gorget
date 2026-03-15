@@ -1,0 +1,11 @@
+struct Wrapper:
+    int value
+
+int unwrap(Wrapper w):
+    return w.value
+
+void main():
+    Wrapper w = Wrapper(42)
+    print(unwrap(w))
+    print(unwrap(w))
+    print(w.value)

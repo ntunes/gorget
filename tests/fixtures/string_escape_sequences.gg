@@ -1,0 +1,9 @@
+void main():
+    str s = "hello\tworld"
+    print(s.len())
+    str q = "say \"hi\""
+    print(q)
+    str bs = "back\\slash"
+    print(bs)
+    str nl = "line1\nline2"
+    print(nl.len())

@@ -1,0 +1,22 @@
+struct Builder:
+    int width
+    int height
+    str title
+
+equip Builder:
+    Builder with_width(self, int w):
+        return Builder(w, self.height, self.title)
+
+    Builder with_height(self, int h):
+        return Builder(self.width, h, self.title)
+
+    Builder with_title(self, str t):
+        return Builder(self.width, self.height, t)
+
+    str build(self):
+        return f"{self.title}: {self.width}x{self.height}"
+
+void main():
+    Builder b = Builder(0, 0, "")
+    str result = b.with_width(800).with_height(600).with_title("Window").build()
+    print(result)

@@ -1,0 +1,18 @@
+@derive(Equatable)
+enum Color:
+    Rgb(int, int, int)
+    Named(str)
+
+void main():
+    Color a = Color.Rgb(255, 0, 0)
+    Color b = Color.Rgb(255, 0, 0)
+    Color c = Color.Rgb(0, 255, 0)
+    Color d = Color.Named("red")
+    Color e = Color.Named("red")
+    Color f = Color.Named("blue")
+
+    print(a == b)
+    print(a == c)
+    print(d == e)
+    print(d == f)
+    print(a == d)
