@@ -8,6 +8,8 @@
 
 - **LIR backend: Phase 2 — reach parity**: **596/596 A/B tests passing (100%)**. COMPLETE. [updated: 2026-03-16]
 
+- **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: Down from ~300+ C errors to ~61. Fixed: dead global elimination index remapping, SDL/GL/Image/Audio/Compression/Metal/SQLite runtime detection, `sdl_*`→`gorget_sdl_*` function name remapping, RuntimeCall struct name rewriting, single-field newtype scalar↔struct coercion, float global struct field emission. Remaining (61 errors): (1) GL functions receive `const char*` string literals but expect `Str` — need StrLit→Str wrapping in CallExtern paths for GL/SDL functions that take `Str` params (37 errors); (2) multi-return functions (`gorget_image_load_rgba*`, `gorget_audio_load_wav*`, `gorget_deflate_decompress`) use out-params in C runtime but LIR calls them as single-return (12 errors); (3) Result type return mismatch — `parse_int`/`parse_float` return `Result<T,str>` struct but LIR types the return as scalar (6 errors); (4) `gorget_str_cat` arg type mismatch (2 errors); (5) misc coercion issues (4 errors). [added: 2026-03-16]
+
 - **LIR backend: Phase 4 — default backend switch**: Once all A/B tests pass through LIR, flip default: no flag = LIR→C, `--backend=gir` selects old path. Feature-gate fallback for hot-reload and `--shared` builds. [added: 2026-03-11]
 
 - **LIR backend: Phase 5 — old backend retirement**: Delete `src/backend/c/mod.rs` (12,918 lines) after transition period. Keep `c_runtime.rs`. Remove `--backend=gir` flag. -12,918 lines of the most complex, duplicated code in the project. [added: 2026-03-11]

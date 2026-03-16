@@ -231,6 +231,19 @@ pub fn eliminate_dead_globals(module: &mut LirModule) -> usize {
     }
 
     let original = module.globals.len();
+
+    // Build old→new index remapping table before removing anything.
+    let mut old_to_new: Vec<Option<u32>> = Vec::with_capacity(original);
+    let mut new_idx = 0u32;
+    for old_idx in 0..original {
+        if referenced.contains(&GlobalId(old_idx as u32)) {
+            old_to_new.push(Some(new_idx));
+            new_idx += 1;
+        } else {
+            old_to_new.push(None);
+        }
+    }
+
     let mut i = 0;
     module.globals.retain(|_| {
         let keep = referenced.contains(&GlobalId(i as u32));
@@ -238,7 +251,23 @@ pub fn eliminate_dead_globals(module: &mut LirModule) -> usize {
         keep
     });
 
-    original - module.globals.len()
+    let eliminated = original - module.globals.len();
+    if eliminated > 0 {
+        // Remap GlobalAddr instructions in all functions to account for removed globals.
+        for func in &mut module.functions {
+            for block in &mut func.blocks {
+                for inst in &mut block.insts {
+                    if let Inst::GlobalAddr { global, .. } = inst {
+                        if let Some(new) = old_to_new[global.0 as usize] {
+                            *global = GlobalId(new);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    eliminated
 }
 
 /// Check if a global initializer contains any FuncAddr references.

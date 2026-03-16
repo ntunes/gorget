@@ -4651,6 +4651,9 @@ fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
         // NOTE: "len" is handled via type-aware dispatch in the Call handler.
         "chars" => "gorget_str_chars",
         "bytes" => "gorget_str_bytes",
+        _ if name.starts_with("sdl_") => {
+            return Some(format!("gorget_{name}"));
+        }
         _ => return None,
     };
     Some(mapped.to_string())

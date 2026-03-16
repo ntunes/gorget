@@ -71,6 +71,17 @@ fn lir_to_runtime_name(name: &str) -> Option<&'static str> {
         "AtomicInt" => Some("GorgetAtomicInt"),
         "AtomicBool" => Some("GorgetAtomicBool"),
         "Process" => Some("GorgetProcess"),
+        // SDL types
+        "SDLWindow" => Some("GorgetSDLWindow"),
+        "SDLRenderer" => Some("GorgetSDLRenderer"),
+        "SDLTexture" => Some("GorgetSDLTexture"),
+        "SDLFont" => Some("GorgetSDLFont"),
+        "SDLEvent" => Some("GorgetSDLEvent"),
+        // Audio types
+        "AudioChunk" => Some("GorgetAudioChunk"),
+        "AudioMusic" => Some("GorgetAudioMusic"),
+        // GL types — GorgetGLContext is typedef'd to int64_t in runtime
+        "GLContext" => Some("GorgetGLContext"),
         _ => None,
     }
 }
@@ -320,6 +331,80 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         // Trace
         if has(&|n| n.starts_with("gorget_trace_")) {
             out.push_str(crate::backend::c::c_runtime::TRACE_RUNTIME);
+        }
+
+        // SDL
+        if has(&|n| n.starts_with("sdl_") || n.starts_with("gorget_sdl_")) {
+            if has(&|n| n == "sdl_load_texture" || n == "gorget_sdl_load_texture") {
+                out.push_str("#define GORGET_USE_SDL_IMAGE\n");
+            }
+            if has(&|n| n == "sdl_load_font" || n == "sdl_close_font" || n == "sdl_draw_text"
+                || n == "sdl_render_text" || n == "sdl_text_width" || n == "sdl_text_height"
+                || n.starts_with("gorget_sdl_load_font") || n.starts_with("gorget_sdl_draw_text")
+                || n.starts_with("gorget_sdl_render_text")) {
+                out.push_str("#define GORGET_USE_SDL_TTF\n");
+            }
+            out.push_str(crate::backend::c::c_runtime::SDL_RUNTIME);
+        }
+
+        // Bytes f32/f64/i64 helpers
+        if has(&|n| n.starts_with("gorget_bytes_") && (n.contains("f32") || n.contains("f64") || n.contains("i64"))) {
+            out.push_str(crate::backend::c::c_runtime::BYTES_F32_RUNTIME);
+        }
+
+        // OpenGL
+        if has(&|n| n.starts_with("gorget_gl_")) {
+            out.push_str(crate::backend::c::c_runtime::GL_RUNTIME);
+        }
+
+        // Image loading (stb_image)
+        if has(&|n| n.starts_with("gorget_image_")) {
+            out.push_str("\n#define STB_IMAGE_IMPLEMENTATION\n");
+            out.push_str("#define STBI_NO_STDIO\n");
+            out.push_str("#define STBI_ONLY_PNG\n");
+            out.push_str("#define STBI_ONLY_JPEG\n");
+            out.push_str("#define STBI_ONLY_TGA\n");
+            out.push_str("#define STBI_ONLY_BMP\n");
+            out.push_str("#define GORGET_HAS_STB_IMAGE 1\n");
+            out.push_str("#pragma GCC diagnostic push\n");
+            out.push_str("#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
+            out.push_str("#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n");
+            out.push_str("#pragma GCC diagnostic ignored \"-Wsign-compare\"\n");
+            out.push_str("#pragma GCC diagnostic ignored \"-Wshift-negative-value\"\n");
+            out.push_str(crate::backend::c::c_runtime::STB_IMAGE_SOURCE);
+            out.push_str("\n#pragma GCC diagnostic pop\n");
+            out.push_str(crate::backend::c::c_runtime::IMAGE_RUNTIME);
+        }
+
+        // Audio (SDL2_mixer)
+        if has(&|n| n.starts_with("gorget_audio_")) {
+            out.push_str(crate::backend::c::c_runtime::AUDIO_RUNTIME);
+        }
+
+        // Compression (zlib/deflate)
+        if has(&|n| n.starts_with("gorget_zlib_") || n.starts_with("gorget_deflate_") || n.starts_with("gorget_crc32_")) {
+            out.push_str(crate::backend::c::c_runtime::COMPRESS_RUNTIME);
+        }
+
+        // Metal (macOS Objective-C wrappers)
+        if has(&|n| n.starts_with("gorget_metal_") || n.starts_with("gorget_sdl_metal_")) {
+            out.push_str(crate::backend::c::c_runtime::METAL_RUNTIME);
+        }
+
+        // SQLite
+        let needs_sqlite = has(&|n| n.starts_with("gorget_sqlite_") || n == "sqlite_open");
+        if needs_sqlite {
+            out.push_str("\n#define SQLITE_MAX_MMAP_SIZE 0\n");
+            out.push_str("#define HAVE_MREMAP 0\n");
+            out.push_str("#pragma GCC diagnostic push\n");
+            out.push_str("#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n");
+            out.push_str("#pragma GCC diagnostic ignored \"-Wunused-variable\"\n");
+            out.push_str("#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
+            out.push_str("#pragma GCC diagnostic ignored \"-Wimplicit-fallthrough\"\n");
+            out.push_str("#pragma GCC diagnostic ignored \"-Wpedantic\"\n");
+            out.push_str(crate::backend::c::c_runtime::SQLITE_AMALGAMATION);
+            out.push_str("\n#pragma GCC diagnostic pop\n");
+            out.push_str(crate::backend::c::c_runtime::SQLITE_GORGET_WRAPPERS);
         }
 
         // LIR-specific helper functions not emitted by the old C backend preamble.
@@ -700,7 +785,7 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         }
         let kw = if g.is_const { "const " } else { "" };
         write!(out, "{kw}{} __lir_g{i}", c_type_named(&g.ty, &struct_names)).unwrap();
-        emit_global_init(&mut out, &g.init, &g.ty, &module.functions);
+        emit_global_init(&mut out, &g.init, &g.ty, &module.functions, &module.structs);
         writeln!(out, "; // {}", g.name).unwrap();
     }
     if !module.globals.is_empty() {
@@ -741,7 +826,7 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         let g = &module.globals[i];
         let kw = if g.is_const { "const " } else { "" };
         write!(out, "{kw}{} __lir_g{i}", c_type_named(&g.ty, &struct_names)).unwrap();
-        emit_global_init(&mut out, &g.init, &g.ty, &module.functions);
+        emit_global_init(&mut out, &g.init, &g.ty, &module.functions, &module.structs);
         writeln!(out, "; // {}", g.name).unwrap();
     }
     if !deferred_globals.is_empty() {
@@ -2547,11 +2632,27 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
 
     // For the main function, emit runtime call initializers for globals.
     if func.name == "main" {
-        for g in &module.globals {
+        // Build original→LIR struct name map for rewriting compound literals in RuntimeCall exprs.
+        let orig_to_lir: Vec<(String, String)> = module.structs.iter().enumerate()
+            .filter_map(|(i, def)| {
+                let lir_name = sn.get(&(i as u32)).cloned().unwrap_or_else(|| format!("__lir_s{i}"));
+                if lir_name != def.name {
+                    Some((def.name.clone(), lir_name))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (gid, g) in module.globals.iter().enumerate() {
             if let LirGlobalInit::RuntimeCall(expr) = &g.init {
-                writeln!(out, "    __lir_g{gid} = {expr};",
-                    gid = module.globals.iter().position(|gg| std::ptr::eq(gg, g)).unwrap_or(0))
-                    .unwrap();
+                let mut rewritten = expr.clone();
+                for (orig, lir_name) in &orig_to_lir {
+                    rewritten = rewritten.replace(
+                        &format!("({orig}){{"),
+                        &format!("({lir_name}){{"),
+                    );
+                }
+                writeln!(out, "    __lir_g{gid} = {rewritten};").unwrap();
             }
         }
     }
@@ -2722,12 +2823,35 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     } else if slot_is_gs && val_is_str {
                         // Str value → GorgetString slot: promote via gorget_string_from_str
                         write!(out, "{} = gorget_string_from_str({});", s(*slot), v(*value)).unwrap();
+                    } else if !matches!(val_ty, Some(LirType::Struct(_)) | None) {
+                        // Scalar → single-field struct coercion (newtype wrapping).
+                        if let LirType::Struct(sid) = slot_ty {
+                            let sdef = &module.structs[sid.0 as usize];
+                            if sdef.fields.len() == 1 {
+                                write!(out, "{} = ({}){{ .{} = {} }};",
+                                    s(*slot), ty_name, sdef.fields[0].0, v(*value)).unwrap();
+                            } else {
+                                write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
+                            }
+                        } else {
+                            write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
+                        }
                     } else {
                         write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
                     }
                 }
             } else {
-                write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
+                // Scalar slot — check for single-field struct → scalar unwrapping (newtype).
+                if let Some(LirType::Struct(val_sid)) = val_ty {
+                    let sdef = &module.structs[val_sid.0 as usize];
+                    if sdef.fields.len() == 1 && !matches!(slot_ty, LirType::Struct(_)) {
+                        write!(out, "{} = {}.{};", s(*slot), v(*value), sdef.fields[0].0).unwrap();
+                    } else {
+                        write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
+                    }
+                } else {
+                    write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
+                }
             }
         }
         Inst::SlotLoad { dst, slot, .. } => {
@@ -5241,12 +5365,12 @@ fn emit_jump_args(out: &mut String, target: BlockId, args: &[ValueId], func: &Li
     }
 }
 
-fn emit_global_init(out: &mut String, init: &LirGlobalInit, ty: &LirType, funcs: &[LirFunction]) {
+fn emit_global_init(out: &mut String, init: &LirGlobalInit, ty: &LirType, funcs: &[LirFunction], structs: &[StructDef]) {
     write!(out, " = ").unwrap();
-    emit_global_init_value(out, init, ty, funcs);
+    emit_global_init_value(out, init, ty, funcs, structs);
 }
 
-fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty: &LirType, funcs: &[LirFunction]) {
+fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty: &LirType, funcs: &[LirFunction], structs: &[StructDef]) {
     match init {
         LirGlobalInit::Zeroed => write!(out, "{{0}}").unwrap(),
         LirGlobalInit::Bytes(b) => {
@@ -5254,11 +5378,19 @@ fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty: &LirType, 
             match (b.len(), is_float) {
                 (4, true) => {
                     let val = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
-                    write!(out, "{val}").unwrap();
+                    if val.is_finite() {
+                        write!(out, "{val:.17e}").unwrap();
+                    } else {
+                        write!(out, "{val}").unwrap();
+                    }
                 }
                 (8, true) => {
                     let val = f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
-                    write!(out, "{val}").unwrap();
+                    if val.is_finite() {
+                        write!(out, "{val:.17e}").unwrap();
+                    } else {
+                        write!(out, "{val}").unwrap();
+                    }
                 }
                 (1, _) => write!(out, "{}", b[0] as i8).unwrap(),
                 (2, _) => write!(out, "{}", i16::from_le_bytes([b[0], b[1]])).unwrap(),
@@ -5271,13 +5403,16 @@ fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty: &LirType, 
             let fname = funcs.get(fid.0 as usize).map(|f| f.name.as_str()).unwrap_or("__unknown_fn");
             write!(out, "(void*)&{fname}").unwrap();
         }
-        LirGlobalInit::Struct { fields, .. } => {
+        LirGlobalInit::Struct { struct_id, fields } => {
             write!(out, "{{").unwrap();
+            let field_types: Option<&[(String, LirType)]> = structs.get(struct_id.0 as usize)
+                .map(|sd| sd.fields.as_slice());
             for (i, f) in fields.iter().enumerate() {
                 if i > 0 {
                     write!(out, ", ").unwrap();
                 }
-                emit_global_init_value(out, f, &LirType::I64, funcs);
+                let ft = field_types.and_then(|fts| fts.get(i).map(|(_, t)| t)).unwrap_or(&LirType::I64);
+                emit_global_init_value(out, f, ft, funcs, structs);
             }
             write!(out, "}}").unwrap();
         }
