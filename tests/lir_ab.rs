@@ -95,6 +95,89 @@ fn run_lir(fixture_path: &std::path::Path) -> Option<String> {
     Some(stdout)
 }
 
+/// Build + run through the GIR C backend, passing args to the binary.
+fn run_gir_with_args(fixture_path: &std::path::Path, args: &[&str]) -> Option<String> {
+    let stem = fixture_path.file_stem()?.to_str()?;
+    let dir = fixture_path.parent()?;
+    let exe_path = dir.join(format!("{stem}_gir"));
+    let c_path = dir.join(format!("{stem}_gir.c"));
+
+    let build = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "build", "-o"])
+        .arg(&exe_path)
+        .arg(fixture_path)
+        .output()
+        .ok()?;
+    if !build.status.success() {
+        return None;
+    }
+
+    let mut child = Command::new(&exe_path)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let run = child.wait_with_output().ok()?;
+    let stdout = String::from_utf8_lossy(&run.stdout).to_string();
+
+    let _ = std::fs::remove_file(&exe_path);
+    let _ = std::fs::remove_file(&c_path);
+
+    Some(stdout)
+}
+
+/// Build through LIR→C backend, passing args to the binary.
+fn run_lir_with_args(fixture_path: &std::path::Path, args: &[&str]) -> Option<String> {
+    let stem = fixture_path.file_stem()?.to_str()?;
+    let dir = fixture_path.parent()?;
+    let exe_path = dir.join(format!("{stem}_lir"));
+    let c_path = dir.join(format!("{stem}_lir.c"));
+
+    let build = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--", "build", "--backend=lir", "-o"])
+        .arg(&exe_path)
+        .arg(fixture_path)
+        .output()
+        .ok()?;
+    if !build.status.success() {
+        return None;
+    }
+
+    let mut child = Command::new(&exe_path)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .ok()?;
+    let run = child.wait_with_output().ok()?;
+    let stdout = String::from_utf8_lossy(&run.stdout).to_string();
+
+    let _ = std::fs::remove_file(&exe_path);
+    let _ = std::fs::remove_file(&c_path);
+
+    Some(stdout)
+}
+
+fn ab_test_with_args(fixture: &str, args: &[&str]) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+    assert!(fixture_path.exists(), "Fixture not found: {}", fixture_path.display());
+
+    let gir_out = run_gir_with_args(&fixture_path, args)
+        .unwrap_or_else(|| panic!("GIR backend failed for {fixture}"));
+    let lir_out = run_lir_with_args(&fixture_path, args)
+        .unwrap_or_else(|| panic!("LIR backend failed for {fixture}"));
+
+    assert_eq!(
+        gir_out.trim(),
+        lir_out.trim(),
+        "A/B mismatch for {fixture}:\n  GIR: {:?}\n  LIR: {:?}",
+        gir_out.trim(),
+        lir_out.trim(),
+    );
+}
+
 fn ab_test(fixture: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
@@ -815,3 +898,5 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_test_closures_advanced() { ab_test("test_closures_advanced.gg"); }
 #[test] fn lir_ab_test_closures_edge_cases() { ab_test("test_closures_edge_cases.gg"); }
 #[test] fn lir_ab_generic_nested_collections() { ab_test("generic_nested_collections.gg"); }
+#[test] fn lir_ab_test_struct_derive() { ab_test("test_struct_derive.gg"); }
+#[test] fn lir_ab_cli_args() { ab_test_with_args("cli_args.gg", &["hello", "world"]); }

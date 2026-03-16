@@ -795,14 +795,13 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         if thread_generated_names.contains(&func.name) {
             continue;
         }
+        // main() uses int main(int argc, char** argv) — must match the definition.
+        if func.name == "main" {
+            writeln!(out, "int main(int argc, char** argv);").unwrap();
+            continue;
+        }
         // For throws-int main, override Result return type to int.
-        let ret_type_str = if func.name == "main" && matches!(&func.return_type, LirType::Struct(sid) if {
-            module.structs.get(sid.0 as usize).map_or(false, |s| s.name.starts_with("Result__"))
-        }) {
-            "int".to_string()
-        } else {
-            c_type_named(&func.return_type, &struct_names)
-        };
+        let ret_type_str = c_type_named(&func.return_type, &struct_names);
         write!(out, "{} {}(", ret_type_str, c_func_name(&func.name)).unwrap();
         if func.params.is_empty() {
             write!(out, "void").unwrap();
@@ -2199,28 +2198,29 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     });
     let ret_type_str = if is_throws_main { "int".to_string() } else { c_type_named(&func.return_type, sn) };
 
-    // Signature
-    write!(out, "{} {}(", ret_type_str, c_func_name(&func.name)).unwrap();
-    if func.params.is_empty() {
-        write!(out, "void").unwrap();
-    } else {
-        for (i, p) in func.params.iter().enumerate() {
-            if i > 0 {
-                write!(out, ", ").unwrap();
-            }
-            // Void as non-sole param is invalid C — use void* (closure env ptr).
-            let ty_str = if matches!(p, LirType::Void) { "void*".to_string() } else { c_type_named(p, sn) };
-            write!(out, "{ty_str} __p{i}").unwrap();
-        }
-    }
-    writeln!(out, ") {{").unwrap();
-
-    // Emit trace init at the start of main().
+    // Signature — special-case main() to accept argc/argv for sys.argv support.
     if func.name == "main" {
+        writeln!(out, "int main(int argc, char** argv) {{").unwrap();
+        writeln!(out, "    gorget_init_args(argc, argv);").unwrap();
         if let Some(ref trace_path) = module.trace_filename {
             let escaped = trace_path.replace('\\', "\\\\").replace('"', "\\\"");
             writeln!(out, "    __gorget_trace_init(\"{escaped}\");").unwrap();
         }
+    } else {
+        write!(out, "{} {}(", ret_type_str, c_func_name(&func.name)).unwrap();
+        if func.params.is_empty() {
+            write!(out, "void").unwrap();
+        } else {
+            for (i, p) in func.params.iter().enumerate() {
+                if i > 0 {
+                    write!(out, ", ").unwrap();
+                }
+                // Void as non-sole param is invalid C — use void* (closure env ptr).
+                let ty_str = if matches!(p, LirType::Void) { "void*".to_string() } else { c_type_named(p, sn) };
+                write!(out, "{ty_str} __p{i}").unwrap();
+            }
+        }
+        writeln!(out, ") {{").unwrap();
     }
 
     // Value declarations — collect all values defined in the function.
@@ -7878,7 +7878,7 @@ mod tests {
         module.add_function(func);
 
         let c = generate_c(&module);
-        assert!(c.contains("int32_t main(void)"));
+        assert!(c.contains("int main(int argc, char** argv)"));
         assert!(c.contains("__v0 = (int32_t)0LL;"));
         assert!(c.contains("return __v0;"));
     }

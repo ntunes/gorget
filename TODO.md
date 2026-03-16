@@ -8,9 +8,7 @@
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 4 C warnings remaining (2 `gorget_int_to_str` Ptr→int cast from slot type inference issue, 2 memset overflow from struct size mismatch). Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-16]
 
-- **LIR backend: remaining gaps vs GIR**: LIR is now the default backend (694 A/B tests, 825 integration tests pass). Known gaps still using `--backend=gir` fallback:
-  - `test_struct_derive` — derived `__str` methods pass struct fields as untyped `void*`, making Str decomposition impossible at c_lir level (needs LIR lowering fix)
-  - CLI args (`cli_args.gg`) — `sys.argv` not wired in LIR
+- **LIR backend: remaining gaps vs GIR**: LIR is now the default backend (696 A/B tests, 825 integration tests pass). Known gaps still using `--backend=gir` fallback:
   - Trace instrumentation (`--trace`/`--no-trace`) — per-function trace not ported to LIR
   - Self-host comparison tests (lexer/parser/resolver/typechecker) — use `--backend=gir` for now
   [updated: 2026-03-16]

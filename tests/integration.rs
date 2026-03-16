@@ -3638,11 +3638,10 @@ fn readdir() {
 
 #[test]
 fn cli_args() {
-    // CLI args not yet supported in LIR backend
-    run_gg_with_args_backend("cli_args.gg", &["hello", "world"], "\
+    run_gg_with_args("cli_args.gg", &["hello", "world"], "\
 3
 hello
-world", Some("gir"));
+world");
 }
 
 #[test]
