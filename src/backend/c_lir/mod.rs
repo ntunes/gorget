@@ -3900,6 +3900,43 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 }
             }
             else { name.as_str() };
+
+            // ── Out-parameter functions (image_load, audio_load, deflate_decompress) ──
+            // These C runtime functions use void+out-param ABI but GIR calls them
+            // as if they return a single Result/struct value. Rewrite to out-param form.
+            if let Some(outparam_code) = try_emit_outparam_call_lir(
+                emit_name, dst, args, val_types, str_lit_vals, sn, &module.structs,
+            ) {
+                write!(out, "{}", outparam_code).unwrap();
+                return;
+            }
+
+            // gorget_str_cat("", val) — str() coercion.
+            // GIR represents str(int_val) as gorget_str_cat("", int_val).
+            // Rewrite to gorget_int_to_str / gorget_float_to_str + wrap.
+            if emit_name == "gorget_str_cat" && args.len() == 2 {
+                let arg0_is_empty_str = str_lit_vals.get(args[0].0 as usize).copied().unwrap_or(false)
+                    && func.blocks.iter().any(|blk| blk.insts.iter().any(|inst| {
+                        matches!(inst, Inst::StrLit { dst, value } if *dst == args[0] && value.is_empty())
+                    }));
+                let arg1_ty = val_types.get(args[1].0 as usize).and_then(|t| t.as_ref());
+                let is_arg1_int = matches!(arg1_ty, Some(LirType::I8 | LirType::I16 | LirType::I32 | LirType::I64
+                    | LirType::U8 | LirType::U16 | LirType::U32 | LirType::U64));
+                let is_arg1_float = matches!(arg1_ty, Some(LirType::F32 | LirType::F64));
+                let is_arg1_bool = matches!(arg1_ty, Some(LirType::Bool));
+                if arg0_is_empty_str && (is_arg1_int || is_arg1_float || is_arg1_bool) {
+                    let conv_fn = if is_arg1_int { "gorget_int_to_str" }
+                        else if is_arg1_float { "gorget_float_to_str" }
+                        else { "gorget_bool_to_str" };
+                    if let Some(d) = dst {
+                        // gorget_str_cat returns GorgetString — the conversion returns const char*,
+                        // so wrap with gorget_string_new for GorgetString result.
+                        write!(out, "{} = gorget_string_new({}({}));", v(*d), conv_fn, v(args[1])).unwrap();
+                    }
+                    return;
+                }
+            }
+
             // gorget_str_push / gorget_str_push_line — dispatch by arg type.
             // The GIR emits a generic `gorget_str_push(ptr, i64)` but the
             // actual runtime has type-specific variants (push_int, push_float, push_bool).
@@ -5026,12 +5063,18 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 }
                 // String literal arg to a gorget_str_* or Dict/Set inline function → Str wrap.
                 // Skip if ext_params says this arg is not a Str type (e.g. gorget_str_join arg 1 = GorgetArray).
-                else if is_str_lit && (name.starts_with("gorget_str_") || force_str_coerce || trait_str_arg_positions.contains(&i))
+                // Also wrap for any extern function whose declared param at position i is Str
+                // (handles GL, SDL, and other runtime functions generically).
+                // Skip functions that actually take const char* at the C level (takes_cstr_for_str_param).
+                else if is_str_lit && (name.starts_with("gorget_str_") || force_str_coerce || trait_str_arg_positions.contains(&i)
+                    || (ext_param_is_str(ext_params, i, &module.structs) && !takes_cstr_for_str_param(emit_name, i))
+                    || runtime_fn_str_param(emit_name, i))
                     && !str_fn_non_str_arg(name, i) {
                     write!(out, "gorget_str_from_literal({}, strlen({}))", v(*a), v(*a)).unwrap();
                 }
-                // Ptr arg to a trait box method that expects Str → deref as *(Str*).
-                else if trait_str_arg_positions.contains(&i) && matches!(arg_ty, Some(LirType::Ptr)) && !is_str_lit {
+                // Ptr arg to a trait box method or runtime function that expects Str → deref as *(Str*).
+                else if (trait_str_arg_positions.contains(&i) || runtime_fn_str_param(emit_name, i))
+                    && matches!(arg_ty, Some(LirType::Ptr)) && !is_str_lit {
                     write!(out, "*(Str*){}", v(*a)).unwrap();
                 }
                 // GorgetString arg to a gorget_str_* function → coerce to Str.
@@ -6047,6 +6090,218 @@ fn is_runtime_fn(name: &str) -> bool {
         || name.starts_with("__gorget_")
 }
 
+/// Rewrite out-parameter calls for image/audio/deflate functions.
+/// These C runtime functions use a void+out-param ABI but GIR treats them as single-return.
+/// Returns Some(code) if the function was handled, None otherwise.
+fn try_emit_outparam_call_lir(
+    func_name: &str,
+    dst: &Option<ValueId>,
+    args: &[ValueId],
+    val_types: &[Option<LirType>],
+    str_lit_vals: &[bool],
+    sn: &std::collections::HashMap<u32, String>,
+    structs: &[StructDef],
+) -> Option<String> {
+    use std::fmt::Write;
+    let v = |id: ValueId| format!("__v{}", id.0);
+    let mut out = String::new();
+
+    // Helper: get the C type name for the destination value's type.
+    let dst_c_type = |d: &ValueId| -> String {
+        val_types.get(d.0 as usize)
+            .and_then(|t| t.as_ref())
+            .map(|t| c_type_named(t, sn))
+            .unwrap_or_else(|| "int64_t".to_string())
+    };
+
+    // Helper: coerce a string literal arg to Str, or pass a Str value as-is.
+    // For Ptr args (e.g. pointer to Str slot), dereference to Str.
+    let str_arg = |a: ValueId| -> String {
+        let is_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+        let ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+        if is_lit {
+            format!("gorget_str_from_literal({v}, strlen({v}))", v = v(a))
+        } else if matches!(ty, Some(LirType::Ptr)) {
+            format!("*(Str*){}", v(a))
+        } else {
+            v(a)
+        }
+    };
+
+    // Helper: get address of an array arg (pass by pointer).
+    let array_addr = |a: ValueId| -> String {
+        let ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+        if matches!(ty, Some(LirType::Ptr)) {
+            v(a)
+        } else {
+            format!("&{}", v(a))
+        }
+    };
+
+    // Helper: find the LIR C name for a struct by its original (GIR) name.
+    let find_struct_c_name = |orig_name: &str| -> String {
+        for (i, sdef) in structs.iter().enumerate() {
+            if sdef.name == orig_name {
+                return sn.get(&(i as u32)).cloned().unwrap_or_else(|| format!("__lir_s{i}"));
+            }
+        }
+        orig_name.to_string()
+    };
+
+    // Helper: find the Ok field name in a Result struct (LIR flattens to Ok_0, Error_0).
+    // Also returns Error field name.
+    let result_fields = |d: &ValueId| -> (String, String) {
+        if let Some(LirType::Struct(sid)) = val_types.get(d.0 as usize).and_then(|t| t.as_ref()) {
+            if let Some(sdef) = structs.get(sid.0 as usize) {
+                let ok_f = sdef.fields.iter().find(|(n, _)| n.starts_with("Ok"))
+                    .map(|(n, _)| c_field_name(n)).unwrap_or_else(|| "Ok_0".to_string());
+                let err_f = sdef.fields.iter().find(|(n, _)| n.starts_with("Error"))
+                    .map(|(n, _)| c_field_name(n)).unwrap_or_else(|| "Error_0".to_string());
+                return (ok_f, err_f);
+            }
+        }
+        ("Ok_0".to_string(), "Error_0".to_string())
+    };
+
+    match func_name {
+        // gorget_image_load_rgba(Str path, int64_t* out_tag, int64_t* out_w, int64_t* out_h,
+        //                       int64_t* out_ch, GorgetArray* out_data, Str* out_err)
+        // Returns Result[Image, str]
+        "gorget_image_load_rgba" | "image_load_rgba" => {
+            let d = dst.as_ref()?;
+            let c_type = dst_c_type(d);
+            let path = str_arg(args[0]);
+            let image_c = find_struct_c_name("Image");
+            let (ok_f, err_f) = result_fields(d);
+            let _ = write!(out,
+                "{{ int64_t __tag = 0, __w = 0, __h = 0, __ch = 0; \
+                GorgetArray __data = gorget_array_new(sizeof(uint8_t)); Str __err = {{0}}; \
+                gorget_image_load_rgba({path}, &__tag, &__w, &__h, &__ch, &__data, &__err); \
+                {c_type} __wr = {{0}}; __wr.tag = __tag; \
+                if (__tag == 0) {{ __wr.{ok_f} = ({image_c}){{.width = __w, .height = __h, .channels = __ch, .data = __data}}; }} \
+                else {{ __wr.{err_f} = __err; }} {v} = __wr; }}",
+                v = v(*d));
+            Some(out)
+        }
+        // gorget_image_load_rgba_from_memory(const GorgetArray* data, ...)
+        "gorget_image_load_rgba_from_memory" => {
+            let d = dst.as_ref()?;
+            let c_type = dst_c_type(d);
+            let data_ptr = array_addr(args[0]);
+            let image_c = find_struct_c_name("Image");
+            let (ok_f, err_f) = result_fields(d);
+            let _ = write!(out,
+                "{{ int64_t __tag = 0, __w = 0, __h = 0, __ch = 0; \
+                GorgetArray __data = gorget_array_new(sizeof(uint8_t)); Str __err = {{0}}; \
+                gorget_image_load_rgba_from_memory({data_ptr}, &__tag, &__w, &__h, &__ch, &__data, &__err); \
+                {c_type} __wr = {{0}}; __wr.tag = __tag; \
+                if (__tag == 0) {{ __wr.{ok_f} = ({image_c}){{.width = __w, .height = __h, .channels = __ch, .data = __data}}; }} \
+                else {{ __wr.{err_f} = __err; }} {v} = __wr; }}",
+                v = v(*d));
+            Some(out)
+        }
+        // gorget_image_flip_vertically — extract Image fields, pass individually
+        "gorget_image_flip_vertically" => {
+            let d = dst.as_ref()?;
+            let img = v(args[0]);
+            let arg_ty = val_types.get(args[0].0 as usize).and_then(|t| t.as_ref());
+            let image_c = find_struct_c_name("Image");
+            // When the arg is a Ptr (void*), cast to Image* for field access.
+            let (img_expr, acc) = if matches!(arg_ty, Some(LirType::Ptr)) {
+                (format!("(({image_c}*){img})"), "->".to_string())
+            } else {
+                (img.clone(), ".".to_string())
+            };
+            let data_ref = format!("&{img_expr}{acc}data");
+            let _ = write!(out,
+                "{{ int64_t __w = 0, __h = 0, __ch = 0; \
+                GorgetArray __data = gorget_array_new(sizeof(uint8_t)); \
+                gorget_image_flip_vertically({img_expr}{acc}width, {img_expr}{acc}height, {img_expr}{acc}channels, {data_ref}, &__w, &__h, &__ch, &__data); \
+                {v} = ({image_c}){{.width = __w, .height = __h, .channels = __ch, .data = __data}}; }}",
+                v = v(*d));
+            Some(out)
+        }
+        // gorget_audio_load_wav(Str path, ...)
+        "gorget_audio_load_wav" => {
+            let d = dst.as_ref()?;
+            let c_type = dst_c_type(d);
+            let path = str_arg(args[0]);
+            let (ok_f, err_f) = result_fields(d);
+            let _ = write!(out,
+                "{{ int64_t __tag = 0; GorgetAudioChunk __chunk = {{0}}; Str __err = {{0}}; \
+                gorget_audio_load_wav({path}, &__tag, &__chunk, &__err); \
+                {c_type} __wr = {{0}}; __wr.tag = __tag; \
+                if (__tag == 0) {{ __wr.{ok_f} = __chunk; }} \
+                else {{ __wr.{err_f} = __err; }} {v} = __wr; }}",
+                v = v(*d));
+            Some(out)
+        }
+        // gorget_audio_load_wav_from_memory(const GorgetArray* data, ...)
+        "gorget_audio_load_wav_from_memory" => {
+            let d = dst.as_ref()?;
+            let c_type = dst_c_type(d);
+            let data_ptr = array_addr(args[0]);
+            let (ok_f, err_f) = result_fields(d);
+            let _ = write!(out,
+                "{{ int64_t __tag = 0; GorgetAudioChunk __chunk = {{0}}; Str __err = {{0}}; \
+                gorget_audio_load_wav_from_memory({data_ptr}, &__tag, &__chunk, &__err); \
+                {c_type} __wr = {{0}}; __wr.tag = __tag; \
+                if (__tag == 0) {{ __wr.{ok_f} = __chunk; }} \
+                else {{ __wr.{err_f} = __err; }} {v} = __wr; }}",
+                v = v(*d));
+            Some(out)
+        }
+        // gorget_deflate_decompress(const GorgetArray* data, int64_t uncompressed_size, ...)
+        "gorget_deflate_decompress" => {
+            let d = dst.as_ref()?;
+            let c_type = dst_c_type(d);
+            let data_ptr = array_addr(args[0]);
+            let size = v(args[1]);
+            let (ok_f, err_f) = result_fields(d);
+            let _ = write!(out,
+                "{{ int64_t __tag = 0; GorgetArray __data = gorget_array_new(sizeof(uint8_t)); Str __err = {{0}}; \
+                gorget_deflate_decompress({data_ptr}, {size}, &__tag, &__data, &__err); \
+                {c_type} __wr = {{0}}; __wr.tag = __tag; \
+                if (__tag == 0) {{ __wr.{ok_f} = __data; }} \
+                else {{ __wr.{err_f} = __err; }} {v} = __wr; }}",
+                v = v(*d));
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// Returns true if the extern's declared parameter at position `i` is a Str struct type.
+/// Used to generically detect string literal args to any extern (GL, SDL, etc.) that
+/// need wrapping with `gorget_str_from_literal()`.
+fn ext_param_is_str(ext_params: Option<&[LirType]>, i: usize, structs: &[StructDef]) -> bool {
+    ext_params.and_then(|p| p.get(i)).map_or(false, |ty| {
+        matches!(ty, LirType::Struct(sid) if {
+            structs.get(sid.0 as usize).map_or(false, |s| s.name == "Str" || s.name == "GorgetString")
+        })
+    })
+}
+
+/// Returns true if a runtime function takes `Str` at the given parameter position.
+/// This covers GL/Metal/SDL runtime wrappers whose C definitions use `Str` by value,
+/// but whose LIR extern declarations may have `Ptr` (inferred from string literal call sites).
+fn runtime_fn_str_param(fn_name: &str, _param_idx: usize) -> bool {
+    // GL runtime wrappers that take Str params
+    matches!(fn_name,
+        "gorget_gl_get_uniform_location"
+        | "gorget_gl_get_attrib_location"
+        | "gorget_gl_get_uniform_block_index"
+        | "gorget_gl_bind_attrib_location"
+        | "gorget_gl_shader_source"
+        // Metal runtime wrappers that take Str params
+        | "gorget_metal_create_library"
+        | "gorget_metal_library_function"
+        | "gorget_metal_cmd_buf_push_debug_group"
+        | "gorget_metal_encoder_push_debug_group"
+        | "gorget_metal_encoder_insert_debug_signpost"
+    )
+}
+
 /// Returns true if the runtime function returns a raw `const char*` that needs wrapping
 /// when stored to a Str/GorgetString slot. Other Ptr-returning functions return struct
 /// pointers or void* that should be handled by the aggregate (memcpy) path instead.
@@ -6077,6 +6332,7 @@ fn is_cstr_returning_fn(name: &str) -> bool {
             | "gorget_platform"
             | "gorget_regex_match_text"
             | "gorget_regex_pattern_str"
+            | "gorget_sdl_get_error"
             | "gorget_str_concat"
     )
 }

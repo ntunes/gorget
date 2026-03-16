@@ -734,14 +734,76 @@ impl<'a> FuncLowering<'a> {
             } => {
                 let val = self.lower_operand(value, bb);
                 let to = map_gir_type_with_structs(target_type, self.gir_types, Some(self.struct_reg));
-                let result = self.lir_func.next_value();
-                // Determine cast kind based on types.
-                self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
-                    dst: result,
-                    value: val,
-                    to,
+
+                // Check if target is Str — emit conversion call instead of invalid (Str)(val) cast.
+                let is_str_target = matches!(&to, LirType::Struct(sid) if {
+                    self.module_structs.get(sid.0 as usize)
+                        .map_or(false, |s| s.name == "Str" || s.name == "GorgetString")
                 });
-                self.store_to_local(*dst, result, bb);
+                if is_str_target {
+                    // Determine source GIR type to pick the right conversion function.
+                    let src_gir_ty = match value {
+                        Operand::Copy(place) | Operand::Move(place) => {
+                            let idx = place.local.0 as usize;
+                            if idx < self.gir_func.locals.len() {
+                                Some(self.gir_func.locals[idx].type_id)
+                            } else {
+                                None
+                            }
+                        }
+                        Operand::Constant(c) => match c {
+                            Constant::I8(_) | Constant::I16(_) | Constant::I32(_) | Constant::I64(_)
+                            | Constant::U8(_) | Constant::U16(_) | Constant::U32(_) | Constant::U64(_)
+                            | Constant::SizeOf(_) => Some(gir_types::I64_TYPE),
+                            Constant::F32(_) | Constant::F64(_) => Some(gir_types::F64_TYPE),
+                            Constant::Bool(_) => Some(gir_types::BOOL_TYPE),
+                            _ => None,
+                        },
+                    };
+                    let is_int = src_gir_ty.map_or(false, |t| {
+                        t == gir_types::I64_TYPE || t == gir_types::I32_TYPE
+                        || t == gir_types::I16_TYPE || t == gir_types::I8_TYPE
+                        || t == gir_types::U8_TYPE || t == gir_types::U16_TYPE
+                        || t == gir_types::U32_TYPE || t == gir_types::U64_TYPE
+                    });
+                    let is_float = src_gir_ty.map_or(false, |t| {
+                        t == gir_types::F64_TYPE || t == gir_types::F32_TYPE
+                    });
+                    let is_bool = src_gir_ty.map_or(false, |t| t == gir_types::BOOL_TYPE);
+
+                    let conv_fn = if is_int {
+                        "gorget_int_to_str"
+                    } else if is_float {
+                        "gorget_float_to_str"
+                    } else if is_bool {
+                        "gorget_bool_to_str"
+                    } else {
+                        // Unknown source → use int_to_str as fallback (most casts are int→str).
+                        "gorget_int_to_str"
+                    };
+                    // Emit CallExtern to the conversion function (returns const char*).
+                    let cstr_result = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: Some(cstr_result),
+                        name: conv_fn.to_string(),
+                        args: vec![val],
+                    });
+                    self.ensure_extern(conv_fn, &[if is_float { LirType::F64 } else if is_bool { LirType::Bool } else { LirType::I64 }], &LirType::Ptr);
+                    // The result is a const char* (Ptr) — the SlotStore Ptr→Str path in c_lir
+                    // will wrap it with gorget_str_from_literal since it's a cstr_val.
+                    self.store_to_local(*dst, cstr_result, bb);
+                } else if matches!(to, LirType::Void) {
+                    // Cast to void — just evaluate for side effects, don't generate (void)(val).
+                    // No store needed.
+                } else {
+                    let result = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
+                        dst: result,
+                        value: val,
+                        to,
+                    });
+                    self.store_to_local(*dst, result, bb);
+                }
             }
 
             Instruction::BitCast {
