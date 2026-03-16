@@ -28,7 +28,7 @@ void main():
 
     test_resolve("=== enum ===", "enum Color:\n    Red\n    Green\n    Blue(int)\n")
 
-    test_resolve("=== forward_ref ===", "void main():\n    auto x = helper()\nint helper() = 42\n")
+    test_resolve("=== forward_ref ===", "void main():\n    auto x = helper()\nint helper(): 42\n")
 
     test_resolve("=== shadowing ===", "void f():\n    int x = 1\n    if true:\n        int x = 2\n        print(x)\n")
 

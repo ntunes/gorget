@@ -129,9 +129,9 @@ private int flat_to_addr(Vector[int] strides, int offset, Vector[int] shape, int
 
 equip Tensor[T]:
     # Shape and metadata
-    int ndim(self) = self.shape.len()
-    int size(self) = product(self.shape)
-    int storage_len(self) = self.storage.slen()
+    int ndim(self): self.shape.len()
+    int size(self): product(self.shape)
+    int storage_len(self): self.storage.slen()
 
     bool is_contiguous(self):
         if self.offset != 0:
@@ -314,10 +314,10 @@ Tensor[T] tensor_elemwise[Numeric T](Tensor[T] a, Tensor[T] b, meta op):
     return out
 
 # Thin named wrappers — preserve the public API exactly.
-Tensor[T] tensor_add[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_elemwise[T](a, b, meta +)
-Tensor[T] tensor_sub[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_elemwise[T](a, b, meta -)
-Tensor[T] tensor_mul[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_elemwise[T](a, b, meta *)
-Tensor[T] tensor_div[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_elemwise[T](a, b, meta /)
+Tensor[T] tensor_add[Numeric T](Tensor[T] a, Tensor[T] b): tensor_elemwise[T](a, b, meta +)
+Tensor[T] tensor_sub[Numeric T](Tensor[T] a, Tensor[T] b): tensor_elemwise[T](a, b, meta -)
+Tensor[T] tensor_mul[Numeric T](Tensor[T] a, Tensor[T] b): tensor_elemwise[T](a, b, meta *)
+Tensor[T] tensor_div[Numeric T](Tensor[T] a, Tensor[T] b): tensor_elemwise[T](a, b, meta /)
 
 Tensor[T] tensor_neg[Numeric T](Tensor[T] a):
     int sz = a.size()
@@ -341,10 +341,10 @@ Tensor[T] tensor_scalar_op[Numeric T](Tensor[T] t, T val, meta op):
     return out
 
 # Thin named wrappers — preserve the public API exactly.
-Tensor[T] scalar_add[Numeric T](Tensor[T] t, T val) = tensor_scalar_op[T](t, val, meta +)
-Tensor[T] scalar_sub[Numeric T](Tensor[T] t, T val) = tensor_scalar_op[T](t, val, meta -)
-Tensor[T] scalar_mul[Numeric T](Tensor[T] t, T val) = tensor_scalar_op[T](t, val, meta *)
-Tensor[T] scalar_div[Numeric T](Tensor[T] t, T val) = tensor_scalar_op[T](t, val, meta /)
+Tensor[T] scalar_add[Numeric T](Tensor[T] t, T val): tensor_scalar_op[T](t, val, meta +)
+Tensor[T] scalar_sub[Numeric T](Tensor[T] t, T val): tensor_scalar_op[T](t, val, meta -)
+Tensor[T] scalar_mul[Numeric T](Tensor[T] t, T val): tensor_scalar_op[T](t, val, meta *)
+Tensor[T] scalar_div[Numeric T](Tensor[T] t, T val): tensor_scalar_op[T](t, val, meta /)
 
 # ── Broadcasting ──────────────────────────────────────────────
 
@@ -619,9 +619,9 @@ Tensor[bool] tensor_cmpwise[Numeric T](Tensor[T] a, Tensor[T] b, meta op):
     return Tensor[bool](Shared[Vector[bool]](data), sh, strides, 0)
 
 # Thin named wrappers — preserve the public API exactly.
-Tensor[bool] tensor_eq[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_cmpwise[T](a, b, meta ==)
-Tensor[bool] tensor_lt[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_cmpwise[T](a, b, meta <)
-Tensor[bool] tensor_gt[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_cmpwise[T](a, b, meta >)
-Tensor[bool] tensor_le[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_cmpwise[T](a, b, meta <=)
-Tensor[bool] tensor_ge[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_cmpwise[T](a, b, meta >=)
-Tensor[bool] tensor_ne[Numeric T](Tensor[T] a, Tensor[T] b) = tensor_cmpwise[T](a, b, meta !=)
+Tensor[bool] tensor_eq[Numeric T](Tensor[T] a, Tensor[T] b): tensor_cmpwise[T](a, b, meta ==)
+Tensor[bool] tensor_lt[Numeric T](Tensor[T] a, Tensor[T] b): tensor_cmpwise[T](a, b, meta <)
+Tensor[bool] tensor_gt[Numeric T](Tensor[T] a, Tensor[T] b): tensor_cmpwise[T](a, b, meta >)
+Tensor[bool] tensor_le[Numeric T](Tensor[T] a, Tensor[T] b): tensor_cmpwise[T](a, b, meta <=)
+Tensor[bool] tensor_ge[Numeric T](Tensor[T] a, Tensor[T] b): tensor_cmpwise[T](a, b, meta >=)
+Tensor[bool] tensor_ne[Numeric T](Tensor[T] a, Tensor[T] b): tensor_cmpwise[T](a, b, meta !=)

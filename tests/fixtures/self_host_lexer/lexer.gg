@@ -297,7 +297,7 @@ equip Lexer:
 
     # ── Primitives ────────────────────────────────────────────
 
-    bool lex_at_end(self) = self.lex_pos >= self.lex_source.byte_len()
+    bool lex_at_end(self): self.lex_pos >= self.lex_source.byte_len()
 
     byte lex_peek(self):
         return self.lex_source.byte_at(self.lex_pos)

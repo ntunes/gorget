@@ -45,7 +45,7 @@ equip Row:
         str v = self.columns[col]
         return v == "1" or v == "true" or v == "True"
 
-    bool has(&self, str col) = self.columns.contains(col)
+    bool has(&self, str col): self.columns.contains(col)
 
 # ── Typed DB column value ─────────────────────────────────────
 
@@ -74,7 +74,7 @@ trait FromRow:
 
 # Row trivially satisfies FromRow (identity).
 equip Row with FromRow:
-    Row from_row(Row row) = row
+    Row from_row(Row row): row
 
 # The core query interface.
 #

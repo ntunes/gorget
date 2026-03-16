@@ -1,8 +1,8 @@
-int square(int x) = x * x
-int cube(int x) = x * x * x
-bool is_positive(int x) = x > 0
-str greeting(str name) = f"hello {name}"
-int max2(int a, int b) = if a > b: a else: b
+int square(int x): x * x
+int cube(int x): x * x * x
+bool is_positive(int x): x > 0
+str greeting(str name): f"hello {name}"
+int max2(int a, int b): if a > b: a else: b
 
 void main():
     print(square(5))

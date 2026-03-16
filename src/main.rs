@@ -383,6 +383,14 @@ fn try_build_ir(
         return Err(format!("{} parse error(s) found", parser.errors.len()));
     }
 
+    // Emit parse-level warnings (e.g. deprecated syntax)
+    if !parser.warnings.is_empty() {
+        let reporter = ErrorReporter::new(filename.to_string(), source.to_string());
+        for warn in &parser.warnings {
+            reporter.report_parse_warning(warn);
+        }
+    }
+
     // Load imported modules recursively and merge
     let (mut module, file_infos) = load_imports(filename, source, module, dep_paths);
     // Concatenated source for feature-flag detection (.contains() checks below).
@@ -1536,6 +1544,13 @@ fn main() {
                 process::exit(1);
             }
 
+            if !parser.warnings.is_empty() {
+                let reporter = ErrorReporter::new(filename.clone(), source.clone());
+                for warn in &parser.warnings {
+                    reporter.report_parse_warning(warn);
+                }
+            }
+
             println!("{module:#?}");
         }
         "check" => {
@@ -1549,6 +1564,13 @@ fn main() {
                 }
                 eprintln!("\n{} parse error(s) found", parser.errors.len());
                 process::exit(1);
+            }
+
+            if !parser.warnings.is_empty() {
+                let reporter = ErrorReporter::new(filename.clone(), source.clone());
+                for warn in &parser.warnings {
+                    reporter.report_parse_warning(warn);
+                }
             }
 
             // Load imported modules recursively and merge

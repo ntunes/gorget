@@ -1275,7 +1275,7 @@ void main():
 
     #[test]
     fn discover_generic_function() {
-        let source = r#"T identity[T](T x) = x
+        let source = r#"T identity[T](T x): x
 
 void main():
     int a = identity[int](42)

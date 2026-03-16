@@ -2,7 +2,7 @@ struct Pair[A, B]:
     A first
     B second
 
-int identity(int x) = x
+int identity(int x): x
 
 void main():
     Pair[int, int] p = Pair[int, int](10, 20)

@@ -212,7 +212,7 @@ struct JsonParser:
     str err
 
 equip JsonParser:
-    bool failed(self) = self.err != ""
+    bool failed(self): self.err != ""
 
     void fail(&self, str msg):
         if self.err == "":

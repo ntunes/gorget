@@ -1,4 +1,4 @@
-(int, int) swap(int a, int b) = (b, a)
+(int, int) swap(int a, int b): (b, a)
 
 void main():
     auto x, y = swap(1, 2)

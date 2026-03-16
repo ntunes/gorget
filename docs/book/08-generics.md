@@ -11,7 +11,7 @@ structs. Generics let you write that function once and use it for any type.
 A generic function declares type parameters in square brackets after the name:
 
 ```gorget
-T identity[T](T x) = x
+T identity[T](T x): x
 ```
 
 `T` is a *type parameter* — a placeholder that the compiler fills in at each call
@@ -286,7 +286,7 @@ Gorget compiles generics by *monomorphization*: each unique combination of type
 arguments produces a specialized copy of the code. When you write:
 
 ```gorget
-T identity[T](T x) = x
+T identity[T](T x): x
 
 void main():
     identity[int](42)
@@ -307,7 +307,7 @@ is rarely a problem, and the performance guarantee is worth it.
 
 | Concept | Syntax | Example |
 |---------|--------|---------|
-| Generic function | `T f[T](T x)` | `T identity[T](T x) = x` |
+| Generic function | `T f[T](T x)` | `T identity[T](T x): x` |
 | Generic struct | `struct S[T]: T field` | `struct Container[T]: T value` |
 | Generic enum | `enum E[T]: Variant(T)` | `enum Option[T]: Some(T), None` |
 | Explicit type args | `f[Type](args)` | `identity[int](42)` |

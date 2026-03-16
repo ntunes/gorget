@@ -1,4 +1,4 @@
-T identity[T](T x) = x
+T identity[T](T x): x
 
 void main():
     print(identity[int](42))

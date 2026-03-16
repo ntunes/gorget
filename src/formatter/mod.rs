@@ -517,7 +517,7 @@ impl Formatter {
                 self.emitter.dedent();
             }
             FunctionBody::Expression(expr) => {
-                self.emitter.write(" = ");
+                self.emitter.write(": ");
                 self.format_expr(expr);
                 self.emitter.newline();
             }
@@ -2337,9 +2337,9 @@ mod tests {
 
     #[test]
     fn test_expression_body() {
-        let input = "int double(int x) = x * 2\n";
+        let input = "int double(int x): x * 2\n";
         let output = fmt(input);
-        assert_eq!(output, "int double(int x) = x * 2\n");
+        assert_eq!(output, "int double(int x): x * 2\n");
     }
 
     #[test]

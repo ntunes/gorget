@@ -1,1 +1,1 @@
-int square(int x) = x * x
+int square(int x): x * x

@@ -152,7 +152,7 @@ Result[Vector[Row], str] _influx_parse_csv(str body):
 # ── InfluxClient: implements DbConnection ─────────────────────
 
 equip InfluxClient with DbConnection:
-    bool is_connected(&self) = self.base_url != ""
+    bool is_connected(&self): self.base_url != ""
 
     void close(&self):
         pass  # HTTP client is stateless; nothing to close

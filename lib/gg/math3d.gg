@@ -11,9 +11,9 @@ float EPSILON = 0.000001
 
 # ── Utility Functions ────────────────────────────────────────
 
-float radians(float deg) = deg * PI / 180.0
+float radians(float deg): deg * PI / 180.0
 
-float degrees(float rad) = rad * 180.0 / PI
+float degrees(float rad): rad * 180.0 / PI
 
 float clamp_f(float x, float lo, float hi):
     if x < lo:
@@ -22,7 +22,7 @@ float clamp_f(float x, float lo, float hi):
         return hi
     return x
 
-float lerp_f(float a, float b, float t) = a + (b - a) * t
+float lerp_f(float a, float b, float t): a + (b - a) * t
 
 float abs_f(float x):
     if x < 0.0:
@@ -37,19 +37,19 @@ struct Vec2:
     float y
 
 equip Vec2:
-    Vec2 zero() = Vec2(0.0, 0.0)
-    Vec2 one() = Vec2(1.0, 1.0)
+    Vec2 zero(): Vec2(0.0, 0.0)
+    Vec2 one(): Vec2(1.0, 1.0)
 
-    Vec2 add(self, Vec2 other) = Vec2(self.x + other.x, self.y + other.y)
-    Vec2 sub(self, Vec2 other) = Vec2(self.x - other.x, self.y - other.y)
-    Vec2 scale(self, float s) = Vec2(self.x * s, self.y * s)
-    Vec2 neg(self) = Vec2(0.0 - self.x, 0.0 - self.y)
+    Vec2 add(self, Vec2 other): Vec2(self.x + other.x, self.y + other.y)
+    Vec2 sub(self, Vec2 other): Vec2(self.x - other.x, self.y - other.y)
+    Vec2 scale(self, float s): Vec2(self.x * s, self.y * s)
+    Vec2 neg(self): Vec2(0.0 - self.x, 0.0 - self.y)
 
-    float dot(self, Vec2 other) = self.x * other.x + self.y * other.y
+    float dot(self, Vec2 other): self.x * other.x + self.y * other.y
 
-    float length_sq(self) = self.x * self.x + self.y * self.y
+    float length_sq(self): self.x * self.x + self.y * self.y
 
-    float length(self) = sqrt(self.x * self.x + self.y * self.y)
+    float length(self): sqrt(self.x * self.x + self.y * self.y)
 
     Vec2 normalize(self):
         float len = self.length()
@@ -83,16 +83,16 @@ struct Vec3:
     float z
 
 equip Vec3:
-    Vec3 zero() = Vec3(0.0, 0.0, 0.0)
-    Vec3 one() = Vec3(1.0, 1.0, 1.0)
-    Vec3 up() = Vec3(0.0, 1.0, 0.0)
-    Vec3 right() = Vec3(1.0, 0.0, 0.0)
-    Vec3 forward() = Vec3(0.0, 0.0, -1.0)
+    Vec3 zero(): Vec3(0.0, 0.0, 0.0)
+    Vec3 one(): Vec3(1.0, 1.0, 1.0)
+    Vec3 up(): Vec3(0.0, 1.0, 0.0)
+    Vec3 right(): Vec3(1.0, 0.0, 0.0)
+    Vec3 forward(): Vec3(0.0, 0.0, -1.0)
 
-    Vec3 add(self, Vec3 other) = Vec3(self.x + other.x, self.y + other.y, self.z + other.z)
-    Vec3 sub(self, Vec3 other) = Vec3(self.x - other.x, self.y - other.y, self.z - other.z)
-    Vec3 scale(self, float s) = Vec3(self.x * s, self.y * s, self.z * s)
-    Vec3 neg(self) = Vec3(0.0 - self.x, 0.0 - self.y, 0.0 - self.z)
+    Vec3 add(self, Vec3 other): Vec3(self.x + other.x, self.y + other.y, self.z + other.z)
+    Vec3 sub(self, Vec3 other): Vec3(self.x - other.x, self.y - other.y, self.z - other.z)
+    Vec3 scale(self, float s): Vec3(self.x * s, self.y * s, self.z * s)
+    Vec3 neg(self): Vec3(0.0 - self.x, 0.0 - self.y, 0.0 - self.z)
 
     float dot(self, Vec3 other):
         return self.x * other.x + self.y * other.y + self.z * other.z
@@ -103,9 +103,9 @@ equip Vec3:
             self.z * other.x - self.x * other.z,
             self.x * other.y - self.y * other.x)
 
-    float length_sq(self) = self.x * self.x + self.y * self.y + self.z * self.z
+    float length_sq(self): self.x * self.x + self.y * self.y + self.z * self.z
 
-    float length(self) = sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
+    float length(self): sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
 
     Vec3 normalize(self):
         float len = self.length()
@@ -152,7 +152,7 @@ struct Vec4:
     float w
 
 equip Vec4:
-    Vec4 zero() = Vec4(0.0, 0.0, 0.0, 0.0)
+    Vec4 zero(): Vec4(0.0, 0.0, 0.0, 0.0)
 
     Vec4 add(self, Vec4 other):
         return Vec4(self.x + other.x, self.y + other.y, self.z + other.z, self.w + other.w)
@@ -458,7 +458,7 @@ struct Quat:
     float w
 
 equip Quat:
-    Quat identity() = Quat(0.0, 0.0, 0.0, 1.0)
+    Quat identity(): Quat(0.0, 0.0, 0.0, 1.0)
 
     Quat from_axis_angle(Vec3 axis, float angle_rad):
         float half = angle_rad / 2.0
@@ -608,7 +608,7 @@ equip AABB:
     bool contains_point(self, Vec3 p):
         return p.x >= self.min_pt.x and p.x <= self.max_pt.x and p.y >= self.min_pt.y and p.y <= self.max_pt.y and p.z >= self.min_pt.z and p.z <= self.max_pt.z
 
-    bool contains(self, Vec3 p) = self.contains_point(p)
+    bool contains(self, Vec3 p): self.contains_point(p)
 
     bool intersects(self, AABB other):
         return self.min_pt.x <= other.max_pt.x and self.max_pt.x >= other.min_pt.x and self.min_pt.y <= other.max_pt.y and self.max_pt.y >= other.min_pt.y and self.min_pt.z <= other.max_pt.z and self.max_pt.z >= other.min_pt.z

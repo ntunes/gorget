@@ -41,7 +41,7 @@ struct TomlParser:
     int current_sec
 
 equip TomlParser:
-    bool failed(self) = self.err != ""
+    bool failed(self): self.err != ""
 
     void fail(&self, str msg):
         if self.err == "":
@@ -52,7 +52,7 @@ equip TomlParser:
             return self.source.char_at(self.pos)
         return '\0'
 
-    bool at_end(self) = self.pos >= self.source.byte_len()
+    bool at_end(self): self.pos >= self.source.byte_len()
 
     void skip_ws(&self):
         while self.pos < self.source.byte_len():

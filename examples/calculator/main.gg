@@ -12,10 +12,10 @@ from expr import Expr, Num, Add, Mul, Neg
 from eval import eval
 
 # Helper to build expression nodes concisely
-Expr num(int n) = Num(n)
-Expr add(Expr a, Expr b) = Add(Box.new(a), Box.new(b))
-Expr mul(Expr a, Expr b) = Mul(Box.new(a), Box.new(b))
-Expr neg(Expr a) = Neg(Box.new(a))
+Expr num(int n): Num(n)
+Expr add(Expr a, Expr b): Add(Box.new(a), Box.new(b))
+Expr mul(Expr a, Expr b): Mul(Box.new(a), Box.new(b))
+Expr neg(Expr a): Neg(Box.new(a))
 
 void main():
     # 2 + 3 = 5

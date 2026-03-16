@@ -1,1 +1,1 @@
-int value() = 99
+int value(): 99

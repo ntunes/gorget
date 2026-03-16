@@ -89,7 +89,7 @@ private Result[Vector[Row], str] step_rows(int stmt, int db):
 # ── SqliteConn: implements DbConnection ───────────────────────
 
 equip SqliteConn with DbConnection:
-    bool is_connected(&self) = self._handle != 0
+    bool is_connected(&self): self._handle != 0
 
     void close(&self):
         if self._handle != 0:

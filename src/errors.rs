@@ -44,6 +44,29 @@ impl std::fmt::Display for LexError {
     }
 }
 
+/// Parse-time warning (non-fatal).
+#[derive(Debug, Clone)]
+pub struct ParseWarning {
+    pub kind: ParseWarningKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum ParseWarningKind {
+    /// DEPRECATION(0.1.4): remove = expr support before 0.2.0
+    DeprecatedExpressionBodyEquals,
+}
+
+impl std::fmt::Display for ParseWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.kind {
+            ParseWarningKind::DeprecatedExpressionBodyEquals => {
+                write!(f, "deprecated `=` expression body syntax")
+            }
+        }
+    }
+}
+
 /// Parse-time error.
 #[derive(Debug, Clone)]
 pub struct ParseError {
@@ -163,6 +186,17 @@ impl ErrorReporter {
         let diag = diagnostic::Diagnostic::error()
             .with_message(err.to_string())
             .with_labels(vec![self.primary_label(err.span)]);
+        self.emit(&diag);
+    }
+
+    pub fn report_parse_warning(&self, warn: &ParseWarning) {
+        let diag = diagnostic::Diagnostic::warning()
+            .with_message(warn.to_string())
+            .with_labels(vec![self.primary_label(warn.span)])
+            .with_notes(vec![
+                "use `:` instead: `int f(int x): x * 2`".to_string(),
+                "= syntax will be removed in 0.2.0".to_string(),
+            ]);
         self.emit(&diag);
     }
 

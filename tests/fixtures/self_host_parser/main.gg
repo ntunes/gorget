@@ -19,7 +19,7 @@ void main():
     test_parse("=== struct ===", "struct Point:\n    int x\n    int y\n")
     test_parse("=== enum ===", "enum Color:\n    Red\n    Green\n    Blue(int)\n")
     test_parse("=== import ===", "from std.collections import Vector\n")
-    test_parse("=== expr_body ===", "int double(int x) = x * 2\n")
+    test_parse("=== expr_body ===", "int double(int x): x * 2\n")
 
     # Statements inside functions
     test_parse("=== vardecl ===", "void f():\n    int x = 42\n")

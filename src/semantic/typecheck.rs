@@ -3594,7 +3594,7 @@ mod tests {
 
     #[test]
     fn simple_function_no_errors() {
-        let errors = check("int add(int a, int b) = a + b\n");
+        let errors = check("int add(int a, int b): a + b\n");
         // May have some unresolved type errors but shouldn't panic
         let _ = errors;
     }
@@ -3628,7 +3628,7 @@ mod tests {
 
     #[test]
     fn expression_body_type_check() {
-        let errors = check("int double(int x) = x * 2\n");
+        let errors = check("int double(int x): x * 2\n");
         // int * int should unify fine
         assert!(
             !errors.iter().any(|e| matches!(

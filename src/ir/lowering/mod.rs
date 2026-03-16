@@ -2237,7 +2237,7 @@ void main():
 
     #[test]
     fn lower_multiple_functions() {
-        let source = r#"int double(int x) = x * 2
+        let source = r#"int double(int x): x * 2
 
 int triple(int x):
     return x * 3
@@ -2460,7 +2460,7 @@ void main():
 
     #[test]
     fn lower_generic_function_monomorphized() {
-        let source = r#"T identity[T](T x) = x
+        let source = r#"T identity[T](T x): x
 
 void main():
     int a = identity[int](42)

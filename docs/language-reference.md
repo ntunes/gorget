@@ -617,7 +617,7 @@ The ownership annotation at the call site **must match** the parameter declarati
 **Expression body shorthand:**
 
 ```gorget
-int double(int x) = x * 2
+int double(int x): x * 2
 ```
 
 Equivalent to a block body with `return`.
@@ -949,7 +949,7 @@ test "addition":
     assert add(2, 3) == 5
 
 @inline
-int fast_add(int a, int b) = a + b
+int fast_add(int a, int b): a + b
 ```
 
 > **Note:** `@inline` is parsed but does not yet affect code generation. The compiler may inline small functions automatically in future versions.
@@ -5011,7 +5011,7 @@ Type function parameters follow normal Gorget param syntax. Only meta-compatible
 Any ordinary function with meta-compatible parameter and return types can be called in a meta initializer — no special annotation required. The compiler interprets the body at compile time.
 
 ```gorget
-int square(int x) = x * x
+int square(int x): x * x
 
 int sum_range(int n):
     int total = 0
@@ -5037,7 +5037,7 @@ meta int NESTED = square(sum_range(3))   # 36
 - `return` (mandatory — bare `return` is not allowed)
 - `assert`
 - Nested function calls (including recursive)
-- Expression-body functions (`int double(int x) = x * 2`)
+- Expression-body functions (`int double(int x): x * 2`)
 
 **Not supported:** `match`, `throw`, `select`, `with`, generic functions, `async` functions, `unsafe` functions.
 

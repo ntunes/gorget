@@ -1,8 +1,8 @@
 # Generic identity function
-T identity[T](T x) = x
+T identity[T](T x): x
 
 # Generic function with two type params
-B apply_second[A, B](A a, B b) = b
+B apply_second[A, B](A a, B b): b
 
 # Generic function returning Option
 Option[T] find_positive[T](T val, bool keep):

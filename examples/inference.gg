@@ -57,6 +57,6 @@ equip Point:
     float magnitude(self):
         return 0.0
 
-int add(int a, int b) = a + b
-int double(int x) = x * 2
-bool is_positive(int x) = x > 0
+int add(int a, int b): a + b
+int double(int x): x * 2
+bool is_positive(int x): x > 0

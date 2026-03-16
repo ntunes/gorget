@@ -66,7 +66,7 @@ public int add(int a, int b):
     return a + b
 
 # Expression body function
-int double(int x) = x * 2
+int double(int x): x * 2
 
 # NOT YET: generic functions with where clause need stdlib Vector
 # void print_all[T](Vector[T] items) where T is Displayable:

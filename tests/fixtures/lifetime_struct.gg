@@ -11,13 +11,13 @@ struct Nested:
     View inner
 
 # Struct with str field from string literal — always safe
-View make_view_literal() = View("hello")
+View make_view_literal(): View("hello")
 
 # Struct with str field from parameter — safe (borrows from param)
-View make_view(str s) = View(s)
+View make_view(str s): View(s)
 
 # Struct with mixed fields — safe when source is a literal
-Tagged make_tagged() = Tagged("tag", 42)
+Tagged make_tagged(): Tagged("tag", 42)
 
 void main():
     # Literal source

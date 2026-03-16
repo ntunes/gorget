@@ -5,7 +5,7 @@ pub mod stmt;
 pub mod types;
 pub mod visitor;
 
-use crate::errors::ParseError;
+use crate::errors::{ParseError, ParseWarning, ParseWarningKind};
 use crate::lexer::token::{Keyword, Token};
 use crate::lexer::Lexer;
 use crate::span::{Span, Spanned};
@@ -41,6 +41,7 @@ pub struct Parser {
     spans: Vec<Span>,
     pos: usize,
     pub errors: Vec<ParseError>,
+    pub warnings: Vec<ParseWarning>,
     /// Nesting depth for call-arg parsing. Used to auto-wrap `it` only at the
     /// outermost call-arg level and prevent double-wrapping in nested calls.
     call_arg_depth: usize,
@@ -79,6 +80,7 @@ impl Parser {
             spans,
             pos: 0,
             errors: Vec::new(),
+            warnings: Vec::new(),
             call_arg_depth: 0,
             comments,
         }
@@ -1607,11 +1609,24 @@ impl Parser {
                 return Err(self.error_unexpected("string literal for extern symbol"));
             }
         } else if self.match_token(&Token::Eq) {
+            // DEPRECATED: = expr syntax — emit warning, parse normally
+            self.warnings.push(ParseWarning {
+                kind: ParseWarningKind::DeprecatedExpressionBodyEquals,
+                span: self.previous_span(),
+            });
             let expr = self.parse_expr()?;
             self.consume_newline();
             FunctionBody::Expression(Box::new(expr))
-        } else if self.check(&Token::Colon) {
-            FunctionBody::Block(self.parse_block()?)
+        } else if self.match_token(&Token::Colon) {
+            if self.check(&Token::Newline) {
+                let start = self.previous_span();
+                FunctionBody::Block(self.parse_block_body(start)?)
+            } else {
+                // Same line → expression body
+                let expr = self.parse_expr()?;
+                self.consume_newline();
+                FunctionBody::Expression(Box::new(expr))
+            }
         } else {
             self.consume_newline();
             FunctionBody::Declaration

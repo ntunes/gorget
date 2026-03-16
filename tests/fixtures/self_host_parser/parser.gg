@@ -2962,7 +2962,7 @@ equip Parser:
             while not self.check_tok(TOK_COLON) and not self.check_tok(TOK_EQ) and not self.check_tok(TOK_NEWLINE) and not self.check_tok(TOK_DEDENT) and not self.at_end():
                 self.advance()
 
-        # Expression-body function: Type name(params) = expr
+        # Expression-body function: Type name(params) = expr (deprecated)
         if self.check_tok(TOK_EQ):
             self.advance()
             SpannedExpr body_expr = self.parse_expr()
@@ -2976,6 +2976,12 @@ equip Parser:
             return FunctionDef(name, params, ret_ty, type_params, body, false)
 
         self.expect_tok(TOK_COLON, "expected ':' after function signature")
+        # Colon + same-line content = expression body
+        if not self.check_tok(TOK_NEWLINE):
+            SpannedExpr body_expr = self.parse_expr()
+            Vector[Stmt] body = Vector[Stmt]()
+            body.push(SReturn(Some(body_expr)))
+            return FunctionDef(name, params, ret_ty, type_params, body, true)
         Vector[Stmt] body = self.parse_block()
         return FunctionDef(name, params, ret_ty, type_params, body, false)
 

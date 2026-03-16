@@ -108,7 +108,7 @@ fn test_function_with_block() {
 
 #[test]
 fn test_function_expression_body() {
-    let module = parse("int double(int x) = x * 2\n");
+    let module = parse("int double(int x): x * 2\n");
     assert_eq!(module.items.len(), 1);
     if let Item::Function(ref f) = module.items[0].node {
         assert_eq!(f.name.node, "double");
@@ -408,7 +408,7 @@ fn test_return_stmt() {
 
 #[test]
 fn test_binary_expr() {
-    let module = parse("int foo() = 1 + 2 * 3\n");
+    let module = parse("int foo(): 1 + 2 * 3\n");
     if let Item::Function(ref f) = module.items[0].node {
         if let FunctionBody::Expression(ref expr) = f.body {
             // Should be Add(1, Mul(2, 3))
@@ -549,7 +549,7 @@ fn test_attribute() {
 
 #[test]
 fn test_public_visibility() {
-    let module = parse("public int add(int a, int b) = a + b\n");
+    let module = parse("public int add(int a, int b): a + b\n");
     if let Item::Function(ref f) = module.items[0].node {
         assert_eq!(f.visibility, Visibility::Public);
     } else {
@@ -741,7 +741,7 @@ fn test_pass_stmt() {
 #[test]
 fn test_multiple_items() {
     let module = parse(
-        "struct A:\n    int x\n\nstruct B:\n    int y\n\nint add(int a, int b) = a + b\n"
+        "struct A:\n    int x\n\nstruct B:\n    int y\n\nint add(int a, int b): a + b\n"
     );
     assert_eq!(module.items.len(), 3);
 }
@@ -786,7 +786,7 @@ fn test_string_interpolation_in_expr() {
 
 #[test]
 fn test_doc_comments() {
-    let module = parse("#/ Documentation for the function\nint foo() = 42\n");
+    let module = parse("#/ Documentation for the function\nint foo(): 42\n");
     if let Item::Function(ref f) = module.items[0].node {
         assert!(f.doc_comment.is_some());
     } else {

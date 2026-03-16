@@ -29,13 +29,13 @@ struct YamlParser:
     Vector[Yaml] yaml_anc_vals
 
 equip YamlParser:
-    bool failed(self) = self.yaml_err != ""
+    bool failed(self): self.yaml_err != ""
 
     void fail(&self, str msg):
         if self.yaml_err == "":
             self.yaml_err = move msg
 
-    bool at_end(self) = self.yaml_pos >= self.yaml_input.byte_len()
+    bool at_end(self): self.yaml_pos >= self.yaml_input.byte_len()
 
     str peek(self):
         if self.yaml_pos < self.yaml_input.byte_len():

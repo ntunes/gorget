@@ -660,7 +660,7 @@ str format_function(FunctionDef fd):
                 case SReturn(val):
                     match val:
                         case Some(v):
-                            result = result + " = " + format_expr(v)
+                            result = result + ": " + format_expr(v)
                         else:
                             pass
                 else:

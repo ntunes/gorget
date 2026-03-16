@@ -125,13 +125,13 @@ struct GroupBy:
 # ── Column Access Helpers ────────────────────────────────────
 
 equip TypedColumn[T]:
-    int col_len(self) = self.data.len()
+    int col_len(self): self.data.len()
     bool is_null(self, int idx):
         Option[bool] m = self.mask.get(idx)
         if m.is_none():
             return true
         return not m.unwrap()
-    T get_val(self, int idx) = self.data.get(idx).unwrap()
+    T get_val(self, int idx): self.data.get(idx).unwrap()
     int null_count(self):
         int cnt = 0
         int i = 0
@@ -367,9 +367,9 @@ equip DataFrame:
     Vector[str] column_names(self):
         return vec_str_copy(self.col_names)
 
-    int nrows(self) = self.num_rows
+    int nrows(self): self.num_rows
 
-    int ncols(self) = self.col_names.len()
+    int ncols(self): self.col_names.len()
 
     DataFrame head(self, int n):
         int end = n

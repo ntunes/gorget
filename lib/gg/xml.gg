@@ -144,7 +144,7 @@ struct XmlParser:
     str err
 
 equip XmlParser:
-    bool failed(self) = self.err != ""
+    bool failed(self): self.err != ""
 
     void fail(&self, str msg):
         if self.err == "":

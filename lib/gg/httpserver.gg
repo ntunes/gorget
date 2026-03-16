@@ -43,16 +43,16 @@ struct HttpServerResponse:
     Dict[str, str] headers   # additional response headers (e.g. Set-Cookie, CORS)
 
 equip HttpServerResponse:
-    HttpServerResponse ok(str body) = HttpServerResponse(200, body, "text/plain", Dict[str, str]())
-    HttpServerResponse html(str body) = HttpServerResponse(200, body, "text/html", Dict[str, str]())
-    HttpServerResponse json(str body) = HttpServerResponse(200, body, "application/json", Dict[str, str]())
+    HttpServerResponse ok(str body): HttpServerResponse(200, body, "text/plain", Dict[str, str]())
+    HttpServerResponse html(str body): HttpServerResponse(200, body, "text/html", Dict[str, str]())
+    HttpServerResponse json(str body): HttpServerResponse(200, body, "application/json", Dict[str, str]())
     # Build a 200 application/json response by serializing a Json value.
     HttpServerResponse of_json(Json val):
         str body = json_stringify(val).str()
         return HttpServerResponse(200, body, "application/json", Dict[str, str]())
-    HttpServerResponse not_found() = HttpServerResponse(404, "Not Found", "text/plain", Dict[str, str]())
-    HttpServerResponse bad_request(str msg) = HttpServerResponse(400, msg, "text/plain", Dict[str, str]())
-    HttpServerResponse internal_error(str msg) = HttpServerResponse(500, msg, "text/plain", Dict[str, str]())
+    HttpServerResponse not_found(): HttpServerResponse(404, "Not Found", "text/plain", Dict[str, str]())
+    HttpServerResponse bad_request(str msg): HttpServerResponse(400, msg, "text/plain", Dict[str, str]())
+    HttpServerResponse internal_error(str msg): HttpServerResponse(500, msg, "text/plain", Dict[str, str]())
 
     HttpServerResponse with_header(self, str name, str value):
         Dict[str, str] new_headers = self.headers
@@ -496,11 +496,11 @@ struct HttpServer:
     int max_requests_per_conn
 
 equip HttpServer:
-    HttpServer new(str host, int port) = HttpServer(host, port, 5000, false, "", "", 16777216, 0)
-    HttpServer with_timeout(str host, int port, int timeout_ms) = HttpServer(host, port, timeout_ms, false, "", "", 16777216, 0)
-    HttpServer with_max_body(str host, int port, int max_bytes) = HttpServer(host, port, 5000, false, "", "", max_bytes, 0)
+    HttpServer new(str host, int port): HttpServer(host, port, 5000, false, "", "", 16777216, 0)
+    HttpServer with_timeout(str host, int port, int timeout_ms): HttpServer(host, port, timeout_ms, false, "", "", 16777216, 0)
+    HttpServer with_max_body(str host, int port, int max_bytes): HttpServer(host, port, 5000, false, "", "", max_bytes, 0)
     # Limit the number of requests served per keep-alive connection.
-    HttpServer with_max_requests(str host, int port, int max_req) = HttpServer(host, port, 5000, false, "", "", 16777216, max_req)
+    HttpServer with_max_requests(str host, int port, int max_req): HttpServer(host, port, 5000, false, "", "", 16777216, max_req)
 
     # Construct a TLS-enabled server that will use the given PEM cert and key files.
     HttpServer new_tls(str host, int port, str cert_path, str key_path):

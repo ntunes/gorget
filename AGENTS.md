@@ -44,7 +44,7 @@ cargo test               # all tests
 ## Language Syntax (Quick Reference)
 
 - Indentation-based blocks (Python-style), type-first declarations: `int x = 5`, `str name = "hello"`
-- Functions: `int add(int a, int b): return a + b` / expression-body: `int double(int x) = x * 2`
+- Functions: `int add(int a, int b): return a + b` / expression-body: `int double(int x): x * 2`
 - Closures: `(int x): x * 2` / function types: `int(int, int)` (return type first)
 - Match uses `case`: `match x: case 1: ... else: ...`
 - Enum variants are qualified: `Color.Red()` not `Red()` (prelude variants `Ok`, `Error`, `Some`, `None` stay bare)

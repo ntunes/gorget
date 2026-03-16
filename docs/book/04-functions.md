@@ -30,9 +30,9 @@ void greet(str name):
 When a function is a single expression, skip the block:
 
 ```gorget
-int double(int x) = x * 2
-bool is_positive(int n) = n > 0
-float square(float x) = x * x
+int double(int x): x * 2
+bool is_positive(int n): n > 0
+float square(float x): x * x
 ```
 
 The `= expr` form is equivalent to `return expr` in a block. Use it when the
@@ -214,7 +214,7 @@ void main():
 | Concept | Syntax | Example |
 |---------|--------|---------|
 | Function | `RetType name(params): body` | `int add(int a, int b): return a + b` |
-| Expression body | `RetType name(params) = expr` | `int double(int x) = x * 2` |
+| Expression body | `RetType name(params): expr` | `int double(int x): x * 2` |
 | Void function | `void name(params): body` | `void greet(str s): print(s)` |
 | Multiple returns | `T1, T2 name(params):` | `str, int parse(str s):` |
 | Closure | `(params): expr` | `(x): x * 2` |

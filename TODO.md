@@ -2,6 +2,8 @@
 
 ## High
 
+- **DEPRECATION(0.1.4): remove `=` expression-body support before 0.2.0** — Parser currently accepts both `int f(int x): x * 2` (new) and `int f(int x) = x * 2` (deprecated, emits warning). Remove the `=` branch in `src/parser/mod.rs` before 0.2.0 release. [added: 2026-03-16]
+
 - **C backend: missing drop insertion for Move-type locals (Vector, Str)**: The drop insertion pass does not emit `gorget_array_free` / `gorget_str_free` for many local variables of Move types at scope exit. Confirmed by inspecting generated C: `gpu_draw_textured_quads` creates a `GorgetArray` local for vertex data but returns without freeing it. This causes ~180KB/frame leak in the arena project from accumulated small Vector[uint8] and Str allocations in GPU draw helpers, HUD rendering, and string formatting. Affects all programs with short-lived Vector/Str locals in loops. Root cause: likely the GIR type for these locals is UNIT_TYPE or I64_TYPE (not recognized as a droppable type), so the drop insertion pass skips them. [added: 2026-03-14]
 
 - **LIR backend: Phase 2 — reach parity**: **580/596 A/B tests passing (97.3%)**. Remaining 16 failures: (1) p2p networking (8 — environmental), (2) httpserver_json (1 — environmental/timeout), (3) stress/flaky (3 — async_channel_multi, stress_channel_select, stress_shared_comprehensive), (4) async_select (1 — timeout/flaky), (5) test_cleanup (1 — real bug: failure-path drops), (6) test_with_clause (1 — real bug or flaky). Breakdown: ~14 environmental/timing/flaky, ~2 real bugs (test_cleanup, test_with_clause). [updated: 2026-03-15]

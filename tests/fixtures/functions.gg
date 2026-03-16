@@ -1,7 +1,7 @@
 int add(int a, int b):
     return a + b
 
-int double(int x) = x * 2
+int double(int x): x * 2
 
 int factorial(int n):
     if n <= 1:

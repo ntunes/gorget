@@ -7,11 +7,11 @@ equip Registry:
     void add(&self, str key, int val):
         self.items.put(key, val)
 
-    int lookup(self, str key) = self.items.get(key).unwrap()
+    int lookup(self, str key): self.items.get(key).unwrap()
 
-    int size(self) = self.items.len()
+    int size(self): self.items.len()
 
-    bool has(self, str key) = self.items.contains(key)
+    bool has(self, str key): self.items.contains(key)
 
 struct Cache:
     HashMap[str, int] data
@@ -20,11 +20,11 @@ equip Cache:
     void set(&self, str key, int val):
         self.data.put(key, val)
 
-    int fetch(self, str key) = self.data.get(key).unwrap()
+    int fetch(self, str key): self.data.get(key).unwrap()
 
-    int count(self) = self.data.len()
+    int count(self): self.data.len()
 
-    bool has(self, str key) = self.data.contains(key)
+    bool has(self, str key): self.data.contains(key)
 
 void main():
     Registry reg = Registry(Dict[str, int]())

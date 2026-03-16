@@ -217,7 +217,7 @@ void greet(str name):
     print("Hello, {name}")
 
 # Expression body shorthand for simple functions
-int double(int x) = x * 2
+int double(int x): x * 2
 ```
 
 `void` means no return value. `str` is an immutable string slice (like Rust's `&str`). `String` is an owned, heap-allocated string.
@@ -459,7 +459,7 @@ Every function is assigned one of four purity levels, from purest to most effect
 
 | Level | Meaning | Example |
 |-------|---------|---------|
-| **Pure** | Reads only its arguments, calls only pure functions, no globals or IO | `int double(int x) = x * 2` |
+| **Pure** | Reads only its arguments, calls only pure functions, no globals or IO | `int double(int x): x * 2` |
 | **ReadOnly** | May read global variables but never mutates them, no IO | `int get_threshold(): return GLOBAL_MAX` |
 | **MutatesArgs** | May mutate `&` or `!` parameters but no globals or IO | `void push(Vector[int] &v, int x): v.push(x)` |
 | **HasSideEffects** | Anything else: IO, global mutation, shared variable access, extern calls | `void greet(str name): print(f"hello {name}")` |

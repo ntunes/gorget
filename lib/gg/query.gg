@@ -62,7 +62,7 @@ struct PathParser:
     int pos
 
 equip PathParser:
-    bool at_end(self) = self.pos >= self.input.byte_len()
+    bool at_end(self): self.pos >= self.input.byte_len()
 
     str peek(self):
         if self.at_end():

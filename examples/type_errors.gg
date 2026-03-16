@@ -1,8 +1,8 @@
 # This file intentionally contains errors to test semantic analysis.
 
 # Error: duplicate definition
-int foo() = 1
-int foo() = 2
+int foo(): 1
+int foo(): 2
 
 # Error: undefined variable
 void use_undefined():

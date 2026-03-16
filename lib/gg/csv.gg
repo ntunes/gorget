@@ -14,15 +14,15 @@ struct CsvParser:
     str delim
 
 equip CsvParser:
-    bool failed(self) = self.err != ""
+    bool failed(self): self.err != ""
 
     void fail(&self, str msg):
         if self.err == "":
             self.err = move msg
 
-    bool at_end(self) = self.pos >= self.input.byte_len()
+    bool at_end(self): self.pos >= self.input.byte_len()
 
-    str peek(self) = self.input.char_at(self.pos)
+    str peek(self): self.input.char_at(self.pos)
 
     void advance(&self):
         self.pos = self.pos + 1
@@ -118,11 +118,11 @@ struct CsvTable:
     Vector[Vector[str]] rows_data
 
 equip CsvTable:
-    int row_count(self) = self.rows_data.len()
+    int row_count(self): self.rows_data.len()
 
-    int col_count(self) = self.headers_data.len()
+    int col_count(self): self.headers_data.len()
 
-    Vector[str] headers(self) = self.headers_data
+    Vector[str] headers(self): self.headers_data
 
     Vector[str] row(self, int n):
         return self.rows_data.get(n).unwrap()

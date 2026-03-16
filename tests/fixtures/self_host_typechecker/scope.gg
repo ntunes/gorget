@@ -78,7 +78,7 @@ Scope get_scope_at(Vector[Scope] v, int i):
 
 equip ScopeTable:
 
-    ScopeTable new_scope_table() = ScopeTable(
+    ScopeTable new_scope_table(): ScopeTable(
         Vector[Scope](),
         Vector[DefInfo](),
         Vector[int](),

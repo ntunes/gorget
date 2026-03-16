@@ -1476,7 +1476,7 @@ enum Color: Red; Green; Blue(int);
 === import ===
 from std.collections import Vector
 === expr_body ===
-int double(int x) = (x * 2)
+int double(int x): (x * 2)
 === vardecl ===
 void f(): int x = 42;
 === if_else ===

@@ -1729,7 +1729,7 @@ mod tests {
 
     #[test]
     fn collect_function() {
-        let (scopes, _, errors) = parse_and_collect("int add(int a, int b) = a + b\n");
+        let (scopes, _, errors) = parse_and_collect("int add(int a, int b): a + b\n");
         assert!(errors.is_empty(), "errors: {:?}", errors);
         assert!(scopes.lookup("add").is_some());
     }
@@ -1768,7 +1768,7 @@ mod tests {
 
     #[test]
     fn duplicate_definition() {
-        let (_, _, errors) = parse_and_collect("int foo() = 1\nint foo() = 2\n");
+        let (_, _, errors) = parse_and_collect("int foo(): 1\nint foo(): 2\n");
         assert_eq!(errors.len(), 1);
         match &errors[0].kind {
             SemanticErrorKind::DuplicateDefinition { name, .. } => {
@@ -1780,7 +1780,7 @@ mod tests {
 
     #[test]
     fn forward_reference() {
-        let source = "void main():\n    auto x = helper()\nint helper() = 42\n";
+        let source = "void main():\n    auto x = helper()\nint helper(): 42\n";
         let (_, _, _, errors) = parse_and_resolve(source);
         // helper should be resolved (forward reference)
         assert!(
@@ -1826,7 +1826,7 @@ void main():
 
     #[test]
     fn str_mutable_borrow_param_rejected() {
-        let (_, _, errors) = parse_and_collect("void greet(str &name) = print(name)\n");
+        let (_, _, errors) = parse_and_collect("void greet(str &name): print(name)\n");
         assert_eq!(errors.len(), 1);
         match &errors[0].kind {
             SemanticErrorKind::InvalidParameterMode { param_name, type_name, mode } => {
@@ -1840,7 +1840,7 @@ void main():
 
     #[test]
     fn str_move_param_rejected() {
-        let (_, _, errors) = parse_and_collect("void consume(str !s) = print(s)\n");
+        let (_, _, errors) = parse_and_collect("void consume(str !s): print(s)\n");
         assert_eq!(errors.len(), 1);
         match &errors[0].kind {
             SemanticErrorKind::InvalidParameterMode { param_name, type_name, mode } => {
@@ -1854,7 +1854,7 @@ void main():
 
     #[test]
     fn str_plain_param_accepted() {
-        let (_, _, errors) = parse_and_collect("void greet(str name) = print(name)\n");
+        let (_, _, errors) = parse_and_collect("void greet(str name): print(name)\n");
         assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
     }
 
@@ -1892,7 +1892,7 @@ struct Point:
         let dummy = Span::new(0, 0);
 
         // Parse the private function from source text.
-        let mut parser = Parser::new("private int helper() = 42\nint public_fn() = 1\n");
+        let mut parser = Parser::new("private int helper(): 42\nint public_fn(): 1\n");
         let inner_module = parser.parse_module();
         assert!(parser.errors.is_empty(), "parse errors: {:?}", parser.errors);
 
@@ -1947,7 +1947,7 @@ struct Point:
         use crate::span::Span;
         let dummy = Span::new(0, 0);
 
-        let mut parser = Parser::new("int public_fn() = 1\n");
+        let mut parser = Parser::new("int public_fn(): 1\n");
         let inner_module = parser.parse_module();
         assert!(parser.errors.is_empty());
 
@@ -2086,7 +2086,7 @@ struct Point:
 
     #[test]
     fn required_after_default_rejected() {
-        let (_, _, errors) = parse_and_collect("int foo(int a = 1, int b) = a + b\n");
+        let (_, _, errors) = parse_and_collect("int foo(int a = 1, int b): a + b\n");
         assert_eq!(errors.len(), 1);
         match &errors[0].kind {
             SemanticErrorKind::RequiredAfterDefault { name } => {
@@ -2098,13 +2098,13 @@ struct Point:
 
     #[test]
     fn defaults_at_end_accepted() {
-        let (_, _, errors) = parse_and_collect("int foo(int a, int b = 2, int c = 3) = a + b + c\n");
+        let (_, _, errors) = parse_and_collect("int foo(int a, int b = 2, int c = 3): a + b + c\n");
         assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
     }
 
     #[test]
     fn no_defaults_accepted() {
-        let (_, _, errors) = parse_and_collect("int foo(int a, int b) = a + b\n");
+        let (_, _, errors) = parse_and_collect("int foo(int a, int b): a + b\n");
         assert!(errors.is_empty(), "expected no errors, got: {:?}", errors);
     }
 
