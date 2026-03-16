@@ -770,7 +770,23 @@ impl<'a> FuncLowering<'a> {
                         t == gir_types::F64_TYPE || t == gir_types::F32_TYPE
                     });
                     let is_bool = src_gir_ty.map_or(false, |t| t == gir_types::BOOL_TYPE);
+                    let is_ptr = src_gir_ty.map_or(false, |t| {
+                        self.gir_types.get(t).map_or(false, |gt| matches!(gt, GirType::Ptr(_) | GirType::MutPtr(_)))
+                    });
 
+                    if is_ptr {
+                        // Ptr source (const char*) → Str: wrap directly with gorget_str_from_cstr.
+                        let str_ty = self.struct_reg.lookup("Str")
+                            .map(LirType::Struct).unwrap_or(LirType::Ptr);
+                        let cstr_result = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: Some(cstr_result),
+                            name: "gorget_str_from_cstr".to_string(),
+                            args: vec![val],
+                        });
+                        self.ensure_extern("gorget_str_from_cstr", &[LirType::Ptr], &str_ty);
+                        self.store_to_local(*dst, cstr_result, bb);
+                    } else {
                     let conv_fn = if is_int {
                         "gorget_int_to_str"
                     } else if is_float {
@@ -792,6 +808,7 @@ impl<'a> FuncLowering<'a> {
                     // The result is a const char* (Ptr) — the SlotStore Ptr→Str path in c_lir
                     // will wrap it with gorget_str_from_literal since it's a cstr_val.
                     self.store_to_local(*dst, cstr_result, bb);
+                    } // close else (non-ptr) branch
                 } else if matches!(to, LirType::Void) {
                     // Cast to void — just evaluate for side effects, don't generate (void)(val).
                     // No store needed.

@@ -8,7 +8,7 @@
 
 - **LIR backend: Phase 2 — reach parity**: **596/596 A/B tests passing (100%)**. COMPLETE. [updated: 2026-03-16]
 
-- **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: Down from ~300+ to 6 errors. Remaining: 6 user-defined functions (`parse_int`/`parse_float`) that return `Result[T, str]` but `map_gir_type_with_structs` resolves return type as scalar (`int64_t`/`double`) instead of the Result struct — likely GIR TypeId for cross-file Result types not found in LIR struct registry. [updated: 2026-03-16]
+- **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 4 C warnings remaining (2 `gorget_int_to_str` Ptr→int cast from slot type inference issue, 2 memset overflow from struct size mismatch). Linker errors from missing `read_file_bytes`/`mem_live`/`mem_allocated`/`mem_freed` symbols are pre-existing gorget-arena issues. [updated: 2026-03-16]
 
 - **LIR backend: Phase 4 — default backend switch**: Once all A/B tests pass through LIR, flip default: no flag = LIR→C, `--backend=gir` selects old path. Feature-gate fallback for hot-reload and `--shared` builds. [added: 2026-03-11]
 
