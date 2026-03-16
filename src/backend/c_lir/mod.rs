@@ -1111,14 +1111,17 @@ fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str, method: &
             writeln!(out, "}}").unwrap();
         }
         "fold" => {
-            writeln!(out, "static inline {elem_c} {full_name}(void* __arr_ptr, {elem_c} __acc, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
-            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        __acc = {call_fn}(&__fn, __acc, __elem);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __acc;").unwrap();
-            writeln!(out, "}}").unwrap();
+            // Fold accumulator type may differ from element type. Use a macro (not inline function)
+            // to let the caller's type propagate via __typeof__.
+            // The inline expansion path handles all fold sites directly; this macro exists
+            // only as a fallback definition to avoid linker errors on unreachable code paths.
+            writeln!(out, "#define {full_name}(__arr_ptr, __acc_init, __fn) \
+({{ GorgetArray __src = *(GorgetArray*)(__arr_ptr); \
+__typeof__(__acc_init) __acc = (__acc_init); \
+for (size_t __i = 0; __i < __src.len; __i++) {{ \
+{elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
+__acc = {call_fn}(&(__fn), __acc, __elem); \
+}} __acc; }})").unwrap();
         }
         "any" => {
             writeln!(out, "static inline bool {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
@@ -1355,17 +1358,28 @@ fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, val_c: &str,
 
 /// Emit inline C helpers for Set higher-order and inline methods.
 fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str, closure_ty: &str, call_fn: &str) {
-    let iter_loop = format!(
-        "for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-        if (__src.states[__i] != 1) continue;"
-    );
+    // Set__ uses insertion order (order array), HashSet__ uses bucket order
+    let is_ordered = !full_name.starts_with("HashSet__");
+    let iter_loop = if is_ordered {
+        format!(
+            "for (size_t __j = 0; __j < __src.order_len; __j++) {{ \
+            size_t __i = __src.order[__j]; \
+            if (__src.states[__i] != 1) continue;"
+        )
+    } else {
+        format!(
+            "for (size_t __i = 0; __i < __src.cap; __i++) {{ \
+            if (__src.states[__i] != 1) continue;"
+        )
+    };
+    let ctor = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
     let elem_read = format!("{elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size);");
 
     match method {
         "filter" => {
             writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, {closure_ty} __fn) {{").unwrap();
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = gorget_set_new(sizeof({elem_c}));").unwrap();
+            writeln!(out, "    GorgetSet __result = {ctor}(sizeof({elem_c}));").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
             writeln!(out, "        if ({call_fn}(&__fn, __elem)) gorget_set_add(&__result, &__elem);").unwrap();
@@ -1427,8 +1441,14 @@ fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str
             // is_superset(other) = other.is_subset(self)
             writeln!(out, "static inline bool {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
             writeln!(out, "    GorgetSet __self = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __other.cap; __i++) {{").unwrap();
-            writeln!(out, "        if (__other.states[__i] != 1) continue;").unwrap();
+            if is_ordered {
+                writeln!(out, "    for (size_t __j = 0; __j < __other.order_len; __j++) {{").unwrap();
+                writeln!(out, "        size_t __i = __other.order[__j];").unwrap();
+                writeln!(out, "        if (__other.states[__i] != 1) continue;").unwrap();
+            } else {
+                writeln!(out, "    for (size_t __i = 0; __i < __other.cap; __i++) {{").unwrap();
+                writeln!(out, "        if (__other.states[__i] != 1) continue;").unwrap();
+            }
             writeln!(out, "        {elem_c} __elem = *({elem_c}*)((char*)__other.keys + __i * __other.key_size);").unwrap();
             writeln!(out, "        if (!gorget_set_contains(&__self, &__elem)) return false;").unwrap();
             writeln!(out, "    }}").unwrap();
@@ -1439,14 +1459,20 @@ fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str
             // union: combine all elements from self and other
             writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = gorget_set_new(sizeof({elem_c}));").unwrap();
+            writeln!(out, "    GorgetSet __result = {ctor}(sizeof({elem_c}));").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
             writeln!(out, "        gorget_set_add(&__result, &__elem);").unwrap();
             writeln!(out, "    }}").unwrap();
-            writeln!(out, "    for (size_t __j = 0; __j < __other.cap; __j++) {{").unwrap();
-            writeln!(out, "        if (__other.states[__j] != 1) continue;").unwrap();
-            writeln!(out, "        {elem_c} __elem2 = *({elem_c}*)((char*)__other.keys + __j * __other.key_size);").unwrap();
+            if is_ordered {
+                writeln!(out, "    for (size_t __j2 = 0; __j2 < __other.order_len; __j2++) {{").unwrap();
+                writeln!(out, "        size_t __i2 = __other.order[__j2];").unwrap();
+                writeln!(out, "        if (__other.states[__i2] != 1) continue;").unwrap();
+            } else {
+                writeln!(out, "    for (size_t __i2 = 0; __i2 < __other.cap; __i2++) {{").unwrap();
+                writeln!(out, "        if (__other.states[__i2] != 1) continue;").unwrap();
+            }
+            writeln!(out, "        {elem_c} __elem2 = *({elem_c}*)((char*)__other.keys + __i2 * __other.key_size);").unwrap();
             writeln!(out, "        gorget_set_add(&__result, &__elem2);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
@@ -1456,7 +1482,7 @@ fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str
             // intersection: elements in both self and other
             writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = gorget_set_new(sizeof({elem_c}));").unwrap();
+            writeln!(out, "    GorgetSet __result = {ctor}(sizeof({elem_c}));").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
             writeln!(out, "        if (gorget_set_contains(&__other, &__elem)) gorget_set_add(&__result, &__elem);").unwrap();
@@ -1468,7 +1494,7 @@ fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str
             // difference: elements in self but not in other
             writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = gorget_set_new(sizeof({elem_c}));").unwrap();
+            writeln!(out, "    GorgetSet __result = {ctor}(sizeof({elem_c}));").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
             writeln!(out, "        if (!gorget_set_contains(&__other, &__elem)) gorget_set_add(&__result, &__elem);").unwrap();
@@ -1480,14 +1506,20 @@ fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str
             // symmetric_difference: elements in self xor other
             writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = gorget_set_new(sizeof({elem_c}));").unwrap();
+            writeln!(out, "    GorgetSet __result = {ctor}(sizeof({elem_c}));").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
             writeln!(out, "        if (!gorget_set_contains(&__other, &__elem)) gorget_set_add(&__result, &__elem);").unwrap();
             writeln!(out, "    }}").unwrap();
-            writeln!(out, "    for (size_t __j = 0; __j < __other.cap; __j++) {{").unwrap();
-            writeln!(out, "        if (__other.states[__j] != 1) continue;").unwrap();
-            writeln!(out, "        {elem_c} __elem2 = *({elem_c}*)((char*)__other.keys + __j * __other.key_size);").unwrap();
+            if is_ordered {
+                writeln!(out, "    for (size_t __j2 = 0; __j2 < __other.order_len; __j2++) {{").unwrap();
+                writeln!(out, "        size_t __i2 = __other.order[__j2];").unwrap();
+                writeln!(out, "        if (__other.states[__i2] != 1) continue;").unwrap();
+            } else {
+                writeln!(out, "    for (size_t __i2 = 0; __i2 < __other.cap; __i2++) {{").unwrap();
+                writeln!(out, "        if (__other.states[__i2] != 1) continue;").unwrap();
+            }
+            writeln!(out, "        {elem_c} __elem2 = *({elem_c}*)((char*)__other.keys + __i2 * __other.key_size);").unwrap();
             writeln!(out, "        if (!gorget_set_contains(&__src, &__elem2)) gorget_set_add(&__result, &__elem2);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
@@ -2242,6 +2274,9 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     // Override the C type name for values whose LIR type can't represent runtime structs
     // (e.g. GorgetArray, GorgetMap — not in module.structs but needed for correct C declarations).
     let mut val_c_type_override: Vec<Option<String>> = vec![None; max_val as usize];
+    // Track which values came from gorget_map_get/gorget_array_get (return void* into internal storage).
+    // When these pointers are loaded as resource types, we must clone instead of shallow deref.
+    let mut collection_get_vals: Vec<bool> = vec![false; max_val as usize];
     for block in &func.blocks {
         for (vid, ty) in &block.params {
             val_types[vid.0 as usize] = Some(ty.clone());
@@ -2277,6 +2312,12 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             }
             if let Inst::NullPtr { dst } = inst {
                 null_vals[dst.0 as usize] = true;
+            }
+            // Track collection get results — pointers into internal storage that need cloning on Load.
+            if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
+                if name == "gorget_map_get" || name == "gorget_array_get" {
+                    collection_get_vals[d.0 as usize] = true;
+                }
             }
             // Track spawn source function for void* destinations.
             // When __gorget_spawn_X returns Task__T but dst is void*, the codegen
@@ -2713,7 +2754,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         // Instructions
         for inst in &block.insts {
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &null_vals, &ptr_pointee, &func_addr_targets, &spawn_source_fn);
+            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &null_vals, &ptr_pointee, &func_addr_targets, &spawn_source_fn, &collection_get_vals);
             writeln!(out).unwrap();
 
             // In test functions, register droppable user-named slots on the cleanup stack
@@ -2742,7 +2783,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>], spawn_source_fn: &[Option<String>]) {
+fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>], spawn_source_fn: &[Option<String>], collection_get_vals: &[bool]) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -3160,7 +3201,33 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
 
         // Memory
         Inst::Load { dst, ptr, ty } => {
-            write!(out, "{} = *({} *)({});", v(*dst), c_type_named(ty, sn), v(*ptr)).unwrap();
+            // If loading a resource type from a collection get pointer, clone instead of shallow deref
+            // to prevent double-free (both collection slot and local would alias the same internal data).
+            let from_collection = collection_get_vals.get(ptr.0 as usize).copied().unwrap_or(false);
+            let resource_clone_fn = if from_collection {
+                if let LirType::Struct(sid) = ty {
+                    match module.structs.get(sid.0 as usize).map(|s| s.name.as_str()) {
+                        Some("GorgetArray") => Some("gorget_array_clone"),
+                        Some("GorgetMap") => Some("gorget_map_clone"),
+                        Some("GorgetSet") => Some("gorget_set_clone"),
+                        Some("GorgetString") => Some("gorget_string_clone"),
+                        _ => {
+                            // Check if struct transitively contains resource types
+                            if struct_contains_resources(*sid, module) {
+                                None // fall through to memcpy — deep clone not available for arbitrary structs
+                            } else {
+                                None
+                            }
+                        }
+                    }
+                } else { None }
+            } else { None };
+            if let Some(clone_fn) = resource_clone_fn {
+                let ty_c = c_type_named(ty, sn);
+                write!(out, "{d} = {clone_fn}(({ty_c}*){p});", d = v(*dst), p = v(*ptr)).unwrap();
+            } else {
+                write!(out, "{} = *({} *)({});", v(*dst), c_type_named(ty, sn), v(*ptr)).unwrap();
+            }
         }
         Inst::Store { ptr, value } => {
             // Generic store — type is determined by context.
@@ -3991,6 +4058,61 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 return;
             }
 
+            // ── File.create / File.open rewrite ──
+            // gorget_file_create(path) → gorget_file_open(cstr, "w")
+            // gorget_file_open(path) with 1 arg → gorget_file_open(cstr, "r")
+            if emit_name == "gorget_file_create" && args.len() == 1 {
+                let a = args[0];
+                let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                let path_expr = if is_str_lit {
+                    format!("{}", v(a))
+                } else {
+                    format!("gorget_str_to_cstr({})", v(a))
+                };
+                if let Some(d) = dst {
+                    write!(out, "{} = gorget_file_open({}, \"w\");", v(*d), path_expr).unwrap();
+                } else {
+                    write!(out, "gorget_file_open({}, \"w\");", path_expr).unwrap();
+                }
+                return;
+            }
+            // gorget_file_read_all(file_ptr) → wrap result in Result<GorgetString, Str> with UTF-8 validation
+            if emit_name == "gorget_file_read_all" && args.len() == 1 {
+                if let Some(d) = dst {
+                    let dst_ty = val_types.get(d.0 as usize).and_then(|t| t.as_ref());
+                    // If destination is a Result struct, wrap with UTF-8 validation
+                    if let Some(LirType::Struct(sid)) = dst_ty {
+                        let sdef = module.structs.get(sid.0 as usize);
+                        let is_result = sdef.map_or(false, |s| s.name.contains("Result"));
+                        if is_result {
+                            let result_c = c_type_named(&LirType::Struct(*sid), sn);
+                            write!(out, "{d} = ({{ GorgetString __gs = gorget_file_read_all({a}); \
+                                {result_c} __wr; if (gorget_utf8_validate(__gs.data, __gs.len)) {{ \
+                                __wr.tag = 0; __wr.Ok_0 = __gs; }} else {{ \
+                                gorget_string_free(&__gs); __wr.tag = 1; \
+                                __wr.Error_0 = gorget_str_from_literal(\"invalid UTF-8\", 13); }} __wr; }});",
+                                d = v(*d), a = v(args[0])).unwrap();
+                            return;
+                        }
+                    }
+                }
+            }
+            if emit_name == "gorget_file_open" && args.len() == 1 {
+                let a = args[0];
+                let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                let path_expr = if is_str_lit {
+                    format!("{}", v(a))
+                } else {
+                    format!("gorget_str_to_cstr({})", v(a))
+                };
+                if let Some(d) = dst {
+                    write!(out, "{} = gorget_file_open({}, \"r\");", v(*d), path_expr).unwrap();
+                } else {
+                    write!(out, "gorget_file_open({}, \"r\");", path_expr).unwrap();
+                }
+                return;
+            }
+
             // gorget_str_cat("", val) — str() coercion.
             // GIR represents str(int_val) as gorget_str_cat("", int_val).
             // Rewrite to gorget_int_to_str / gorget_float_to_str + wrap.
@@ -4437,28 +4559,33 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     let dv = d_opt.map(|d| format!("__v{}", d.0)).unwrap_or_default();
                     let arr_arg = v(emit_args[0]);
                     let fn_arg = closure_arg.map(|ca| v(ca)).unwrap_or_default();
+                    // If closure arg is already a pointer (Ptr type), don't add extra &
+                    let closure_is_ptr = closure_arg.map_or(false, |ca| matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr)));
+                    let fn_ref = if closure_is_ptr { fn_arg.clone() } else { format!("&{fn_arg}") };
                     match method {
                         "filter" => {
                             write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
                                 GorgetArray __result = gorget_array_new(sizeof({elem_c})); \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}(&{fn_arg}, __elem)) gorget_array_push(&__result, &__elem); \
+                                if ({call_fn}({fn_ref}, __elem)) gorget_array_push(&__result, &__elem); \
                                 }} __result; }});").unwrap();
                         }
                         "map" => {
                             write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                __typeof__({call_fn}(&{fn_arg}, ({elem_c}){{0}})) __map_out; \
+                                __typeof__({call_fn}({fn_ref}, ({elem_c}){{0}})) __map_out; \
                                 GorgetArray __result = gorget_array_new(sizeof(__map_out)); \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                __map_out = {call_fn}(&{fn_arg}, __elem); \
+                                __map_out = {call_fn}({fn_ref}, __elem); \
                                 gorget_array_push(&__result, &__map_out); \
                                 }} __result; }});").unwrap();
                         }
                         "fold" if emit_args.len() >= 3 => {
                             let acc_arg = v(emit_args[1]);
                             let fn_a = v(emit_args[2]);
+                            let fold_closure_is_ptr = matches!(val_types.get(emit_args[2].0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
+                            let fn_a_ref = if fold_closure_is_ptr { fn_a.clone() } else { format!("&{fn_a}") };
                             let call_fn2 = val_types.get(emit_args[2].0 as usize).and_then(|t| t.as_ref()).and_then(|ty| {
                                 if let LirType::Struct(sid) = ty {
                                     let sdef = &module.structs[sid.0 as usize];
@@ -4466,19 +4593,47 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                     if module.functions.iter().any(|f| f.name == cn) { Some(cn) } else { None }
                                 } else { None }
                             }).unwrap_or_else(|| call_fn.clone());
-                            write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                {elem_c} __acc = {acc_arg}; \
-                                for (size_t __i = 0; __i < __src.len; __i++) {{ \
-                                {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                __acc = {call_fn2}(&{fn_a}, __acc, __elem); \
-                                }} __acc; }});").unwrap();
+                            // Accumulator type: use destination type (fold returns accumulator, not element).
+                            let acc_c = d_opt.and_then(|d| val_types.get(d.0 as usize).and_then(|t| t.as_ref()))
+                                .map(|t| c_type_named(t, sn)).unwrap_or_else(|| "int64_t".to_string());
+                            // Detect Str/GorgetString mismatch: if the closure returns GorgetString
+                            // but the fold destination is Str, use GorgetString internally and convert at the end.
+                            let closure_returns_gorget_string = {
+                                // Look up the __call function and check its return type
+                                module.functions.iter().find(|f| f.name == call_fn2).map_or(false, |f| {
+                                    matches!(&f.return_type, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"))
+                                })
+                            };
+                            let dst_is_str = acc_c == "Str";
+                            let acc_is_str_lit = str_lit_vals.get(emit_args[1].0 as usize).copied().unwrap_or(false);
+                            if closure_returns_gorget_string && dst_is_str {
+                                // Use GorgetString as internal accumulator, convert at boundaries
+                                let acc_init = if acc_is_str_lit {
+                                    format!("gorget_string_new(gorget_str_from_literal({acc_arg}, strlen({acc_arg})).data)")
+                                } else {
+                                    format!("gorget_string_new({acc_arg}.data)")
+                                };
+                                write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
+                                    GorgetString __acc = {acc_init}; \
+                                    for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                                    {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
+                                    __acc = {call_fn2}({fn_a_ref}, (Str){{ .data = __acc.data, .len = __acc.len }}, __elem); \
+                                    }} (Str){{ .data = __acc.data, .len = __acc.len }}; }});").unwrap();
+                            } else {
+                                write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
+                                    {acc_c} __acc = {acc_arg}; \
+                                    for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                                    {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
+                                    __acc = {call_fn2}({fn_a_ref}, __acc, __elem); \
+                                    }} __acc; }});").unwrap();
+                            }
                         }
                         "reduce" => {
                             write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
                                 {elem_c} __acc = GORGET_ARRAY_AT({elem_c}, __src, 0); \
                                 for (size_t __i = 1; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                __acc = {call_fn}(&{fn_arg}, __acc, __elem); \
+                                __acc = {call_fn}({fn_ref}, __acc, __elem); \
                                 }} __acc; }});").unwrap();
                         }
                         "any" => {
@@ -4486,7 +4641,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 bool __any_r = false; \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}(&{fn_arg}, __elem)) {{ __any_r = true; break; }} \
+                                if ({call_fn}({fn_ref}, __elem)) {{ __any_r = true; break; }} \
                                 }} __any_r; }});").unwrap();
                         }
                         "all" => {
@@ -4494,14 +4649,14 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 bool __all_r = true; \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if (!{call_fn}(&{fn_arg}, __elem)) {{ __all_r = false; break; }} \
+                                if (!{call_fn}({fn_ref}, __elem)) {{ __all_r = false; break; }} \
                                 }} __all_r; }});").unwrap();
                         }
                         "each" => {
                             write!(out, "{{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                {call_fn}(&{fn_arg}, __elem); \
+                                {call_fn}({fn_ref}, __elem); \
                                 }} }}").unwrap();
                         }
                         "sorted" => {
@@ -4533,7 +4688,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 {opt_ty} __opt; memset(&__opt, 0, sizeof(__opt)); __opt.tag = 1; \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}(&{fn_arg}, __elem)) {{ __opt.tag = 0; __opt.Some_0 = __elem; break; }} \
+                                if ({call_fn}({fn_ref}, __elem)) {{ __opt.tag = 0; __opt.Some_0 = __elem; break; }} \
                                 }} __opt; }});").unwrap();
                         }
                         "find_index" => {
@@ -4541,7 +4696,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 int64_t __idx = -1; \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}(&{fn_arg}, __elem)) {{ __idx = (int64_t)__i; break; }} \
+                                if ({call_fn}({fn_ref}, __elem)) {{ __idx = (int64_t)__i; break; }} \
                                 }} __idx; }});").unwrap();
                         }
                         "flat_map" => {
@@ -4549,7 +4704,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 GorgetArray __result = gorget_array_new(sizeof({elem_c})); \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                GorgetArray __sub = {call_fn}(&{fn_arg}, __elem); \
+                                GorgetArray __sub = {call_fn}({fn_ref}, __elem); \
                                 gorget_array_extend(&__result, &__sub); \
                                 }} __result; }});").unwrap();
                         }
@@ -4558,7 +4713,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 int64_t __cnt = 0; \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}(&{fn_arg}, __elem)) __cnt++; \
+                                if ({call_fn}({fn_ref}, __elem)) __cnt++; \
                                 }} __cnt; }});").unwrap();
                         }
                         _ => {
@@ -4586,6 +4741,8 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     let dv = d_opt.map(|d| format!("__v{}", d.0)).unwrap_or_default();
                     let map_arg = v(emit_args[0]);
                     let fn_arg = closure_arg.map(|ca| v(ca)).unwrap_or_default();
+                    let dict_closure_is_ptr = closure_arg.map_or(false, |ca| matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr)));
+                    let dict_fn_ref = if dict_closure_is_ptr { fn_arg.clone() } else { format!("&{fn_arg}") };
                     let is_dict = emit_name.starts_with("Dict__");
                     let ctor_fn = if key_c == "Str" {
                         if is_dict { "gorget_dict_new_str" } else { "gorget_map_new_str" }
@@ -4601,12 +4758,14 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 if (__src.states[__i] != 1) continue; \
                                 {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
                                 {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                if ({call_fn}(&{fn_arg}, __key, __val)) gorget_map_put(&__result, &__key, &__val); \
+                                if ({call_fn}({dict_fn_ref}, __key, __val)) gorget_map_put(&__result, &__key, &__val); \
                                 }} __result; }});").unwrap();
                         }
                         "fold" if emit_args.len() >= 3 => {
                             let acc_arg = v(emit_args[1]);
                             let fn_a = v(emit_args[2]);
+                            let dict_fold_is_ptr = matches!(val_types.get(emit_args[2].0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
+                            let dict_fn_a_ref = if dict_fold_is_ptr { fn_a.clone() } else { format!("&{fn_a}") };
                             let call_fn2 = resolve_call_fn(Some(emit_args[2]));
                             write!(out, "{dv} = ({{ GorgetMap __src = *(GorgetMap*){map_arg}; \
                                 __typeof__({acc_arg}) __acc = {acc_arg}; \
@@ -4614,7 +4773,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 if (__src.states[__i] != 1) continue; \
                                 {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
                                 {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                __acc = {call_fn2}(&{fn_a}, __acc, __key, __val); \
+                                __acc = {call_fn2}({dict_fn_a_ref}, __acc, __key, __val); \
                                 }} __acc; }});").unwrap();
                         }
                         "each" => {
@@ -4623,7 +4782,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 if (__src.states[__i] != 1) continue; \
                                 {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
                                 {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                {call_fn}(&{fn_arg}, __key, __val); \
+                                {call_fn}({dict_fn_ref}, __key, __val); \
                                 }} }}").unwrap();
                         }
                         "any" => {
@@ -4633,7 +4792,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 if (__src.states[__i] != 1) continue; \
                                 {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
                                 {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                if ({call_fn}(&{fn_arg}, __key, __val)) {{ __any_r = true; break; }} \
+                                if ({call_fn}({dict_fn_ref}, __key, __val)) {{ __any_r = true; break; }} \
                                 }} __any_r; }});").unwrap();
                         }
                         "all" => {
@@ -4643,7 +4802,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 if (__src.states[__i] != 1) continue; \
                                 {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
                                 {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                if (!{call_fn}(&{fn_arg}, __key, __val)) {{ __all_r = false; break; }} \
+                                if (!{call_fn}({dict_fn_ref}, __key, __val)) {{ __all_r = false; break; }} \
                                 }} __all_r; }});").unwrap();
                         }
                         _ => {
@@ -4668,52 +4827,63 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     let dv = d_opt.map(|d| format!("__v{}", d.0)).unwrap_or_default();
                     let set_arg = v(emit_args[0]);
                     let fn_arg = closure_arg.map(|ca| v(ca)).unwrap_or_default();
+                    let set_closure_is_ptr = closure_arg.map_or(false, |ca| matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr)));
+                    let set_fn_ref = if set_closure_is_ptr { fn_arg.clone() } else { format!("&{fn_arg}") };
+                    let set_is_ordered = !emit_name.starts_with("HashSet__");
+                    let set_ctor = if set_is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
+                    let (set_iter_var, set_iter_cond, set_idx_decl) = if set_is_ordered {
+                        ("__j", "__src.order_len", "size_t __i = __src.order[__j]; if (__src.states[__i] != 1) continue; ")
+                    } else {
+                        ("__i", "__src.cap", "if (__src.states[__i] != 1) continue; ")
+                    };
                     match method {
                         "filter" => {
                             write!(out, "{dv} = ({{ GorgetSet __src = *(GorgetSet*){set_arg}; \
-                                GorgetSet __result = gorget_set_new(sizeof({elem_c})); \
-                                for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                                if (__src.states[__i] != 1) continue; \
+                                GorgetSet __result = {set_ctor}(sizeof({elem_c})); \
+                                for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
+                                {set_idx_decl}\
                                 {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                if ({call_fn}(&{fn_arg}, __elem)) gorget_set_add(&__result, &__elem); \
+                                if ({call_fn}({set_fn_ref}, __elem)) gorget_set_add(&__result, &__elem); \
                                 }} __result; }});").unwrap();
                         }
                         "fold" if emit_args.len() >= 3 => {
                             let acc_arg = v(emit_args[1]);
                             let fn_a = v(emit_args[2]);
+                            let fold_closure_is_ptr2 = matches!(val_types.get(emit_args[2].0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
+                            let fn_a_ref2 = if fold_closure_is_ptr2 { fn_a.clone() } else { format!("&{fn_a}") };
                             let call_fn2 = resolve_call_fn(Some(emit_args[2]));
                             write!(out, "{dv} = ({{ GorgetSet __src = *(GorgetSet*){set_arg}; \
                                 __typeof__({acc_arg}) __acc = {acc_arg}; \
-                                for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                                if (__src.states[__i] != 1) continue; \
+                                for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
+                                {set_idx_decl}\
                                 {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                __acc = {call_fn2}(&{fn_a}, __acc, __elem); \
+                                __acc = {call_fn2}({fn_a_ref2}, __acc, __elem); \
                                 }} __acc; }});").unwrap();
                         }
                         "each" => {
                             write!(out, "{{ GorgetSet __src = *(GorgetSet*){set_arg}; \
-                                for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                                if (__src.states[__i] != 1) continue; \
+                                for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
+                                {set_idx_decl}\
                                 {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                {call_fn}(&{fn_arg}, __elem); \
+                                {call_fn}({set_fn_ref}, __elem); \
                                 }} }}").unwrap();
                         }
                         "any" => {
                             write!(out, "{dv} = ({{ GorgetSet __src = *(GorgetSet*){set_arg}; \
                                 bool __any_r = false; \
-                                for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                                if (__src.states[__i] != 1) continue; \
+                                for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
+                                {set_idx_decl}\
                                 {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                if ({call_fn}(&{fn_arg}, __elem)) {{ __any_r = true; break; }} \
+                                if ({call_fn}({set_fn_ref}, __elem)) {{ __any_r = true; break; }} \
                                 }} __any_r; }});").unwrap();
                         }
                         "all" => {
                             write!(out, "{dv} = ({{ GorgetSet __src = *(GorgetSet*){set_arg}; \
                                 bool __all_r = true; \
-                                for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                                if (__src.states[__i] != 1) continue; \
+                                for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
+                                {set_idx_decl}\
                                 {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                if (!{call_fn}(&{fn_arg}, __elem)) {{ __all_r = false; break; }} \
+                                if (!{call_fn}({set_fn_ref}, __elem)) {{ __all_r = false; break; }} \
                                 }} __all_r; }});").unwrap();
                         }
                         _ => {
@@ -5106,18 +5276,45 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                             if ch == '%' {
                                 if let Some(&next) = chars.peek() {
                                     if next == '%' { chars.next(); continue; }
-                                    // Skip flags/width/precision
-                                    while chars.peek().map_or(false, |c| "-+ #0".contains(*c) || c.is_ascii_digit() || *c == '.') {
+                                    // Skip flags: - + space # 0
+                                    while chars.peek().map_or(false, |c| "-+ #0".contains(*c)) {
                                         chars.next();
                                     }
-                                    // Read format letter
+                                    // Skip width: digits or * (* consumes an extra arg)
+                                    if chars.peek() == Some(&'*') {
+                                        chars.next();
+                                        // * in width position consumes an argument
+                                        if spec_idx == arg_idx { return false; }
+                                        spec_idx += 1;
+                                    } else {
+                                        while chars.peek().map_or(false, |c| c.is_ascii_digit()) {
+                                            chars.next();
+                                        }
+                                    }
+                                    // Skip precision: . followed by digits or * (* consumes an extra arg)
+                                    if chars.peek() == Some(&'.') {
+                                        chars.next();
+                                        if chars.peek() == Some(&'*') {
+                                            chars.next();
+                                            // * in precision position consumes an argument
+                                            if spec_idx == arg_idx { return false; }
+                                            spec_idx += 1;
+                                        } else {
+                                            while chars.peek().map_or(false, |c| c.is_ascii_digit()) {
+                                                chars.next();
+                                            }
+                                        }
+                                    }
+                                    // Skip length modifiers: h, hh, l, ll, L, z, j, t, q
+                                    while chars.peek().map_or(false, |c| "hlLzjtq".contains(*c)) {
+                                        chars.next();
+                                    }
+                                    // Read the actual conversion letter
                                     if let Some(spec) = chars.next() {
                                         if spec_idx == arg_idx {
                                             return spec == 's';
                                         }
                                         spec_idx += 1;
-                                        // Handle %ll or %l prefix
-                                        // (already consumed in skip loop above for digits)
                                     }
                                 }
                             }
@@ -7445,7 +7642,9 @@ fn runtime_fn_return_struct(name: &str) -> Option<&'static str> {
         "gorget_map_new" | "gorget_map_clone" => Some("GorgetMap"),
         "gorget_set_new" | "gorget_set_clone" => Some("GorgetSet"),
         "gorget_string_new" | "gorget_string_adopt" | "gorget_string_from_concat"
-        | "gorget_str_cat" => Some("GorgetString"),
+        | "gorget_str_cat" | "gorget_string_format"
+        | "gorget_string_format_alloc" => Some("GorgetString"),
+        "gorget_file_open" => Some("GorgetFile"),
         _ => None,
     }
 }

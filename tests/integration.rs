@@ -1166,6 +1166,10 @@ done",
 
 /// Build and run a `.gg` fixture, passing extra args to the compiled binary.
 fn run_gg_with_args(fixture: &str, binary_args: &[&str], expected: &str) {
+    run_gg_with_args_backend(fixture, binary_args, expected, None);
+}
+
+fn run_gg_with_args_backend(fixture: &str, binary_args: &[&str], expected: &str, backend: Option<&str>) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
 
@@ -1181,9 +1185,13 @@ fn run_gg_with_args(fixture: &str, binary_args: &[&str], expected: &str) {
     let exe_path = dir.join(stem);
 
     // 1. Build
+    let mut cmd = gg_command("build");
+    if let Some(be) = backend {
+        cmd.arg(format!("--backend={be}"));
+    }
+    cmd.arg(&fixture_path);
     let build = build_with_timeout(
-        gg_command("build")
-            .arg(&fixture_path),
+        &mut cmd,
         fixture,
     );
 
@@ -1326,6 +1334,10 @@ fn run_gg_with_stdin(fixture: &str, stdin_data: &str, expected: &str) {
 
 /// Build and run a multi-file `.gg` fixture from a directory.
 fn run_gg_dir(dir_name: &str, main_file: &str, expected: &str) {
+    run_gg_dir_backend(dir_name, main_file, expected, None);
+}
+
+fn run_gg_dir_backend(dir_name: &str, main_file: &str, expected: &str, backend: Option<&str>) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let dir_path = manifest_dir.join("tests/fixtures").join(dir_name);
     let main_path = dir_path.join(main_file);
@@ -1345,9 +1357,13 @@ fn run_gg_dir(dir_name: &str, main_file: &str, expected: &str) {
     let exe_path = dir_path.join(stem);
 
     // 1. Build: gg build <dir/main.gg>
+    let mut cmd = gg_command("build");
+    if let Some(be) = backend {
+        cmd.arg(format!("--backend={be}"));
+    }
+    cmd.arg(&main_path);
     let build = build_with_timeout(
-        gg_command("build")
-            .arg(&main_path),
+        &mut cmd,
         &format!("{dir_name}/{main_file}"),
     );
 
@@ -1444,7 +1460,7 @@ fn modules_pkg() {
 
 #[test]
 fn self_host_lexer() {
-    run_gg_dir(
+    run_gg_dir_backend(
         "self_host_lexer",
         "main.gg",
         "\
@@ -1458,12 +1474,13 @@ comment:this is a comment ident:x = int:1 NL EOF
 ident:f ( ident:a , ident:b ) NL EOF
 ident:a += int:1 NL ident:b -= int:2 NL ident:c ..= ident:d NL EOF
 kw:if kw:true kw:and kw:not kw:false : NL INDENT kw:return kw:None NL DEDENT EOF",
+        Some("gir"),
     );
 }
 
 #[test]
 fn self_host_parser() {
-    run_gg_dir(
+    run_gg_dir_backend(
         "self_host_parser",
         "main.gg",
         "\
@@ -1489,6 +1506,7 @@ void f(): match x: case 1: print(1); case _: print(0);;
 void f(): v.push(42);
 === assign ===
 void f(): x = 10;",
+        Some("gir"),
     );
 }
 
@@ -3620,10 +3638,11 @@ fn readdir() {
 
 #[test]
 fn cli_args() {
-    run_gg_with_args("cli_args.gg", &["hello", "world"], "\
+    // CLI args not yet supported in LIR backend
+    run_gg_with_args_backend("cli_args.gg", &["hello", "world"], "\
 3
 hello
-world");
+world", Some("gir"));
 }
 
 #[test]
@@ -3787,9 +3806,10 @@ fn trace_directive() {
     let exe_path = dir.join("trace_test");
     let trace_path = dir.join("trace_test.trace.jsonl");
 
-    // 1. Build
+    // 1. Build (trace not yet supported in LIR backend)
     let build = build_with_timeout(
         gg_command("build")
+            .arg("--backend=gir")
             .arg(&fixture_path),
         "trace_test.gg",
     );
@@ -3858,9 +3878,10 @@ fn trace_cli_flag() {
     let exe_path = dir.join("functions");
     let trace_path = dir.join("functions.trace.jsonl");
 
-    // Build with --trace
+    // Build with --trace (trace not yet supported in LIR backend)
     let build = build_with_timeout(
         gg_command("build")
+            .arg("--backend=gir")
             .arg("--trace")
             .arg(&fixture_path),
         "functions.gg",
@@ -3906,9 +3927,10 @@ fn trace_no_trace_flag() {
     let exe_path = dir.join("trace_test");
     let trace_path = dir.join("trace_test.trace.jsonl");
 
-    // Build with --no-trace (overrides directive)
+    // Build with --no-trace (overrides directive; trace not yet supported in LIR backend)
     let build = build_with_timeout(
         gg_command("build")
+            .arg("--backend=gir")
             .arg("--no-trace")
             .arg(&fixture_path),
         "trace_test.gg",
@@ -5418,11 +5440,10 @@ fn hot_reload_basic_lir() {
 
     assert!(fixture_path.exists(), "Fixture not found: {}", fixture_path.display());
 
-    // 1. Build with --hot-reload --backend=lir
+    // 1. Build with --hot-reload (LIR is now the default backend)
     let build = build_with_timeout(
         gg_command("build")
             .arg("--hot-reload")
-            .arg("--backend=lir")
             .arg(&fixture_path),
         "hot_reload_basic.gg (LIR)",
     );
@@ -6455,6 +6476,10 @@ done",
 /// Build a multi-file `.gg` fixture from a directory.
 /// Returns (exe_path, c_path) — caller is responsible for cleanup.
 fn build_gg_dir(dir_name: &str, main_file: &str) -> (PathBuf, PathBuf) {
+    build_gg_dir_backend(dir_name, main_file, None)
+}
+
+fn build_gg_dir_backend(dir_name: &str, main_file: &str, backend: Option<&str>) -> (PathBuf, PathBuf) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let dir_path = manifest_dir.join("tests/fixtures").join(dir_name);
     let main_path = dir_path.join(main_file);
@@ -6473,9 +6498,13 @@ fn build_gg_dir(dir_name: &str, main_file: &str) -> (PathBuf, PathBuf) {
     let c_path = dir_path.join(format!("{stem}.c"));
     let exe_path = dir_path.join(stem);
 
+    let mut cmd = gg_command("build");
+    if let Some(be) = backend {
+        cmd.arg(format!("--backend={be}"));
+    }
+    cmd.arg(&main_path);
     let build = build_with_timeout(
-        gg_command("build")
-            .arg(&main_path),
+        &mut cmd,
         &format!("{dir_name}/{main_file}"),
     );
 
@@ -6629,7 +6658,7 @@ fn is_comment_token(s: &str) -> bool {
 #[test]
 fn lexer_comparison() {
     // 1. Build the Gorget lexer driver
-    let (driver_exe, driver_c) = build_gg_dir("self_host_lexer", "driver.gg");
+    let (driver_exe, driver_c) = build_gg_dir_backend("self_host_lexer", "driver.gg", Some("gir"));
 
     // 2. Discover all top-level .gg fixture files
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -9605,7 +9634,7 @@ fn parser_comparison() {
     use gorget::parser::Parser;
 
     // 1. Build the Gorget parser driver
-    let (driver_exe, driver_c) = build_gg_dir("self_host_parser", "driver.gg");
+    let (driver_exe, driver_c) = build_gg_dir_backend("self_host_parser", "driver.gg", Some("gir"));
 
     // 2. Discover all top-level .gg fixture files
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -9864,7 +9893,7 @@ fn resolver_comparison() {
     use gorget::semantic::types::TypeTable;
 
     // 1. Build the Gorget resolver driver
-    let (driver_exe, driver_c) = build_gg_dir("self_host_resolver", "driver.gg");
+    let (driver_exe, driver_c) = build_gg_dir_backend("self_host_resolver", "driver.gg", Some("gir"));
 
     // 2. Discover all top-level .gg fixture files
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -10162,7 +10191,7 @@ fn type_comparison() {
         return;
     }
 
-    let (driver_exe, driver_c) = build_gg_dir("self_host_typechecker", "driver.gg");
+    let (driver_exe, driver_c) = build_gg_dir_backend("self_host_typechecker", "driver.gg", Some("gir"));
 
     // 2. Discover all top-level .gg fixture files
     let fixtures_dir = manifest_dir.join("tests/fixtures");

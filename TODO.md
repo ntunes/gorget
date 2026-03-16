@@ -6,11 +6,14 @@
 
 - **C backend: missing drop insertion for Move-type locals (Vector, Str)**: The drop insertion pass does not emit `gorget_array_free` / `gorget_str_free` for many local variables of Move types at scope exit. Confirmed by inspecting generated C: `gpu_draw_textured_quads` creates a `GorgetArray` local for vertex data but returns without freeing it. This causes ~180KB/frame leak in the arena project from accumulated small Vector[uint8] and Str allocations in GPU draw helpers, HUD rendering, and string formatting. Affects all programs with short-lived Vector/Str locals in loops. Root cause: likely the GIR type for these locals is UNIT_TYPE or I64_TYPE (not recognized as a droppable type), so the drop insertion pass skips them. [added: 2026-03-14]
 
-- **LIR backend: Phase 2 — reach parity**: **596/596 A/B tests passing (100%)**. COMPLETE. [updated: 2026-03-16]
-
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 4 C warnings remaining (2 `gorget_int_to_str` Ptr→int cast from slot type inference issue, 2 memset overflow from struct size mismatch). Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-16]
 
-- **LIR backend: Phase 4 — default backend switch**: Once all A/B tests pass through LIR, flip default: no flag = LIR→C, `--backend=gir` selects old path. Hot-reload, `--shared`, scheduler modes, `--trace` init, and `is_test_module` now supported by LIR backend. Per-function trace instrumentation (entry/exit/branch events) not yet ported — requires adding trace instructions to LIR or reconstructing display names in c_lir codegen. [added: 2026-03-11, updated: 2026-03-16]
+- **LIR backend: remaining gaps vs GIR**: LIR is now the default backend (694 A/B tests, 825 integration tests pass). Known gaps still using `--backend=gir` fallback:
+  - `test_struct_derive` — derived `__str` methods pass struct fields as untyped `void*`, making Str decomposition impossible at c_lir level (needs LIR lowering fix)
+  - CLI args (`cli_args.gg`) — `sys.argv` not wired in LIR
+  - Trace instrumentation (`--trace`/`--no-trace`) — per-function trace not ported to LIR
+  - Self-host comparison tests (lexer/parser/resolver/typechecker) — use `--backend=gir` for now
+  [updated: 2026-03-16]
 
 - **LIR backend: Phase 5 — old backend retirement**: Delete `src/backend/c/mod.rs` (12,918 lines) after transition period. Keep `c_runtime.rs`. Remove `--backend=gir` flag. -12,918 lines of the most complex, duplicated code in the project. [added: 2026-03-11]
 

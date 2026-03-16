@@ -586,7 +586,7 @@ fn try_build_ir(
             let dylib_ext = ".so";
             let guest_lib_file = format!("{guest_lib_name}{dylib_ext}");
             let recompile_cmd = format!(
-                "{} build --backend=lir --shared {} -o {}",
+                "{} build --shared {} -o {}",
                 std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gg")).display(),
                 abs_filename.display(),
                 dir.join(&guest_lib_file).display(),
@@ -1427,7 +1427,7 @@ fn main() {
         println!("  --emit-gir              Dump GIR (intermediate representation) to stdout instead of compiling");
         println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
         println!("  --emit-c-lir            Dump C code generated from LIR to stdout (for A/B testing)");
-        println!("  --backend=lir           Build through LIR→C backend instead of GIR→C");
+        println!("  --backend=gir           Build through legacy GIR→C backend instead of LIR→C");
         return;
     }
 
@@ -1470,7 +1470,7 @@ fn main() {
             sanitize, scheduler_mode: parse_scheduler(&args),
             ..Default::default()
         };
-        let use_lir = args.iter().any(|a| a == "--backend=lir");
+        let use_lir = !args.iter().any(|a| a == "--backend=gir");
         let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, use_lir)
             .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
         let status = Command::new(&exe_path)
@@ -1592,7 +1592,7 @@ fn main() {
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
     let warn_const = args.iter().any(|a| a == "--warn-const");
-    let use_lir_backend = args.iter().any(|a| a == "--backend=lir");
+    let use_lir_backend = !args.iter().any(|a| a == "--backend=gir");
     let features = parse_features(&args);
     // Parse -o <path> for shared output
     let shared_output_path: Option<PathBuf> = {
