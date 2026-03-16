@@ -1923,7 +1923,7 @@ impl<'a> BorrowChecker<'a> {
                     if let Some(&recv_def_id) = self.resolution_map.get(&receiver.span.start) {
                         let method_name = method.node.as_str();
                         match method_name {
-                            "is_some" | "is_ok" | "is_none" | "is_err" => {
+                            "is_some" | "is_ok" | "is_none" | "is_err" | "is_error" => {
                                 if self.fallible_states.contains_key(&recv_def_id) {
                                     self.fallible_states.insert(recv_def_id, FallibleState::Checked);
                                 }

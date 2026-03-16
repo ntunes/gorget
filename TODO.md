@@ -97,7 +97,6 @@
 
 - **Self-hosting type checker: 595/595 (100%) — COMPLETE.** Phases 1-18. [updated: 2026-03-10]
 
-- **Compiler: UncheckedUnwrap wrong span in imported files**: `.unwrap()` warnings in imported modules (pk3.gg, collision.gg, shader.gg, gpu_backend.gg) point at wrong lines (comments, function signatures). The `method.span` fix narrows the highlight to "unwrap" but byte offsets from imported files still map to incorrect lines. Root cause: multi-file import span offset mapping. [added: 2026-03-15]
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
 
