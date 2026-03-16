@@ -5127,7 +5127,15 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 || matches!(ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "Str"))
             });
 
+            // printf(var) with a single non-literal arg triggers -Wformat-security
+            // on macOS clang. Rewrite to printf("%s", var).
+            let printf_needs_fmt_guard = is_printf && emit_args.len() == 1
+                && !str_lit_vals.get(emit_args[0].0 as usize).copied().unwrap_or(false);
+
             write!(out, "{}(", emit_name).unwrap();
+            if printf_needs_fmt_guard {
+                write!(out, "\"%s\", ").unwrap();
+            }
             if is_stderr_print {
                 write!(out, "stderr").unwrap();
                 if !emit_args.is_empty() {
@@ -5399,6 +5407,14 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     } else {
                         write!(out, "{}", v(*a)).unwrap();
                     }
+                }
+                // gorget_int_to_str / gorget_float_to_str: always cast arg to expected type.
+                // The LIR lowerer emits str() coercion for unknown source types, which can
+                // produce void* args. macOS clang rejects implicit void*→int64_t conversion.
+                // Casting is a no-op when the arg is already the correct type.
+                else if emit_name == "gorget_int_to_str" || emit_name == "gorget_float_to_str" {
+                    let cast_ty = if emit_name == "gorget_float_to_str" { "double" } else { "int64_t" };
+                    write!(out, "({cast_ty}){}", v(*a)).unwrap();
                 }
                 // Use general coercion for extern params.
                 else {
