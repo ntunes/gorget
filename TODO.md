@@ -196,7 +196,6 @@
 
 - **`gg info` command**: show fields, methods, traits, memory layout for a type. [added: 2026-02-10]
 
-- **Docs: document safety checker inference pipeline for contributors**: The `src/semantic/safety/` module split makes the architecture discoverable (origins.rs, return_borrows.rs, helpers.rs, etc.), but a prose overview of the multi-phase flow would still help: Pass 5a (return_borrows.rs) computes `return_borrows_from` per function, Pass 5b (check_expr/check_stmt) validates at call sites. Cover `BorrowOrigin` variants, `compute_expr_origin()`, and the `LocalAliasMap`. [added: 2026-02-22, updated: 2026-03-16]
 
 - **Associated type validation**: Associated types are parsed but not validated or resolved in semantic analysis. [from roadmap, added: 2026-02-16]
 

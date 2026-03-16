@@ -25,6 +25,7 @@ cargo test               # all tests
 - `docs/book/` — [The Gorget Book](docs/book/README.md): learn the language from scratch (assumes programming experience, not Gorget experience)
 - `docs/language-reference.md` — Full syntax and semantics specification (the authoritative language spec)
 - `docs/language-design.md` — Design philosophy, safety features, and rationale
+- `docs/internals/` — [Compiler Internals](docs/internals/README.md): contributor-facing pipeline and design docs
 
 ## Project Structure
 
