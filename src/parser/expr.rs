@@ -1475,7 +1475,7 @@ impl Parser {
         let mut elif_branches = Vec::new();
         let mut else_branch = None;
 
-        while self.match_keyword(Keyword::Elif) {
+        while self.match_elif() {
             let elif_cond = self.parse_expr()?;
             self.expect(&Token::Colon)?;
             let elif_body = self.parse_expr()?;

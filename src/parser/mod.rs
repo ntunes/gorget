@@ -143,6 +143,22 @@ impl Parser {
         }
     }
 
+    /// Match `elif` or `else if` (treated identically).
+    pub fn match_elif(&mut self) -> bool {
+        if self.check_keyword(Keyword::Elif) {
+            self.advance();
+            true
+        } else if self.check_keyword(Keyword::Else)
+            && matches!(self.peek_ahead(1), Token::Keyword(Keyword::If))
+        {
+            self.advance(); // consume `else`
+            self.advance(); // consume `if`
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn expect(&mut self, token: &Token) -> Result<Spanned<Token>, ParseError> {
         if self.check(token) {
             Ok(self.advance())
@@ -777,7 +793,7 @@ impl Parser {
         let then_items = self.parse_meta_block()?;
 
         let mut elif_branches = Vec::new();
-        while self.match_keyword(Keyword::Elif) {
+        while self.match_elif() {
             let elif_cond = self.parse_expr()?;
             let elif_items = self.parse_meta_block()?;
             elif_branches.push((elif_cond, elif_items));

@@ -221,7 +221,7 @@ impl Parser {
         let mut elif_branches = Vec::new();
         let mut else_body = None;
 
-        while self.match_keyword(Keyword::Elif) {
+        while self.match_elif() {
             let elif_cond = self.parse_expr()?;
             let elif_body = self.parse_block()?;
             elif_branches.push((elif_cond, elif_body));
@@ -763,7 +763,7 @@ impl Parser {
         let mut elif_branches = Vec::new();
         let mut else_body = None;
 
-        while self.match_keyword(Keyword::Elif) {
+        while self.match_elif() {
             let elif_cond = self.parse_expr()?;
             let elif_body = self.parse_block()?;
             elif_branches.push((elif_cond, elif_body));

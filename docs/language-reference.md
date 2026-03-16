@@ -1117,11 +1117,11 @@ A no-op statement. Used as a placeholder in empty blocks.
 
 ```ebnf
 if_stmt = "if" expr ":" block
-          { "elif" expr ":" block }
+          { ("elif" | "else" "if") expr ":" block }
           [ "else" ":" block ] ;
 ```
 
-Conditional execution. The condition must be of type `bool`. The `elif` keyword chains additional conditions.
+Conditional execution. The condition must be of type `bool`. Both `elif` and `else if` are accepted and behave identically. The canonical form is `elif` (used by `gg fmt`).
 
 ```gorget
 if x > 0:

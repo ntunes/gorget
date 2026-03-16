@@ -200,6 +200,26 @@ positive
 }
 
 #[test]
+fn else_if() {
+    run_gg(
+        "else_if.gg",
+        "\
+positive
+negative
+zero
+first
+second
+third
+other
+one
+two
+three
+four
+big",
+    );
+}
+
+#[test]
 fn structs() {
     run_gg(
         "structs.gg",

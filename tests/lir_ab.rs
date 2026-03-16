@@ -223,6 +223,7 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_block_expr() { ab_test("block_expr.gg"); }
 #[test] fn lir_ab_break_nested() { ab_test("break_nested.gg"); }
 #[test] fn lir_ab_control_flow() { ab_test("control_flow.gg"); }
+#[test] fn lir_ab_else_if() { ab_test("else_if.gg"); }
 #[test] fn lir_ab_extern_ffi() { ab_test("extern_ffi.gg"); }
 #[test] fn lir_ab_for_else() { ab_test("for_else.gg"); }
 #[test] fn lir_ab_named_scope_basic() { ab_test("named_scope_basic.gg"); }
