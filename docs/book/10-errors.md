@@ -25,8 +25,8 @@ code.
 ## Throwing and Catching Errors
 
 Gorget's primary error handling mechanism is `throws`. A function that can fail declares it
-in its signature. The caller either lets the error propagate or catches it with `raw`. The
-happy path reads like straight-line code.
+in its signature. The caller either lets the error propagate or captures it as a `Result`.
+The happy path reads like straight-line code.
 
 ### Declaring a Throwing Function
 
@@ -102,14 +102,15 @@ Result[int, str] double_parsed(str s):
     return Ok(val * 2)
 ```
 
-### Catching with `raw`
+### Capturing as a Result
 
-Sometimes you don't want an error to propagate — you want to handle it locally. The
-`raw` keyword captures a throwing call as a `Result` value:
+Sometimes you don't want an error to propagate — you want to handle it locally. When
+you declare the destination variable with a `Result[T, E]` type, the compiler suppresses
+auto-unwrap and captures the full `Result` value:
 
 ```gorget
 void main():
-    Result[int, str] result = raw parse_port("8080")
+    Result[int, str] result = parse_port("8080")
     match result:
         case Ok(port):
             print(f"using port {port}")
@@ -117,9 +118,10 @@ void main():
             print(f"bad port: {msg}")
 ```
 
-Without `raw`, calling a `throws` function from a non-`throws` function is a compile
-error. `raw` is the bridge: it converts the throwing call into a `Result` you can
-inspect with all the methods from the previous chapter.
+Without the `Result` type on the destination, calling a `throws` function from a
+non-`throws` function is a compile error. The `Result` type is the bridge: it tells
+the compiler you want to inspect the result with all the methods from the previous
+chapter.
 
 ### Quick Recovery
 
@@ -127,7 +129,8 @@ When you just need a default value if something fails:
 
 ```gorget
 void main():
-    int port = raw parse_port(input).unwrap_or(8080)
+    Result[int, str] port_result = parse_port(input)
+    int port = port_result.unwrap_or(8080)
     print(f"listening on {port}")
 ```
 
@@ -135,7 +138,7 @@ Or with pattern matching for more nuanced recovery:
 
 ```gorget
 void main():
-    auto result = raw connect(host, port)
+    Result[Connection, str] result = connect(host, port)
     match result:
         case Ok(conn):
             handle(conn)
@@ -146,12 +149,12 @@ void main():
 
 ### Intercepting Errors in a Throwing Function
 
-You can use `raw` inside a `throws` function too, when you want to intercept an error
-rather than let it propagate:
+You can use Result capture inside a `throws` function too, when you want to intercept
+an error rather than let it propagate:
 
 ```gorget
 Config load_with_fallback(str path) throws str:
-    auto result = raw load_config(path)
+    Result[Config, str] result = load_config(path)
     match result:
         case Ok(cfg):
             return cfg
@@ -160,8 +163,8 @@ Config load_with_fallback(str path) throws str:
             return Config.default()
 ```
 
-Without `raw`, the error from `load_config` would auto-propagate. With `raw`, you catch
-it locally and decide what to do.
+Without the `Result` type, the error from `load_config` would auto-propagate. With
+Result capture, you handle it locally and decide what to do.
 
 ### Recovering from Errors with `catch`
 
@@ -296,8 +299,9 @@ where needed:
 4. **`on error`** — add cleanup that only runs on the error path. Use when you've
    acquired resources that need releasing.
 
-5. **`raw`** — drop to full manual control. Capture the `Result` and handle it with
-   pattern matching, combinators, or any logic you need.
+5. **Result capture** — drop to full manual control. Declare a `Result[T, E]` variable
+   to capture the result, then handle it with pattern matching, combinators, or any
+   logic you need.
 
 Most functions only need step 1. A few need steps 2 or 3. Steps 4 and 5 appear at
 natural boundaries — module edges, resource management, top-level handlers.
@@ -321,7 +325,7 @@ This gives callers the ability to match on the *kind* of error and respond diffe
 
 ```gorget
 void handle_request(str path) throws AppError:
-    auto result = raw load_resource(path)
+    Result[Data, AppError] result = load_resource(path)
     match result:
         case Ok(data):
             respond(data)
@@ -329,7 +333,7 @@ void handle_request(str path) throws AppError:
             respond_404(msg)
         case Error(AppError.Io(msg)):
             # retry once
-            auto retry = raw load_resource(path)
+            Result[Data, AppError] retry = load_resource(path)
             match retry:
                 case Ok(data):
                     respond(data)
@@ -371,8 +375,9 @@ int parse_port(str input) throws str:
 
 compiles to a function that returns `Result[int, str]`. The `throw` keyword becomes an
 early return of `Error(...)`. Auto-propagation becomes automatic unwrapping of `Ok` or
-early return of `Error`. The `raw` keyword is the inverse — it wraps the call so you get
-the raw `Result` back.
+early return of `Error`. Type-directed Result capture is the inverse — when the
+destination type is `Result[T, E]`, the compiler skips the auto-unwrap and gives you
+the full `Result` value.
 
 This means `throws` functions and `Result`-returning functions are interchangeable from
 the caller's perspective. Auto-propagation works with both. You can call a library
@@ -451,8 +456,8 @@ Or use wrapping operators for specific expressions: `+%`, `-%`, `*%`.
 
 ## Putting It Together
 
-Here's a realistic example that combines `throws`, `raw`, custom error types, and
-`Option`:
+Here's a realistic example that combines `throws`, Result capture, custom error types,
+and `Option`:
 
 ```gorget
 enum ConfigError:
@@ -496,7 +501,7 @@ Config load_config(str path) throws ConfigError:
     return parse_config(content)
 
 void main():
-    auto result = raw load_config("app.conf")
+    Result[Config, ConfigError] result = load_config("app.conf")
     match result:
         case Ok(cfg):
             print(f"connecting to {cfg.host}:{cfg.port}/{cfg.database}")
@@ -511,8 +516,8 @@ void main():
 
 The structure is clear: `parse_config` throws on any parsing issue with a specific
 reason. `load_config` uses `rethrow` to wrap file I/O errors into the same error type
-in one line. `main` uses `raw` to catch everything and respond to each error kind
-differently.
+in one line. `main` uses Result capture to catch everything and respond to each error
+kind differently.
 
 ---
 
@@ -528,6 +533,6 @@ differently.
 | `catch (e): expr` | Recover from error with fallback | Default values, graceful degradation |
 | `throws int` on main | Exit code on error | Process-level error handling |
 | `on error: block` | Cleanup on error exit only | Resource cleanup |
-| `raw expr` | Catch a throwing call as `Result` | When you want to handle, not propagate |
+| `Result[T, E] x = expr` | Capture a throwing call as `Result` | When you want to handle, not propagate |
 | `assert` | Panic if condition is false | Invariant checks (runs in all builds) |
 | Panic | Crash on programmer error | Bugs, not environmental failures |

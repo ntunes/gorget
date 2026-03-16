@@ -1367,11 +1367,6 @@ impl<'a> TypeChecker<'a> {
                 self.types.intern_generic(task_def_id, vec![result_type])
             }
 
-            Expr::RawCapture { expr: inner } => {
-                self.infer_expr(inner);
-                self.types.error_id // Result[T, E]
-            }
-
             Expr::If {
                 condition,
                 then_branch,
@@ -1732,6 +1727,7 @@ impl<'a> TypeChecker<'a> {
                             // (e.g. Vector[int] v = [1, 2, 3])
                             if !self.is_collection_assignment(declared_type, value_type)
                                 && !self.is_auto_propagation_compatible(declared_type, value_type)
+                                && !self.is_result_capture_compatible(declared_type, value_type)
                             {
                                 self.unify(declared_type, value_type, value.span);
                             }
@@ -1782,7 +1778,9 @@ impl<'a> TypeChecker<'a> {
                 self.decl_type_hint = Some(target_type);
                 let value_type = self.infer_expr(value);
                 self.decl_type_hint = prev_hint;
-                if !self.is_auto_propagation_compatible(target_type, value_type) {
+                if !self.is_auto_propagation_compatible(target_type, value_type)
+                    && !self.is_result_capture_compatible(target_type, value_type)
+                {
                     self.unify(target_type, value_type, value.span);
                 }
             }
@@ -2447,6 +2445,36 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        false
+    }
+
+    /// Check if a throws/Result-returning call can be captured as a Result value.
+    /// Allows `Result[T, E] r = throwing_call()` where `throwing_call` returns `T`
+    /// (with throws E) or `Result[T, E]`.
+    fn is_result_capture_compatible(&self, declared: TypeId, value: TypeId) -> bool {
+        // Check if declared type is Result[T, E]
+        let declared_resolved = self.resolve_type(declared);
+        let ok_type = if let ResolvedType::Generic(def_id, ref args) = self.types.get(declared_resolved).clone() {
+            let name = self.scopes.get_def(def_id).name.clone();
+            if name == "Result" && args.len() == 2 {
+                args[0]
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        };
+
+        // Check if value type matches the Ok type of the Result
+        let value_resolved = self.resolve_type(value);
+        let ok_resolved = self.resolve_type(ok_type);
+        if value_resolved == ok_resolved {
+            return true;
+        }
+        // Also accept if value resolves to error_id (inference)
+        if value_resolved == self.types.error_id {
+            return true;
+        }
         false
     }
 

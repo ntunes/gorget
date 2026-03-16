@@ -291,8 +291,8 @@ int parse_port(str input) throws str:
 ```
 
 compiles to a function that returns `Result[int, str]`. The `throw` keyword becomes
-an early return of `Error(...)`. The `raw` keyword captures a throwing call as a
-raw `Result`.
+an early return of `Error(...)`. When the destination variable is typed as `Result[T, E]`,
+the compiler captures the full `Result` instead of auto-unwrapping.
 
 You don't need to think about this to use `throws` — the next chapter covers that
 model in full. But knowing the connection means you can move freely between the two

@@ -912,7 +912,8 @@ if "name" in config:
     print(config["name"])
 
 # Use in match guards and while conditions
-match raw parse(input):
+Result[int, str] parsed = parse(input)
+match parsed:
     case Ok(n) if n in 1..=100: print("valid")
     else: print("out of range")
 ```
@@ -1017,7 +1018,7 @@ HashSet[int] unique = {x * x for x in 1..=10}
 
 ## 6. Error Handling
 
-### 6.1 The `throws` + `raw` Model
+### 6.1 The `throws` Model
 
 Functions that can fail use `throws`. Errors auto-propagate without `?`:
 
@@ -1028,9 +1029,9 @@ Data process(str path) throws AppError:
     Config config = parse_config(content)     # auto-propagates if error
     return transform(config)
 
-# To handle an error locally, use raw:
+# To handle an error locally, use type-directed Result capture:
 Data safe_process(str path) throws AppError:
-    auto result = raw read_file(path)       # captures Result instead of propagating
+    Result[str, AppError] result = read_file(path)   # Result type suppresses auto-propagation
     match result:
         case Ok(content): return parse(content)
         case Error(e):
@@ -1043,9 +1044,10 @@ Record parse_line(str line) throws ParseError:
         throw ParseError("empty line")      # raises error, exits function
     return parse(line)
 
-# Non-throwing functions must use raw:
+# Non-throwing functions capture via Result type:
 void main():
-    match raw process("data.txt"):
+    Result[Data, AppError] result = process("data.txt")
+    match result:
         case Ok(data): print(data)
         case Error(e): print("Error: {e}")
 ```
@@ -1053,7 +1055,7 @@ void main():
 **Keywords summary:**
 - `throws` — annotates a function that can fail (on the signature)
 - `throw` — explicitly raises an error (inside a `throws` function)
-- `raw` — captures the result as `Result[T, E]` instead of auto-propagating
+- **Type-directed capture** — declaring the destination as `Result[T, E]` suppresses auto-propagation
 
 Under the hood, `throws` desugars to `Result`. Both styles available:
 - **throws style**: clean, auto-propagation (most code)
@@ -1092,11 +1094,12 @@ Three layers, from cheap to detailed:
 
 ```gorget
 # Adding context:
-String content = raw read_file(path)
+Result[str, IOError] content = read_file(path)
     .context("loading config from {path}")
 
 # Accessing trace:
-match raw process("data.txt"):
+Result[Data, AppError] result = process("data.txt")
+match result:
     case Error(e):
         print(e)           # error message
         print(e.trace())   # propagation trace (debug builds)
@@ -1514,9 +1517,10 @@ async void fetch_all():
 auto fetcher = async (str url):
     return http.get(url).await()
 
-# async with error handling (throws + raw)
+# async with error handling (throws + Result capture)
 async void resilient_fetch(str url):
-    match raw fetch(url).await():
+    Result[str, IOError] result = fetch(url).await()
+    match result:
         case Ok(data): print(data)
         case Error(e): print("Failed: {e}")
 ```
@@ -1748,7 +1752,7 @@ void main():
 | Lifetimes | Body-inferred + `live` | Signature-only + `'a` | N/A | N/A |
 | Generics | `[T]` | `<T>` | `[T]` | `<T>` |
 | Mutability | Mutable default + `const` | `let` default + `mut` | Default mutable | `final`/`const` |
-| Error handling | `throws` + `raw` | `Result` + `?` | Exceptions | Exceptions |
+| Error handling | `throws` + Result capture | `Result` + `?` | Exceptions | Exceptions |
 | Closures | `(params):` + `it` | `\|params\|` | `lambda` | `->` (Java) |
 | Inheritance | Traits only | Traits only | Classes | Classes |
 
@@ -2898,8 +2902,8 @@ Record parse_line(str line) throws ProcessError:
     if parts.len() != 2:
         throw ProcessError.InvalidFormat("expected 2 fields, got {parts.len()}")
     String name = parts[0].trim().to_string()
-    int value = raw parts[1].trim().parse[int]()
-        .map_err((e): ProcessError.Parse("invalid number: {e}"))
+    Result[int, str] parsed = parts[1].trim().parse[int]()
+    int value = parsed.map_err((e): ProcessError.Parse("invalid number: {e}")).unwrap()
     return Record(name, value)
 
 Vector[Record] process_file(Path path) throws ProcessError:
@@ -2917,7 +2921,8 @@ Vector[Record] process_file(Path path) throws ProcessError:
     return records
 
 void main():
-    match raw process_file(Path.new("data.csv")):
+    Result[Vector[Record], ProcessError] result = process_file(Path.new("data.csv"))
+    match result:
         case Ok(records):
             print("Processed {records.len()} records")
             int total = records.iter().map(it.value).sum()

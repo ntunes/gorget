@@ -250,59 +250,6 @@ fn lower_expr_inner(
             lower_match_expr(ctx, builder, scrutinee, arms, else_arm.as_deref())
         }
 
-        // -- P3.3: Raw/error handling --
-        Expr::RawCapture { expr: inner } => {
-            // try expr → evaluate, extract Ok value or return zero-default on error
-            let val = lower_expr(ctx, builder, inner);
-            let val_type = infer_operand_type_full(ctx, &val, builder);
-            let val_local = builder.add_local(val_type, None);
-            builder.assign(Place::local(val_local), val);
-
-            // Look up Ok field type
-            let ok_field_type = {
-                let type_name = ctx.type_registry.type_name(val_type);
-                if let Some(ref name) = type_name {
-                    if let Some(td) = ctx.type_registry.get_type_def(name) {
-                        if let crate::ir::types::TypeDefKind::Enum(ref e) = td.kind {
-                            e.variants.iter().find(|v| v.name == "Ok" || v.name == "Some")
-                                .and_then(|v| v.fields.first().map(|f| f.type_id))
-                                .unwrap_or(I64_TYPE)
-                        } else { I64_TYPE }
-                    } else { I64_TYPE }
-                } else { I64_TYPE }
-            };
-
-            let tag = builder.tag_of(FunctionBuilder::copy(val_local));
-            let is_ok = builder.cmp(CmpOp::Eq, I32_TYPE, FunctionBuilder::copy(tag), Operand::Constant(Constant::I32(0)));
-
-            let ok_bb = builder.new_block();
-            let err_bb = builder.new_block();
-            let merge_bb = builder.new_block();
-
-            builder.branch(FunctionBuilder::copy(is_ok), ok_bb, err_bb);
-
-            // Ok path: extract value
-            builder.switch_to(ok_bb);
-            let ok_val = builder.enum_field_load(Place::local(val_local), "Ok", 0, ok_field_type);
-            let result_local = builder.add_local(ok_field_type, None);
-            builder.assign(Place::local(result_local), FunctionBuilder::copy(ok_val));
-            builder.jump(merge_bb);
-
-            // Error path: zero-default
-            builder.switch_to(err_bb);
-            let zero = match ok_field_type {
-                id if id == BOOL_TYPE => Operand::Constant(Constant::Bool(false)),
-                id if id == F64_TYPE => Operand::Constant(Constant::F64(0.0)),
-                id if id == F32_TYPE => Operand::Constant(Constant::F32(0.0)),
-                _ => Operand::Constant(Constant::I64(0)),
-            };
-            builder.assign(Place::local(result_local), zero);
-            builder.jump(merge_bb);
-
-            builder.switch_to(merge_bb);
-            FunctionBuilder::copy(result_local)
-        }
-
         // -- P3.4: Miscellaneous expressions --
 
         Expr::NoneLiteral => {

@@ -752,8 +752,7 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
         | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner }
         | Expr::Spawn { expr: inner }
-        | Expr::SpawnBlocking { expr: inner }
-        | Expr::RawCapture { expr: inner } => qualify_expr(inner, vm),
+        | Expr::SpawnBlocking { expr: inner } => qualify_expr(inner, vm),
         Expr::DefaultOp { lhs, rhs } => {
             qualify_expr(lhs, vm);
             qualify_expr(rhs, vm);

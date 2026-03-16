@@ -482,6 +482,9 @@ impl Formatter {
         self.format_doc_comment(&f.doc_comment);
         self.format_attributes(&f.attributes);
         self.format_visibility(&f.visibility);
+        if matches!(f.body, FunctionBody::Extern(_)) {
+            self.emitter.write("extern ");
+        }
         self.format_qualifiers(&f.qualifiers);
         // type-first: `ReturnType name(params)`
         // Bare tuple return: emit `T1, T2` not `(T1, T2)` in return position
@@ -1960,10 +1963,6 @@ impl Formatter {
             }
             Expr::SpawnBlocking { expr } => {
                 self.emitter.write("spawn blocking ");
-                self.format_expr(expr);
-            }
-            Expr::RawCapture { expr } => {
-                self.emitter.write("raw ");
                 self.format_expr(expr);
             }
             Expr::Is {

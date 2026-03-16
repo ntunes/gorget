@@ -258,7 +258,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
         Expr::Move { expr: inner }
         | Expr::MutableBorrow { expr: inner } | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner } | Expr::Spawn { expr: inner }
-        | Expr::SpawnBlocking { expr: inner } | Expr::RawCapture { expr: inner } => {
+        | Expr::SpawnBlocking { expr: inner } => {
             rewrite_expr(inner, res, scopes, errors);
         }
         Expr::If { condition, then_branch, elif_branches, else_branch } => {

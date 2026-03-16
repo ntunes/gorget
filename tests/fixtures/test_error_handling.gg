@@ -1,4 +1,4 @@
-# Error handling patterns with throws, auto-propagation, raw, catch, rethrow
+# Error handling patterns with throws, auto-propagation, catch, rethrow
 
 int safe_divide(int a, int b) throws str:
     if b == 0:
@@ -78,11 +78,19 @@ void main():
         case Error(e):
             print(e)
 
-    # raw — success gives value, error gives zero-default
-    int raw_ok = raw safe_divide(10, 5)
-    print(f"{raw_ok}")
+    # Result capture — success gives Ok, error gives Error
+    Result[int, str] r8 = safe_divide(10, 5)
+    match r8:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print(e)
 
-    int raw_err = raw safe_divide(10, 0)
-    print(f"{raw_err}")
+    Result[int, str] r9 = safe_divide(10, 0)
+    match r9:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print(e)
 
     print("done")

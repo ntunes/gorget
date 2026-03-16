@@ -12,23 +12,26 @@ int propagate(int x) throws str:
     return val + 1
 
 void main():
-    # raw capture — success case
-    int a = raw risky(5)
+    # catch — success passes through
+    int a = risky(5) catch (e): -1
     print(f"{a}")
 
-    # raw capture — error case (returns zero-default)
-    int b = raw risky(-1)
+    # catch — error uses fallback
+    int b = risky(-1) catch (e): -1
     print(f"{b}")
 
-    # throw with a str variable (not a literal)
-    int c = raw throw_var("variable error")
+    # catch on a function that always throws
+    int c = throw_var("variable error") catch (e): -1
     print(f"{c}")
 
-    # ? operator propagates errors through wrapper
-    int d = raw propagate(5)
+    # catch on propagated success
+    int d = propagate(5) catch (e): -1
     print(f"{d}")
 
-    int e = raw propagate(-1)
-    print(f"{e}")
+    # Result capture for full control
+    Result[int, str] r = propagate(-1)
+    match r:
+        case Ok(v): print(f"{v}")
+        case Error(e): print(f"caught: {e}")
 
     print("done")

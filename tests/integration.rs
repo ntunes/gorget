@@ -400,10 +400,10 @@ fn error_handling() {
         "error_handling.gg",
         "\
 10
-0
-0
+-1
+-1
 11
-0
+caught: negative input
 done",
     );
 }
@@ -423,7 +423,7 @@ divide by zero
 5
 calc failed: divide by zero
 2
-0
+divide by zero
 done",
     );
 }
@@ -1718,7 +1718,7 @@ val",
 
 #[test]
 fn result_propagation() {
-    run_gg("result_propagation.gg", "84\n0\n52\n126\ndone");
+    run_gg("result_propagation.gg", "84\n-1\n52\n126\ndone");
 }
 
 #[test]
@@ -7126,9 +7126,6 @@ fn format_expr_canonical(expr: &Expr) -> String {
                 .collect();
             format!("{}({})", name.node, arg_strs.join(", "))
         }
-        Expr::RawCapture { expr } => {
-            format!("raw {}", format_expr_canonical(&expr.node))
-        }
         Expr::Move { expr } => {
             format!("!{}", format_expr_canonical(&expr.node))
         }
@@ -10979,7 +10976,7 @@ success
 10
 enter
 cleanup
-0
+-1
 done",
     );
 }
@@ -10994,7 +10991,7 @@ success
 10
 enter
 cleanup
-0
+-1
 done",
     );
 }

@@ -17,7 +17,7 @@ enum Keyword:
     KwBreak  KwContinue  KwReturn  KwDo  KwPass
     KwAnd  KwOr  KwNot  KwIs
     KwTrue  KwFalse  KwNone  KwSome  KwOk  KwError
-    KwThrow  KwThrows  KwRaw
+    KwThrow  KwThrows
     KwImport  KwFrom  KwDirective
     KwWith  KwAs  KwVia
     KwWhere  KwExtends  KwLive  KwOutlives
@@ -205,8 +205,6 @@ Option[Keyword] keyword_from_str(str s):
         return Some(KwThrow())
     elif s == "throws":
         return Some(KwThrows())
-    elif s == "raw":
-        return Some(KwRaw())
     elif s == "import":
         return Some(KwImport())
     elif s == "from":

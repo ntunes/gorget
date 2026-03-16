@@ -9,7 +9,7 @@ from ast import EBinaryOp, EUnaryOp, ECall, EMethodCall, EFieldAccess
 from ast import EIndex, EClosure, EArrayLiteral, ETupleLiteral
 from ast import EStructLiteral, EDotShorthand, ETry, EAs, EMove
 from ast import EMutableBorrow, EDeref, EIs, EAwait, ESpawn
-from ast import EDictLiteral, ERawCapture, EDefaultOp, EBlock, EDo
+from ast import EDictLiteral, EDefaultOp, EBlock, EDo
 from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo
 from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
@@ -496,9 +496,6 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             int it = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
             return it
 
-        case ERawCapture(inner):
-            int it = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
-            return it
 
         case EIs(inner, negated, pattern):
             return types.bool_id

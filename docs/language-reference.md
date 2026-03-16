@@ -104,7 +104,7 @@ true  false  None  Some  Ok  Error
 **Error handling keywords:**
 
 ```
-throw  throws  raw  catch
+throw  throws  catch
 ```
 
 **Import keywords:**
@@ -1573,20 +1573,18 @@ Unwraps the left operand if `Some`; otherwise evaluates the right operand. The r
 String name = user?.name ?? "anonymous"
 ```
 
-### 7.13 Raw Expression
+### 7.13 Type-Directed Result Capture
 
-```ebnf
-raw_expr = "raw" expr ;
-```
-
-Captures a potentially-throwing call as a `Result[T, E]` instead of auto-propagating:
+When the destination variable's type is `Result[T, E]`, the compiler suppresses auto-unwrap and captures the full `Result`:
 
 ```gorget
-auto result = raw read_file(path)
+Result[str, IOError] result = read_file(path)
 match result:
     case Ok(content): print(content)
     case Error(e): print("Error: {e}")
 ```
+
+This replaces the need for any special keyword — the compiler infers from the declared type that you want the `Result` value, not the unwrapped success value.
 
 ### 7.14 Move Expression
 
@@ -2248,7 +2246,7 @@ struct Merger:
 
 ## 10. Error Handling
 
-Gorget uses a `throws`/`raw`/`throw` model that desugars to `Result[T, E]`.
+Gorget uses a `throws`/`throw` model that desugars to `Result[T, E]`.
 
 ### 10.1 Throwing Functions
 
@@ -2272,16 +2270,18 @@ throw ParseError("invalid input")
 
 It is a compile-time error to use `throw` in a function not declared with `throws`.
 
-### 10.3 Raw
+### 10.3 Type-Directed Result Capture
 
-The `raw` keyword captures a potentially-failing call as a `Result` value instead of auto-propagating:
+When the destination variable's type is `Result[T, E]`, the compiler suppresses auto-propagation and captures the full `Result` value:
 
 ```gorget
-auto result = raw read_file(path)
+Result[str, IOError] result = read_file(path)
 match result:
     case Ok(content): use(content)
     case Error(e): handle(e)
 ```
+
+This is type-directed: the compiler sees the `Result` type on the left-hand side and infers that you want to capture the result rather than auto-unwrap it.
 
 ### 10.4 Rethrow
 

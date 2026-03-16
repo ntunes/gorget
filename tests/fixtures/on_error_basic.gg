@@ -12,10 +12,10 @@ int with_cleanup(int x) throws str:
     return val
 
 void main():
-    int a = raw with_cleanup(5)
+    int a = with_cleanup(5) catch (e): -1
     print(f"{a}")
 
-    int b = raw with_cleanup(-1)
+    int b = with_cleanup(-1) catch (e): -1
     print(f"{b}")
 
     print("done")

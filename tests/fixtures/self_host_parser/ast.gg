@@ -74,7 +74,6 @@ enum Expr:
     EStructLiteral(str, Vector[str], Vector[SpannedExpr])
     EDotShorthand(str, Vector[SpannedExpr])
     ETry(Box[SpannedExpr])
-    ERawCapture(Box[SpannedExpr])
     EMove(Box[SpannedExpr])
     EMutableBorrow(Box[SpannedExpr])
     EDeref(Box[SpannedExpr])

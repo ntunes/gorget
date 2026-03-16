@@ -661,11 +661,6 @@ pub enum Expr {
         expr: Box<Spanned<Expr>>,
     },
 
-    // ── Raw capture ──
-    RawCapture {
-        expr: Box<Spanned<Expr>>,
-    },
-
     // ── Is pattern test ──
     Is {
         expr: Box<Spanned<Expr>>,

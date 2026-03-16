@@ -367,8 +367,6 @@ str format_expr(SpannedExpr se):
             return result
         case ETry(inner):
             return format_expr(*inner) + "?"
-        case ERawCapture(inner):
-            return "raw " + format_expr(*inner)
         case EMove(inner):
             return "!" + format_expr(*inner)
         case EMutableBorrow(inner):
