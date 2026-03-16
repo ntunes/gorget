@@ -229,6 +229,9 @@ impl<'a> LoweringContext<'a> {
         }
         self.module.has_suite_setup = self.gir.runtime.has_suite_setup;
         self.module.has_suite_teardown = self.gir.runtime.has_suite_teardown;
+        self.module.scheduler_mode = self.gir.runtime.scheduler_mode;
+        self.module.trace_filename = self.gir.runtime.trace_filename.clone();
+        self.module.is_test_module = self.gir.runtime.is_test_module;
         self.module.hot_reload = self.gir.runtime.hot_reload;
         self.module.hot_reload_state_type = self.gir.runtime.hot_reload_state_type.clone();
         self.module.hot_reload_state_hash = self.gir.runtime.hot_reload_state_hash;

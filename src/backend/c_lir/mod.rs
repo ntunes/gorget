@@ -142,7 +142,7 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
     if include_runtime {
         // Include the full Gorget runtime (provides Str, GorgetString, collections, etc.)
         out.push_str(crate::backend::c::c_runtime::RUNTIME_PREAMBLE);
-        if module.test_fns.is_empty() {
+        if module.test_fns.is_empty() && module.bench_fns.is_empty() && !module.is_test_module {
             out.push_str(crate::backend::c::c_runtime::PANIC_NORMAL);
         } else {
             out.push_str(crate::backend::c::c_runtime::PANIC_TEST);
@@ -194,7 +194,12 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
         if needs_async {
             out.push_str(crate::backend::c::c_runtime::ASYNC_RUNTIME);
             out.push_str(crate::backend::c::c_runtime::TASK_COMMON);
-            out.push_str(crate::backend::c::c_runtime::SCHEDULER_POOL_RUNTIME);
+            match module.scheduler_mode {
+                crate::ir::SchedulerMode::Pool => out.push_str(crate::backend::c::c_runtime::SCHEDULER_POOL_RUNTIME),
+                crate::ir::SchedulerMode::Thread => out.push_str(crate::backend::c::c_runtime::SCHEDULER_THREAD_RUNTIME),
+                crate::ir::SchedulerMode::Inline => out.push_str(crate::backend::c::c_runtime::SCHEDULER_INLINE_RUNTIME),
+                crate::ir::SchedulerMode::Single => out.push_str(crate::backend::c::c_runtime::SCHEDULER_SINGLE_RUNTIME),
+            }
             out.push_str(crate::backend::c::c_runtime::MAIN_WAKER_RUNTIME);
             out.push_str(crate::backend::c::c_runtime::EXECUTOR_RUNTIME);
         }
@@ -329,7 +334,7 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         }
 
         // Trace
-        if has(&|n| n.starts_with("gorget_trace_")) {
+        if module.trace_filename.is_some() || has(&|n| n.starts_with("gorget_trace_")) {
             out.push_str(crate::backend::c::c_runtime::TRACE_RUNTIME);
         }
 
@@ -912,18 +917,22 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
 
     // Function definitions
     writeln!(out, "// ── Function Definitions ──").unwrap();
+    let has_test_runner = !module.test_fns.is_empty() || !module.bench_fns.is_empty() || module.is_test_module;
     for func in &module.functions {
+        if has_test_runner && func.name == "main" {
+            continue;
+        }
         emit_function(&mut out, func, module, &struct_names);
         writeln!(out).unwrap();
     }
 
-    // Test runner main (when test_fns is non-empty, the source is a test file without its own main).
-    if !module.test_fns.is_empty() {
+    // Test runner main (when test_fns is non-empty or is_test_module).
+    if !module.test_fns.is_empty() || module.is_test_module {
         emit_test_runner_main(&mut out, module);
     }
 
     // Bench runner main.
-    if !module.bench_fns.is_empty() && module.test_fns.is_empty() {
+    if !module.bench_fns.is_empty() && module.test_fns.is_empty() && !module.is_test_module {
         emit_bench_runner_main(&mut out, module);
     }
 
@@ -2185,6 +2194,14 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         }
     }
     writeln!(out, ") {{").unwrap();
+
+    // Emit trace init at the start of main().
+    if func.name == "main" {
+        if let Some(ref trace_path) = module.trace_filename {
+            let escaped = trace_path.replace('\\', "\\\\").replace('"', "\\\"");
+            writeln!(out, "    __gorget_trace_init(\"{escaped}\");").unwrap();
+        }
+    }
 
     // Value declarations — collect all values defined in the function.
     let mut max_val = 0u32;
@@ -6854,6 +6871,10 @@ fn emit_test_runner_main(out: &mut String, module: &LirModule) {
 
     writeln!(out, "int main(int argc, char** argv) {{").unwrap();
     writeln!(out, "    gorget_init_args(argc, argv);").unwrap();
+    if let Some(ref trace_path) = module.trace_filename {
+        let escaped = trace_path.replace('\\', "\\\\").replace('"', "\\\"");
+        writeln!(out, "    __gorget_trace_init(\"{escaped}\");").unwrap();
+    }
     writeln!(out, "    int __test_passed = 0, __test_failed = 0, __test_skipped = 0;").unwrap();
     writeln!(out, "    struct timespec __total_start, __total_end;").unwrap();
     writeln!(out, "    clock_gettime(CLOCK_MONOTONIC, &__total_start);").unwrap();

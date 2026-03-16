@@ -707,6 +707,12 @@ pub struct LirModule {
     /// Keyed by GIR type name (e.g., "Container", "Wrapper", "Vector__Container").
     /// The backend uses these to generate nested for-loops and field accesses.
     pub elem_drop_recipes: HashMap<String, Vec<ElemDropAction>>,
+    /// Scheduler mode (pool, thread, inline, single).
+    pub scheduler_mode: crate::ir::SchedulerMode,
+    /// Trace output filename (set by --trace flag).
+    pub trace_filename: Option<String>,
+    /// Whether this is a test module (affects panic handler and test runner).
+    pub is_test_module: bool,
     /// Whether this module uses hot-reload mode.
     pub hot_reload: bool,
     /// The state type name for hot-reload (defaults to "State").
@@ -732,6 +738,9 @@ impl LirModule {
             has_suite_setup: false,
             has_suite_teardown: false,
             elem_drop_recipes: HashMap::new(),
+            scheduler_mode: crate::ir::SchedulerMode::Pool,
+            trace_filename: None,
+            is_test_module: false,
             hot_reload: false,
             hot_reload_state_type: None,
             hot_reload_state_hash: 0,
