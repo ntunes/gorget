@@ -92,6 +92,9 @@ impl<'a> LoweringContext<'a> {
         // Lower struct/enum type definitions from GIR type registry.
         self.lower_type_defs();
 
+        // Register cross-module types (Result/Option from imported functions).
+        self.register_extern_types();
+
         // Lower extern declarations.
         // Skip externs whose names map to runtime functions (e.g., Vector__int64_t__new
         // maps to gorget_array_new which is already in the C runtime).
@@ -455,6 +458,221 @@ impl<'a> LoweringContext<'a> {
                     // Type aliases are transparent — no LIR struct needed.
                 }
             }
+        }
+    }
+
+    /// Register cross-module types that appear in extern declarations or function
+    /// locals but don't have TypeDefs in the current module's type registry.
+    ///
+    /// This handles Result__X__Y and Option__X types from imported functions
+    /// (e.g., `parse_float` returns `Result__double__Str`) that would otherwise
+    /// fall back to LirType::Ptr because the struct registry is only populated
+    /// from the current module's type defs.
+    fn register_extern_types(&mut self) {
+        // Collect all Named types referenced by externs and functions.
+        let mut needed: Vec<String> = Vec::new();
+
+        // Scan extern declarations.
+        for ext in &self.gir.externs {
+            self.collect_named_types(&ext.return_type, &mut needed);
+            for param in &ext.params {
+                self.collect_named_types(param, &mut needed);
+            }
+        }
+
+        // Scan function signatures and locals.
+        for func in &self.gir.functions {
+            self.collect_named_types(&func.return_type, &mut needed);
+            for param in &func.params {
+                self.collect_named_types(param, &mut needed);
+            }
+            for local in &func.locals {
+                self.collect_named_types(&local.type_id, &mut needed);
+            }
+        }
+
+        // Scan globals.
+        for global in &self.gir.globals {
+            self.collect_named_types(&global.type_id, &mut needed);
+        }
+
+        // Deduplicate.
+        needed.sort();
+        needed.dedup();
+
+        // Register types not yet in struct_reg.
+        for name in &needed {
+            if self.struct_reg.lookup(name).is_some() {
+                continue;
+            }
+            // Skip collections and opaques — handled by existing logic.
+            if collection_runtime_type(name).is_some() {
+                continue;
+            }
+            if is_opaque_pointer_type(name) {
+                continue;
+            }
+
+            // Try to find a TypeDef in the registry (may exist for cross-module types).
+            if let Some(def) = self.gir.type_registry.get_type_def(name) {
+                match &def.kind {
+                    gir_types::TypeDefKind::Struct(sdef) => {
+                        let fields: Vec<(String, LirType)> = sdef
+                            .fields
+                            .iter()
+                            .map(|f| {
+                                (
+                                    f.name.clone(),
+                                    map_gir_type_with_structs(
+                                        &f.type_id,
+                                        &self.gir.type_registry,
+                                        Some(&self.struct_reg),
+                                    ),
+                                )
+                            })
+                            .collect();
+                        let sid = self.module.add_struct(StructDef {
+                            name: name.clone(),
+                            fields,
+                        });
+                        self.struct_reg.register(name, sid);
+                    }
+                    gir_types::TypeDefKind::Enum(edef) => {
+                        let mut fields: Vec<(String, LirType)> =
+                            vec![("tag".into(), LirType::I32)];
+                        for variant in &edef.variants {
+                            for (i, f) in variant.fields.iter().enumerate() {
+                                fields.push((
+                                    format!("{}_{}", variant.name, i),
+                                    map_gir_type_with_structs(
+                                        &f.type_id,
+                                        &self.gir.type_registry,
+                                        Some(&self.struct_reg),
+                                    ),
+                                ));
+                            }
+                        }
+                        let sid = self.module.add_struct(StructDef {
+                            name: name.clone(),
+                            fields,
+                        });
+                        self.struct_reg.register(name, sid);
+                    }
+                    gir_types::TypeDefKind::Alias(_) => {}
+                }
+                continue;
+            }
+
+            // No TypeDef exists — synthesize from the name pattern.
+            if let Some(fields) = synthesize_struct_fields(name, &self.struct_reg) {
+                let sid = self.module.add_struct(StructDef {
+                    name: name.clone(),
+                    fields,
+                });
+                self.struct_reg.register(name, sid);
+            }
+        }
+    }
+
+    /// Collect all Named type names referenced by a GIR TypeId.
+    fn collect_named_types(&self, type_id: &GirTypeId, out: &mut Vec<String>) {
+        if let Some(gir_type) = self.gir.type_registry.get(*type_id) {
+            match gir_type {
+                GirType::Named(name) => {
+                    out.push(name.clone());
+                }
+                GirType::Ptr(inner) | GirType::MutPtr(inner) => {
+                    self.collect_named_types(inner, out);
+                }
+                GirType::FnPtr { params, return_type } => {
+                    for p in params {
+                        self.collect_named_types(p, out);
+                    }
+                    self.collect_named_types(return_type, out);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Synthesize struct fields for a cross-module Result/Option type from its
+/// monomorphized name. Returns `None` if the name doesn't match a known pattern.
+///
+/// Examples:
+/// - `Result__double__Str` → `{ tag: I32, Ok_0: F64, Error_0: Struct(Str) }`
+/// - `Option__int64_t` → `{ tag: I32, Some_0: I64 }`
+fn synthesize_struct_fields(
+    name: &str,
+    struct_reg: &StructRegistry,
+) -> Option<Vec<(String, LirType)>> {
+    if let Some(rest) = name.strip_prefix("Result__") {
+        // Result__X__Y — split into Ok type (X) and Error type (Y).
+        // Handle compound inner types (e.g., Result__Vector__int64_t__Str)
+        // by finding the split point.
+        let (ok_name, err_name) = split_result_components(rest)?;
+        let ok_ty = component_to_lir_type(ok_name, struct_reg);
+        let err_ty = component_to_lir_type(err_name, struct_reg);
+        return Some(vec![
+            ("tag".into(), LirType::I32),
+            ("Ok_0".into(), ok_ty),
+            ("Error_0".into(), err_ty),
+        ]);
+    }
+    if let Some(inner) = name.strip_prefix("Option__") {
+        let some_ty = component_to_lir_type(inner, struct_reg);
+        return Some(vec![
+            ("tag".into(), LirType::I32),
+            ("Some_0".into(), some_ty),
+        ]);
+    }
+    None
+}
+
+/// Split a Result's inner components: "double__Str" → ("double", "Str").
+/// Handles compound types like "Vector__int64_t__Str" → ("Vector__int64_t", "Str").
+fn split_result_components(rest: &str) -> Option<(&str, &str)> {
+    // The error type is typically the last `__`-separated component.
+    // But compound types like `Vector__int64_t` have internal `__` separators.
+    // Strategy: try splitting from the right. Known simple error types: Str, int64_t, etc.
+    // For compound ok-types, the rightmost `__` gives the error type.
+    let pos = rest.rfind("__")?;
+    let ok = &rest[..pos];
+    let err = &rest[pos + 2..];
+    if ok.is_empty() || err.is_empty() {
+        return None;
+    }
+    Some((ok, err))
+}
+
+/// Map a monomorphized type name component to an LirType.
+fn component_to_lir_type(name: &str, struct_reg: &StructRegistry) -> LirType {
+    match name {
+        "bool" => LirType::Bool,
+        "int8_t" => LirType::I8,
+        "int16_t" => LirType::I16,
+        "int32_t" => LirType::I32,
+        "int64_t" => LirType::I64,
+        "uint8_t" => LirType::U8,
+        "uint16_t" => LirType::U16,
+        "uint32_t" => LirType::U32,
+        "uint64_t" => LirType::U64,
+        "float" | "double" => LirType::F64,
+        "float32" => LirType::F32,
+        "void" => LirType::Void,
+        _ => {
+            // Try struct registry lookup.
+            if let Some(sid) = struct_reg.lookup(name) {
+                return LirType::Struct(sid);
+            }
+            // Collection types.
+            if let Some(runtime_name) = collection_runtime_type(name) {
+                if let Some(sid) = struct_reg.lookup(runtime_name) {
+                    return LirType::Struct(sid);
+                }
+            }
+            // Fallback: pointer (opaque or unknown).
+            LirType::Ptr
         }
     }
 }
@@ -4444,298 +4662,15 @@ fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
         return Some(format!("gorget_write_guard_{method}"));
     }
     // Bare stdlib helpers → gorget_ prefixed runtime functions.
-    // Bare stdlib helpers → gorget_ prefixed runtime functions.
-    // This mirrors map_stdlib_name() from the old C backend (src/backend/c/mod.rs).
-    let mapped = match name {
-        // Conversion
-        "int_to_str" => "gorget_int_to_str",
-        "float_to_str" => "gorget_float_to_str",
-        "bool_to_str" => "gorget_bool_to_str",
-        "int_to_float" => "gorget_int_to_float",
-        "ord" => "gorget_str_ord",
-        "chr" => "gorget_char_chr",
-        "parse_int" => "gorget_parse_int",
-        "parse_float" => "gorget_parse_float",
-        "print_no_newline" => "gorget_print_no_newline",
-        "codepoint_to_utf8" => "gorget_codepoint_to_utf8",
-        // File I/O
-        "read_file" => "gorget_read_file",
-        "write_file" => "gorget_write_file",
-        "append_file" => "gorget_append_file",
-        "file_exists" => "gorget_file_exists",
-        "delete_file" => "gorget_delete_file",
-        "file_size" => "gorget_file_size",
-        "is_dir" => "gorget_is_dir",
-        // Filesystem
-        "mkdir" => "gorget_mkdir",
-        "rmdir" => "gorget_rmdir",
-        "copy_file" => "gorget_copy_file",
-        "readdir" => "gorget_readdir",
-        "getcwd" => "gorget_getcwd",
-        // Path functions
-        "path_parent" => "gorget_path_parent",
-        "path_basename" => "gorget_path_basename",
-        "path_extension" => "gorget_path_extension",
-        "path_stem" => "gorget_path_stem",
-        "path_join" => "gorget_path_join",
-        "path_normalize" => "gorget_path_normalize",
-        "path_absolute" => "gorget_path_absolute",
-        "rename" => "gorget_rename",
-        // I/O
-        "readline" => "gorget_readline",
-        "input" => "gorget_input",
-        "getchar" => "gorget_getchar",
-        "term_cols" => "gorget_term_cols",
-        "term_rows" => "gorget_term_rows",
-        // CLI / process
-        "args" => "gorget_args",
-        "exec" => "gorget_exec",
-        "exec_output" => "gorget_exec_output",
-        "process_spawn" => "gorget_process_spawn",
-        "getpid" => "gorget_getpid",
-        // Process methods
-        "Process__wait" => "gorget_process_wait",
-        "Process__kill" => "gorget_process_kill",
-        "Process__pid" => "gorget_process_pid",
-        "Process__write_stdin" => "gorget_process_write_stdin",
-        "Process__close_stdin" => "gorget_process_close_stdin",
-        "Process__read_stdout" => "gorget_process_read_stdout",
-        "Process__read_stderr" => "gorget_process_read_stderr",
-        // Signal functions
-        "signal_trap" => "gorget_signal_trap",
-        "signal_check" => "gorget_signal_check",
-        "signal_wait" => "gorget_signal_wait",
-        "signal_ignore" => "gorget_signal_ignore",
-        "signal_reset" => "gorget_signal_reset",
-        "signal_send" => "gorget_signal_send",
-        // AtomicInt methods
-        "AtomicInt__new" => "gorget_atomic_int_new",
-        "AtomicInt__load" => "gorget_atomic_int_load",
-        "AtomicInt__store" => "gorget_atomic_int_store",
-        "AtomicInt__add" => "gorget_atomic_int_add",
-        "AtomicInt__sub" => "gorget_atomic_int_sub",
-        "AtomicInt__compare_exchange" => "gorget_atomic_int_compare_exchange",
-        "AtomicInt__free" => "gorget_atomic_int_free",
-        // AtomicBool methods
-        "AtomicBool__new" => "gorget_atomic_bool_new",
-        "AtomicBool__load" => "gorget_atomic_bool_load",
-        "AtomicBool__store" => "gorget_atomic_bool_store",
-        "AtomicBool__swap" => "gorget_atomic_bool_swap",
-        "AtomicBool__compare_exchange" => "gorget_atomic_bool_compare_exchange",
-        "AtomicBool__free" => "gorget_atomic_bool_free",
-        // Barrier methods
-        "Barrier__wait" => "gorget_barrier_wait",
-        // CondVar methods
-        "CondVar__notify_one" => "gorget_condvar_notify_one",
-        "CondVar__notify_all" => "gorget_condvar_notify_all",
-        "CondVar__wait" => "gorget_condvar_wait_guard",
-        // WaitGroup methods
-        "WaitGroup__new" => "gorget_waitgroup_new",
-        "WaitGroup__add" => "gorget_waitgroup_add",
-        "WaitGroup__done" => "gorget_waitgroup_done",
-        "WaitGroup__wait" => "gorget_waitgroup_wait",
-        "WaitGroup__free" => "gorget_waitgroup_free",
-        // Semaphore methods
-        "Semaphore__new" => "gorget_semaphore_new",
-        "Semaphore__acquire" => "gorget_semaphore_acquire",
-        "Semaphore__release" => "gorget_semaphore_release",
-        "Semaphore__try_acquire" => "gorget_semaphore_try_acquire",
-        "Semaphore__free" => "gorget_semaphore_free",
-        // OnceFlag methods
-        "OnceFlag__new" => "gorget_onceflag_new",
-        "OnceFlag__do_once" => "gorget_onceflag_do_once",
-        "OnceFlag__is_done" => "gorget_onceflag_is_done",
-        // std.thread
-        "current_thread_id" => "gorget_current_thread_id",
-        // Environment
-        "getenv" => "gorget_getenv",
-        "setenv" => "gorget_setenv",
-        "platform" => "gorget_platform",
-        // Time
-        "time" => "gorget_time",
-        "time_ms" => "gorget_time_ms",
-        "format_time" => "gorget_format_time",
-        "parse_time" => "gorget_parse_time",
-        "sleep_ms" => "gorget_sleep_ms",
-        "async_sleep" => "gorget_reactor_sleep_ms",
-        // Random
-        "rand" => "gorget_rand",
-        "rand_range" => "gorget_rand_range",
-        "seed" => "gorget_seed",
-        // Math
-        "abs" => "gorget_abs",
-        "min" => "gorget_min",
-        "max" => "gorget_max",
-        "sqrt" => "gorget_sqrt",
-        "floor" => "gorget_floor",
-        "ceil" => "gorget_ceil",
-        "round" => "gorget_round",
-        "log" => "gorget_log",
-        "log2" => "gorget_log2",
-        "log10" => "gorget_log10",
-        "pow" => "gorget_pow",
-        "sin" => "gorget_sin",
-        "cos" => "gorget_cos",
-        "tan" => "gorget_tan",
-        "asin" => "gorget_asin",
-        "acos" => "gorget_acos",
-        "atan" => "gorget_atan",
-        "atan2" => "gorget_atan2",
-        // Crypto
-        "crypto_sha256" => "gorget_crypto_sha256",
-        "crypto_sha1" => "gorget_crypto_sha1",
-        "crypto_hmac" => "gorget_crypto_hmac",
-        "crypto_random_bytes" => "gorget_crypto_random_bytes",
-        "crypto_aes_ctr_new" => "gorget_crypto_aes_ctr_new",
-        "crypto_bn_from_bytes" => "gorget_crypto_bn_from_bytes",
-        "crypto_bn_to_bytes" => "gorget_crypto_bn_to_bytes",
-        "crypto_bn_mod_exp" => "gorget_crypto_bn_mod_exp",
-        "crypto_rsa_load_public" => "gorget_crypto_rsa_load_public",
-        "crypto_rsa_verify" => "gorget_crypto_rsa_verify",
-        "crypto_ed25519_keygen" => "gorget_crypto_ed25519_keygen",
-        "crypto_ed25519_sign" => "gorget_crypto_ed25519_sign",
-        "crypto_ed25519_verify" => "gorget_crypto_ed25519_verify",
-        "crypto_x25519_keygen" => "gorget_crypto_x25519_keygen",
-        "crypto_x25519_keypair" => "gorget_crypto_x25519_keypair",
-        "crypto_x25519_shared" => "gorget_crypto_x25519_shared",
-        "crypto_x25519_shared_secret" => "gorget_crypto_x25519_shared_secret",
-        "crypto_x25519_dh" => "gorget_crypto_x25519_dh",
-        "crypto_hkdf_sha256" => "gorget_crypto_hkdf_sha256",
-        "crypto_aes_gcm_encrypt" => "gorget_crypto_aes_gcm_encrypt",
-        "crypto_aes_gcm_decrypt" => "gorget_crypto_aes_gcm_decrypt",
-        "X25519KeyPair__public_key" => "gorget_crypto_x25519_public",
-        "X25519KeyPair__private_key" => "gorget_crypto_x25519_private",
-        "CipherContext__encrypt" => "gorget_crypto_aes_ctr_encrypt",
-        "CipherContext__decrypt" => "gorget_crypto_aes_ctr_decrypt",
-        // Regex
-        "regex_compile" | "regex_compile_with" => "gorget_regex_compile",
-        "regex_is_match" => "gorget_regex_is_match_pat",
-        "regex_find" => "gorget_regex_find_pat",
-        "regex_match" => "gorget_regex_match",
-        "regex_find_all" => "gorget_regex_find_all",
-        "regex_replace" => "gorget_regex_replace_pat",
-        "Regex__is_match" => "gorget_regex_is_match",
-        "Regex__find" => "gorget_regex_find",
-        "Regex__find_at" => "gorget_regex_find_at",
-        "Regex__find_all" => "gorget_regex_find_all",
-        "Regex__replace" => "gorget_regex_replace",
-        "Regex__split" | "Regex__splitn" => "gorget_regex_split",
-        "Regex__fullmatch" => "gorget_regex_fullmatch",
-        "Regex__groups" => "gorget_regex_groups",
-        "Regex__free" => "gorget_regex_free",
-        "Match__group" => "gorget_regex_match_group",
-        "Match__group_by_name" => "gorget_regex_match_group_by_name",
-        // Socket
-        "socket_connect" => "gorget_socket_connect",
-        "socket_listen" => "gorget_socket_listen",
-        "tls_connect" => "gorget_tls_connect",
-        "tls_server_bind" => "gorget_tls_server_bind",
-        "TlsServerSocket__accept" => "gorget_tls_server_accept",
-        "TlsServerSocket__close" => "gorget_tls_server_close",
-        "TlsSocket__set_timeout" => "gorget_tls_set_timeout",
-        "udp_bind" => "gorget_udp_bind",
-        // Bytes / Encoding
-        "bytes_from_str" => "gorget_bytes_from_str",
-        "bytes_to_str" => "gorget_bytes_to_str",
-        "bytes_from_hex" => "gorget_bytes_from_hex",
-        "bytes_to_hex" => "gorget_bytes_to_hex",
-        "bytes_concat" => "gorget_bytes_concat",
-        "bytes_slice" => "gorget_bytes_slice",
-        "bytes_write_u16_be" => "gorget_bytes_write_u16_be",
-        "bytes_read_u16_be" => "gorget_bytes_read_u16_be",
-        "bytes_write_u32_be" => "gorget_bytes_write_u32_be",
-        "bytes_read_u32_be" => "gorget_bytes_read_u32_be",
-        "bytes_write_u16_le" => "gorget_bytes_write_u16_le",
-        "bytes_read_u16_le" => "gorget_bytes_read_u16_le",
-        "bytes_write_u32_le" => "gorget_bytes_write_u32_le",
-        "bytes_read_u32_le" => "gorget_bytes_read_u32_le",
-        "base64_encode" => "gorget_base64_encode",
-        "base64_decode" => "gorget_base64_decode",
-        "hex_encode" => "gorget_hex_encode",
-        "hex_decode" => "gorget_hex_decode",
-        "url_encode" => "gorget_url_encode",
-        "url_decode" => "gorget_url_decode",
-        // Allocator methods
-        "Arena__bytes_used" => "gorget_arena_bytes_used",
-        "Arena__checkpoint" => "gorget_arena_checkpoint",
-        "Arena__restore" => "gorget_arena_restore",
-        "Arena__reset" => "gorget_arena_reset",
-        "Arena__destroy" => "gorget_arena_destroy",
-        "TrackingAllocator__alloc_count" => "gorget_tracking_alloc_count",
-        "TrackingAllocator__free_count" => "gorget_tracking_free_count",
-        "TrackingAllocator__bytes_allocated" => "gorget_tracking_bytes_allocated",
-        "TrackingAllocator__bytes_freed" => "gorget_tracking_bytes_freed",
-        "TrackingAllocator__current_bytes" => "gorget_tracking_current_bytes",
-        "TrackingAllocator__peak_bytes" => "gorget_tracking_peak_bytes",
-        "TrackingAllocator__realloc_count" => "gorget_tracking_realloc_count",
-        "TrackingAllocator__reset" => "gorget_tracking_reset",
-        "TrackingAllocator__report" => "gorget_tracking_report",
-        "TrackingAllocator__destroy" => "gorget_tracking_destroy",
-        "PoolAllocator__used_blocks" => "gorget_pool_used_blocks",
-        "PoolAllocator__free_blocks" => "gorget_pool_free_blocks",
-        "PoolAllocator__total_blocks" => "gorget_pool_total_blocks",
-        "PoolAllocator__block_size" => "gorget_pool_block_size",
-        "PoolAllocator__reset" => "gorget_pool_reset",
-        "PoolAllocator__destroy" => "gorget_pool_destroy",
-        "TlsfAllocator__bytes_used" => "gorget_tlsf_bytes_used",
-        "TlsfAllocator__peak_bytes" => "gorget_tlsf_peak_bytes",
-        "TlsfAllocator__pool_size" => "gorget_tlsf_pool_size",
-        "TlsfAllocator__reset" => "gorget_tlsf_reset",
-        "TlsfAllocator__destroy" => "gorget_tlsf_destroy",
-        "FixedBufferAllocator__bytes_used" => "gorget_fba_bytes_used",
-        "FixedBufferAllocator__capacity" => "gorget_fba_capacity",
-        "FixedBufferAllocator__reset" => "gorget_fba_reset",
-        "FixedBufferAllocator__destroy" => "gorget_fba_destroy",
-        "FallbackAllocator__primary_count" => "gorget_fallback_primary_count",
-        "FallbackAllocator__fallback_count" => "gorget_fallback_fallback_count",
-        "FallbackAllocator__destroy" => "gorget_fallback_destroy",
-        // UdpSocket methods
-        "UdpSocket__sendto" => "gorget_udp_sendto",
-        "UdpSocket__recvfrom" => "gorget_udp_recvfrom",
-        "UdpSocket__join_multicast" => "gorget_udp_join_multicast",
-        "UdpSocket__poll" => "gorget_udp_poll",
-        "UdpSocket__set_nonblocking" => "gorget_udp_set_nonblocking",
-        "UdpSocket__leave_multicast" => "gorget_udp_leave_multicast",
-        "UdpSocket__set_multicast_loopback" => "gorget_udp_set_multicast_loopback",
-        "UdpSocket__local_addr" => "gorget_udp_local_addr",
-        "UdpSocket__close" => "gorget_udp_close",
-        // ServerSocket
-        "server_socket_bind" => "gorget_server_socket_bind",
-        "ServerSocket__accept" => "gorget_server_socket_accept",
-        "ServerSocket__close" => "gorget_server_socket_close",
-        // Socket methods
-        "Socket__read" => "gorget_socket_read",
-        "Socket__read_exact" => "gorget_socket_read_exact",
-        "Socket__write" => "gorget_socket_write",
-        "Socket__write_str" => "gorget_socket_write_str",
-        "Socket__read_line" => "gorget_socket_read_line",
-        "Socket__set_timeout" => "gorget_socket_set_timeout",
-        "Socket__close" => "gorget_socket_close",
-        // TlsSocket methods
-        "TlsSocket__read" => "gorget_tls_read",
-        "TlsSocket__read_exact" => "gorget_tls_read_exact",
-        "TlsSocket__write" => "gorget_tls_write",
-        "TlsSocket__write_str" => "gorget_tls_write_str",
-        "TlsSocket__read_line" => "gorget_tls_read_line",
-        "TlsSocket__close" => "gorget_tls_close",
-        // File methods
-        "File__create" => "gorget_file_create",
-        "File__open" => "gorget_file_open",
-        "File__write" => "gorget_file_write_handle",
-        "File__read_all" => "gorget_file_read_all",
-        "File__close" => "gorget_file_close",
-        // Str hash
-        "Str__hash" => "gorget_str_hash",
-        // Bare method names emitted by GIR without type prefix
-        // NOTE: "len" is handled via type-aware dispatch in the Call handler.
-        "chars" => "gorget_str_chars",
-        "bytes" => "gorget_str_bytes",
-        _ if name.starts_with("sdl_") => {
-            return Some(format!("gorget_{name}"));
-        }
-        _ => return None,
-    };
-    Some(mapped.to_string())
+    // Delegates to the shared map_stdlib_name() in crate::backend.
+    if let Some(mapped) = crate::backend::map_stdlib_name(name) {
+        return Some(mapped.to_string());
+    }
+    // SDL wildcard fallback for any sdl_ function not explicitly listed.
+    if name.starts_with("sdl_") {
+        return Some(format!("gorget_{name}"));
+    }
+    None
 }
 
 /// Extract the element type name from a monomorphized collection method name.

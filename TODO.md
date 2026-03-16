@@ -8,7 +8,7 @@
 
 - **LIR backend: Phase 2 — reach parity**: **596/596 A/B tests passing (100%)**. COMPLETE. [updated: 2026-03-16]
 
-- **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 4 C warnings remaining (2 `gorget_int_to_str` Ptr→int cast from slot type inference issue, 2 memset overflow from struct size mismatch). Linker errors from missing `read_file_bytes`/`mem_live`/`mem_allocated`/`mem_freed` symbols are pre-existing gorget-arena issues. [updated: 2026-03-16]
+- **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 4 C warnings remaining (2 `gorget_int_to_str` Ptr→int cast from slot type inference issue, 2 memset overflow from struct size mismatch). Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-16]
 
 - **LIR backend: Phase 4 — default backend switch**: Once all A/B tests pass through LIR, flip default: no flag = LIR→C, `--backend=gir` selects old path. Feature-gate fallback for hot-reload and `--shared` builds. [added: 2026-03-11]
 
