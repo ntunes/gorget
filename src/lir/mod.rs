@@ -514,6 +514,8 @@ pub struct LirFunction {
     pub blocks: Vec<Block>,
     /// Next ValueId to allocate.
     next_value: u32,
+    /// Whether this function is a test function (needs cleanup stack registration).
+    pub is_test_fn: bool,
 }
 
 impl LirFunction {
@@ -525,6 +527,7 @@ impl LirFunction {
             slots: Vec::new(),
             blocks: Vec::new(),
             next_value: 0,
+            is_test_fn: false,
         }
     }
 
@@ -633,6 +636,9 @@ pub struct SpawnedFn {
     pub ret_c_type: String,
     /// Whether any parameter is passed by mutable reference (&) in the actual function.
     pub ref_param_indices: Vec<usize>,
+    /// Indices of parameters that are refcounted and need cloning when captured into spawn context.
+    /// Each entry is (param_index, original_gir_type_name) e.g. (0, "Channel__int64_t").
+    pub clone_params: Vec<(usize, String)>,
 }
 
 /// Metadata for a test function, mirrored from GIR's TestFnInfo.

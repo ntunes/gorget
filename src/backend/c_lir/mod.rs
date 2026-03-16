@@ -712,7 +712,15 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         if thread_generated_names.contains(&func.name) {
             continue;
         }
-        write!(out, "{} {}(", c_type_named(&func.return_type, &struct_names), c_func_name(&func.name)).unwrap();
+        // For throws-int main, override Result return type to int.
+        let ret_type_str = if func.name == "main" && matches!(&func.return_type, LirType::Struct(sid) if {
+            module.structs.get(sid.0 as usize).map_or(false, |s| s.name.starts_with("Result__"))
+        }) {
+            "int".to_string()
+        } else {
+            c_type_named(&func.return_type, &struct_names)
+        };
+        write!(out, "{} {}(", ret_type_str, c_func_name(&func.name)).unwrap();
         if func.params.is_empty() {
             write!(out, "void").unwrap();
         } else {
@@ -1932,10 +1940,10 @@ fn emit_spawn_helpers(out: &mut String, module: &LirModule) {
         writeln!(out, "    __ctx->base.run = __spawn_run_{fn_name};").unwrap();
         writeln!(out, "    pthread_mutex_init(&__ctx->base.mtx, NULL);").unwrap();
         writeln!(out, "    pthread_cond_init(&__ctx->base.cond, NULL);").unwrap();
-        for (param_name, c_type) in &sf.params {
-            // Clone Shared params (refcounted) to avoid dangling pointers.
-            if c_type.starts_with("Shared__") {
-                writeln!(out, "    __ctx->__{param_name} = {c_type}__clone({param_name});").unwrap();
+        for (i, (param_name, _c_type)) in sf.params.iter().enumerate() {
+            // Clone refcounted params (Channel, Shared, Weak) to avoid dangling pointers.
+            if let Some((_, gir_name)) = sf.clone_params.iter().find(|(idx, _)| *idx == i) {
+                writeln!(out, "    __ctx->__{param_name} = {gir_name}__clone({param_name});").unwrap();
             } else {
                 writeln!(out, "    __ctx->__{param_name} = {param_name};").unwrap();
             }
@@ -2052,8 +2060,14 @@ fn emit_thread_helpers(out: &mut String, module: &LirModule) {
 }
 
 fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>) {
+    // For main() with a Result return type (throws-int main), override to int.
+    let is_throws_main = func.name == "main" && matches!(&func.return_type, LirType::Struct(sid) if {
+        module.structs.get(sid.0 as usize).map_or(false, |s| s.name.starts_with("Result__"))
+    });
+    let ret_type_str = if is_throws_main { "int".to_string() } else { c_type_named(&func.return_type, sn) };
+
     // Signature
-    write!(out, "{} {}(", c_type_named(&func.return_type, sn), c_func_name(&func.name)).unwrap();
+    write!(out, "{} {}(", ret_type_str, c_func_name(&func.name)).unwrap();
     if func.params.is_empty() {
         write!(out, "void").unwrap();
     } else {
@@ -2097,6 +2111,10 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     let mut null_vals: Vec<bool> = vec![false; max_val as usize];
     // Track which values are FuncAddr — maps value → FuncId for adapter generation.
     let mut func_addr_targets: Vec<Option<FuncId>> = vec![None; max_val as usize];
+    // Track which spawn function produced a void* value (for task_group_submit reconstruction).
+    // When a spawn result is extracted to .__task (void*), we need to reconstruct Task__T
+    // with the correct __drop function when passing to gorget_task_group_submit.
+    let mut spawn_source_fn: Vec<Option<String>> = vec![None; max_val as usize];
     // Track the pointee type for Ptr-typed values (e.g. SlotAddr → slot type, FieldPtr → field type).
     // Used by Inst::Store to emit correct sizeof() for memcpy of aggregates.
     let mut ptr_pointee: Vec<Option<LirType>> = vec![None; max_val as usize];
@@ -2138,6 +2156,21 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             }
             if let Inst::NullPtr { dst } = inst {
                 null_vals[dst.0 as usize] = true;
+            }
+            // Track spawn source function for void* destinations.
+            // When __gorget_spawn_X returns Task__T but dst is void*, the codegen
+            // extracts .__task; we record X so task_group_submit can reconstruct
+            // the full Task struct with the correct __drop fn.
+            if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
+                if name.starts_with("__gorget_spawn_") {
+                    let is_task_struct = matches!(val_types.get(d.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Struct(sid)) if {
+                        module.structs.get(sid.0 as usize).map_or(false, |s| s.name.starts_with("Task__"))
+                    });
+                    if !is_task_struct {
+                        let fn_suffix = name.strip_prefix("__gorget_spawn_").unwrap_or("").to_string();
+                        spawn_source_fn[d.0 as usize] = Some(fn_suffix);
+                    }
+                }
             }
             // Track pointee types for pointer-producing instructions.
             match inst {
@@ -2523,6 +2556,9 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         }
     }
 
+    // Track which slots have been registered on the cleanup stack (test functions only).
+    let mut test_cleanup_pushed = std::collections::HashSet::<u32>::new();
+
     // Blocks
     for block in &func.blocks {
         writeln!(out, "__bb{}:", block.id.0).unwrap();
@@ -2535,26 +2571,47 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         // Instructions
         for inst in &block.insts {
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &null_vals, &ptr_pointee, &func_addr_targets);
+            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &null_vals, &ptr_pointee, &func_addr_targets, &spawn_source_fn);
             writeln!(out).unwrap();
+
+            // In test functions, register droppable user-named slots on the cleanup stack
+            // so they're cleaned up if gorget_panic() calls longjmp (test assertion fails).
+            if func.is_test_fn {
+                if let Inst::SlotStore { slot, .. } = inst {
+                    let slot_idx = slot.0;
+                    if !test_cleanup_pushed.contains(&slot_idx) {
+                        if func.slots[slot_idx as usize].name.is_some() {
+                            if let Some(push_code) = test_cleanup_push_code_lir(slot_idx, func, module, sn) {
+                                out.push_str(&push_code);
+                                test_cleanup_pushed.insert(slot_idx);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Terminator
         write!(out, "    ").unwrap();
-        emit_term(out, &block.terminator, func, sn, &val_types);
+        emit_term(out, &block.terminator, func, module, sn, &val_types);
         writeln!(out).unwrap();
     }
 
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>]) {
+fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>], spawn_source_fn: &[Option<String>]) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
     match inst {
         // Slot access
         Inst::SlotStore { slot, value } => {
+            // Skip store to slot 0 (return slot) in void-returning functions.
+            // LIR declares slot 0 as void* but unit values are int32_t — skip to avoid type mismatch.
+            if slot.0 == 0 && matches!(func.return_type, LirType::Void) {
+                return;
+            }
             let slot_ty = &func.slots[slot.0 as usize].ty;
             let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
             let slot_is_str = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
@@ -2645,9 +2702,13 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     // Check for size mismatch: Str ptr → GorgetString slot needs coercion.
                     let pointee = ptr_pointee.get(value.0 as usize).and_then(|t| t.as_ref());
                     let pointee_is_gs = pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString")));
+                    let pointee_is_str = pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str")));
                     if slot_is_str && pointee_is_gs {
                         // GorgetString* → Str: extract .data and .len
                         write!(out, "{{ GorgetString __gs = *(GorgetString*){}; {} = (Str){{ .data = __gs.data, .len = __gs.len }}; }}", v(*value), s(*slot)).unwrap();
+                    } else if slot_is_gs && pointee_is_str {
+                        // Str* → GorgetString slot: promote via gorget_string_from_str
+                        write!(out, "{} = gorget_string_from_str(*(Str*){});", s(*slot), v(*value)).unwrap();
                     } else {
                         write!(out, "memcpy(&{}, {}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
                     }
@@ -2655,8 +2716,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     // Value is a struct by value (e.g., from ParamRef or function return).
                     // GorgetString → Str coercion: extract .data and .len
                     let val_is_gs = matches!(val_ty, Some(LirType::Struct(sid)) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString"));
+                    let val_is_str = matches!(val_ty, Some(LirType::Struct(sid)) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
                     if slot_is_str && val_is_gs {
                         write!(out, "{{ GorgetString __gs = {}; {} = (Str){{ .data = __gs.data, .len = __gs.len }}; }}", v(*value), s(*slot)).unwrap();
+                    } else if slot_is_gs && val_is_str {
+                        // Str value → GorgetString slot: promote via gorget_string_from_str
+                        write!(out, "{} = gorget_string_from_str({});", s(*slot), v(*value)).unwrap();
                     } else {
                         write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
                     }
@@ -2924,8 +2989,14 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     // GorgetString* → Str*: truncate by extracting .data/.len (24→16 bytes).
                     let src_is_gs = pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString")));
                     let dst_is_str = dst_pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str")));
+                    let src_is_str = pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str")));
+                    let dst_is_gs = dst_pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString")));
                     if src_is_gs && dst_is_str {
                         write!(out, "{{ GorgetString __gs = *(GorgetString*){val}; *(Str*){p} = (Str){{ .data = __gs.data, .len = __gs.len }}; }}",
+                            p = v(*ptr), val = v(*value)).unwrap();
+                    } else if src_is_str && dst_is_gs {
+                        // Str* → GorgetString*: promote via gorget_string_from_str
+                        write!(out, "*(GorgetString*)({p}) = gorget_string_from_str(*(Str*){val});",
                             p = v(*ptr), val = v(*value)).unwrap();
                     } else {
                         // Prefer destination pointee type for sizing (it's the allocation we write into).
@@ -4047,8 +4118,23 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     "GorgetString" => Some("gorget_string_clone"),
                     _ => None,
                 };
+                // Check if the payload struct needs deep cloning.
+                let deep_clone_ops = if clone_fn.is_none() {
+                    if let Some(payload_ty_inner) = payload_ty {
+                        if let LirType::Struct(sid) = payload_ty_inner {
+                            let ops = collect_clone_ops_lir(sid.0, &format!("{}.{payload_fname}", v(d)), module, sn);
+                            if !ops.is_empty() { Some(ops) } else { None }
+                        } else { None }
+                    } else { None }
+                } else { None };
                 if let Some(cfn) = clone_fn {
                     write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = {cfn}(({payload_c}*)__tmp); }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
+                } else if let Some(ops) = deep_clone_ops {
+                    write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = *({payload_c}*)__tmp;", dv = v(d)).unwrap();
+                    for op in &ops {
+                        write!(out, " {op}").unwrap();
+                    }
+                    write!(out, " }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
                 } else {
                     write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = *({payload_c}*)__tmp; }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
                 }
@@ -4501,7 +4587,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
 
             // ── gorget_task_group_submit(group, task) ──
             // The macro expects task to be a Task struct (with .__task, .__drop),
-            // but LIR may pass a pointer (void*). Cast to Task__void and dereference.
+            // but LIR may pass a pointer (void*) containing only .__task extracted
+            // from a spawn result. In that case, reconstruct the full Task__void
+            // struct with the correct __drop function from the spawn source.
             if emit_name == "gorget_task_group_submit" && emit_args.len() >= 2 {
                 let task_arg = emit_args[1];
                 let task_ty = val_types.get(task_arg.0 as usize).and_then(|t| t.as_ref());
@@ -4509,8 +4597,17 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 let group_arg = v(emit_args[0]);
                 let task_v = v(task_arg);
                 if is_ptr {
-                    // Dereference pointer to get Task struct
-                    write!(out, "gorget_task_group_submit(*(TaskGroup*){group_arg}, *(Task__void*){task_v});").unwrap();
+                    // Check if this void* was produced by a spawn (.__task extraction).
+                    // If so, reconstruct the full Task__void struct with the correct __drop fn.
+                    if let Some(Some(spawn_fn)) = spawn_source_fn.get(task_arg.0 as usize) {
+                        let drop_fn = format!("__spawn_drop_{spawn_fn}");
+                        // Use gorget_task_group_submit_raw directly to avoid macro comma issues
+                        // with compound literals.
+                        write!(out, "gorget_task_group_submit_raw(*(TaskGroup*){group_arg}, {task_v}, {drop_fn});").unwrap();
+                    } else {
+                        // Fallback: dereference pointer to get Task struct (legacy path)
+                        write!(out, "gorget_task_group_submit(*(TaskGroup*){group_arg}, *(Task__void*){task_v});").unwrap();
+                    }
                 } else {
                     let task_ty_name = task_ty.map(|t| c_type_named(t, sn)).unwrap_or_else(|| "Task__void".to_string());
                     write!(out, "gorget_task_group_submit(*(TaskGroup*){group_arg}, *({task_ty_name}*){task_v});").unwrap();
@@ -4519,6 +4616,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
             }
 
             let mut deref_clone_extra_close = false;
+            let mut deref_deep_clone_ops: Option<Vec<String>> = None;
             if dst_needs_deref {
                 let d = dst.unwrap();
                 let dst_ty = val_types[d.0 as usize].as_ref().unwrap();
@@ -4531,10 +4629,21 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     "GorgetString" => Some("gorget_string_clone"),
                     _ => None,
                 };
+                // Check if the struct needs deep cloning (contains resource-type fields).
+                let deep_clone_ops = if clone_fn.is_none() {
+                    if let LirType::Struct(sid) = dst_ty {
+                        let ops = collect_clone_ops_lir(sid.0, &v(d), module, sn);
+                        if !ops.is_empty() { Some(ops) } else { None }
+                    } else { None }
+                } else { None };
                 if let Some(cfn) = clone_fn {
                     // Emit: dst = clone_fn((Type*)call(args));  — extra ) needed after args
                     write!(out, "{} = {}(({ty_name}*)", v(d), cfn).unwrap();
                     deref_clone_extra_close = true;
+                } else if deep_clone_ops.is_some() {
+                    // Shallow copy then deep-clone resource fields.
+                    write!(out, "{} = *({ty_name}*)", v(d)).unwrap();
+                    deref_deep_clone_ops = deep_clone_ops;
                 } else {
                     // Emit: dst = *(Type*)call(args);
                     write!(out, "{} = *({ty_name}*)", v(d)).unwrap();
@@ -4659,7 +4768,8 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 .find(|sf| sf.fn_name == await_fn_name)
                                 .map(|sf| if sf.ret_c_type == "void" { "Task__void".to_string() } else { format!("Task__{}", sf.ret_c_type) })
                                 .unwrap_or_else(|| "Task__void".to_string());
-                            write!(out, "({task_type}){{.__task = {v}, .__drop = NULL}}", v = v(*a)).unwrap();
+                            let drop_fn = format!("__spawn_drop_{await_fn_name}");
+                            write!(out, "({task_type}){{.__task = {v}, .__drop = {drop_fn}}}", v = v(*a)).unwrap();
                         }
                         continue;
                     }
@@ -4857,6 +4967,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
             } else {
                 write!(out, ");").unwrap();
             }
+            // Deep-clone resource fields in user structs read from collections.
+            if let Some(ops) = deref_deep_clone_ops {
+                for op in ops {
+                    write!(out, " {op}").unwrap();
+                }
+            }
 
             // Post-push zeroing: after gorget_array_push / gorget_map_put / gorget_set_add / gorget_heap_push,
             // if the element argument points to a collection-type value (GorgetArray, GorgetMap, GorgetSet,
@@ -5031,11 +5147,26 @@ fn rewrite_inline_c_locals(code: &str, func: &LirFunction) -> String {
     result
 }
 
-fn emit_term(out: &mut String, term: &Term, func: &LirFunction, sn: &HashMap<u32, String>, val_types: &[Option<LirType>]) {
+fn emit_term(out: &mut String, term: &Term, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>]) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
 
     match term {
         Term::Ret(val) => {
+            // For throws-int main, unwrap Result to exit code.
+            let is_throws_main = func.name == "main" && matches!(&func.return_type, LirType::Struct(sid) if {
+                module.structs.get(sid.0 as usize).map_or(false, |s| s.name.starts_with("Result__"))
+            });
+            if is_throws_main {
+                let val_ty = val_types.get(val.0 as usize).and_then(|t| t.as_ref());
+                let ty_name = c_type_named(&func.return_type, sn);
+                let val_expr = if matches!(val_ty, Some(LirType::Ptr)) {
+                    format!("*({ty_name}*){}", v(*val))
+                } else {
+                    v(*val)
+                };
+                write!(out, "{{ {ty_name} __res = {val_expr}; if (__res.tag == 0) {{ return 0; }} else {{ return __res.Error_0; }} }}").unwrap();
+                return;
+            }
             // If the function returns an aggregate but the value is a pointer, dereference.
             let val_ty = val_types.get(val.0 as usize).and_then(|t| t.as_ref());
             if func.return_type.is_aggregate() && matches!(val_ty, Some(LirType::Ptr)) {
@@ -5277,6 +5408,15 @@ fn emit_monomorphized_typedefs(out: &mut String, module: &LirModule, sn: &HashMa
     for ext in &module.externs {
         if is_wrapper_method(&ext.name) && method_seen.insert(ext.name.clone()) {
             method_calls.push(ext.name.clone());
+        }
+    }
+    // Synthesize clone method calls for refcounted types captured by spawn helpers.
+    for sf in &module.spawned_fns {
+        for (_idx, gir_name) in &sf.clone_params {
+            let clone_name = format!("{gir_name}__clone");
+            if method_seen.insert(clone_name.clone()) {
+                method_calls.push(clone_name);
+            }
         }
     }
 
@@ -6525,6 +6665,8 @@ fn takes_cstr_for_str_param(fn_name: &str, param_idx: usize) -> bool {
         "gorget_parse_time" => param_idx == 0 || param_idx == 1,
         // gorget_udp_sendto(sock*, data*, const char* host, int port) — arg 2 is cstr
         "gorget_udp_sendto" => param_idx == 2,
+        // gorget_udp_join/leave_multicast(sock*, const char* group) — arg 1 is cstr
+        "gorget_udp_join_multicast" | "gorget_udp_leave_multicast" => param_idx == 1,
         // Byte conversion functions that take const char*
         "gorget_bytes_from_str" | "gorget_bytes_from_hex" => param_idx == 0,
         _ => false,
@@ -6556,6 +6698,7 @@ fn needs_null_terminated_cstr(fn_name: &str) -> bool {
         | "gorget_socket_connect" | "gorget_server_socket_bind"
         | "gorget_tls_connect" | "gorget_tls_server_bind"
         | "gorget_udp_bind" | "gorget_udp_send_to" | "gorget_udp_sendto"
+        | "gorget_udp_join_multicast" | "gorget_udp_leave_multicast"
         | "gorget_bytes_from_str" | "gorget_bytes_from_hex"
     )
 }
@@ -6931,6 +7074,128 @@ fn struct_field_access_expr(
             }
         }
     }
+    None
+}
+
+/// Collect deep-clone operations for a struct that contains resource-type fields.
+/// Similar to GIR's `collect_clone_ops` but uses LIR struct info.
+/// `path` is the C expression path to the struct (e.g., "dst" or "dst.Some_0").
+/// Returns clone statements to be emitted after the shallow copy.
+fn collect_clone_ops_lir(
+    struct_id: u32,
+    path: &str,
+    module: &LirModule,
+    sn: &HashMap<u32, String>,
+) -> Vec<String> {
+    let mut ops = Vec::new();
+    let Some(sdef) = module.structs.get(struct_id as usize) else { return ops };
+    for (fname, fty) in &sdef.fields {
+        let c_fname = c_field_name(fname);
+        let field_path = format!("{path}.{c_fname}");
+        match fty {
+            LirType::Struct(sid) => {
+                let name = sn.get(&sid.0).map(|s| s.as_str()).unwrap_or("");
+                match name {
+                    "GorgetArray" => ops.push(format!("{field_path} = gorget_array_clone(&{field_path});")),
+                    "GorgetMap" => ops.push(format!("{field_path} = gorget_map_clone(&{field_path});")),
+                    "GorgetSet" => ops.push(format!("{field_path} = gorget_set_clone(&{field_path});")),
+                    "GorgetString" => ops.push(format!("{field_path} = gorget_string_clone(&{field_path});")),
+                    // Str is a borrowed view (data ptr + len), not owned — no clone needed.
+                    "Str" => {}
+                    _ => {
+                        // Recurse into nested structs.
+                        let nested = collect_clone_ops_lir(sid.0, &field_path, module, sn);
+                        ops.extend(nested);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    ops
+}
+
+/// Returns true if a struct type (by ID) contains any resource-type fields
+/// that require deep cloning when read from a collection.
+fn struct_needs_deep_clone(struct_id: u32, module: &LirModule, sn: &HashMap<u32, String>) -> bool {
+    let Some(sdef) = module.structs.get(struct_id as usize) else { return false };
+    for (_fname, fty) in &sdef.fields {
+        if let LirType::Struct(sid) = fty {
+            let name = sn.get(&sid.0).map(|s| s.as_str()).unwrap_or("");
+            match name {
+                "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetString" => return true,
+                _ => {
+                    if struct_needs_deep_clone(sid.0, module, sn) { return true; }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Generate a `__gorget_cleanup_push(...)` call for a slot in a test function.
+/// Returns None if the slot's type doesn't need cleanup stack registration.
+fn test_cleanup_push_code_lir(
+    slot_idx: u32,
+    func: &LirFunction,
+    module: &LirModule,
+    sn: &HashMap<u32, String>,
+) -> Option<String> {
+    let slot = &func.slots[slot_idx as usize];
+    let slot_ty = &slot.ty;
+
+    // Get the struct name for struct-typed slots.
+    let struct_name = if let LirType::Struct(sid) = slot_ty {
+        // Use original GIR name from module.structs (not the __lir_sN alias).
+        module.structs.get(sid.0 as usize).map(|s| s.name.as_str())
+    } else {
+        None
+    };
+
+    if let Some(name) = struct_name {
+        // Box types: push raw pointer (no address-of since Box is a typedef for T*).
+        if name.starts_with("Box__") {
+            let c_name = sn.get(&if let LirType::Struct(sid) = slot_ty { sid.0 } else { 0 }).cloned().unwrap_or_default();
+            // Check for trait object Box (Box__TraitObj).
+            let inner = &name[5..];
+            if module.structs.iter().any(|s| s.name == format!("{inner}_TraitObj")) {
+                return Some(format!("    __gorget_cleanup_push(free, (void*)__s{slot_idx}.data);\n"));
+            } else {
+                return Some(format!("    __gorget_cleanup_push(free, (void*)__s{slot_idx});\n"));
+            }
+        }
+
+        // GorgetString
+        if name == "GorgetString" {
+            return Some(format!("    __gorget_cleanup_push((__gorget_cleanup_fn)gorget_string_free, (void*)&__s{slot_idx});\n"));
+        }
+
+        // Vector/Array types
+        if name.starts_with("Vector__") || name.starts_with("Deque__") || name == "GorgetArray" {
+            return Some(format!("    __gorget_cleanup_push((__gorget_cleanup_fn)gorget_array_free, (void*)&__s{slot_idx});\n"));
+        }
+
+        // Dict/Map types
+        if name.starts_with("Dict__") || name.starts_with("HashMap__") || name == "GorgetMap" {
+            return Some(format!("    __gorget_cleanup_push((__gorget_cleanup_fn)gorget_map_free, (void*)&__s{slot_idx});\n"));
+        }
+
+        // User struct with custom drop: check if a {Name}__drop function exists.
+        let drop_fn_name = format!("{name}__drop");
+        if module.functions.iter().any(|f| f.name == drop_fn_name) {
+            return Some(format!("    __gorget_cleanup_push((__gorget_cleanup_fn){drop_fn_name}, (void*)&__s{slot_idx});\n"));
+        }
+    }
+
+    // Ptr-typed slots that are named (e.g., Box[T] lowered as raw pointer).
+    // In LIR, Box[T] may also appear as a Ptr slot when the Box typedef isn't used.
+    if matches!(slot_ty, LirType::Ptr) {
+        // Check if the slot name suggests it's a Box (heuristic).
+        // Box slots in test functions are typically registered with `free`.
+        // However, we can't reliably detect this without more type info, so skip.
+        // The struct-typed Box path above handles the common case.
+    }
+
     None
 }
 

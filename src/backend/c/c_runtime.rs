@@ -2596,6 +2596,27 @@ static int __gorget_try_run_one(void) {
     return 1;
 }
 
+// Try to dequeue and run one POLL-BASED task (non-blocking).
+// Skips run-based tasks (which may block indefinitely) to avoid deadlocking
+// the select loop when a spawned task blocks on channel send.
+static int __gorget_try_run_one_nonblocking(void) {
+    pthread_mutex_lock(&__gorget_exec.mtx);
+    for (int i = 0; i < __gorget_exec.queue_len; i++) {
+        GorgetTask* task = __gorget_exec.queue[i];
+        if (task->poll != NULL) {
+            // Remove from queue
+            memmove(__gorget_exec.queue + i, __gorget_exec.queue + i + 1,
+                    (size_t)(__gorget_exec.queue_len - i - 1) * sizeof(GorgetTask*));
+            __gorget_exec.queue_len--;
+            pthread_mutex_unlock(&__gorget_exec.mtx);
+            __gorget_run_task_inline(task);
+            return 1;
+        }
+    }
+    pthread_mutex_unlock(&__gorget_exec.mtx);
+    return 0;
+}
+
 // Re-submit a task to the executor (used by future wakers for cooperative yield).
 static void __gorget_executor_resubmit(GorgetTask* task) {
     pthread_mutex_lock(&task->mtx);
@@ -2675,11 +2696,11 @@ static void __gorget_worker_waker_wake(GorgetWaker* w) {
 }
 
 // Select yield: help the executor make progress when the main thread's select
-// spin-loop is waiting for data.  Try to steal + run one queued task; if there
-// is nothing to steal, do a brief sleep so worker threads can acquire channel
-// mutexes without contention from the poller.
+// spin-loop is waiting for data.  Only steal poll-based (non-blocking) tasks;
+// run-based tasks (blocking spawns) must stay on worker threads to avoid
+// deadlocking the select loop when a spawned producer blocks on channel send.
 static int __gorget_select_yield(void) {
-    if (!__gorget_try_run_one()) {
+    if (!__gorget_try_run_one_nonblocking()) {
         usleep(100);   // 100 µs backoff
     }
     return 0;
@@ -4347,18 +4368,30 @@ static inline void gorget_array_remove(GorgetArray* arr, size_t index) {
 // Remove element at index and return pointer to a static copy of it.
 // The returned pointer is valid until the next gorget_array_remove_opt call.
 static inline void* gorget_array_remove_opt(GorgetArray* arr, size_t index) {
-    static _Thread_local char __remove_buf[256];
+    static _Thread_local char __remove_buf[4096];
+    static _Thread_local char* __remove_heap = NULL;
+    static _Thread_local size_t __remove_heap_cap = 0;
     if (index >= arr->len) return NULL;
     void* elem = (char*)arr->data + index * arr->elem_size;
-    size_t sz = arr->elem_size < 256 ? arr->elem_size : 256;
-    memcpy(__remove_buf, elem, sz);
+    char* buf;
+    if (arr->elem_size <= sizeof(__remove_buf)) {
+        buf = __remove_buf;
+    } else {
+        if (arr->elem_size > __remove_heap_cap) {
+            free(__remove_heap);
+            __remove_heap = (char*)malloc(arr->elem_size);
+            __remove_heap_cap = arr->elem_size;
+        }
+        buf = __remove_heap;
+    }
+    memcpy(buf, elem, arr->elem_size);
     if (index + 1 < arr->len) {
         memmove((char*)arr->data + index * arr->elem_size,
                 (char*)arr->data + (index + 1) * arr->elem_size,
                 (arr->len - index - 1) * arr->elem_size);
     }
     arr->len--;
-    return __remove_buf;
+    return buf;
 }
 
 static inline bool gorget_array_is_empty(const GorgetArray* arr) {

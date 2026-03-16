@@ -179,11 +179,21 @@ impl<'a> LoweringContext<'a> {
                     })
                 })
             }).collect();
+            // Detect refcounted params that need cloning when captured.
+            let clone_params: Vec<(usize, String)> = params.iter().enumerate().filter_map(|(i, (_, type_id))| {
+                if let Some(GirType::Named(name)) = self.gir.type_registry.get(*type_id) {
+                    if name.starts_with("Channel__") || name.starts_with("Shared__") || name.starts_with("Weak__") {
+                        return Some((i, name.clone()));
+                    }
+                }
+                None
+            }).collect();
             self.module.spawned_fns.push(SpawnedFn {
                 fn_name: fn_name.clone(),
                 params: lir_params,
                 ret_c_type: ret_c,
                 ref_param_indices,
+                clone_params,
             });
         }
 
@@ -537,6 +547,7 @@ impl<'a> FuncLowering<'a> {
             .collect();
         let return_type = map_gir_type_with_structs(&gir_func.return_type, gir_types, Some(struct_reg));
         let mut lir_func = LirFunction::new(gir_func.name.clone(), params, return_type);
+        lir_func.is_test_fn = gir_func.is_test_fn;
 
         // Create LIR slots for each GIR local.
         let local_to_slot: Vec<SlotId> = gir_func
