@@ -3954,7 +3954,7 @@ impl<'a> FuncLowering<'a> {
 
         // Look up the struct and find the null variant (first fieldless variant).
         let struct_id = self.struct_reg.lookup(&elem_type_name)?;
-        let lir_struct = self.module_structs.get(struct_id.0 as usize)?;
+        let _lir_struct = self.module_structs.get(struct_id.0 as usize)?;
 
         // Find the null variant tag by looking up the GIR type def.
         let tag_ordinal = self.find_null_variant_tag_by_name(&elem_type_name)?;
@@ -4980,7 +4980,7 @@ fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collections::HashM
                         // Mutex__T__new(val) → gorget_mutex_new(sizeof(T), &(T){val})
                         if matches!(mapped.as_str(), "gorget_mutex_new" | "gorget_shared_new" | "gorget_rwlock_new") {
                             let args_str = &remapped[paren_pos + 1..remapped.len() - 1]; // strip parens
-                            let elem_size = concurrency_elem_size(func_name, &[]).unwrap_or(8);
+                            let _elem_size = concurrency_elem_size(func_name, &[]).unwrap_or(8);
                             // Use a compound literal with the element type for proper alignment
                             let elem_type = func_name
                                 .strip_prefix("Mutex__").or_else(|| func_name.strip_prefix("Shared__"))

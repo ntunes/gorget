@@ -27,18 +27,6 @@ const LIR_NAMED_STRUCTS: &[&str] = &[
     "GorgetFile", "GorgetError",
 ];
 
-/// Sanitize a Gorget function name that collides with C keywords.
-fn sanitize_c_name(name: &str) -> String {
-    match name {
-        "double" | "float" | "int" | "long" | "short" | "char" | "void"
-        | "signed" | "unsigned" | "auto" | "extern" | "register" | "static"
-        | "struct" | "union" | "enum" | "typedef" | "const" | "volatile"
-        | "goto" | "break" | "continue" | "return" | "switch" | "case"
-        | "default" | "if" | "else" | "for" | "while" | "do" | "sizeof" => format!("gg_{name}"),
-        _ => name.to_string(),
-    }
-}
-
 /// Maps LIR struct names to their runtime C names when they differ.
 fn lir_to_runtime_name(name: &str) -> Option<&'static str> {
     match name {
@@ -167,7 +155,7 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
         let has = |pred: &dyn Fn(&str) -> bool| all_call_names.iter().any(|n| pred(n));
 
         // Also check struct names for monomorphized types that need specific runtimes.
-        let has_struct = |name: &str| module.structs.iter().any(|s| s.name == name);
+        let _has_struct = |name: &str| module.structs.iter().any(|s| s.name == name);
 
         // Sync primitives (atomics, barriers, semaphores, etc.)
         let needs_sync = has(&|n| n.starts_with("gorget_atomic_int_") || n.starts_with("gorget_atomic_bool_")) || has(&|n| {
@@ -5063,7 +5051,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 // Spawn now returns Task__T directly — simple assignment.
                 let d = dst.as_ref().unwrap();
                 let dst_ty = val_types[d.0 as usize].as_ref().unwrap();
-                let task_ty_name = c_type_named(dst_ty, sn);
+                let _task_ty_name = c_type_named(dst_ty, sn);
                 let fn_name_suffix = emit_name.strip_prefix("__gorget_spawn_").unwrap_or(emit_name);
                 let spawn_param_c_types: Vec<String> = module.spawned_fns.iter()
                     .find(|sf| sf.fn_name == fn_name_suffix)
@@ -5453,7 +5441,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         // handled via Custom/Recursive drop guards (memcmp zero check).
                         if is_direct_resource_type(*pt_sid, module) {
                             let sn_name = module.structs.get(pt_sid.0 as usize)
-                                .map(|s| c_type_named(&LirType::Struct(*pt_sid), sn))
+                                .map(|_s| c_type_named(&LirType::Struct(*pt_sid), sn))
                                 .unwrap_or_else(|| "void".to_string());
                             write!(out, "\n    memset({}, 0, sizeof({}));", v(*arg_val), sn_name).unwrap();
                         }
@@ -7805,24 +7793,6 @@ fn collect_clone_ops_lir(
     ops
 }
 
-/// Returns true if a struct type (by ID) contains any resource-type fields
-/// that require deep cloning when read from a collection.
-fn struct_needs_deep_clone(struct_id: u32, module: &LirModule, sn: &HashMap<u32, String>) -> bool {
-    let Some(sdef) = module.structs.get(struct_id as usize) else { return false };
-    for (_fname, fty) in &sdef.fields {
-        if let LirType::Struct(sid) = fty {
-            let name = sn.get(&sid.0).map(|s| s.as_str()).unwrap_or("");
-            match name {
-                "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetString" => return true,
-                _ => {
-                    if struct_needs_deep_clone(sid.0, module, sn) { return true; }
-                }
-            }
-        }
-    }
-    false
-}
-
 /// Generate a `__gorget_cleanup_push(...)` call for a slot in a test function.
 /// Returns None if the slot's type doesn't need cleanup stack registration.
 fn test_cleanup_push_code_lir(
@@ -7845,7 +7815,7 @@ fn test_cleanup_push_code_lir(
     if let Some(name) = struct_name {
         // Box types: push raw pointer (no address-of since Box is a typedef for T*).
         if name.starts_with("Box__") {
-            let c_name = sn.get(&if let LirType::Struct(sid) = slot_ty { sid.0 } else { 0 }).cloned().unwrap_or_default();
+            let _c_name = sn.get(&if let LirType::Struct(sid) = slot_ty { sid.0 } else { 0 }).cloned().unwrap_or_default();
             // Check for trait object Box (Box__TraitObj).
             let inner = &name[5..];
             if module.structs.iter().any(|s| s.name == format!("{inner}_TraitObj")) {
