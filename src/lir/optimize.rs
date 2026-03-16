@@ -110,6 +110,12 @@ fn find_live_functions(module: &LirModule) -> HashSet<FuncId> {
         .map(|sf| sf.fn_name.as_str())
         .chain(module.thread_spawned_fns.iter().map(|tf| tf.fn_name.as_str()))
         .collect();
+    // Hot-reload entry points: init, tick, reload are called from the host binary.
+    let hot_reload_roots: HashSet<&str> = if module.hot_reload {
+        ["init", "tick", "reload"].iter().copied().collect()
+    } else {
+        HashSet::new()
+    };
     for (i, func) in module.functions.iter().enumerate() {
         let fid = FuncId(i as u32);
         if func.name == "main"
@@ -117,6 +123,7 @@ fn find_live_functions(module: &LirModule) -> HashSet<FuncId> {
             || func.name.starts_with("__suite_")
             || func.name.contains("__call")
             || spawned_names.contains(func.name.as_str())
+            || hot_reload_roots.contains(func.name.as_str())
         {
             if live.insert(fid) {
                 worklist.push(fid);

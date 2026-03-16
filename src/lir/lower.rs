@@ -229,6 +229,10 @@ impl<'a> LoweringContext<'a> {
         }
         self.module.has_suite_setup = self.gir.runtime.has_suite_setup;
         self.module.has_suite_teardown = self.gir.runtime.has_suite_teardown;
+        self.module.hot_reload = self.gir.runtime.hot_reload;
+        self.module.hot_reload_state_type = self.gir.runtime.hot_reload_state_type.clone();
+        self.module.hot_reload_state_hash = self.gir.runtime.hot_reload_state_hash;
+        self.module.hot_reload_has_reload_fn = self.gir.runtime.hot_reload_has_reload_fn;
 
         // Compute elem_drop_recipes for types that need compound drops.
         self.compute_all_drop_recipes();

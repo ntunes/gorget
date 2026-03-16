@@ -376,3 +376,148 @@ pub trait Backend {
     /// Generate source code from an LIR module.
     fn generate(&self, module: &LirModule) -> CodegenOutput;
 }
+
+/// Options for hot-reload code generation.
+pub struct HotReloadOpts {
+    /// Absolute path to the source file (for the file watcher).
+    pub watch_path: String,
+    /// Base name of the guest shared library (without extension).
+    pub guest_lib_name: String,
+    /// Shell command to recompile the guest library.
+    pub recompile_cmd: String,
+}
+
+/// Split a full compiled C string into host + guest for hot-reload mode.
+///
+/// - Guest: full code minus main(), plus state hash constant + exported wrappers.
+/// - Host: runtime/type section only + a dlopen-based main().
+pub fn generate_hot_reload_split(
+    full_c: &str,
+    state_type: &str,
+    state_hash: u64,
+    has_reload: bool,
+    hr_opts: Option<&HotReloadOpts>,
+) -> (String, String) {
+    // ── Guest code ──
+    let mut guest = String::with_capacity(full_c.len() + 1024);
+    // Remove main() by finding a line starting with "int main(" and ending with ") {"
+    // then bracket-match to remove the body.
+    let main_pos = full_c.find("\nint main(").map(|p| p + 1)
+        .or_else(|| if full_c.starts_with("int main(") { Some(0) } else { None });
+    if let Some(main_pos) = main_pos {
+        guest.push_str(&full_c[..main_pos]);
+        let after_main = &full_c[main_pos..];
+        let mut depth = 0usize;
+        let mut end_pos = 0;
+        for (i, ch) in after_main.char_indices() {
+            if ch == '{' { depth += 1; }
+            if ch == '}' {
+                depth -= 1;
+                if depth == 0 { end_pos = i + 1; break; }
+            }
+        }
+        let remaining = after_main[end_pos..].strip_prefix('\n').unwrap_or(&after_main[end_pos..]);
+        guest.push_str(remaining);
+    } else {
+        guest.push_str(full_c);
+    }
+    // State hash constant
+    guest.push_str(&format!(
+        "\n// ── Hot Reload Guest Exports ──\n\
+         const uint64_t GORGET_STATE_HASH = 0x{state_hash:016X}ULL;\n\n"
+    ));
+    // Exported init() wrapper
+    guest.push_str(&format!(
+        "__attribute__((visibility(\"default\")))\n\
+         {state_type} gorget_guest_init(void) {{\n\
+         \treturn init();\n\
+         }}\n\n"
+    ));
+    // Exported tick() wrapper
+    guest.push_str(&format!(
+        "__attribute__((visibility(\"default\")))\n\
+         bool gorget_guest_tick({state_type}* state) {{\n\
+         \treturn tick(state);\n\
+         }}\n\n"
+    ));
+    // Exported reload() wrapper
+    if has_reload {
+        guest.push_str(&format!(
+            "__attribute__((visibility(\"default\")))\n\
+             void gorget_guest_reload({state_type}* state) {{\n\
+             \treload(state);\n\
+             }}\n\n"
+        ));
+    }
+
+    // ── Host code ──
+    // Use the runtime/types section (before "// ── Function Definitions ──") + host main.
+    let mut host = String::with_capacity(4096);
+    let func_defs_marker = "// ── Function Definitions ──";
+    if let Some(pos) = full_c.find(func_defs_marker) {
+        host.push_str(&full_c[..pos]);
+    } else {
+        host.push_str(c::c_runtime::RUNTIME_PREAMBLE);
+        host.push_str(c::c_runtime::PANIC_NORMAL);
+        host.push_str(c::c_runtime::RUNTIME_CORE);
+    }
+    // HOT_RELOAD_RUNTIME was already emitted in the full code; don't double-emit.
+    // Just emit the function-pointer typedefs and main().
+    host.push_str(&format!(
+        "// ── Hot Reload Host ──\n\
+         typedef {state_type} (*gorget_init_fn_t)(void);\n\
+         typedef bool (*gorget_tick_fn_t)({state_type}*);\n\
+         typedef void (*gorget_reload_fn_t)({state_type}*);\n\n"
+    ));
+
+    let (guest_lib_name, recompile_cmd, watch_path) = if let Some(opts) = hr_opts {
+        (opts.guest_lib_name.as_str(), opts.recompile_cmd.as_str(), opts.watch_path.as_str())
+    } else {
+        ("guest", "gg build --shared", ".")
+    };
+    let watch_c = format!("    const char* __watch_paths[] = {{\"{watch_path}\"}};\n    int __watch_count = 1;\n");
+
+    host.push_str(&format!(
+        r#"int main(int argc, char** argv) {{
+    gorget_init_args(argc, argv);
+{watch_c}
+    GorgetFileWatcher __watcher = gorget_hot_watch_init(__watch_paths, __watch_count);
+
+    if (system("{recompile_cmd}") != 0) {{
+        fprintf(stderr, "[hot-reload] Initial compilation failed\n");
+        return 1;
+    }}
+    GorgetGuestModule __guest = gorget_hot_load("./{guest_lib_name}" GORGET_DYLIB_EXT);
+    if (!__guest.handle) {{
+        fprintf(stderr, "[hot-reload] Failed to load guest module\n");
+        return 1;
+    }}
+
+    gorget_init_fn_t __init_fn = (gorget_init_fn_t)__guest.init;
+    {state_type} __state = __init_fn();
+    gorget_tick_fn_t __tick_fn = (gorget_tick_fn_t)__guest.tick;
+    gorget_reload_fn_t __reload_fn = (gorget_reload_fn_t)__guest.reload;
+    bool __running = true;
+    while (__running) {{
+        if (gorget_hot_watch_check(&__watcher)) {{
+            if (system("{recompile_cmd}") == 0) {{
+                GorgetGuestModule __new = gorget_hot_load("./{guest_lib_name}" GORGET_DYLIB_EXT);
+                if (__new.handle) {{
+                    gorget_hot_unload(&__guest);
+                    __guest = __new;
+                    __tick_fn = (gorget_tick_fn_t)__guest.tick;
+                    __reload_fn = (gorget_reload_fn_t)__guest.reload;
+                    if (__reload_fn) __reload_fn(&__state);
+                }}
+            }}
+        }}
+        __running = __tick_fn(&__state);
+    }}
+    gorget_hot_unload(&__guest);
+    return 0;
+}}
+"#
+    ));
+
+    (host, guest)
+}

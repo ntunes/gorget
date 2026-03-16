@@ -407,6 +407,11 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
             out.push_str(crate::backend::c::c_runtime::SQLITE_GORGET_WRAPPERS);
         }
 
+        // Hot-reload runtime (dlopen/file-watcher helpers)
+        if module.hot_reload {
+            out.push_str(crate::backend::c::c_runtime::HOT_RELOAD_RUNTIME);
+        }
+
         // LIR-specific helper functions not emitted by the old C backend preamble.
         writeln!(out, "// ── LIR helpers ──").unwrap();
         writeln!(out, "static inline Str gorget_char_chr(int64_t code) {{ return gorget_str_from_cstr(gorget_codepoint_to_utf8(code)); }}").unwrap();
@@ -892,7 +897,21 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         }
     }
 
+    // Hot-reload: emit a typedef so the guest wrappers can use the original state type name.
+    if module.hot_reload {
+        if let Some(ref state_type) = module.hot_reload_state_type {
+            // Find the LIR-mangled C name for this struct.
+            if let Some((i, _)) = module.structs.iter().enumerate().find(|(_, s)| s.name == *state_type) {
+                let c_name = struct_names.get(&(i as u32)).cloned().unwrap_or_else(|| format!("__lir_s{i}"));
+                if c_name != *state_type {
+                    writeln!(out, "typedef {c_name} {state_type};").unwrap();
+                }
+            }
+        }
+    }
+
     // Function definitions
+    writeln!(out, "// ── Function Definitions ──").unwrap();
     for func in &module.functions {
         emit_function(&mut out, func, module, &struct_names);
         writeln!(out).unwrap();

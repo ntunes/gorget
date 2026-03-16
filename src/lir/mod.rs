@@ -707,6 +707,14 @@ pub struct LirModule {
     /// Keyed by GIR type name (e.g., "Container", "Wrapper", "Vector__Container").
     /// The backend uses these to generate nested for-loops and field accesses.
     pub elem_drop_recipes: HashMap<String, Vec<ElemDropAction>>,
+    /// Whether this module uses hot-reload mode.
+    pub hot_reload: bool,
+    /// The state type name for hot-reload (defaults to "State").
+    pub hot_reload_state_type: Option<String>,
+    /// Hash of the state type layout for hot-reload ABI compatibility.
+    pub hot_reload_state_hash: u64,
+    /// Whether the module defines a `reload()` function.
+    pub hot_reload_has_reload_fn: bool,
 }
 
 impl LirModule {
@@ -724,6 +732,10 @@ impl LirModule {
             has_suite_setup: false,
             has_suite_teardown: false,
             elem_drop_recipes: HashMap::new(),
+            hot_reload: false,
+            hot_reload_state_type: None,
+            hot_reload_state_hash: 0,
+            hot_reload_has_reload_fn: false,
         }
     }
 

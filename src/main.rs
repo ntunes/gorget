@@ -494,14 +494,6 @@ fn try_build_ir(
 
     // ── LIR backend: full build through LIR → C → binary ──────────
     if use_lir_backend {
-        // LIR backend does not yet support hot-reload or shared-library builds.
-        if shared_output.is_some() {
-            return Err("--backend=lir does not support --shared builds yet".to_string());
-        }
-        if gir_module.runtime.hot_reload {
-            return Err("--backend=lir does not support hot-reload builds yet".to_string());
-        }
-
         // Lower GIR → LIR → SSA → optimize → backend
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
         for func in &mut lir_module.functions {
@@ -532,6 +524,141 @@ fn try_build_ir(
             (c_path, exe_path)
         };
 
+        // ── --shared: build as shared library (used by hot-reload recompile) ──
+        if let Some(shared_path) = shared_output {
+            let shared_c_code = if lir_module.hot_reload {
+                let state_type = lir_module.hot_reload_state_type.as_deref().unwrap_or("State");
+                let (_, guest) = gorget::backend::generate_hot_reload_split(
+                    &c_code, state_type, lir_module.hot_reload_state_hash,
+                    lir_module.hot_reload_has_reload_fn, None,
+                );
+                guest
+            } else {
+                c_code.clone()
+            };
+            let shared_c_path = dir.join(format!("{stem}_guest.c"));
+            if let Err(e) = fs::write(&shared_c_path, &shared_c_code) {
+                return Err(format!("Error writing {}: {e}", shared_c_path.display()));
+            }
+            let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
+            let mut cc_cmd = Command::new(&cc);
+            cc_cmd
+                .arg("-std=c11")
+                .arg("-shared")
+                .arg("-fPIC")
+                .arg("-Wall")
+                .arg("-Wextra")
+                .arg("-Wno-unused-parameter")
+                .arg("-Wno-unused-variable")
+                .arg("-Wno-unused-function")
+                .arg("-Wno-unused-but-set-variable")
+                .arg("-o")
+                .arg(shared_path)
+                .arg(&shared_c_path)
+                .arg("-lm");
+            if options.overflow_wrap || gir_module.runtime.overflow_wrap { cc_cmd.arg("-fwrapv"); }
+            if options.sanitize {
+                cc_cmd.arg("-fsanitize=address,undefined");
+                cc_cmd.arg("-fno-omit-frame-pointer");
+                cc_cmd.arg("-g");
+            }
+            add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx"), &shared_c_code);
+            add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || concat_source.contains("gg.http"));
+            add_crypto_flags(&mut cc_cmd, concat_source.contains("gg.crypto") || concat_source.contains("gg.p2p"));
+            add_regex_flags(&mut cc_cmd, concat_source.contains("gg.regex"));
+            add_thread_flags(&mut cc_cmd, concat_source.contains("std.async") || concat_source.contains("gg.p2p"));
+            let status = cc_cmd.status();
+            return match status {
+                Ok(s) if s.success() => Ok(shared_path.to_path_buf()),
+                Ok(s) => Err(format!("Shared library compilation failed: {s}\nGenerated: {}", shared_c_path.display())),
+                Err(e) => Err(format!("Failed to run C compiler '{cc}': {e}")),
+            };
+        }
+
+        // ── Hot-reload: two-phase build (host binary + guest shared library) ──
+        if lir_module.hot_reload {
+            let abs_filename = std::path::absolute(Path::new(filename))
+                .unwrap_or_else(|_| PathBuf::from(filename));
+            let guest_lib_name = format!("{stem}_guest");
+            #[cfg(target_os = "macos")]
+            let dylib_ext = ".dylib";
+            #[cfg(not(target_os = "macos"))]
+            let dylib_ext = ".so";
+            let guest_lib_file = format!("{guest_lib_name}{dylib_ext}");
+            let recompile_cmd = format!(
+                "{} build --backend=lir --shared {} -o {}",
+                std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gg")).display(),
+                abs_filename.display(),
+                dir.join(&guest_lib_file).display(),
+            );
+            let state_type = lir_module.hot_reload_state_type.as_deref().unwrap_or("State");
+            let hr_opts = gorget::backend::HotReloadOpts {
+                watch_path: abs_filename.display().to_string(),
+                guest_lib_name: guest_lib_name.clone(),
+                recompile_cmd,
+            };
+            let (host_code, guest_code) = gorget::backend::generate_hot_reload_split(
+                &c_code, state_type, lir_module.hot_reload_state_hash,
+                lir_module.hot_reload_has_reload_fn, Some(&hr_opts),
+            );
+
+            let host_c_path = dir.join(format!("{stem}_host.c"));
+            let guest_c_path = dir.join(format!("{stem}_guest.c"));
+            let guest_lib_path = dir.join(format!("{}_guest{dylib_ext}", hr_opts.guest_lib_name.trim_end_matches("_guest")));
+
+            if let Err(e) = fs::write(&host_c_path, &host_code) {
+                return Err(format!("Error writing {}: {e}", host_c_path.display()));
+            }
+            if let Err(e) = fs::write(&guest_c_path, &guest_code) {
+                return Err(format!("Error writing {}: {e}", guest_c_path.display()));
+            }
+
+            let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
+
+            // Compile guest shared library
+            let mut guest_cmd = Command::new(&cc);
+            guest_cmd
+                .arg("-std=c11").arg("-shared").arg("-fPIC")
+                .arg("-Wall").arg("-Wextra")
+                .arg("-Wno-unused-parameter").arg("-Wno-unused-variable").arg("-Wno-unused-function")
+                .arg("-Wno-unused-but-set-variable")
+                .arg("-o").arg(&guest_lib_path)
+                .arg(&guest_c_path).arg("-lm");
+            if options.sanitize {
+                guest_cmd.arg("-fsanitize=address,undefined");
+                guest_cmd.arg("-fno-omit-frame-pointer");
+                guest_cmd.arg("-g");
+            }
+            let guest_status = guest_cmd.status();
+            match guest_status {
+                Ok(s) if !s.success() => return Err(format!("Guest compilation failed: {s}\nGenerated: {}", guest_c_path.display())),
+                Err(e) => return Err(format!("Failed to run '{cc}': {e}")),
+                _ => {}
+            }
+
+            // Compile host binary
+            let mut host_cmd = Command::new(&cc);
+            host_cmd.arg("-std=c11")
+                .arg("-Wall").arg("-Wextra")
+                .arg("-Wno-unused-parameter").arg("-Wno-unused-variable").arg("-Wno-unused-function")
+                .arg("-Wno-unused-but-set-variable")
+                .arg("-o").arg(&exe_path)
+                .arg(&host_c_path).arg("-lm").arg("-ldl");
+            if options.overflow_wrap || gir_module.runtime.overflow_wrap { host_cmd.arg("-fwrapv"); }
+            if options.sanitize {
+                host_cmd.arg("-fsanitize=address,undefined");
+                host_cmd.arg("-fno-omit-frame-pointer");
+                host_cmd.arg("-g");
+            }
+            let host_status = host_cmd.status();
+            return match host_status {
+                Ok(s) if s.success() => Ok(exe_path),
+                Ok(s) => Err(format!("Host compilation failed: {s}\nGenerated: {}", host_c_path.display())),
+                Err(e) => Err(format!("Failed to run '{cc}': {e}")),
+            };
+        }
+
+        // ── Normal LIR build ──
         if let Err(e) = fs::write(&c_path, &c_code) {
             return Err(format!("Error writing {}: {e}", c_path.display()));
         }
@@ -643,7 +770,7 @@ fn try_build_ir(
             abs_filename.display(),
             dir.join(&guest_lib_file).display(),
         );
-        Some(gorget::backend::c::HotReloadOpts {
+        Some(gorget::backend::HotReloadOpts {
             watch_path: abs_filename.display().to_string(),
             guest_lib_name: guest_lib_name.clone(),
             recompile_cmd,

@@ -10,7 +10,7 @@
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 4 C warnings remaining (2 `gorget_int_to_str` Ptr→int cast from slot type inference issue, 2 memset overflow from struct size mismatch). Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-16]
 
-- **LIR backend: Phase 4 — default backend switch**: Once all A/B tests pass through LIR, flip default: no flag = LIR→C, `--backend=gir` selects old path. Feature-gate fallback for hot-reload and `--shared` builds. [added: 2026-03-11]
+- **LIR backend: Phase 4 — default backend switch**: Once all A/B tests pass through LIR, flip default: no flag = LIR→C, `--backend=gir` selects old path. Hot-reload and `--shared` builds now supported by LIR backend. [added: 2026-03-11, updated: 2026-03-16]
 
 - **LIR backend: Phase 5 — old backend retirement**: Delete `src/backend/c/mod.rs` (12,918 lines) after transition period. Keep `c_runtime.rs`. Remove `--backend=gir` flag. -12,918 lines of the most complex, duplicated code in the project. [added: 2026-03-11]
 

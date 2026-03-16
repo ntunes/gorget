@@ -5410,6 +5410,62 @@ fn hot_reload_basic() {
 }
 
 #[test]
+fn hot_reload_basic_lir() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/hot_reload_basic.gg");
+    let dir = fixture_path.parent().unwrap();
+    let stem = "hot_reload_basic";
+
+    assert!(fixture_path.exists(), "Fixture not found: {}", fixture_path.display());
+
+    // 1. Build with --hot-reload --backend=lir
+    let build = build_with_timeout(
+        gg_command("build")
+            .arg("--hot-reload")
+            .arg("--backend=lir")
+            .arg(&fixture_path),
+        "hot_reload_basic.gg (LIR)",
+    );
+
+    assert!(
+        build.status.success(),
+        "Hot-reload LIR build failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // 2. Run the host binary (it dlopen's the guest and runs init/tick)
+    let exe_path = dir.join(stem);
+    let mut cmd = Command::new(&exe_path);
+    cmd.current_dir(dir);
+    let run = run_with_timeout(&mut cmd, "hot_reload_basic.gg (LIR)");
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+
+    // 3. Assert: init() creates State(0), tick() increments 3 times then exits
+    assert!(
+        stdout.contains("1\n2\n3"),
+        "Hot-reload LIR output mismatch.\nExpected stdout to contain '1\\n2\\n3'.\nGot:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    assert!(
+        run.status.success(),
+        "Hot-reload LIR binary exited with error: {:?}\nstderr: {}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr),
+    );
+
+    // 4. Clean up generated files
+    let _ = std::fs::remove_file(dir.join(format!("{stem}_host.c")));
+    let _ = std::fs::remove_file(dir.join(format!("{stem}_guest.c")));
+    let _ = std::fs::remove_file(dir.join(format!("{stem}_guest.dylib")));
+    let _ = std::fs::remove_file(dir.join(format!("{stem}_guest.so")));
+    let _ = std::fs::remove_file(&exe_path);
+    let _ = std::fs::remove_file(dir.join(format!("{stem}.c")));
+}
+
+#[test]
 fn box_callable() {
     run_gg("box_callable.gg", "\
 10
