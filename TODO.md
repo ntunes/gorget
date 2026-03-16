@@ -198,7 +198,7 @@
 
 - **`gg info` command**: show fields, methods, traits, memory layout for a type. [added: 2026-02-10]
 
-- **Docs: document borrow checker inference pipeline for contributors**: Explain the multi-phase architecture: Pass 5a computes `return_borrows_from` per function (body analysis with local alias tracing → elision fallback → explicit `live`), Pass 5b validates at call sites using `var_origins` + `return_borrows_from`. Document how the two systems interact — 5b depends on 5a's metadata for cross-function analysis. Cover `BorrowOrigin` variants, `compute_expr_origin()`, and the `LocalAliasMap` that traces through local variables and calls. [added: 2026-02-22, updated: 2026-02-22]
+- **Docs: document safety checker inference pipeline for contributors**: The `src/semantic/safety/` module split makes the architecture discoverable (origins.rs, return_borrows.rs, helpers.rs, etc.), but a prose overview of the multi-phase flow would still help: Pass 5a (return_borrows.rs) computes `return_borrows_from` per function, Pass 5b (check_expr/check_stmt) validates at call sites. Cover `BorrowOrigin` variants, `compute_expr_origin()`, and the `LocalAliasMap`. [added: 2026-02-22, updated: 2026-03-16]
 
 - **Associated type validation**: Associated types are parsed but not validated or resolved in semantic analysis. [from roadmap, added: 2026-02-16]
 

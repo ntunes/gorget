@@ -1,4 +1,4 @@
-pub mod borrow;
+pub mod safety;
 pub mod derive;
 pub mod errors;
 pub mod ids;
@@ -236,7 +236,7 @@ pub fn analyze_with_source_dir(
     );
 
     // Pass 5: Borrow checking (two sub-passes: 5a computes return_borrows_from, 5b does full check)
-    let (shared_bindings, warnings, fn_purity) = borrow::check_module(
+    let (shared_bindings, warnings, fn_purity) = safety::check_module(
         module,
         &scopes,
         &types,

@@ -1,0 +1,632 @@
+use rustc_hash::{FxHashMap, FxHashSet};
+
+use crate::parser::ast::*;
+use crate::span::{Span, Spanned};
+
+use super::errors::{SemanticError, SemanticErrorKind};
+use super::ids::{DefId, ScopeId, TypeId};
+use super::resolve::{FunctionInfo, ResolutionMap};
+use super::scope::ScopeTable;
+use super::types::{self, ResolvedType, TypeTable};
+
+// ─── Fallible State (Option/Result tracking) ──────────────
+
+/// Whether an Option/Result variable has been guard-checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FallibleState {
+    /// Not yet checked with is_some/is_ok/match.
+    Unchecked,
+    /// Checked via guard (is_some, is_ok, match, etc.).
+    Checked,
+}
+
+// ─── Variable State ────────────────────────────────────────
+
+/// Tracks the ownership state of a variable.
+#[derive(Debug, Clone)]
+pub(super) enum VarState {
+    /// Variable is available for use.
+    Live,
+    /// Ownership was transferred; cannot use.
+    Moved { moved_at: Span },
+}
+
+/// Snapshot of all variable states (for branching).
+pub(super) type StateSnapshot = FxHashMap<DefId, VarState>;
+
+// ─── Capture Set Tracking ─────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BorrowCaptureMode {
+    Read,
+    Mutable,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CaptureEntry {
+    pub(super) def_id: DefId,
+    pub(super) name: String,
+    pub(super) mode: BorrowCaptureMode,
+    /// True if the captured variable has a non-Static borrow origin
+    /// (str param, &T, reference derived from local, etc.)
+    pub(super) has_borrowed_origin: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct CaptureSet {
+    pub(super) captures: Vec<CaptureEntry>,
+}
+
+
+// ─── Borrow Origin ────────────────────────────────────────
+
+/// Tracks where a reference-typed value originated from.
+/// Used for lifetime inference: prevents returning references to locals
+/// and using references after their source is moved.
+#[derive(Debug, Clone)]
+pub(super) enum BorrowOrigin {
+    /// String literal or global constant — always valid.
+    Static,
+    /// Function parameter — valid in caller's scope.
+    Param { #[allow(dead_code)] param_index: usize, def_id: DefId },
+    /// Local variable — scope-limited, can't escape the function.
+    Local(DefId),
+    /// Match binding — owns data extracted from the scrutinee.
+    /// `binding_def_id` is this binding's DefId (for move/invalidation tracking).
+    /// `scrutinee_origin` is the matched expression's origin (for lifetime/return checks).
+    /// `is_ref` is true when the binding has a reference type (str, &T, etc.),
+    /// meaning it borrows from the scrutinee rather than owning the data.
+    MatchBinding { binding_def_id: DefId, scrutinee_origin: Box<BorrowOrigin>, is_ref: bool },
+    /// Call result — inherits origins from callee's `return_borrows_from` args.
+    CallResult(Vec<BorrowOrigin>),
+    /// Conservative fallback — treated as potentially local in Phase 1,
+    /// refined to CallResult in Phase 2+ when callee info is available.
+    Unknown,
+}
+
+impl BorrowOrigin {
+    /// Returns true if this origin (or any nested origin) references a local.
+    /// Unknown is treated conservatively — it might be local.
+    fn contains_local(&self) -> bool {
+        match self {
+            BorrowOrigin::Local(_) => true,
+            BorrowOrigin::Unknown => true,
+            // Only reference-type bindings borrow from the scrutinee.
+            // Non-reference bindings own their extracted data independently.
+            BorrowOrigin::MatchBinding { scrutinee_origin, is_ref, .. } => {
+                if *is_ref { scrutinee_origin.contains_local() } else { false }
+            }
+            BorrowOrigin::CallResult(origins) => origins.iter().any(|o| o.contains_local()),
+            _ => false,
+        }
+    }
+
+    /// Returns true if this origin (or any nested origin) references the given DefId.
+    fn references_def(&self, target: DefId) -> bool {
+        match self {
+            BorrowOrigin::Local(def_id) | BorrowOrigin::Param { def_id, .. } => *def_id == target,
+            // Only check the binding itself, NOT the scrutinee — sibling bindings are independent
+            BorrowOrigin::MatchBinding { binding_def_id, .. } => *binding_def_id == target,
+            BorrowOrigin::CallResult(origins) => origins.iter().any(|o| o.references_def(target)),
+            BorrowOrigin::Static | BorrowOrigin::Unknown => false,
+        }
+    }
+
+    /// Collect the names of all locals referenced by this origin.
+    fn local_names(&self, scopes: &ScopeTable) -> Vec<String> {
+        match self {
+            BorrowOrigin::Local(def_id) => vec![scopes.get_def(*def_id).name.clone()],
+            BorrowOrigin::MatchBinding { binding_def_id, .. } => vec![scopes.get_def(*binding_def_id).name.clone()],
+            BorrowOrigin::Unknown => vec!["<unresolved origin>".to_string()],
+            BorrowOrigin::CallResult(origins) => {
+                origins.iter().flat_map(|o| o.local_names(scopes)).collect()
+            }
+            _ => vec![],
+        }
+    }
+
+    /// Returns true if this origin (or any nested origin) is Unknown.
+    fn contains_unknown(&self) -> bool {
+        match self {
+            BorrowOrigin::Unknown => true,
+            BorrowOrigin::MatchBinding { scrutinee_origin, is_ref, .. } => {
+                if *is_ref { scrutinee_origin.contains_unknown() } else { false }
+            }
+            BorrowOrigin::CallResult(origins) => origins.iter().any(|o| o.contains_unknown()),
+            _ => false,
+        }
+    }
+
+    /// Collect all source DefIds referenced by this origin.
+    fn source_def_ids(&self) -> Vec<DefId> {
+        match self {
+            BorrowOrigin::Param { def_id, .. } | BorrowOrigin::Local(def_id) => vec![*def_id],
+            BorrowOrigin::MatchBinding { binding_def_id, .. } => vec![*binding_def_id],
+            BorrowOrigin::CallResult(origins) => {
+                origins.iter().flat_map(|o| o.source_def_ids()).collect()
+            }
+            BorrowOrigin::Static | BorrowOrigin::Unknown => vec![],
+        }
+    }
+}
+
+/// Active outlives constraint from a call site with `where a outlives b`.
+/// Tracks the source DefIds for each group so we can detect violations when
+/// the "longer" group's source is invalidated while the "shorter" group's
+/// source is still alive.
+#[derive(Debug, Clone)]
+pub(super) struct ActiveOutlives {
+    pub(super) longer_group: String,
+    pub(super) shorter_group: String,
+    pub(super) longer_source_def_ids: Vec<DefId>,
+    pub(super) shorter_source_def_ids: Vec<DefId>,
+    pub(super) _call_span: Span,
+}
+
+/// Snapshot of origin tracking state (for branching).
+pub(super) type OriginSnapshot = FxHashMap<DefId, BorrowOrigin>;
+
+/// Info about a local derived from a shared variable, used for stale-condition tracking.
+#[derive(Debug, Clone)]
+pub(super) struct SharedDerivedInfo {
+    pub(super) local_name: String,
+    pub(super) shared_name: String,
+    /// Where the local was derived from the shared variable (VarDecl or assignment span).
+    pub(super) derivation_span: Span,
+    /// The await point that made this entry stale (set when promoted from shared_derived to stale).
+    pub(super) await_span: Option<Span>,
+}
+
+/// Combined snapshot of variable states and origin tracking for branching.
+/// Used by save/restore/merge_branch_state to handle all branching state atomically.
+pub(super) struct BranchState {
+    pub(super) var_states: StateSnapshot,
+    pub(super) origins: OriginSnapshot,
+    pub(super) invalidated: FxHashSet<DefId>,
+    pub(super) reassignment_invalidated: FxHashMap<DefId, (String, Span)>,
+    pub(super) await_invalidated: FxHashSet<DefId>,
+    /// Variables currently captured mutably by live closures.
+    pub(super) mut_captured_vars: FxHashMap<DefId, Vec<(String, DefId, Span)>>,
+    /// Reverse map: closure DefId → captured variable DefIds.
+    pub(super) mut_capture_owners: FxHashMap<DefId, Vec<DefId>>,
+    /// Locals derived from shared variables (not yet stale).
+    pub(super) shared_derived: FxHashMap<DefId, SharedDerivedInfo>,
+    /// Locals derived from shared that became stale after await.
+    pub(super) stale_shared_derived: FxHashMap<DefId, SharedDerivedInfo>,
+    /// Whether this branch always diverges (return/break/continue/throw).
+    pub(super) diverges: bool,
+    /// Fallible (Option/Result) variable guard states.
+    pub(super) fallible_states: FxHashMap<DefId, FallibleState>,
+}
+
+// ─── Blocking Call Detection ───────────────────────────────
+// These AST-level names correspond to functions that release the shared-variable
+// token (blocking I/O, sleep).  Must stay in sync with
+// `src/ir/lowering/exprs/mod.rs::BLOCKING_CALL_NAMES` and the broader list in
+// `src/ir/transforms/shared_async.rs::BLOCKING_STDLIB_CALLS`.
+
+pub(super) const BLOCKING_CALL_NAMES: &[&str] = &[
+    "sleep", "read_file", "write_file", "append_file",
+    "readdir", "http_get", "http_post", "http_put", "http_delete",
+];
+
+// NOTE: `is_blocking_call_name` and `expr_contains_yield_point` are now
+// purity-aware methods on BorrowChecker. BLOCKING_CALL_NAMES above is still
+// used by `is_yield_point_call` for backwards compatibility.
+
+mod type_utils;
+use type_utils::*;
+mod origins;
+mod helpers;
+mod check_expr;
+mod check_stmt;
+
+// ─── Borrow Checker ────────────────────────────────────────
+
+pub(super) struct BorrowChecker<'a> {
+    pub(super) scopes: &'a ScopeTable,
+    pub(super) types: &'a TypeTable,
+    pub(super) resolution_map: &'a ResolutionMap,
+    pub(super) function_info: &'a FxHashMap<DefId, FunctionInfo>,
+    pub(super) function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
+    pub(super) errors: Vec<SemanticError>,
+    /// Variable state: DefId -> current state.
+    pub(super) var_states: FxHashMap<DefId, VarState>,
+    /// Nesting depth inside loops (for move-in-loop detection).
+    pub(super) loop_depth: usize,
+    /// Stack of DefId sets: variables declared in each loop nesting level.
+    /// Variables declared within a loop body are re-created each iteration
+    /// and can safely be moved. Only variables from OUTSIDE the innermost
+    /// loop are rejected.
+    pub(super) loop_local_defs: Vec<FxHashSet<DefId>>,
+    /// Nesting depth inside arena `with` blocks (for escape detection).
+    pub(super) arena_depth: usize,
+    /// Variables declared while arena_depth > 0 that hold non-Copy types.
+    /// These must not escape the arena scope.
+    pub(super) arena_scoped_vars: FxHashSet<DefId>,
+    /// Expression type map from the type checker (for lifetime tracking).
+    pub(super) expr_types: &'a FxHashMap<Span, TypeId>,
+    /// Current function's body scope (for scope-aware variable lookup).
+    pub(super) current_fn_scope: Option<ScopeId>,
+
+    // ── Struct borrowing state (Phase 4) ──
+    /// Structs that contain reference-type fields (directly or transitively).
+    pub(super) ref_type_structs: FxHashSet<DefId>,
+    /// Per-struct field flags: true if that field's type is a reference type.
+    pub(super) struct_field_ref_flags: FxHashMap<DefId, Vec<bool>>,
+
+    // ── Lifetime inference state ──
+    /// Origin of each reference-typed variable.
+    pub(super) var_origins: FxHashMap<DefId, BorrowOrigin>,
+    /// DefIds whose data has been moved (invalidated).
+    pub(super) invalidated_origins: FxHashSet<DefId>,
+    /// Current function's return type (if it's a reference type).
+    pub(super) current_return_type_id: Option<TypeId>,
+    /// Depth of Item::Module nesting. When > 0, we're checking an imported module's
+    /// code. DanglingReturn checks are skipped because (a) imported code is validated
+    /// by its own project's borrow checker, and (b) cross-module origin tracking has
+    /// limitations — built-in methods (unwrap, get, etc.) aren't in method_resolutions,
+    /// so origin tracking falls back to conservative Local origins, causing false positives.
+    pub(super) imported_module_depth: usize,
+    /// Current function's param (DefId, param_index) pairs.
+    pub(super) current_param_def_ids: Vec<(DefId, usize)>,
+
+    // ── Method resolution (Phase 7) ──
+    /// Method span start → DefId (from typechecker, for origin/temporary tracking).
+    pub(super) method_resolutions: &'a FxHashMap<usize, DefId>,
+
+    // ── Outlives constraints (Phase 5) ──
+    /// Active `where a outlives b` constraints from call sites.
+    pub(super) active_outlives: Vec<ActiveOutlives>,
+
+    // ── Reassignment invalidation (Phase 11) ──
+    /// Variables whose borrow source was reassigned, making their reference stale.
+    /// Maps the dependent variable's DefId → (source_name, reassignment_span).
+    pub(super) reassignment_invalidated: FxHashMap<DefId, (String, Span)>,
+
+    /// Whether the current execution path has unconditionally diverged
+    /// (return, break, continue, throw). Used to exclude diverging branches
+    /// from state merges so that moves in early-return paths don't poison
+    /// the post-branch state.
+    pub(super) diverged: bool,
+
+    /// Whether we are inside a return expression (for allowing implicit
+    /// constructor moves of non-loop-local vars — return exits the function).
+    pub(super) in_return_expr: bool,
+
+    /// Whether the current function is `async`.
+    pub(super) current_function_is_async: bool,
+    /// Whether the current function has `throws`.
+    pub(super) current_function_throws: bool,
+    /// Variables with non-static borrow origins that were Live before an `await`.
+    /// Using these after the await triggers BorrowAcrossAwait.
+    pub(super) await_invalidated: FxHashSet<DefId>,
+
+    /// Capture sets for closure-typed variables, keyed by the variable's DefId.
+    pub(super) closure_capture_sets: FxHashMap<DefId, CaptureSet>,
+    /// Temporarily holds the capture set computed for the most recent closure
+    /// expression, picked up by VarDecl to associate it with the variable's DefId.
+    pub(super) pending_capture_set: Option<CaptureSet>,
+
+    /// Variables currently captured mutably by live closures.
+    /// Maps variable DefId → Vec of (closure variable name, closure DefId, span of closure decl).
+    /// Multiple closures may capture the same variable; the Vec tracks all of them.
+    /// While any entry is present, reading or writing the variable directly is an error.
+    pub(super) mut_captured_vars: FxHashMap<DefId, Vec<(String, DefId, Span)>>,
+    /// Reverse map: closure DefId → list of captured variable DefIds registered in
+    /// mut_captured_vars.  Used to clean up mut_captured_vars when the closure is moved
+    /// or goes out of scope.
+    pub(super) mut_capture_owners: FxHashMap<DefId, Vec<DefId>>,
+    /// DefIds of variables declared with `shared` — maps to (SharedKind, name, span).
+    pub(super) shared_var_defs: FxHashMap<DefId, (crate::parser::ast::SharedKind, String, Span)>,
+    /// Locals derived from a shared binding (read before any await).
+    pub(super) shared_derived: FxHashMap<DefId, SharedDerivedInfo>,
+    /// Locals derived from shared that have become stale (an await occurred
+    /// between the read and the current point). Using these in branch conditions
+    /// triggers a warning.
+    pub(super) stale_shared_derived: FxHashMap<DefId, SharedDerivedInfo>,
+    /// Shared variables that have been written to (assigned or compound-assigned).
+    pub(super) shared_written: FxHashSet<DefId>,
+    /// Shared variables that have been passed as spawn arguments.
+    pub(super) shared_spawned: FxHashSet<DefId>,
+    /// Output: CFA decisions populated during analysis.
+    pub(super) shared_out: FxHashMap<DefId, super::SharedStrategy>,
+    /// Stale-condition warnings collected during analysis (§3.4).
+    pub(super) stale_warnings: Vec<super::errors::SemanticWarning>,
+    /// DefIds of `with` bindings that track shared variables (auto-refresh).
+    /// These are exempt from stale-condition warnings — the compiler guarantees
+    /// they are refreshed after every await point.
+    pub(super) with_shared_tracked: FxHashSet<DefId>,
+    /// Stack of (shared_name, condition_span, kind) for enclosing branches/loops
+    /// whose condition/iterable references a `with`-tracked shared variable.
+    /// Yield points inside these trigger check-then-act or iterator invalidation warnings.
+    pub(super) with_guarded_conditions: Vec<(Vec<String>, Span, WithGuardKind)>,
+    /// Depth of `with` blocks (for detecting spawn inside `with`).
+    pub(super) with_depth: usize,
+
+    /// Inferred function purity (for yield-point detection in `with` blocks).
+    pub(super) fn_purity: &'a super::purity::PurityByName,
+
+    /// Tracks local variable declarations for unused-variable detection.
+    /// Maps DefId → (name, span, is_used). Reset per function.
+    pub(super) local_var_usage: FxHashMap<DefId, (String, Span, bool)>,
+
+    /// Tracks whether Option/Result variables have been guard-checked.
+    /// Maps DefId → FallibleState. Reset per function.
+    pub(super) fallible_states: FxHashMap<DefId, FallibleState>,
+
+    /// Tracks which variables have been reassigned (for const promotion warnings).
+    pub(super) var_reassigned: FxHashSet<DefId>,
+
+    /// Tracks which `&` (MutableBorrow) parameters have been actually mutated.
+    pub(super) mut_param_mutated: FxHashSet<DefId>,
+    /// `&` parameters in the current function: (DefId, name, span).
+    pub(super) current_mut_params: Vec<(DefId, String, Span)>,
+    /// Whether to emit CouldBeConst warnings (opt-in via `--warn-const`).
+    pub(super) warn_const: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WithGuardKind {
+    BranchCondition,
+    Iteration,
+}
+
+impl<'a> BorrowChecker<'a> {
+    fn new(
+        scopes: &'a ScopeTable,
+        types: &'a TypeTable,
+        resolution_map: &'a ResolutionMap,
+        function_info: &'a FxHashMap<DefId, FunctionInfo>,
+        function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
+        expr_types: &'a FxHashMap<Span, TypeId>,
+        method_resolutions: &'a FxHashMap<usize, DefId>,
+        ref_type_structs: FxHashSet<DefId>,
+        struct_field_ref_flags: FxHashMap<DefId, Vec<bool>>,
+        fn_purity: &'a super::purity::PurityByName,
+    ) -> Self {
+        Self {
+            scopes,
+            types,
+            resolution_map,
+            function_info,
+            function_body_scopes,
+            errors: Vec::new(),
+            var_states: FxHashMap::default(),
+            loop_depth: 0,
+            loop_local_defs: Vec::new(),
+            arena_depth: 0,
+            arena_scoped_vars: FxHashSet::default(),
+            expr_types: expr_types,
+            current_fn_scope: None,
+            method_resolutions,
+            ref_type_structs,
+            struct_field_ref_flags,
+            var_origins: FxHashMap::default(),
+            invalidated_origins: FxHashSet::default(),
+            current_return_type_id: None,
+            imported_module_depth: 0,
+            current_param_def_ids: Vec::new(),
+            active_outlives: Vec::new(),
+            reassignment_invalidated: FxHashMap::default(),
+            diverged: false,
+            in_return_expr: false,
+            current_function_is_async: false,
+            current_function_throws: false,
+            await_invalidated: FxHashSet::default(),
+            closure_capture_sets: FxHashMap::default(),
+            pending_capture_set: None,
+            mut_captured_vars: FxHashMap::default(),
+            mut_capture_owners: FxHashMap::default(),
+            shared_var_defs: FxHashMap::default(),
+            shared_derived: FxHashMap::default(),
+            stale_shared_derived: FxHashMap::default(),
+            shared_written: FxHashSet::default(),
+            shared_spawned: FxHashSet::default(),
+            shared_out: FxHashMap::default(),
+            stale_warnings: Vec::new(),
+            with_shared_tracked: FxHashSet::default(),
+            with_guarded_conditions: Vec::new(),
+            with_depth: 0,
+            fn_purity,
+            local_var_usage: FxHashMap::default(),
+            fallible_states: FxHashMap::default(),
+            var_reassigned: FxHashSet::default(),
+            mut_param_mutated: FxHashSet::default(),
+            current_mut_params: Vec::new(),
+            warn_const: false,
+        }
+    }
+
+    fn error(&mut self, kind: SemanticErrorKind, span: Span) {
+        self.errors.push(SemanticError { kind, span });
+    }
+
+    /// Returns the type name ("Option" or "Result") if the TypeId is an Option/Result type.
+    fn is_option_or_result_type(&self, type_id: TypeId) -> Option<String> {
+        if let ResolvedType::Generic(def_id, _) = self.types.get(type_id) {
+            let name = self.scopes.get_def(*def_id).name.clone();
+            if name == "Option" || name == "Result" {
+                return Some(name);
+            }
+        }
+        None
+    }
+
+}
+
+
+
+mod return_borrows;
+use return_borrows::compute_all_return_borrows;
+
+// ─── Pass 5b: Full Borrow Check ──────────────────────────────
+
+/// Run borrow checking on the entire module.
+pub fn check_module(
+    module: &Module,
+    scopes: &ScopeTable,
+    types: &TypeTable,
+    resolution_map: &ResolutionMap,
+    function_info: &mut FxHashMap<DefId, FunctionInfo>,
+    function_body_scopes: &FxHashMap<(String, usize), ScopeId>,
+    expr_types: &FxHashMap<Span, TypeId>,
+    method_resolutions: &FxHashMap<usize, DefId>,
+    errors: &mut Vec<SemanticError>,
+    warn_const: bool,
+) -> (FxHashMap<DefId, super::SharedStrategy>, Vec<super::errors::SemanticWarning>, super::purity::PurityByName) {
+    // Phase 4: compute which structs have reference-type fields
+    let ref_type_structs = compute_ref_type_structs(module, scopes);
+    let struct_field_ref_flags = compute_struct_field_ref_flags(module, scopes, &ref_type_structs);
+
+    // Pass 5a: compute return_borrows_from for each function
+    compute_all_return_borrows(module, scopes, types, resolution_map, function_info, &ref_type_structs);
+
+    // Pass 5b½: Purity inference — lightweight AST walk (moved before borrow check
+    // so purity info is available for yield-point detection in `with` blocks).
+    let purity_by_name = infer_purity(module, scopes, resolution_map);
+
+    // Pass 5b: full borrow check with origin tracking
+    let mut checker = BorrowChecker::new(
+        scopes, types, resolution_map, function_info, function_body_scopes,
+        expr_types,
+        method_resolutions, ref_type_structs, struct_field_ref_flags,
+        &purity_by_name,
+    );
+    checker.warn_const = warn_const;
+
+    check_items_recursive(&mut checker, &module.items);
+
+    // Final CFA pass: assign default strategies for shared vars not yet decided.
+    // - If a shared var is spawned AND locally written → upgrade to ArcMutex
+    //   (main thread writes + spawned thread reads = data race without mutex)
+    // - If a shared var is spawned but never locally written → keep cfa_at_spawn's decision
+    // - If a shared var is never spawned → ArcMutex if written, ArcOnly if read-only
+    let mut warnings = Vec::new();
+    for (&def_id, (_, name, span)) in &checker.shared_var_defs {
+        let entry = checker.shared_out.entry(def_id).or_insert_with(|| {
+            // Not spawned at all — decide based on local writes
+            if checker.shared_written.contains(&def_id) {
+                super::SharedStrategy::ArcMutex
+            } else {
+                super::SharedStrategy::ArcOnly
+            }
+        });
+        // If spawned as ArcOnly but locally written, upgrade to ArcMutex
+        if *entry == super::SharedStrategy::ArcOnly && checker.shared_written.contains(&def_id) {
+            *entry = super::SharedStrategy::ArcMutex;
+        }
+        // Warn if a shared var never crosses a concurrency boundary
+        if !checker.shared_spawned.contains(&def_id) {
+            warnings.push(super::errors::SemanticWarning {
+                kind: super::errors::SemanticWarningKind::UnnecessaryShared {
+                    name: name.clone(),
+                },
+                span: *span,
+            });
+        }
+    }
+
+    // Phase 4: Unused import detection
+    // Collect imported DefIds from the AST, then check if they appear in resolution_map values.
+    let used_def_ids: FxHashSet<DefId> = resolution_map.values().copied().collect();
+    let mut imported_defs: Vec<(DefId, String, Span)> = Vec::new();
+    collect_imported_defs(&module.items, scopes, &mut imported_defs);
+    for (def_id, name, span) in &imported_defs {
+        if !used_def_ids.contains(def_id) && !name.starts_with('_') {
+            warnings.push(super::errors::SemanticWarning {
+                kind: super::errors::SemanticWarningKind::UnusedImport {
+                    name: name.clone(),
+                },
+                span: *span,
+            });
+        }
+    }
+
+    // Phase 8: Private-in-public signature detection
+    check_private_in_public(&module.items, scopes, &mut checker.errors);
+
+    warnings.extend(checker.stale_warnings);
+    errors.extend(checker.errors);
+
+    (checker.shared_out, warnings, purity_by_name)
+}
+
+fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
+    for item in items {
+        match &item.node {
+            Item::Module { items: inner, .. } => {
+                checker.imported_module_depth += 1;
+                check_items_recursive(checker, inner);
+                checker.imported_module_depth -= 1;
+            }
+            Item::Function(f) => {
+                checker.check_function(f);
+            }
+            Item::Equip(impl_block) => {
+                for method in &impl_block.items {
+                    checker.check_function(&method.node);
+                }
+            }
+            Item::Test(t) => {
+                checker.var_states.clear();
+                checker.loop_depth = 0;
+                checker.loop_local_defs.clear();
+                checker.arena_depth = 0;
+                checker.arena_scoped_vars.clear();
+                checker.var_origins.clear();
+                checker.invalidated_origins.clear();
+                checker.await_invalidated.clear();
+                checker.closure_capture_sets.clear();
+                checker.pending_capture_set = None;
+                checker.check_block(&t.body);
+            }
+            Item::Bench(b) => {
+                checker.var_states.clear();
+                checker.loop_depth = 0;
+                checker.loop_local_defs.clear();
+                checker.arena_depth = 0;
+                checker.arena_scoped_vars.clear();
+                checker.var_origins.clear();
+                checker.invalidated_origins.clear();
+                checker.await_invalidated.clear();
+                checker.closure_capture_sets.clear();
+                checker.pending_capture_set = None;
+                checker.check_block(&b.body);
+            }
+            Item::SuiteSetup(s) => {
+                checker.var_states.clear();
+                checker.loop_depth = 0;
+                checker.loop_local_defs.clear();
+                checker.arena_depth = 0;
+                checker.arena_scoped_vars.clear();
+                checker.var_origins.clear();
+                checker.invalidated_origins.clear();
+                checker.await_invalidated.clear();
+                checker.closure_capture_sets.clear();
+                checker.pending_capture_set = None;
+                checker.check_block(&s.body);
+            }
+            Item::SuiteTeardown(s) => {
+                checker.var_states.clear();
+                checker.loop_depth = 0;
+                checker.loop_local_defs.clear();
+                checker.arena_depth = 0;
+                checker.arena_scoped_vars.clear();
+                checker.var_origins.clear();
+                checker.invalidated_origins.clear();
+                checker.await_invalidated.clear();
+                checker.closure_capture_sets.clear();
+                checker.pending_capture_set = None;
+                checker.check_block(&s.body);
+            }
+            _ => {}
+        }
+    }
+}
+
+mod validation;
+use validation::{check_private_in_public, collect_imported_defs, infer_purity};
+
+#[cfg(test)]
+mod tests;
