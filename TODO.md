@@ -168,8 +168,6 @@
 
 - **gorget-db — JSON document store**: MongoDB-lite REST API using gg.httpserver, gg.json, gg.jsonpath, std.signal, std.fs. POST/GET/DELETE/PUT/PATCH on `/db/{collection}/{id}` with query support. [added: 2026-03-09]
 
-- **Semantic: function type unification ignores ownership** — `unify()` on `ResolvedType::Function` uses `..` to skip `param_ownerships`, so `int(&int)` and `int(!int)` unify as compatible. Fix requires Callable inner function types to carry real ownership from the type annotation (currently they default to `Borrow` for all params), otherwise false mismatches occur. Needs design work on how Callable/function type ownership flows through the type system. [added: 2026-03-17]
-
 - **Semantic: scope lookup performance (O(n) → O(1))** — Linear scope lookup could use index-based optimization. Needs profiling first to confirm it's a bottleneck. [added: 2026-03-17]
 
 - **Semantic: type alias circular dependency detection** — No check for circular type aliases (`type A = B`, `type B = A`). Needs design. [added: 2026-03-17]

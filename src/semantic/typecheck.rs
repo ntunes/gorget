@@ -477,6 +477,26 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Extract `param_ownerships` from a type hint, unwrapping through
+    /// Callable/MutCallable/ConsumeCallable/BoxedCallable wrappers.
+    fn extract_function_ownerships(&self, hint: Option<TypeId>) -> Option<Vec<crate::parser::ast::Ownership>> {
+        let hint = hint?;
+        let resolved = self.resolve_type(hint);
+        match self.types.get(resolved) {
+            ResolvedType::Function { param_ownerships, .. } => Some(param_ownerships.clone()),
+            ResolvedType::CallableTrait(inner)
+            | ResolvedType::MutCallableTrait(inner)
+            | ResolvedType::ConsumeCallableTrait(inner)
+            | ResolvedType::BoxedCallable { inner, .. } => {
+                match self.types.get(*inner) {
+                    ResolvedType::Function { param_ownerships, .. } => Some(param_ownerships.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Return a human-readable name for a resolved type.
     /// Uses the definition name for `Defined`/`Generic` types instead of the
     /// unhelpful `"<defined>"` from `TypeTable::display`.
@@ -578,17 +598,28 @@ impl<'a> TypeChecker<'a> {
                 ResolvedType::Function {
                     params: a_params,
                     return_type: a_ret,
-                    ..
+                    param_ownerships: a_own,
                 },
                 ResolvedType::Function {
                     params: b_params,
                     return_type: b_ret,
-                    ..
+                    param_ownerships: b_own,
                 },
             ) if a_params.len() == b_params.len() => {
-                // NOTE: param_ownerships intentionally skipped — Callable inner
-                // function types default to Borrow, causing false mismatches
-                // with concrete functions that carry real ownership. See TODO.md.
+                // Check ownership compatibility when both sides carry ownership info
+                if !a_own.is_empty() && !b_own.is_empty()
+                    && a_own.len() == b_own.len()
+                    && a_own != b_own
+                {
+                    self.error(
+                        SemanticErrorKind::TypeMismatch {
+                            expected: self.describe_resolved_type(a),
+                            found: self.describe_resolved_type(b),
+                        },
+                        span,
+                    );
+                    return self.types.error_id;
+                }
                 let pairs: Vec<_> = a_params
                     .iter()
                     .copied()
@@ -1621,8 +1652,20 @@ impl<'a> TypeChecker<'a> {
                 // Infer closure type from params and body.
                 // Write resolved param types back to DefInfos so that
                 // references to the params inside the body can find them.
+                let expected_ownerships = self.extract_function_ownerships(self.decl_type_hint);
                 let mut param_types = Vec::new();
-                for param in params {
+                let mut param_ownerships = Vec::new();
+                for (i, param) in params.iter().enumerate() {
+                    // Use explicit ownership from closure param, or inherit from
+                    // expected type hint (e.g. Callable[int(&T)]) for untyped params.
+                    let own = if param.node.ownership != crate::parser::ast::Ownership::Borrow {
+                        param.node.ownership
+                    } else if let Some(expected) = expected_ownerships.as_ref().and_then(|v| v.get(i)) {
+                        *expected
+                    } else {
+                        crate::parser::ast::Ownership::Borrow
+                    };
+                    param_ownerships.push(own);
                     if let Some(ty) = &param.node.type_ {
                         let tid = super::types::ast_type_to_resolved(
                             &ty.node, ty.span, self.scopes, self.types,
@@ -1648,7 +1691,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 let body_type = self.infer_expr(body);
                 self.types.insert(ResolvedType::Function {
-                    param_ownerships: vec![crate::parser::ast::Ownership::Borrow; param_types.len()],
+                    param_ownerships,
                     params: param_types,
                     return_type: body_type,
                 })
@@ -1659,10 +1702,13 @@ impl<'a> TypeChecker<'a> {
                 let prev_it_type = self.implicit_it_type.replace(param_type);
                 let body_type = self.infer_expr(body);
                 self.implicit_it_type = prev_it_type;
+                let ownership = self.extract_function_ownerships(self.decl_type_hint)
+                    .and_then(|v| v.into_iter().next())
+                    .unwrap_or(crate::parser::ast::Ownership::Borrow);
                 self.types.insert(ResolvedType::Function {
                     params: vec![param_type],
                     return_type: body_type,
-                    param_ownerships: vec![crate::parser::ast::Ownership::Borrow],
+                    param_ownerships: vec![ownership],
                 })
             }
 
@@ -3538,8 +3584,11 @@ impl<'a> TypeChecker<'a> {
         };
 
         // Create the Function type and set it on the DefInfo
+        let param_ownerships = self.function_info.get(&def_id)
+            .map(|info| info.param_ownerships.clone())
+            .unwrap_or_else(|| vec![crate::parser::ast::Ownership::Borrow; param_types.len()]);
         let func_type = self.types.insert(ResolvedType::Function {
-            param_ownerships: vec![crate::parser::ast::Ownership::Borrow; param_types.len()],
+            param_ownerships,
             params: param_types,
             return_type,
         });

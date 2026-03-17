@@ -269,9 +269,16 @@ impl TypeTable {
             ResolvedType::Function {
                 params,
                 return_type,
-                ..
+                param_ownerships,
             } => {
-                let params: Vec<_> = params.iter().map(|p| self.display(*p)).collect();
+                let params: Vec<_> = params.iter().enumerate().map(|(i, p)| {
+                    let prefix = match param_ownerships.get(i) {
+                        Some(crate::parser::ast::Ownership::MutableBorrow) => "&",
+                        Some(crate::parser::ast::Ownership::Move) => "!",
+                        _ => "",
+                    };
+                    format!("{prefix}{}", self.display(*p))
+                }).collect();
                 format!("{}({})", self.display(*return_type), params.join(", "))
             }
             ResolvedType::TraitObject(_) => "<trait object>".into(),
