@@ -99,6 +99,10 @@ impl<'a> BorrowChecker<'a> {
     pub(super) fn compute_expr_origin(&self, expr: &Spanned<Expr>) -> BorrowOrigin {
         match &expr.node {
             // String literals are always valid (static storage).
+            // NOTE: f-strings allocate heap memory (GorgetString) with local lifetime,
+            // but the IR layer handles ownership via string_backing + mark-moved.
+            // A future enhancement could add BorrowOrigin::Owned to catch dangling
+            // str views of f-strings, but this requires updating many existing fixtures.
             Expr::StringLiteral(_) => BorrowOrigin::Static,
 
             Expr::Identifier(_) => {

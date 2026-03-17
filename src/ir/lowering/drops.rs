@@ -93,6 +93,41 @@ impl DropElaborator {
         }
     }
 
+    /// Register a Move-type local at the outermost (Function) scope, even if the current
+    /// scope is a nested Block or Loop. Used for GorgetString temps that back Str views —
+    /// they must survive until the function exits, not just the current block scope.
+    /// Skips if the local is already registered in any scope (prevents double-registration).
+    pub fn register_local_at_function_scope(&mut self, local: LocalId, type_id: TypeId, registry: &TypeRegistry) {
+        if !needs_drop(type_id, registry) {
+            return;
+        }
+        // Check if already registered in any scope
+        for scope in &self.scopes {
+            if scope.entries.iter().any(|e| e.local == local) {
+                return;
+            }
+        }
+        // Find the outermost Function scope
+        for scope in self.scopes.iter_mut() {
+            if scope.kind == DropScopeKind::Function {
+                scope.entries.push(DropEntry {
+                    local,
+                    type_id,
+                    maybe_moved: false,
+                });
+                return;
+            }
+        }
+        // Fallback to current scope if no Function scope exists
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.entries.push(DropEntry {
+                local,
+                type_id,
+                maybe_moved: false,
+            });
+        }
+    }
+
     /// Register a function parameter for drop at scope exit — **only** for Copy-semantics
     /// types that have a non-None drop strategy (e.g., Channel, Shared, Weak).
     ///

@@ -2209,6 +2209,25 @@ fn lower_string_interpolation(
     FunctionBuilder::copy(dst)
 }
 
+/// If the operand is a GorgetString temp (from function/method calls, concat, etc.),
+/// register it for drop at function scope. This ensures intermediate GorgetString allocations
+/// are freed at function exit. The caller (VarDecl/Assign) handles marking the temp as moved
+/// when it's consumed by a String variable.
+pub fn maybe_register_owned_string_for_drop(
+    ctx: &mut LoweringContext,
+    builder: &FunctionBuilder,
+    operand: &Operand,
+) {
+    if let Operand::Copy(place) | Operand::Move(place) = operand {
+        if place.projections.is_empty() {
+            let local_type = builder.locals[place.local.0 as usize].type_id;
+            if local_type == ctx.type_mapper.owned_string_type {
+                ctx.drops.register_local_at_function_scope(place.local, local_type, &ctx.type_registry);
+            }
+        }
+    }
+}
+
 /// Infer the GIR type of an operand by examining its structure.
 /// Register (or reuse) a Tuple TypeDef for the given element types.
 /// Infer operand type using both ctx locals and builder locals.

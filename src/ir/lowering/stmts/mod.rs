@@ -262,6 +262,23 @@ fn lower_var_decl(
                 }
             }
             builder.assign(Place::local(local_id), operand.clone());
+            // Track GorgetString temps assigned to Str or String variables.
+            // Use the ACTUAL variable type (after reinference) not the original gir_type.
+            let actual_var_type = builder.locals[local_id.0 as usize].type_id;
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                if place.projections.is_empty() {
+                    let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                    if rhs_type == ctx.type_mapper.owned_string_type
+                        && actual_var_type == ctx.type_mapper.owned_string_type
+                        && place.local != local_id
+                    {
+                        // String variable consuming a GorgetString temp: mark temp as moved
+                        // to prevent double-free (VarDecl already registers the variable for drop)
+                        builder.move_zero(Place::local(place.local));
+                        ctx.drops.mark_moved(place.local);
+                    }
+                }
+            }
             // Emit MoveZero for resource-type field loads to prevent double-free
             maybe_emit_field_move_zero(ctx, builder, &operand);
         }
@@ -584,6 +601,12 @@ fn lower_return(
         }
         // Postcondition checks: `assert return <expr>` — check before returning
         emit_postcondition_checks(ctx, builder);
+
+        // Note: GorgetString temps backing str views are NOT freed here.
+        // Without borrow checker support (f-string origin tracking), we cannot safely
+        // determine if a Str view's backing has been copied to a struct or collection.
+        // Freeing the backing could cause use-after-free. These GorgetStrings leak.
+        // See TODO.md for the planned borrow checker enhancement.
 
         // P2.6: Emit cleanup drops for all scopes being exited
         // Exclude the local being returned (it's moved into _0, not consumed)

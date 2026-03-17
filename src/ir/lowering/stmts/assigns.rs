@@ -89,6 +89,21 @@ pub(super) fn lower_assign(
                     builder.assign(Place::local(local_id), operand.clone());
                     super::maybe_emit_field_move_zero(ctx, builder, &operand);
                 }
+                // Track GorgetString temps in assignments
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                    if place.projections.is_empty() {
+                        let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                        if rhs_type == ctx.type_mapper.owned_string_type
+                            && type_id == ctx.type_mapper.owned_string_type
+                            && place.local != local_id
+                        {
+                            // String variable consuming a GorgetString temp: mark temp as moved
+                            // to prevent double-free (variable is already registered for drop)
+                            builder.move_zero(Place::local(place.local));
+                            ctx.drops.mark_moved(place.local);
+                        }
+                    }
+                }
             } else if ctx.global_names.contains(name.as_str()) {
                 // Module-level static variable — emit GlobalAssign
                 let operand = lower_expr(ctx, builder, value);
@@ -463,6 +478,9 @@ pub(super) fn lower_compound_assign(
                     vec![cur_val, rhs],
                     owned_type,
                 );
+                // Note: for str variables, the GorgetString temp is NOT freed here.
+                // Without borrow checker support, we cannot safely determine if the Str view
+                // has been copied elsewhere. These temporaries leak (same as original behavior).
                 let dst = if is_mut_capture {
                     Place { local: local_id, projections: vec![Projection::Deref] }
                 } else {

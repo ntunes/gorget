@@ -170,9 +170,20 @@ pub fn lower_function(
 
         FunctionBody::Expression(expr) => {
             let operand = lower_expr(ctx, &mut builder, expr);
+            // Identify the returned local to exclude it from drops
+            let returned_local = match &operand {
+                Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                    Some(place.local)
+                }
+                _ => None,
+            };
             builder.assign(Place::local(LocalId(0)), operand);
-            // P2.6: Emit scope drops before return
-            ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            // P2.6: Emit scope drops before return, excluding the returned value
+            ctx.drops.emit_early_exit_drops(
+                &mut builder, &ctx.type_registry,
+                DropScopeKind::Function, returned_local,
+            );
+            ctx.drops.pop_scope_no_emit();
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
 
@@ -322,8 +333,18 @@ pub fn lower_equip_method(
 
         FunctionBody::Expression(expr) => {
             let operand = lower_expr(ctx, &mut builder, expr);
+            let returned_local = match &operand {
+                Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                    Some(place.local)
+                }
+                _ => None,
+            };
             builder.assign(Place::local(LocalId(0)), operand);
-            ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            ctx.drops.emit_early_exit_drops(
+                &mut builder, &ctx.type_registry,
+                DropScopeKind::Function, returned_local,
+            );
+            ctx.drops.pop_scope_no_emit();
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
 
@@ -555,6 +576,12 @@ pub fn lower_generic_function(
 
         FunctionBody::Expression(expr) => {
             let operand = lower_expr(ctx, &mut builder, expr);
+            let returned_local = match &operand {
+                Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                    Some(place.local)
+                }
+                _ => None,
+            };
             builder.assign(Place::local(LocalId(0)), operand);
             // For move-overridden params: zero the source through the pointer
             // to prevent the caller from double-freeing.
@@ -568,7 +595,11 @@ pub fn lower_generic_function(
                     }
                 }
             }
-            ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+            ctx.drops.emit_early_exit_drops(
+                &mut builder, &ctx.type_registry,
+                DropScopeKind::Function, returned_local,
+            );
+            ctx.drops.pop_scope_no_emit();
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
 
@@ -758,8 +789,18 @@ pub fn lower_generic_equip_methods_with_defaults(
             }
             FunctionBody::Expression(expr) => {
                 let operand = lower_expr(ctx, &mut builder, expr);
+                let returned_local = match &operand {
+                    Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                        Some(place.local)
+                    }
+                    _ => None,
+                };
                 builder.assign(Place::local(LocalId(0)), operand);
-                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+                ctx.drops.emit_early_exit_drops(
+                    &mut builder, &ctx.type_registry,
+                    DropScopeKind::Function, returned_local,
+                );
+                ctx.drops.pop_scope_no_emit();
                 builder.ret(FunctionBuilder::copy(LocalId(0)));
             }
             FunctionBody::Declaration | FunctionBody::Extern(_) => {

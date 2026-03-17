@@ -225,6 +225,15 @@ pub struct LoweringContext<'a> {
     /// Maps temp locals from field_load → (source_field_place, field_type).
     /// Used by VarDecl/Assign to emit MoveZero after extracting resource-type fields.
     pub field_load_origins: FxHashMap<LocalId, (crate::ir::instructions::Place, TypeId)>,
+    /// Maps Str local → backing GorgetString local.
+    /// When a GorgetString is assigned to a Str variable, the GorgetString
+    /// holds ownership of the heap buffer. The Str is a zero-copy view.
+    pub string_backing: FxHashMap<LocalId, LocalId>,
+    /// Maps Str local → companion GorgetString local.
+    /// Each str variable that receives GorgetString data gets a dedicated companion
+    /// local that always holds the current backing. This ensures correct cleanup
+    /// when different branches produce GorgetStrings in different temp locals.
+    pub str_companions: FxHashMap<LocalId, LocalId>,
 }
 
 
@@ -269,6 +278,8 @@ impl<'a> LoweringContext<'a> {
             move_override_params: std::collections::HashSet::new(),
             sentinel_to_option_methods: rustc_hash::FxHashSet::default(),
             field_load_origins: FxHashMap::default(),
+            string_backing: FxHashMap::default(),
+            str_companions: FxHashMap::default(),
         }
     }
 
@@ -346,6 +357,8 @@ impl<'a> LoweringContext<'a> {
         self.with_shared_refresh.clear();
         self.postconditions.clear();
         self.move_override_params.clear();
+        self.string_backing.clear();
+        self.str_companions.clear();
     }
 
     /// Take the locals map, leaving it empty. Used for save/restore during async variant generation.
