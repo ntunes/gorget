@@ -30,6 +30,112 @@ fn is_integer_type(prim: &PrimitiveType) -> bool {
     int_range(prim).is_some()
 }
 
+/// Returns (bit_width, is_signed) for integer primitive types.
+fn int_width_signed(prim: &PrimitiveType) -> Option<(u8, bool)> {
+    match prim {
+        PrimitiveType::Int8 => Some((8, true)),
+        PrimitiveType::Int16 => Some((16, true)),
+        PrimitiveType::Int32 => Some((32, true)),
+        PrimitiveType::Int | PrimitiveType::Int64 => Some((64, true)),
+        PrimitiveType::Uint8 => Some((8, false)),
+        PrimitiveType::Uint16 => Some((16, false)),
+        PrimitiveType::Uint32 => Some((32, false)),
+        PrimitiveType::Uint | PrimitiveType::Uint64 => Some((64, false)),
+        _ => None,
+    }
+}
+
+/// Returns true if `from` can safely widen to `to` without data loss.
+/// Safe widening: smaller signed → larger signed, smaller unsigned → larger unsigned,
+/// and smaller unsigned → strictly larger signed (unsigned always fits).
+fn is_safe_integer_widening(from: &PrimitiveType, to: &PrimitiveType) -> bool {
+    match (int_width_signed(from), int_width_signed(to)) {
+        (Some((from_bits, from_signed)), Some((to_bits, to_signed))) => {
+            if from_bits == to_bits && from_signed == to_signed {
+                return true; // same type (e.g. Int and Int64)
+            }
+            if from_bits >= to_bits && !(from_bits == to_bits && from_signed == to_signed) {
+                return false; // narrowing is never safe
+            }
+            // from_bits < to_bits
+            match (from_signed, to_signed) {
+                (true, true) => true,    // signed → larger signed
+                (false, false) => true,  // unsigned → larger unsigned
+                (false, true) => true,   // unsigned → larger signed (always fits)
+                (true, false) => false,  // signed → unsigned (may lose sign)
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Format a PrimitiveType as its Gorget source name.
+fn describe_primitive(prim: &PrimitiveType) -> String {
+    match prim {
+        PrimitiveType::Int => "int".to_string(),
+        PrimitiveType::Int8 => "int8".to_string(),
+        PrimitiveType::Int16 => "int16".to_string(),
+        PrimitiveType::Int32 => "int32".to_string(),
+        PrimitiveType::Int64 => "int64".to_string(),
+        PrimitiveType::Uint => "uint".to_string(),
+        PrimitiveType::Uint8 => "uint8".to_string(),
+        PrimitiveType::Uint16 => "uint16".to_string(),
+        PrimitiveType::Uint32 => "uint32".to_string(),
+        PrimitiveType::Uint64 => "uint64".to_string(),
+        PrimitiveType::Float32 => "float32".to_string(),
+        PrimitiveType::Float64 => "float64".to_string(),
+        PrimitiveType::Float => "float".to_string(),
+        PrimitiveType::Bool => "bool".to_string(),
+        PrimitiveType::Str => "str".to_string(),
+        PrimitiveType::StringType => "String".to_string(),
+        PrimitiveType::CStr => "cstr".to_string(),
+        PrimitiveType::Void => "void".to_string(),
+    }
+}
+
+/// Occurs check: returns true if type variable `var_id` appears anywhere in `type_id`.
+fn occurs_in(
+    var_id: u32,
+    type_id: TypeId,
+    types: &super::types::TypeTable,
+    substitutions: &FxHashMap<u32, TypeId>,
+) -> bool {
+    match types.get(type_id) {
+        ResolvedType::Var(v) => {
+            if *v == var_id {
+                return true;
+            }
+            if let Some(&sub) = substitutions.get(v) {
+                occurs_in(var_id, sub, types, substitutions)
+            } else {
+                false
+            }
+        }
+        ResolvedType::Generic(_, args) => {
+            args.iter().any(|&a| occurs_in(var_id, a, types, substitutions))
+        }
+        ResolvedType::Tuple(elems) => {
+            elems.iter().any(|&e| occurs_in(var_id, e, types, substitutions))
+        }
+        ResolvedType::Array(elem, _) | ResolvedType::Slice(elem) => {
+            occurs_in(var_id, *elem, types, substitutions)
+        }
+        ResolvedType::Function { params, return_type, .. } => {
+            params.iter().any(|&p| occurs_in(var_id, p, types, substitutions))
+                || occurs_in(var_id, *return_type, types, substitutions)
+        }
+        ResolvedType::CallableTrait(inner)
+        | ResolvedType::MutCallableTrait(inner)
+        | ResolvedType::ConsumeCallableTrait(inner) => {
+            occurs_in(var_id, *inner, types, substitutions)
+        }
+        ResolvedType::BoxedCallable { inner, .. } => {
+            occurs_in(var_id, *inner, types, substitutions)
+        }
+        _ => false, // Primitive, Defined, TraitObject, Error, Void, Never
+    }
+}
+
 // ══════════════════════════════════════════════════════════════
 // Closure kind classification
 // ══════════════════════════════════════════════════════════════
@@ -311,10 +417,17 @@ impl<'a> TypeChecker<'a> {
 
     /// Resolve a type variable to its substitution, following chains.
     fn resolve_type(&self, id: TypeId) -> TypeId {
+        self.resolve_type_inner(id, 0)
+    }
+
+    fn resolve_type_inner(&self, id: TypeId, depth: u32) -> TypeId {
+        if depth > 100 {
+            return self.types.error_id;
+        }
         match self.types.get(id) {
             ResolvedType::Var(var_id) => {
                 if let Some(&sub) = self.substitutions.get(var_id) {
-                    self.resolve_type(sub)
+                    self.resolve_type_inner(sub, depth + 1)
                 } else {
                     id
                 }
@@ -417,10 +530,16 @@ impl<'a> TypeChecker<'a> {
 
         match (&a_ty, &b_ty) {
             (ResolvedType::Var(var_id), _) => {
+                if occurs_in(*var_id, b, self.types, &self.substitutions) {
+                    return error_id;
+                }
                 self.substitutions.insert(*var_id, b);
                 b
             }
             (_, ResolvedType::Var(var_id)) => {
+                if occurs_in(*var_id, a, self.types, &self.substitutions) {
+                    return error_id;
+                }
                 self.substitutions.insert(*var_id, a);
                 a
             }
@@ -539,11 +658,24 @@ impl<'a> TypeChecker<'a> {
                 self.unify(a, inner, span);
                 b
             }
-            // Allow implicit widening between integer types (matches C codegen behavior)
+            // Integer coercion: only allow safe widening (no data loss).
+            // Narrowing or signed↔unsigned conversions require explicit `as`.
             (ResolvedType::Primitive(a_prim), ResolvedType::Primitive(b_prim))
                 if is_integer_type(a_prim) && is_integer_type(b_prim) =>
             {
-                a // accept the expected (lhs) type
+                // a = expected, b = found/actual. Check if found safely widens to expected.
+                if is_safe_integer_widening(b_prim, a_prim) {
+                    a
+                } else {
+                    self.error(
+                        SemanticErrorKind::UnsafeIntegerConversion {
+                            from: describe_primitive(b_prim),
+                            to: describe_primitive(a_prim),
+                        },
+                        span,
+                    );
+                    a
+                }
             }
             // String→str coercion: String auto-coerces to str (owned → view)
             (ResolvedType::Primitive(PrimitiveType::Str), ResolvedType::Primitive(PrimitiveType::StringType))

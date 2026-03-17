@@ -345,6 +345,12 @@ pub enum SemanticErrorKind {
         max: i128,
     },
 
+    /// Integer conversion that may lose data or sign information.
+    UnsafeIntegerConversion {
+        from: String,
+        to: String,
+    },
+
     // ── Lifetime errors ──
 
     /// Returning a reference to a local variable (would dangle after return).
@@ -646,6 +652,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::ValueOutOfRange { value, type_name, min, max } => {
                 write!(f, "value {value} is out of range for type {type_name} (valid range: {min}..={max})")
+            }
+            SemanticErrorKind::UnsafeIntegerConversion { from, to } => {
+                write!(f, "cannot implicitly convert `{from}` to `{to}` (use `as {to}` for explicit conversion)")
             }
             SemanticErrorKind::DanglingReturn { name, local_name, .. } => {
                 write!(f, "cannot return `{name}`: borrows from local variable `{local_name}` which will be dropped")
