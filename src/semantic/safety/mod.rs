@@ -79,6 +79,9 @@ pub(super) enum BorrowOrigin {
     MatchBinding { binding_def_id: DefId, scrutinee_origin: Box<BorrowOrigin>, is_ref: bool },
     /// Call result — inherits origins from callee's `return_borrows_from` args.
     CallResult(Vec<BorrowOrigin>),
+    /// Heap-allocated owned value (f-string, etc.) — local lifetime.
+    /// Like Local for escape analysis (contains_local() = true) but has no DefId.
+    Owned,
     /// Conservative fallback — treated as potentially local in Phase 1,
     /// refined to CallResult in Phase 2+ when callee info is available.
     Unknown,
@@ -89,7 +92,7 @@ impl BorrowOrigin {
     /// Unknown is treated conservatively — it might be local.
     fn contains_local(&self) -> bool {
         match self {
-            BorrowOrigin::Local(_) => true,
+            BorrowOrigin::Local(_) | BorrowOrigin::Owned => true,
             BorrowOrigin::Unknown => true,
             // Only reference-type bindings borrow from the scrutinee.
             // Non-reference bindings own their extracted data independently.
@@ -108,7 +111,7 @@ impl BorrowOrigin {
             // Only check the binding itself, NOT the scrutinee — sibling bindings are independent
             BorrowOrigin::MatchBinding { binding_def_id, .. } => *binding_def_id == target,
             BorrowOrigin::CallResult(origins) => origins.iter().any(|o| o.references_def(target)),
-            BorrowOrigin::Static | BorrowOrigin::Unknown => false,
+            BorrowOrigin::Static | BorrowOrigin::Owned | BorrowOrigin::Unknown => false,
         }
     }
 
@@ -117,6 +120,7 @@ impl BorrowOrigin {
         match self {
             BorrowOrigin::Local(def_id) => vec![scopes.get_def(*def_id).name.clone()],
             BorrowOrigin::MatchBinding { binding_def_id, .. } => vec![scopes.get_def(*binding_def_id).name.clone()],
+            BorrowOrigin::Owned => vec!["<f-string>".to_string()],
             BorrowOrigin::Unknown => vec!["<unresolved origin>".to_string()],
             BorrowOrigin::CallResult(origins) => {
                 origins.iter().flat_map(|o| o.local_names(scopes)).collect()
@@ -145,7 +149,7 @@ impl BorrowOrigin {
             BorrowOrigin::CallResult(origins) => {
                 origins.iter().flat_map(|o| o.source_def_ids()).collect()
             }
-            BorrowOrigin::Static | BorrowOrigin::Unknown => vec![],
+            BorrowOrigin::Static | BorrowOrigin::Owned | BorrowOrigin::Unknown => vec![],
         }
     }
 }

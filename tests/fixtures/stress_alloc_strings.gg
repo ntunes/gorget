@@ -12,7 +12,7 @@ void main():
     # --- Section 1: f-string creation in a loop ---
     int i = 0
     while i < 1000:
-        str s = f"iteration-{i}"
+        String s = f"iteration-{i}"
         i = i + 1
 
     # --- Section 2: String concatenation in a loop ---
@@ -24,7 +24,7 @@ void main():
     # --- Section 3: String methods returning new strings ---
     i = 0
     while i < 500:
-        str base = f"  Hello World {i}  "
+        String base = f"  Hello World {i}  "
         str trimmed = base.trim()
         str upper = base.to_upper()
         str lower = base.to_lower()
@@ -34,7 +34,7 @@ void main():
     # --- Section 4: String.split() returns Vector[str] ---
     i = 0
     while i < 500:
-        str csv = f"a,b,c,d,{i}"
+        String csv = f"a,b,c,d,{i}"
         Vector[str] parts = csv.split(",")
         i = i + 1
 
@@ -59,12 +59,12 @@ void main():
     # --- Section 7: Function-returned strings ---
     i = 0
     while i < 1000:
-        str s = make_greeting(i)
+        String s = make_greeting(i)
         i = i + 1
 
     int leaked = mem_live() - baseline
     print(f"leaked={leaked > 0}")
     print("done")
 
-str make_greeting(int n):
+String make_greeting(int n):
     return f"Hello, user #{n}!"

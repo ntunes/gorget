@@ -98,12 +98,16 @@ impl<'a> BorrowChecker<'a> {
     /// Compute the borrow origin of an expression.
     pub(super) fn compute_expr_origin(&self, expr: &Spanned<Expr>) -> BorrowOrigin {
         match &expr.node {
-            // String literals are always valid (static storage).
-            // NOTE: f-strings allocate heap memory (GorgetString) with local lifetime,
-            // but the IR layer handles ownership via string_backing + mark-moved.
-            // A future enhancement could add BorrowOrigin::Owned to catch dangling
-            // str views of f-strings, but this requires updating many existing fixtures.
-            Expr::StringLiteral(_) => BorrowOrigin::Static,
+            // Plain string literals are always valid (static storage).
+            // F-strings with interpolation allocate heap memory (GorgetString)
+            // with local lifetime — classified as Owned.
+            Expr::StringLiteral(s) => {
+                if s.has_interpolation() {
+                    BorrowOrigin::Owned
+                } else {
+                    BorrowOrigin::Static
+                }
+            }
 
             Expr::Identifier(_) => {
                 if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
@@ -190,7 +194,9 @@ impl<'a> BorrowChecker<'a> {
                 BorrowOrigin::Unknown
             }
 
-            // Struct literal: origin is the union of all reference-type field args
+            // Struct literal: origin is the union of all reference-type field args.
+            // Owned origins (f-strings) are excluded — the struct takes ownership
+            // of the heap data, so the f-string lives as long as the struct.
             Expr::StructLiteral { name, args, .. } => {
                 if let Some(def_id) = self.resolution_map.get(&name.span.start).copied()
                     .or_else(|| self.scopes.lookup(&name.node))
@@ -200,6 +206,7 @@ impl<'a> BorrowChecker<'a> {
                             .zip(ref_flags.iter())
                             .filter(|(_, is_ref)| **is_ref)
                             .map(|(arg, _)| self.compute_expr_origin(arg))
+                            .filter(|o| !matches!(o, BorrowOrigin::Owned))
                             .collect();
                         return Self::merge_origins(origins);
                     }

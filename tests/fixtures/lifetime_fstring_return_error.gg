@@ -1,0 +1,5 @@
+str bad():
+    return f"x={42}"
+
+void main():
+    print(bad())

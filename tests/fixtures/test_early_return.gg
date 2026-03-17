@@ -57,7 +57,7 @@ Option[int] find_index(Vector[int] v, int target):
     return None()
 
 # 7. Guard clause pattern
-str greet(str name):
+String greet(str name):
     if name == "":
         return "Hello, stranger!"
     return f"Hello, {name}!"

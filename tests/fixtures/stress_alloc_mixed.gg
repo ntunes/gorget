@@ -86,7 +86,7 @@ void main():
     # --- Section 7: Mixed types in one scope ---
     i = 0
     while i < 200:
-        str name = f"user-{i}"
+        String name = f"user-{i}"
         Vector[int] scores = Vector[int]()
         scores.push(90)
         scores.push(85)

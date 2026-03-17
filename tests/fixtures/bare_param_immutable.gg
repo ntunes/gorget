@@ -13,11 +13,11 @@ struct Rect:
 int area(Rect r):
     return r.width * r.height
 
-str describe(Point p):
+String describe(Point p):
     return f"{p.x},{p.y}"
 
-str rect_info(Rect r):
-    str origin = describe(r.origin)
+String rect_info(Rect r):
+    String origin = describe(r.origin)
     int a = area(r)
     return f"{origin} {a}"
 

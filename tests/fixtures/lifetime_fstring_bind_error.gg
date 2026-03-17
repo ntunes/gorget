@@ -1,0 +1,3 @@
+void main():
+    str s = f"hello {42}"
+    print(s)

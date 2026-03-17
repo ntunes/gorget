@@ -59,7 +59,7 @@ float shape_area(Shape s):
             # Use base * height / 2 approximation
             return a * b / 2.0
 
-str describe_wrapper(Wrapper w):
+String describe_wrapper(Wrapper w):
     match w:
         case IntVal(n):
             return f"int:{n}"

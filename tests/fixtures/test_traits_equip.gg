@@ -9,7 +9,7 @@ equip Point:
     int manhattan(self):
         return self.x + self.y
 
-    str to_string(self):
+    String to_string(self):
         return f"({self.x}, {self.y})"
 
     Point offset(self, int dx, int dy):
@@ -21,7 +21,7 @@ equip Point:
 # --- Trait definition ---
 trait Shape:
     float area(self)
-    str describe(self)
+    String describe(self)
 
 # --- Multiple structs implementing same trait ---
 struct Circle:
@@ -34,7 +34,7 @@ equip Circle:
 equip Circle with Shape:
     float area(self):
         return 3.14 * self.radius * self.radius
-    str describe(self):
+    String describe(self):
         return "circle"
 
 struct Square:
@@ -43,29 +43,29 @@ struct Square:
 equip Square with Shape:
     float area(self):
         return self.side * self.side
-    str describe(self):
+    String describe(self):
         return "square"
 
 # --- Trait with default method ---
 trait Named:
-    str name(self)
-    str greeting(self):
+    String name(self)
+    String greeting(self):
         return f"hello {self.name()}"
 
 struct Person:
     str first
 
 equip Person with Named:
-    str name(self):
+    String name(self):
         return self.first
 
 struct Robot:
     int id
 
 equip Robot with Named:
-    str name(self):
+    String name(self):
         return f"robot-{self.id}"
-    str greeting(self):
+    String greeting(self):
         return f"beep {self.name()}"
 
 void main():

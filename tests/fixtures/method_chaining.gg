@@ -13,10 +13,10 @@ equip Builder:
     Builder with_title(self, str t):
         return Builder(self.width, self.height, t)
 
-    str build(self):
+    String build(self):
         return f"{self.title}: {self.width}x{self.height}"
 
 void main():
     Builder b = Builder(0, 0, "")
-    str result = b.with_width(800).with_height(600).with_title("Window").build()
+    String result = b.with_width(800).with_height(600).with_title("Window").build()
     print(result)

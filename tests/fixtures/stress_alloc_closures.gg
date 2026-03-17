@@ -24,7 +24,7 @@ void main():
     # --- Section 2: Closure capturing a string ---
     i = 0
     while i < 500:
-        str prefix = f"item-{i}"
+        String prefix = f"item-{i}"
         auto make_label = (int n): f"{prefix}-{n}"
         str label = make_label(42)
         i = i + 1

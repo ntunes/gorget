@@ -4,7 +4,7 @@ enum Value:
     StrVal(str)
     BoolVal(bool)
 
-str describe(Value v):
+String describe(Value v):
     match v:
         case IntVal(n):
             return f"int: {n}"

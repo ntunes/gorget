@@ -151,7 +151,28 @@ impl<'a> BorrowChecker<'a> {
                         let is_ref = self.is_var_reference_type(def_id, Some(type_));
                         if is_ref {
                             let origin = self.compute_expr_origin(value);
-                            self.var_origins.insert(def_id, origin);
+                            self.var_origins.insert(def_id, origin.clone());
+
+                            // Check for owned string (f-string) assigned to str variable.
+                            // Only fire when the variable type is specifically `str`,
+                            // not for structs that contain str fields.
+                            if matches!(&origin, BorrowOrigin::Owned) {
+                                let var_is_str = self.scopes.get_def(def_id).type_id
+                                    .map_or(false, |tid| matches!(
+                                        self.types.get(tid),
+                                        types::ResolvedType::Primitive(crate::parser::ast::PrimitiveType::Str)
+                                    ));
+                                if var_is_str {
+                                    if let Pattern::Binding(name) = &pattern.node {
+                                        self.error(
+                                            SemanticErrorKind::OwnedStringBind {
+                                                name: name.clone(),
+                                            },
+                                            value.span,
+                                        );
+                                    }
+                                }
+                            }
 
                             // Phase 6: Detect binding a ref type to a temporary
                             // Skip when auto-propagation applies: the Ok value is moved
@@ -611,7 +632,21 @@ impl<'a> BorrowChecker<'a> {
                                     Expr::Identifier(n) => n.clone(),
                                     _ => "<expression>".to_string(),
                                 };
-                                if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
+                                // Only fire OwnedStringReturn when the return type
+                                // is specifically `str` — struct literals with str fields
+                                // also produce Owned origins but the struct owns the data.
+                                let ret_is_str = matches!(
+                                    self.types.get(ret_type_id),
+                                    types::ResolvedType::Primitive(crate::parser::ast::PrimitiveType::Str)
+                                );
+                                if ret_is_str && matches!(&origin, BorrowOrigin::Owned) {
+                                    self.error(
+                                        SemanticErrorKind::OwnedStringReturn {
+                                            name: return_name,
+                                        },
+                                        expr.span,
+                                    );
+                                } else if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
                                     self.error(
                                         SemanticErrorKind::UnresolvedBorrowOrigin {
                                             name: return_name,
@@ -1302,7 +1337,18 @@ impl<'a> BorrowChecker<'a> {
                                 Expr::Identifier(n) => n.clone(),
                                 _ => "<expression>".to_string(),
                             };
-                            if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
+                            let ret_is_str = matches!(
+                                self.types.get(ret_type_id),
+                                types::ResolvedType::Primitive(crate::parser::ast::PrimitiveType::Str)
+                            );
+                            if ret_is_str && matches!(&origin, BorrowOrigin::Owned) {
+                                self.error(
+                                    SemanticErrorKind::OwnedStringReturn {
+                                        name: return_name,
+                                    },
+                                    expr.span,
+                                );
+                            } else if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
                                 self.error(
                                     SemanticErrorKind::UnresolvedBorrowOrigin {
                                         name: return_name,

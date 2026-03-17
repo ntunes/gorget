@@ -1,12 +1,12 @@
 trait Describable:
-    str describe(self)
+    String describe(self)
     float measure(self)
 
 struct Circle:
     float radius
 
 equip Circle with Describable:
-    str describe(self):
+    String describe(self):
         return f"circle r={self.radius}"
 
     float measure(self):

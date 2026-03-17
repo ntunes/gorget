@@ -4,7 +4,7 @@ struct Greeting:
     Option[str] message
     Option[int] priority
 
-str describe(Greeting g):
+String describe(Greeting g):
     str msg = "no message"
     match g.message:
         case Some(m):

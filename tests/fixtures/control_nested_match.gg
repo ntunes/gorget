@@ -2,7 +2,7 @@ enum Outer:
     A(int)
     B(str)
 
-str classify(Outer o):
+String classify(Outer o):
     match o:
         case A(n):
             match n:

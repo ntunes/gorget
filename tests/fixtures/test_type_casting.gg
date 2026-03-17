@@ -77,7 +77,7 @@ void main():
     # === 8. int to str via interpolation ===
     print("--- int to str ---")
     int val = 123
-    str s1 = f"{val}"
+    String s1 = f"{val}"
     print(s1)
 
     # === 9. int_to_str / float_to_str ===

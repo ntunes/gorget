@@ -12,7 +12,7 @@ equip Point:
     bool equals(self, Point other):
         return self.x == other.x and self.y == other.y
 
-    str to_string(self):
+    String to_string(self):
         return f"({self.x}, {self.y})"
 
 struct Rect:

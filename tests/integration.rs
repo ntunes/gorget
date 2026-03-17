@@ -5805,6 +5805,22 @@ fn lifetime_reassign_error() {
 }
 
 #[test]
+fn lifetime_fstring_return_error() {
+    check_gg_fails(
+        "lifetime_fstring_return_error.gg",
+        "f-string creates an owned String",
+    );
+}
+
+#[test]
+fn lifetime_fstring_bind_error() {
+    check_gg_fails(
+        "lifetime_fstring_bind_error.gg",
+        "cannot bind `str` variable",
+    );
+}
+
+#[test]
 fn measurable_trait() {
     run_gg(
         "measurable_trait.gg",
