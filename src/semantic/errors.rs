@@ -186,6 +186,9 @@ pub enum SemanticErrorKind {
     /// Field doesn't exist on struct.
     NoFieldFound { field: String, type_: String },
 
+    /// Tuple field index out of bounds.
+    TupleIndexOutOfBounds { index: usize, len: usize },
+
     /// Duplicate trait implementation.
     DuplicateImpl { trait_: String, type_: String },
 
@@ -478,6 +481,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::NoFieldFound { field, type_ } => {
                 write!(f, "no field `{field}` found on type `{type_}`")
+            }
+            SemanticErrorKind::TupleIndexOutOfBounds { index, len } => {
+                write!(f, "tuple index `{index}` out of bounds for tuple with {len} elements")
             }
             SemanticErrorKind::DuplicateImpl { trait_, type_ } => {
                 if trait_ == "(inherent)" {

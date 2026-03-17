@@ -586,6 +586,9 @@ impl<'a> TypeChecker<'a> {
                     ..
                 },
             ) if a_params.len() == b_params.len() => {
+                // NOTE: param_ownerships intentionally skipped — Callable inner
+                // function types default to Borrow, causing false mismatches
+                // with concrete functions that carry real ownership. See TODO.md.
                 let pairs: Vec<_> = a_params
                     .iter()
                     .copied()
@@ -1363,13 +1366,23 @@ impl<'a> TypeChecker<'a> {
                 self.types.error_id
             }
 
-            Expr::TupleFieldAccess { object, .. } => {
+            Expr::TupleFieldAccess { object, index } => {
                 let object_type = self.infer_expr(object);
                 let resolved = self.resolve_type(object_type);
                 match self.types.get(resolved).clone() {
-                    ResolvedType::Tuple(_elems) => {
-                        // Would check index bounds here
-                        self.types.error_id
+                    ResolvedType::Tuple(elems) => {
+                        if *index < elems.len() {
+                            elems[*index]
+                        } else {
+                            self.error(
+                                SemanticErrorKind::TupleIndexOutOfBounds {
+                                    index: *index,
+                                    len: elems.len(),
+                                },
+                                expr.span,
+                            );
+                            self.types.error_id
+                        }
                     }
                     _ => self.types.error_id,
                 }

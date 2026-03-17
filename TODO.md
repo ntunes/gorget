@@ -168,6 +168,16 @@
 
 - **gorget-db — JSON document store**: MongoDB-lite REST API using gg.httpserver, gg.json, gg.jsonpath, std.signal, std.fs. POST/GET/DELETE/PUT/PATCH on `/db/{collection}/{id}` with query support. [added: 2026-03-09]
 
+- **Semantic: function type unification ignores ownership** — `unify()` on `ResolvedType::Function` uses `..` to skip `param_ownerships`, so `int(&int)` and `int(!int)` unify as compatible. Fix requires Callable inner function types to carry real ownership from the type annotation (currently they default to `Borrow` for all params), otherwise false mismatches occur. Needs design work on how Callable/function type ownership flows through the type system. [added: 2026-03-17]
+
+- **Semantic: scope lookup performance (O(n) → O(1))** — Linear scope lookup could use index-based optimization. Needs profiling first to confirm it's a bottleneck. [added: 2026-03-17]
+
+- **Semantic: type alias circular dependency detection** — No check for circular type aliases (`type A = B`, `type B = A`). Needs design. [added: 2026-03-17]
+
+- **Semantic: conflicting trait method name detection** — No check when two traits with same-named methods are both implemented for a type. Needs design. [added: 2026-03-17]
+
+- **Semantic: via delegation full validation** — Incomplete validation of `via` delegation. Needs deeper analysis. [added: 2026-03-17]
+
 - **Negative test fixtures — remaining gaps**: 29 `*_error.gg` fixtures added (2026-03-15), plus 4 new diagnostics: `no_field` (Defined structs only), `not_a_function` (Variable/Const/Static), `break_outside_loop`, `unknown_directive` (item-level @attrs). `no_method` now enabled for types with inherent-only equip blocks. Still missing: `underivable_trait` (deferred — derive expansion runs before trait registry), `return_outside_function` (parse error only), `spawn sync_fn()` (not caught), `private_in_public` (warning only), `borrow_on_copy` (not caught). [updated: 2026-03-17]
 
 

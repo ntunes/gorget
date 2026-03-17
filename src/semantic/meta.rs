@@ -1237,8 +1237,20 @@ fn eval_binary_op(
         (MetaValue::Int(a), BinaryOp::BitAnd, MetaValue::Int(b)) => Ok(MetaValue::Int(a & b)),
         (MetaValue::Int(a), BinaryOp::BitOr, MetaValue::Int(b)) => Ok(MetaValue::Int(a | b)),
         (MetaValue::Int(a), BinaryOp::BitXor, MetaValue::Int(b)) => Ok(MetaValue::Int(a ^ b)),
-        (MetaValue::Int(a), BinaryOp::Shl, MetaValue::Int(b)) => Ok(MetaValue::Int(a << b)),
-        (MetaValue::Int(a), BinaryOp::Shr, MetaValue::Int(b)) => Ok(MetaValue::Int(a >> b)),
+        (MetaValue::Int(a), BinaryOp::Shl, MetaValue::Int(b)) => {
+            if *b < 0 || *b >= 64 {
+                Err(meta_err(&format!("shift amount {b} out of range (0..63)"), span))
+            } else {
+                Ok(MetaValue::Int(a << b))
+            }
+        }
+        (MetaValue::Int(a), BinaryOp::Shr, MetaValue::Int(b)) => {
+            if *b < 0 || *b >= 64 {
+                Err(meta_err(&format!("shift amount {b} out of range (0..63)"), span))
+            } else {
+                Ok(MetaValue::Int(a >> b))
+            }
+        }
 
         // Float arithmetic
         (MetaValue::Float(a), BinaryOp::Add, MetaValue::Float(b)) => Ok(MetaValue::Float(a + b)),
@@ -3068,6 +3080,12 @@ fn eval_delayed_expr(
                         match ctx.type_registry.get_type_def(&type_name) {
                             Some(type_def) => {
                                 if let crate::ir::types::TypeDefKind::Enum(e) = &type_def.kind {
+                                    if ordinal < 0 {
+                                        return Err(meta_err(
+                                            &format!("enum_from_ordinal: ordinal {ordinal} is negative"),
+                                            span,
+                                        ));
+                                    }
                                     match e.variants.get(ordinal as usize) {
                                         Some(v) => return Ok(MetaValue::Str(v.name.clone())),
                                         None => return Err(meta_err(
