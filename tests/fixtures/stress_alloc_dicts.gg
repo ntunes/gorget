@@ -1,0 +1,86 @@
+from std.os import mem_live
+from std.collections import Vector, Dict
+
+# Stress test: Dict allocation and deallocation.
+# Creates dicts in loops, inserts/removes entries, drops them.
+
+void main():
+    int baseline = mem_live()
+
+    # --- Section 1: Dict[str, int] create-insert-drop loop ---
+    int i = 0
+    while i < 500:
+        Dict[str, int] d = Dict[str, int]()
+        int j = 0
+        while j < 20:
+            d[f"key-{j}"] = j * 10
+            j = j + 1
+        i = i + 1
+
+    # --- Section 2: Dict[int, str] with owned string values ---
+    i = 0
+    while i < 500:
+        Dict[int, str] d = Dict[int, str]()
+        int j = 0
+        while j < 20:
+            d[j] = f"value-{j}-{i}"
+            j = j + 1
+        # Dict buffer + all string values must be freed
+        i = i + 1
+
+    # --- Section 3: Dict.keys() and Dict.values() return vectors ---
+    i = 0
+    while i < 200:
+        Dict[str, int] d = Dict[str, int]()
+        d["a"] = 1
+        d["b"] = 2
+        d["c"] = 3
+        Vector[str] keys = d.keys()
+        Vector[int] vals = d.values()
+        # d, keys vector, vals vector all freed
+        i = i + 1
+
+    # --- Section 4: Dict with insert + remove churn ---
+    i = 0
+    while i < 200:
+        Dict[str, int] d = Dict[str, int]()
+        int j = 0
+        while j < 50:
+            d[f"k{j}"] = j
+            j = j + 1
+        j = 0
+        while j < 50:
+            d.remove(f"k{j}")
+            j = j + 1
+        i = i + 1
+
+    # --- Section 5: Dict[str, Vector[int]] (nested owned values) ---
+    i = 0
+    while i < 100:
+        Dict[str, Vector[int]] groups = Dict[str, Vector[int]]()
+        int j = 0
+        while j < 5:
+            Vector[int] v = Vector[int]()
+            v.push(j)
+            v.push(j + 1)
+            groups[f"group-{j}"] = !v
+            j = j + 1
+        # Dict + all inner vectors + all string keys freed
+        i = i + 1
+
+    # --- Section 6: Function-returned dict ---
+    i = 0
+    while i < 500:
+        Dict[str, int] d = make_scores(i)
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")
+
+Dict[str, int] make_scores(int seed):
+    Dict[str, int] d = Dict[str, int]()
+    d["math"] = seed + 90
+    d["science"] = seed + 85
+    d["english"] = seed + 80
+    return d

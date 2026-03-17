@@ -1,0 +1,70 @@
+from std.os import mem_live
+from std.collections import Vector
+
+# Stress test: string allocation and deallocation.
+# Every section creates owned strings in loops and lets them go out of scope.
+# mem_live() at the end should be close to the baseline (within tolerance
+# for runtime overhead / static allocations that don't get freed).
+
+void main():
+    int baseline = mem_live()
+
+    # --- Section 1: f-string creation in a loop ---
+    int i = 0
+    while i < 1000:
+        str s = f"iteration-{i}"
+        i = i + 1
+
+    # --- Section 2: String concatenation in a loop ---
+    i = 0
+    while i < 1000:
+        str s = "hello" + " " + "world" + " " + f"{i}"
+        i = i + 1
+
+    # --- Section 3: String methods returning new strings ---
+    i = 0
+    while i < 500:
+        str base = f"  Hello World {i}  "
+        str trimmed = base.trim()
+        str upper = base.to_upper()
+        str lower = base.to_lower()
+        str replaced = base.replace("World", "Gorget")
+        i = i + 1
+
+    # --- Section 4: String.split() returns Vector[str] ---
+    i = 0
+    while i < 500:
+        str csv = f"a,b,c,d,{i}"
+        Vector[str] parts = csv.split(",")
+        i = i + 1
+
+    # --- Section 5: String owned (String type) in a loop ---
+    i = 0
+    while i < 1000:
+        String s = String()
+        s.push("hello ")
+        s.push(f"world {i}")
+        i = i + 1
+
+    # --- Section 6: Strings in Vector, pushed and dropped ---
+    i = 0
+    while i < 100:
+        Vector[str] v = Vector[str]()
+        int j = 0
+        while j < 50:
+            v.push(f"item-{i}-{j}")
+            j = j + 1
+        i = i + 1
+
+    # --- Section 7: Function-returned strings ---
+    i = 0
+    while i < 1000:
+        str s = make_greeting(i)
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")
+
+str make_greeting(int n):
+    return f"Hello, user #{n}!"

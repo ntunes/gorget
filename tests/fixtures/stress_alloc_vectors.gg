@@ -1,0 +1,90 @@
+from std.os import mem_live
+from std.collections import Vector
+
+# Stress test: Vector allocation and deallocation.
+# Creates vectors in tight loops, pushes elements, drops them.
+# Exercises buffer growth, nested vectors, and function returns.
+
+void main():
+    int baseline = mem_live()
+
+    # --- Section 1: Vector[int] create-push-drop loop ---
+    int i = 0
+    while i < 1000:
+        Vector[int] v = Vector[int]()
+        int j = 0
+        while j < 100:
+            v.push(j)
+            j = j + 1
+        i = i + 1
+
+    # --- Section 2: Vector growth (trigger multiple reallocs) ---
+    i = 0
+    while i < 100:
+        Vector[int] v = Vector[int]()
+        int j = 0
+        while j < 1000:
+            v.push(j * j)
+            j = j + 1
+        # v drops here with a large buffer
+        i = i + 1
+
+    # --- Section 3: Vector[str] with owned string elements ---
+    i = 0
+    while i < 200:
+        Vector[str] v = Vector[str]()
+        int j = 0
+        while j < 20:
+            v.push(f"elem-{i}-{j}")
+            j = j + 1
+        # Each string element AND the vector buffer must be freed
+        i = i + 1
+
+    # --- Section 4: Nested Vector[Vector[int]] ---
+    i = 0
+    while i < 100:
+        Vector[Vector[int]] grid = Vector[Vector[int]]()
+        int j = 0
+        while j < 10:
+            Vector[int] row = Vector[int]()
+            int k = 0
+            while k < 10:
+                row.push(k)
+                k = k + 1
+            grid.push(row)
+            j = j + 1
+        # grid + all inner vectors must be freed
+        i = i + 1
+
+    # --- Section 5: Function-returned vectors ---
+    i = 0
+    while i < 500:
+        Vector[int] v = make_range(i, i + 20)
+        i = i + 1
+
+    # --- Section 6: Vector.map/filter (return new vectors) ---
+    i = 0
+    while i < 200:
+        Vector[int] src = make_range(0, 50)
+        Vector[int] doubled = src.map((int x): x * 2)
+        Vector[int] big = src.filter((int x): x > 25)
+        i = i + 1
+
+    # --- Section 7: Vector.clone() ---
+    i = 0
+    while i < 200:
+        Vector[int] src = make_range(0, 50)
+        Vector[int] cloned = src.clone()
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")
+
+Vector[int] make_range(int start, int end):
+    Vector[int] v = Vector[int]()
+    int i = start
+    while i < end:
+        v.push(i)
+        i = i + 1
+    return v

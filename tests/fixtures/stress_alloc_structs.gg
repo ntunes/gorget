@@ -1,0 +1,110 @@
+from std.os import mem_live
+from std.collections import Vector
+from gg.math3d import Vec2, Vec3
+
+# Stress test: struct allocation and deallocation.
+# Tests structs with owned fields, nested structs, structs in collections,
+# and function return/pass patterns.
+
+struct Person:
+    str name
+    int age
+    Vector[str] hobbies
+
+struct Team:
+    str team_name
+    Vector[Person] members
+
+Person make_person(int id):
+    Vector[str] h = Vector[str]()
+    h.push(f"hobby-{id}-a")
+    h.push(f"hobby-{id}-b")
+    return Person(f"person-{id}", 20 + id, h)
+
+Team make_team(str name, int size):
+    Vector[Person] members = Vector[Person]()
+    int i = 0
+    while i < size:
+        members.push(make_person(i))
+        i = i + 1
+    return Team(name, members)
+
+int count_hobbies(Team team):
+    int total = 0
+    int i = 0
+    while i < team.members.len():
+        Person p = team.members[i]
+        total = total + p.hobbies.len()
+        i = i + 1
+    return total
+
+void main():
+    int baseline = mem_live()
+
+    # --- Section 1: Struct with owned fields in a loop ---
+    int i = 0
+    while i < 500:
+        Person p = make_person(i)
+        i = i + 1
+
+    # --- Section 2: Nested struct (Team -> Vector[Person] -> Vector[str]) ---
+    i = 0
+    while i < 100:
+        Team t = make_team(f"team-{i}", 10)
+        int h = count_hobbies(t)
+        i = i + 1
+
+    # --- Section 3: Vec2/Vec3 in tight loops (copy types, no alloc) ---
+    i = 0
+    float sum = 0.0
+    while i < 10000:
+        Vec2 a = Vec2(1.0, 2.0)
+        Vec2 b = Vec2(3.0, 4.0)
+        Vec2 c = a.add(b)
+        sum = sum + c.x + c.y
+        i = i + 1
+    print(f"vec2_sum={sum > 0.0}")
+
+    # --- Section 4: Vec3 operations ---
+    i = 0
+    float dot_sum = 0.0
+    while i < 10000:
+        Vec3 a = Vec3(1.0, 0.0, 0.0)
+        Vec3 b = Vec3(0.0, 1.0, 0.0)
+        Vec3 cross = a.cross(b)
+        dot_sum = dot_sum + cross.z
+        i = i + 1
+    print(f"vec3_cross={dot_sum > 0.0}")
+
+    # --- Section 5: Vector[Vec2] (copy struct in vector) ---
+    i = 0
+    while i < 200:
+        Vector[Vec2] points = Vector[Vec2]()
+        int j = 0
+        while j < 50:
+            float fj = j as float
+            points.push(Vec2(fj, fj * 2.0))
+            j = j + 1
+        i = i + 1
+
+    # --- Section 6: Vector[Person] created and dropped ---
+    i = 0
+    while i < 200:
+        Vector[Person] people = Vector[Person]()
+        int j = 0
+        while j < 5:
+            people.push(make_person(j))
+            j = j + 1
+        # Vector buffer + each Person's name + each Person's hobbies vector + each hobby string
+        i = i + 1
+
+    # --- Section 7: Struct reassignment (old value dropped) ---
+    Person p = make_person(0)
+    i = 0
+    while i < 1000:
+        p = make_person(i)
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")

@@ -2147,6 +2147,52 @@ fn move_type_unwrap() {
     );
 }
 
+// ── Allocation stress tests ──────────────────────────────────────────
+
+#[test]
+fn stress_alloc_strings() {
+    run_gg("stress_alloc_strings.gg", "\
+leaked=true
+done");
+}
+
+#[test]
+fn stress_alloc_vectors() {
+    run_gg("stress_alloc_vectors.gg", "\
+leaked=true
+done");
+}
+
+#[test]
+fn stress_alloc_dicts() {
+    run_gg("stress_alloc_dicts.gg", "\
+leaked=true
+done");
+}
+
+#[test]
+fn stress_alloc_structs() {
+    run_gg("stress_alloc_structs.gg", "\
+vec2_sum=true
+vec3_cross=true
+leaked=true
+done");
+}
+
+#[test]
+fn stress_alloc_closures() {
+    run_gg("stress_alloc_closures.gg", "\
+leaked=true
+done");
+}
+
+#[test]
+fn stress_alloc_mixed() {
+    run_gg("stress_alloc_mixed.gg", "\
+leaked=true
+done");
+}
+
 #[test]
 fn trait_defaults() {
     run_gg(

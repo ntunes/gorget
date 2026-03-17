@@ -901,3 +901,11 @@ fn ab_test(fixture: &str) {
 #[test] fn lir_ab_generic_nested_collections() { ab_test("generic_nested_collections.gg"); }
 #[test] fn lir_ab_test_struct_derive() { ab_test("test_struct_derive.gg"); }
 #[test] fn lir_ab_cli_args() { ab_test_with_args("cli_args.gg", &["hello", "world"]); }
+
+// ── Allocation stress tests ─────────────────────────────────────────
+#[test] fn lir_ab_stress_alloc_strings() { ab_test("stress_alloc_strings.gg"); }
+#[test] fn lir_ab_stress_alloc_vectors() { ab_test("stress_alloc_vectors.gg"); }
+#[test] fn lir_ab_stress_alloc_dicts() { ab_test("stress_alloc_dicts.gg"); }
+#[test] fn lir_ab_stress_alloc_structs() { ab_test("stress_alloc_structs.gg"); }
+#[test] fn lir_ab_stress_alloc_closures() { ab_test("stress_alloc_closures.gg"); }
+#[test] fn lir_ab_stress_alloc_mixed() { ab_test("stress_alloc_mixed.gg"); }

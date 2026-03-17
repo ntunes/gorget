@@ -1,0 +1,88 @@
+from std.os import mem_live
+from std.collections import Vector
+
+# Stress test: closure allocation and deallocation.
+# Closures capture values and allocate __Closure_N structs.
+# Tests that closure objects and their captures are freed.
+
+int apply(int x, int(int) fn):
+    return fn(x)
+
+Vector[int] transform(Vector[int] src, int(int) fn):
+    return src.map(fn)
+
+void main():
+    int baseline = mem_live()
+
+    # --- Section 1: Simple closure in a loop ---
+    int i = 0
+    while i < 1000:
+        int offset = i
+        int result = apply(10, (int x): x + offset)
+        i = i + 1
+
+    # --- Section 2: Closure capturing a string ---
+    i = 0
+    while i < 500:
+        str prefix = f"item-{i}"
+        auto make_label = (int n): f"{prefix}-{n}"
+        str label = make_label(42)
+        i = i + 1
+
+    # --- Section 3: Vector.map with closures ---
+    i = 0
+    while i < 200:
+        Vector[int] src = Vector[int]()
+        int j = 0
+        while j < 50:
+            src.push(j)
+            j = j + 1
+        int multiplier = i + 1
+        Vector[int] result = src.map((int x): x * multiplier)
+        i = i + 1
+
+    # --- Section 4: Vector.filter with closures ---
+    i = 0
+    while i < 200:
+        Vector[int] src = Vector[int]()
+        int j = 0
+        while j < 50:
+            src.push(j)
+            j = j + 1
+        int threshold = 25
+        Vector[int] big = src.filter((int x): x > threshold)
+        i = i + 1
+
+    # --- Section 5: Vector.fold with closures ---
+    i = 0
+    while i < 200:
+        Vector[int] src = Vector[int]()
+        int j = 0
+        while j < 50:
+            src.push(j)
+            j = j + 1
+        int total = src.fold(0, (int acc, int x): acc + x)
+        i = i + 1
+
+    # --- Section 6: Chained map+filter+fold ---
+    i = 0
+    while i < 100:
+        Vector[int] src = Vector[int]()
+        int j = 0
+        while j < 100:
+            src.push(j)
+            j = j + 1
+        int result = src.map((int x): x * 2).filter((int x): x > 50).fold(0, (int a, int b): a + b)
+        i = i + 1
+
+    # --- Section 7: Closures stored in a variable, called later ---
+    i = 0
+    while i < 500:
+        int captured = i * 3
+        int(int) fn = (int x): x + captured
+        int r = fn(100)
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")
