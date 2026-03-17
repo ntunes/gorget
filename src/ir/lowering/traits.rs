@@ -577,15 +577,12 @@ fn emit_via_forwarding_function(
     };
     let self_cast = builder.ptr_cast(cast_type, FunctionBuilder::copy(LocalId(1)));
 
-    // Look up field index
-    let field_idx = ctx.lookup_field(type_name, field_name)
-        .map(|(idx, _)| idx)
-        .unwrap_or(0);
-
-    // _3 = Borrow(&self_cast->field)  → gives us a pointer to the embedded field
-    let field_type_id = ctx.lookup_field(type_name, field_name)
-        .map(|(_, ty)| ty)
-        .unwrap_or(UNIT_TYPE);
+    // Look up field index and type (single lookup)
+    let (field_idx, field_type_id) = ctx.lookup_field(type_name, field_name)
+        .unwrap_or_else(|| {
+            eprintln!("warning: vtable forwarding: field '{}' not found on type '{}', defaulting to field 0", field_name, type_name);
+            (0, UNIT_TYPE)
+        });
     let field_ptr_type = if vtable_method.self_is_mutable {
         ctx.register_mut_ptr_type(field_type_id)
     } else {

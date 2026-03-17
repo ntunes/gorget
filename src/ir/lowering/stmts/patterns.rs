@@ -322,8 +322,7 @@ pub fn emit_pattern_bindings(
 
         Pattern::Tuple(elems) => {
             for (i, elem_pat) in elems.iter().enumerate() {
-                // Use field_load with field index
-                let elem_type = I64_TYPE; // placeholder — real type needs registry
+                let elem_type = super::super::exprs::resolve_tuple_field_type(ctx, scrut_type, i);
                 let dst = builder.field_load(Place::local(scrut_local), i as u32, elem_type);
                 emit_pattern_bindings(ctx, builder, elem_pat, dst, elem_type);
             }

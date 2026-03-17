@@ -776,16 +776,9 @@ fn collect_read_locals_for_validate(inst: &Instruction) -> Vec<u32> {
     reads
 }
 
-/// Check whether a type needs dropping (mirrors logic in drops.rs).
+/// Check whether a type needs dropping. Delegates to `TypeRegistry::needs_drop()`.
 fn type_needs_drop(type_id: TypeId, registry: &TypeRegistry) -> bool {
-    if type_id.0 < 12 { return false; }
-    if let Some(GirType::Named(name)) = registry.get(type_id) {
-        if let Some(type_def) = registry.get_type_def(name) {
-            return type_def.metadata.copy_semantics == CopySemantics::Resource
-                || type_def.metadata.drop_strategy != DropStrategy::None;
-        }
-    }
-    false
+    registry.needs_drop(type_id)
 }
 
 fn check_terminator_blocks(

@@ -173,38 +173,15 @@ impl DropElaborator {
 }
 
 /// Check whether a Copy-semantics type needs dropping when passed as a function parameter.
-/// Only returns true for Copy types with a non-None drop strategy (ref-counted pointers like
-/// Channel, Shared, Weak). Move types are excluded because their drops are handled by the
-/// body-level drop elaboration — registering them as params too would double-free.
+/// Delegates to `TypeRegistry::needs_param_drop()`.
 fn needs_param_drop(type_id: TypeId, registry: &TypeRegistry) -> bool {
-    if type_id.0 < 12 {
-        return false;
-    }
-    if let Some(GirType::Named(name)) = registry.get(type_id) {
-        if let Some(type_def) = registry.get_type_def(name) {
-            return type_def.metadata.copy_semantics == CopySemantics::Trivial
-                && type_def.metadata.drop_strategy != DropStrategy::None;
-        }
-    }
-    false
+    registry.needs_param_drop(type_id)
 }
 
 /// Check whether a type needs dropping based on its metadata.
+/// Delegates to `TypeRegistry::needs_drop()`.
 fn needs_drop(type_id: TypeId, registry: &TypeRegistry) -> bool {
-    // Primitives never need dropping
-    if type_id.0 < 12 {
-        return false;
-    }
-
-    // Check Named types for their metadata
-    if let Some(GirType::Named(name)) = registry.get(type_id) {
-        if let Some(type_def) = registry.get_type_def(name) {
-            return type_def.metadata.copy_semantics == CopySemantics::Resource
-                || type_def.metadata.drop_strategy != DropStrategy::None;
-        }
-    }
-
-    false
+    registry.needs_drop(type_id)
 }
 
 /// Emit Drop/DropIfAlive for a list of entries in LIFO order.

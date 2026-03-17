@@ -513,29 +513,35 @@ fn fold_binop_i32(a: i32, op: BinOp, b: i32) -> Option<Constant> {
 }
 
 fn fold_binop_f32(a: f32, op: BinOp, b: f32) -> Option<Constant> {
-    Some(Constant::F32(match op {
+    let result = match op {
         BinOp::Add => a + b,
         BinOp::Sub => a - b,
         BinOp::Mul => a * b,
-        BinOp::Div => { if b == 0.0 { return None; } a / b }
-        BinOp::Rem => { if b == 0.0 { return None; } a % b }
-        BinOp::Mod => { if b == 0.0 { return None; } ((a % b) + b) % b }
+        // IEEE 754: div/rem by zero yields inf/NaN, which is well-defined.
+        BinOp::Div => a / b,
+        BinOp::Rem => a % b,
+        BinOp::Mod => ((a % b) + b) % b,
         BinOp::Pow => a.powf(b),
         _ => return None,
-    }))
+    };
+    // Don't fold if result is NaN or infinity — preserve runtime behavior for debuggability.
+    if result.is_nan() || result.is_infinite() { return None; }
+    Some(Constant::F32(result))
 }
 
 fn fold_binop_f64(a: f64, op: BinOp, b: f64) -> Option<Constant> {
-    Some(Constant::F64(match op {
+    let result = match op {
         BinOp::Add => a + b,
         BinOp::Sub => a - b,
         BinOp::Mul => a * b,
-        BinOp::Div => { if b == 0.0 { return None; } a / b }
-        BinOp::Rem => { if b == 0.0 { return None; } a % b }
-        BinOp::Mod => { if b == 0.0 { return None; } ((a % b) + b) % b }
+        BinOp::Div => a / b,
+        BinOp::Rem => a % b,
+        BinOp::Mod => ((a % b) + b) % b,
         BinOp::Pow => a.powf(b),
         _ => return None, // bitwise ops don't apply to floats
-    }))
+    };
+    if result.is_nan() || result.is_infinite() { return None; }
+    Some(Constant::F64(result))
 }
 
 fn fold_binop_bool(a: bool, op: BinOp, b: bool) -> Option<Constant> {
@@ -1362,7 +1368,13 @@ fn elide_dead_drops(func: &mut Function) {
                 {
                     elide_indices.push(i);
                 }
-                _ => {}
+                _ => {
+                    // Any other instruction that writes to a simple local un-marks it
+                    // (e.g., BinOp, Call, StructInit writing to dst).
+                    if let Some(written) = instruction_dst(inst) {
+                        moved_in_block.remove(&written);
+                    }
+                }
             }
         }
 

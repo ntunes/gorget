@@ -170,7 +170,7 @@ pub enum CopySemantics {
     Resource,
 }
 
-// Pre-allocated primitive type IDs.
+// Pre-allocated primitive type IDs (indices 0–11).
 pub const BOOL_TYPE: TypeId = TypeId(0);
 pub const I8_TYPE: TypeId = TypeId(1);
 pub const I16_TYPE: TypeId = TypeId(2);
@@ -183,6 +183,10 @@ pub const U64_TYPE: TypeId = TypeId(8);
 pub const F32_TYPE: TypeId = TypeId(9);
 pub const F64_TYPE: TypeId = TypeId(10);
 pub const UNIT_TYPE: TypeId = TypeId(11);
+
+/// Number of pre-allocated primitive types in the registry (indices 0..PRIMITIVE_TYPE_COUNT).
+/// Used to distinguish primitives from user-defined types without magic numbers.
+pub const PRIMITIVE_TYPE_COUNT: u32 = 12;
 
 /// Registry of all GIR types in a module.
 pub struct TypeRegistry {
@@ -296,7 +300,40 @@ impl TypeRegistry {
 
     /// Whether the registry contains only the pre-allocated primitives.
     pub fn is_empty(&self) -> bool {
-        self.types.len() <= 13
+        self.types.len() <= PRIMITIVE_TYPE_COUNT as usize
+    }
+
+    /// Whether a type is a primitive (index < PRIMITIVE_TYPE_COUNT).
+    pub fn is_primitive(&self, type_id: TypeId) -> bool {
+        type_id.0 < PRIMITIVE_TYPE_COUNT
+    }
+
+    /// Check whether a type needs dropping based on its metadata.
+    /// Primitives never need dropping. Named types need dropping if they
+    /// have Resource copy semantics or a non-None drop strategy.
+    pub fn needs_drop(&self, type_id: TypeId) -> bool {
+        if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
+        if let Some(GirType::Named(name)) = self.get(type_id) {
+            if let Some(type_def) = self.get_type_def(name) {
+                return type_def.metadata.copy_semantics == CopySemantics::Resource
+                    || type_def.metadata.drop_strategy != DropStrategy::None;
+            }
+        }
+        false
+    }
+
+    /// Check whether a Copy-semantics type needs dropping when passed as a parameter.
+    /// Only true for ref-counted types (Channel, Shared, Weak) that are Copy but
+    /// still have a drop strategy. Move types are excluded (body-level drops handle them).
+    pub fn needs_param_drop(&self, type_id: TypeId) -> bool {
+        if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
+        if let Some(GirType::Named(name)) = self.get(type_id) {
+            if let Some(type_def) = self.get_type_def(name) {
+                return type_def.metadata.copy_semantics == CopySemantics::Trivial
+                    && type_def.metadata.drop_strategy != DropStrategy::None;
+            }
+        }
+        false
     }
 
     /// Register a named type definition. Returns its index.
@@ -337,7 +374,7 @@ impl TypeRegistry {
     /// and collection types whose TypeDef may lack correct metadata due to
     /// early registration via `register_collection_alias`.
     pub fn is_resource_type(&self, type_id: TypeId) -> bool {
-        if type_id.0 < 12 { return false; } // primitives
+        if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; } // primitives
         if let Some(GirType::Named(name)) = self.get(type_id) {
             self.is_resource_name(name)
         } else {

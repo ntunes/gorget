@@ -75,7 +75,7 @@ pub enum Constant {
 }
 
 /// Instructions that don't transfer control flow.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     // -- Memory --
     Assign {
@@ -277,7 +277,7 @@ pub enum CmpOp {
 }
 
 /// Terminators end a basic block and transfer control.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Terminator {
     Return(Operand),
     Jump(BlockId),

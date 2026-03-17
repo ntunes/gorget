@@ -54,6 +54,16 @@
 
 - **`shared static` support**: `public static shared int counter = 0` — thread-safe module-level statics. Requires adding `SharedKind` field to `StaticDecl`, atomic/mutex global codegen in C backend (atomic globals, constructor-initialized mutexes), and wiring lock/unlock into `GlobalAssign` emission. Workaround: use explicit `Mutex[int]` or `Atomic[int]` as the static type. [added: 2026-03-10]
 
+- **IR: computed callees silently return Unit** — Non-identifier, non-closure callees (e.g., `array[i](args)`) in `lowering/exprs/calls.rs:852` silently produce `Constant::Unit` instead of an error or actual call. [added: 2026-03-17]
+
+- **IR: silent I64_TYPE fallbacks throughout lowering** — ~10 locations default to `I64_TYPE` when type resolution fails, with no diagnostic. Key sites: closure return inference (`closures.rs:597,604,652,665`), local type lookup (`exprs/mod.rs:180`), fn_sigs miss (`calls.rs:786`). Should at minimum `debug_assert!` or log. [added: 2026-03-17]
+
+- **IR: re-enable copy propagation** — Disabled in `transforms/optimize.rs:88` due to Str/GorgetString TypeId aliasing. Significant optimization opportunity blocked. [added: 2026-03-17]
+
+- **IR: shared AST visitor for closure analysis** — `collect_free_vars()` and `detect_mutations()` in `closures.rs:335-482` duplicate ~150 lines of identical tree-walking code. Extract shared visitor trait. [added: 2026-03-17]
+
+- **IR: split `lower_module()` into named sub-passes** — Currently ~1,056 lines with ~15 phases inlined. Each phase should be a separate function. [added: 2026-03-17]
+
 - **IR refactor: Continue `exprs/` split — Phase 4**: Phases 1-3 done (8 files, mod.rs 2,515 lines). Remaining: control-flow exprs, struct literals, field access — tightly coupled to `lower_expr_inner`. Diminishing returns. Revisit if mod.rs grows again. [updated: 2026-03-07]
 
 - **IR refactor: Continue `LoweringContext` decomposition (Phase 3)**: Phases 1-2 done. 24 fields remain. fn_sigs has 116 uses — high churn for modest readability gain. Diminishing returns. [updated: 2026-03-07]
