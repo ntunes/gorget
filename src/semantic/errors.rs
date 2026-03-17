@@ -189,6 +189,9 @@ pub enum SemanticErrorKind {
     /// Tuple field index out of bounds.
     TupleIndexOutOfBounds { index: usize, len: usize },
 
+    /// Or-pattern alternatives bind different names.
+    OrPatternBindingMismatch { missing: Vec<String>, extra: Vec<String> },
+
     /// Duplicate trait implementation.
     DuplicateImpl { trait_: String, type_: String },
 
@@ -484,6 +487,16 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::TupleIndexOutOfBounds { index, len } => {
                 write!(f, "tuple index `{index}` out of bounds for tuple with {len} elements")
+            }
+            SemanticErrorKind::OrPatternBindingMismatch { missing, extra } => {
+                let mut parts = Vec::new();
+                if !missing.is_empty() {
+                    parts.push(format!("missing: {}", missing.join(", ")));
+                }
+                if !extra.is_empty() {
+                    parts.push(format!("extra: {}", extra.join(", ")));
+                }
+                write!(f, "or-pattern alternatives must bind the same names ({})", parts.join("; "))
             }
             SemanticErrorKind::DuplicateImpl { trait_, type_ } => {
                 if trait_ == "(inherent)" {

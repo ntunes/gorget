@@ -550,12 +550,50 @@ fn collect_item(
 
         Item::ExternBlock(ext) => {
             for func in &ext.items {
-                if let Err(e) = scopes.define(
+                match scopes.define(
                     func.node.name.node.clone(),
                     DefKind::Function,
                     func.node.name.span,
                 ) {
-                    errors.push(e);
+                    Ok(def_id) => {
+                        let ret_type = types::ast_type_to_resolved(
+                            &func.node.return_type.node,
+                            func.node.return_type.span,
+                            scopes,
+                            types,
+                        ).ok();
+                        let param_ownerships: Vec<Ownership> =
+                            func.node.params.iter().map(|p| p.node.ownership).collect();
+                        let param_names: Vec<String> =
+                            func.node.params.iter().map(|p| p.node.name.node.clone()).collect();
+                        let param_type_ids: Vec<Option<TypeId>> = func.node.params.iter()
+                            .map(|p| types::ast_type_to_resolved(
+                                &p.node.type_.node, p.node.type_.span, scopes, types,
+                            ).ok())
+                            .collect();
+                        let param_count = func.node.params.len();
+                        let generic_param_names = extract_generic_param_names(&func.node.generic_params);
+                        ctx.function_info.insert(def_id, FunctionInfo {
+                            def_id,
+                            return_type_id: ret_type,
+                            param_type_ids,
+                            param_ownerships,
+                            param_names,
+                            param_defaults: vec![None; param_count],
+                            throws: func.node.throws.is_some(),
+                            is_async: false,
+                            scope_id: scopes.current_scope(),
+                            generic_param_names,
+                            trait_bounds: Vec::new(),
+                            return_borrows_from: Vec::new(),
+                            param_is_live: vec![false; param_count],
+                            param_live_groups: vec![None; param_count],
+                            outlives_bounds: Vec::new(),
+                            has_body: false,
+                            return_origin_is_static: true,
+                        });
+                    }
+                    Err(e) => errors.push(e),
                 }
             }
         }
@@ -1572,6 +1610,23 @@ fn resolve_is_condition(
     }
 }
 
+/// Collect all binding names introduced by a pattern (for or-pattern validation).
+fn collect_pattern_names(pattern: &Pattern) -> Vec<String> {
+    match pattern {
+        Pattern::Binding(name) => vec![name.clone()],
+        Pattern::Constructor { fields, .. } | Pattern::DotShorthand { fields, .. } => {
+            fields.iter().flat_map(|f| collect_pattern_names(&f.node)).collect()
+        }
+        Pattern::Tuple(elems) => {
+            elems.iter().flat_map(|e| collect_pattern_names(&e.node)).collect()
+        }
+        Pattern::Or(alts) => {
+            alts.first().map(|a| collect_pattern_names(&a.node)).unwrap_or_default()
+        }
+        Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest => vec![],
+    }
+}
+
 /// Define bindings introduced by a pattern (always as `DefKind::Variable`).
 fn define_pattern_bindings(
     pattern: &Pattern,
@@ -1609,8 +1664,24 @@ fn define_pattern_bindings_with_kind(
             }
         }
         Pattern::Or(alternatives) => {
-            // In an or pattern, each alternative must bind the same names.
-            // For simplicity, just bind from the first alternative.
+            // Validate that all alternatives bind the same set of names.
+            if alternatives.len() >= 2 {
+                let first_names: std::collections::BTreeSet<_> =
+                    collect_pattern_names(&alternatives[0].node).into_iter().collect();
+                for alt in &alternatives[1..] {
+                    let alt_names: std::collections::BTreeSet<_> =
+                        collect_pattern_names(&alt.node).into_iter().collect();
+                    if first_names != alt_names {
+                        let missing: Vec<_> = first_names.difference(&alt_names).cloned().collect();
+                        let extra: Vec<_> = alt_names.difference(&first_names).cloned().collect();
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::OrPatternBindingMismatch { missing, extra },
+                            span: alt.span,
+                        });
+                    }
+                }
+            }
+            // Bind from the first alternative.
             if let Some(first) = alternatives.first() {
                 define_pattern_bindings_with_kind(&first.node, first.span, scopes, errors, kind, is_mutable);
             }

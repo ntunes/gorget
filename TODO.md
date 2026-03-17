@@ -168,6 +168,14 @@
 
 - **gorget-db — JSON document store**: MongoDB-lite REST API using gg.httpserver, gg.json, gg.jsonpath, std.signal, std.fs. POST/GET/DELETE/PUT/PATCH on `/db/{collection}/{id}` with query support. [added: 2026-03-09]
 
+- **Resolver: nested `Stmt::Item` orphans FunctionInfo** — `resolve_stmt` at line 1108 creates a fresh `ResolveContext` for nested function definitions. `FunctionInfo` entries created there are immediately dropped — the type checker never sees them. Fix requires threading `function_info`/`function_body_scopes` through `resolve_block` (29 call sites) and `resolve_stmt` (1 call site). Nested function definitions are rare, so low urgency. [added: 2026-03-17]
+
+- **Resolver: `Expr::Block`/`Expr::Do` throwaway TypeTable** — Lines 1379/1385 pass `TypeTable::new()` to `resolve_block`. Types created inside expression blocks are discarded. Would need adding `types` to `resolve_expr` (84+ call sites). Expression blocks with type declarations are extremely rare. [added: 2026-03-17]
+
+- **Resolver: double equip block scope creation** — Pass 1 creates an EquipBlock scope and defines method names. Pass 2 creates another EquipBlock scope for body resolution. Wasteful but functionally correct. [added: 2026-03-17]
+
+- **Resolver: `validate_str_param_modes` for type aliases** — Only checks bare `Type::Primitive(Str)`, not `type MyStr = str`. Would need type resolution which isn't available in Pass 1. Low impact. [added: 2026-03-17]
+
 - **Semantic: scope lookup performance (O(n) → O(1))** — Linear scope lookup could use index-based optimization. Needs profiling first to confirm it's a bottleneck. [added: 2026-03-17]
 
 - **Semantic: type alias circular dependency detection** — No check for circular type aliases (`type A = B`, `type B = A`). Needs design. [added: 2026-03-17]
