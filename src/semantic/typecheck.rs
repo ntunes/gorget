@@ -863,8 +863,28 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::NoneLiteral => {
-                // None is Option[?T] — for now return error type
-                self.types.error_id
+                // If there's a type hint and it's Option[T], use it directly.
+                if let Some(hint) = self.decl_type_hint {
+                    let resolved = self.resolve_type(hint);
+                    let is_option = match self.types.get(resolved) {
+                        ResolvedType::Generic(def_id, args) if args.len() == 1 => {
+                            self.scopes.get_def(*def_id).name == "Option"
+                        }
+                        _ => false,
+                    };
+                    if is_option {
+                        return hint;
+                    }
+                }
+                // No usable hint — create Option[?T] with a fresh type variable.
+                if let Some(option_def_id) = self.scopes.lookup("Option") {
+                    let var_id = self.next_type_var;
+                    self.next_type_var += 1;
+                    let fresh = self.types.fresh_var(var_id);
+                    self.types.intern_generic(option_def_id, vec![fresh])
+                } else {
+                    self.types.error_id
+                }
             }
 
             Expr::Identifier(name) => {
@@ -1280,11 +1300,41 @@ impl<'a> TypeChecker<'a> {
                             self.expr_types.insert(expr.span, ret_type);
                             ret_type
                         } else {
-                            // TODO: Emit NoMethodFound here once method resolution
-                            // covers all paths (equip, builtin, runtime). Currently
-                            // too many false positives from imported module methods
-                            // and runtime-only methods.
-                            self.types.error_id
+                            // Name-based fallback for cross-module equip methods
+                            // where TypeId doesn't match.
+                            let base_name = match self.types.get(resolved_receiver) {
+                                ResolvedType::Generic(def_id, _) | ResolvedType::Defined(def_id) => {
+                                    Some(self.scopes.get_def(*def_id).name.clone())
+                                }
+                                _ => None,
+                            };
+                            if let Some(ref name) = base_name {
+                                if let Some((_def_id, sig)) = self.traits.resolve_method_by_name(name, &method.node) {
+                                    let ret = sig.return_type;
+                                    self.expr_types.insert(expr.span, ret);
+                                    ret
+                                } else {
+                                    // Only emit NoMethodFound for types with inherent-only
+                                    // equip blocks (no trait impls, no via delegation).
+                                    // Types with trait impls may have default or via-forwarded
+                                    // methods that aren't in the equip's methods map.
+                                    // Stdlib/runtime types without equip blocks have methods
+                                    // only in the C backend, so we'd produce false positives.
+                                    let has_inherent_only = self.traits.has_inherent_only_impls(name);
+                                    if has_inherent_only {
+                                        self.error(
+                                            SemanticErrorKind::NoMethodFound {
+                                                method: method.node.clone(),
+                                                type_: self.describe_resolved_type(resolved_receiver),
+                                            },
+                                            expr.span,
+                                        );
+                                    }
+                                    self.types.error_id
+                                }
+                            } else {
+                                self.types.error_id
+                            }
                         }
                     }
                 }
@@ -3320,6 +3370,24 @@ impl<'a> TypeChecker<'a> {
                         Some(self.types.owned_string_id)
                     }
                 }
+                _ => None,
+            },
+            "Arena" => match method {
+                "bytes_used" => Some(self.types.int_id),
+                "reset" => Some(self.types.void_id),
+                "checkpoint" => {
+                    self.scopes.lookup("ArenaCheckpoint")
+                        .map(|did| self.types.defined_id(did))
+                        .or(Some(self.types.int_id))
+                }
+                _ => None,
+            },
+            "ArenaCheckpoint" => match method {
+                "mark" => Some(self.types.void_id),
+                _ => None,
+            },
+            "TlsfAllocator" | "FixedBufferAllocator" => match method {
+                "bytes_used" => Some(self.types.int_id),
                 _ => None,
             },
             _ => None,

@@ -92,9 +92,42 @@ impl TraitRegistry {
         None
     }
 
+    /// Fallback: look up a method by type name (string) when TypeId-based lookup fails.
+    /// Used for cross-module equip blocks where TypeIds don't match.
+    pub fn resolve_method_by_name(
+        &self,
+        type_name: &str,
+        method: &str,
+    ) -> Option<(&DefId, &FunctionSig)> {
+        for impl_info in &self.impls {
+            if impl_info.self_type_name == type_name {
+                if let Some((def_id, sig)) = impl_info.methods.get(method) {
+                    return Some((def_id, sig));
+                }
+            }
+        }
+        None
+    }
+
     /// Check if a type (by name) has any impl registered.
     pub fn has_any_impl_by_name(&self, type_name: &str) -> bool {
         self.impls.iter().any(|impl_info| impl_info.self_type_name == type_name)
+    }
+
+    /// Check if a type has ONLY inherent impls (no trait impls, no via delegation).
+    /// Types with trait impls may have default or via-forwarded methods that aren't
+    /// in the equip's methods map, so we can't reliably detect missing methods.
+    pub fn has_inherent_only_impls(&self, type_name: &str) -> bool {
+        let mut has_inherent = false;
+        for impl_info in &self.impls {
+            if impl_info.self_type_name == type_name {
+                if impl_info.trait_.is_some() || impl_info.via_field.is_some() {
+                    return false; // has trait impl or via delegation
+                }
+                has_inherent = true;
+            }
+        }
+        has_inherent
     }
 
     /// Check if a type (by name) has an implementation for a trait (by name).
