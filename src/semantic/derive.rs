@@ -11,6 +11,15 @@ use crate::span::Spanned;
 use crate::span::Span;
 
 use super::errors::{SemanticError, SemanticErrorKind};
+use crate::span::Span as SpanType;
+
+/// Metadata about a derive expansion, used for post-Pass-3 field trait validation.
+pub struct DeriveRecord {
+    pub struct_name: String,
+    pub trait_name: String,
+    pub field_type_names: Vec<String>,
+    pub span: SpanType,
+}
 
 /// Global counter for allocating unique span offsets for derive-generated items.
 /// Each derive source string gets a unique base offset (spaced 100K apart) to prevent
@@ -42,15 +51,17 @@ fn format_generic_params(gp: &Option<Spanned<GenericParams>>) -> String {
 /// For each derivable trait, generates Gorget source code for the equip block,
 /// parses it, and appends the resulting `EquipBlock` items to the module.
 /// Recurses into `Item::Module` wrappers so derives in imported modules are expanded.
-pub fn expand_derives(module: &mut Module, errors: &mut Vec<SemanticError>) {
-    expand_derives_in_items(&mut module.items, errors);
+pub fn expand_derives(module: &mut Module, errors: &mut Vec<SemanticError>) -> Vec<DeriveRecord> {
+    let mut records = Vec::new();
+    expand_derives_in_items(&mut module.items, errors, &mut records);
+    records
 }
 
-fn expand_derives_in_items(items: &mut Vec<Spanned<Item>>, errors: &mut Vec<SemanticError>) {
+fn expand_derives_in_items(items: &mut Vec<Spanned<Item>>, errors: &mut Vec<SemanticError>, records: &mut Vec<DeriveRecord>) {
     // First, recurse into Item::Module wrappers so nested modules get expanded too.
     for item in items.iter_mut() {
         if let Item::Module { items: inner, .. } = &mut item.node {
-            expand_derives_in_items(inner, errors);
+            expand_derives_in_items(inner, errors, records);
         }
     }
 
@@ -59,7 +70,7 @@ fn expand_derives_in_items(items: &mut Vec<Spanned<Item>>, errors: &mut Vec<Sema
     for item in items.iter() {
         match &item.node {
             Item::Struct(s) => {
-                collect_struct_derives(s, &mut new_items, errors);
+                collect_struct_derives(s, &mut new_items, errors, records);
             }
             Item::Enum(e) => {
                 collect_enum_derives(e, &mut new_items, errors);
@@ -80,6 +91,7 @@ fn collect_struct_derives(
     s: &StructDef,
     new_items: &mut Vec<Spanned<Item>>,
     errors: &mut Vec<SemanticError>,
+    records: &mut Vec<DeriveRecord>,
 ) {
     let type_name = &s.name.node;
     let gs = format_generic_params(&s.generic_params);
@@ -119,8 +131,80 @@ fn collect_struct_derives(
             })
             .collect();
 
+        // Record derive metadata for post-Pass-3 field trait validation.
+        records.push(DeriveRecord {
+            struct_name: type_name.clone(),
+            trait_name: trait_name.clone(),
+            field_type_names: fields.iter().map(|(_, ty)| ty.to_string()).collect(),
+            span: s.span,
+        });
+
         let source = generate_struct_derive(type_name, &gs, &trait_name, &fields);
         parse_and_collect_derived_items(&source, new_items);
+    }
+}
+
+/// Traits that require all fields to implement the same trait.
+const FIELD_REQUIRING_TRAITS: &[&str] = &["Hashable", "Equatable", "Cloneable"];
+
+/// Primitive types that satisfy common traits implicitly.
+fn primitive_satisfies(type_name: &str, trait_name: &str) -> bool {
+    match trait_name {
+        "Equatable" | "Cloneable" | "Displayable" => {
+            // All primitives satisfy these
+            matches!(type_name, "int" | "int8" | "int16" | "int32" | "int64"
+                | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
+                | "float" | "float32" | "float64" | "bool" | "str" | "String")
+        }
+        "Hashable" => {
+            // Floats are NOT hashable
+            matches!(type_name, "int" | "int8" | "int16" | "int32" | "int64"
+                | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
+                | "bool" | "str" | "String")
+        }
+        _ => false,
+    }
+}
+
+/// Post-Pass-3 validation: check that @derive'd traits have field types
+/// that implement the required trait.
+pub fn validate_derive_field_traits(
+    records: &[DeriveRecord],
+    traits: &super::traits::TraitRegistry,
+    errors: &mut Vec<SemanticError>,
+) {
+    for record in records {
+        if !FIELD_REQUIRING_TRAITS.contains(&record.trait_name.as_str()) {
+            continue;
+        }
+        for field_type in &record.field_type_names {
+            // Skip generic type parameters (single uppercase letter or generic names)
+            if field_type.len() <= 2 && field_type.chars().next().map_or(false, |c| c.is_uppercase()) {
+                continue;
+            }
+            // Skip collection/generic types like Vector[T], Option[T] — they have
+            // their own derive or are handled by the serialization framework.
+            if field_type.contains('[') {
+                continue;
+            }
+            // Check primitives
+            if primitive_satisfies(field_type, &record.trait_name) {
+                continue;
+            }
+            // Check trait registry for user-defined types
+            if traits.has_trait_impl_by_name(field_type, &record.trait_name) {
+                continue;
+            }
+            // Field type doesn't implement the required trait
+            errors.push(SemanticError {
+                kind: SemanticErrorKind::FieldMissingDerivedTrait {
+                    struct_name: record.struct_name.clone(),
+                    field_type: field_type.clone(),
+                    trait_name: record.trait_name.clone(),
+                },
+                span: record.span,
+            });
+        }
     }
 }
 

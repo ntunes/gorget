@@ -32,7 +32,6 @@
 
 - **Multi-line closures with return always typed as void**: `infer_closure_return_type` in `src/ir/lowering/closures.rs:664` hardcodes `Expr::Block(_) => UNIT_TYPE`. Multi-line closures like `(int x): int y = x + 1; return y * 2` fail type checking because the return type is inferred as void instead of int. Only single-expression closures and void (side-effect) closures work. Fix: walk the block's return statements to infer the actual return type. [added: 2026-03-11]
 
-- **Hashable derive for float fields uses uninitialized accumulator**: `Vec2__hash` (struct with float32/float64 fields) has an uninitialized `_2` hash accumulator variable in the generated C code. The hash value is garbage for float-field structs. Int and str fields work fine. [added: 2026-03-11]
 
 - **Inline `None()` without typed variable produces garbage**: Using bare `None()` in expressions without first binding to a typed `Option[T]` variable causes uninitialized variable warnings and garbage output in the C backend. Workaround: `Option[int] n = None()` then use `n`. [added: 2026-03-11]
 
@@ -169,9 +168,6 @@
 
 - **Negative test fixtures — remaining gaps**: 29 `*_error.gg` fixtures added (2026-03-15), plus 4 new diagnostics: `no_field` (Defined structs only), `not_a_function` (Variable/Const/Static), `break_outside_loop`, `unknown_directive` (item-level @attrs). `no_method` now enabled for types with inherent-only equip blocks. Still missing: `underivable_trait` (deferred — derive expansion runs before trait registry), `return_outside_function` (parse error only), `spawn sync_fn()` (not caught), `private_in_public` (warning only), `borrow_on_copy` (not caught). [updated: 2026-03-17]
 
-- **`underivable_trait` diagnostic — deferred**: `@derive(Hashable)` on a struct with unhashable fields should error, but `expand_derives` runs before the trait registry is built (Pass 0 vs Pass 3). Field-level trait checking needs to run post-Pass 3. [added: 2026-03-15]
-
-- **Duplicate `infer_expr` call in `check_block`**: `check_block` calls `check_stmt(stmt)` then also calls `infer_expr(expr)` for `Stmt::Expr` to get block return type. This double-invocation causes duplicate errors from newly added diagnostics (e.g., NotAFunction fires twice). Fix: cache the result from `check_stmt` or skip the second `infer_expr`. [added: 2026-03-15]
 
 ## Low
 

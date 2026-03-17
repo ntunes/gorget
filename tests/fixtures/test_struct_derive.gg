@@ -13,8 +13,8 @@ struct Coord:
     int x
     int y
 
-# 3. Struct with float fields
-@derive(Equatable, Displayable, Cloneable, Hashable)
+# 3. Struct with float fields (Hashable excluded — float is not hashable)
+@derive(Equatable, Displayable, Cloneable)
 struct Vec2:
     float dx
     float dy

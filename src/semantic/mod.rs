@@ -84,7 +84,7 @@ pub fn analyze_with_source_dir(
     errors.extend(meta::evaluate_meta_consts_with_source_dir(module, features, source_dir));
 
     // Expand @derive(...) attributes into equip blocks
-    derive::expand_derives(module, &mut errors);
+    let derive_records = derive::expand_derives(module, &mut errors);
 
     // Validate directives
     for item in &module.items {
@@ -220,6 +220,9 @@ pub fn analyze_with_source_dir(
     // Pass 3: Build trait/impl registry
     let trait_registry =
         traits::build_registry(module, &scopes, &mut types, &resolution_map, &mut errors);
+
+    // Pass 3.5: Validate @derive field types against trait requirements
+    derive::validate_derive_field_traits(&derive_records, &trait_registry, &mut errors);
 
     // Pass 4: Type check everything
     let (expr_types, method_resolutions) = typecheck::check_module(

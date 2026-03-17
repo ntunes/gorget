@@ -2136,7 +2136,7 @@ impl<'a> TypeChecker<'a> {
                 self.unify(cond_type, self.types.bool_id, condition.span);
                 // Assign types to all `is` pattern bindings (including compound conditions)
                 self.assign_compound_is_types(condition);
-                self.check_block(then_body);
+                let then_type = self.check_block(then_body);
 
                 for (cond, body) in elif_branches {
                     let ct = self.infer_expr(cond);
@@ -2147,6 +2147,9 @@ impl<'a> TypeChecker<'a> {
 
                 if let Some(else_body) = else_body {
                     self.check_block(else_body);
+                    // If-with-else in tail position produces the then-branch type.
+                    // Return it so check_block doesn't re-infer via infer_stmt_tail_type.
+                    return Some(then_type);
                 }
             }
 
@@ -2156,18 +2159,27 @@ impl<'a> TypeChecker<'a> {
                 else_arm,
             } => {
                 let scrutinee_type = self.infer_expr(scrutinee);
+                let mut first_arm_type = None;
                 for arm in arms.iter().filter_map(|i| i.arm()) {
                     self.assign_pattern_types(&arm.pattern, scrutinee_type);
                     if let Some(guard) = &arm.guard {
                         let gt = self.infer_expr(guard);
                         self.unify(gt, self.types.bool_id, guard.span);
                     }
-                    self.infer_expr(&arm.body);
+                    let arm_type = self.infer_expr(&arm.body);
+                    if first_arm_type.is_none() {
+                        first_arm_type = Some(arm_type);
+                    }
                 }
                 if let Some(else_arm) = else_arm {
                     self.check_block(else_arm);
                 }
                 self.check_match_exhaustiveness(scrutinee_type, arms, else_arm.is_some(), stmt.span);
+                // Match in tail position produces the first arm's type.
+                // Return it so check_block doesn't re-infer via infer_stmt_tail_type.
+                if let Some(ty) = first_arm_type {
+                    return Some(ty);
+                }
             }
 
             Stmt::Select { arms, else_arm } => {

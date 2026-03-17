@@ -313,6 +313,9 @@ pub enum SemanticErrorKind {
     /// `@derive(From)` requires exactly one field (newtype pattern).
     DeriveFromRequiresSingleField { type_name: String },
 
+    /// A field's type doesn't implement the trait required by @derive.
+    FieldMissingDerivedTrait { struct_name: String, field_type: String, trait_name: String },
+
     /// Assignment to a const binding (always an error).
     AssignmentToConst { name: String },
 
@@ -625,6 +628,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::DeriveFromRequiresSingleField { type_name } => {
                 write!(f, "`@derive(From)` on `{type_name}` requires exactly one field")
+            }
+            SemanticErrorKind::FieldMissingDerivedTrait { struct_name, field_type, trait_name } => {
+                write!(f, "`@derive({trait_name})` on `{struct_name}`: field type `{field_type}` does not implement `{trait_name}`")
             }
             SemanticErrorKind::AssignmentToConst { name } => {
                 write!(f, "cannot assign to constant `{name}`")
