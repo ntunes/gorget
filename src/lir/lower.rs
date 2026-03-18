@@ -112,10 +112,11 @@ impl<'a> LoweringContext<'a> {
 
         // Lower globals.
         for global in &self.gir.globals {
+            let ty = map_gir_type_with_structs(&global.type_id, &self.gir.type_registry, Some(&self.struct_reg));
             let gid = self.module.add_global(LirGlobal {
                 name: global.name.clone(),
-                ty: map_gir_type_with_structs(&global.type_id, &self.gir.type_registry, Some(&self.struct_reg)),
-                init: lower_global_init(&global.init, &self.func_index),
+                ty: ty.clone(),
+                init: lower_global_init(&global.init, &self.func_index, &ty),
                 is_const: false, // GIR doesn't distinguish const vs mut globals
             });
             self.global_index.insert(global.name.clone(), gid);
@@ -4947,7 +4948,7 @@ fn c_sizeof_tuple_fields(fields_str: &str, structs: &[StructDef]) -> usize {
     total
 }
 
-fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collections::HashMap<String, FuncId>) -> LirGlobalInit {
+fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collections::HashMap<String, FuncId>, target_ty: &LirType) -> LirGlobalInit {
     match init {
         ir::GlobalInit::Zeroed => LirGlobalInit::Zeroed,
         ir::GlobalInit::Bytes(b) => LirGlobalInit::Bytes(b.clone()),
@@ -4961,11 +4962,19 @@ fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collections::HashM
         ir::GlobalInit::Struct { fields, .. } => {
             LirGlobalInit::Struct {
                 struct_id: StructId(0), // placeholder
-                fields: fields.iter().map(|(_, f)| lower_global_init(f, func_index)).collect(),
+                fields: fields.iter().map(|(_, f)| lower_global_init(f, func_index, &LirType::I64)).collect(),
             }
         }
         ir::GlobalInit::RuntimeCall(expr) => {
             // Try to parse the expression as a numeric constant.
+            // For float-typed globals, always parse as f64 to avoid
+            // integer-like values (e.g. "800" from 800.0) being stored
+            // as i64 bits instead of f64 bits.
+            if target_ty.is_float() {
+                if let Ok(v) = expr.parse::<f64>() {
+                    return LirGlobalInit::Bytes(v.to_le_bytes().to_vec());
+                }
+            }
             if let Ok(v) = expr.parse::<i64>() {
                 LirGlobalInit::Bytes(v.to_le_bytes().to_vec())
             } else if let Ok(v) = expr.parse::<f64>() {
