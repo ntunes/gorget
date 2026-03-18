@@ -78,12 +78,12 @@ impl<'a> BorrowChecker<'a> {
 
             Expr::Move { expr: inner } => {
                 // The `!` operator: move the value
-                // Cannot move from a bare (immutable) parameter — caller still owns it
-                if let Some(param_name) = self.check_bare_param_mutation(inner) {
+                // Cannot move from a non-owned parameter — only `!` params own the value
+                if let Some((param_name, kind)) = self.check_non_owned_param_move(inner) {
                     self.error(
                         SemanticErrorKind::MutationOfBareParam {
                             name: param_name,
-                            detail: "cannot move from immutable parameter".to_string(),
+                            detail: format!("cannot move from {kind} parameter"),
                         },
                         expr.span,
                     );
@@ -165,12 +165,12 @@ impl<'a> BorrowChecker<'a> {
                 for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
-                            // Cannot move from a bare (immutable) parameter
-                            if let Some(param_name) = self.check_bare_param_mutation(&arg.node.value) {
+                            // Cannot move from a non-owned parameter
+                            if let Some((param_name, kind)) = self.check_non_owned_param_move(&arg.node.value) {
                                 self.error(
                                     SemanticErrorKind::MutationOfBareParam {
                                         name: param_name,
-                                        detail: "cannot move from immutable parameter".to_string(),
+                                        detail: format!("cannot move from {kind} parameter"),
                                     },
                                     arg.span,
                                 );

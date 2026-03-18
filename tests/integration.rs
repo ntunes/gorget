@@ -5674,6 +5674,14 @@ fn bare_param_borrow_error() {
 }
 
 #[test]
+fn mut_param_move_error() {
+    check_gg_fails(
+        "mut_param_move_error.gg",
+        "cannot move from mutably borrowed parameter",
+    );
+}
+
+#[test]
 fn lifetime_use_after_move_error() {
     check_gg_fails(
         "lifetime_use_after_move_error.gg",

@@ -84,14 +84,10 @@ Box[SpannedExpr] unwrap_opt_box_sexpr(Option[Box[SpannedExpr]] opt):
 # ── Dict set helpers (codegen workaround for Dict.set through mutable borrows) ──
 
 void res_map_set(ResolveContext &ctx, int key, int val):
-    Dict[int, int] m = !ctx.resolution_map
-    m.put(key, val)
-    ctx.resolution_map = !m
+    ctx.resolution_map.put(key, val)
 
 void fn_scope_set(ResolveContext &ctx, str name, int scope_id):
-    Dict[str, int] m = !ctx.function_body_scopes
-    m.put(name, scope_id)
-    ctx.function_body_scopes = !m
+    ctx.function_body_scopes.put(name, scope_id)
 
 # ── Resolve context ─────────────────────────────────────────
 

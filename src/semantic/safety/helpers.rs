@@ -409,6 +409,30 @@ impl<'a> BorrowChecker<'a> {
         Some(def.name.clone())
     }
 
+    /// Check if `expr` is a non-owned parameter (bare or `&`) of a non-Copy type.
+    /// Only `!` (move) params own the value and can be moved from.
+    /// Returns `(param_name, ownership_description)` if move should be rejected.
+    pub(super) fn check_non_owned_param_move(&self, expr: &Spanned<Expr>) -> Option<(String, &'static str)> {
+        let def_id = self.find_root_def_id(expr)?;
+        let def = self.scopes.get_def(def_id);
+        if !def.is_param {
+            return None;
+        }
+        // Only non-Copy types are affected
+        if let Some(type_id) = def.type_id {
+            if is_copy_type(type_id, self.types, self.scopes) {
+                return None;
+            }
+        }
+        match def.param_ownership {
+            Some(crate::parser::ast::Ownership::Borrow) =>
+                Some((def.name.clone(), "immutable")),
+            Some(crate::parser::ast::Ownership::MutableBorrow) =>
+                Some((def.name.clone(), "mutably borrowed")),
+            _ => None, // Move/owned params can be moved
+        }
+    }
+
     /// Check that call-site ownership annotations match the parameter declarations.
     pub(super) fn check_call_ownership(
         &mut self,
