@@ -308,6 +308,9 @@ pub(super) struct BorrowChecker<'a> {
 
     /// Capture sets for closure-typed variables, keyed by the variable's DefId.
     pub(super) closure_capture_sets: FxHashMap<DefId, CaptureSet>,
+    /// Variables (struct/array) that contain closures capturing local variables.
+    /// When returned, these would cause use-after-free.
+    pub(super) vars_containing_closures: FxHashSet<DefId>,
     /// Temporarily holds the capture set computed for the most recent closure
     /// expression, picked up by VarDecl to associate it with the variable's DefId.
     pub(super) pending_capture_set: Option<CaptureSet>,
@@ -419,6 +422,7 @@ impl<'a> BorrowChecker<'a> {
             current_function_throws: false,
             await_invalidated: FxHashSet::default(),
             closure_capture_sets: FxHashMap::default(),
+            vars_containing_closures: FxHashSet::default(),
             pending_capture_set: None,
             mut_captured_vars: FxHashMap::default(),
             mut_capture_owners: FxHashMap::default(),
@@ -582,6 +586,7 @@ fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
                 checker.invalidated_origins.clear();
                 checker.await_invalidated.clear();
                 checker.closure_capture_sets.clear();
+                checker.vars_containing_closures.clear();
                 checker.pending_capture_set = None;
                 checker.check_block(&t.body);
             }
@@ -595,6 +600,7 @@ fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
                 checker.invalidated_origins.clear();
                 checker.await_invalidated.clear();
                 checker.closure_capture_sets.clear();
+                checker.vars_containing_closures.clear();
                 checker.pending_capture_set = None;
                 checker.check_block(&b.body);
             }
@@ -608,6 +614,7 @@ fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
                 checker.invalidated_origins.clear();
                 checker.await_invalidated.clear();
                 checker.closure_capture_sets.clear();
+                checker.vars_containing_closures.clear();
                 checker.pending_capture_set = None;
                 checker.check_block(&s.body);
             }
@@ -621,6 +628,7 @@ fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
                 checker.invalidated_origins.clear();
                 checker.await_invalidated.clear();
                 checker.closure_capture_sets.clear();
+                checker.vars_containing_closures.clear();
                 checker.pending_capture_set = None;
                 checker.check_block(&s.body);
             }

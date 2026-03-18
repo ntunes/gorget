@@ -247,6 +247,11 @@ impl<'a> BorrowChecker<'a> {
                             }
 
                             self.closure_capture_sets.insert(def_id, cs);
+                        } else {
+                            // Track struct/array variables that contain closures capturing locals.
+                            // Even without a pending_capture_set (not a direct closure assignment),
+                            // the value might be a StructLiteral whose args include closures.
+                            self.mark_var_if_contains_closures(def_id, value);
                         }
                     }
                 }
@@ -678,33 +683,9 @@ impl<'a> BorrowChecker<'a> {
                     }
                     } // imported_module_depth == 0
 
-                    // Check if returning a closure that captures local variables.
-                    // Even value-typed locals live on the stack and become dangling.
-                    if let Some(ret_type_id) = self.current_return_type_id {
-                        if types::is_callable_type(ret_type_id, self.types) {
-                            if let Expr::Identifier(_) = &expr.node {
-                                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
-                                    if let Some(cs) = self.closure_capture_sets.get(&def_id) {
-                                        let cs = cs.clone();
-                                        for entry in &cs.captures {
-                                            let cap_def = self.scopes.get_def(entry.def_id);
-                                            // Local variables (not params, not globals) will be freed
-                                            if cap_def.kind == DefKind::Variable && !cap_def.is_param {
-                                                self.error(
-                                                    SemanticErrorKind::ClosureEscapesScope {
-                                                        closure_name: self.scopes.get_def(def_id).name.clone(),
-                                                        captured_name: entry.name.clone(),
-                                                    },
-                                                    expr.span,
-                                                );
-                                                break; // one error per return is enough
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    // Check if returning a closure (or a struct/array containing one)
+                    // that captures local variables — use-after-free.
+                    self.check_return_for_escaping_closures(expr);
                 }
                 self.diverged = true;
             }
@@ -1299,6 +1280,7 @@ impl<'a> BorrowChecker<'a> {
         self.shared_derived.clear();
         self.stale_shared_derived.clear();
         self.closure_capture_sets.clear();
+        self.vars_containing_closures.clear();
         self.pending_capture_set = None;
         self.mut_captured_vars.clear();
         self.mut_capture_owners.clear();
@@ -1411,6 +1393,8 @@ impl<'a> BorrowChecker<'a> {
                 }
                 } // imported_module_depth == 0
                 self.check_expr(expr);
+                // Also check closure escape for expression-body functions.
+                self.check_return_for_escaping_closures(expr);
             }
             FunctionBody::Declaration | FunctionBody::Extern(_) => {}
         }

@@ -1,0 +1,10 @@
+struct Holder:
+    Callable[int()] fn
+
+Holder make():
+    int x = 42
+    auto f = (): x
+    return Holder(f)
+
+void main():
+    pass

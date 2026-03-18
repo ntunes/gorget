@@ -14631,3 +14631,8 @@ fn dict_no_hashable_error() {
 fn closure_mut_method_capture_error() {
     check_gg_fails("closure_mut_method_capture_error.gg", "cannot read `c` while it is mutably captured by closure `f`");
 }
+
+#[test]
+fn closure_struct_escape_error() {
+    check_gg_fails("closure_struct_escape_error.gg", "captures local variable");
+}

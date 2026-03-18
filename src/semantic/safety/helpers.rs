@@ -738,6 +738,105 @@ impl<'a> BorrowChecker<'a> {
         CaptureSet { captures: collector.captures }
     }
 
+    /// Check if a return expression contains closures that capture local variables.
+    /// Walks through struct literals, arrays, and identifiers to find closures whose
+    /// capture sets contain non-param locals (would dangle after return).
+    pub(super) fn check_return_for_escaping_closures(&mut self, expr: &Spanned<Expr>) {
+        self.check_expr_for_escaping_closures(expr);
+    }
+
+    /// Recursive helper: walk an expression looking for escaping closures.
+    /// Returns true if an error was emitted (to stop after first error).
+    fn check_expr_for_escaping_closures(&mut self, expr: &Spanned<Expr>) -> bool {
+        match &expr.node {
+            Expr::Identifier(_) => {
+                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                    // Direct closure variable
+                    if let Some(cs) = self.closure_capture_sets.get(&def_id).cloned() {
+                        for entry in &cs.captures {
+                            let cap_def = self.scopes.get_def(entry.def_id);
+                            if cap_def.kind == DefKind::Variable && !cap_def.is_param {
+                                self.error(
+                                    SemanticErrorKind::ClosureEscapesScope {
+                                        closure_name: self.scopes.get_def(def_id).name.clone(),
+                                        captured_name: entry.name.clone(),
+                                    },
+                                    expr.span,
+                                );
+                                return true;
+                            }
+                        }
+                    }
+                    // Struct/array variable known to contain an escaping closure
+                    if self.vars_containing_closures.contains(&def_id) {
+                        let name = self.scopes.get_def(def_id).name.clone();
+                        self.error(
+                            SemanticErrorKind::ClosureEscapesScope {
+                                closure_name: name.clone(),
+                                captured_name: "<local>".to_string(),
+                            },
+                            expr.span,
+                        );
+                        return true;
+                    }
+                }
+                false
+            }
+            Expr::StructLiteral { args, .. } => {
+                for arg in args {
+                    if self.check_expr_for_escaping_closures(arg) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Expr::ArrayLiteral(elems) => {
+                for elem in elems {
+                    if self.check_expr_for_escaping_closures(elem) {
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if a struct/array literal value contains closures that capture locals.
+    /// If so, mark the variable as tainted for escape checking.
+    pub(super) fn mark_var_if_contains_closures(&mut self, var_def_id: DefId, value: &Spanned<Expr>) {
+        if self.expr_contains_escaping_closure(value) {
+            self.vars_containing_closures.insert(var_def_id);
+        }
+    }
+
+    /// Check if an expression contains a closure (identifier) that captures local variables.
+    fn expr_contains_escaping_closure(&self, expr: &Spanned<Expr>) -> bool {
+        match &expr.node {
+            Expr::Identifier(_) => {
+                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                    if let Some(cs) = self.closure_capture_sets.get(&def_id) {
+                        return cs.captures.iter().any(|entry| {
+                            let cap_def = self.scopes.get_def(entry.def_id);
+                            cap_def.kind == DefKind::Variable && !cap_def.is_param
+                        });
+                    }
+                    if self.vars_containing_closures.contains(&def_id) {
+                        return true;
+                    }
+                }
+                false
+            }
+            Expr::StructLiteral { args, .. } => {
+                args.iter().any(|arg| self.expr_contains_escaping_closure(arg))
+            }
+            Expr::ArrayLiteral(elems) => {
+                elems.iter().any(|elem| self.expr_contains_escaping_closure(elem))
+            }
+            _ => false,
+        }
+    }
+
     /// Check if a function returns a temporary (non-reference owning type) with
     /// no `return_borrows_from`. Used by both Call and MethodCall detection.
     pub(super) fn is_temporary_from_function(&self, def_id: DefId) -> bool {
