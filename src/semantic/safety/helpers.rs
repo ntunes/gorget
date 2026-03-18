@@ -366,13 +366,14 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
-    /// Walk up FieldAccess/TupleFieldAccess/Index chains to find the root identifier's DefId.
+    /// Walk up FieldAccess/TupleFieldAccess/Index/OptionalChain chains to find the root identifier's DefId.
     pub(super) fn find_root_def_id(&self, expr: &Spanned<Expr>) -> Option<DefId> {
         match &expr.node {
             Expr::Identifier(_) => self.resolution_map.get(&expr.span.start).copied(),
             Expr::FieldAccess { object, .. }
             | Expr::TupleFieldAccess { object, .. }
-            | Expr::Index { object, .. } => self.find_root_def_id(object),
+            | Expr::Index { object, .. }
+            | Expr::OptionalChain { object, .. } => self.find_root_def_id(object),
             Expr::SelfExpr => self.resolution_map.get(&expr.span.start).copied(),
             _ => None,
         }

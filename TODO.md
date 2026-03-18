@@ -168,6 +168,12 @@
 
 - **gorget-db — JSON document store**: MongoDB-lite REST API using gg.httpserver, gg.json, gg.jsonpath, std.signal, std.fs. POST/GET/DELETE/PUT/PATCH on `/db/{collection}/{id}` with query support. [added: 2026-03-09]
 
+- **Borrow checker: f-string interpolation bypasses all safety checks** — String interpolation segments are stored as raw text (`StringSegment::Interpolation(String, Option<String>)`), not parsed AST expressions. The resolver, type checker, and borrow checker never see expressions inside `f"{expr}"`. This means use-after-move, dangling references, bare param mutation, etc. inside f-strings are uncaught. Fixing requires either: (1) re-parsing interpolation strings during semantic analysis, or (2) changing the lexer/parser to store parsed `Expr` nodes in `StringSegment::Interpolation`. Option 2 is cleaner but a larger refactor. [added: 2026-03-18]
+
+- **Borrow checker: bare param mutation via nested field method call** — `w.c.increment()` where `w` is a bare param and `increment` takes `&self` is not caught. Direct `c.increment()` IS caught. The issue is that `function_info.get(&method_def_id)` returns None for equip methods when called through a field chain, so the ownership check silently skips. Root cause: method_resolutions maps to a DefId that doesn't match function_info keys for equip methods. [added: 2026-03-18]
+
+- **Type checker: struct `as int` cast not validated** — `Secret(value=42) as int` passes without error and produces a garbage pointer value at runtime. The `as` cast should be restricted to numeric-to-numeric, bool-to-int, and similar safe conversions. [added: 2026-03-18]
+
 - **Resolver: nested `Stmt::Item` orphans FunctionInfo** — `resolve_stmt` at line 1108 creates a fresh `ResolveContext` for nested function definitions. `FunctionInfo` entries created there are immediately dropped — the type checker never sees them. Fix requires threading `function_info`/`function_body_scopes` through `resolve_block` (29 call sites) and `resolve_stmt` (1 call site). Nested function definitions are rare, so low urgency. [added: 2026-03-17]
 
 - **Resolver: `Expr::Block`/`Expr::Do` throwaway TypeTable** — Lines 1379/1385 pass `TypeTable::new()` to `resolve_block`. Types created inside expression blocks are discarded. Would need adding `types` to `resolve_expr` (84+ call sites). Expression blocks with type declarations are extremely rare. [added: 2026-03-17]

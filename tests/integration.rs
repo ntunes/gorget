@@ -5682,6 +5682,14 @@ fn mut_param_move_error() {
 }
 
 #[test]
+fn field_move_error() {
+    check_gg_fails(
+        "field_move_error.gg",
+        "use of moved value",
+    );
+}
+
+#[test]
 fn lifetime_use_after_move_error() {
     check_gg_fails(
         "lifetime_use_after_move_error.gg",

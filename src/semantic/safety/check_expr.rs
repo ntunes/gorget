@@ -96,7 +96,14 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
                 } else {
-                    // Move of a complex expression — just recurse
+                    // Move of a field/index expression (e.g., !p.field) — mark
+                    // the root variable as moved since the struct is now partial.
+                    if let Some(root_def_id) = self.find_root_def_id(inner) {
+                        let kind = self.scopes.get_def(root_def_id).kind;
+                        if kind == DefKind::Variable {
+                            self.check_move(root_def_id, expr.span);
+                        }
+                    }
                     self.check_expr(inner);
                 }
             }
@@ -186,6 +193,13 @@ impl<'a> BorrowChecker<'a> {
                                     }
                                 }
                             } else {
+                                // Field move (e.g., f(!p.field)) — mark root as moved
+                                if let Some(root_def_id) = self.find_root_def_id(&arg.node.value) {
+                                    let kind = self.scopes.get_def(root_def_id).kind;
+                                    if kind == DefKind::Variable {
+                                        self.check_move(root_def_id, arg.span);
+                                    }
+                                }
                                 self.check_expr(&arg.node.value);
                             }
                         }

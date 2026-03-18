@@ -1,0 +1,13 @@
+# Tests that moving a struct field marks the whole struct as moved.
+
+struct Pair:
+    Vector[int] first
+    Vector[int] second
+
+void consume(Vector[int] !v):
+    print(v.len())
+
+void main():
+    Pair p = Pair(first=[1,2,3], second=[4,5,6])
+    consume(!p.first)
+    print(p.second.len())
