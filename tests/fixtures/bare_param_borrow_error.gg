@@ -1,0 +1,14 @@
+# Tests that the borrow checker rejects escalating a bare param to mutable borrow.
+
+struct Counter:
+    int count
+
+void mutate(Counter &c):
+    c.count = c.count + 1
+
+void bad(Counter c):
+    mutate(&c)
+
+void main():
+    Counter c = Counter(count=0)
+    bad(c)

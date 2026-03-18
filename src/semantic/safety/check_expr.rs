@@ -78,6 +78,16 @@ impl<'a> BorrowChecker<'a> {
 
             Expr::Move { expr: inner } => {
                 // The `!` operator: move the value
+                // Cannot move from a bare (immutable) parameter — caller still owns it
+                if let Some(param_name) = self.check_bare_param_mutation(inner) {
+                    self.error(
+                        SemanticErrorKind::MutationOfBareParam {
+                            name: param_name,
+                            detail: "cannot move from immutable parameter".to_string(),
+                        },
+                        expr.span,
+                    );
+                }
                 if let Expr::Identifier(_) = &inner.node {
                     if let Some(&def_id) = self.resolution_map.get(&inner.span.start) {
                         let kind = self.scopes.get_def(def_id).kind;
@@ -155,6 +165,16 @@ impl<'a> BorrowChecker<'a> {
                 for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
+                            // Cannot move from a bare (immutable) parameter
+                            if let Some(param_name) = self.check_bare_param_mutation(&arg.node.value) {
+                                self.error(
+                                    SemanticErrorKind::MutationOfBareParam {
+                                        name: param_name,
+                                        detail: "cannot move from immutable parameter".to_string(),
+                                    },
+                                    arg.span,
+                                );
+                            }
                             // Argument passed with `!` — check the move
                             if let Expr::Identifier(_) = &arg.node.value.node {
                                 if let Some(&def_id) =

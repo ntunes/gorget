@@ -5658,6 +5658,22 @@ fn bare_param_method_error() {
 }
 
 #[test]
+fn bare_param_move_error() {
+    check_gg_fails(
+        "bare_param_move_error.gg",
+        "cannot move from immutable parameter",
+    );
+}
+
+#[test]
+fn bare_param_borrow_error() {
+    check_gg_fails(
+        "bare_param_borrow_error.gg",
+        "cannot create mutable borrow from immutable parameter",
+    );
+}
+
+#[test]
 fn lifetime_use_after_move_error() {
     check_gg_fails(
         "lifetime_use_after_move_error.gg",
