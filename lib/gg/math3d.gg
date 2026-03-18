@@ -76,7 +76,7 @@ equip Vec2:
 
 # ── Vec3 ─────────────────────────────────────────────────────
 
-@derive(Default)
+@derive(Default, Cloneable)
 struct Vec3:
     float x
     float y

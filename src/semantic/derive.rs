@@ -195,6 +195,15 @@ pub fn validate_derive_field_traits(
             if traits.has_trait_impl_by_name(field_type, &record.trait_name) {
                 continue;
             }
+            // Check if the field type itself has a derive record for this trait
+            // (handles cross-module derives where the library module's equip blocks
+            // aren't yet in the trait registry)
+            let derived_elsewhere = records.iter().any(|r| {
+                r.struct_name == *field_type && r.trait_name == record.trait_name
+            });
+            if derived_elsewhere {
+                continue;
+            }
             // Field type doesn't implement the required trait
             errors.push(SemanticError {
                 kind: SemanticErrorKind::FieldMissingDerivedTrait {
