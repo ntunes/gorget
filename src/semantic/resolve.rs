@@ -79,6 +79,9 @@ pub struct ResolveContext {
     /// Scope IDs for FileModule scopes — keyed by joined module path.
     /// Used during body resolution so that private names are visible within the module.
     pub file_module_scopes: FxHashMap<String, super::ids::ScopeId>,
+    /// Generic type parameter bounds for structs/enums:
+    /// (param_names, [(param_name, [trait_name, ...])])
+    pub struct_generic_bounds: FxHashMap<DefId, (Vec<String>, Vec<(String, Vec<String>)>)>,
 }
 
 impl ResolveContext {
@@ -91,6 +94,7 @@ impl ResolveContext {
             function_body_scopes: FxHashMap::default(),
             module_private_names: Vec::new(),
             file_module_scopes: FxHashMap::default(),
+            struct_generic_bounds: FxHashMap::default(),
         }
     }
 }
@@ -136,6 +140,23 @@ pub fn collect_top_level(
             ctx.enum_variants.insert(enum_def_id, EnumVariantInfo { variants: variant_infos, variant_field_types: Vec::new(), generic_param_names: Vec::new() });
         }
     }
+    // Register trait bounds for built-in collection types.
+    // Dict[K,V] / HashMap[K,V] require K: Hashable + Equatable.
+    // Set[T] / HashSet[T] require T: Hashable + Equatable.
+    for (type_name, param_name) in &[("Dict", "K"), ("HashMap", "K"), ("Set", "T"), ("HashSet", "T")] {
+        if let Some(def_id) = scopes.lookup(type_name) {
+            let param_names = if *type_name == "Dict" || *type_name == "HashMap" {
+                vec!["K".to_string(), "V".to_string()]
+            } else {
+                vec!["T".to_string()]
+            };
+            ctx.struct_generic_bounds.insert(
+                def_id,
+                (param_names, vec![(param_name.to_string(), vec!["Hashable".to_string(), "Equatable".to_string()])]),
+            );
+        }
+    }
+
     collect_top_level_inner(module, scopes, types, errors, &mut ctx);
 
     // Second pass: handle glob imports (`from X import EnumName.*`).
@@ -368,6 +389,11 @@ fn collect_item(
                         .collect();
                     ctx.struct_fields
                         .insert(def_id, StructFieldInfo { fields });
+                    let bounds = extract_generic_bounds(&s.generic_params);
+                    if !bounds.is_empty() {
+                        let param_names = extract_generic_param_names(&s.generic_params);
+                        ctx.struct_generic_bounds.insert(def_id, (param_names, bounds));
+                    }
                 }
                 Err(e) => errors.push(e),
             }
@@ -417,6 +443,11 @@ fn collect_item(
                         ));
                     }
                     let generic_param_names = extract_generic_param_names(&e.generic_params);
+                    let bounds = extract_generic_bounds(&e.generic_params);
+                    if !bounds.is_empty() {
+                        let param_names_for_bounds = generic_param_names.clone();
+                        ctx.struct_generic_bounds.insert(enum_def_id, (param_names_for_bounds, bounds));
+                    }
                     ctx.enum_variants.insert(
                         enum_def_id,
                         EnumVariantInfo {

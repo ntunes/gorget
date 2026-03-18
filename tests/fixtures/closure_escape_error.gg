@@ -1,0 +1,7 @@
+Callable[int()] make():
+    int x = 42
+    auto f = (): x
+    return f
+
+void main():
+    pass

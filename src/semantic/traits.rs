@@ -139,7 +139,11 @@ impl TraitRegistry {
             return true;
         }
         // Intrinsic satisfaction: numeric primitives satisfy numeric traits.
-        is_numeric_primitive(type_name) && is_numeric_trait(trait_name)
+        if is_numeric_primitive(type_name) && is_numeric_trait(trait_name) {
+            return true;
+        }
+        // Intrinsic satisfaction: hashable/equatable primitives.
+        is_hashable_primitive(type_name) && is_hashable_trait(trait_name)
     }
 
     /// Get the trait's generic AST type args for a specific trait impl on a type (by name).
@@ -201,6 +205,17 @@ fn is_numeric_trait(name: &str) -> bool {
         "Numeric" | "Add" | "Sub" | "Mul" | "Div" | "Rem" | "Mod" | "Neg"
         | "Comparable" | "Equatable" | "Default" | "One"
     )
+}
+
+/// Check if a type name is a primitive that intrinsically supports hashing and equality.
+/// Includes: all numeric types, str, bool, char.
+fn is_hashable_primitive(name: &str) -> bool {
+    is_numeric_primitive(name) || matches!(name, "str" | "bool" | "char" | "String")
+}
+
+/// Check if a trait name is one that hashable primitives intrinsically satisfy.
+fn is_hashable_trait(name: &str) -> bool {
+    matches!(name, "Hashable" | "Equatable")
 }
 
 /// Build the trait and impl registry from the module.

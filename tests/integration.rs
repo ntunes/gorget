@@ -14616,3 +14616,13 @@ fn duplicate_struct_field_error() {
 fn wrong_field_count_struct_error() {
     check_gg_fails("wrong_field_count_struct_error.gg", "has 2 fields but 1");
 }
+
+#[test]
+fn closure_escape_error() {
+    check_gg_fails("closure_escape_error.gg", "cannot return closure `f`: captures local variable `x`");
+}
+
+#[test]
+fn dict_no_hashable_error() {
+    check_gg_fails("dict_no_hashable_error.gg", "does not satisfy trait bound `K is Hashable`");
+}

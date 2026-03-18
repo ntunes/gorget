@@ -235,6 +235,7 @@ pub fn analyze_with_source_dir(
         &resolve_ctx.enum_variants,
         &resolve_ctx.struct_fields,
         &resolve_ctx.function_body_scopes,
+        &resolve_ctx.struct_generic_bounds,
         &mut errors,
     );
 

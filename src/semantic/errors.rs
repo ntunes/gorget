@@ -433,6 +433,9 @@ pub enum SemanticErrorKind {
 
     /// Binding a str variable to an f-string (owned String) that will leak.
     OwnedStringBind { name: String },
+
+    /// Returning a closure that captures a local variable (use-after-free).
+    ClosureEscapesScope { closure_name: String, captured_name: String },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -756,6 +759,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::OwnedStringBind { name } => {
                 write!(f, "cannot bind `str` variable `{name}` to owned string: value owns heap-allocated data — use `String` type instead")
+            }
+            SemanticErrorKind::ClosureEscapesScope { closure_name, captured_name } => {
+                write!(f, "cannot return closure `{closure_name}`: captures local variable `{captured_name}` which will be dropped")
             }
         }
     }

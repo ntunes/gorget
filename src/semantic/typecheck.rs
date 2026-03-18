@@ -350,6 +350,8 @@ struct TypeChecker<'a> {
     current_trait_bounds: Vec<(String, Vec<String>)>,
     /// Nesting depth inside loops (for break/continue validation).
     loop_depth: usize,
+    /// Generic type parameter bounds for structs/enums (from resolve).
+    struct_generic_bounds: &'a FxHashMap<DefId, (Vec<String>, Vec<(String, Vec<String>)>)>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -362,6 +364,7 @@ impl<'a> TypeChecker<'a> {
         enum_variants: &'a FxHashMap<DefId, EnumVariantInfo>,
         struct_fields: &'a FxHashMap<DefId, StructFieldInfo>,
         function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
+        struct_generic_bounds: &'a FxHashMap<DefId, (Vec<String>, Vec<(String, Vec<String>)>)>,
     ) -> Self {
         Self {
             scopes,
@@ -386,6 +389,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_scope: None,
             current_trait_bounds: Vec::new(),
             loop_depth: 0,
+            struct_generic_bounds,
         }
     }
 
@@ -1806,7 +1810,9 @@ impl<'a> TypeChecker<'a> {
                 }
                 // Build Dict[K, V] type
                 if let Some(dict_def_id) = self.scopes.lookup("Dict") {
-                    self.types.intern_generic(dict_def_id, vec![key_type, val_type])
+                    let dict_type = self.types.intern_generic(dict_def_id, vec![key_type, val_type]);
+                    self.check_struct_type_bounds(dict_type, expr.span);
+                    dict_type
                 } else {
                     self.types.error_id
                 }
@@ -1848,7 +1854,9 @@ impl<'a> TypeChecker<'a> {
                             ).ok()
                         }).collect();
                         if !type_ids.is_empty() {
-                            return self.types.intern_generic(def_id, type_ids);
+                            let generic_type = self.types.intern_generic(def_id, type_ids);
+                            self.check_struct_type_bounds(generic_type, name.span);
+                            return generic_type;
                         }
                     }
                     self.types.defined_id(def_id)
@@ -1979,6 +1987,11 @@ impl<'a> TypeChecker<'a> {
                         self.types,
                     ).ok(),
                 };
+
+                // Check generic type parameter trait bounds (e.g. Dict[K: Hashable, V])
+                if let Some(dt) = declared_type {
+                    self.check_struct_type_bounds(dt, type_.span);
+                }
 
                 let prev_hint = self.decl_type_hint;
                 self.decl_type_hint = declared_type;
@@ -3553,6 +3566,60 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Check generic type parameter trait bounds for struct/enum instantiations.
+    /// Given a resolved TypeId, if it's a Generic type with bounds registered in
+    /// struct_generic_bounds, verify each concrete type arg satisfies the required traits.
+    fn check_struct_type_bounds(&mut self, type_id: TypeId, span: Span) {
+        let (def_id, args) = match self.types.get(type_id).clone() {
+            ResolvedType::Generic(def_id, args) => (def_id, args),
+            _ => return,
+        };
+        let (param_names, bounds) = match self.struct_generic_bounds.get(&def_id) {
+            Some(info) => info,
+            None => return,
+        };
+        if bounds.is_empty() {
+            return;
+        }
+        let bounds = bounds.clone();
+        let param_names = param_names.clone();
+        for (param_name, required_traits) in &bounds {
+            let idx = match param_names.iter().position(|n| n == param_name) {
+                Some(i) => i,
+                None => continue,
+            };
+            let arg_type_id = match args.get(idx) {
+                Some(&tid) => tid,
+                None => continue,
+            };
+            // Skip type variables (unresolved generics) — bounds will be checked
+            // when the outer generic is itself instantiated with concrete types.
+            if matches!(self.types.get(arg_type_id), ResolvedType::Var(_)) {
+                continue;
+            }
+            let concrete_type = self.describe_resolved_type(arg_type_id);
+            for trait_name in required_traits {
+                if self.traits.has_trait_impl_by_name(&concrete_type, trait_name) {
+                    continue;
+                }
+                // Transitive bound propagation from the enclosing generic function
+                let satisfied_by_outer_bound = self.current_trait_bounds.iter().any(|(p, tb)| {
+                    p == &concrete_type && tb.iter().any(|b| self.traits.trait_satisfies(b, trait_name))
+                });
+                if !satisfied_by_outer_bound {
+                    self.error(
+                        SemanticErrorKind::UnsatisfiedTraitBound {
+                            type_name: concrete_type.clone(),
+                            trait_name: trait_name.clone(),
+                            param_name: param_name.clone(),
+                        },
+                        span,
+                    );
+                }
+            }
+        }
+    }
+
     /// Pre-register a function's signature (return type + param types) on its DefInfo
     /// so that callers can infer the function's type during type checking.
     /// Skips generic functions since their type params aren't in scope at module level.
@@ -3768,9 +3835,10 @@ pub fn check_module(
     enum_variants: &FxHashMap<DefId, EnumVariantInfo>,
     struct_fields: &FxHashMap<DefId, StructFieldInfo>,
     function_body_scopes: &FxHashMap<(String, usize), ScopeId>,
+    struct_generic_bounds: &FxHashMap<DefId, (Vec<String>, Vec<(String, Vec<String>)>)>,
     errors: &mut Vec<SemanticError>,
 ) -> (FxHashMap<Span, TypeId>, FxHashMap<usize, DefId>) {
-    let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants, struct_fields, function_body_scopes);
+    let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants, struct_fields, function_body_scopes, struct_generic_bounds);
 
     // Pre-pass: register function signatures so callers can infer return types.
     // This must run before body checking so that e.g. `auto x = imported_fn()`

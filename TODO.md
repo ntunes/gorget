@@ -19,9 +19,7 @@
 
 ## Medium
 
-- **Borrow checker: closure escaping function scope (use-after-free)** — A closure that captures a local variable can be returned from the function. The captured local lives on the stack and is freed when the function returns, but the closure still references it — use-after-free. Example: `Callable[int()] make(): int x = 42; auto f = (): x; return f` compiles and produces garbage at runtime. The borrow checker's `DanglingReturn` check only looks at `BorrowOrigin` for the return expression — closures get origin `Unknown` or `Local`, but the check doesn't fire because the closure itself isn't a reference type. Fix: when returning a closure, check if its capture set contains any `Local`-origin variables. This requires the `CaptureSet` to be available during return checking. [added: 2026-03-18]
-
-- **Type checker: generic type parameter trait bounds not enforced** — `Dict[MyStruct, int]` compiles without checking that `MyStruct` implements `Hashable`/`Equatable`. At runtime, the hash function produces garbage (pointer reinterpretation). Similarly, `Set[T]` doesn't enforce `Hashable` on `T`. Fix: when instantiating a generic type with concrete type args, validate that the concrete type satisfies the generic's trait bounds (stored in `GenericParams.bounds`). Requires trait registry lookup during type checking. [added: 2026-03-18]
+- **Borrow checker: closure escape via struct field** — The closure escape check only fires on direct `return closure_var` expressions. A closure capturing locals that is stored in a struct field, with the struct then returned, is not caught. Would need deeper escape analysis (track closure-typed struct fields through return paths). [added: 2026-03-18]
 
 - **Borrow checker: closure captures &param mutation unchecked** — A closure that captures a `&` (mutable borrow) parameter can call mutating methods on it without the borrow checker noticing. `void bad(Counter &c): auto f = (): c.increment(); apply(f)` passes. Related to the nested-field-method FunctionInfo gap — the closure body check doesn't have method ownership info for the captured param's type. [added: 2026-03-18]
 

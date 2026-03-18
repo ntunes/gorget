@@ -677,6 +677,34 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
                     } // imported_module_depth == 0
+
+                    // Check if returning a closure that captures local variables.
+                    // Even value-typed locals live on the stack and become dangling.
+                    if let Some(ret_type_id) = self.current_return_type_id {
+                        if types::is_callable_type(ret_type_id, self.types) {
+                            if let Expr::Identifier(_) = &expr.node {
+                                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                                    if let Some(cs) = self.closure_capture_sets.get(&def_id) {
+                                        let cs = cs.clone();
+                                        for entry in &cs.captures {
+                                            let cap_def = self.scopes.get_def(entry.def_id);
+                                            // Local variables (not params, not globals) will be freed
+                                            if cap_def.kind == DefKind::Variable && !cap_def.is_param {
+                                                self.error(
+                                                    SemanticErrorKind::ClosureEscapesScope {
+                                                        closure_name: self.scopes.get_def(def_id).name.clone(),
+                                                        captured_name: entry.name.clone(),
+                                                    },
+                                                    expr.span,
+                                                );
+                                                break; // one error per return is enough
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 self.diverged = true;
             }

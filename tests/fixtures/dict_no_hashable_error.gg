@@ -1,0 +1,7 @@
+struct Point:
+    int x
+    int y
+
+void main():
+    Dict[Point, int] d = {Point(1, 2): 42}
+    print(d.size())
