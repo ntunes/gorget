@@ -10597,11 +10597,13 @@ fn try_emit_outparam_call(
         "gorget_image_load_rgba" | "image_load_rgba" => {
             let dst_id = dst.as_ref()?;
             let path = format_operand(&args[0], func, registry);
+            // Coerce GorgetString → Str if needed (both have .data/.len fields)
+            let path_str = format!("(Str){{ .data = {path}.data, .len = {path}.len }}");
             let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
             let _ = writeln!(out,
                 "        _{id} = ({{ int64_t __tag = 0, __w = 0, __h = 0, __ch = 0; \
                 GorgetArray __data = gorget_array_new(sizeof(uint8_t)); Str __err = {{0}}; \
-                gorget_image_load_rgba({path}, &__tag, &__w, &__h, &__ch, &__data, &__err); \
+                gorget_image_load_rgba({path_str}, &__tag, &__w, &__h, &__ch, &__data, &__err); \
                 {c_type} __wr; if (__tag == 0) {{ __wr.tag = 0; __wr.data.Ok._0 = (Image){{.width = __w, .height = __h, .channels = __ch, .data = __data}}; }} \
                 else {{ __wr.tag = 1; __wr.data.Error._0 = __err; }} __wr; }});",
                 id = dst_id.0);

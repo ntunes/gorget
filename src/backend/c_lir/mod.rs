@@ -2263,8 +2263,8 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     // (e.g. GorgetArray, GorgetMap — not in module.structs but needed for correct C declarations).
     let mut val_c_type_override: Vec<Option<String>> = vec![None; max_val as usize];
     // Track which values came from gorget_map_get/gorget_array_get (return void* into internal storage).
-    // When these pointers are loaded as resource types, we must clone instead of shallow deref.
-    let mut collection_get_vals: Vec<bool> = vec![false; max_val as usize];
+    // Previously used for clone-on-read; now kept for potential future use.
+    let mut _collection_get_vals: Vec<bool> = vec![false; max_val as usize];
     for block in &func.blocks {
         for (vid, ty) in &block.params {
             val_types[vid.0 as usize] = Some(ty.clone());
@@ -2304,7 +2304,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             // Track collection get results — pointers into internal storage that need cloning on Load.
             if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
                 if name == "gorget_map_get" || name == "gorget_array_get" {
-                    collection_get_vals[d.0 as usize] = true;
+                    _collection_get_vals[d.0 as usize] = true;
                 }
             }
             // Track spawn source function for void* destinations.
@@ -2742,7 +2742,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         // Instructions
         for inst in &block.insts {
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &null_vals, &ptr_pointee, &func_addr_targets, &spawn_source_fn, &collection_get_vals);
+            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &null_vals, &ptr_pointee, &func_addr_targets, &spawn_source_fn, &_collection_get_vals);
             writeln!(out).unwrap();
 
             // In test functions, register droppable user-named slots on the cleanup stack
@@ -2771,7 +2771,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>], spawn_source_fn: &[Option<String>], collection_get_vals: &[bool]) {
+fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>], spawn_source_fn: &[Option<String>], _collection_get_vals: &[bool]) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -3189,33 +3189,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
 
         // Memory
         Inst::Load { dst, ptr, ty } => {
-            // If loading a resource type from a collection get pointer, clone instead of shallow deref
-            // to prevent double-free (both collection slot and local would alias the same internal data).
-            let from_collection = collection_get_vals.get(ptr.0 as usize).copied().unwrap_or(false);
-            let resource_clone_fn = if from_collection {
-                if let LirType::Struct(sid) = ty {
-                    match module.structs.get(sid.0 as usize).map(|s| s.name.as_str()) {
-                        Some("GorgetArray") => Some("gorget_array_clone"),
-                        Some("GorgetMap") => Some("gorget_map_clone"),
-                        Some("GorgetSet") => Some("gorget_set_clone"),
-                        Some("GorgetString") => Some("gorget_string_clone"),
-                        _ => {
-                            // Check if struct transitively contains resource types
-                            if struct_contains_resources(*sid, module) {
-                                None // fall through to memcpy — deep clone not available for arbitrary structs
-                            } else {
-                                None
-                            }
-                        }
-                    }
-                } else { None }
-            } else { None };
-            if let Some(clone_fn) = resource_clone_fn {
-                let ty_c = c_type_named(ty, sn);
-                write!(out, "{d} = {clone_fn}(({ty_c}*){p});", d = v(*dst), p = v(*ptr)).unwrap();
-            } else {
-                write!(out, "{} = *({} *)({});", v(*dst), c_type_named(ty, sn), v(*ptr)).unwrap();
-            }
+            // Load from a pointer — always shallow deref.  The GIR drop elaborator
+            // already determines ownership: if the loaded value needs freeing, it
+            // emits a Drop/MoveZero.  Cloning resource types here would leak if no
+            // corresponding Drop exists (which is the common case for collection
+            // element reads — the collection owns the data).
+            write!(out, "{} = *({} *)({});", v(*dst), c_type_named(ty, sn), v(*ptr)).unwrap();
         }
         Inst::Store { ptr, value } => {
             // Generic store — type is determined by context.
@@ -4469,15 +4448,11 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     "GorgetString" => Some("gorget_string_clone"),
                     _ => None,
                 };
-                // Check if the payload struct needs deep cloning.
-                let deep_clone_ops = if clone_fn.is_none() {
-                    if let Some(payload_ty_inner) = payload_ty {
-                        if let LirType::Struct(sid) = payload_ty_inner {
-                            let ops = collect_clone_ops_lir(sid.0, &format!("{}.{payload_fname}", v(d)), module, sn);
-                            if !ops.is_empty() { Some(ops) } else { None }
-                        } else { None }
-                    } else { None }
-                } else { None };
+                // Note: we deliberately do NOT deep-clone resource fields within
+                // Option payloads from collection reads.  The GIR drop elaborator treats
+                // these as borrows (no Drop emitted), so cloning here leaks because the
+                // clone is never freed.  Shallow copy + no free matches GIR behaviour.
+                let deep_clone_ops: Option<Vec<String>> = None;
                 if let Some(cfn) = clone_fn {
                     write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = {cfn}(({payload_c}*)__tmp); }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
                 } else if let Some(ops) = deep_clone_ops {
@@ -5028,13 +5003,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     "GorgetString" => Some("gorget_string_clone"),
                     _ => None,
                 };
-                // Check if the struct needs deep cloning (contains resource-type fields).
-                let deep_clone_ops = if clone_fn.is_none() {
-                    if let LirType::Struct(sid) = dst_ty {
-                        let ops = collect_clone_ops_lir(sid.0, &v(d), module, sn);
-                        if !ops.is_empty() { Some(ops) } else { None }
-                    } else { None }
-                } else { None };
+                // Note: we deliberately do NOT deep-clone resource fields within
+                // structs loaded from collections.  The GIR drop elaborator treats
+                // these as borrows (no Drop emitted), so cloning here leaks because
+                // the clone is never freed.  Shallow copy + no free matches the GIR
+                // backend's behaviour.
+                let deep_clone_ops: Option<Vec<String>> = None;
                 if let Some(cfn) = clone_fn {
                     // Emit: dst = clone_fn((Type*)call(args));  — extra ) needed after args
                     write!(out, "{} = {}(({ty_name}*)", v(d), cfn).unwrap();
@@ -7271,6 +7245,7 @@ fn is_direct_resource_type(sid: crate::lir::StructId, module: &crate::lir::LirMo
 
 /// Returns true if a struct (by StructId) directly is a resource type (GorgetArray, etc.)
 /// or transitively contains resource-type fields that would be double-freed on shallow copy.
+#[allow(dead_code)]
 fn struct_contains_resources(sid: crate::lir::StructId, module: &crate::lir::LirModule) -> bool {
     if let Some(sdef) = module.structs.get(sid.0 as usize) {
         if matches!(sdef.name.as_str(),
@@ -7759,6 +7734,7 @@ fn struct_field_access_expr(
 /// Similar to GIR's `collect_clone_ops` but uses LIR struct info.
 /// `path` is the C expression path to the struct (e.g., "dst" or "dst.Some_0").
 /// Returns clone statements to be emitted after the shallow copy.
+#[allow(dead_code)]
 fn collect_clone_ops_lir(
     struct_id: u32,
     path: &str,

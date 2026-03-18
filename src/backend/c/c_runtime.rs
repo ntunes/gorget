@@ -37,11 +37,50 @@ typedef struct GorgetAllocator {
 static _Atomic size_t __gorget_total_allocated = 0;
 static _Atomic size_t __gorget_total_freed = 0;
 static _Atomic size_t __gorget_alloc_count = 0;
+static _Atomic size_t __gorget_free_count = 0;
+static _Atomic size_t __gorget_size_buckets[16] = {0}; // [0]=1-15, [1]=16-31, ..., [14]=224-239, [15]=240+
+static _Atomic size_t __gorget_array_new_count = 0;
+static _Atomic size_t __gorget_array_free_count = 0;
+static _Atomic size_t __gorget_array_clone_count = 0;
+static _Atomic size_t __gorget_str_cat_count = 0;
+static _Atomic size_t __gorget_string_free_count = 0;
+static _Atomic size_t __gorget_string_new_count = 0;
+static void __gorget_alloc_report(void) {
+    fprintf(stderr, "\n[alloc-report] allocs=%zu frees=%zu live_bytes=%zu\n",
+        __gorget_alloc_count, __gorget_free_count,
+        __gorget_total_allocated - __gorget_total_freed);
+    fprintf(stderr, "[alloc-report] array: new=%zu clone=%zu free=%zu (net=%zu)\n",
+        __gorget_array_new_count, __gorget_array_clone_count, __gorget_array_free_count,
+        __gorget_array_new_count + __gorget_array_clone_count - __gorget_array_free_count);
+    fprintf(stderr, "[alloc-report] string: new=%zu cat=%zu free=%zu (net=%zu)\n",
+        __gorget_string_new_count, __gorget_str_cat_count, __gorget_string_free_count,
+        __gorget_string_new_count + __gorget_str_cat_count - __gorget_string_free_count);
+    fprintf(stderr, "[alloc-report] size buckets (alloc count by size range):\n");
+    const char* labels[] = {"1-15","16-31","32-47","48-63","64-79","80-95","96-111","112-127",
+                            "128-143","144-159","160-175","176-191","192-207","208-223","224-239","240+"};
+    for (int i = 0; i < 16; i++) {
+        if (__gorget_size_buckets[i] > 0)
+            fprintf(stderr, "  %s bytes: %zu allocs\n", labels[i], __gorget_size_buckets[i]);
+    }
+}
+__attribute__((constructor)) static void __gorget_register_alloc_report(void) {
+    atexit(__gorget_alloc_report);
+}
 
 static void* __gorget_global_alloc_fn(void* ctx, size_t size) {
     (void)ctx;
     __gorget_total_allocated += size;
     __gorget_alloc_count++;
+    size_t bucket = size / 16;
+    if (bucket > 15) bucket = 15;
+    __gorget_size_buckets[bucket]++;
+    if (__gorget_alloc_count % 100000 == 0) {
+        fprintf(stderr, "[alloc] count=%zu live=%zuMB total=%zuMB freed=%zuMB size=%zu\n",
+            __gorget_alloc_count,
+            (__gorget_total_allocated - __gorget_total_freed) >> 20,
+            __gorget_total_allocated >> 20,
+            __gorget_total_freed >> 20, size);
+    }
     return malloc(size);
 }
 static void* __gorget_global_realloc_fn(void* ctx, void* ptr, size_t old_size, size_t new_size) {
@@ -53,6 +92,7 @@ static void* __gorget_global_realloc_fn(void* ctx, void* ptr, size_t old_size, s
 static void __gorget_global_dealloc_fn(void* ctx, void* ptr, size_t size) {
     (void)ctx;
     __gorget_total_freed += size;
+    __gorget_free_count++;
     free(ptr);
 }
 
@@ -1106,6 +1146,7 @@ typedef struct {
 } GorgetString;
 
 static inline GorgetString gorget_string_new(const char* s) {
+    __gorget_string_new_count++;
     GorgetAllocator* a = __gorget_current_alloc;
     if (s == NULL) return (GorgetString){NULL, 0, 0, a};
     size_t len = strlen(s);
@@ -1125,6 +1166,7 @@ static inline GorgetString gorget_string_adopt(char* s) {
 }
 
 static inline void gorget_string_free(GorgetString* s) {
+    __gorget_string_free_count++;
     if (s->cap > 0) s->alloc->dealloc(s->alloc->ctx, s->data, s->cap);
     s->data = NULL;
     s->len = 0;
@@ -2229,6 +2271,7 @@ static inline int64_t gorget_str_count(Str s, Str needle) {
 
 // Str-aware concatenation (handles non-null-terminated views).
 static inline GorgetString gorget_str_cat(Str a, Str b) {
+    __gorget_str_cat_count++;
     GorgetAllocator* al = __gorget_current_alloc;
     size_t cap = a.len + b.len + 1;
     char* data = (char*)al->alloc(al->ctx, cap);
@@ -4313,6 +4356,7 @@ typedef struct {
 } GorgetArray;
 
 static inline GorgetArray gorget_array_new(size_t elem_size) {
+    __gorget_array_new_count++;
     return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc};
 }
 
@@ -4434,6 +4478,7 @@ static inline void gorget_array_clear(GorgetArray* arr) {
 }
 
 static inline void gorget_array_free(GorgetArray* arr) {
+    __gorget_array_free_count++;
     if (arr->data) arr->alloc->dealloc(arr->alloc->ctx, arr->data, arr->cap * arr->elem_size);
     arr->data = NULL;
     arr->len = 0;
@@ -4545,6 +4590,7 @@ static inline void gorget_array_extend(GorgetArray* dst, const GorgetArray* src)
 }
 
 static inline GorgetArray gorget_array_clone(const GorgetArray* src) {
+    __gorget_array_clone_count++;
     GorgetArray dst = gorget_array_new(src->elem_size);
     if (src->len > 0) {
         gorget_array_reserve(&dst, src->len);
