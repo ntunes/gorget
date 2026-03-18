@@ -27,8 +27,8 @@ int enc_hex_value(byte enc_ch):
         return enc_code - 87
     return -1
 
-str enc_byte_to_pct(int enc_byte):
-    str enc_pct = "%"
+String enc_byte_to_pct(int enc_byte):
+    String enc_pct = "%"
     enc_pct = enc_pct + enc_hex_digit(enc_byte >> 4)
     enc_pct = enc_pct + enc_hex_digit(enc_byte & 15)
     return enc_pct
@@ -53,8 +53,8 @@ bool enc_is_url_unreserved(byte enc_ch):
 
 # ── URL encoding (RFC 3986) ───────────────────────────────────
 
-str url_encode(str enc_input):
-    str enc_out = ""
+String url_encode(str enc_input):
+    String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
     while enc_i < enc_slen:
@@ -66,8 +66,8 @@ str url_encode(str enc_input):
         enc_i = enc_i + 1
     return enc_out
 
-Result[str, str] url_decode(str enc_input):
-    str enc_out = ""
+Result[String, str] url_decode(str enc_input):
+    String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
     while enc_i < enc_slen:
@@ -86,8 +86,8 @@ Result[str, str] url_decode(str enc_input):
             enc_i = enc_i + 1
     return Ok(enc_out)
 
-str form_encode(str enc_input):
-    str enc_out = ""
+String form_encode(str enc_input):
+    String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
     while enc_i < enc_slen:
@@ -101,8 +101,8 @@ str form_encode(str enc_input):
         enc_i = enc_i + 1
     return enc_out
 
-Result[str, str] form_decode(str enc_input):
-    str enc_out = ""
+Result[String, str] form_decode(str enc_input):
+    String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
     while enc_i < enc_slen:
@@ -126,8 +126,8 @@ Result[str, str] form_decode(str enc_input):
 
 # ── HTML entity escaping ─────────────────────────────────────
 
-str html_escape(str enc_input):
-    str enc_out = ""
+String html_escape(str enc_input):
+    String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
     while enc_i < enc_slen:
@@ -223,8 +223,8 @@ str enc_decode_entity(str enc_name):
         return codepoint_to_str(247)
     return ""
 
-str html_unescape(str enc_input):
-    str enc_out = ""
+String html_unescape(str enc_input):
+    String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
     while enc_i < enc_slen:
@@ -238,7 +238,7 @@ str html_unescape(str enc_input):
                 enc_k = enc_k + 1
             if enc_k < enc_limit and enc_input.byte_at(enc_k) == b';':
                 # Build entity name between & and ;
-                str enc_entity = ""
+                String enc_entity = ""
                 int enc_j = enc_i + 1
                 while enc_j < enc_k:
                     enc_entity = enc_entity + enc_input.byte_slice(enc_j, enc_j + 1)
@@ -392,8 +392,8 @@ Result[Vector[uint8], str] latin1_encode(str enc_s):
         enc_i = enc_i + 1
     return Ok(enc_out)
 
-str latin1_decode(Vector[uint8] enc_bytes):
-    str enc_out = ""
+String latin1_decode(Vector[uint8] enc_bytes):
+    String enc_out = ""
     int enc_i = 0
     while enc_i < enc_bytes.len():
         int enc_b = enc_bytes.get(enc_i).unwrap() as int

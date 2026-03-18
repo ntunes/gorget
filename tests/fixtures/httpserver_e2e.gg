@@ -69,7 +69,7 @@ async void main():
     Task[void] server = spawn serve_n(!srv, 6)
     sleep(0.5).await()
 
-    str base = "http://127.0.0.1:" + int_to_str(port)
+    String base = "http://127.0.0.1:" + int_to_str(port)
 
     # 1. GET /hello → 200 "world"
     Result[HttpResponse, str] r1 = get(base + "/hello")

@@ -8,8 +8,8 @@ struct Player:
     bool alive
 
 # Generic debug serializer using field_value
-str to_debug[T](T val):
-    str out = ""
+String to_debug[T](T val):
+    String out = ""
     meta for fname, ftype in fields(T):
         if out != "":
             out = out + ","

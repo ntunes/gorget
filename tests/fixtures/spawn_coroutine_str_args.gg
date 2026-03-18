@@ -1,7 +1,7 @@
 # Test string literal arguments passed to functions within a coroutine.
 # Verifies Constant::Str operands are wrapped in gorget_str_from_literal.
 
-str format_greeting(str prefix, str name):
+String format_greeting(str prefix, str name):
     return prefix + " " + name
 
 async int compute(int x):
@@ -11,7 +11,7 @@ async void worker():
     Task[int] t = spawn compute(10)
     int n = t.await()
     # String literal args in coroutine context — these must be Str, not bare "..."
-    str result = format_greeting("hello", "world")
+    String result = format_greeting("hello", "world")
     print(result)
     print(n)
 

@@ -94,13 +94,20 @@ pub(super) fn lower_assign(
                     if place.projections.is_empty() {
                         let rhs_type = builder.locals[place.local.0 as usize].type_id;
                         if rhs_type == ctx.type_mapper.owned_string_type
-                            && type_id == ctx.type_mapper.owned_string_type
                             && place.local != local_id
                         {
-                            // String variable consuming a GorgetString temp: mark temp as moved
-                            // to prevent double-free (variable is already registered for drop)
-                            builder.move_zero(Place::local(place.local));
-                            ctx.drops.mark_moved(place.local);
+                            if type_id == ctx.type_mapper.owned_string_type {
+                                // String variable consuming a GorgetString temp: mark temp as moved
+                                // to prevent double-free (variable is already registered for drop)
+                                builder.move_zero(Place::local(place.local));
+                                ctx.drops.mark_moved(place.local);
+                            } else if type_id == ctx.type_mapper.str_type {
+                                // Str variable taking a view of a GorgetString temp: completely
+                                // unregister the temp from drop tracking. The str view may escape
+                                // the scope, and freeing the GorgetString would invalidate the view.
+                                // The GorgetString will leak — same as pre-drop-registration behavior.
+                                ctx.drops.unregister(place.local);
+                            }
                         }
                     }
                 }
@@ -204,6 +211,7 @@ pub(super) fn lower_field_assign(
                             let mut target_place = deref_place;
                             target_place.projections.push(Projection::Field(field_idx));
                             emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
+                            maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
                             builder.assign(target_place, rhs);
                             return;
                         }
@@ -214,6 +222,7 @@ pub(super) fn lower_field_assign(
                                         let mut target_place = deref_place;
                                         target_place.projections.push(Projection::Field(i as u32));
                                         emit_field_drop_if_needed(ctx, builder, &target_place, f.type_id);
+                                        maybe_unregister_str_view_temp(ctx, builder, &rhs, f.type_id);
                                         builder.assign(target_place, rhs);
                                         return;
                                     }
@@ -241,6 +250,7 @@ pub(super) fn lower_field_assign(
                     target_place.projections.push(Projection::Field(field_idx));
                     // Drop old field value before reassignment if it's droppable
                     emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
+                    maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
                     builder.assign(target_place, rhs);
                     return;
                 }
@@ -253,12 +263,39 @@ pub(super) fn lower_field_assign(
                                 target_place.projections.push(Projection::Field(i as u32));
                                 // Drop old field value before reassignment if it's droppable
                                 emit_field_drop_if_needed(ctx, builder, &target_place, f.type_id);
+                                maybe_unregister_str_view_temp(ctx, builder, &rhs, f.type_id);
                                 builder.assign(target_place, rhs);
                                 return;
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// If a GorgetString temp is being assigned to a str-typed target (field, variable, etc.),
+/// unregister the temp from drop tracking. The str view may escape the scope, and freeing
+/// the GorgetString would create a use-after-free. The GorgetString will leak.
+fn maybe_unregister_str_view_temp(
+    ctx: &mut LoweringContext,
+    builder: &FunctionBuilder,
+    rhs: &Operand,
+    target_type: TypeId,
+) {
+    if target_type != ctx.type_mapper.str_type {
+        return;
+    }
+    let place = match rhs {
+        Operand::Copy(place) | Operand::Move(place) => Some(place),
+        _ => None,
+    };
+    if let Some(place) = place {
+        if place.projections.is_empty() {
+            let rhs_type = builder.locals[place.local.0 as usize].type_id;
+            if rhs_type == ctx.type_mapper.owned_string_type {
+                ctx.drops.unregister(place.local);
             }
         }
     }
@@ -478,15 +515,19 @@ pub(super) fn lower_compound_assign(
                     vec![cur_val, rhs],
                     owned_type,
                 );
-                // Note: for str variables, the GorgetString temp is NOT freed here.
-                // Without borrow checker support, we cannot safely determine if the Str view
-                // has been copied elsewhere. These temporaries leak (same as original behavior).
+                // Register the GorgetString temp for drop. When assigned to a String variable,
+                // the temp is marked moved by VarDecl handling, preventing double-free.
+                crate::ir::lowering::exprs::register_owned_string_for_drop(ctx, tmp);
                 let dst = if is_mut_capture {
                     Place { local: local_id, projections: vec![Projection::Deref] }
                 } else {
                     Place::local(local_id)
                 };
                 builder.assign(dst, FunctionBuilder::copy(tmp));
+                // Mark the temp as moved so the drop elaborator doesn't free it
+                // (the destination variable now owns the GorgetString)
+                builder.move_zero(Place::local(tmp));
+                ctx.drops.mark_moved(tmp);
                 return;
             }
 

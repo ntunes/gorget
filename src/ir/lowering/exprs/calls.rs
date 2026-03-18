@@ -793,6 +793,10 @@ pub(super) fn lower_call(
             effective_name
         };
 
+        // Unregister GorgetString temps used as call arguments — they may be
+        // coerced to Str views that the callee stores in structs, outliving the scope.
+        super::unregister_gorget_string_args(ctx, builder, &lowered_args);
+
         let result = if ret_type == UNIT_TYPE {
             builder.call_void(&call_name, lowered_args);
             Operand::Constant(Constant::Unit)

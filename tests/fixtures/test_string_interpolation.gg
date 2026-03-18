@@ -39,7 +39,7 @@ void main():
 
     # 9. Interpolation in concatenated strings
     int n = 42
-    str result = "prefix " + f"{n}" + " suffix"
+    String result = "prefix " + f"{n}" + " suffix"
     print(result)
 
     # 10. Struct field in interpolation

@@ -144,8 +144,8 @@ equip DateTime:
     str format(self, str dt_fmt):
         return format_time(self.to_epoch(), dt_fmt)
 
-    str to_string(self):
-        str dt_s = int_to_str(self.dt_year) + "-"
+    String to_string(self):
+        String dt_s = int_to_str(self.dt_year) + "-"
         if self.dt_month < 10:
             dt_s = dt_s + "0"
         dt_s = dt_s + int_to_str(self.dt_month) + "-"

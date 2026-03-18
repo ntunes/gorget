@@ -24,9 +24,9 @@ void main():
     str mixed = "Hello World"
     print(mixed.to_upper())
     print(mixed.to_lower())
-    str no_match = s.replace("xyz", "abc")
+    String no_match = s.replace("xyz", "abc")
     print(no_match)
-    str rep = s.replace("world", "gorget")
+    String rep = s.replace("world", "gorget")
     print(rep)
     print("ha".repeat(3))
     print("x".repeat(1))
@@ -82,7 +82,7 @@ void main():
     str csv = "a,b,c"
     Vector[str] parts = csv.split(",")
     print(f"{parts.len()}")
-    str joined = ",".join(parts)
+    String joined = ",".join(parts)
     print(joined)
 
     # --- Iterators ---

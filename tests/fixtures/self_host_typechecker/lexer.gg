@@ -1,1 +1,1059 @@
-../self_host_lexer/lexer.gg
+# Self-hosting lexer for the Gorget programming language.
+# Produces a stream of tokens from source text, including synthetic
+# INDENT/DEDENT/NEWLINE tokens based on indentation changes.
+
+from std.collections import Vector
+from std.conv import parse_int, parse_float, chr
+
+# ── Keyword enum ──────────────────────────────────────────────
+
+enum Keyword:
+    KwInt  KwInt8  KwInt16  KwInt32  KwInt64
+    KwUint  KwUint8  KwUint16  KwUint32  KwUint64
+    KwFloat  KwFloat32  KwFloat64
+    KwBool  KwChar  KwStr  KwStringType  KwVoid  KwAuto
+    KwConst  KwStruct  KwEnum  KwTrait  KwEquip  KwPublic  KwStatic  KwType  KwNewtype
+    KwIf  KwElif  KwElse  KwFor  KwWhile  KwLoop  KwIn  KwMatch  KwCase
+    KwBreak  KwContinue  KwReturn  KwDo  KwPass
+    KwAnd  KwOr  KwNot  KwIs
+    KwTrue  KwFalse  KwNone  KwSome  KwOk  KwError
+    KwThrow  KwThrows
+    KwImport  KwFrom  KwDirective
+    KwWith  KwAs  KwVia
+    KwWhere  KwExtends  KwLive  KwOutlives
+    KwAsync  KwAwait  KwSpawn
+    KwUnsafe  KwExtern
+    KwSelfLower  KwSelfUpper
+    KwBox  KwRc  KwArc  KwWeak  KwCell  KwRefCell  KwMutex  KwRwLock
+    KwMove  KwMutable
+    KwTest  KwSuite  KwBench  KwIt  KwPanic  KwAssert
+    KwShared  KwMeta  KwSelect  KwRethrow  KwMod  KwCatch  KwOn  KwSnapshot
+
+# ── String literal types ──────────────────────────────────────
+
+enum StringKind:
+    SkNormal  SkRaw  SkMultiLine  SkByte
+
+enum StringSegment:
+    SegLiteral(str)
+    SegInterpolation(str)
+
+struct StringLiteral:
+    StringKind lex_kind
+    Vector[StringSegment] lex_segments
+
+# ── Token enum ────────────────────────────────────────────────
+
+enum Token:
+    # Identifiers and keywords
+    TkKeyword(Keyword)
+    TkIdentifier(str)
+    # Literals
+    TkInt(int)
+    TkFloat(float)
+    TkString(StringLiteral)
+    TkBool(bool)
+    # Single-char operators
+    TkPlus  TkMinus  TkStar  TkSlash  TkPercent
+    TkEq  TkLt  TkGt  TkBang  TkAmpersand  TkPipe
+    TkCaret  TkTilde  TkDot  TkQuestion  TkAt  TkUnderscore
+    # Multi-char operators
+    TkEqEq  TkBangEq  TkLtEq  TkGtEq
+    TkLtLt  TkGtGt  TkLtLtEq  TkGtGtEq
+    TkAmpEq  TkPipeEq  TkCaretEq
+    TkPlusEq  TkArrow  TkMinusEq  TkStarEq  TkSlashEq  TkPercentEq
+    TkPlusPercent  TkMinusPercent  TkStarPercent
+    TkPlusPercentEq  TkMinusPercentEq  TkStarPercentEq
+    TkDotDot  TkDotDotEq  TkQuestionDot  TkDoubleQuestion
+    # Delimiters
+    TkLParen  TkRParen  TkLBracket  TkRBracket  TkLBrace  TkRBrace
+    TkColon  TkComma
+    # Indentation
+    TkIndent  TkDedent  TkNewline
+    # Special
+    TkDocComment(str)  TkComment(str)
+    TkEof
+    TkError(str)
+
+# ── Spanned token ─────────────────────────────────────────────
+
+struct SpannedToken:
+    Token lex_token
+    int lex_start
+    int lex_end
+
+# ── Lexer struct ──────────────────────────────────────────────
+
+struct Lexer:
+    str lex_source
+    int lex_pos
+    Vector[int] lex_indent_stack
+    int lex_bracket_depth
+    Vector[SpannedToken] lex_tokens
+    bool lex_finished
+    bool lex_need_newline
+    str lex_error
+
+# ── Keyword lookup ────────────────────────────────────────────
+
+Option[Keyword] keyword_from_str(str s):
+    if s == "int":
+        return Some(KwInt())
+    elif s == "int8":
+        return Some(KwInt8())
+    elif s == "int16":
+        return Some(KwInt16())
+    elif s == "int32":
+        return Some(KwInt32())
+    elif s == "int64":
+        return Some(KwInt64())
+    elif s == "uint":
+        return Some(KwUint())
+    elif s == "uint8":
+        return Some(KwUint8())
+    elif s == "uint16":
+        return Some(KwUint16())
+    elif s == "uint32":
+        return Some(KwUint32())
+    elif s == "uint64":
+        return Some(KwUint64())
+    elif s == "float":
+        return Some(KwFloat())
+    elif s == "float32":
+        return Some(KwFloat32())
+    elif s == "float64":
+        return Some(KwFloat64())
+    elif s == "bool":
+        return Some(KwBool())
+    elif s == "char":
+        return Some(KwChar())
+    elif s == "str":
+        return Some(KwStr())
+    elif s == "String":
+        return Some(KwStringType())
+    elif s == "void":
+        return Some(KwVoid())
+    elif s == "auto":
+        return Some(KwAuto())
+    elif s == "const":
+        return Some(KwConst())
+    elif s == "struct":
+        return Some(KwStruct())
+    elif s == "enum":
+        return Some(KwEnum())
+    elif s == "trait":
+        return Some(KwTrait())
+    elif s == "equip":
+        return Some(KwEquip())
+    elif s == "public":
+        return Some(KwPublic())
+    elif s == "static":
+        return Some(KwStatic())
+    elif s == "type":
+        return Some(KwType())
+    elif s == "newtype":
+        return Some(KwNewtype())
+    elif s == "if":
+        return Some(KwIf())
+    elif s == "elif":
+        return Some(KwElif())
+    elif s == "else":
+        return Some(KwElse())
+    elif s == "for":
+        return Some(KwFor())
+    elif s == "while":
+        return Some(KwWhile())
+    elif s == "loop":
+        return Some(KwLoop())
+    elif s == "in":
+        return Some(KwIn())
+    elif s == "match":
+        return Some(KwMatch())
+    elif s == "case":
+        return Some(KwCase())
+    elif s == "break":
+        return Some(KwBreak())
+    elif s == "continue":
+        return Some(KwContinue())
+    elif s == "return":
+        return Some(KwReturn())
+    elif s == "do":
+        return Some(KwDo())
+    elif s == "pass":
+        return Some(KwPass())
+    elif s == "and":
+        return Some(KwAnd())
+    elif s == "or":
+        return Some(KwOr())
+    elif s == "not":
+        return Some(KwNot())
+    elif s == "is":
+        return Some(KwIs())
+    elif s == "true":
+        return Some(KwTrue())
+    elif s == "false":
+        return Some(KwFalse())
+    elif s == "None":
+        return Some(KwNone())
+    elif s == "Some":
+        return Some(KwSome())
+    elif s == "Ok":
+        return Some(KwOk())
+    elif s == "Error":
+        return Some(KwError())
+    elif s == "throw":
+        return Some(KwThrow())
+    elif s == "throws":
+        return Some(KwThrows())
+    elif s == "import":
+        return Some(KwImport())
+    elif s == "from":
+        return Some(KwFrom())
+    elif s == "directive":
+        return Some(KwDirective())
+    elif s == "with":
+        return Some(KwWith())
+    elif s == "as":
+        return Some(KwAs())
+    elif s == "via":
+        return Some(KwVia())
+    elif s == "where":
+        return Some(KwWhere())
+    elif s == "extends":
+        return Some(KwExtends())
+    elif s == "live":
+        return Some(KwLive())
+    elif s == "outlives":
+        return Some(KwOutlives())
+    elif s == "async":
+        return Some(KwAsync())
+    elif s == "await":
+        return Some(KwAwait())
+    elif s == "spawn":
+        return Some(KwSpawn())
+    elif s == "unsafe":
+        return Some(KwUnsafe())
+    elif s == "extern":
+        return Some(KwExtern())
+    elif s == "self":
+        return Some(KwSelfLower())
+    elif s == "Self":
+        return Some(KwSelfUpper())
+    elif s == "Box":
+        return Some(KwBox())
+    elif s == "Rc":
+        return Some(KwRc())
+    elif s == "Arc":
+        return Some(KwArc())
+    elif s == "Weak":
+        return Some(KwWeak())
+    elif s == "Cell":
+        return Some(KwCell())
+    elif s == "RefCell":
+        return Some(KwRefCell())
+    elif s == "Mutex":
+        return Some(KwMutex())
+    elif s == "RwLock":
+        return Some(KwRwLock())
+    elif s == "move":
+        return Some(KwMove())
+    elif s == "mutable":
+        return Some(KwMutable())
+    elif s == "test":
+        return Some(KwTest())
+    elif s == "suite":
+        return Some(KwSuite())
+    elif s == "bench":
+        return Some(KwBench())
+    elif s == "it":
+        return Some(KwIt())
+    elif s == "panic":
+        return Some(KwPanic())
+    elif s == "assert":
+        return Some(KwAssert())
+    elif s == "shared":
+        return Some(KwShared())
+    elif s == "meta":
+        return Some(KwMeta())
+    elif s == "select":
+        return Some(KwSelect())
+    elif s == "rethrow":
+        return Some(KwRethrow())
+    elif s == "mod":
+        return Some(KwMod())
+    elif s == "catch":
+        return Some(KwCatch())
+    elif s == "on":
+        return Some(KwOn())
+    elif s == "snapshot":
+        return Some(KwSnapshot())
+    return None
+
+# ── Lexer methods ─────────────────────────────────────────────
+
+equip Lexer:
+
+    # ── Primitives ────────────────────────────────────────────
+
+    bool lex_at_end(self): self.lex_pos >= self.lex_source.byte_len()
+
+    byte lex_peek(self):
+        return self.lex_source.byte_at(self.lex_pos)
+
+    byte lex_peek_at(self, int offset):
+        return self.lex_source.byte_at(self.lex_pos + offset)
+
+    void lex_advance(&self):
+        self.lex_pos = self.lex_pos + 1
+
+    void lex_emit(&self, Token tok, int start, int end):
+        self.lex_tokens.push(SpannedToken(tok, start, end))
+
+    # ── Indentation helpers ───────────────────────────────────
+
+    int lex_count_leading_spaces(&self):
+        int count = 0
+        while self.lex_pos < self.lex_source.byte_len():
+            byte c = self.lex_source.byte_at(self.lex_pos)
+            if c == b' ':
+                count = count + 1
+                self.lex_pos = self.lex_pos + 1
+            elif c == b'\t':
+                count = count + 4
+                self.lex_pos = self.lex_pos + 1
+            else:
+                return count
+        return count
+
+    void lex_emit_newline_if_needed(&self, int line_start):
+        if self.lex_need_newline:
+            self.lex_emit(TkNewline(), line_start, line_start)
+            self.lex_need_newline = false
+
+    void lex_process_indentation(&self, int spaces, int line_start):
+        int current = self.lex_indent_stack.get(self.lex_indent_stack.len() - 1).unwrap()
+        if spaces > current:
+            self.lex_indent_stack.push(spaces)
+            self.lex_emit(TkIndent(), line_start, line_start)
+        elif spaces < current:
+            while self.lex_indent_stack.len() > 1:
+                int top = self.lex_indent_stack.get(self.lex_indent_stack.len() - 1).unwrap()
+                if top <= spaces:
+                    break
+                self.lex_indent_stack.pop()
+                self.lex_emit(TkDedent(), line_start, line_start)
+
+    void lex_emit_eof(&self):
+        if self.lex_finished:
+            return
+        self.lex_finished = true
+        int pos = self.lex_source.byte_len()
+        if self.lex_need_newline:
+            self.lex_emit(TkNewline(), pos, pos)
+        while self.lex_indent_stack.len() > 1:
+            self.lex_indent_stack.pop()
+            self.lex_emit(TkDedent(), pos, pos)
+        self.lex_emit(TkEof(), pos, pos)
+
+    # ── Skip helpers ──────────────────────────────────────────
+
+    void lex_skip_to_eol(&self):
+        while self.lex_pos < self.lex_source.byte_len() and self.lex_source.byte_at(self.lex_pos) != b'\n':
+            self.lex_pos = self.lex_pos + 1
+
+    # ── Escape sequence parsing ───────────────────────────────
+
+    Option[str] lex_parse_escape(&self):
+        if self.lex_at_end():
+            return None
+        byte c = self.lex_peek()
+        if c == b'n':
+            self.lex_advance()
+            return Some("\n")
+        elif c == b't':
+            self.lex_advance()
+            return Some("\t")
+        elif c == b'r':
+            self.lex_advance()
+            return Some("\r")
+        elif c == b'\\':
+            self.lex_advance()
+            return Some("\\")
+        elif c == b'0':
+            self.lex_advance()
+            return Some("\0")
+        elif c == b'"':
+            self.lex_advance()
+            return Some("\"")
+        elif c == b'\'':
+            self.lex_advance()
+            return Some("'")
+        elif c == b'{':
+            self.lex_advance()
+            return Some("{")
+        elif c == b'}':
+            self.lex_advance()
+            return Some("}")
+        elif c == b'u' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'{':
+            self.lex_pos = self.lex_pos + 2
+            int hex_start = self.lex_pos
+            while self.lex_pos < self.lex_source.byte_len() and self.lex_peek() != b'}':
+                self.lex_advance()
+            str hex_str = self.lex_source.byte_slice(hex_start, self.lex_pos)
+            if self.lex_pos < self.lex_source.byte_len():
+                self.lex_advance()
+            int code = lex_parse_int_radix(hex_str, 16)
+            return Some(chr(code))
+        else:
+            self.lex_advance()
+            return Some(self.lex_source.byte_slice(self.lex_pos - 1, self.lex_pos))
+
+    # ── Identifier scanning ───────────────────────────────────
+
+    void lex_scan_identifier(&self):
+        int start = self.lex_pos
+        while self.lex_pos < self.lex_source.byte_len():
+            byte c = self.lex_source.byte_at(self.lex_pos)
+            if c.is_alphanumeric() or c == b'_':
+                self.lex_pos = self.lex_pos + 1
+            else:
+                break
+        str word = self.lex_source.byte_slice(start, self.lex_pos)
+        Option[Keyword] kw = keyword_from_str(word)
+        match kw:
+            case Some(k):
+                self.lex_emit(TkKeyword(k), start, self.lex_pos)
+            else:
+                if word == "_":
+                    self.lex_emit(TkUnderscore(), start, self.lex_pos)
+                else:
+                    self.lex_emit(TkIdentifier(word), start, self.lex_pos)
+
+    # ── Number scanning ───────────────────────────────────────
+
+    void lex_scan_number(&self):
+        int start = self.lex_pos
+        byte first = self.lex_peek()
+
+        # Check for 0x, 0o, 0b prefixes
+        if first == b'0' and self.lex_pos + 1 < self.lex_source.byte_len():
+            byte prefix = self.lex_peek_at(1)
+            if prefix == b'x' or prefix == b'X':
+                self.lex_pos = self.lex_pos + 2
+                while self.lex_pos < self.lex_source.byte_len():
+                    byte c = self.lex_source.byte_at(self.lex_pos)
+                    if c.is_hex_digit() or c == b'_':
+                        self.lex_pos = self.lex_pos + 1
+                    else:
+                        break
+                str hex_body = self.lex_source.byte_slice(start + 2, self.lex_pos)
+                str clean = str_remove_char(hex_body, b'_')
+                int val = lex_parse_int_radix(clean, 16)
+                self.lex_emit(TkInt(val), start, self.lex_pos)
+                return
+            elif prefix == b'o' or prefix == b'O':
+                self.lex_pos = self.lex_pos + 2
+                while self.lex_pos < self.lex_source.byte_len():
+                    byte c = self.lex_source.byte_at(self.lex_pos)
+                    if c >= b'0' and c <= b'7' or c == b'_':
+                        self.lex_pos = self.lex_pos + 1
+                    else:
+                        break
+                str oct_body = self.lex_source.byte_slice(start + 2, self.lex_pos)
+                str clean = str_remove_char(oct_body, b'_')
+                int val = lex_parse_int_radix(clean, 8)
+                self.lex_emit(TkInt(val), start, self.lex_pos)
+                return
+            elif prefix == b'b' or prefix == b'B':
+                self.lex_pos = self.lex_pos + 2
+                while self.lex_pos < self.lex_source.byte_len():
+                    byte c = self.lex_source.byte_at(self.lex_pos)
+                    if c == b'0' or c == b'1' or c == b'_':
+                        self.lex_pos = self.lex_pos + 1
+                    else:
+                        break
+                str bin_body = self.lex_source.byte_slice(start + 2, self.lex_pos)
+                str clean = str_remove_char(bin_body, b'_')
+                int val = lex_parse_int_radix(clean, 2)
+                self.lex_emit(TkInt(val), start, self.lex_pos)
+                return
+
+        # Decimal digits
+        while self.lex_pos < self.lex_source.byte_len():
+            byte c = self.lex_source.byte_at(self.lex_pos)
+            if c.is_digit() or c == b'_':
+                self.lex_pos = self.lex_pos + 1
+            else:
+                break
+
+        # Check for float (decimal point followed by digit)
+        bool is_float = false
+        if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == b'.':
+            if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1).is_digit():
+                is_float = true
+                self.lex_pos = self.lex_pos + 1
+                while self.lex_pos < self.lex_source.byte_len():
+                    byte c = self.lex_source.byte_at(self.lex_pos)
+                    if c.is_digit() or c == b'_':
+                        self.lex_pos = self.lex_pos + 1
+                    else:
+                        break
+
+        # Check for exponent
+        if self.lex_pos < self.lex_source.byte_len():
+            byte ec = self.lex_peek()
+            if ec == b'e' or ec == b'E':
+                is_float = true
+                self.lex_pos = self.lex_pos + 1
+                if self.lex_pos < self.lex_source.byte_len():
+                    byte sign = self.lex_peek()
+                    if sign == b'+' or sign == b'-':
+                        self.lex_pos = self.lex_pos + 1
+                while self.lex_pos < self.lex_source.byte_len():
+                    byte exp_d = self.lex_source.byte_at(self.lex_pos)
+                    if not exp_d.is_digit():
+                        break
+                    self.lex_pos = self.lex_pos + 1
+
+        str num_str = self.lex_source.byte_slice(start, self.lex_pos)
+        str clean = str_remove_char(num_str, b'_')
+        if is_float:
+            float fval = parse_float(clean).unwrap_or(0.0)
+            self.lex_emit(TkFloat(fval), start, self.lex_pos)
+        else:
+            int ival = parse_int(clean).unwrap_or(0)
+            self.lex_emit(TkInt(ival), start, self.lex_pos)
+
+    # ── String scanning ───────────────────────────────────────
+
+    void lex_scan_string(&self):
+        int start = self.lex_pos
+
+        # Detect prefix using booleans
+        bool is_raw = false
+        bool is_byte = false
+        bool is_format = false
+        if self.lex_peek() == b'r':
+            is_raw = true
+            self.lex_advance()
+        elif self.lex_peek() == b'b':
+            is_byte = true
+            self.lex_advance()
+        elif self.lex_peek() == b'f':
+            is_format = true
+            self.lex_advance()
+        elif self.lex_peek() == b'c':
+            self.lex_advance()
+
+        # Capture and skip opening quote (may be " or ')
+        byte quote_char = self.lex_peek()
+        self.lex_advance()
+
+        # Check for triple-quote
+        bool triple = false
+        if quote_char == b'"' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek() == b'"' and self.lex_peek_at(1) == b'"':
+            triple = true
+            self.lex_pos = self.lex_pos + 2
+
+        Vector[StringSegment] segments = Vector[StringSegment]()
+        str current_lit = ""
+
+        while self.lex_pos < self.lex_source.byte_len():
+            # Check for closing quote(s)
+            if triple:
+                if self.lex_pos + 2 < self.lex_source.byte_len() and self.lex_peek() == b'"' and self.lex_peek_at(1) == b'"' and self.lex_peek_at(2) == b'"':
+                    self.lex_pos = self.lex_pos + 3
+                    break
+            else:
+                if self.lex_peek() == quote_char:
+                    self.lex_advance()
+                    break
+
+            # Newline in non-triple string is an error
+            if self.lex_peek() == b'\n' and not triple:
+                self.lex_error = "unterminated string"
+                break
+
+            # Escape sequences (not in raw strings)
+            if self.lex_peek() == b'\\' and not is_raw:
+                self.lex_advance()
+                Option[str] esc = self.lex_parse_escape()
+                match esc:
+                    case Some(c):
+                        current_lit = current_lit + c
+                    else:
+                        self.lex_error = "unterminated string"
+                        break
+                continue
+
+            # String interpolation: {expr} — only in f-strings
+            if self.lex_peek() == b'{' and is_format:
+                # Check for escaped brace: {{
+                if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'{':
+                    current_lit = current_lit + "{"
+                    self.lex_pos = self.lex_pos + 2
+                    continue
+
+                # Flush current literal
+                if current_lit.len() > 0:
+                    segments.push(SegLiteral(current_lit))
+                    current_lit = ""
+
+                # Scan interpolation expression
+                self.lex_advance()
+                int expr_start = self.lex_pos
+                int brace_depth = 1
+                while self.lex_pos < self.lex_source.byte_len() and brace_depth > 0:
+                    byte bc = self.lex_peek()
+                    if bc == b'{':
+                        brace_depth = brace_depth + 1
+                    elif bc == b'}':
+                        brace_depth = brace_depth - 1
+                        if brace_depth == 0:
+                            break
+                    elif bc == b'"':
+                        # Skip nested string
+                        self.lex_advance()
+                        while self.lex_pos < self.lex_source.byte_len() and self.lex_peek() != b'"':
+                            if self.lex_peek() == b'\\':
+                                self.lex_advance()
+                            self.lex_advance()
+                    self.lex_advance()
+
+                str expr_text = self.lex_source.byte_slice(expr_start, self.lex_pos)
+                segments.push(SegInterpolation(expr_text))
+                if self.lex_pos < self.lex_source.byte_len():
+                    self.lex_advance()
+                continue
+
+            # Escaped brace: }} — only in f-strings
+            if self.lex_peek() == b'}' and is_format:
+                if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'}':
+                    current_lit = current_lit + "}"
+                    self.lex_pos = self.lex_pos + 2
+                    continue
+
+            # Regular character
+            current_lit = current_lit + self.lex_source.byte_slice(self.lex_pos, self.lex_pos + 1)
+            self.lex_advance()
+
+        if current_lit.len() > 0:
+            segments.push(SegLiteral(current_lit))
+
+        StringKind final_kind = SkNormal()
+        if is_raw:
+            final_kind = SkRaw()
+        elif is_byte:
+            final_kind = SkByte()
+        elif triple:
+            final_kind = SkMultiLine()
+        auto slit = StringLiteral(final_kind, segments)
+        self.lex_emit(TkString(slit), start, self.lex_pos)
+
+    # ── Single-quoted literal scanning ────────────────────────
+    # Single-quoted literals are just strings in Gorget (same as Rust lexer).
+
+    void lex_scan_char_lit(&self):
+        int start = self.lex_pos
+        self.lex_advance()  # skip opening '
+
+        str lit = ""
+        while not self.lex_at_end() and self.lex_peek() != b'\'' and self.lex_peek() != b'\n':
+            if self.lex_peek() == b'\\':
+                self.lex_advance()
+                Option[str] esc = self.lex_parse_escape()
+                match esc:
+                    case Some(c):
+                        lit = lit + c
+                    else:
+                        self.lex_error = "unterminated char literal"
+                        self.lex_emit(TkError("unterminated char"), start, self.lex_pos)
+                        return
+            else:
+                lit = lit + self.lex_source.byte_slice(self.lex_pos, self.lex_pos + 1)
+                self.lex_advance()
+
+        if self.lex_at_end() or self.lex_peek() == b'\n':
+            self.lex_error = "unterminated char literal"
+            self.lex_emit(TkError("unterminated char"), start, self.lex_pos)
+            return
+
+        self.lex_advance()  # skip closing '
+
+        Vector[StringSegment] segs = Vector[StringSegment]()
+        segs.push(SegLiteral(lit))
+        auto slit = StringLiteral(SkNormal(), segs)
+        self.lex_emit(TkString(slit), start, self.lex_pos)
+
+    # ── Operator scanning ─────────────────────────────────────
+
+    void lex_scan_operator(&self):
+        int start = self.lex_pos
+        byte c = self.lex_peek()
+        int remaining = self.lex_source.byte_len() - self.lex_pos
+
+        # Three-char operators
+        if remaining >= 3:
+            byte c2 = self.lex_peek_at(1)
+            byte c3 = self.lex_peek_at(2)
+            if c == b'.' and c2 == b'.' and c3 == b'=':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(TkDotDotEq(), start, self.lex_pos)
+                return
+            elif c == b'<' and c2 == b'<' and c3 == b'=':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(TkLtLtEq(), start, self.lex_pos)
+                return
+            elif c == b'>' and c2 == b'>' and c3 == b'=':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(TkGtGtEq(), start, self.lex_pos)
+                return
+            elif c == b'+' and c2 == b'%' and c3 == b'=':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(TkPlusPercentEq(), start, self.lex_pos)
+                return
+            elif c == b'-' and c2 == b'%' and c3 == b'=':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(TkMinusPercentEq(), start, self.lex_pos)
+                return
+            elif c == b'*' and c2 == b'%' and c3 == b'=':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(TkStarPercentEq(), start, self.lex_pos)
+                return
+
+        # Two-char operators
+        if remaining >= 2:
+            byte c2 = self.lex_peek_at(1)
+            if c == b'.' and c2 == b'.':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkDotDot(), start, self.lex_pos)
+                return
+            elif c == b'?' and c2 == b'.':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkQuestionDot(), start, self.lex_pos)
+                return
+            elif c == b'?' and c2 == b'?':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkDoubleQuestion(), start, self.lex_pos)
+                return
+            elif c == b'=' and c2 == b'=':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkEqEq(), start, self.lex_pos)
+                return
+            elif c == b'!' and c2 == b'=':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkBangEq(), start, self.lex_pos)
+                return
+            elif c == b'<' and c2 == b'=':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkLtEq(), start, self.lex_pos)
+                return
+            elif c == b'>' and c2 == b'=':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkGtEq(), start, self.lex_pos)
+                return
+            elif c == b'<' and c2 == b'<':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkLtLt(), start, self.lex_pos)
+                return
+            elif c == b'>' and c2 == b'>':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkGtGt(), start, self.lex_pos)
+                return
+            elif c == b'+' and c2 == b'=':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkPlusEq(), start, self.lex_pos)
+                return
+            elif c == b'-' and c2 == b'>':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkArrow(), start, self.lex_pos)
+                return
+            elif c == b'-' and c2 == b'=':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkMinusEq(), start, self.lex_pos)
+                return
+            elif c == b'*' and c2 == b'=':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkStarEq(), start, self.lex_pos)
+                return
+            elif c == b'/' and c2 == b'=':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkSlashEq(), start, self.lex_pos)
+                return
+            elif c == b'%' and c2 == b'=':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkPercentEq(), start, self.lex_pos)
+                return
+            elif c == b'+' and c2 == b'%':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkPlusPercent(), start, self.lex_pos)
+                return
+            elif c == b'-' and c2 == b'%':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkMinusPercent(), start, self.lex_pos)
+                return
+            elif c == b'*' and c2 == b'%':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkStarPercent(), start, self.lex_pos)
+                return
+            elif c == b'&' and c2 == b'=':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkAmpEq(), start, self.lex_pos)
+                return
+            elif c == b'|' and c2 == b'=':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkPipeEq(), start, self.lex_pos)
+                return
+            elif c == b'^' and c2 == b'=':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(TkCaretEq(), start, self.lex_pos)
+                return
+
+        # Single-char operators and delimiters
+        self.lex_advance()
+        if c == b'+':
+            self.lex_emit(TkPlus(), start, self.lex_pos)
+        elif c == b'-':
+            self.lex_emit(TkMinus(), start, self.lex_pos)
+        elif c == b'*':
+            self.lex_emit(TkStar(), start, self.lex_pos)
+        elif c == b'/':
+            self.lex_emit(TkSlash(), start, self.lex_pos)
+        elif c == b'%':
+            self.lex_emit(TkPercent(), start, self.lex_pos)
+        elif c == b'=':
+            self.lex_emit(TkEq(), start, self.lex_pos)
+        elif c == b'<':
+            self.lex_emit(TkLt(), start, self.lex_pos)
+        elif c == b'>':
+            self.lex_emit(TkGt(), start, self.lex_pos)
+        elif c == b'!':
+            self.lex_emit(TkBang(), start, self.lex_pos)
+        elif c == b'&':
+            self.lex_emit(TkAmpersand(), start, self.lex_pos)
+        elif c == b'|':
+            self.lex_emit(TkPipe(), start, self.lex_pos)
+        elif c == b'^':
+            self.lex_emit(TkCaret(), start, self.lex_pos)
+        elif c == b'~':
+            self.lex_emit(TkTilde(), start, self.lex_pos)
+        elif c == b'.':
+            self.lex_emit(TkDot(), start, self.lex_pos)
+        elif c == b'?':
+            self.lex_emit(TkQuestion(), start, self.lex_pos)
+        elif c == b'@':
+            self.lex_emit(TkAt(), start, self.lex_pos)
+        elif c == b'(':
+            self.lex_bracket_depth = self.lex_bracket_depth + 1
+            self.lex_emit(TkLParen(), start, self.lex_pos)
+        elif c == b')':
+            if self.lex_bracket_depth > 0:
+                self.lex_bracket_depth = self.lex_bracket_depth - 1
+            self.lex_emit(TkRParen(), start, self.lex_pos)
+        elif c == b'[':
+            self.lex_bracket_depth = self.lex_bracket_depth + 1
+            self.lex_emit(TkLBracket(), start, self.lex_pos)
+        elif c == b']':
+            if self.lex_bracket_depth > 0:
+                self.lex_bracket_depth = self.lex_bracket_depth - 1
+            self.lex_emit(TkRBracket(), start, self.lex_pos)
+        elif c == b'{':
+            self.lex_bracket_depth = self.lex_bracket_depth + 1
+            self.lex_emit(TkLBrace(), start, self.lex_pos)
+        elif c == b'}':
+            if self.lex_bracket_depth > 0:
+                self.lex_bracket_depth = self.lex_bracket_depth - 1
+            self.lex_emit(TkRBrace(), start, self.lex_pos)
+        elif c == b':':
+            self.lex_emit(TkColon(), start, self.lex_pos)
+        elif c == b',':
+            self.lex_emit(TkComma(), start, self.lex_pos)
+        else:
+            self.lex_emit(TkError("unexpected character"), start, self.lex_pos)
+
+    # ── Comment scanning ──────────────────────────────────────
+
+    void lex_scan_comment(&self):
+        int start = self.lex_pos
+        self.lex_advance()
+
+        # Check for doc comment (## ...)
+        if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == b'#':
+            self.lex_advance()
+            # Skip leading space
+            if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == b' ':
+                self.lex_advance()
+            int content_start = self.lex_pos
+            self.lex_skip_to_eol()
+            str content = self.lex_source.byte_slice(content_start, self.lex_pos)
+            self.lex_emit(TkDocComment(content), start, self.lex_pos)
+            return
+
+        # Regular comment: skip leading space
+        if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == b' ':
+            self.lex_advance()
+        int content_start = self.lex_pos
+        self.lex_skip_to_eol()
+        str content = self.lex_source.byte_slice(content_start, self.lex_pos)
+        self.lex_emit(TkComment(content), start, self.lex_pos)
+
+    # ── Tokenize one line's content ───────────────────────────
+
+    void lex_tokenize_line(&self):
+        while self.lex_pos < self.lex_source.byte_len():
+            byte c = self.lex_source.byte_at(self.lex_pos)
+
+            # End of line
+            if c == b'\n':
+                return
+
+            # Skip whitespace within line
+            if c == b' ' or c == b'\t':
+                self.lex_pos = self.lex_pos + 1
+                continue
+
+            # Comment
+            if c == b'#':
+                self.lex_scan_comment()
+                return
+
+            # String literals (including r"..." and b"...")
+            if c == b'"':
+                self.lex_scan_string()
+                continue
+            if c == b'r' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'"':
+                self.lex_scan_string()
+                continue
+            if c == b'b' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'"':
+                self.lex_scan_string()
+                continue
+
+            # f-string: f"..." or f'...'
+            if c == b'f' and self.lex_pos + 1 < self.lex_source.byte_len():
+                byte next_c = self.lex_peek_at(1)
+                if next_c == b'"' or next_c == b'\'':
+                    self.lex_scan_string()
+                    continue
+
+            # c-string: c"..."
+            if c == b'c' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'"':
+                self.lex_scan_string()
+                continue
+
+            # Single-quoted literal (becomes TkString)
+            if c == b'\'':
+                self.lex_scan_char_lit()
+                continue
+
+            # Identifier or keyword
+            if c.is_alpha() or c == b'_':
+                self.lex_scan_identifier()
+                continue
+
+            # Number
+            if c.is_digit():
+                self.lex_scan_number()
+                continue
+
+            # Operator or delimiter
+            self.lex_scan_operator()
+
+    # ── Main loop: scan line by line ──────────────────────────
+
+    void lex_scan_next_line(&self):
+        if self.lex_pos >= self.lex_source.byte_len():
+            self.lex_emit_eof()
+            return
+
+        # Skip blank lines and comment-only lines
+        while self.lex_pos < self.lex_source.byte_len():
+            int line_start = self.lex_pos
+            int spaces = self.lex_count_leading_spaces()
+
+            if self.lex_pos >= self.lex_source.byte_len():
+                self.lex_emit_eof()
+                return
+
+            byte c = self.lex_source.byte_at(self.lex_pos)
+
+            # Blank line
+            if c == b'\n':
+                self.lex_pos = self.lex_pos + 1
+                continue
+
+            # Comment-only line (not doc comment)
+            if c == b'#':
+                if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'#':
+                    # Doc comment — treat as content
+                    pass
+                else:
+                    # Regular comment — emit and skip line
+                    self.lex_scan_comment()
+                    if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == b'\n':
+                        self.lex_pos = self.lex_pos + 1
+                    continue
+
+            # Leading dot continuation (suppress indentation processing)
+            if c == b'.' and self.lex_bracket_depth == 0:
+                if self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) != b'.':
+                    self.lex_emit_newline_if_needed(line_start)
+                    self.lex_tokenize_line()
+                    if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == b'\n':
+                        self.lex_pos = self.lex_pos + 1
+                    self.lex_need_newline = true
+                    return
+
+            # Process indentation (only when not inside brackets)
+            if self.lex_bracket_depth == 0:
+                self.lex_emit_newline_if_needed(line_start)
+                self.lex_process_indentation(spaces, line_start)
+
+            # Tokenize the line content
+            self.lex_tokenize_line()
+            if self.lex_pos < self.lex_source.byte_len() and self.lex_peek() == b'\n':
+                self.lex_pos = self.lex_pos + 1
+            self.lex_need_newline = true
+            return
+
+        self.lex_emit_eof()
+
+    void lex_all(&self):
+        while not self.lex_finished:
+            self.lex_scan_next_line()
+
+# ── Helper functions ──────────────────────────────────────────
+
+str str_remove_char(str s, byte target):
+    str result = ""
+    int i = 0
+    while i < s.byte_len():
+        byte c = s.byte_at(i)
+        if c != target:
+            result = result + s.byte_slice(i, i + 1)
+        i = i + 1
+    return result
+
+int lex_parse_int_radix(str s, int radix):
+    int result = 0
+    int i = 0
+    while i < s.byte_len():
+        byte c = s.byte_at(i)
+        int digit = 0
+        if c >= b'0' and c <= b'9':
+            digit = c as int - b'0'
+        elif c >= b'a' and c <= b'f':
+            digit = c as int - b'a' + 10
+        elif c >= b'A' and c <= b'F':
+            digit = c as int - b'A' + 10
+        result = result * radix + digit
+        i = i + 1
+    return result
+
+# ── Public API ────────────────────────────────────────────────
+
+Vector[SpannedToken] lex_tokenize(str source):
+    Vector[int] indent = Vector[int]()
+    indent.push(0)
+    Lexer l = Lexer(source, 0, indent, 0, Vector[SpannedToken](), false, false, "")
+    l.lex_all()
+    return l.lex_tokens

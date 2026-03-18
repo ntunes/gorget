@@ -228,7 +228,7 @@ Result[HttpRequest, str] http_server_parse_request(Socket &conn, int max_body_by
             Option[int] colon_opt = hdr_line.index_of(":")
             if colon_opt.is_some():
                 int colon = colon_opt.unwrap()
-                str hdr_name = hdr_line.byte_slice(0, colon).trim().to_lower()
+                String hdr_name = hdr_line.byte_slice(0, colon).trim().to_lower()
                 str hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim()
                 req_headers.put(hdr_name, hdr_val)
 
@@ -256,7 +256,7 @@ Result[HttpRequest, str] http_server_parse_request(Socket &conn, int max_body_by
 
 # Write response with "Connection: close" (legacy/single-request).
 void http_server_write_response(Socket &conn, HttpServerResponse resp):
-    str status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
+    String status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
     str body_len = int_to_str(resp.body.byte_len())
     conn.write_str(status_line)
     conn.write_str("Content-Type: " + resp.content_type + "\r\n")
@@ -273,7 +273,7 @@ void http_server_write_response(Socket &conn, HttpServerResponse resp):
 
 # Write response with Connection header based on keep_alive flag.
 void http_server_write_response_ka(Socket &conn, HttpServerResponse resp, bool keep_alive):
-    str status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
+    String status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
     str body_len = int_to_str(resp.body.byte_len())
     conn.write_str(status_line)
     conn.write_str("Content-Type: " + resp.content_type + "\r\n")
@@ -396,7 +396,7 @@ Result[HttpRequest, str] http_server_parse_request_tls(TlsSocket &conn, int max_
             Option[int] colon_opt = hdr_line.index_of(":")
             if colon_opt.is_some():
                 int colon = colon_opt.unwrap()
-                str hdr_name = hdr_line.byte_slice(0, colon).trim().to_lower()
+                String hdr_name = hdr_line.byte_slice(0, colon).trim().to_lower()
                 str hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim()
                 req_headers.put(hdr_name, hdr_val)
 
@@ -421,7 +421,7 @@ Result[HttpRequest, str] http_server_parse_request_tls(TlsSocket &conn, int max_
 
 # Write a keep-alive HTTP response over a TLS socket.
 void http_server_write_response_tls_ka(TlsSocket &conn, HttpServerResponse resp, bool keep_alive):
-    str status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
+    String status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
     str body_len = int_to_str(resp.body.byte_len())
     conn.write_str(status_line)
     conn.write_str("Content-Type: " + resp.content_type + "\r\n")
@@ -757,13 +757,13 @@ equip Router:
     void route(&self, str method, str path, Callable[HttpServerResponse(HttpRequest)] handler):
         Callable[HttpServerResponse(HttpRequest)] h = handler
         if path.contains("*"):
-            str wkey = method + "|" + path
+            String wkey = method + "|" + path
             self.wildcard_routes.put(wkey, h)
         elif path.contains(":"):
-            str pkey = method + "|" + path
+            String pkey = method + "|" + path
             self.param_routes.put(pkey, h)
         else:
-            str key = method + " " + path
+            String key = method + " " + path
             self.exact_routes.put(key, h)
 
     void get(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
@@ -847,12 +847,12 @@ equip Router:
         int ai = 0
         while ai < all_methods.len():
             str m = all_methods[ai]
-            str exact_key = m + " " + path
+            String exact_key = m + " " + path
             if self.exact_routes.contains(exact_key):
                 found.push(m)
                 ai = ai + 1
                 continue
-            str mpfx = m + "|"
+            String mpfx = m + "|"
             int mpfx_len = m.byte_len() + 1
             Vector[str] pkeys = self.param_routes.keys()
             int pi = 0
@@ -886,14 +886,14 @@ equip Router:
     # Inner dispatch: exact match → param match → HEAD/OPTIONS auto → 404. No middleware applied.
     HttpServerResponse dispatch_inner(&self, HttpRequest req):
         # 1. Exact-match first (O(1))
-        str key = req.method + " " + req.path
+        String key = req.method + " " + req.path
         if self.exact_routes.contains(key):
             Callable[HttpServerResponse(HttpRequest)] h = self.exact_routes[key]
             return h(req)
         # 2. Parameterized match (linear scan over param_routes)
         Vector[str] path_parts = req.path.split("/")
         Vector[str] pkeys = self.param_routes.keys()
-        str method_prefix = req.method + "|"
+        String method_prefix = req.method + "|"
         int method_prefix_len = req.method.byte_len() + 1
         int pi = 0
         while pi < pkeys.len():
@@ -910,7 +910,7 @@ equip Router:
             pi = pi + 1
         # 2b. Wildcard match (linear scan over wildcard_routes)
         Vector[str] wkeys = self.wildcard_routes.keys()
-        str wpfx = req.method + "|"
+        String wpfx = req.method + "|"
         int wpfx_len = req.method.byte_len() + 1
         int wi = 0
         while wi < wkeys.len():

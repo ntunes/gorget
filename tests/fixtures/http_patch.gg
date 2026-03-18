@@ -39,7 +39,7 @@ async void main():
     Task[void] server = spawn serve_n(!srv, 1)
     sleep(0.05).await()
 
-    str base = "http://127.0.0.1:" + int_to_str(port)
+    String base = "http://127.0.0.1:" + int_to_str(port)
     Dict[str, str] hdrs = Dict[str, str]()
     Result[HttpResponse, str] r = patch(base + "/item", "delta", hdrs)
     if r.is_ok():

@@ -61,7 +61,7 @@ async void main():
     sleep(0.5).await()
 
     # Both get requests use Connection: close → 2 separate connections
-    str base1 = "http://127.0.0.1:" + int_to_str(port1)
+    String base1 = "http://127.0.0.1:" + int_to_str(port1)
     Result[HttpResponse, str] r1a = get(base1 + "/ping")
     check("serve_n_req1", r1a.is_ok() and r1a.unwrap().status_code == 200)
 
@@ -103,7 +103,7 @@ async void main():
                 Option[int] colon_opt = line.index_of(":")
                 if colon_opt.is_some():
                     int colon = colon_opt.unwrap()
-                    str hname = line.byte_slice(0, colon).trim().to_lower()
+                    String hname = line.byte_slice(0, colon).trim().to_lower()
                     str hval = line.byte_slice(colon + 1, line.byte_len()).trim()
                     if hname == "content-length":
                         Option[int] clv = int.parse(hval)

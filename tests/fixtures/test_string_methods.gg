@@ -6,14 +6,14 @@ void main():
     str csv = "one,two,three"
     Vector[str] parts = csv.split(",")
     print(f"{parts.len()}")
-    str rejoined = ",".join(parts)
+    String rejoined = ",".join(parts)
     print(rejoined)
 
     # Split on multi-char delimiter
     str spaced = "a--b--c"
     Vector[str] sp2 = spaced.split("--")
     print(f"{sp2.len()}")
-    str rej2 = "--".join(sp2)
+    String rej2 = "--".join(sp2)
     print(rej2)
 
     # Split single element (no delimiter present)
@@ -23,24 +23,24 @@ void main():
     print(sp3.get(0).unwrap())
 
     # Join with different separator
-    str piped = "|".join(parts)
+    String piped = "|".join(parts)
     print(piped)
 
     # === Replace with multiple occurrences ===
     str rep = "abcabcabc"
-    str replaced = rep.replace("abc", "x")
+    String replaced = rep.replace("abc", "x")
     print(replaced)
 
     str dots = "a.b.c.d"
-    str nodots = dots.replace(".", "-")
+    String nodots = dots.replace(".", "-")
     print(nodots)
 
     # Replace with empty string (deletion)
-    str del = "hello world".replace("o", "")
+    String del = "hello world".replace("o", "")
     print(del)
 
     # Replace where replacement contains search string
-    str grow = "aa".replace("a", "ba")
+    String grow = "aa".replace("a", "ba")
     print(grow)
 
     # === Repeat ===
@@ -52,13 +52,13 @@ void main():
     # === String concatenation ===
     str a = "hello"
     str b = " world"
-    str c = a + b
+    String c = a + b
     print(c)
 
-    str d = "" + "nonempty"
+    String d = "" + "nonempty"
     print(d)
 
-    str e = "left" + ""
+    String e = "left" + ""
     print(e)
 
     # === String comparison ===
@@ -134,14 +134,14 @@ void main():
     print(f"{words.len()}")
 
     # Join with different separator
-    str hyphen = "-".join(words)
+    String hyphen = "-".join(words)
     print(hyphen)
 
     # === Chained operations ===
-    str upper_trimmed = "  hello  ".trim().to_upper()
+    String upper_trimmed = "  hello  ".trim().to_upper()
     print(upper_trimmed)
 
-    str result = "abc def".replace("abc", "xyz").to_upper()
+    String result = "abc def".replace("abc", "xyz").to_upper()
     print(result)
 
     # === count with multiple occurrences ===

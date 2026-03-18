@@ -9,48 +9,48 @@ extern bool is_tty() = "gorget_is_tty"
 
 # ── ANSI reset ───────────────────────────────────────────────
 
-str term_reset():
+String term_reset():
     return "\u{1b}[0m"
 
 # ── Foreground colors ────────────────────────────────────────
 
-str red(str term_text):
+String red(str term_text):
     return "\u{1b}[31m" + term_text + "\u{1b}[0m"
 
-str green(str term_text):
+String green(str term_text):
     return "\u{1b}[32m" + term_text + "\u{1b}[0m"
 
-str yellow(str term_text):
+String yellow(str term_text):
     return "\u{1b}[33m" + term_text + "\u{1b}[0m"
 
-str blue(str term_text):
+String blue(str term_text):
     return "\u{1b}[34m" + term_text + "\u{1b}[0m"
 
-str magenta(str term_text):
+String magenta(str term_text):
     return "\u{1b}[35m" + term_text + "\u{1b}[0m"
 
-str cyan(str term_text):
+String cyan(str term_text):
     return "\u{1b}[36m" + term_text + "\u{1b}[0m"
 
-str white(str term_text):
+String white(str term_text):
     return "\u{1b}[37m" + term_text + "\u{1b}[0m"
 
 # ── Text styles ──────────────────────────────────────────────
 
-str bold(str term_text):
+String bold(str term_text):
     return "\u{1b}[1m" + term_text + "\u{1b}[0m"
 
-str dim(str term_text):
+String dim(str term_text):
     return "\u{1b}[2m" + term_text + "\u{1b}[0m"
 
-str underline(str term_text):
+String underline(str term_text):
     return "\u{1b}[4m" + term_text + "\u{1b}[0m"
 
 # ── ANSI strip ───────────────────────────────────────────────
 # Remove ANSI escape sequences from a string (useful for log files).
 # Handles: ESC [ ... m sequences (the common case).
 
-str strip_ansi(str term_s):
+String strip_ansi(str term_s):
     str term_out = ""
     int term_i = 0
     int term_len = term_s.byte_len()

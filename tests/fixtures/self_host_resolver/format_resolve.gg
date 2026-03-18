@@ -66,7 +66,7 @@ str format_definitions(ScopeTable scopes):
     while i < scopes.def_count():
         DefInfo d = scopes.get_def(i)
         str kind = def_kind_str(d.kind)
-        str line = "DEF " + int_to_str(i) + " " + kind + " " + quote(d.name) + " " + int_to_str(d.span.start) + ":" + int_to_str(d.span.end)
+        String line = "DEF " + int_to_str(i) + " " + kind + " " + quote(d.name) + " " + int_to_str(d.span.start) + ":" + int_to_str(d.span.end)
         lines.push(line)
         i = i + 1
     return join_lines(lines)
@@ -80,7 +80,7 @@ str format_scopes(ScopeTable scopes):
         ScopeKind kind = scopes.scope_kind(i)
         int parent = scopes.scope_parent(i)
         str kind_str = scope_kind_str(kind)
-        str line = "SCOPE " + int_to_str(i) + " " + kind_str + " parent:" + int_to_str(parent)
+        String line = "SCOPE " + int_to_str(i) + " " + kind_str + " parent:" + int_to_str(parent)
         lines.push(line)
         i = i + 1
     return join_lines(lines)
@@ -97,7 +97,7 @@ str format_resolution_map(Dict[int, int] res_map):
     while i < keys.len():
         int span_start = keys.get(i).unwrap()
         int def_id = res_map.get(span_start).unwrap()
-        str line = "RES " + int_to_str(span_start) + " -> " + int_to_str(def_id)
+        String line = "RES " + int_to_str(span_start) + " -> " + int_to_str(def_id)
         lines.push(line)
         i = i + 1
     return join_lines(lines)

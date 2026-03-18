@@ -73,7 +73,7 @@ void main():
     print(f"{r.len()}")
 
     # base64 encode
-    str b64_enc = base64_encode(bytes_from_str("Hello"))
+    String b64_enc = base64_encode(bytes_from_str("Hello"))
     print(b64_enc)
 
     # base64 decode

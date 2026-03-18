@@ -18,7 +18,7 @@ void main():
     # --- Section 2: String concatenation in a loop ---
     i = 0
     while i < 1000:
-        str s = "hello" + " " + "world" + " " + f"{i}"
+        String s = "hello" + " " + "world" + " " + f"{i}"
         i = i + 1
 
     # --- Section 3: String methods returning new strings ---
@@ -26,9 +26,9 @@ void main():
     while i < 500:
         String base = f"  Hello World {i}  "
         str trimmed = base.trim()
-        str upper = base.to_upper()
-        str lower = base.to_lower()
-        str replaced = base.replace("World", "Gorget")
+        String upper = base.to_upper()
+        String lower = base.to_lower()
+        String replaced = base.replace("World", "Gorget")
         i = i + 1
 
     # --- Section 4: String.split() returns Vector[str] ---

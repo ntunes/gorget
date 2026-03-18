@@ -158,6 +158,7 @@ pub(super) fn lower_method_call(
                     // Try to infer return type — for .from(), .default() etc., return the type itself
                     ctx.type_mapper.lookup_named(name).unwrap_or(I64_TYPE)
                 };
+                super::unregister_gorget_string_args(ctx, builder, &lowered_args);
                 if ret_type == UNIT_TYPE {
                     builder.call_void(effective_name, lowered_args);
                     return Operand::Constant(Constant::Unit);
@@ -1476,11 +1477,18 @@ pub(super) fn lower_method_call(
             ret_type
         };
 
+        // Unregister GorgetString temps used as method call arguments
+        super::unregister_gorget_string_args(ctx, builder, &call_args);
+
         let result = if ret_type == UNIT_TYPE {
             builder.call_void(call_name, call_args);
             Operand::Constant(Constant::Unit)
         } else {
             let dst = builder.call(call_name, call_args, ret_type);
+            // Register GorgetString temps from allocating string methods for drop
+            if ret_type == ctx.type_mapper.owned_string_type {
+                super::register_owned_string_for_drop(ctx, dst);
+            }
             FunctionBuilder::copy(dst)
         };
 

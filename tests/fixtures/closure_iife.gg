@@ -3,5 +3,5 @@ void main():
     print(result)
     int doubled = ((int a, int b): a + b)(3, 7)
     print(doubled)
-    str greeting = ((str name): "hello " + name)("world")
+    String greeting = ((str name): "hello " + name)("world")
     print(greeting)

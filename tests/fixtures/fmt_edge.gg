@@ -6,7 +6,7 @@ void main():
     print(pad_left("x", 4, ""))
 
     # ── pad_right: empty fill defaults to space ──
-    str pr = pad_right("y", 4, "")
+    String pr = pad_right("y", 4, "")
     print(pr)
     int pr_len = pr.len()
     print(f"{pr_len}")

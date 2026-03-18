@@ -1308,6 +1308,10 @@ fn lower_struct_literal(
         .map(|arg| lower_expr(ctx, builder, arg))
         .collect();
 
+    // Unregister GorgetString temps used as struct fields — they may be stored
+    // as Str views that outlive the current scope.
+    unregister_gorget_string_args(ctx, builder, &field_operands);
+
     let type_id = ctx.type_mapper.lookup_named(&effective_name).unwrap_or(UNIT_TYPE);
     let dst = builder.struct_init(&effective_name, type_id, field_operands.clone());
 
@@ -2206,23 +2210,50 @@ fn lower_string_interpolation(
     let mut all_args = vec![Operand::Constant(Constant::Str(format_str))];
     all_args.extend(args);
     let dst = builder.call_extern("gorget_string_format", all_args, owned_string_type);
+    register_owned_string_for_drop(ctx, dst);
     FunctionBuilder::copy(dst)
 }
 
-/// If the operand is a GorgetString temp (from function/method calls, concat, etc.),
-/// register it for drop at function scope. This ensures intermediate GorgetString allocations
-/// are freed at function exit. The caller (VarDecl/Assign) handles marking the temp as moved
-/// when it's consumed by a String variable.
-pub fn maybe_register_owned_string_for_drop(
+/// Register a GorgetString temp for drop at function scope.
+/// Uses function scope (not block scope) because `str` views into the GorgetString
+/// Register a GorgetString temp for drop at the current block scope.
+/// Callers that consume the temp for str views (VarDecl, Assign, field assign)
+/// must call `ctx.drops.unregister()` to prevent use-after-free.
+/// Callers that consume the temp for String variables must call `mark_moved()`
+/// to prevent double-free.
+///
+/// Note: block scope means loop-body temps are freed each iteration (good),
+/// but temps whose str views escape the block (e.g. passed to functions that
+/// store the view in structs) will cause use-after-free. Those call sites
+/// need to use `String` parameters instead of `str`.
+pub fn register_owned_string_for_drop(
+    ctx: &mut LoweringContext,
+    dst: LocalId,
+) {
+    let owned_string_type = ctx.type_mapper.owned_string_type;
+    ctx.drops.register_local(dst, owned_string_type, &ctx.type_registry);
+}
+
+/// Unregister GorgetString temps used as call/struct arguments.
+/// When a GorgetString temp is passed to a function that takes `str`, the function
+/// may store the str view in a struct that outlives the current scope. Freeing the
+/// GorgetString at scope exit would create a use-after-free. Instead, we unregister
+/// the temp (accepting a leak) to preserve correctness.
+pub fn unregister_gorget_string_args(
     ctx: &mut LoweringContext,
     builder: &FunctionBuilder,
-    operand: &Operand,
+    args: &[Operand],
 ) {
-    if let Operand::Copy(place) | Operand::Move(place) = operand {
-        if place.projections.is_empty() {
-            let local_type = builder.locals[place.local.0 as usize].type_id;
-            if local_type == ctx.type_mapper.owned_string_type {
-                ctx.drops.register_local_at_function_scope(place.local, local_type, &ctx.type_registry);
+    let owned_string_type = ctx.type_mapper.owned_string_type;
+    for arg in args {
+        if let Operand::Copy(place) | Operand::Move(place) = arg {
+            if place.projections.is_empty() {
+                let idx = place.local.0 as usize;
+                if idx < builder.locals.len()
+                    && builder.locals[idx].type_id == owned_string_type
+                {
+                    ctx.drops.unregister(place.local);
+                }
             }
         }
     }

@@ -162,7 +162,7 @@ equip InfluxClient with DbConnection:
     # The `params` vector is used for ? substitution in the Flux string.
     Result[Vector[Row], str] query_raw(&self, str flux, Vector[Param] params):
         str query = _influx_format_sql(flux, params)
-        str url = self.base_url + "/api/v2/query?org=" + self.org
+        String url = self.base_url + "/api/v2/query?org=" + self.org
         Dict[str, str] hdrs = Dict[str, str]()
         hdrs["Authorization"] = "Token " + self.token
         hdrs["Content-Type"] = "application/vnd.flux"
@@ -177,7 +177,7 @@ equip InfluxClient with DbConnection:
     # Returns number of lines written (always 0 from InfluxDB — it returns 204).
     Result[int, str] exec(&self, str line_protocol, Vector[Param] params):
         str body = _influx_format_sql(line_protocol, params)
-        str url = self.base_url + "/api/v2/write?org=" + self.org + "&bucket=" + self.bucket + "&precision=ns"
+        String url = self.base_url + "/api/v2/write?org=" + self.org + "&bucket=" + self.bucket + "&precision=ns"
         Dict[str, str] hdrs = Dict[str, str]()
         hdrs["Authorization"] = "Token " + self.token
         hdrs["Content-Type"] = "text/plain; charset=utf-8"

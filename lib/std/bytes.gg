@@ -72,9 +72,9 @@ int b64_char_value(byte b64_ch):
 
 # ── Base64 encode (RFC 4648) ────────────────────────────────
 
-str base64_encode(Vector[uint8] b64_data):
+String base64_encode(Vector[uint8] b64_data):
     str b64_alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    str b64_out = ""
+    String b64_out = ""
     int b64_len = b64_data.len()
     int b64_i = 0
 

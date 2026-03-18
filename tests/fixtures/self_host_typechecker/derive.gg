@@ -170,14 +170,14 @@ str field_write_lines(str expr, str type_name, str indent):
         str elem_ty = collection_elem(type_name)
         str idx = next_var()
         str val = next_var()
-        str inner = indent + "    "
+        String inner = indent + "    "
         str elem_lines = field_write_lines(val, elem_ty, inner)
         return indent + "ser.begin_seq(" + expr + ".len())\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + expr + ".len():\n" + inner + "ser.elem(" + idx + ")\n" + inner + elem_ty + " " + val + " = " + expr + ".get(" + idx + ").unwrap()\n" + elem_lines + inner + idx + " = " + idx + " + 1\n" + indent + "ser.end_seq()\n"
     if kind == "option":
         str inner_ty = collection_elem(type_name)
         str val = next_var()
-        str case_indent = indent + "    "
-        str body_indent = indent + "        "
+        String case_indent = indent + "    "
+        String body_indent = indent + "        "
         str write_lines = field_write_lines(val, inner_ty, body_indent)
         return indent + "match " + expr + ":\n" + case_indent + "case Some(" + val + "):\n" + write_lines + case_indent + "case None:\n" + body_indent + "ser.write_null()\n"
     if kind == "dict" or kind == "hashmap":
@@ -188,7 +188,7 @@ str field_write_lines(str expr, str type_name, str indent):
             str idx = next_var()
             str key_var = next_var()
             str val_var = next_var()
-            str inner = indent + "    "
+            String inner = indent + "    "
             str val_lines = field_write_lines(val_var, val_ty, inner)
             return indent + "Vector[str] " + keys_var + " = " + expr + ".keys()\n" + indent + "ser.begin_struct(\"\", " + keys_var + ".len())\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + keys_var + ".len():\n" + inner + "str " + key_var + " = " + keys_var + ".get(" + idx + ").unwrap()\n" + inner + "ser.field(" + key_var + ", " + idx + ")\n" + inner + val_ty + " " + val_var + " = " + expr + "[" + key_var + "]\n" + val_lines + inner + idx + " = " + idx + " + 1\n" + indent + "ser.end_struct()\n"
     return indent + field_write_call(expr, type_name) + "\n"
@@ -202,13 +202,13 @@ str field_read_lines(str name, str type_name, str indent):
         str len_var = next_var()
         str idx = next_var()
         str elem_var = next_var()
-        str inner = indent + "    "
+        String inner = indent + "    "
         str elem_lines = field_read_lines(elem_var, elem_ty, inner)
         return indent + "int " + len_var + " = de.begin_seq()\n" + indent + type_name + " " + name + " = " + type_name + "()\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + len_var + ":\n" + inner + "de.elem(" + idx + ")\n" + elem_lines + inner + name + ".push(" + elem_var + ")\n" + inner + idx + " = " + idx + " + 1\n" + indent + "de.end_seq()\n"
     if kind == "option":
         str inner_ty = collection_elem(type_name)
         str val_var = next_var()
-        str inner = indent + "    "
+        String inner = indent + "    "
         str val_lines = field_read_lines(val_var, inner_ty, inner)
         return indent + type_name + " " + name + " = None()\n" + indent + "if not de.is_null():\n" + val_lines + inner + name + " = Some(" + val_var + ")\n"
     if kind == "dict" or kind == "hashmap":
@@ -219,7 +219,7 @@ str field_read_lines(str name, str type_name, str indent):
             str idx = next_var()
             str key_var = next_var()
             str val_var = next_var()
-            str inner = indent + "    "
+            String inner = indent + "    "
             str val_lines = field_read_lines(val_var, val_ty, inner)
             return indent + "de.begin_struct()\n" + indent + "Vector[str] " + keys_var + " = de.keys()\n" + indent + type_name + " " + name + " = " + type_name + "()\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + keys_var + ".len():\n" + inner + "str " + key_var + " = " + keys_var + ".get(" + idx + ").unwrap()\n" + inner + "de.field(" + key_var + ")\n" + val_lines + inner + name + ".put(" + key_var + ", " + val_var + ")\n" + inner + idx + " = " + idx + " + 1\n" + indent + "de.end_struct()\n"
     return indent + field_read_decl(name, type_name) + "\n"
@@ -291,7 +291,7 @@ str variant_prefix(str type_name, Vector[str] type_params):
 # ── Struct derive generators ────────────────────────────────
 
 str gen_struct_equatable(str name, str gs, str gp, Vector[Param] fields):
-    str src = "equip " + gp + name + gs + " with Equatable:\n"
+    String src = "equip " + gp + name + gs + " with Equatable:\n"
     src = src + "    bool eq(self, " + name + gs + " other):\n"
     if fields.len() == 0:
         src = src + "        return true\n"
@@ -308,7 +308,7 @@ str gen_struct_equatable(str name, str gs, str gp, Vector[Param] fields):
     return src
 
 str gen_struct_displayable(str name, str gs, str gp, Vector[Param] fields):
-    str src = "equip " + gp + name + gs + " with Displayable:\n"
+    String src = "equip " + gp + name + gs + " with Displayable:\n"
     src = src + "    str display(self):\n"
     if fields.len() == 0:
         src = src + "        return \"" + name + "()\"\n"
@@ -325,7 +325,7 @@ str gen_struct_displayable(str name, str gs, str gp, Vector[Param] fields):
     return src
 
 str gen_struct_cloneable(str name, str gs, str gp, Vector[Param] fields):
-    str src = "equip " + gp + name + gs + " with Cloneable:\n"
+    String src = "equip " + gp + name + gs + " with Cloneable:\n"
     src = src + "    " + name + gs + " clone(self):\n"
     str args = ""
     int i = 0
@@ -339,7 +339,7 @@ str gen_struct_cloneable(str name, str gs, str gp, Vector[Param] fields):
     return src
 
 str gen_struct_hashable(str name, str gs, str gp, Vector[Param] fields):
-    str src = "equip " + gp + name + gs + " with Hashable:\n"
+    String src = "equip " + gp + name + gs + " with Hashable:\n"
     src = src + "    int hash(self):\n"
     if fields.len() == 0:
         src = src + "        return 0\n"
@@ -358,7 +358,7 @@ str gen_struct_hashable(str name, str gs, str gp, Vector[Param] fields):
     return src
 
 str gen_struct_default(str name, str gs, str gp, Vector[Param] fields):
-    str src = "equip " + gp + name + gs + " with Default:\n"
+    String src = "equip " + gp + name + gs + " with Default:\n"
     src = src + "    " + name + gs + " default():\n"
     str args = ""
     int i = 0
@@ -372,7 +372,7 @@ str gen_struct_default(str name, str gs, str gp, Vector[Param] fields):
     return src
 
 str gen_struct_serializable(str name, str gs, str gp, Vector[Param] fields):
-    str src = "equip " + gp + name + gs + " with Serializable:\n"
+    String src = "equip " + gp + name + gs + " with Serializable:\n"
     src = src + "    void serialize(self, Box[Serializer] ser):\n"
     src = src + "        ser.begin_struct(\"" + name + "\", " + int_to_str(fields.len()) + ")\n"
     int i = 0
@@ -387,7 +387,7 @@ str gen_struct_serializable(str name, str gs, str gp, Vector[Param] fields):
     return src
 
 str gen_struct_deserializable(str name, str gs, Vector[Param] fields):
-    str src = "Result[" + name + gs + ", str] deserialize_" + name + "(Box[Deserializer] de):\n"
+    String src = "Result[" + name + gs + ", str] deserialize_" + name + "(Box[Deserializer] de):\n"
     src = src + "    de.begin_struct()\n"
     int i = 0
     while i < fields.len():
@@ -416,7 +416,7 @@ str gen_struct_from(str name, str gs, str gp, Vector[Param] fields):
         return ""
     Param f = fields.get(0).unwrap()
     str ftype = format_ast_type(f.param_type)
-    str src = "equip " + gp + name + gs + " with From[" + ftype + "]:\n"
+    String src = "equip " + gp + name + gs + " with From[" + ftype + "]:\n"
     src = src + "    " + name + gs + " from(" + ftype + " value):\n"
     src = src + "        return " + name + gs + "(value)\n"
     return src
@@ -426,13 +426,13 @@ str gen_struct_try_from(str name, str gs, str gp, Vector[Param] fields):
         return ""
     Param f = fields.get(0).unwrap()
     str ftype = format_ast_type(f.param_type)
-    str src = "equip " + gp + name + gs + " with TryFrom[" + ftype + "]:\n"
+    String src = "equip " + gp + name + gs + " with TryFrom[" + ftype + "]:\n"
     src = src + "    Result[" + name + gs + ", str] try_from(" + ftype + " value):\n"
     src = src + "        return Ok(" + name + gs + "(value))\n"
     return src
 
 str gen_struct_from_row(str name, str gs, str gp, Vector[Param] fields):
-    str src = "equip " + gp + name + gs + " with FromRow:\n"
+    String src = "equip " + gp + name + gs + " with FromRow:\n"
     src = src + "    " + name + gs + " from_row(Row row):\n"
     int i = 0
     while i < fields.len():
@@ -464,7 +464,7 @@ str gen_struct_from_row(str name, str gs, str gp, Vector[Param] fields):
 # ── Enum derive generators ──────────────────────────────────
 
 str gen_enum_equatable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
-    str src = "equip " + gp + name + gs + " with Equatable:\n"
+    String src = "equip " + gp + name + gs + " with Equatable:\n"
     src = src + "    bool eq(self, " + name + gs + " other):\n"
     src = src + "        match self:\n"
     int vi = 0
@@ -481,8 +481,8 @@ str gen_enum_equatable(str name, str gs, str gp, Vector[EnumVariant] variants, s
             self_binds = self_binds + "a" + int_to_str(fi)
             other_binds = other_binds + "b" + int_to_str(fi)
             fi = fi + 1
-        str self_pat = pfx + v.name + "(" + self_binds + ")"
-        str other_pat = pfx + v.name + "(" + other_binds + ")"
+        String self_pat = pfx + v.name + "(" + self_binds + ")"
+        String other_pat = pfx + v.name + "(" + other_binds + ")"
         str cmp = "true"
         if fc > 0:
             cmp = ""
@@ -502,7 +502,7 @@ str gen_enum_equatable(str name, str gs, str gp, Vector[EnumVariant] variants, s
     return src
 
 str gen_enum_displayable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
-    str src = "equip " + gp + name + gs + " with Displayable:\n"
+    String src = "equip " + gp + name + gs + " with Displayable:\n"
     src = src + "    str display(self):\n"
     src = src + "        match self:\n"
     int vi = 0
@@ -516,7 +516,7 @@ str gen_enum_displayable(str name, str gs, str gp, Vector[EnumVariant] variants,
                 binds = binds + ", "
             binds = binds + "a" + int_to_str(fi)
             fi = fi + 1
-        str pat = pfx + v.name + "(" + binds + ")"
+        String pat = pfx + v.name + "(" + binds + ")"
         if fc == 0:
             src = src + "            case " + pat + ":\n"
             src = src + "                return \"" + v.name + "()\"\n"
@@ -534,7 +534,7 @@ str gen_enum_displayable(str name, str gs, str gp, Vector[EnumVariant] variants,
     return src
 
 str gen_enum_cloneable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
-    str src = "equip " + gp + name + gs + " with Cloneable:\n"
+    String src = "equip " + gp + name + gs + " with Cloneable:\n"
     src = src + "    " + name + gs + " clone(self):\n"
     src = src + "        match self:\n"
     int vi = 0
@@ -548,14 +548,14 @@ str gen_enum_cloneable(str name, str gs, str gp, Vector[EnumVariant] variants, s
                 binds = binds + ", "
             binds = binds + "a" + int_to_str(fi)
             fi = fi + 1
-        str pat = pfx + v.name + "(" + binds + ")"
+        String pat = pfx + v.name + "(" + binds + ")"
         src = src + "            case " + pat + ":\n"
         src = src + "                return " + pfx + v.name + "(" + binds + ")\n"
         vi = vi + 1
     return src
 
 str gen_enum_hashable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
-    str src = "equip " + gp + name + gs + " with Hashable:\n"
+    String src = "equip " + gp + name + gs + " with Hashable:\n"
     src = src + "    int hash(self):\n"
     src = src + "        match self:\n"
     int vi = 0
@@ -569,7 +569,7 @@ str gen_enum_hashable(str name, str gs, str gp, Vector[EnumVariant] variants, st
                 binds = binds + ", "
             binds = binds + "a" + int_to_str(fi)
             fi = fi + 1
-        str pat = pfx + v.name + "(" + binds + ")"
+        String pat = pfx + v.name + "(" + binds + ")"
         if fc == 0:
             src = src + "            case " + pat + ":\n"
             src = src + "                return " + int_to_str(vi) + "\n"
@@ -585,7 +585,7 @@ str gen_enum_hashable(str name, str gs, str gp, Vector[EnumVariant] variants, st
     return src
 
 str gen_enum_serializable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
-    str src = "equip " + gp + name + gs + " with Serializable:\n"
+    String src = "equip " + gp + name + gs + " with Serializable:\n"
     src = src + "    void serialize(self, Box[Serializer] ser):\n"
     src = src + "        match self:\n"
     int vi = 0
@@ -599,7 +599,7 @@ str gen_enum_serializable(str name, str gs, str gp, Vector[EnumVariant] variants
                 binds = binds + ", "
             binds = binds + "a" + int_to_str(fi)
             fi = fi + 1
-        str pat = pfx + v.name + "(" + binds + ")"
+        String pat = pfx + v.name + "(" + binds + ")"
         src = src + "            case " + pat + ":\n"
         if fc == 0:
             src = src + "                ser.write_str(\"" + v.name + "\")\n"
@@ -620,7 +620,7 @@ str gen_enum_serializable(str name, str gs, str gp, Vector[EnumVariant] variants
     return src
 
 str gen_enum_deserializable(str name, str gs, Vector[EnumVariant] variants, str pfx):
-    str src = "Result[" + name + gs + ", str] deserialize_" + name + "(Box[Deserializer] de):\n"
+    String src = "Result[" + name + gs + ", str] deserialize_" + name + "(Box[Deserializer] de):\n"
     # Separate unit and data variants
     Vector[str] unit_names = Vector[str]()
     Vector[EnumVariant] data_variants = Vector[EnumVariant]()
@@ -661,7 +661,7 @@ str gen_enum_deserializable(str name, str gs, Vector[EnumVariant] variants, str 
                 src = src + "        de.elem(" + int_to_str(dfi) + ")\n"
                 SpannedType ft = dv.fields.get(dfi).unwrap()
                 str ftype = format_ast_type(ft)
-                str var_name = "a" + int_to_str(dfi)
+                String var_name = "a" + int_to_str(dfi)
                 src = src + "        " + field_read_decl(var_name, ftype) + "\n"
                 dfi = dfi + 1
             src = src + "        de.end_seq()\n"

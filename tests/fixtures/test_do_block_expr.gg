@@ -53,7 +53,7 @@ void main():
     print(nested)
 
     # 7. Do-block returning a string value
-    str msg = do:
+    String msg = do:
         str greeting = "hello"
         str name = "world"
         greeting + " " + name

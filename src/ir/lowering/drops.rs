@@ -146,6 +146,18 @@ impl DropElaborator {
         }
     }
 
+    /// Completely remove a local from drop tracking. Used when a GorgetString temp
+    /// is consumed by a str view assignment — the view may escape the scope, so the
+    /// GorgetString must NOT be freed (it will leak, same as pre-drop-registration).
+    pub fn unregister(&mut self, local: LocalId) {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(pos) = scope.entries.iter().position(|e| e.local == local) {
+                scope.entries.remove(pos);
+                return;
+            }
+        }
+    }
+
     /// Mark a local as "maybe moved" — future drops will use DropIfAlive.
     pub fn mark_moved(&mut self, local: LocalId) {
         for scope in self.scopes.iter_mut().rev() {

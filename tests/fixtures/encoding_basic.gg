@@ -57,13 +57,13 @@ void main():
     print(html_unescape("&#x43;&#x44;"))
 
     # HTML unescape common entity — verify codepoint
-    str enc_copy = html_unescape("&copy;")
+    String enc_copy = html_unescape("&copy;")
     Vector[int] enc_copy_cps = utf8_codepoints(enc_copy)
     int enc_copy_val = enc_copy_cps.get(0).unwrap()
     print(f"{enc_copy_val}")
 
     # HTML roundtrip
-    str enc_html_rt = html_unescape(html_escape("<div>"))
+    String enc_html_rt = html_unescape(html_escape("<div>"))
     print(enc_html_rt)
 
     # ── UTF-8 ──

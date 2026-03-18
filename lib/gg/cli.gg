@@ -121,7 +121,7 @@ equip CliParser:
         while ai < self.args.len():
             CliArg a = self.args.get(ai).unwrap()
             if not a.positional:
-                str line = "  " + a.long_name
+                String line = "  " + a.long_name
                 if a.short_name != "":
                     line = line + ", " + a.short_name
                 line = line + "  " + a.help

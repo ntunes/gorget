@@ -22,7 +22,7 @@ str describe_type(int type_id, ScopeTable scopes, TypeTable types):
             return d.name
         case RTGeneric(def_id, args):
             DefInfo d = scopes.get_def(def_id)
-            str result = d.name + "["
+            String result = d.name + "["
             int i = 0
             while i < args.len():
                 if i > 0:
@@ -49,7 +49,7 @@ str describe_type(int type_id, ScopeTable scopes, TypeTable types):
             return "[" + describe_type(elem_id, scopes, types) + "]"
         case RTFunction(params, ownerships, ret_id):
             str ret_str = describe_type(ret_id, scopes, types)
-            str result = ret_str + "("
+            String result = ret_str + "("
             int i = 0
             while i < params.len():
                 if i > 0:
@@ -88,7 +88,7 @@ str format_types(ScopeTable scopes, TypeTable types):
         DefInfo d = scopes.get_def(i)
         if d.type_id >= 0:
             str type_str = describe_type(d.type_id, scopes, types)
-            str line = "TYPE " + int_to_str(i) + " " + quote(d.name) + " = " + type_str
+            String line = "TYPE " + int_to_str(i) + " " + quote(d.name) + " = " + type_str
             lines.push(line)
         i = i + 1
     return join_lines(lines)

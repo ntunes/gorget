@@ -84,7 +84,7 @@ str format_type(SpannedType st):
         case TNamed(name, args):
             if args.len() == 0:
                 return "" + name
-            str result = name + "["
+            String result = name + "["
             int i = 0
             while i < args.len():
                 if i > 0:
@@ -113,7 +113,7 @@ str format_type(SpannedType st):
             result = result + ")"
             return result
         case TFunction(ret, params, owns):
-            str result = format_type(*ret) + "("
+            String result = format_type(*ret) + "("
             int i = 0
             while i < params.len():
                 if i > 0:
@@ -143,7 +143,7 @@ str format_pattern(SpannedPattern sp):
         case PConstructor(name, args):
             if args.len() == 0:
                 return "" + name
-            str result = name + "("
+            String result = name + "("
             int i = 0
             while i < args.len():
                 if i > 0:
@@ -156,7 +156,7 @@ str format_pattern(SpannedPattern sp):
         case PDotShorthand(name, args):
             if args.len() == 0:
                 return "." + name
-            str result = "." + name + "("
+            String result = "." + name + "("
             int i = 0
             while i < args.len():
                 if i > 0:
@@ -228,7 +228,7 @@ str format_expr(SpannedExpr se):
             return "(" + op + " " + os + ")"
         case ECall(callee, args, targs):
             str cs = format_expr(*callee)
-            str result = cs + "("
+            String result = cs + "("
             int i = 0
             while i < args.len():
                 if i > 0:
@@ -240,7 +240,7 @@ str format_expr(SpannedExpr se):
             return result
         case EMethodCall(obj, name, args, targs):
             str os = format_expr(*obj)
-            str result = os + "." + name + "("
+            String result = os + "." + name + "("
             int i = 0
             while i < args.len():
                 if i > 0:
@@ -266,7 +266,7 @@ str format_expr(SpannedExpr se):
                 result = result + format_expr(get_opt_boxed_expr(hi))
             return result
         case EIf(cond, body, branches):
-            str result = "if " + format_expr(*cond) + ":"
+            String result = "if " + format_expr(*cond) + ":"
             result = result + format_block(body)
             int i = 0
             while i < branches.len():
@@ -280,11 +280,11 @@ str format_expr(SpannedExpr se):
                 i = i + 1
             return result
         case EMatch(subject, arms):
-            str result = "match " + format_expr(*subject) + ":"
+            String result = "match " + format_expr(*subject) + ":"
             int i = 0
             while i < arms.len():
                 MatchArm arm = get_arm_at(arms, i)
-                str arm_str = " case " + format_pattern(arm.pattern)
+                String arm_str = " case " + format_pattern(arm.pattern)
                 result = result + arm_str + ":"
                 result = result + format_block(arm.body)
                 i = i + 1
@@ -342,7 +342,7 @@ str format_expr(SpannedExpr se):
             result = result + close_b
             return result
         case EStructLiteral(name, fields, vals):
-            str result = name + "("
+            String result = name + "("
             int i = 0
             while i < sexpr_vec_len(vals):
                 if i > 0:
@@ -355,7 +355,7 @@ str format_expr(SpannedExpr se):
         case EDotShorthand(name, args):
             if sexpr_vec_len(args) == 0:
                 return "." + name
-            str result = "." + name + "("
+            String result = "." + name + "("
             int i = 0
             while i < sexpr_vec_len(args):
                 if i > 0:
@@ -378,7 +378,7 @@ str format_expr(SpannedExpr se):
         case EBlock(stmts):
             return "block:" + format_block(stmts)
         case EListComp(expr, var, iter, cond):
-            str result = "[" + format_expr(*expr) + " for " + var + " in " + format_expr(*iter)
+            String result = "[" + format_expr(*expr) + " for " + var + " in " + format_expr(*iter)
             if has_opt_boxed_expr(cond):
                 result = result + " if " + format_expr(get_opt_boxed_expr(cond))
             result = result + "]"
@@ -386,7 +386,7 @@ str format_expr(SpannedExpr se):
         case ESetComp(expr, var, iter, cond):
             str lb = r"{"
             str rb = r"}"
-            str sc_result = lb + format_expr(*expr) + " for " + var + " in " + format_expr(*iter)
+            String sc_result = lb + format_expr(*expr) + " for " + var + " in " + format_expr(*iter)
             # Check if cond is a non-dummy expression (dummy = EIntLiteral(0) at span 0,0)
             match (*cond).expr:
                 case EIntLiteral(n):
@@ -476,7 +476,7 @@ str format_stmt(Stmt s):
         case SLoop(body):
             return "loop:" + format_block(body)
         case SIf(cond, body, branches):
-            str result = "if " + format_expr(cond) + ":" + format_block(body)
+            String result = "if " + format_expr(cond) + ":" + format_block(body)
             int i = 0
             while i < branches.len():
                 ElseBranch br = get_else_at(branches, i)
@@ -489,11 +489,11 @@ str format_stmt(Stmt s):
                 i = i + 1
             return result
         case SMatch(subject, arms):
-            str result = "match " + format_expr(subject) + ":"
+            String result = "match " + format_expr(subject) + ":"
             int i = 0
             while i < arms.len():
                 MatchArm arm = get_arm_at(arms, i)
-                str arm_str = " case " + format_pattern(arm.pattern)
+                String arm_str = " case " + format_pattern(arm.pattern)
                 result = result + arm_str + ":"
                 result = result + format_block(arm.body)
                 i = i + 1
@@ -518,7 +518,7 @@ str format_stmt(Stmt s):
         case SOnError(body):
             return "on error:" + format_block(body)
         case SAssert(cond, msg):
-            str result = "assert " + format_expr(cond)
+            String result = "assert " + format_expr(cond)
             match msg:
                 case Some(m):
                     result = result + ", \"" + m + "\""
@@ -526,7 +526,7 @@ str format_stmt(Stmt s):
                     pass
             return result
         case SAssertReturn(cond, msg):
-            str result = "assert return " + format_expr(cond)
+            String result = "assert return " + format_expr(cond)
             match msg:
                 case Some(m):
                     result = result + ", \"" + m + "\""
@@ -572,7 +572,7 @@ str format_item(Item item):
                 return "directive " + name
             return "directive " + name + " " + value
         case ITypeAlias(name, tps, ty):
-            str result = "type " + name
+            String result = "type " + name
             if tps.len() > 0:
                 result = result + "["
                 int i = 0
@@ -623,7 +623,7 @@ str format_item(Item item):
             return "?"
 
 str format_function(FunctionDef fd):
-    str result = format_type(fd.return_type) + " " + fd.name
+    String result = format_type(fd.return_type) + " " + fd.name
     if fd.type_params.len() > 0:
         result = result + "["
         int i = 0
@@ -668,7 +668,7 @@ str format_function(FunctionDef fd):
     return result
 
 str format_struct(StructDef sd):
-    str result = "struct " + sd.name
+    String result = "struct " + sd.name
     if sd.type_params.len() > 0:
         result = result + "["
         int i = 0
@@ -688,7 +688,7 @@ str format_struct(StructDef sd):
     return result
 
 str format_enum(EnumDef ed):
-    str result = "enum " + ed.name
+    String result = "enum " + ed.name
     if ed.type_params.len() > 0:
         result = result + "["
         int i = 0
@@ -719,7 +719,7 @@ str format_enum(EnumDef ed):
     return result
 
 str format_trait(TraitDef td):
-    str result = "trait " + td.name
+    String result = "trait " + td.name
     if td.type_params.len() > 0:
         result = result + "["
         int i = 0
@@ -748,7 +748,7 @@ str format_trait(TraitDef td):
     return result
 
 str format_equip(EquipBlock eq):
-    str result = "equip " + format_type(eq.target)
+    String result = "equip " + format_type(eq.target)
     match eq.trait_name:
         case Some(tn):
             result = result + " via " + tn
@@ -764,7 +764,7 @@ str format_equip(EquipBlock eq):
 
 str format_import(ImportStmt imp):
     if imp.names.len() > 0:
-        str result = "from " + imp.module_path + " import "
+        String result = "from " + imp.module_path + " import "
         int i = 0
         while i < imp.names.len():
             if i > 0:

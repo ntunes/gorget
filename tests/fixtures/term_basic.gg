@@ -2,30 +2,30 @@ from std.term import red, green, yellow, blue, bold, dim, underline, strip_ansi,
 
 void main():
     # strip_ansi removes ANSI escape sequences
-    str colored = red("hello")
-    str plain = strip_ansi(colored)
+    String colored = red("hello")
+    String plain = strip_ansi(colored)
     print(plain)
     # Test strip_ansi on pre-built strings
-    str with_green = green("world")
+    String with_green = green("world")
     print(strip_ansi(with_green))
     # Bold
-    str bolded = bold("important")
+    String bolded = bold("important")
     print(strip_ansi(bolded))
     # Multiple sequences
-    str multi = red("a") + green("b") + bold("c")
+    String multi = red("a") + green("b") + bold("c")
     print(strip_ansi(multi))
     # String without ANSI passes through unchanged
     str no_ansi = "plain text"
     print(strip_ansi(no_ansi))
     # Dim and underline
-    str dimmed = dim("faint")
+    String dimmed = dim("faint")
     print(strip_ansi(dimmed))
-    str underlined = underline("link")
+    String underlined = underline("link")
     print(strip_ansi(underlined))
     # Yellow, blue
-    str yellowed = yellow("warn")
+    String yellowed = yellow("warn")
     print(strip_ansi(yellowed))
-    str blued = blue("info")
+    String blued = blue("info")
     print(strip_ansi(blued))
     # is_tty returns false when output is piped (which it is during tests)
     bool tty = is_tty()

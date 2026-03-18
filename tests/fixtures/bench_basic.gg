@@ -2,4 +2,4 @@ bench "addition":
     int x = 1 + 2
 
 bench "string concat":
-    str s = "hello" + " world"
+    String s = "hello" + " world"

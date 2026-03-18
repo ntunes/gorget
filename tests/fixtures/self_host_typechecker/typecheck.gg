@@ -925,7 +925,7 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 Param field = get_param_at(sdef.fields, fi)
                 int field_type_id = ast_type_to_resolved(field.param_type.ty, field.param_type.span, scopes, &types)
                 if field_type_id >= 0:
-                    str key = sdef.name + "." + field.param_name
+                    String key = sdef.name + "." + field.param_name
                     types.variant_field_types.put(key, field_type_id)
                 fi = fi + 1
 

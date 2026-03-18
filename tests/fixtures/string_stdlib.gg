@@ -25,7 +25,7 @@ void main():
     print(s.to_lower())
 
     # replace
-    str replaced = s.replace("World", "Gorget")
+    String replaced = s.replace("World", "Gorget")
     print(replaced)
 
     # split

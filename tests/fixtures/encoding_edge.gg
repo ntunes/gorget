@@ -82,7 +82,7 @@ void main():
     Vector[uint8] high_bytes = Vector[uint8]()
     high_bytes.push(195 as uint8)
     high_bytes.push(169 as uint8)
-    str decoded = latin1_decode(high_bytes)
+    String decoded = latin1_decode(high_bytes)
     int blen = decoded.byte_len()
     print(f"{blen}")
 

@@ -170,7 +170,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
     bool http_use_tls = http_parsed._3
 
     # Build request (same for TLS and plain)
-    str http_req = http_method + " " + http_path + " HTTP/1.1\r\n"
+    String http_req = http_method + " " + http_path + " HTTP/1.1\r\n"
     http_req = http_req + "Host: " + http_host + "\r\n"
 
     if http_body.byte_len() > 0:
@@ -223,7 +223,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
                 Option[int] http_tls_colon = http_tls_hl.index_of(":")
                 if http_tls_colon.is_some():
                     int http_tls_cv3 = http_tls_colon.unwrap()
-                    str http_tls_hn = http_tls_hl.byte_slice(0, http_tls_cv3).trim().to_lower()
+                    String http_tls_hn = http_tls_hl.byte_slice(0, http_tls_cv3).trim().to_lower()
                     str http_tls_hv = http_tls_hl.byte_slice(http_tls_cv3 + 1, http_tls_hl.byte_len()).trim()
                     http_tls_hdrs.put(http_tls_hn, http_tls_hv)
 
@@ -278,7 +278,7 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
                 Option[int] http_plain_colon = http_plain_hl.index_of(":")
                 if http_plain_colon.is_some():
                     int http_plain_cv3 = http_plain_colon.unwrap()
-                    str http_plain_hn = http_plain_hl.byte_slice(0, http_plain_cv3).trim().to_lower()
+                    String http_plain_hn = http_plain_hl.byte_slice(0, http_plain_cv3).trim().to_lower()
                     str http_plain_hv = http_plain_hl.byte_slice(http_plain_cv3 + 1, http_plain_hl.byte_len()).trim()
                     http_plain_hdrs.put(http_plain_hn, http_plain_hv)
 

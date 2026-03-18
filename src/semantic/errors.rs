@@ -755,7 +755,7 @@ impl std::fmt::Display for SemanticError {
                 write!(f, "cannot return `{name}`: f-string creates an owned String that will be dropped — use `String` return type instead")
             }
             SemanticErrorKind::OwnedStringBind { name } => {
-                write!(f, "cannot bind `str` variable `{name}` to f-string: value owns heap-allocated data — use `String` type instead")
+                write!(f, "cannot bind `str` variable `{name}` to owned string: value owns heap-allocated data — use `String` type instead")
             }
         }
     }

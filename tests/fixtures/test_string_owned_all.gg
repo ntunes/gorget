@@ -55,7 +55,7 @@ void main():
     print(f"{src.ends_with("hello")}")
 
     # --- replace ---
-    str replaced = src.replace("hello", "hi")
+    String replaced = src.replace("hello", "hi")
     print(replaced)
 
     # --- Edge cases ---

@@ -153,9 +153,9 @@ impl<'a> BorrowChecker<'a> {
                             let origin = self.compute_expr_origin(value);
                             self.var_origins.insert(def_id, origin.clone());
 
-                            // Check for owned string (f-string) assigned to str variable.
-                            // Only fire when the variable type is specifically `str`,
-                            // not for structs that contain str fields.
+                            // Check for owned string (f-string, concat, allocating method)
+                            // assigned to str variable. Only fire when the variable type
+                            // is specifically `str`, not for structs that contain str fields.
                             if matches!(&origin, BorrowOrigin::Owned) {
                                 let var_is_str = self.scopes.get_def(def_id).type_id
                                     .map_or(false, |tid| matches!(
@@ -640,12 +640,18 @@ impl<'a> BorrowChecker<'a> {
                                     types::ResolvedType::Primitive(crate::parser::ast::PrimitiveType::Str)
                                 );
                                 if ret_is_str && matches!(&origin, BorrowOrigin::Owned) {
-                                    self.error(
-                                        SemanticErrorKind::OwnedStringReturn {
-                                            name: return_name,
-                                        },
-                                        expr.span,
-                                    );
+                                    // Only fire for f-strings and allocating methods — not for
+                                    // concat returns, which leak harmlessly until Phase 2 drop
+                                    // registration is enabled for str-returning functions.
+                                    let is_concat = matches!(&expr.node, Expr::BinaryOp { op, .. } if *op == BinaryOp::Add);
+                                    if !is_concat {
+                                        self.error(
+                                            SemanticErrorKind::OwnedStringReturn {
+                                                name: return_name,
+                                            },
+                                            expr.span,
+                                        );
+                                    }
                                 } else if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
                                     self.error(
                                         SemanticErrorKind::UnresolvedBorrowOrigin {
@@ -1342,12 +1348,15 @@ impl<'a> BorrowChecker<'a> {
                                 types::ResolvedType::Primitive(crate::parser::ast::PrimitiveType::Str)
                             );
                             if ret_is_str && matches!(&origin, BorrowOrigin::Owned) {
-                                self.error(
-                                    SemanticErrorKind::OwnedStringReturn {
-                                        name: return_name,
-                                    },
-                                    expr.span,
-                                );
+                                let is_concat = matches!(&expr.node, Expr::BinaryOp { op, .. } if *op == BinaryOp::Add);
+                                if !is_concat {
+                                    self.error(
+                                        SemanticErrorKind::OwnedStringReturn {
+                                            name: return_name,
+                                        },
+                                        expr.span,
+                                    );
+                                }
                             } else if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
                                 self.error(
                                     SemanticErrorKind::UnresolvedBorrowOrigin {

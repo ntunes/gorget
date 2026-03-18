@@ -86,7 +86,7 @@ SshConfig parse_ssh_config(str host, int default_port, str default_user):
             continue
 
         # Split on first whitespace (or =)
-        str normalized = trimmed.replace("=", " ")
+        String normalized = trimmed.replace("=", " ")
         Vector[str] parts = normalized.split(" ")
         if parts.len() < 2:
             i = i + 1

@@ -613,7 +613,7 @@ str type_to_name(SpannedType st):
         case TNamed(name, args):
             if stype_vec_len(args) == 0:
                 return "" + name
-            str result = name + "["
+            String result = name + "["
             int i = 0
             while i < stype_vec_len(args):
                 if i > 0:
@@ -1013,7 +1013,7 @@ int infix_right_bp(int tag):
 str expr_ident_name(Expr e):
     match e:
         case EIdentifier(id_name):
-            str result = "" + id_name
+            String result = "" + id_name
             return result
         else:
             return ""
@@ -1464,7 +1464,7 @@ equip Parser:
             if self.check_tok(TOK_DOT):
                 self.advance()
                 SpannedToken qual_tok = self.advance()
-                str qual_name = name + "." + token_ident(qual_tok.lex_token)
+                String qual_name = name + "." + token_ident(qual_tok.lex_token)
                 if self.check_tok(TOK_LPAREN):
                     self.advance()
                     Vector[SpannedPattern] args = Vector[SpannedPattern]()
@@ -1684,7 +1684,7 @@ equip Parser:
                     w_bp = 29
                 if w_bp < min_bp:
                     break
-                str wop = "+%"
+                String wop = "+%"
                 if ptag == TOK_MINUSPERCENT:
                     wop = "-%"
                 elif ptag == TOK_STARPERCENT:

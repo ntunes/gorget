@@ -85,7 +85,7 @@ async void main():
                 Option[int] colon_opt = hl.index_of(":")
                 if colon_opt.is_some():
                     int colon = colon_opt.unwrap()
-                    str hname = hl.byte_slice(0, colon).trim().to_lower()
+                    String hname = hl.byte_slice(0, colon).trim().to_lower()
                     str hval = hl.byte_slice(colon + 1, hl.byte_len()).trim()
                     if hname == "content-length":
                         Option[int] clv = int.parse(hval)

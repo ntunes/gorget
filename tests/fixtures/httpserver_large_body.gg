@@ -45,7 +45,7 @@ async void main():
     Task[void] server = spawn serve_n(!srv, 1)
     sleep(0.5).await()
 
-    str base = "http://127.0.0.1:" + int_to_str(port)
+    String base = "http://127.0.0.1:" + int_to_str(port)
 
     # Build 8192-byte body: 64 repetitions of a 128-char string
     str chunk = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"

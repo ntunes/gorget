@@ -267,7 +267,15 @@ impl<'a> BorrowChecker<'a> {
             | Expr::FloatLiteral(_)
             | Expr::BoolLiteral(_) => BorrowOrigin::Static,
 
-            // Binary/unary ops produce new values (arithmetic, comparison, logical)
+            // Binary/unary ops produce new values (arithmetic, comparison, logical).
+            // String concatenation (`+` on str/String) allocates a GorgetString — Owned.
+            Expr::BinaryOp { op, left, right } if *op == BinaryOp::Add => {
+                if self.is_string_typed_expr(left) || self.is_string_typed_expr(right) {
+                    BorrowOrigin::Owned
+                } else {
+                    BorrowOrigin::Static
+                }
+            }
             Expr::BinaryOp { .. } | Expr::UnaryOp { .. } => BorrowOrigin::Static,
 
             // Range produces a new value
@@ -425,6 +433,18 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
         }
+        // String methods that allocate a new GorgetString → Owned.
+        // trim/slice/strip return views (Str), NOT new allocations — not Owned.
+        let allocating_string_methods: &[&str] = &[
+            "to_upper", "to_lower", "replace", "repeat",
+            "pad_left", "pad_right", "join",
+        ];
+        if allocating_string_methods.contains(&method.node.as_str()) {
+            if self.is_string_typed_expr(receiver) {
+                return BorrowOrigin::Owned;
+            }
+        }
+
         // Fallback: conservatively propagate receiver origin
         self.compute_expr_origin(receiver)
     }
@@ -717,5 +737,44 @@ impl<'a> BorrowChecker<'a> {
         self.stale_shared_derived = merged_stale_shared;
         self.fallible_states = merged_fallible;
         self.diverged = false;
+    }
+
+    /// Check if an expression is string-typed (str or String).
+    /// Uses expr_types first, falls back to structural heuristics.
+    fn is_string_typed_expr(&self, expr: &Spanned<Expr>) -> bool {
+        // Check expr_types map first
+        if let Some(&type_id) = self.expr_types.get(&expr.span) {
+            return matches!(
+                self.types.get(type_id),
+                types::ResolvedType::Primitive(PrimitiveType::Str)
+                | types::ResolvedType::Primitive(PrimitiveType::StringType)
+            );
+        }
+        // Structural heuristics
+        match &expr.node {
+            Expr::StringLiteral(_) => true,
+            Expr::Identifier(_) => {
+                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                    let def = self.scopes.get_def(def_id);
+                    if let Some(tid) = def.type_id {
+                        return matches!(
+                            self.types.get(tid),
+                            types::ResolvedType::Primitive(PrimitiveType::Str)
+                            | types::ResolvedType::Primitive(PrimitiveType::StringType)
+                        );
+                    }
+                }
+                false
+            }
+            // Recursive: if either operand of a nested + is a string, the whole thing is
+            Expr::BinaryOp { op, left, right } if *op == BinaryOp::Add => {
+                self.is_string_typed_expr(left) || self.is_string_typed_expr(right)
+            }
+            // Method calls on strings that return strings
+            Expr::MethodCall { receiver, .. } => self.is_string_typed_expr(receiver),
+            // F-strings are always strings
+            Expr::FieldAccess { object, .. } => self.is_string_typed_expr(object),
+            _ => false,
+        }
     }
 }

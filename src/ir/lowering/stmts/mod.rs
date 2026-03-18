@@ -269,13 +269,20 @@ fn lower_var_decl(
                 if place.projections.is_empty() {
                     let rhs_type = builder.locals[place.local.0 as usize].type_id;
                     if rhs_type == ctx.type_mapper.owned_string_type
-                        && actual_var_type == ctx.type_mapper.owned_string_type
                         && place.local != local_id
                     {
-                        // String variable consuming a GorgetString temp: mark temp as moved
-                        // to prevent double-free (VarDecl already registers the variable for drop)
-                        builder.move_zero(Place::local(place.local));
-                        ctx.drops.mark_moved(place.local);
+                        if actual_var_type == ctx.type_mapper.owned_string_type {
+                            // String variable consuming a GorgetString temp: mark temp as moved
+                            // to prevent double-free (VarDecl already registers the variable for drop)
+                            builder.move_zero(Place::local(place.local));
+                            ctx.drops.mark_moved(place.local);
+                        } else if actual_var_type == ctx.type_mapper.str_type {
+                            // Str variable taking a view of a GorgetString temp: completely
+                            // unregister the temp from drop tracking. The str view may escape
+                            // the scope, and freeing the GorgetString would invalidate the view.
+                            // The GorgetString will leak — same as pre-drop-registration behavior.
+                            ctx.drops.unregister(place.local);
+                        }
                     }
                 }
             }
@@ -583,7 +590,21 @@ fn lower_return(
                 }
             }
         } else {
-            builder.assign(Place::local(LocalId(0)), operand);
+            builder.assign(Place::local(LocalId(0)), operand.clone());
+            // If the return local is str-typed and the operand is a GorgetString temp,
+            // unregister the temp to prevent use-after-free: the str view in the return
+            // local may be accessed after the temp's scope exit frees it.
+            let ret_type = builder.locals[0].type_id;
+            if ret_type == ctx.type_mapper.str_type {
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                    if place.projections.is_empty() {
+                        let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                        if rhs_type == ctx.type_mapper.owned_string_type {
+                            ctx.drops.unregister(place.local);
+                        }
+                    }
+                }
+            }
         }
         // For move-overridden generic params: zero the source through the pointer
         // to transfer ownership to the caller and prevent double-free.
@@ -601,12 +622,6 @@ fn lower_return(
         }
         // Postcondition checks: `assert return <expr>` — check before returning
         emit_postcondition_checks(ctx, builder);
-
-        // Note: GorgetString temps backing str views are NOT freed here.
-        // Without borrow checker support (f-string origin tracking), we cannot safely
-        // determine if a Str view's backing has been copied to a struct or collection.
-        // Freeing the backing could cause use-after-free. These GorgetStrings leak.
-        // See TODO.md for the planned borrow checker enhancement.
 
         // P2.6: Emit cleanup drops for all scopes being exited
         // Exclude the local being returned (it's moved into _0, not consumed)

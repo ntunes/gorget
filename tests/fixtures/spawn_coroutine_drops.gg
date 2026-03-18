@@ -3,7 +3,7 @@
 
 async str make_greeting(str name):
     str prefix = "Hello, "
-    str result = prefix + name + "!"
+    String result = prefix + name + "!"
     return result
 
 async int sum_vec(Vector[int] v):
