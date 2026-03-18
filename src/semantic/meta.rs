@@ -1773,6 +1773,7 @@ fn validate_type(ty: &Type, value: &MetaValue, span: Span) -> Result<(), Semanti
         (Type::Primitive(PrimitiveType::Float64), MetaValue::Float(_)) => true,
         (Type::Primitive(PrimitiveType::Bool), MetaValue::Bool(_)) => true,
         (Type::Primitive(PrimitiveType::Str), MetaValue::Str(_)) => true,
+        (Type::Primitive(PrimitiveType::StringType), MetaValue::Str(_)) => true,
         (Type::Primitive(PrimitiveType::CStr), MetaValue::Str(_)) => true,
         _ => false,
     };

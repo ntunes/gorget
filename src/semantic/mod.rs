@@ -3,6 +3,7 @@ pub mod derive;
 pub mod errors;
 pub mod ids;
 pub mod meta;
+pub mod provenance;
 pub mod purity;
 pub mod resolve;
 pub mod rewrite;
@@ -237,6 +238,12 @@ pub fn analyze_with_source_dir(
         &resolve_ctx.function_body_scopes,
         &resolve_ctx.struct_generic_bounds,
         &mut errors,
+    );
+
+    // Pass 4.5: String provenance inference — downgrades view String bindings to Str
+    provenance::infer_string_provenance(
+        module, &mut scopes, &types, &resolution_map, &expr_types,
+        &mut resolve_ctx.function_info, &method_resolutions,
     );
 
     // Pass 5: Borrow checking (two sub-passes: 5a computes return_borrows_from, 5b does full check)

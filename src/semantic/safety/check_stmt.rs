@@ -143,6 +143,18 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
+                // OwnedStringBind: str variable bound to f-string (owned String expression)
+                if let Pattern::Binding(name) = &pattern.node {
+                    if matches!(type_.node, Type::Primitive(PrimitiveType::Str)) {
+                        if matches!(&value.node, Expr::StringLiteral(s) if s.has_interpolation()) {
+                            self.error(
+                                SemanticErrorKind::OwnedStringBind { name: name.clone() },
+                                value.span,
+                            );
+                        }
+                    }
+                }
+
                 // Track origin for reference-typed variables
                 if let Pattern::Binding(name) = &pattern.node {
                     let def_id_opt = self.scopes.lookup_def_by_span(name, pattern.span)
@@ -152,27 +164,6 @@ impl<'a> BorrowChecker<'a> {
                         if is_ref {
                             let origin = self.compute_expr_origin(value);
                             self.var_origins.insert(def_id, origin.clone());
-
-                            // Check for owned string (f-string, concat, allocating method)
-                            // assigned to str variable. Only fire when the variable type
-                            // is specifically `str`, not for structs that contain str fields.
-                            if matches!(&origin, BorrowOrigin::Owned) {
-                                let var_is_str = self.scopes.get_def(def_id).type_id
-                                    .map_or(false, |tid| matches!(
-                                        self.types.get(tid),
-                                        types::ResolvedType::Primitive(crate::parser::ast::PrimitiveType::Str)
-                                    ));
-                                if var_is_str {
-                                    if let Pattern::Binding(name) = &pattern.node {
-                                        self.error(
-                                            SemanticErrorKind::OwnedStringBind {
-                                                name: name.clone(),
-                                            },
-                                            value.span,
-                                        );
-                                    }
-                                }
-                            }
 
                             // Phase 6: Detect binding a ref type to a temporary
                             // Skip when auto-propagation applies: the Ok value is moved
@@ -620,6 +611,19 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
 
+                    // OwnedStringReturn: returning f-string from str-returning function
+                    if let Some(ret_tid) = self.current_return_type_id {
+                        if ret_tid == self.types.string_id {
+                            if matches!(&expr.node, Expr::StringLiteral(s) if s.has_interpolation()) {
+                                let name = "<expression>".to_string();
+                                self.error(
+                                    SemanticErrorKind::OwnedStringReturn { name },
+                                    expr.span,
+                                );
+                            }
+                        }
+                    }
+
                     // Lifetime check: if the function returns a reference or callable type,
                     // verify the return expression doesn't reference local data.
                     // Skip for imported module functions: their borrow safety is validated by
@@ -632,32 +636,21 @@ impl<'a> BorrowChecker<'a> {
                             || types::is_callable_type(ret_type_id, self.types)
                         {
                             let origin = self.compute_expr_origin(expr);
-                            if origin.contains_local() {
+                            // String concat in str-returning functions produces Owned
+                            // (local lifetime) but leaks harmlessly — skip the error.
+                            let ret_is_str = matches!(
+                                self.types.get(ret_type_id),
+                                types::ResolvedType::Primitive(PrimitiveType::Str)
+                            );
+                            let is_str_concat = ret_is_str
+                                && matches!(&origin, BorrowOrigin::Owned)
+                                && matches!(&expr.node, Expr::BinaryOp { op, .. } if *op == BinaryOp::Add);
+                            if origin.contains_local() && !is_str_concat {
                                 let return_name = match &expr.node {
                                     Expr::Identifier(n) => n.clone(),
                                     _ => "<expression>".to_string(),
                                 };
-                                // Only fire OwnedStringReturn when the return type
-                                // is specifically `str` — struct literals with str fields
-                                // also produce Owned origins but the struct owns the data.
-                                let ret_is_str = matches!(
-                                    self.types.get(ret_type_id),
-                                    types::ResolvedType::Primitive(crate::parser::ast::PrimitiveType::Str)
-                                );
-                                if ret_is_str && matches!(&origin, BorrowOrigin::Owned) {
-                                    // Only fire for f-strings and allocating methods — not for
-                                    // concat returns, which leak harmlessly until Phase 2 drop
-                                    // registration is enabled for str-returning functions.
-                                    let is_concat = matches!(&expr.node, Expr::BinaryOp { op, .. } if *op == BinaryOp::Add);
-                                    if !is_concat {
-                                        self.error(
-                                            SemanticErrorKind::OwnedStringReturn {
-                                                name: return_name,
-                                            },
-                                            expr.span,
-                                        );
-                                    }
-                                } else if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
+                                if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
                                     self.error(
                                         SemanticErrorKind::UnresolvedBorrowOrigin {
                                             name: return_name,
@@ -1314,8 +1307,15 @@ impl<'a> BorrowChecker<'a> {
             if let Some(def_id) = self.find_def_by_name(&param.node.name.node) {
                 self.current_param_def_ids.push((def_id, i));
 
-                // If this param is a reference type, track its origin as Param
-                let is_ref = is_ast_type_ref(&param.node.type_.node, self.scopes, &self.ref_type_structs);
+                // If this param is a reference type, track its origin as Param.
+                // For StringType annotations, fall through to provenance-adjusted type_id
+                // since the parser maps `str` to StringType (unified string type).
+                let is_ref = if matches!(param.node.type_.node, Type::Primitive(PrimitiveType::StringType)) {
+                    self.scopes.get_def(def_id).type_id
+                        .map_or(false, |tid| types::is_reference_type(tid, self.types, &self.ref_type_structs))
+                } else {
+                    is_ast_type_ref(&param.node.type_.node, self.scopes, &self.ref_type_structs)
+                };
                 if is_ref {
                     self.var_origins.insert(def_id, BorrowOrigin::Param { param_index: i, def_id });
                 }
@@ -1353,21 +1353,7 @@ impl<'a> BorrowChecker<'a> {
                                 Expr::Identifier(n) => n.clone(),
                                 _ => "<expression>".to_string(),
                             };
-                            let ret_is_str = matches!(
-                                self.types.get(ret_type_id),
-                                types::ResolvedType::Primitive(crate::parser::ast::PrimitiveType::Str)
-                            );
-                            if ret_is_str && matches!(&origin, BorrowOrigin::Owned) {
-                                let is_concat = matches!(&expr.node, Expr::BinaryOp { op, .. } if *op == BinaryOp::Add);
-                                if !is_concat {
-                                    self.error(
-                                        SemanticErrorKind::OwnedStringReturn {
-                                            name: return_name,
-                                        },
-                                        expr.span,
-                                    );
-                                }
-                            } else if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
+                            if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
                                 self.error(
                                     SemanticErrorKind::UnresolvedBorrowOrigin {
                                         name: return_name,

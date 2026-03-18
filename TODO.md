@@ -19,6 +19,11 @@
 
 ## Medium
 
+- **Unified String type: fixture migration (`str` → `String`)** — 352+ fixture files use `str` type. Migration to `String` is cosmetic but needed before removing `str` keyword. [added: 2026-03-18]
+
+- **Unified String type: self-host migration (`str` → `String`)** — 35 self-host .gg files use `str`. Same as fixture migration. [added: 2026-03-18]
+
+- **Unified String type: parser change (`String` → `Str`)** — Attempted upgrade direction (String parses as PrimitiveType::Str, provenance upgrades to owned). Hit fundamental aliasing issue: owned strings stored in collections create aliases that dangle when the local is freed. Reverted to downgrade direction. Next approach: try view-default with escape analysis. [added: 2026-03-18, investigated: 2026-03-19]
 
 - **GorgetString temp leaks when str views escape via function args**: Phase 2 drop registration unregisters GorgetString temps when they flow to str-typed variables, fields, returns, or function arguments. This prevents use-after-free but means temps leak in patterns like `print("a" + "b")` where the callee only borrows the view transiently. The conservative approach is correct (no crashes) but leaves small bounded leaks. Fix requires either: (1) escape analysis to distinguish "callee stores view" from "callee borrows transiently", or (2) migrating all str-storing APIs to String parameters. [added: 2026-03-17]
 

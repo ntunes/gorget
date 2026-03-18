@@ -943,11 +943,14 @@ impl<'a> BorrowChecker<'a> {
 
     /// Check if a variable is a reference type, using its type annotation or resolved type.
     pub(super) fn is_var_reference_type(&self, def_id: DefId, type_annotation: Option<&Spanned<Type>>) -> bool {
-        // Try the type annotation first (works even before type checking)
+        // For StringType annotations, skip the AST check — the provenance pass
+        // already adjusted the def's type_id to Str (view) or StringType (owned).
         if let Some(ann) = type_annotation {
-            return is_ast_type_ref(&ann.node, self.scopes, &self.ref_type_structs);
+            if !matches!(ann.node, Type::Primitive(PrimitiveType::StringType)) {
+                return is_ast_type_ref(&ann.node, self.scopes, &self.ref_type_structs);
+            }
+            // Fall through to provenance-adjusted type_id check
         }
-        // Fall back to resolved type
         let def = self.scopes.get_def(def_id);
         if let Some(type_id) = def.type_id {
             return types::is_reference_type(type_id, self.types, &self.ref_type_structs);

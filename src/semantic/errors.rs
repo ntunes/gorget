@@ -374,6 +374,12 @@ pub enum SemanticErrorKind {
     /// Binding a reference type to a temporary that will be immediately dropped.
     TemporaryBorrow { name: String, callee: String, temp_at: Option<Span> },
 
+    /// Binding a `str` variable to an owned String expression (f-string, concat, etc.)
+    OwnedStringBind { name: String },
+
+    /// Returning an owned String expression from a function declared as returning `str`.
+    OwnedStringReturn { name: String },
+
     /// `where a outlives b` violated: group a's source was invalidated
     /// while group b's source is still alive.
     OutlivesViolation {
@@ -701,6 +707,12 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::TemporaryBorrow { name, callee, .. } => {
                 write!(f, "cannot bind `{name}` to temporary from `{callee}()` — value will be dropped")
+            }
+            SemanticErrorKind::OwnedStringBind { name } => {
+                write!(f, "cannot bind `str {name}` to an owned String expression — use `String` type instead")
+            }
+            SemanticErrorKind::OwnedStringReturn { name } => {
+                write!(f, "cannot return owned String from function returning `str` — `{name}` allocates")
             }
             SemanticErrorKind::OutlivesViolation { longer_group, shorter_group, longer_source, shorter_source } => {
                 write!(f, "borrow group `{longer_group}` must outlive `{shorter_group}`, but `{longer_source}` (group `{longer_group}`) was moved while `{shorter_source}` (group `{shorter_group}`) is still alive")
