@@ -693,12 +693,20 @@ impl<'a> BorrowChecker<'a> {
             Stmt::Pass => {}
 
             Stmt::For {
+                pattern,
                 iterable,
                 body,
                 else_body,
                 ..
             } => {
                 self.check_expr(iterable);
+
+                // Track borrow origins for for-loop pattern bindings.
+                // The iterable origin propagates to pattern variables so that
+                // reference-type bindings (str, Slice, etc.) are tracked for
+                // dangling return detection.
+                let iterable_origin = self.compute_expr_origin(iterable);
+                self.mark_pattern_origins(pattern, &iterable_origin);
 
                 // §3.7 Iterator invalidation: track if iterable is a with-tracked shared
                 let iter_guard = if self.current_function_is_async {
@@ -1189,7 +1197,10 @@ impl<'a> BorrowChecker<'a> {
                     // The scrutinee_origin is still stored for diagnostics and for
                     // reference/callable bindings where the data itself is a borrow.
                     let is_ref = self.scopes.get_def(def_id).type_id
-                        .map_or(false, |tid| types::is_callable_type(tid, self.types));
+                        .map_or(false, |tid| {
+                            types::is_callable_type(tid, self.types)
+                            || types::is_reference_type(tid, self.types, &self.ref_type_structs)
+                        });
                     self.var_origins.insert(def_id, BorrowOrigin::MatchBinding {
                         binding_def_id: def_id,
                         scrutinee_origin: Box::new(scrutinee_origin.clone()),
