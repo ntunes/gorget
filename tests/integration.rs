@@ -14626,3 +14626,8 @@ fn closure_escape_error() {
 fn dict_no_hashable_error() {
     check_gg_fails("dict_no_hashable_error.gg", "does not satisfy trait bound `K is Hashable`");
 }
+
+#[test]
+fn closure_mut_method_capture_error() {
+    check_gg_fails("closure_mut_method_capture_error.gg", "cannot read `c` while it is mutably captured by closure `f`");
+}

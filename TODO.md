@@ -21,7 +21,6 @@
 
 - **Borrow checker: closure escape via struct field** — The closure escape check only fires on direct `return closure_var` expressions. A closure capturing locals that is stored in a struct field, with the struct then returned, is not caught. Would need deeper escape analysis (track closure-typed struct fields through return paths). [added: 2026-03-18]
 
-- **Borrow checker: closure captures &param mutation unchecked** — A closure that captures a `&` (mutable borrow) parameter can call mutating methods on it without the borrow checker noticing. `void bad(Counter &c): auto f = (): c.increment(); apply(f)` passes. Related to the nested-field-method FunctionInfo gap — the closure body check doesn't have method ownership info for the captured param's type. [added: 2026-03-18]
 
 - **GorgetString temp leaks when str views escape via function args**: Phase 2 drop registration unregisters GorgetString temps when they flow to str-typed variables, fields, returns, or function arguments. This prevents use-after-free but means temps leak in patterns like `print("a" + "b")` where the callee only borrows the view transiently. The conservative approach is correct (no crashes) but leaves small bounded leaks. Fix requires either: (1) escape analysis to distinguish "callee stores view" from "callee borrows transiently", or (2) migrating all str-storing APIs to String parameters. [added: 2026-03-17]
 

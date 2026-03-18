@@ -715,6 +715,8 @@ impl<'a> BorrowChecker<'a> {
         let mut mutation_collector = CapturedMutationCollector {
             locals: FxHashSet::default(),
             mutated: FxHashSet::default(),
+            method_resolutions: self.method_resolutions,
+            function_info: self.function_info,
         };
         mutation_collector.visit_expr(body);
 

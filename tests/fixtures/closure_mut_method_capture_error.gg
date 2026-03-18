@@ -1,0 +1,20 @@
+struct Counter:
+    int value
+
+equip Counter:
+    void increment(&self):
+        self.value = self.value + 1
+
+    int get(self):
+        return self.value
+
+void apply(Callable[void()] f):
+    f()
+
+void bad(Counter &c):
+    auto f = (): c.increment()
+    print(c.get())
+    apply(f)
+
+void main():
+    pass

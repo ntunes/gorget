@@ -239,18 +239,51 @@ impl crate::parser::visitor::ExprVisitor for CapturedRefOriginCollector<'_> {
 // ─── Visitor: Captured Mutation Collector ─────────────────────
 
 /// Walks a closure body collecting names of variables that are mutated
-/// (assigned or compound-assigned) inside the body. Excludes locals
-/// declared inside the closure itself.
-pub(super) struct CapturedMutationCollector {
+/// (assigned, compound-assigned, or receiver of a `&self` method call)
+/// inside the body. Excludes locals declared inside the closure itself.
+pub(super) struct CapturedMutationCollector<'a> {
     pub(super) locals: FxHashSet<String>,
     pub(super) mutated: FxHashSet<String>,
+    /// Method call span start → DefId (for checking if method takes &self).
+    pub(super) method_resolutions: &'a FxHashMap<usize, DefId>,
+    /// Function/method info (for checking param_ownerships[0] == MutableBorrow).
+    pub(super) function_info: &'a FxHashMap<DefId, FunctionInfo>,
 }
 
-impl crate::parser::visitor::ExprVisitor for CapturedMutationCollector {
+/// Extract the root identifier name from a nested FieldAccess/Index chain.
+fn extract_root_name(expr: &Expr) -> Option<&str> {
+    let mut e = expr;
+    loop {
+        match e {
+            Expr::Identifier(name) => return Some(name),
+            Expr::FieldAccess { object, .. } | Expr::Index { object, .. } => {
+                e = &object.node;
+            }
+            _ => return None,
+        }
+    }
+}
+
+impl crate::parser::visitor::ExprVisitor for CapturedMutationCollector<'_> {
     fn visit_expr(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
             // Skip nested closures — they have their own mutation scope
             Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
+            // Detect method calls that take &self (mutable borrow) as mutations
+            Expr::MethodCall { receiver, method, .. } => {
+                if let Some(&method_def_id) = self.method_resolutions.get(&method.span.start) {
+                    if let Some(info) = self.function_info.get(&method_def_id) {
+                        if info.param_ownerships.first() == Some(&Ownership::MutableBorrow) {
+                            if let Some(name) = extract_root_name(&receiver.node) {
+                                if !self.locals.contains(name) {
+                                    self.mutated.insert(name.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                crate::parser::visitor::walk_expr(self, expr);
+            }
             _ => crate::parser::visitor::walk_expr(self, expr),
         }
     }
@@ -264,20 +297,9 @@ impl crate::parser::visitor::ExprVisitor for CapturedMutationCollector {
             }
             Stmt::Assign { target, .. } | Stmt::CompoundAssign { target, .. } => {
                 // Extract root identifier from assignment target
-                let mut expr = &target.node;
-                loop {
-                    match expr {
-                        Expr::Identifier(name) => {
-                            if !self.locals.contains(name) {
-                                self.mutated.insert(name.clone());
-                            }
-                            break;
-                        }
-                        Expr::FieldAccess { object, .. }
-                        | Expr::Index { object, .. } => {
-                            expr = &object.node;
-                        }
-                        _ => break,
+                if let Some(name) = extract_root_name(&target.node) {
+                    if !self.locals.contains(name) {
+                        self.mutated.insert(name.to_string());
                     }
                 }
             }
