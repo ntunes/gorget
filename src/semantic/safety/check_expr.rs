@@ -1,7 +1,7 @@
 use rustc_hash::FxHashSet;
 
 use crate::parser::ast::*;
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 
 use crate::semantic::errors::SemanticErrorKind;
 use crate::semantic::ids::DefId;
@@ -22,15 +22,24 @@ impl<'a> BorrowChecker<'a> {
             | Expr::It => {}
 
             Expr::StringLiteral(lit) => {
-                // Phase 3: Mark variables used in f-string interpolation as used
+                // Re-parse and check interpolation expressions for borrow safety.
+                // Interpolations are stored as raw strings; the borrow checker must
+                // parse them to catch use-after-move, bare param mutation, etc.
                 for seg in &lit.segments {
                     if let crate::lexer::token::StringSegment::Interpolation(var_name, _) = seg {
-                        // Extract root variable name before first '.', '(', or '['
-                        // so that f"{obj.field}" marks `obj` as used
-                        let root = var_name.split(['.', '(', '[']).next().unwrap_or(var_name);
-                        if let Some(def_id) = self.find_def_by_name(root) {
-                            if let Some(entry) = self.local_var_usage.get_mut(&def_id) {
-                                entry.2 = true;
+                        // Try to parse as a full expression
+                        if let Ok(parsed_expr) = crate::parser::Parser::new(var_name).parse_expr() {
+                            // Re-resolve identifiers against current scope.
+                            // Use the f-string's span for error reporting since the
+                            // re-parsed expression has synthetic spans.
+                            self.check_interpolation_expr(&parsed_expr, expr.span);
+                        } else {
+                            // Fallback: mark root variable as used
+                            let root = var_name.split(['.', '(', '[']).next().unwrap_or(var_name);
+                            if let Some(def_id) = self.find_def_by_name(root) {
+                                if let Some(entry) = self.local_var_usage.get_mut(&def_id) {
+                                    entry.2 = true;
+                                }
                             }
                         }
                     }
@@ -806,6 +815,53 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(expr);
                 self.check_expr(recovery);
             }
+        }
+    }
+
+    /// Check a re-parsed f-string interpolation expression for borrow safety.
+    /// The expression was parsed from raw text, so its spans don't match the
+    /// resolution map. We resolve identifiers by name and use `fstring_span`
+    /// for error reporting.
+    pub(super) fn check_interpolation_expr(&mut self, expr: &Spanned<Expr>, fstring_span: Span) {
+        match &expr.node {
+            Expr::Identifier(name) => {
+                if let Some(def_id) = self.find_def_by_name(name) {
+                    let kind = self.scopes.get_def(def_id).kind;
+                    if kind == DefKind::Variable {
+                        self.check_use(def_id, fstring_span);
+                    }
+                    // Phase 3: Mark as used
+                    if let Some(entry) = self.local_var_usage.get_mut(&def_id) {
+                        entry.2 = true;
+                    }
+                }
+            }
+            Expr::FieldAccess { object, .. }
+            | Expr::TupleFieldAccess { object, .. }
+            | Expr::OptionalChain { object, .. }
+            | Expr::Index { object, .. } => {
+                self.check_interpolation_expr(object, fstring_span);
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                self.check_interpolation_expr(receiver, fstring_span);
+                for arg in args {
+                    self.check_interpolation_expr(&arg.node.value, fstring_span);
+                }
+            }
+            Expr::Call { callee, args, .. } => {
+                self.check_interpolation_expr(callee, fstring_span);
+                for arg in args {
+                    self.check_interpolation_expr(&arg.node.value, fstring_span);
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.check_interpolation_expr(left, fstring_span);
+                self.check_interpolation_expr(right, fstring_span);
+            }
+            Expr::UnaryOp { operand, .. } => {
+                self.check_interpolation_expr(operand, fstring_span);
+            }
+            _ => {}
         }
     }
 }

@@ -520,6 +520,16 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Check if a resolved type is an enum (for cast validation).
+    fn is_enum_type(&self, type_id: TypeId) -> bool {
+        match self.types.get(type_id) {
+            ResolvedType::Defined(def_id) | ResolvedType::Generic(def_id, _) => {
+                self.enum_variants.contains_key(def_id)
+            }
+            _ => false,
+        }
+    }
+
     /// Unify two types, binding type variables as needed.
     fn unify(&mut self, a: TypeId, b: TypeId, span: Span) -> TypeId {
         let a = self.resolve_type(a);
@@ -1851,14 +1861,37 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::As { expr: inner, type_ } => {
-                self.infer_expr(inner);
-                super::types::ast_type_to_resolved(
+                let source_type = self.infer_expr(inner);
+                let target_type = super::types::ast_type_to_resolved(
                     &type_.node,
                     type_.span,
                     self.scopes,
                     self.types,
                 )
-                .unwrap_or(self.types.error_id)
+                .unwrap_or(self.types.error_id);
+                // Validate that the cast is between compatible types.
+                // Allow: numeric↔numeric, bool↔int, enum→int.
+                // Reject: struct→primitive, collection→primitive, etc.
+                let src = self.resolve_type(source_type);
+                let tgt = self.resolve_type(target_type);
+                let src_castable = matches!(
+                    self.types.get(src),
+                    ResolvedType::Primitive(_) | ResolvedType::Error | ResolvedType::Void
+                ) || self.is_enum_type(src);
+                let tgt_castable = matches!(
+                    self.types.get(tgt),
+                    ResolvedType::Primitive(_) | ResolvedType::Error | ResolvedType::Void
+                );
+                if !src_castable && tgt_castable && tgt != self.types.error_id {
+                    self.error(
+                        SemanticErrorKind::TypeMismatch {
+                            expected: format!("castable type for `as {}`", self.describe_resolved_type(tgt)),
+                            found: self.describe_resolved_type(src),
+                        },
+                        expr.span,
+                    );
+                }
+                target_type
             }
 
             Expr::Is { expr: inner, .. } => {

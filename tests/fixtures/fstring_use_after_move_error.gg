@@ -1,0 +1,9 @@
+# Tests that the borrow checker catches use-after-move inside f-string interpolation.
+
+void consume(Vector[int] !v):
+    print(v.len())
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    consume(!v)
+    print(f"{v.len()}")

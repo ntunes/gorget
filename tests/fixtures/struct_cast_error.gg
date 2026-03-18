@@ -1,0 +1,9 @@
+# Tests that casting a struct to a primitive type is rejected.
+
+struct Secret:
+    int value
+
+void main():
+    Secret s = Secret(value=42)
+    int raw = s as int
+    print(raw)
