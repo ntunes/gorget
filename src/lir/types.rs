@@ -46,10 +46,15 @@ impl Default for StructRegistry {
 /// Well-known struct layouts for Gorget runtime types.
 pub fn builtin_struct_defs() -> Vec<StructDef> {
     vec![
-        // str — immutable UTF-8 view
+        // str — unified view/owned string (cap==0 ⟺ view, cap>0 ⟺ owned)
         StructDef {
             name: "Str".into(),
-            fields: vec![("data".into(), LirType::Ptr), ("len".into(), LirType::I64)],
+            fields: vec![
+                ("data".into(), LirType::Ptr),
+                ("len".into(), LirType::I64),
+                ("cap".into(), LirType::I64),
+                ("alloc".into(), LirType::Ptr),
+            ],
         },
         // String — owned heap string
         StructDef {
@@ -177,7 +182,7 @@ mod tests {
         let defs = builtin_struct_defs();
         assert!(defs.len() >= 9);
         assert_eq!(defs[0].name, "Str");
-        assert_eq!(defs[0].fields.len(), 2);
+        assert_eq!(defs[0].fields.len(), 4);
         assert_eq!(defs[1].name, "GorgetString");
         assert_eq!(defs[1].fields.len(), 3);
     }

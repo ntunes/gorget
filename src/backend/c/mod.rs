@@ -2753,7 +2753,7 @@ fn emit_poll_inst(
                 if let Operand::Copy(p) | Operand::Move(p) = value {
                     let src_type = effective_c_type(p.local.0 as usize, func, registry, type_overrides);
                     if src_type == "GorgetString" {
-                        let _ = writeln!(out, "        {dst_str} = (Str){{ .data = {val_str}.data, .len = {val_str}.len }};");
+                        let _ = writeln!(out, "        {dst_str} = (Str){{ .data = {val_str}.data, .len = {val_str}.len, .cap = 0, .alloc = NULL }};");
                         return None;
                     }
                 }
@@ -2935,7 +2935,7 @@ fn emit_poll_inst(
                                         match &args[1] {
                                             Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => format!("&{val}"),
                                             Operand::Constant(Constant::Str(s)) => {
-                                                format!("&(Str){{ .data = \"{}\", .len = {} }}", escape_c_string(s), s.len())
+                                                format!("&(Str){{ .data = \"{}\", .len = {}, .cap = 0, .alloc = NULL }}", escape_c_string(s), s.len())
                                             }
                                             _ => {
                                                 let arg_type = match &args[1] {
@@ -3020,7 +3020,7 @@ fn emit_poll_inst(
                             }
                             "__INLINE_STRING_TO_STR__" => {
                                 if let Some(dst_id) = dst {
-                                    let _ = writeln!(out, "        f->_{id} = (Str){{ .data = {self_val}.data, .len = {self_val}.len }};", id = dst_id.0);
+                                    let _ = writeln!(out, "        f->_{id} = (Str){{ .data = {self_val}.data, .len = {self_val}.len, .cap = 0, .alloc = NULL }};", id = dst_id.0);
                                 }
                             }
                             "__INLINE_STRING_CLEAR__" => {
@@ -3094,7 +3094,7 @@ fn emit_poll_inst(
                                             };
                                             if let Operand::Constant(Constant::Str(s)) = arg {
                                                 let escaped = escape_c_string(s);
-                                                arg_parts.push(format!("&(Str){{ .data = \"{escaped}\", .len = {} }}", s.len()));
+                                                arg_parts.push(format!("&(Str){{ .data = \"{escaped}\", .len = {}, .cap = 0, .alloc = NULL }}", s.len()));
                                             } else if matches!(arg, Operand::Constant(Constant::Null)) {
                                                 if let Some(elem_type) = collection_elem_type_from_name(call_fn) {
                                                     if elem_type.starts_with("Option__") {
@@ -3335,7 +3335,7 @@ fn emit_poll_inst(
                                         };
                                         if let Operand::Constant(Constant::Str(s)) = arg {
                                             let escaped = escape_c_string(s);
-                                            arg_parts.push(format!("&(Str){{ .data = \"{escaped}\", .len = {} }}", s.len()));
+                                            arg_parts.push(format!("&(Str){{ .data = \"{escaped}\", .len = {}, .cap = 0, .alloc = NULL }}", s.len()));
                                         } else {
                                             arg_parts.push(format!("&({arg_type}){{{val}}}"));
                                         }
@@ -5506,7 +5506,7 @@ fn emit_instruction(
             // Implicit is_none/is_some: src is Option__T but dst is bool
             // (handled above since bool doesn't start with Option__)
             if dst_c_type == "Str" && src_c_type == "GorgetString" {
-                let _ = writeln!(out, "        {dst_str} = (Str){{ .data = {val_str}.data, .len = {val_str}.len }};");
+                let _ = writeln!(out, "        {dst_str} = (Str){{ .data = {val_str}.data, .len = {val_str}.len, .cap = 0, .alloc = NULL }};");
             } else if dst_c_type == "GorgetString" && src_c_type == "Str" {
                 let _ = writeln!(out, "        {dst_str} = gorget_string_from_str({val_str});");
             } else if dst_c_type == "Str" && src_c_type == "uint32_t" {
@@ -5526,7 +5526,7 @@ fn emit_instruction(
                     }
                 }
                 if needs_string_coercion(dst_type, src_type, registry) {
-                    let _ = writeln!(out, "        {dst_str} = (Str){{ .data = {val_str}.data, .len = {val_str}.len }};");
+                    let _ = writeln!(out, "        {dst_str} = (Str){{ .data = {val_str}.data, .len = {val_str}.len, .cap = 0, .alloc = NULL }};");
                 } else {
                     // Pointer→value coercion: dereference when assigning Ptr(T) to T
                     // (e.g., `_0 = _1` where _1 is `self` pointer and _0 is value type)
@@ -6035,7 +6035,7 @@ fn emit_instruction(
                     } else if arg_type == "Str" || arg_type == "Str*" || arg_type == "const Str*" {
                         let _ = writeln!(out, "        _{id} = gorget_str_codepoint_count({deref_arg});", id = dst_id.0);
                     } else if arg_type.contains("GorgetString") {
-                        let _ = writeln!(out, "        _{id} = gorget_str_codepoint_count((Str){{ .data = {deref_arg}.data, .len = {deref_arg}.len }});", id = dst_id.0);
+                        let _ = writeln!(out, "        _{id} = gorget_str_codepoint_count((Str){{ .data = {deref_arg}.data, .len = {deref_arg}.len, .cap = 0, .alloc = NULL }});", id = dst_id.0);
                     } else if arg_type.contains("GorgetMap") || arg_type.contains("GorgetSet") || arg_type.contains("GorgetDict") {
                         let _ = writeln!(out, "        _{id} = (int64_t){deref_arg}.count;", id = dst_id.0);
                     } else {
@@ -6403,7 +6403,7 @@ fn emit_instruction(
                 let s = format_operand(&args[0], func, registry);
                 let pos = format_operand(&args[1], func, registry);
                 if let Some(dst_id) = dst {
-                    let _ = writeln!(out, "        _{id} = (Str){{ .data = {s}.data + {pos}, .len = (size_t)gorget_utf8_codepoint_len((unsigned char){s}.data[{pos}]) }};", id = dst_id.0);
+                    let _ = writeln!(out, "        _{id} = (Str){{ .data = {s}.data + {pos}, .len = (size_t)gorget_utf8_codepoint_len((unsigned char){s}.data[{pos}]), .cap = 0, .alloc = NULL }};", id = dst_id.0);
                 }
             }
             // Image/audio out-parameter calls — C runtime uses out-param ABI
@@ -6925,7 +6925,7 @@ fn emit_instruction(
                     format!("&{idx_str}")
                 } else if let Operand::Constant(Constant::Str(s)) = index {
                     // Str compound literal must include both .data and .len
-                    format!("&(Str){{ .data = \"{}\", .len = {} }}", escape_c_string(s), s.len())
+                    format!("&(Str){{ .data = \"{}\", .len = {}, .cap = 0, .alloc = NULL }}", escape_c_string(s), s.len())
                 } else {
                     format!("&({key_type_str}){{{idx_str}}}")
                 };
@@ -7332,7 +7332,7 @@ fn coerce_constructor_arg(
             let arg_c_type = format_type(func.locals[local_idx].type_id, registry);
             let field_c_type = format_type(*field_type, registry);
             if arg_c_type == "GorgetString" && field_c_type == "Str" {
-                return format!("(Str){{ .data = {val}.data, .len = {val}.len }}");
+                return format!("(Str){{ .data = {val}.data, .len = {val}.len, .cap = 0, .alloc = NULL }}");
             }
         }
     }
@@ -8177,8 +8177,8 @@ fn try_emit_higher_order_method(
                         GorgetString __acc = gorget_string_new({init}.data); \
                         for (size_t __i = 0; __i < __src.len; __i++) {{ \
                         {elem_type} __elem = GORGET_ARRAY_AT({elem_type}, __src, __i); \
-                        __acc = {call_fn}({closure_ref}, (Str){{ .data = __acc.data, .len = __acc.len }}, __elem); \
-                        }} (Str){{ .data = __acc.data, .len = __acc.len }}; }});");
+                        __acc = {call_fn}({closure_ref}, (Str){{ .data = __acc.data, .len = __acc.len , .cap = 0, .alloc = NULL }}, __elem); \
+                        }} (Str){{ .data = __acc.data, .len = __acc.len , .cap = 0, .alloc = NULL }}; }});");
                 } else {
                     let _ = writeln!(out, "        {dst_str} = ({{ GorgetArray __src = {coll_val}; \
                         {acc_type} __acc = {init}; \
@@ -9164,13 +9164,13 @@ fn emit_poll_inline_method(
                 } else { "int64_t" };
                 let key_ref = if key.starts_with("f->_") {
                     if key_type == "Str" {
-                        format!("&(Str){{ .data = {key}.data, .len = {key}.len }}")
+                        format!("&(Str){{ .data = {key}.data, .len = {key}.len, .cap = 0, .alloc = NULL }}")
                     } else {
                         format!("&{key}")
                     }
                 } else if key_type == "Str" {
                     let s = key.trim_matches('"');
-                    format!("&(Str){{ .data = {key}, .len = {} }}", s.len())
+                    format!("&(Str){{ .data = {key}, .len = {}, .cap = 0, .alloc = NULL }}", s.len())
                 } else {
                     format!("&({key_type}){{{key}}}")
                 };
@@ -10414,7 +10414,7 @@ fn try_emit_primitive_static_method(
         }
         "Str__default" | "str__default" => {
             if let Some(dst_id) = dst {
-                let _ = writeln!(out, "        _{id} = (Str){{ .data = \"\", .len = 0 }};", id = dst_id.0);
+                let _ = writeln!(out, "        _{id} = (Str){{ .data = \"\", .len = 0 , .cap = 0, .alloc = NULL }};", id = dst_id.0);
             }
             Some(out)
         }
@@ -10598,7 +10598,7 @@ fn try_emit_outparam_call(
             let dst_id = dst.as_ref()?;
             let path = format_operand(&args[0], func, registry);
             // Coerce GorgetString → Str if needed (both have .data/.len fields)
-            let path_str = format!("(Str){{ .data = {path}.data, .len = {path}.len }}");
+            let path_str = format!("(Str){{ .data = {path}.data, .len = {path}.len, .cap = 0, .alloc = NULL }}");
             let c_type = effective_c_type(dst_id.0 as usize, func, registry, type_overrides);
             let _ = writeln!(out,
                 "        _{id} = ({{ int64_t __tag = 0, __w = 0, __h = 0, __ch = 0; \
@@ -11209,21 +11209,21 @@ fn emit_inline_method(
                 } else { "int64_t" };
                 let key_ref = if key.starts_with('_') {
                     if key_type == "Str" {
-                        format!("&(Str){{ .data = {key}.data, .len = {key}.len }}")
+                        format!("&(Str){{ .data = {key}.data, .len = {key}.len, .cap = 0, .alloc = NULL }}")
                     } else {
                         format!("&{key}")
                     }
                 } else if key_type == "Str" {
                     // String literal key: wrap in gorget_str_from_literal
                     let s = key.trim_matches('"');
-                    format!("&(Str){{ .data = {key}, .len = {} }}", s.len())
+                    format!("&(Str){{ .data = {key}, .len = {}, .cap = 0, .alloc = NULL }}", s.len())
                 } else {
                     format!("&({key_type}){{{key}}}")
                 };
                 // Wrap default in Str literal if val_type is Str and default is a C string literal
                 let default_expr = if val_type == "Str" && default.starts_with('"') {
                     let s = default.trim_matches('"');
-                    format!("((Str){{ .data = {default}, .len = {} }})", s.len())
+                    format!("((Str){{ .data = {default}, .len = {}, .cap = 0, .alloc = NULL }})", s.len())
                 } else {
                     default.clone()
                 };
@@ -11598,7 +11598,7 @@ fn emit_collection_method_call(
     if rewrite.runtime_fn == "__INLINE_STRING_TO_STR__" {
         let dereffed = deref_self(&self_str, self_ptr);
         if let Some(dst_id) = dst {
-            let _ = writeln!(out, "        _{id} = (Str){{ .data = {dereffed}.data, .len = {dereffed}.len }};", id = dst_id.0);
+            let _ = writeln!(out, "        _{id} = (Str){{ .data = {dereffed}.data, .len = {dereffed}.len, .cap = 0, .alloc = NULL }};", id = dst_id.0);
         }
         return;
     }
@@ -11691,7 +11691,7 @@ fn emit_collection_method_call(
                         format!("&{val}")
                     }
                     Operand::Constant(Constant::Str(s)) => {
-                        format!("&(Str){{ .data = \"{}\", .len = {} }}",
+                        format!("&(Str){{ .data = \"{}\", .len = {}, .cap = 0, .alloc = NULL }}",
                             escape_c_string(s), s.len())
                     }
                     _ => {
@@ -11867,10 +11867,10 @@ fn emit_collection_method_call(
             "GorgetString" => {
                 // String argument — coerce to Str view
                 if is_push_line {
-                    let _ = writeln!(out, "        gorget_string_append_str({self_ref}, (Str){{ .data = {arg_val}.data, .len = {arg_val}.len }});");
+                    let _ = writeln!(out, "        gorget_string_append_str({self_ref}, (Str){{ .data = {arg_val}.data, .len = {arg_val}.len, .cap = 0, .alloc = NULL }});");
                     let _ = writeln!(out, "        gorget_string_push_byte({self_ref}, '\\n');");
                 } else {
-                    let _ = writeln!(out, "        gorget_string_append_str({self_ref}, (Str){{ .data = {arg_val}.data, .len = {arg_val}.len }});");
+                    let _ = writeln!(out, "        gorget_string_append_str({self_ref}, (Str){{ .data = {arg_val}.data, .len = {arg_val}.len, .cap = 0, .alloc = NULL }});");
                 }
             }
             _ => {
@@ -11925,7 +11925,7 @@ fn emit_collection_method_call(
         let dereffed = deref_self(&self_str, self_ptr);
         if self_c_type == "GorgetString" || self_c_type.contains("GorgetString") {
             // GorgetString → Str coercion: (Str){.data = gs.data, .len = gs.len}
-            call_args.push(format!("(Str){{ .data = {dereffed}.data, .len = {dereffed}.len }}"));
+            call_args.push(format!("(Str){{ .data = {dereffed}.data, .len = {dereffed}.len, .cap = 0, .alloc = NULL }}"));
         } else {
             call_args.push(dereffed);
         }
@@ -11975,7 +11975,7 @@ fn emit_collection_method_call(
                     };
                     // For Str, use gorget_str_from_literal to set both .data and .len
                     if let Operand::Constant(Constant::Str(s)) = arg {
-                        call_args.push(format!("&(Str){{ .data = \"{}\", .len = {} }}",
+                        call_args.push(format!("&(Str){{ .data = \"{}\", .len = {}, .cap = 0, .alloc = NULL }}",
                             escape_c_string(s), s.len()));
                     } else if matches!(arg, Operand::Constant(Constant::Null)) {
                         // Null pushed into a collection — infer element type from collection name
@@ -12012,7 +12012,7 @@ fn emit_collection_method_call(
                     _ => String::new(),
                 };
                 if arg_c_type == "GorgetString" || arg_c_type.contains("GorgetString") {
-                    call_args.push(format!("(Str){{ .data = {val}.data, .len = {val}.len }}"));
+                    call_args.push(format!("(Str){{ .data = {val}.data, .len = {val}.len, .cap = 0, .alloc = NULL }}"));
                 } else {
                     call_args.push(val);
                 }
@@ -12615,7 +12615,7 @@ fn format_args_inner(args: &[Operand], func: &Function, registry: &TypeRegistry,
                             }
                             // GorgetString → Str coercion for gorget_str_* functions
                             "GorgetString" if mode == FormatArgsMode::StrFn => {
-                                arg_str = format!("(Str){{ .data = {arg_str}.data, .len = {arg_str}.len }}");
+                                arg_str = format!("(Str){{ .data = {arg_str}.data, .len = {arg_str}.len, .cap = 0, .alloc = NULL }}");
                             }
                             // Str/GorgetString → const char* for C functions
                             "Str" if mode == FormatArgsMode::CstrFn => {
@@ -12741,7 +12741,7 @@ fn format_args_with_coercion(
                         .map(|&tid| format_type(tid, registry) == "Str")
                         .unwrap_or(true); // default to coerce for unknown targets
                     if target_expects_str {
-                        parts.push(format!("(Str){{ .data = {arg_str}.data, .len = {arg_str}.len }}"));
+                        parts.push(format!("(Str){{ .data = {arg_str}.data, .len = {arg_str}.len, .cap = 0, .alloc = NULL }}"));
                     } else {
                         parts.push(arg_str);
                     }

@@ -410,7 +410,7 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         writeln!(out, "static inline Str gorget_char_chr(int64_t code) {{ return gorget_str_from_cstr(gorget_codepoint_to_utf8(code)); }}").unwrap();
         writeln!(out, "static inline int64_t gorget_str_ord(Str s) {{ size_t pos = 0; return (int64_t)gorget_utf8_decode(s.data, s.len, &pos); }}").unwrap();
         // Default value functions for primitive types
-        writeln!(out, "static inline Str gorget_str_default(void) {{ return (Str){{NULL, 0}}; }}").unwrap();
+        writeln!(out, "static inline Str gorget_str_default(void) {{ return (Str){{NULL, 0, 0, NULL}}; }}").unwrap();
         writeln!(out, "static inline int64_t int64_t__default(void) {{ return 0; }}").unwrap();
         writeln!(out, "static inline int64_t int__default(void) {{ return 0; }}").unwrap();
         writeln!(out, "static inline int8_t int8_t__default(void) {{ return 0; }}").unwrap();
@@ -707,7 +707,7 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
             writeln!(out, "static inline void gorget_str_push(GorgetString* s, Str chunk) {{ gorget_string_push_char(s, chunk); }}").unwrap();
         }
         if has_extern("gorget_str_str") {
-            writeln!(out, "static inline Str gorget_str_str(GorgetString* s) {{ return (Str){{ .data = s->data, .len = s->len }}; }}").unwrap();
+            writeln!(out, "static inline Str gorget_str_str(GorgetString* s) {{ return (Str){{ .data = s->data, .len = s->len, .cap = 0, .alloc = NULL }}; }}").unwrap();
         }
         if has_extern("gorget_str_clear") {
             writeln!(out, "static inline void gorget_str_clear(GorgetString* s) {{ s->len = 0; }}").unwrap();
@@ -2915,7 +2915,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     let pointee_is_str = pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str")));
                     if slot_is_str && pointee_is_gs {
                         // GorgetString* → Str: extract .data and .len
-                        write!(out, "{{ GorgetString __gs = *(GorgetString*){}; {} = (Str){{ .data = __gs.data, .len = __gs.len }}; }}", v(*value), s(*slot)).unwrap();
+                        write!(out, "{{ GorgetString __gs = *(GorgetString*){}; {} = (Str){{ .data = __gs.data, .len = __gs.len, .cap = 0, .alloc = NULL }}; }}", v(*value), s(*slot)).unwrap();
                     } else if slot_is_gs && pointee_is_str {
                         // Str* → GorgetString slot: promote via gorget_string_from_str
                         write!(out, "{} = gorget_string_from_str(*(Str*){});", s(*slot), v(*value)).unwrap();
@@ -2928,7 +2928,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     let val_is_gs = matches!(val_ty, Some(LirType::Struct(sid)) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString"));
                     let val_is_str = matches!(val_ty, Some(LirType::Struct(sid)) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
                     if slot_is_str && val_is_gs {
-                        write!(out, "{{ GorgetString __gs = {}; {} = (Str){{ .data = __gs.data, .len = __gs.len }}; }}", v(*value), s(*slot)).unwrap();
+                        write!(out, "{{ GorgetString __gs = {}; {} = (Str){{ .data = __gs.data, .len = __gs.len, .cap = 0, .alloc = NULL }}; }}", v(*value), s(*slot)).unwrap();
                     } else if slot_is_gs && val_is_str {
                         // Str value → GorgetString slot: promote via gorget_string_from_str
                         write!(out, "{} = gorget_string_from_str({});", s(*slot), v(*value)).unwrap();
@@ -3249,7 +3249,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     let src_is_str = pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str")));
                     let dst_is_gs = dst_pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString")));
                     if src_is_gs && dst_is_str {
-                        write!(out, "{{ GorgetString __gs = *(GorgetString*){val}; *(Str*){p} = (Str){{ .data = __gs.data, .len = __gs.len }}; }}",
+                        write!(out, "{{ GorgetString __gs = *(GorgetString*){val}; *(Str*){p} = (Str){{ .data = __gs.data, .len = __gs.len, .cap = 0, .alloc = NULL }}; }}",
                             p = v(*ptr), val = v(*value)).unwrap();
                     } else if src_is_str && dst_is_gs {
                         // Str* → GorgetString*: promote via gorget_string_from_str
@@ -3547,7 +3547,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 if let Some(d) = dst {
                     let s = format!("(*(Str*){})", v(args[0]));
                     let pos = v(args[1]);
-                    write!(out, "{} = (Str){{ .data = {s}.data + {pos}, .len = (size_t)gorget_utf8_codepoint_len((unsigned char){s}.data[{pos}]) }};",
+                    write!(out, "{} = (Str){{ .data = {s}.data + {pos}, .len = (size_t)gorget_utf8_codepoint_len((unsigned char){s}.data[{pos}]), .cap = 0, .alloc = NULL }};",
                         v(*d)).unwrap();
                 }
                 return;
@@ -4383,7 +4383,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                     let ty_name2 = c_type_named(arg_ty2.unwrap(), sn);
                                     write!(out, "&({ty_name2}){{ {} }}", v(*a)).unwrap();
                                 } else if opt_void_params.contains(&i) && is_str_lit2 {
-                                    write!(out, "&(Str){{ .data = {v}, .len = strlen({v}) }}", v = v(*a)).unwrap();
+                                    write!(out, "&(Str){{ .data = {v}, .len = strlen({v}), .cap = 0, .alloc = NULL }}", v = v(*a)).unwrap();
                                 } else {
                                     let ext_param = ext_params.and_then(|p| p.get(i));
                                     emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
@@ -4451,7 +4451,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         write!(out, "&({ty_name}){{ {} }}", v(*a)).unwrap();
                     } else if collection_void_param_indices(emit_name).contains(&i) && is_str_lit {
                         // String literal arg to void* collection param → wrap as &(Str){...}
-                        write!(out, "&(Str){{ .data = {v}, .len = strlen({v}) }}", v = v(*a)).unwrap();
+                        write!(out, "&(Str){{ .data = {v}, .len = strlen({v}), .cap = 0, .alloc = NULL }}", v = v(*a)).unwrap();
                     } else {
                         let ext_param = ext_params.and_then(|p| p.get(i));
                         emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
@@ -4599,8 +4599,8 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                     GorgetString __acc = {acc_init}; \
                                     for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                     {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                    __acc = {call_fn2}({fn_a_ref}, (Str){{ .data = __acc.data, .len = __acc.len }}, __elem); \
-                                    }} (Str){{ .data = __acc.data, .len = __acc.len }}; }});").unwrap();
+                                    __acc = {call_fn2}({fn_a_ref}, (Str){{ .data = __acc.data, .len = __acc.len, .cap = 0, .alloc = NULL }}, __elem); \
+                                    }} (Str){{ .data = __acc.data, .len = __acc.len, .cap = 0, .alloc = NULL }}; }});").unwrap();
                             } else {
                                 write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
                                     {acc_c} __acc = {acc_arg}; \
@@ -5346,7 +5346,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 // GorgetString arg to a gorget_str_* function → coerce to Str.
                 else if name.starts_with("gorget_str_") && is_gorget_string_type(arg_ty, sn)
                     && !str_fn_non_str_arg(name, i) {
-                    write!(out, "(Str){{ .data = ({v}).data, .len = ({v}).len }}", v = v(*a)).unwrap();
+                    write!(out, "(Str){{ .data = ({v}).data, .len = ({v}).len, .cap = 0, .alloc = NULL }}", v = v(*a)).unwrap();
                 }
                 // Ptr arg to a gorget_str_* function that expects Str by value → deref to Str.
                 // Skip self-by-ptr methods (they take GorgetString*) and arg 0 of ptr methods.
@@ -5363,7 +5363,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 // String literal arg to a void* collection param → wrap as &(Str){...}.
                 // This handles Dict/Set with Str keys: gorget_map_put(m, &(Str){..}, &val).
                 else if void_params.contains(&i) && is_str_lit {
-                    write!(out, "&(Str){{ .data = {v}, .len = strlen({v}) }}", v = v(*a)).unwrap();
+                    write!(out, "&(Str){{ .data = {v}, .len = strlen({v}), .cap = 0, .alloc = NULL }}", v = v(*a)).unwrap();
                 }
                 // Str → const char* coercion for C runtime functions that take raw strings.
                 else if takes_cstr_for_str_param(emit_name, i) {
@@ -5761,7 +5761,7 @@ fn emit_coerced_arg(
     // GorgetString → Str coercion (works for both pointer and value args).
     if param_name.as_deref() == Some("Str") && arg_name.as_deref() == Some("GorgetString") {
         // GorgetString by value (from ParamRef or Call result):
-        write!(out, "(Str){{ .data = ({v}).data, .len = ({v}).len }}", v = format!("__v{}", a.0)).unwrap();
+        write!(out, "(Str){{ .data = ({v}).data, .len = ({v}).len, .cap = 0, .alloc = NULL }}", v = format!("__v{}", a.0)).unwrap();
         return;
     }
 

@@ -2574,7 +2574,7 @@ impl<'a> FuncLowering<'a> {
                         _ => unreachable!(),
                     };
 
-                    // Str fields: 0=data (Ptr), 1=len (I64)
+                    // Str fields: 0=data (Ptr), 1=len (I64), 2=cap (I64), 3=alloc (Ptr)
                     // Load .len (field 1) → cast to I32 for printf %.*s precision
                     let base = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
@@ -3463,19 +3463,9 @@ impl<'a> FuncLowering<'a> {
 
     /// Resolve struct ID with field-count safety: if the resolved struct has
     /// fewer fields than the field index, try a wider compatible type.
-    /// Handles Str→GorgetString promotion (GIR uses GorgetString fields on Str locals).
-    fn resolve_struct_id_for_field(&self, gir_type_id: GirTypeId, field: u32, structs: &[StructDef]) -> StructId {
+    fn resolve_struct_id_for_field(&self, gir_type_id: GirTypeId, _field: u32, _structs: &[StructDef]) -> StructId {
         let sid = self.resolve_struct_id(gir_type_id);
-        let struct_def = &structs[sid.0 as usize];
-        if (field as usize) < struct_def.fields.len() {
-            return sid;
-        }
-        // Str (2 fields) with field >= 2 → GorgetString (3 fields).
-        if struct_def.name == "Str" {
-            if let Some(gs_sid) = self.struct_reg.lookup("GorgetString") {
-                return gs_sid;
-            }
-        }
+        // Str now has 4 fields (data, len, cap, alloc) matching GorgetString — no promotion needed.
         sid
     }
 
@@ -4824,8 +4814,8 @@ fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> usize {
         "int32_t" | "uint32_t" | "float" => 4,
         "int16_t" | "uint16_t" => 2,
         "int8_t" | "uint8_t" | "bool" => 1,
-        // Str is a (data_ptr, len) pair — 16 bytes on 64-bit
-        "Str" => 16,
+        // Str is a (data, len, cap, alloc) struct — 32 bytes on 64-bit
+        "Str" => 32,
         _ => {
             // Runtime collection structs: GorgetArray = {data, len, cap, elem_size, alloc} = 40 bytes
             if type_name.starts_with("Vector__") || type_name == "GorgetArray" {
@@ -4908,8 +4898,8 @@ fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
                     "GorgetMap" | "GorgetSet" => Some(104usize),
                     // GorgetString: {data, len, cap, alloc} = 4 × 8 = 32
                     "GorgetString" => Some(32usize),
-                    // Str: {data, len} = 2 × 8 = 16
-                    "Str" => Some(16usize),
+                    // Str: {data, len, cap, alloc} = 4 × 8 = 32
+                    "Str" => Some(32usize),
                     _ if sd.name.starts_with("Task__") => Some(16usize),
                     _ => None,
                 };
@@ -4926,7 +4916,7 @@ fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
 }
 
 /// Compute the size of a tuple from its mangled field types.
-/// `Tuple__int64_t__Str` → fields are [int64_t, Str] → 8 + 16 = 24.
+/// `Tuple__int64_t__Str` → fields are [int64_t, Str] → 8 + 32 = 40.
 /// Fields are split on `__` but multi-word types like `int64_t` contain `_`
 /// (not `__`), so we split on `__` and rejoin single-underscore segments.
 fn c_sizeof_tuple_fields(fields_str: &str, structs: &[StructDef]) -> usize {
