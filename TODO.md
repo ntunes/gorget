@@ -21,7 +21,7 @@
 
 ## Medium
 
-- **Unified String type: all integration tests passing** — Parser change done (`str` → `PrimitiveType::StringType`), provenance pass active (Pass 4.5 downgrades views), AST rewrite active (Pass 4.6 converts downgraded bindings to `Str`). All 844 integration tests pass, 976 unit tests pass, 703 LIR A/B tests pass. Remaining work: fixture migration (`str` → `String` in source), self-host migration, keyword removal. [updated: 2026-03-19]
+- **Unified String type: all integration tests passing** — Parser change done (`str` → `PrimitiveType::StringType`), provenance pass active (Pass 4.5 downgrades views), AST rewrite active (Pass 4.6 converts downgraded bindings to `Str`). Phase 5 runtime fixes done (owned slicing + clone-on-copy in LIR backend). All 844 integration tests pass, 976 unit tests pass, 703 LIR A/B tests pass. Remaining work: fixture migration (`str` → `String` in source), self-host migration, keyword removal. Note: `gorget_str_byte_slice` and all trim/strip functions now return owned copies (small performance cost, prevents use-after-free class of bugs). Future optimization: add view-returning variants for cases where lifetime analysis can prove safety. [updated: 2026-03-19]
 
 - **Unified String type: fixture migration (`str` → `String`)** — 352+ fixture files use `str` type. Migration to `String` is cosmetic but needed before removing `str` keyword. [added: 2026-03-18]
 
