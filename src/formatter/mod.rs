@@ -2179,7 +2179,7 @@ fn primitive_type_str(p: PrimitiveType) -> &'static str {
         PrimitiveType::Float32 => "float32",
         PrimitiveType::Float64 => "float64",
         PrimitiveType::Bool => "bool",
-        PrimitiveType::Str => "str",
+        PrimitiveType::Str => "String",
         PrimitiveType::CStr => "cstr",
         PrimitiveType::StringType => "String",
         PrimitiveType::Void => "void",

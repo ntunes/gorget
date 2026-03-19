@@ -12,7 +12,7 @@ str type_or_unknown[T]():
         return "int"
     elif typename(T) == "float":
         return "float"
-    elif typename(T) == "str":
+    elif typename(T) == "String":
         return "str"
     else:
         return "unknown"

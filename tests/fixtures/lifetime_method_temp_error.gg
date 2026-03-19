@@ -4,7 +4,7 @@ struct Builder:
 
 equip Builder:
     String build(self):
-        return "result"
+        return f"{'result'}"
 
 void main():
     Builder b = Builder("hello")

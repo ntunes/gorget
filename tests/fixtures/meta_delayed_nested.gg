@@ -19,12 +19,12 @@ void multi_branch[T]():
             print("8 bytes")
         else:
             print("not 8 bytes")
-    elif typename(T) == "str":
+    elif typename(T) == "String":
         print("is str")
-        meta if sizeof(T) == 16:
-            print("16 bytes")
+        meta if sizeof(T) == 32:
+            print("32 bytes")
         else:
-            print("not 16 bytes")
+            print("not 32 bytes")
     else:
         print("other type")
 

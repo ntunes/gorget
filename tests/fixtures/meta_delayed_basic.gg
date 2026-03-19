@@ -3,7 +3,7 @@ str type_label[T](T val):
         return "integer"
     elif typename(T) == "float":
         return "float"
-    elif typename(T) == "str":
+    elif typename(T) == "String":
         return "string"
     else:
         return "other"

@@ -1011,6 +1011,8 @@ fn eval_expr(
                             return Err(meta_err("typename() takes exactly 1 argument", span));
                         }
                         let type_name = meta_expr_to_type_name(&args[0].node.value.node);
+                        // Normalize deprecated "str" → canonical "String"
+                        let type_name = if type_name == "str" { "String".to_string() } else { type_name };
                         Ok(MetaValue::Str(type_name))
                     }
                     "embed_file" => {
@@ -1142,7 +1144,7 @@ fn eval_type_is_check(resolved: &str, category: &str, type_registry: &crate::ir:
             "uint8" | "uint16" | "uint32" | "uint" | "uint64" |
             "float32" | "float" | "float64"),
         // Single-member categories (also exact matches)
-        "bool" | "str" | "char" | "void" => resolved == category,
+        "bool" | "str" | "String" | "char" | "void" => resolved == category,
         // Registry-backed categories: check if the resolved type is an enum or struct.
         "Enum" | "enum" => {
             type_registry.get_type_def(resolved)
@@ -1172,12 +1174,10 @@ fn meta_type_byte_size(name: &str) -> Option<i64> {
         "int"   | "int64"              => Some(8),
         "uint"  | "uint64"             => Some(8),
         "float" | "float64"            => Some(8),
-        // str  = Str  { *u8 data, u64 len }            → 16 bytes
-        "str"  => Some(16),
+        // str/String = Str { *u8, u64, u64, *Alloc } → 32 bytes (unified)
+        "str" | "String" => Some(32),
         // cstr = const char*                           →  8 bytes
         "cstr" => Some(8),
-        // String = GorgetString { *u8, u64, u64, *Alloc } → 32 bytes
-        "String" => Some(32),
         _      => None,
     }
 }
@@ -1991,7 +1991,7 @@ pub fn meta_str_to_type(s: &str) -> Type {
         "float32" => AstType::Primitive(PrimitiveType::Float32),
         "float64" => AstType::Primitive(PrimitiveType::Float64),
         "bool"    => AstType::Primitive(PrimitiveType::Bool),
-        "str"     => AstType::Primitive(PrimitiveType::Str),
+        "str" | "String" => AstType::Primitive(PrimitiveType::Str),
         "void"    => AstType::Primitive(PrimitiveType::Void),
         other     => AstType::Named { name: Spanned::dummy(other.to_string()), generic_args: vec![] },
     }
@@ -2546,7 +2546,7 @@ fn type_name(ty: &Type) -> &'static str {
         Type::Primitive(PrimitiveType::Float32) => "float32",
         Type::Primitive(PrimitiveType::Float64) => "float64",
         Type::Primitive(PrimitiveType::Bool) => "bool",
-        Type::Primitive(PrimitiveType::Str) => "str",
+        Type::Primitive(PrimitiveType::Str) => "String",
         Type::Primitive(PrimitiveType::CStr) => "cstr",
         Type::Primitive(PrimitiveType::StringType) => "String",
         Type::Primitive(PrimitiveType::Void) => "void",
@@ -2593,7 +2593,7 @@ pub fn type_to_canonical_name(ty: &Type) -> String {
             PrimitiveType::Float32 => "float32",
             PrimitiveType::Float64 => "float64",
             PrimitiveType::Bool => "bool",
-            PrimitiveType::Str => "str",
+            PrimitiveType::Str => "String",
             PrimitiveType::CStr => "cstr",
             PrimitiveType::StringType => "String",
             PrimitiveType::Void => "void",
@@ -2913,9 +2913,9 @@ fn eval_delayed_expr(
                                     let pairs = s.fields.iter().map(|f| {
                                         let raw_name = ctx.type_registry.type_id_to_canonical_name(f.type_id);
                                         // Normalize GIR-internal names to Gorget language names:
-                                        // "Str" → "str", "GorgetString" → "String"
+                                        // "Str" → "String", "GorgetString" → "String"
                                         let ty_name = match raw_name.as_str() {
-                                            "Str" => "str".to_string(),
+                                            "Str" => "String".to_string(),
                                             "GorgetString" => "String".to_string(),
                                             other => other.to_string(),
                                         };
@@ -3008,15 +3008,15 @@ fn eval_delayed_expr(
                                                     "double"       => "float".to_string(),
                                                     "float"        => "float32".to_string(),
                                                     "bool"         => "bool".to_string(),
-                                                    "Str"          => "str".to_string(),
+                                                    "Str"          => "String".to_string(),
                                                     "GorgetString" => "String".to_string(),
                                                     other          => other.to_string(),
                                                 }
                                             } else {
                                                 // Primitive or non-generic named type — canonical name as-is,
-                                                // with the same "Str"→"str" normalisation used by fields().
+                                                // with the same "Str"→"String" normalisation used by fields().
                                                 match raw_name.as_str() {
-                                                    "Str"          => "str".to_string(),
+                                                    "Str"          => "String".to_string(),
                                                     "GorgetString" => "String".to_string(),
                                                     other          => other.to_string(),
                                                 }

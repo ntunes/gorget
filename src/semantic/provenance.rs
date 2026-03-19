@@ -5,16 +5,20 @@
 //! (Str/Copy/reference type). The borrow checker (Pass 5) then sees the real
 //! representation and enforces lifetimes for views, move semantics for owned.
 //!
-//! Only these bindings are downgraded:
+//! Downgraded to view:
 //! 1. Bare borrow String parameters (no `&`/`!`)
 //! 2. For-loop bindings over String collections
 //! 3. Match bindings from String scrutinees
-//! 4. Function return types where ALL return expressions are views
+//! 4. VarDecl bindings whose RHS is provably a view (identifier, field access,
+//!    view-returning method, static literal, etc.)
 //!
-//! VarDecl bindings stay Owned (conservative). The borrow checker handles
-//! ownership tracking for them.
+//! Left as owned (no downgrade):
+//! - VarDecl bindings whose RHS allocates (f-string, concat, etc.)
+//! - `!` (Move) parameters
+//! - Function return types (unless ALL returns are provably views)
+//! - Struct/enum fields (structs own their data)
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
@@ -61,8 +65,12 @@ pub fn infer_string_provenance(
         method_resolutions,
         string_id,
         owned_string_id,
+        analyzed_functions: FxHashSet::default(),
     };
 
+    // Phase 1: Process imported modules first so their return types are resolved
+    // before local functions reference them.
+    // Phase 2: Local items (functions, equip methods, tests)
     infer_items(&mut ctx, &module.items);
 }
 
@@ -75,6 +83,8 @@ struct ProvenanceCtx<'a> {
     method_resolutions: &'a FxHashMap<usize, DefId>,
     string_id: TypeId,
     owned_string_id: TypeId,
+    /// Functions whose return types have been analyzed by provenance.
+    analyzed_functions: FxHashSet<DefId>,
 }
 
 impl<'a> ProvenanceCtx<'a> {
@@ -106,25 +116,50 @@ impl<'a> ProvenanceCtx<'a> {
             Expr::Identifier(_) | Expr::SelfExpr => StringProvenance::View,
 
             // Function call → check callee's return type; if view, result is a view
-            Expr::Call { callee, .. } => {
+            Expr::Call { callee, args: _, .. } => {
                 if let Expr::Identifier(name) = &callee.node {
-                    if let Some(def_id) = self.scopes.lookup_from_scope(ScopeId(0), &name) {
+                    if let Some(def_id) = self.scopes.lookup_from_scope(ScopeId(0), name) {
+                        if self.callee_returns_view(def_id) {
+                            return StringProvenance::View;
+                        }
+                    }
+                    // Fallback: resolution map lookup
+                    if let Some(&def_id) = self.resolution_map.get(&callee.span.start) {
                         if self.callee_returns_view(def_id) {
                             return StringProvenance::View;
                         }
                     }
                 }
+                // Fallback: if the type checker resolved this to string_id (view), trust it.
+                if let Some(&tid) = self.expr_types.get(&expr.span) {
+                    if tid == self.string_id {
+                        return StringProvenance::View;
+                    }
+                }
+                // Final fallback: check function type via DefInfo.type_id for
+                // foreign/extern functions not in function_info.
+                if let Some(&def_id) = self.resolution_map.get(&callee.span.start) {
+                    if self.callee_def_returns_view(def_id) {
+                        return StringProvenance::View;
+                    }
+                }
                 StringProvenance::Owned
             }
 
-            // Method call → check VIEW_METHODS list, then callee's return type
+            // Method call → check VIEW_METHODS list, callee's return type, or expr_types.
             Expr::MethodCall { receiver, method, .. } => {
                 if self.is_string_expr(receiver) && VIEW_METHODS.contains(&method.node.as_str()) {
                     return StringProvenance::View;
                 }
-                // Check if the resolved method returns a view (keyed by method name span)
                 if let Some(&def_id) = self.method_resolutions.get(&method.span.start) {
                     if self.callee_returns_view(def_id) {
+                        return StringProvenance::View;
+                    }
+                }
+                // Fallback: if the type checker resolved this expression to string_id (view),
+                // trust it. Covers built-in methods like .unwrap() on Option[str].
+                if let Some(&tid) = self.expr_types.get(&expr.span) {
+                    if tid == self.string_id {
                         return StringProvenance::View;
                     }
                 }
@@ -160,6 +195,9 @@ impl<'a> ProvenanceCtx<'a> {
                 if any_owned { StringProvenance::Owned } else { StringProvenance::View }
             }
 
+            // Indexing/slicing a string → View (returns a view/slice, no allocation)
+            Expr::Index { .. } => StringProvenance::View,
+
             // Everything else → Owned (conservative)
             _ => StringProvenance::Owned,
         }
@@ -175,13 +213,35 @@ impl<'a> ProvenanceCtx<'a> {
         false
     }
 
+    /// Check if a callee's return type is view by examining the function type
+    /// in the scope/type table. This handles extern/foreign functions not in function_info.
+    fn callee_def_returns_view(&self, def_id: DefId) -> bool {
+        let def = self.scopes.get_def(def_id);
+        if let Some(tid) = def.type_id {
+            if let ResolvedType::Function { return_type, .. } = self.types.get(tid) {
+                return *return_type == self.string_id;
+            }
+        }
+        false
+    }
+
     /// Classify a return expression's provenance. Unlike `classify_expr`, plain
     /// string literals (no interpolation) are View here because they point to static
     /// data that outlives any function call (no dangling risk). F-strings allocate
-    /// and are Owned.
+    /// and are Owned. Returning an owned variable transfers ownership → Owned.
     fn classify_return_expr(&self, expr: &Spanned<Expr>) -> StringProvenance {
         match &expr.node {
             Expr::StringLiteral(lit) if !lit.has_interpolation() => StringProvenance::View,
+            // Returning an owned variable transfers ownership → Owned return.
+            Expr::Identifier(name) => {
+                if let Some(def_id) = self.find_binding_def(name, expr.span) {
+                    let def = self.scopes.get_def(def_id);
+                    if def.type_id == Some(self.owned_string_id) {
+                        return StringProvenance::Owned;
+                    }
+                }
+                StringProvenance::View
+            }
             _ => self.classify_expr(expr),
         }
     }
@@ -190,7 +250,6 @@ impl<'a> ProvenanceCtx<'a> {
         if let Some(&tid) = self.expr_types.get(&expr.span) {
             return self.is_any_string(tid);
         }
-        // For identifiers, check the variable's type in the scope table
         if let Expr::Identifier(name) = &expr.node {
             if let Some(def_id) = self.find_binding_def(name, expr.span) {
                 let def = self.scopes.get_def(def_id);
@@ -220,12 +279,23 @@ impl<'a> ProvenanceCtx<'a> {
             .or_else(|| self.resolution_map.get(&span.start).copied())
     }
 
-    /// Infer provenance for a function's parameters and body.
-    fn infer_function(&mut self, func: &FunctionDef) {
-        // Look up function def_id for updating function_info
-        let func_def_id = self.scopes.lookup_from_scope(ScopeId(0), &func.name.node)
+    /// Find the function's def_id, with fallback for equip methods.
+    fn find_func_def_id(&self, func: &FunctionDef) -> Option<DefId> {
+        self.scopes.lookup_from_scope(ScopeId(0), &func.name.node)
             .or_else(|| self.scopes.lookup_def_by_span(&func.name.node, func.name.span))
-            .or_else(|| self.resolution_map.get(&func.name.span.start).copied());
+            .or_else(|| self.resolution_map.get(&func.name.span.start).copied())
+            .or_else(|| {
+                // Fallback for equip methods: search function_info by name/span
+                self.function_info.keys().find(|&&did| {
+                    let def = self.scopes.get_def(did);
+                    def.name == func.name.node && def.span == func.name.span
+                }).copied()
+            })
+    }
+
+    /// Infer provenance for a function's parameters, body, and return type.
+    fn infer_function(&mut self, func: &FunctionDef) {
+        let func_def_id = self.find_func_def_id(func);
 
         // Parameters — bare borrow String params become views
         for (i, param) in func.params.iter().enumerate() {
@@ -240,8 +310,6 @@ impl<'a> ProvenanceCtx<'a> {
                     if let Some(tid) = def.type_id {
                         if self.is_owned_string(tid) {
                             self.downgrade_to_view(def_id);
-                            // Also update param_type_ids in function_info so
-                            // return_borrows_from elision can see the param as ref
                             if let Some(fid) = func_def_id {
                                 if let Some(fi) = self.function_info.get_mut(&fid) {
                                     if i < fi.param_type_ids.len() {
@@ -255,21 +323,17 @@ impl<'a> ProvenanceCtx<'a> {
             }
         }
 
-        // Recurse into body for for-loop/match bindings
+        // Recurse into body for VarDecl/for-loop/match bindings
         match &func.body {
             FunctionBody::Block(block) => self.infer_block(block),
             _ => {}
         }
 
-        // Return type — only downgrade explicitly-owned `String` returns to view
-        // when provably safe. `str` returns are already string_id from the type checker.
-        // Currently disabled: String returns keep owned semantics.
-        // Future: enable for String functions that provably return only views.
-        if false && self.is_string_ast_type(&func.return_type.node) {
+        // Return type — downgrade to view if ALL returns are provably views.
+        if self.is_string_ast_type(&func.return_type.node) {
             if let Some(def_id) = func_def_id {
                 let should_downgrade = match &func.body {
                     FunctionBody::Block(block) => {
-                        // Body present: downgrade if ALL returns are views/static
                         let mut returns = Vec::new();
                         collect_return_exprs(&block.stmts, &mut returns);
                         !returns.is_empty() && returns.iter().all(|e| {
@@ -280,13 +344,13 @@ impl<'a> ProvenanceCtx<'a> {
                         self.classify_return_expr(expr.as_ref()) == StringProvenance::View
                     }
                     FunctionBody::Declaration | FunctionBody::Extern(_) => {
-                        // Bodyless function: if it has bare-borrow String params,
-                        // the return likely borrows from them → downgrade to view.
-                        // This is conservative in the safety direction.
-                        func.params.iter().any(|p| {
-                            self.is_string_ast_type(&p.node.type_.node)
-                                && p.node.ownership == Ownership::Borrow
-                        })
+                        // No body to analyze. View methods (trim, char_at, etc.) and
+                        // functions with bare-borrow string params stay as view.
+                        VIEW_METHODS.contains(&func.name.node.as_str())
+                            || func.params.iter().any(|p| {
+                                self.is_string_ast_type(&p.node.type_.node)
+                                    && p.node.ownership == Ownership::Borrow
+                            })
                     }
                 };
 
@@ -299,6 +363,8 @@ impl<'a> ProvenanceCtx<'a> {
                         }
                     }
                 }
+                // Mark this function as analyzed so callee_returns_view trusts its type.
+                self.analyzed_functions.insert(def_id);
             }
         }
     }
@@ -399,6 +465,26 @@ impl<'a> ProvenanceCtx<'a> {
             }
             Stmt::With { body, .. } | Stmt::NamedScope { body, .. } | Stmt::Unsafe { body, .. } => {
                 for s in &body.stmts { self.check_assignments(&s.node, vars); }
+            }
+            Stmt::MetaFor { body, .. } => {
+                for s in &body.stmts { self.check_assignments(&s.node, vars); }
+            }
+            Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
+                for s in &then_body.stmts { self.check_assignments(&s.node, vars); }
+                for (_, branch) in elif_branches {
+                    for s in &branch.stmts { self.check_assignments(&s.node, vars); }
+                }
+                if let Some(else_br) = else_body {
+                    for s in &else_br.stmts { self.check_assignments(&s.node, vars); }
+                }
+            }
+            Stmt::MetaMatch { arms, else_arm, .. } => {
+                for (_, body) in arms {
+                    for s in &body.stmts { self.check_assignments(&s.node, vars); }
+                }
+                if let Some(else_br) = else_arm {
+                    for s in &else_br.stmts { self.check_assignments(&s.node, vars); }
+                }
             }
             _ => {}
         }
@@ -528,11 +614,19 @@ fn collect_return_exprs<'a>(stmts: &'a [Spanned<Stmt>], out: &mut Vec<&'a Spanne
     }
 }
 
-/// Walk all items in the module, recursing into Module wrappers.
+/// Walk all items in the module. Process imported modules first so their
+/// return types are resolved before local functions reference them.
 fn infer_items(ctx: &mut ProvenanceCtx, items: &[Spanned<Item>]) {
+    // Pass 1: imported modules (Item::Module wrappers from merge_modules)
+    for item in items {
+        if let Item::Module { items: inner, .. } = &item.node {
+            infer_items(ctx, inner);
+        }
+    }
+    // Pass 2: local items
     for item in items {
         match &item.node {
-            Item::Module { items: inner, .. } => infer_items(ctx, inner),
+            Item::Module { .. } => {} // already processed
             Item::Function(f) => ctx.infer_function(f),
             Item::Equip(equip) => {
                 for method in &equip.items {

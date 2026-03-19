@@ -8514,10 +8514,10 @@ fn meta_type_func() {
 #[test]
 fn meta_sizeof() {
     // sizeof/alignof/typename built-in meta functions (M8)
-    // Sizes: int=8, bool=1, str=16, cstr=8, int8=1, int16=2, int32=4, float32=4
+    // Sizes: int=8, bool=1, str=32 (unified), cstr=8, int8=1, int16=2, int32=4, float32=4
     // Alignments: int=8, bool=1, str=8
-    // typename: "int", "bool", "Vector[int]", "str"
-    run_gg("meta_sizeof.gg", "8\n1\n16\n8\n1\n2\n4\n4\n8\n1\n8\nint\nbool\nVector[int]\nstr");
+    // typename: "int", "bool", "Vector[int]", "String"
+    run_gg("meta_sizeof.gg", "8\n1\n32\n8\n1\n2\n4\n4\n8\n1\n8\nint\nbool\nVector[int]\nString");
 }
 
 #[test]
@@ -10563,7 +10563,7 @@ other
 is int
 8 bytes
 is str
-16 bytes
+32 bytes
 other type",
     );
 }
@@ -10652,7 +10652,7 @@ fn meta_fields() {
         "\
 x:float
 y:float
-name:str
+name:String
 health:int
 alive:bool
 2

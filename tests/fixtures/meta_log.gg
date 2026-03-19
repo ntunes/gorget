@@ -9,7 +9,7 @@ str describe[T]():
     meta log "describe called for type:", typename(T)
     meta if typename(T) == "int":
         return "integer"
-    elif typename(T) == "str":
+    elif typename(T) == "String":
         return "string"
     elif typename(T) == "bool":
         return "boolean"

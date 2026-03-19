@@ -1072,6 +1072,10 @@ pub(super) fn lower_method_call(
     // Determine the receiver type and mangle the method name
     let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
 
+    // After String/str unification, owned strings (GorgetString) use the same
+    // methods as view strings (Str). Normalize type name for method mangling.
+    let type_name = type_name.map(|n| if n == "GorgetString" { "Str".to_string() } else { n });
+
     if let Some(type_name) = type_name {
         // Box[T].get() → call Box__T__get(b) passing value directly (not borrow)
         if type_name.starts_with("Box__") && method_name == "get" {

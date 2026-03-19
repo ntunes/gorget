@@ -21,7 +21,7 @@
 
 ## Medium
 
-- **Unified String type: parser change (`String` → `Str`)** — Attempted upgrade direction (String parses as PrimitiveType::Str, provenance upgrades to owned). Hit fundamental aliasing issue: owned strings stored in collections create aliases that dangle when the local is freed. Reverted to downgrade direction. Next approach: try view-default with escape analysis. [added: 2026-03-18, investigated: 2026-03-19]
+- **Unified String type: parser change (`String` → `Str`)** — Attempted upgrade direction (String parses as PrimitiveType::Str, provenance upgrades to owned). Hit fundamental aliasing issue: owned strings stored in collections create aliases that dangle when the local is freed. Reverted to downgrade direction. Next approach: try view-default with escape analysis (track variables stored in collections/assigned to other variables) or defer to when borrow checker can enforce ownership boundaries. [added: 2026-03-18, investigated: 2026-03-19]
 
 - **Unified String type: fixture migration (`str` → `String`)** — 352+ fixture files use `str` type. Migration to `String` is cosmetic but needed before removing `str` keyword. [added: 2026-03-18]
 

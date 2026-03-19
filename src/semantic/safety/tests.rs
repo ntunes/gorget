@@ -1042,10 +1042,13 @@ void main():
 
     #[test]
     fn temporary_borrow_str_from_string_call() {
-        // str v = make_string() where make_string returns String → TemporaryBorrow
+        // str v = make_string() where make_string returns String
+        // Provenance downgrades make_string's return to view because ALL return
+        // paths are static literals. So str v = make_string() is view-to-view, no error.
+        // Use f-string to force owned return.
         let source = "\
 String make_string():
-    return \"hello\"
+    return f\"{'hello'}\"
 
 void main():
     str v = make_string()

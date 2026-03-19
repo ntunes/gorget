@@ -1169,8 +1169,9 @@ static inline GorgetString gorget_string_adopt(char* s) {
 }
 
 static inline void gorget_string_free(GorgetString* s) {
+    if (s->cap == 0) return;  // view — not owned, nothing to free or zero
     __gorget_string_free_count++;
-    if (s->cap > 0) s->alloc->dealloc(s->alloc->ctx, (void*)s->data, s->cap);
+    s->alloc->dealloc(s->alloc->ctx, (void*)s->data, s->cap);
     s->data = NULL;
     s->len = 0;
     s->cap = 0;

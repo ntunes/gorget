@@ -16,7 +16,7 @@ String to_debug[T](T val):
         meta if ftype == "int":
             int v = field_value(val, fname)
             out = out + f"{fname}={v}"
-        elif ftype == "str":
+        elif ftype == "String":
             str v = field_value(val, fname)
             out = out + f"{fname}={v}"
         elif ftype == "bool":

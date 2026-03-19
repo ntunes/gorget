@@ -35,7 +35,10 @@ impl Parser {
                     Keyword::Float32 => Some(PrimitiveType::Float32),
                     Keyword::Float64 => Some(PrimitiveType::Float64),
                     Keyword::Bool => Some(PrimitiveType::Bool),
-                    Keyword::Str => Some(PrimitiveType::Str),
+                    Keyword::Str => {
+                        // Deprecated: use `String` instead of `str`
+                        Some(PrimitiveType::Str)
+                    },
                     Keyword::CStr => Some(PrimitiveType::CStr),
                     Keyword::StringType => Some(PrimitiveType::StringType),
                     Keyword::Void => Some(PrimitiveType::Void),
