@@ -212,22 +212,27 @@ pub(super) fn lower_field_assign(
                             target_place.projections.push(Projection::Field(field_idx));
                             emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
                             maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
+                            maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
                             builder.assign(target_place, rhs);
                             return;
                         }
-                        if let Some(type_def) = ctx.type_registry.get_type_def(&inner_type_name) {
-                            if let TypeDefKind::Struct(ref s) = type_def.kind {
-                                for (i, f) in s.fields.iter().enumerate() {
-                                    if f.name == field_name {
-                                        let mut target_place = deref_place;
-                                        target_place.projections.push(Projection::Field(i as u32));
-                                        emit_field_drop_if_needed(ctx, builder, &target_place, f.type_id);
-                                        maybe_unregister_str_view_temp(ctx, builder, &rhs, f.type_id);
-                                        builder.assign(target_place, rhs);
-                                        return;
-                                    }
+                        let inner_field: Option<(u32, TypeId)> = ctx.type_registry.get_type_def(&inner_type_name)
+                            .and_then(|td| {
+                                if let TypeDefKind::Struct(ref s) = td.kind {
+                                    s.fields.iter().enumerate().find(|(_, f)| f.name == field_name)
+                                        .map(|(i, f)| (i as u32, f.type_id))
+                                } else {
+                                    None
                                 }
-                            }
+                            });
+                        if let Some((field_idx, field_type)) = inner_field {
+                            let mut target_place = deref_place;
+                            target_place.projections.push(Projection::Field(field_idx));
+                            emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
+                            maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
+                            maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
+                            builder.assign(target_place, rhs);
+                            return;
                         }
                     }
                 }
@@ -251,27 +256,53 @@ pub(super) fn lower_field_assign(
                     // Drop old field value before reassignment if it's droppable
                     emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
                     maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
+                    maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
                     builder.assign(target_place, rhs);
                     return;
                 }
                 // Fallback: look up from TypeDef
-                if let Some(type_def) = ctx.type_registry.get_type_def(&type_name) {
-                    if let TypeDefKind::Struct(ref s) = type_def.kind {
-                        for (i, f) in s.fields.iter().enumerate() {
-                            if f.name == field_name {
-                                let mut target_place = base_place;
-                                target_place.projections.push(Projection::Field(i as u32));
-                                // Drop old field value before reassignment if it's droppable
-                                emit_field_drop_if_needed(ctx, builder, &target_place, f.type_id);
-                                maybe_unregister_str_view_temp(ctx, builder, &rhs, f.type_id);
-                                builder.assign(target_place, rhs);
-                                return;
-                            }
+                // Look up field index and type from TypeDef (separate borrow scope)
+                let field_match: Option<(u32, TypeId)> = ctx.type_registry.get_type_def(&type_name)
+                    .and_then(|td| {
+                        if let TypeDefKind::Struct(ref s) = td.kind {
+                            s.fields.iter().enumerate().find(|(_, f)| f.name == field_name)
+                                .map(|(i, f)| (i as u32, f.type_id))
+                        } else {
+                            None
                         }
-                    }
+                    });
+                if let Some((field_idx, field_type)) = field_match {
+                    let mut target_place = base_place;
+                    target_place.projections.push(Projection::Field(field_idx));
+                    emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
+                    maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
+                    maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
+                    builder.assign(target_place, rhs);
+                    return;
                 }
             }
         }
+    }
+}
+
+/// If the RHS is a bare GorgetString local being assigned to a GorgetString field,
+/// unregister it from drop tracking to prevent double-free. The field now owns the
+/// data; the temp should not be freed when it goes out of scope.
+fn maybe_unregister_owned_string_temp(
+    ctx: &mut LoweringContext,
+    builder: &FunctionBuilder,
+    rhs: &Operand,
+    target_type: TypeId,
+) {
+    if target_type != ctx.type_mapper.owned_string_type {
+        return;
+    }
+    let place = match rhs {
+        Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => place,
+        _ => return,
+    };
+    if builder.locals[place.local.0 as usize].type_id == ctx.type_mapper.owned_string_type {
+        ctx.drops.unregister(place.local);
     }
 }
 

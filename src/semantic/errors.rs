@@ -428,12 +428,6 @@ pub enum SemanticErrorKind {
     /// Wrong number of fields in struct literal.
     WrongFieldCount { type_: String, expected: usize, found: usize },
 
-    /// Returning a str view of an owned string (f-string) that will be freed.
-    OwnedStringReturn { name: String },
-
-    /// Binding a str variable to an f-string (owned String) that will leak.
-    OwnedStringBind { name: String },
-
     /// Returning a closure that captures a local variable (use-after-free).
     ClosureEscapesScope { closure_name: String, captured_name: String },
 }
@@ -753,12 +747,6 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::WrongFieldCount { type_, expected, found } => {
                 write!(f, "`{type_}` has {expected} fields but {found} were supplied")
-            }
-            SemanticErrorKind::OwnedStringReturn { name } => {
-                write!(f, "cannot return `{name}`: f-string creates an owned String that will be dropped — use `String` return type instead")
-            }
-            SemanticErrorKind::OwnedStringBind { name } => {
-                write!(f, "cannot bind `str` variable `{name}` to owned string: value owns heap-allocated data — use `String` type instead")
             }
             SemanticErrorKind::ClosureEscapesScope { closure_name, captured_name } => {
                 write!(f, "cannot return closure `{closure_name}`: captures local variable `{captured_name}` which will be dropped")

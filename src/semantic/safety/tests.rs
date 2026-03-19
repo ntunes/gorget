@@ -386,6 +386,9 @@ str f(str s) = s
 
     #[test]
     fn return_str_from_local_string() {
+        // With str→String unification, `String s = "hi"` where "hi" is a view
+        // makes s owned via provenance. Returning an owned string transfers
+        // ownership safely — no DanglingReturn.
         let source = "\
 str f():
     String s = \"hi\"
@@ -393,9 +396,8 @@ str f():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { name, local_name, .. }
-                if name == "s" && local_name == "s")),
-            "expected DanglingReturn for local String, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "unexpected DanglingReturn — owned string return transfers ownership safely: {:?}", errors
         );
     }
 
@@ -406,7 +408,7 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hi\"
+    String s = \"hi\" + \"\"
     str v = s
     consume(!s)
     print(v)
@@ -460,7 +462,7 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hi\"
+    String s = \"hi\" + \"\"
     str v = id(s)
     consume(!s)
     print(v)
@@ -487,7 +489,8 @@ str first(live str a, str b) = a
 
     #[test]
     fn return_str_from_expression_body_local() {
-        // Expression-body function returning a local String → dangling
+        // With str→String unification, returning a local owned string transfers
+        // ownership safely — no DanglingReturn.
         let source = "\
 str bad():
     String s = \"hello\"
@@ -495,8 +498,8 @@ str bad():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
-            "expected DanglingReturn for expression-body returning local: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "unexpected DanglingReturn — owned string return transfers ownership safely: {:?}", errors
         );
     }
 
@@ -559,7 +562,8 @@ void main():
 
     #[test]
     fn struct_outlives_source() {
-        // Struct borrows from moved local → UseAfterSourceMoved
+        // After string unification, struct with str field takes ownership of the string.
+        // View(s) implicitly moves s, then consume(!s) is a double move.
         let source = "\
 struct View:
     str name
@@ -568,16 +572,16 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     View v = View(s)
     consume(!s)
     print(v.name)
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "v" && source_name == "s")),
-            "expected UseAfterSourceMoved for struct outliving its source, got: {:?}", errors
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { name, .. }
+                if name == "s")),
+            "expected DoubleMove for s (moved into struct, then consume), got: {:?}", errors
         );
     }
 
@@ -628,7 +632,8 @@ void main():
 
     #[test]
     fn struct_transitive_borrow() {
-        // Struct containing another struct with a ref field — transitive
+        // After string unification, Inner(s) moves s into the struct.
+        // consume(!s) is a double move.
         let source = "\
 struct Inner:
     str name
@@ -640,7 +645,7 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     Inner i = Inner(s)
     Outer o = Outer(i)
     consume(!s)
@@ -648,14 +653,16 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
-            "expected UseAfterSourceMoved for transitive struct borrow, got: {:?}", errors
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { name, .. }
+                if name == "s")),
+            "expected DoubleMove for s (moved into struct, then consume), got: {:?}", errors
         );
     }
 
     #[test]
     fn struct_mixed_fields() {
-        // Struct with both ref and non-ref fields — only ref field tracked
+        // After string unification, Tagged(s, 42) moves s into the struct.
+        // consume(!s) is a double move.
         let source = "\
 struct Tagged:
     str label
@@ -665,16 +672,16 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     Tagged t = Tagged(s, 42)
     consume(!s)
     print(t.label)
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "t" && source_name == "s")),
-            "expected UseAfterSourceMoved for struct with mixed fields, got: {:?}", errors
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { name, .. }
+                if name == "s")),
+            "expected DoubleMove for s (moved into struct, then consume), got: {:?}", errors
         );
     }
 
@@ -728,8 +735,8 @@ str pick(live(a) str x, live(b) str y) where a outlives b:
     return x
 
 void main():
-    String s1 = \"hello\"
-    String s2 = \"world\"
+    String s1 = \"hello\" + \"\"
+    String s2 = \"world\" + \"\"
     str r = pick(s1, s2)
     String moved = !s1
     print(s2)
@@ -773,7 +780,7 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str v = s
     if true:
         consume(!s)
@@ -797,7 +804,7 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str v = s
     if true:
         consume(!s)
@@ -845,7 +852,7 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str v = s
     auto f = (): print(v)
     consume(!s)
@@ -864,7 +871,7 @@ void main():
         // Returning a closure that captures a local reference → DanglingReturn
         let source = "\
 Callable[void()] bad():
-    String local = \"hello\"
+    String local = \"hello\" + \"\"
     str v = local
     return (): print(v)
 
@@ -1042,10 +1049,12 @@ void main():
 
     #[test]
     fn temporary_borrow_str_from_string_call() {
-        // str v = make_string() where make_string returns String → TemporaryBorrow
+        // With str→String unification, `str v = make_string()` where make_string
+        // returns owned → `v` becomes owned → no TemporaryBorrow.
         let source = "\
 String make_string():
-    return \"hello\"
+    str name = \"world\"
+    return f\"hello {name}\"
 
 void main():
     str v = make_string()
@@ -1053,9 +1062,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::TemporaryBorrow { name, callee, .. }
-                if name == "v" && callee == "make_string")),
-            "expected TemporaryBorrow for str from String call, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::TemporaryBorrow { .. })),
+            "unexpected TemporaryBorrow — str v receives owned value safely: {:?}", errors
         );
     }
 
@@ -1102,7 +1110,7 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str v = s
     consume(!s)
     int x = 1
@@ -1148,7 +1156,7 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str v = s
     int x = 1
     match x:
@@ -1193,7 +1201,10 @@ void main():
 
     #[test]
     fn method_origin_use_after_source_moved() {
-        // Take str from method, move receiver, use str → UseAfterSourceMoved
+        // After str→String unification + struct field rewrite, string struct fields
+        // are Str (Copy). Method calls returning strings are classified as owned by
+        // provenance. So `str v = h.get_name()` no longer creates a borrow — `v`
+        // is either owned (provenance) or a Copy of a Copy field. No UseAfterSourceMoved.
         let source = "\
 struct Holder:
     String name
@@ -1213,15 +1224,16 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "v" && source_name == "h")),
-            "expected UseAfterSourceMoved for v after h moved, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — with String unification, method-call string \
+             returns are owned and struct string fields are Copy views: {:?}", errors
         );
     }
 
     #[test]
     fn method_temporary_borrow() {
-        // str v = b.build() where build() returns String → TemporaryBorrow
+        // With str→String unification, `str v = b.build()` where build() returns
+        // owned String → `v` becomes owned → no TemporaryBorrow.
         let source = "\
 struct Builder:
     String data
@@ -1237,9 +1249,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::TemporaryBorrow { name, callee, .. }
-                if name == "v" && callee == "b.build")),
-            "expected TemporaryBorrow for method returning String, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::TemporaryBorrow { .. })),
+            "unexpected TemporaryBorrow — str v receives owned value safely: {:?}", errors
         );
     }
 
@@ -1301,7 +1312,7 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str v = match 1:
         case 1: s
         case 2: s
@@ -1327,7 +1338,7 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str v = get_view(s)
     consume(!s)
     print(v)
@@ -1353,7 +1364,7 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str v = s
     auto f = make_printer(v)
     consume(!s)
@@ -1395,7 +1406,7 @@ void consume(String !s):
     pass
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str v = s
     auto f = (): print(\"\")
     f = (): print(v)
@@ -1421,7 +1432,7 @@ Callable[void()] make_printer(str v):
     return (): print(v)
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str v = s
     auto c = make_printer(v)
     int x = 1
@@ -1445,9 +1456,9 @@ void main():
         // Reassigning a non-Copy owner invalidates borrows from the old value
         let source = "\
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str v = s
-    s = \"world\"
+    s = \"world\" + \"\"
     print(v)
 ";
         let errors = check(source);
@@ -1518,10 +1529,10 @@ str identity(live str x):
     return x
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str v = s
     str w = identity(v)
-    s = \"world\"
+    s = \"world\" + \"\"
     print(w)
 ";
         let errors = check(source);
@@ -1541,7 +1552,7 @@ struct Wrapper:
     String value
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     Wrapper w = Wrapper(s)
     print(s)
 ";
@@ -1585,7 +1596,7 @@ struct Pair:
     String b
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     Pair p = Pair(s, s)
 ";
         let errors = check(source);
@@ -1603,7 +1614,7 @@ enum Container:
     Empty
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     Container c = Container.Holding(s)
     print(s)
 ";
@@ -1645,7 +1656,7 @@ enum Wrapper:
     Value(String)
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     for i in 0..3:
         auto w = Wrapper.Value(s)
 ";
@@ -1685,7 +1696,7 @@ struct Container:
     String value
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     for i in 0..3:
         auto b = Container(s)
 ";
@@ -1754,7 +1765,7 @@ str pick(str a, str b):
     return result
 
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     str r = pick(s, \"world\")
     String s2 = !s
     print(r)
@@ -4034,7 +4045,7 @@ void main():
     fn non_copy_type_no_const_warn() {
         let source = "\
 void main():
-    String s = \"hello\"
+    String s = \"hello\" + \"\"
     print(s)
 ";
         let warnings = check_warnings_with_const(source);

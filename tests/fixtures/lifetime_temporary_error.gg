@@ -1,7 +1,12 @@
-# Lifetime error: binding str to temporary from function returning String
-String make_string():
-    return "hello"
+# Lifetime error: str view from owned String, source moved
+# (After str/String unification, str takes ownership of return value;
+#  the original TemporaryBorrow error is subsumed by ownership transfer.
+#  This test now verifies use-after-move on a view derived from the owned result.)
+void consume(String !s):
+    pass
 
 void main():
-    str v = make_string()
+    String s = "hello" + ""
+    str v = s.as_str()
+    consume(!s)
     print(v)

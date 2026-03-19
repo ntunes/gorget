@@ -769,7 +769,7 @@ fn resolve_expr_as_type(
             "float32"=> Some(PrimitiveType::Float32),
             "float64"=> Some(PrimitiveType::Float64),
             "bool"   => Some(PrimitiveType::Bool),
-            "str"    => Some(PrimitiveType::Str),
+            "str"    => Some(PrimitiveType::StringType),
             "void"   => Some(PrimitiveType::Void),
             _ => None,
         };
@@ -1991,7 +1991,7 @@ pub fn meta_str_to_type(s: &str) -> Type {
         "float32" => AstType::Primitive(PrimitiveType::Float32),
         "float64" => AstType::Primitive(PrimitiveType::Float64),
         "bool"    => AstType::Primitive(PrimitiveType::Bool),
-        "str"     => AstType::Primitive(PrimitiveType::Str),
+        "str"     => AstType::Primitive(PrimitiveType::StringType),
         "String"  => AstType::Primitive(PrimitiveType::StringType),
         "void"    => AstType::Primitive(PrimitiveType::Void),
         other     => AstType::Named { name: Spanned::dummy(other.to_string()), generic_args: vec![] },

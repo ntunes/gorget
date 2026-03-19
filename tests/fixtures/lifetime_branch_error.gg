@@ -3,8 +3,8 @@ void consume(String !s):
     pass
 
 void main():
-    String s = "hello"
-    str v = s
+    String s = "hello" + ""
+    str v = s.as_str()
     if true:
         consume(!s)
     else:

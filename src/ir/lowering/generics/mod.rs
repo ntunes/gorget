@@ -1028,7 +1028,10 @@ fn monomorphize_struct(
 
     let mut fields: Vec<StructField> = Vec::new();
     for f in &template.fields {
-        let field_type = substitute_and_map_mut(mapper, registry, &f.node.type_.node, &subs);
+        let mut field_type = substitute_and_map_mut(mapper, registry, &f.node.type_.node, &subs);
+        if field_type == mapper.owned_string_type {
+            field_type = mapper.str_type;
+        }
         fields.push(StructField {
             name: f.node.name.node.clone(),
             type_id: field_type,

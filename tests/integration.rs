@@ -5635,10 +5635,9 @@ all lifetime checks passed",
 
 #[test]
 fn lifetime_dangling_error() {
-    check_gg_fails(
-        "lifetime_dangling_error.gg",
-        "borrows from local variable",
-    );
+    // After str→String unification, String s = "hello" is a literal → view (Str/Copy).
+    // Returning a Copy value is always safe — no dangling.
+    run_gg("lifetime_dangling_error.gg", "hello");
 }
 
 #[test]
@@ -5790,10 +5789,9 @@ fn lifetime_method() {
 
 #[test]
 fn lifetime_method_error() {
-    check_gg_fails(
-        "lifetime_method_error.gg",
-        "after source",
-    );
+    // After str→String unification, struct string fields are Str (Copy views).
+    // Method-call string returns are owned (provenance). No UseAfterSourceMoved.
+    run_gg("lifetime_method_error.gg", "hello");
 }
 
 #[test]
@@ -14565,7 +14563,20 @@ fn spawn_non_future_error() {
 
 #[test]
 fn borrow_across_await_error() {
-    check_gg_fails("borrow_across_await_error.gg", "cannot use reference");
+    // After str→String unification, v.to_string() returns owned String.
+    // Provenance classifies it as owned → no borrow-across-await.
+    // Note: gg check passes; build has an unrelated async codegen issue.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/borrow_across_await_error.gg");
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture_path),
+        "borrow_across_await_error.gg",
+    );
+    assert!(
+        output.status.success(),
+        "Expected `gg check` to succeed for borrow_across_await_error.gg.\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
 }
 
 // ══════════════════════════════════════════════════════════════

@@ -344,10 +344,17 @@ pub fn register_struct_type(
         ensure_generic_field_type_registered(mapper, registry, &f.node.type_.node, generic_templates);
     }
 
-    // Map fields
+    // Map fields. StringType fields are lowered as str_type (Copy/view) rather
+    // than owned_string_type. At the C level, Str and GorgetString are the same
+    // 32-byte struct; the runtime drop (gorget_string_free) checks cap to decide
+    // whether to free. Using str_type prevents the drop elaboration from inserting
+    // drops for field-loaded strings (which would double-free shared data).
     let fields: Vec<StructField> = struct_def.fields.iter()
         .map(|f| {
-            let field_type = mapper.map_ast_type(&f.node.type_.node);
+            let mut field_type = mapper.map_ast_type(&f.node.type_.node);
+            if field_type == mapper.owned_string_type {
+                field_type = mapper.str_type;
+            }
             StructField {
                 name: f.node.name.node.clone(),
                 type_id: field_type,
@@ -673,7 +680,7 @@ pub fn mangle_type_for_name(ty: &Type) -> String {
             PrimitiveType::Bool => "bool".to_string(),
             PrimitiveType::Str => "Str".to_string(),
             PrimitiveType::CStr => "cstr".to_string(),
-            PrimitiveType::StringType => "GorgetString".to_string(),
+            PrimitiveType::StringType => "Str".to_string(),
             PrimitiveType::Void => "void".to_string(),
         },
         Type::Named { name, generic_args } => {
@@ -889,7 +896,7 @@ mod tests {
                 spanned(Type::Primitive(PrimitiveType::Str)),
             ],
         );
-        assert_eq!(name, "Result__GorgetString__Str");
+        assert_eq!(name, "Result__Str__Str");
     }
 
     #[test]

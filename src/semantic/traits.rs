@@ -5,7 +5,7 @@ use crate::span::Span;
 
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, TypeId};
-use super::resolve::{ResolutionMap, validate_default_param_ordering, validate_str_param_modes};
+use super::resolve::{ResolutionMap, validate_default_param_ordering};
 use super::scope::{DefKind, ScopeTable};
 use super::types::{self, TypeTable};
 
@@ -261,12 +261,12 @@ fn register_builtin_traits(
     registry: &mut TraitRegistry,
 ) {
     let builtin_traits: Vec<(&str, FxHashMap<String, FunctionSig>)> = vec![
-        // Displayable: str display(self)
+        // Displayable: String display(self)
         ("Displayable", {
             let mut m = FxHashMap::default();
             m.insert("display".into(), FunctionSig {
                 params: vec![],
-                return_type: types.string_id,
+                return_type: types.owned_string_id,
                 has_self: true,
                 self_ownership: None,
             });
@@ -576,7 +576,6 @@ fn collect_trait(
 
     for item in &trait_def.items {
         if let TraitItem::Method(method) = &item.node {
-            validate_str_param_modes(&method.params, errors);
             validate_default_param_ordering(&method.params, errors);
             let sig = build_function_sig(method, scopes, types);
             let has_body = !matches!(method.body, FunctionBody::Declaration | FunctionBody::Extern(_));

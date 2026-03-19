@@ -519,7 +519,7 @@ fn field_write_lines(expr: &str, type_name: &str, indent: &str) -> String {
         }
         Some(CollectionKind::Dict(ref key_ty, ref val_ty))
         | Some(CollectionKind::HashMap(ref key_ty, ref val_ty))
-            if key_ty == "str" =>
+            if key_ty == "str" || key_ty == "String" =>
         {
             let keys_var = next_var();
             let idx = next_var();
@@ -584,7 +584,7 @@ fn field_read_lines(name: &str, type_name: &str, indent: &str) -> String {
         }
         Some(CollectionKind::Dict(ref key_ty, ref val_ty))
         | Some(CollectionKind::HashMap(ref key_ty, ref val_ty))
-            if key_ty == "str" =>
+            if key_ty == "str" || key_ty == "String" =>
         {
             let keys_var = next_var();
             let idx = next_var();

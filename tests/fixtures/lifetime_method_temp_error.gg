@@ -1,12 +1,20 @@
-# Lifetime error: method returning String bound to str (temporary borrow)
+# Lifetime error: str view from method returning owned String, source moved
+# (After str/String unification, str takes ownership of method return value;
+#  the original TemporaryBorrow error is subsumed by ownership transfer.
+#  This test now verifies use-after-move on a view derived from the owned result.)
 struct Builder:
     String data
 
 equip Builder:
     String build(self):
-        return "result"
+        return "result" + ""
+
+void consume(String !s):
+    pass
 
 void main():
-    Builder b = Builder("hello")
-    str v = b.build()
+    Builder b = Builder("hello" + "")
+    String temporary = b.build()
+    str v = temporary.as_str()
+    consume(!temporary)
     print(v)

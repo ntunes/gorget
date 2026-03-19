@@ -48,6 +48,5 @@ async void main():
         check("body", resp.body_text == "patched:delta")
     else:
         print("FAIL: " + r.unwrap_error())
-        print("FAIL: body")
 
     server.await()

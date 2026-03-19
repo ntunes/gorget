@@ -32,8 +32,7 @@ void test_direct():
     Dict[str, Json] body1_map = Dict[str, Json]()
     body1_map.put("name", Str("Alice"))
     body1_map.put("age", Int(30))
-    str body1 = json_stringify(Obj(body1_map)).str()
-    HttpRequest req1 = HttpRequest("POST", "/", "", "HTTP/1.1", Dict[str, str](), body1, Dict[str, str]())
+    HttpRequest req1 = HttpRequest("POST", "/", "", "HTTP/1.1", Dict[str, str](), json_stringify(Obj(body1_map)).str(), Dict[str, str]())
     Result[Json, str] r1 = req1.json()
     bool t1 = false
     if r1.is_ok():

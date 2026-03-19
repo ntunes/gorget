@@ -593,17 +593,57 @@ fn lower_return(
                 }
             }
         } else {
-            builder.assign(Place::local(LocalId(0)), operand.clone());
+            let ret_type = builder.locals[0].type_id;
+            // If returning a str_type (Copy/view) value through an owned_string_type
+            // return slot, clone it so the caller gets an independent allocation.
+            // Without this, the caller frees a pointer still owned by the source
+            // (e.g., an enum field loaded via match destructuring).
+            let mut did_clone_return = false;
+            if ret_type == ctx.type_mapper.owned_string_type {
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                    if place.projections.is_empty() {
+                        let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                        if rhs_type == ctx.type_mapper.str_type {
+                            let clone_result = builder.call(
+                                "gorget_string_from_str",
+                                vec![operand.clone()],
+                                ret_type,
+                            );
+                            builder.assign(
+                                Place::local(LocalId(0)),
+                                FunctionBuilder::copy(clone_result),
+                            );
+                            did_clone_return = true;
+                        }
+                    }
+                }
+            }
+            if !did_clone_return {
+                builder.assign(Place::local(LocalId(0)), operand.clone());
+            }
             // If the return local is str-typed and the operand is a GorgetString temp,
             // unregister the temp to prevent use-after-free: the str view in the return
             // local may be accessed after the temp's scope exit frees it.
-            let ret_type = builder.locals[0].type_id;
             if ret_type == ctx.type_mapper.str_type {
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
                         let rhs_type = builder.locals[place.local.0 as usize].type_id;
                         if rhs_type == ctx.type_mapper.owned_string_type {
                             ctx.drops.unregister(place.local);
+                        }
+                    }
+                }
+            }
+            // If the return local is owned_string_type and the operand is also
+            // owned_string_type, the source has been moved into the return slot.
+            // Mark it as moved so drop elaboration doesn't free it (double-free).
+            if ret_type == ctx.type_mapper.owned_string_type {
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                    if place.projections.is_empty() {
+                        let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                        if rhs_type == ctx.type_mapper.owned_string_type {
+                            builder.move_zero(Place::local(place.local));
+                            ctx.drops.mark_moved(place.local);
                         }
                     }
                 }

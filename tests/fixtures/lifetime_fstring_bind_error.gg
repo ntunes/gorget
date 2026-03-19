@@ -1,3 +1,10 @@
+# Lifetime error: f-string bound to str view, source moved
+# (After str/String unification, f-string → owned; .as_str() creates a view)
+void consume(String !s):
+    pass
+
 void main():
-    str s = f"hello {42}"
-    print(s)
+    String s = f"hello {42}"
+    str v = s.as_str()
+    consume(!s)
+    print(v) # cannot bind `str` variable to f-string temporary

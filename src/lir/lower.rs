@@ -241,6 +241,9 @@ impl<'a> LoweringContext<'a> {
         // Compute elem_drop_recipes for types that need compound drops.
         self.compute_all_drop_recipes();
 
+        // Generate recursive drop function metadata for structs with droppable fields.
+        self.populate_recursive_drop_structs();
+
         self.module
     }
 
@@ -5065,6 +5068,8 @@ pub fn lower_module(gir: &ir::Module) -> LirModule {
 }
 
 /// Convert a GIR TypeId to its C type name (for spawn metadata).
+/// Note: returns "Str" for GorgetString so Task type names match the
+/// mangling used by Task[str] user annotations (Task__Str, not Task__GorgetString).
 fn gir_type_to_c(type_id: gir_types::TypeId, registry: &TypeRegistry) -> String {
     use gir_types::*;
     if type_id == BOOL_TYPE { return "bool".into(); }
@@ -5093,6 +5098,10 @@ fn gir_type_to_c(type_id: gir_types::TypeId, registry: &TypeRegistry) -> String 
                     "void*".into()
                 } else if let Some(rt) = opaque_runtime_type_name(name) {
                     rt.into()
+                } else if name == "GorgetString" {
+                    // Normalize to "Str" so Task types match user annotations
+                    // (Task[str] mangles to Task__Str, not Task__GorgetString).
+                    "Str".into()
                 } else {
                     name.clone()
                 }

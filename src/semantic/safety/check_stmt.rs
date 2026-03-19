@@ -21,7 +21,22 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(value);
 
                 // Check: if value is a bare identifier of non-Copy type, needs `!`
-                self.check_value_needs_move(value);
+                // Skip for view-string targets: creating a view from an owned string
+                // is a borrow (not a move). The provenance pass + AST rewrite set
+                // the target type to Str for view bindings.
+                // Destructuring patterns (Tuple) implicitly move the value,
+                // so suppress MoveWithoutOperator for them.
+                let target_is_view_str = matches!(type_.node, Type::Primitive(PrimitiveType::Str));
+                if !target_is_view_str {
+                    let is_destructure = matches!(&pattern.node, Pattern::Tuple(_));
+                    if is_destructure {
+                        self.in_destructuring_bind = true;
+                    }
+                    self.check_value_needs_move(value);
+                    if is_destructure {
+                        self.in_destructuring_bind = false;
+                    }
+                }
 
                 // Mark new bindings as Live
                 self.mark_pattern_live_spanned(pattern);
@@ -152,27 +167,6 @@ impl<'a> BorrowChecker<'a> {
                         if is_ref {
                             let origin = self.compute_expr_origin(value);
                             self.var_origins.insert(def_id, origin.clone());
-
-                            // Check for owned string (f-string, concat, allocating method)
-                            // assigned to str variable. Only fire when the variable type
-                            // is specifically `str`, not for structs that contain str fields.
-                            if matches!(&origin, BorrowOrigin::Owned) {
-                                let var_is_str = self.scopes.get_def(def_id).type_id
-                                    .map_or(false, |tid| matches!(
-                                        self.types.get(tid),
-                                        types::ResolvedType::Primitive(crate::parser::ast::PrimitiveType::Str)
-                                    ));
-                                if var_is_str {
-                                    if let Pattern::Binding(name) = &pattern.node {
-                                        self.error(
-                                            SemanticErrorKind::OwnedStringBind {
-                                                name: name.clone(),
-                                            },
-                                            value.span,
-                                        );
-                                    }
-                                }
-                            }
 
                             // Phase 6: Detect binding a ref type to a temporary
                             // Skip when auto-propagation applies: the Ok value is moved
@@ -354,7 +348,17 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(value);
 
                 // Check: if value is a bare identifier of non-Copy type, needs `!`
-                self.check_value_needs_move(value);
+                // Skip for view-string targets (creating a view from owned is a borrow).
+                let target_is_view_str = if let Expr::Identifier(_) = &target.node {
+                    self.resolution_map.get(&target.span.start)
+                        .and_then(|&did| self.scopes.get_def(did).type_id)
+                        .map_or(false, |tid| tid == self.types.string_id)
+                } else {
+                    false
+                };
+                if !target_is_view_str {
+                    self.check_value_needs_move(value);
+                }
 
                 // Arena escape check: cannot assign arena-scoped value to outer variable
                 if self.arena_depth > 0 {
@@ -637,27 +641,7 @@ impl<'a> BorrowChecker<'a> {
                                     Expr::Identifier(n) => n.clone(),
                                     _ => "<expression>".to_string(),
                                 };
-                                // Only fire OwnedStringReturn when the return type
-                                // is specifically `str` — struct literals with str fields
-                                // also produce Owned origins but the struct owns the data.
-                                let ret_is_str = matches!(
-                                    self.types.get(ret_type_id),
-                                    types::ResolvedType::Primitive(crate::parser::ast::PrimitiveType::Str)
-                                );
-                                if ret_is_str && matches!(&origin, BorrowOrigin::Owned) {
-                                    // Only fire for f-strings and allocating methods — not for
-                                    // concat returns, which leak harmlessly until Phase 2 drop
-                                    // registration is enabled for str-returning functions.
-                                    let is_concat = matches!(&expr.node, Expr::BinaryOp { op, .. } if *op == BinaryOp::Add);
-                                    if !is_concat {
-                                        self.error(
-                                            SemanticErrorKind::OwnedStringReturn {
-                                                name: return_name,
-                                            },
-                                            expr.span,
-                                        );
-                                    }
-                                } else if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
+                                if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
                                     self.error(
                                         SemanticErrorKind::UnresolvedBorrowOrigin {
                                             name: return_name,
@@ -1130,6 +1114,11 @@ impl<'a> BorrowChecker<'a> {
 
     /// Check if a value expression is a bare identifier of a non-Copy type (needs `!`).
     pub(super) fn check_value_needs_move(&mut self, value: &Spanned<Expr>) {
+        // Destructuring binds (Pattern::Tuple) implicitly move the value,
+        // like Rust's `let (x, y) = expr`. No `!` operator required.
+        if self.in_destructuring_bind {
+            return;
+        }
         if let Expr::Identifier(_) = &value.node {
             if let Some(&def_id) = self.resolution_map.get(&value.span.start) {
                 let def = self.scopes.get_def(def_id);
@@ -1138,6 +1127,12 @@ impl<'a> BorrowChecker<'a> {
                 // re-binding them is just copying a pointer, not transferring ownership.
                 if def.kind == DefKind::Variable && !def.is_param {
                     if let Some(type_id) = def.type_id {
+                        // String unification: owned strings (owned_string_id) in VarDecl/Assign
+                        // contexts create views — the target borrows from the source. Skip the
+                        // move check; lifetime tracking handles dangling-pointer safety.
+                        if type_id == self.types.owned_string_id {
+                            return;
+                        }
                         if !is_copy_type(type_id, self.types, self.scopes) {
                             self.error(
                                 SemanticErrorKind::MoveWithoutOperator {
@@ -1314,8 +1309,11 @@ impl<'a> BorrowChecker<'a> {
             if let Some(def_id) = self.find_def_by_name(&param.node.name.node) {
                 self.current_param_def_ids.push((def_id, i));
 
-                // If this param is a reference type, track its origin as Param
-                let is_ref = is_ast_type_ref(&param.node.type_.node, self.scopes, &self.ref_type_structs);
+                // If this param is a reference type, track its origin as Param.
+                // After string unification, view string params keep StringType in AST
+                // but have string_id (Str/view) DEF type_id — treat them as ref types.
+                let is_ref = is_ast_type_ref(&param.node.type_.node, self.scopes, &self.ref_type_structs)
+                    || self.scopes.get_def(def_id).type_id == Some(self.types.string_id);
                 if is_ref {
                     self.var_origins.insert(def_id, BorrowOrigin::Param { param_index: i, def_id });
                 }
@@ -1353,21 +1351,7 @@ impl<'a> BorrowChecker<'a> {
                                 Expr::Identifier(n) => n.clone(),
                                 _ => "<expression>".to_string(),
                             };
-                            let ret_is_str = matches!(
-                                self.types.get(ret_type_id),
-                                types::ResolvedType::Primitive(crate::parser::ast::PrimitiveType::Str)
-                            );
-                            if ret_is_str && matches!(&origin, BorrowOrigin::Owned) {
-                                let is_concat = matches!(&expr.node, Expr::BinaryOp { op, .. } if *op == BinaryOp::Add);
-                                if !is_concat {
-                                    self.error(
-                                        SemanticErrorKind::OwnedStringReturn {
-                                            name: return_name,
-                                        },
-                                        expr.span,
-                                    );
-                                }
-                            } else if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
+                            if origin.contains_unknown() && !matches!(&origin, BorrowOrigin::Local(_)) {
                                 self.error(
                                     SemanticErrorKind::UnresolvedBorrowOrigin {
                                         name: return_name,

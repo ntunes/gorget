@@ -371,6 +371,10 @@ pub(super) struct BorrowChecker<'a> {
     pub(super) current_mut_params: Vec<(DefId, String, Span)>,
     /// Whether to emit CouldBeConst warnings (opt-in via `--warn-const`).
     pub(super) warn_const: bool,
+    /// True when checking the value expression of a destructuring VarDecl
+    /// (Pattern::Tuple). Destructuring implicitly moves the value, so
+    /// `MoveWithoutOperator` is suppressed.
+    pub(super) in_destructuring_bind: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -443,6 +447,7 @@ impl<'a> BorrowChecker<'a> {
             mut_param_mutated: FxHashSet::default(),
             current_mut_params: Vec::new(),
             warn_const: false,
+            in_destructuring_bind: false,
         }
     }
 

@@ -3,7 +3,7 @@
 # destroying the old String that `v` borrows from.
 
 void main():
-    String s = "hello"
-    str v = s
-    s = "world"
+    String s = "hello" + ""
+    str v = s.as_str()
+    s = "world" + ""
     print(v)

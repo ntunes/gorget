@@ -3120,7 +3120,7 @@ impl<'a> TypeChecker<'a> {
             "float32" => Some(PrimitiveType::Float32),
             "float64" => Some(PrimitiveType::Float64),
             "bool" => Some(PrimitiveType::Bool),
-            "str" => Some(PrimitiveType::Str),
+            "str" => Some(PrimitiveType::StringType),
             _ => None,
         };
         let prim = prim?;

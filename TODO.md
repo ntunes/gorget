@@ -21,7 +21,7 @@
 
 ## Medium
 
-- **Unified String type: parser change — both directions attempted and reverted** — (1) Upgrade direction (`String` → `Str`, provenance upgrades to owned): hit aliasing issue where owned strings in collections dangle when local freed. (2) Downgrade direction (`str` → `StringType`, provenance downgrades views): makes structs with `str` fields non-Copy (36+ test failures), breaks function return type analysis. Both reverted. C-level unification complete (Str = GorgetString = 32 bytes). Next: either escape-analysis approach or defer keyword unification until borrow checker can enforce ownership boundaries. [added: 2026-03-18, investigated: 2026-03-19]
+- **Unified String type: all integration tests passing** — Parser change done (`str` → `PrimitiveType::StringType`), provenance pass active (Pass 4.5 downgrades views), AST rewrite active (Pass 4.6 converts downgraded bindings to `Str`). All 844 integration tests pass, 976 unit tests pass, 703 LIR A/B tests pass. Remaining work: fixture migration (`str` → `String` in source), self-host migration, keyword removal. [updated: 2026-03-19]
 
 - **Unified String type: fixture migration (`str` → `String`)** — 352+ fixture files use `str` type. Migration to `String` is cosmetic but needed before removing `str` keyword. [added: 2026-03-18]
 

@@ -1,3 +1,6 @@
+struct Wrapper:
+    String data
+
 void main():
-    String s = "hello"
-    String t = s
+    Wrapper s = Wrapper("hello" + "")
+    Wrapper t = s

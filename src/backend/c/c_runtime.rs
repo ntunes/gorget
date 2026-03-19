@@ -1513,6 +1513,9 @@ static inline int64_t gorget_str_codepoint_count(Str s) {
     return count;
 }
 
+// Forward declaration — used by gorget_str_index, gorget_str_slice, etc.
+static inline Str gorget_str_own_region(const char* data, size_t len);
+
 // Return Str view of ith codepoint (0-based). Supports negative indexing.
 static inline Str gorget_str_index(Str s, int64_t idx) {
     int64_t cp_count = gorget_str_codepoint_count(s);
@@ -1527,10 +1530,10 @@ static inline Str gorget_str_index(Str s, int64_t idx) {
         i++;
     }
     int cplen = gorget_utf8_codepoint_len((unsigned char)s.data[byte_off]);
-    return (Str){ .data = s.data + byte_off, .len = (size_t)cplen, .cap = 0, .alloc = NULL };
+    return gorget_str_own_region(s.data + byte_off, (size_t)cplen);
 }
 
-// Return Str view of codepoint range [start, end). Supports negative indices.
+// Return owned copy of codepoint range [start, end). Supports negative indices.
 static inline Str gorget_str_slice(Str s, int64_t start, int64_t end) {
     int64_t cp_count = gorget_str_codepoint_count(s);
     if (start < 0) start += cp_count;
@@ -1551,24 +1554,34 @@ static inline Str gorget_str_slice(Str s, int64_t start, int64_t end) {
     for (int64_t i = start; i < end; i++) {
         end_byte += (size_t)gorget_utf8_codepoint_len((unsigned char)s.data[end_byte]);
     }
-    return (Str){ .data = s.data + start_byte, .len = end_byte - start_byte, .cap = 0, .alloc = NULL };
+    return gorget_str_own_region(s.data + start_byte, end_byte - start_byte);
 }
 
-// Return a byte-level Str view of s[start..end]. No allocation.
+// Clone a region of memory into an owned Str.
+static inline Str gorget_str_own_region(const char* data, size_t len) {
+    if (len == 0) return gorget_str_empty();
+    GorgetAllocator* a = __gorget_current_alloc;
+    char* buf = (char*)a->alloc(a->ctx, len + 1);
+    memcpy(buf, data, len);
+    buf[len] = '\0';
+    return (Str){ .data = buf, .len = len, .cap = len + 1, .alloc = a };
+}
+
+// Return a byte-level owned copy of s[start..end].
 static inline Str gorget_str_byte_slice(Str s, int64_t start, int64_t end) {
     if (start < 0 || end < 0 || (size_t)start > s.len || (size_t)end > s.len || start > end) {
         fprintf(stderr, "gorget: panic: string byte_slice out of bounds: [%" PRId64 "..%" PRId64 "], byte length %zu\n", start, end, s.len);
         exit(1);
     }
-    return (Str){ .data = s.data + start, .len = (size_t)(end - start), .cap = 0, .alloc = NULL };
+    return gorget_str_own_region(s.data + start, (size_t)(end - start));
 }
 
-// Return the byte at index as a 1-byte Str. Deprecated compat: prefer byte_at() for byte access.
+// Return the byte at index as a 1-byte owned Str. Deprecated compat: prefer byte_at() for byte access.
 static inline Str gorget_str_char_at(Str s, int64_t index) {
     if (index < 0 || (size_t)index >= s.len) {
-        return (Str){ .data = "", .len = 0, .cap = 0, .alloc = NULL };
+        return gorget_str_empty();
     }
-    return (Str){ .data = s.data + index, .len = 1, .cap = 0, .alloc = NULL };
+    return gorget_str_own_region(s.data + index, 1);
 }
 
 // Return the byte at index (byte-level). Bounds-checked against byte length.
@@ -1878,7 +1891,7 @@ static inline Str gorget_str_trim(Str s) {
         if (!gorget_is_unicode_whitespace(cp)) end = pos;
         (void)cp_start;
     }
-    return (Str){ .data = s.data + start, .len = end - start, .cap = 0, .alloc = NULL };
+    return gorget_str_own_region(s.data + start, end - start);
 }
 
 static inline Str gorget_str_lstrip_ws(Str s) {
@@ -1889,7 +1902,7 @@ static inline Str gorget_str_lstrip_ws(Str s) {
         if (!gorget_is_unicode_whitespace(cp)) break;
         start = pos;
     }
-    return (Str){ .data = s.data + start, .len = s.len - start, .cap = 0, .alloc = NULL };
+    return gorget_str_own_region(s.data + start, s.len - start);
 }
 
 static inline Str gorget_str_rstrip_ws(Str s) {
@@ -1901,7 +1914,7 @@ static inline Str gorget_str_rstrip_ws(Str s) {
         if (!gorget_is_unicode_whitespace(cp)) end = pos;
         (void)cp_start;
     }
-    return (Str){ .data = s.data, .len = end, .cap = 0, .alloc = NULL };
+    return gorget_str_own_region(s.data, end);
 }
 
 // Check if a codepoint is in a set of codepoints given as a Str.
@@ -1930,7 +1943,7 @@ static inline Str gorget_str_strip(Str s, Str chars) {
         if (!gorget_cp_in_str(cp, chars)) end = pos;
         (void)cp_start;
     }
-    return (Str){ .data = s.data + start, .len = end - start, .cap = 0, .alloc = NULL };
+    return gorget_str_own_region(s.data + start, end - start);
 }
 
 static inline Str gorget_str_lstrip(Str s, Str chars) {
@@ -1941,7 +1954,7 @@ static inline Str gorget_str_lstrip(Str s, Str chars) {
         if (!gorget_cp_in_str(cp, chars)) break;
         start = pos;
     }
-    return (Str){ .data = s.data + start, .len = s.len - start, .cap = 0, .alloc = NULL };
+    return gorget_str_own_region(s.data + start, s.len - start);
 }
 
 static inline Str gorget_str_rstrip(Str s, Str chars) {
@@ -1953,19 +1966,19 @@ static inline Str gorget_str_rstrip(Str s, Str chars) {
         if (!gorget_cp_in_str(cp, chars)) end = pos;
         (void)cp_start;
     }
-    return (Str){ .data = s.data, .len = end, .cap = 0, .alloc = NULL };
+    return gorget_str_own_region(s.data, end);
 }
 
 static inline Str gorget_str_removeprefix(Str s, Str prefix) {
     if (gorget_str_starts_with(s, prefix))
-        return (Str){ .data = s.data + prefix.len, .len = s.len - prefix.len, .cap = 0, .alloc = NULL };
-    return s;
+        return gorget_str_own_region(s.data + prefix.len, s.len - prefix.len);
+    return gorget_str_own_region(s.data, s.len);
 }
 
 static inline Str gorget_str_removesuffix(Str s, Str suffix) {
     if (gorget_str_ends_with(s, suffix))
-        return (Str){ .data = s.data, .len = s.len - suffix.len, .cap = 0, .alloc = NULL };
-    return s;
+        return gorget_str_own_region(s.data, s.len - suffix.len);
+    return gorget_str_own_region(s.data, s.len);
 }
 
 // Group B: Allocating returns — return String.
@@ -4711,7 +4724,7 @@ static inline GorgetArray gorget_str_chars(Str s) {
     while (pos < s.len) {
         int cplen = gorget_utf8_codepoint_len((unsigned char)s.data[pos]);
         if (pos + (size_t)cplen > s.len) break;
-        Str ch = (Str){ .data = s.data + pos, .len = (size_t)cplen, .cap = 0, .alloc = NULL };
+        Str ch = gorget_str_own_region(s.data + pos, (size_t)cplen);
         gorget_array_push(&arr, &ch);
         pos += (size_t)cplen;
     }
@@ -6414,7 +6427,7 @@ static inline ExecResult gorget_exec_output(const char* cmd) {
 
     int status = pclose(__proc_fp);
     result.exit_code = WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
-    result.output = (Str){ .data = buf, .len = len, .cap = 0, .alloc = NULL };
+    result.output = gorget_string_adopt(buf);
     return result;
 }
 "#;
@@ -7138,7 +7151,7 @@ static int64_t gorget_socket_write_str(GorgetSocket* sock, const char* s) {
 
 // Read until \n, return as String (for text protocols like SSH banner)
 static GorgetString gorget_socket_read_line(GorgetSocket* sock) {
-    if (sock->fd < 0) return (GorgetString){"", 0, 0};
+    if (sock->fd < 0) return (GorgetString){"", 0, 0, NULL};
     size_t cap = 256, len = 0;
     char* buf = (char*)GORGET_ALLOC(cap);
     while (1) {
@@ -7792,7 +7805,7 @@ static int64_t gorget_tls_write_str(GorgetTlsSocket* sock, const char* s) {
 }
 
 static GorgetString gorget_tls_read_line(GorgetTlsSocket* sock) {
-    if (!sock->ssl) return (GorgetString){"", 0, 0};
+    if (!sock->ssl) return (GorgetString){"", 0, 0, NULL};
     size_t cap = 256, len = 0;
     char* buf = (char*)GORGET_ALLOC(cap);
     while (1) {
@@ -11165,11 +11178,8 @@ static Str gorget_metal_device_name(int64_t device_h) {
         id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
         NSString* name = device.name;
         const char* utf8 = [name UTF8String];
-        // Return a Gorget Str; copy the data since NSString may be autoreleased
-        size_t len = strlen(utf8);
-        char* copy = (char*)GORGET_ALLOC(len + 1);
-        memcpy(copy, utf8, len + 1);
-        return (Str){ .data = copy, .len = len, .cap = 0, .alloc = NULL };
+        // Return an owned Gorget Str; copy the data since NSString may be autoreleased
+        return gorget_str_own_region(utf8, strlen(utf8));
     }
 }
 
@@ -11993,10 +12003,7 @@ static Str gorget_metal_command_buffer_error(int64_t cb_h) {
             return (Str){ .data = NULL, .len = 0, .cap = 0, .alloc = NULL };
         }
         const char* utf8 = [[error localizedDescription] UTF8String];
-        size_t len = strlen(utf8);
-        char* copy = (char*)GORGET_ALLOC(len + 1);
-        memcpy(copy, utf8, len + 1);
-        return (Str){ .data = copy, .len = len, .cap = 0, .alloc = NULL };
+        return gorget_str_own_region(utf8, strlen(utf8));
     }
 }
 

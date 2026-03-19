@@ -1588,7 +1588,8 @@ fn map_combinator_types(
                         .and_then(|s| s.fields.get(2))
                         .map(|(_, t)| c_type_named(t, sn));
                     if let Some(err_c) = err_part {
-                        format!("Result__{}__{err_c}", type_name_to_monomorphized(ret_ty))
+                        let err_m = type_name_to_monomorphized(&err_c);
+                        format!("Result__{}__{err_m}", type_name_to_monomorphized(ret_ty))
                     } else {
                         format!("Result__{}", type_name_to_monomorphized(ret_ty))
                     }
@@ -1616,7 +1617,8 @@ fn map_err_combinator_types(
             .and_then(|s| s.fields.get(1))
             .map(|(_, t)| c_type_named(t, sn));
         if let Some(ok_c) = ok_c {
-            let result_prefix = format!("Result__{ok_c}__{}", type_name_to_monomorphized(ret_ty));
+            let ok_m = type_name_to_monomorphized(&ok_c);
+            let result_prefix = format!("Result__{ok_m}__{}", type_name_to_monomorphized(ret_ty));
             let result_c = find_struct_c_name_by_prefix(&result_prefix, module, sn)
                 .unwrap_or(src_c.clone());
             return (src_c, result_c);
@@ -1654,9 +1656,12 @@ fn find_struct_c_name_by_prefix(prefix: &str, module: &LirModule, sn: &HashMap<u
 
 /// Map a C type name back to its monomorphized form for struct lookup.
 fn type_name_to_monomorphized(c_type: &str) -> &str {
-    // The struct names already use monomorphized forms, so for common types
-    // we just return the C type directly.
-    c_type
+    // Struct names use mangled type names (e.g., "Str"), but c_type_named()
+    // returns C type names (e.g., "GorgetString"). Normalize to mangled form.
+    match c_type {
+        "GorgetString" => "Str",
+        _ => c_type,
+    }
 }
 
 /// Convert a monomorphized element type name to its C type.
@@ -2264,6 +2269,8 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     // Track the pointee type for Ptr-typed values (e.g. SlotAddr → slot type, FieldPtr → field type).
     // Used by Inst::Store to emit correct sizeof() for memcpy of aggregates.
     let mut ptr_pointee: Vec<Option<LirType>> = vec![None; max_val as usize];
+    // Propagate pointee types through Ptr-typed slots (SlotStore → SlotLoad).
+    let mut slot_pointee: Vec<Option<LirType>> = vec![None; func.slots.len()];
     // Override the C type name for values whose LIR type can't represent runtime structs
     // (e.g. GorgetArray, GorgetMap — not in module.structs but needed for correct C declarations).
     let mut val_c_type_override: Vec<Option<String>> = vec![None; max_val as usize];
@@ -2347,6 +2354,21 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                 Inst::GlobalAddr { dst, .. } => {
                     // Could track global type, but globals are rarely stored into via Store.
                     let _ = dst;
+                }
+                // Propagate pointee types through SlotStore→SlotLoad chains.
+                // When a Ptr-typed slot stores a value with known pointee, propagate
+                // to subsequent loads from that slot.
+                Inst::SlotStore { slot, value } => {
+                    if let Some(pt) = ptr_pointee.get(value.0 as usize).and_then(|p| p.clone()) {
+                        if matches!(func.slots[slot.0 as usize].ty, LirType::Ptr) {
+                            slot_pointee[slot.0 as usize] = Some(pt);
+                        }
+                    }
+                }
+                Inst::SlotLoad { dst, slot, .. } => {
+                    if let Some(pt) = slot_pointee.get(slot.0 as usize).and_then(|p| p.clone()) {
+                        ptr_pointee[dst.0 as usize] = Some(pt);
+                    }
                 }
                 _ => {}
             }
@@ -2912,9 +2934,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 if val_is_null {
                     // NullPtr → aggregate slot: zero out (e.g. None variant of Option).
                     write!(out, "memset(&{}, 0, sizeof({}));", s(*slot), ty_name).unwrap();
+                } else if val_is_ptr && (slot_is_str || slot_is_gs) {
+                    // Pointer to Str/GorgetString: use gorget_string_clone to deep-copy owned strings.
+                    // This prevents double-free when both source and destination are freed independently.
+                    write!(out, "{} = gorget_string_clone((const GorgetString*){});", s(*slot), v(*value)).unwrap();
                 } else if val_is_ptr {
                     // Value is a pointer to source data — use memcpy.
-                    // Str and GorgetString are the same 32-byte struct (unified).
                     write!(out, "memcpy(&{}, {}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
                 } else {
                     // Value is a struct by value (e.g., from ParamRef or function return).
@@ -2923,8 +2948,11 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     let val_is_gs = matches!(val_ty, Some(LirType::Struct(sid)) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString"));
                     let val_is_str = matches!(val_ty, Some(LirType::Struct(sid)) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
                     if (slot_is_str && val_is_gs) || (slot_is_gs && val_is_str) {
-                        // Unified: direct assignment via memcpy
-                        write!(out, "memcpy(&{}, &{}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
+                        // Unified cross-type (Str↔GorgetString): clone to ensure owned copy
+                        write!(out, "{} = gorget_string_clone((const GorgetString*)&{});", s(*slot), v(*value)).unwrap();
+                    } else if (slot_is_str || slot_is_gs) && matches!(val_ty, Some(LirType::Struct(_))) {
+                        // Same-type Str→Str or GorgetString→GorgetString: clone to prevent double-free
+                        write!(out, "{} = gorget_string_clone((const GorgetString*)&{});", s(*slot), v(*value)).unwrap();
                     } else if !matches!(val_ty, Some(LirType::Struct(_)) | None) {
                         // Scalar → single-field struct coercion (newtype wrapping).
                         if let LirType::Struct(sid) = slot_ty {
@@ -3599,10 +3627,13 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                         .and_then(|s| s.fields.get(2))
                                         .map(|(_, t)| c_type_named(t, sn));
                                     if let Some(err_c) = err_ty {
-                                        let target = format!("Result__{ret_ty}__{err_c}");
+                                        let ret_m = type_name_to_monomorphized(&ret_ty);
+                                        let err_m = type_name_to_monomorphized(&err_c);
+                                        let target = format!("Result__{ret_m}__{err_m}");
                                         find_struct_c_name_by_prefix(&target, module, sn)
                                     } else {
-                                        let target = format!("Result__{ret_ty}");
+                                        let ret_m = type_name_to_monomorphized(&ret_ty);
+                                        let target = format!("Result__{ret_m}");
                                         find_struct_c_name_by_prefix(&target, module, sn)
                                     }
                                 } else {
@@ -5416,10 +5447,22 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         // after push/set/send.  User structs containing resources are
                         // handled via Custom/Recursive drop guards (memcmp zero check).
                         if is_direct_resource_type(*pt_sid, module) {
-                            let sn_name = module.structs.get(pt_sid.0 as usize)
-                                .map(|_s| c_type_named(&LirType::Struct(*pt_sid), sn))
-                                .unwrap_or_else(|| "void".to_string());
-                            write!(out, "\n    memset({}, 0, sizeof({}));", v(*arg_val), sn_name).unwrap();
+                            let struct_name = module.structs.get(pt_sid.0 as usize)
+                                .map(|s| s.name.as_str())
+                                .unwrap_or("");
+                            if struct_name == "GorgetString" || struct_name == "Str" {
+                                // For unified str/String: zero only the cap field
+                                // (demote to view) instead of zeroing the entire struct.
+                                // This prevents double-free (gorget_string_free checks
+                                // cap==0) while preserving data/len for subsequent reads,
+                                // since str is a copy type in Gorget.
+                                write!(out, "\n    ((GorgetString*){p})->cap = 0; ((GorgetString*){p})->alloc = NULL;", p = v(*arg_val)).unwrap();
+                            } else {
+                                let sn_name = module.structs.get(pt_sid.0 as usize)
+                                    .map(|_s| c_type_named(&LirType::Struct(*pt_sid), sn))
+                                    .unwrap_or_else(|| "void".to_string());
+                                write!(out, "\n    memset({}, 0, sizeof({}));", v(*arg_val), sn_name).unwrap();
+                            }
                         }
                     }
                 }

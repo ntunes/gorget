@@ -39,7 +39,7 @@ enum StringProvenance {
 const VIEW_METHODS: &[&str] = &[
     "trim", "strip", "lstrip", "rstrip",
     "removeprefix", "removesuffix",
-    "byte_slice", "substring", "char_at", "as_str",
+    "byte_slice", "substring", "char_at", "as_str", "str",
 ];
 
 /// Run provenance inference on all functions in the module.
@@ -67,6 +67,7 @@ pub fn infer_string_provenance(
         string_id,
         owned_string_id,
         analyzed_functions: FxHashSet::default(),
+        mut_borrowed_strings: FxHashSet::default(),
     };
 
     // Phase 1: Process imported modules first so their return types are resolved
@@ -76,6 +77,36 @@ pub fn infer_string_provenance(
 }
 
 /// Rewrite AST type annotations to match provenance-adjusted semantic type_ids.
+/// Recursively rewrite `PrimitiveType::StringType` → `PrimitiveType::Str` in a type tree.
+/// Handles bare `String`, generic args like `Vector[String]`, tuples, etc.
+fn rewrite_type_to_str(ty: &mut Type) {
+    match ty {
+        Type::Primitive(PrimitiveType::StringType) => {
+            *ty = Type::Primitive(PrimitiveType::Str);
+        }
+        Type::Named { generic_args, .. } => {
+            for arg in generic_args {
+                rewrite_type_to_str(&mut arg.node);
+            }
+        }
+        Type::Tuple(elems) => {
+            for elem in elems {
+                rewrite_type_to_str(&mut elem.node);
+            }
+        }
+        Type::Array { element, .. } | Type::Slice { element } => {
+            rewrite_type_to_str(&mut element.node);
+        }
+        Type::Function { return_type, params, .. } => {
+            rewrite_type_to_str(&mut return_type.node);
+            for p in params {
+                rewrite_type_to_str(&mut p.node);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// After str→StringType unification, all string annotations are `StringType`.
 /// Provenance downgrades some bindings' type_ids to `string_id` (view).
 /// This pass rewrites the AST `StringType` → `Str` for those bindings so the
@@ -111,6 +142,27 @@ fn rewrite_item(
                 rewrite_function(&mut method.node, scopes, types, function_info, string_id, owned_string_id);
             }
         }
+        Item::Trait(trait_def) => {
+            for trait_item in &mut trait_def.items {
+                if let TraitItem::Method(f) = &mut trait_item.node {
+                    rewrite_function(f, scopes, types, function_info, string_id, owned_string_id);
+                }
+            }
+        }
+        Item::Struct(s) => {
+            for field in &mut s.fields {
+                rewrite_type_to_str(&mut field.node.type_.node);
+            }
+        }
+        Item::Enum(e) => {
+            for variant in &mut e.variants {
+                if let VariantFields::Tuple(types) = &mut variant.node.fields {
+                    for ty in types {
+                        rewrite_type_to_str(&mut ty.node);
+                    }
+                }
+            }
+        }
         Item::Test(t) => {
             rewrite_block_stmts(&mut t.body.stmts, scopes, string_id);
         }
@@ -131,17 +183,15 @@ fn rewrite_function(
     string_id: TypeId,
     _owned_string_id: TypeId,
 ) {
-    // Rewrite parameter types based on provenance-adjusted type_ids
+    // Rewrite parameter types: bare borrow String params are always views.
+    // Use ownership sigil rather than DEF lookup — this handles trait default methods
+    // whose DefIds may not be in the scope table.
     for param in &mut func.params {
-        if matches!(param.node.type_.node, Type::Primitive(PrimitiveType::StringType)) {
-            if let Some(def_id) = scopes.lookup_def_by_span(&param.node.name.node, param.node.name.span) {
-                let def = scopes.get_def(def_id);
-                if let Some(tid) = def.type_id {
-                    if tid == string_id {
-                        param.node.type_.node = Type::Primitive(PrimitiveType::Str);
-                    }
-                }
-            }
+        if matches!(param.node.type_.node, Type::Primitive(PrimitiveType::StringType))
+            && param.node.ownership == Ownership::Borrow
+            && param.node.name.node != "self"
+        {
+            param.node.type_.node = Type::Primitive(PrimitiveType::Str);
         }
     }
 
@@ -249,6 +299,8 @@ struct ProvenanceCtx<'a> {
     owned_string_id: TypeId,
     /// Functions whose return types have been analyzed by provenance.
     analyzed_functions: FxHashSet<DefId>,
+    /// String locals that are `&`-borrowed in the current function — skip downgrade.
+    mut_borrowed_strings: FxHashSet<DefId>,
 }
 
 impl<'a> ProvenanceCtx<'a> {
@@ -266,8 +318,9 @@ impl<'a> ProvenanceCtx<'a> {
     /// Owned = allocates new data or takes ownership (GorgetString).
     fn classify_expr(&self, expr: &Spanned<Expr>) -> StringProvenance {
         match &expr.node {
-            // String literals → Owned (allocates a GorgetString in IR)
-            // Even plain literals create owned values at the variable level.
+            // Plain string literals → View (static data, no allocation, cap=0).
+            // F-strings (interpolated) → Owned (allocates a new GorgetString).
+            Expr::StringLiteral(lit) if !lit.has_interpolation() => StringProvenance::View,
             Expr::StringLiteral(_) => StringProvenance::Owned,
 
             // Concat → Owned (allocates new GorgetString)
@@ -325,6 +378,18 @@ impl<'a> ProvenanceCtx<'a> {
                 if let Some(&tid) = self.expr_types.get(&expr.span) {
                     if tid == self.string_id {
                         return StringProvenance::View;
+                    }
+                }
+                // unwrap/expect on collection access results (e.g., vec.get(i).unwrap())
+                // return shallow copies borrowed from the collection → View.
+                // But unwrap on I/O results (e.g., read_line().unwrap()) returns owned.
+                if matches!(method.node.as_str(), "unwrap" | "expect" | "unwrap_or_default") {
+                    if let Expr::MethodCall { method: inner_method, .. } = &receiver.node {
+                        // Collection .get() returns Option with borrowed element
+                        if matches!(inner_method.node.as_str(), "get" | "first" | "last"
+                            | "peek" | "front" | "back") {
+                            return StringProvenance::View;
+                        }
                     }
                 }
                 StringProvenance::Owned
@@ -426,13 +491,7 @@ impl<'a> ProvenanceCtx<'a> {
     }
 
     fn is_string_ast_type(&self, ty: &Type) -> bool {
-        // When str→StringType parser unification is active, both `str` and `String`
-        // produce StringType in the AST and this processes all string types.
-        // Without the parser change (str → Str), the pass is a no-op: `str` bindings
-        // already have string_id (view), and `String` bindings should keep owned_string_id.
-        // Return false to disable provenance inference until the parser change is activated.
-        let _ = ty;
-        false
+        matches!(ty, Type::Primitive(PrimitiveType::StringType))
     }
 
     fn downgrade_to_view(&mut self, def_id: DefId) {
@@ -463,9 +522,151 @@ impl<'a> ProvenanceCtx<'a> {
             })
     }
 
+    /// Collect DefIds of String locals that are `&`-borrowed in the function body.
+    /// If a variable is `&`-borrowed, the callee could replace its value with an
+    /// owned string, so we conservatively keep it as owned (no downgrade).
+    fn collect_mut_borrowed_strings(&self, stmts: &[Spanned<Stmt>]) -> FxHashSet<DefId> {
+        let mut result = FxHashSet::default();
+        for stmt in stmts {
+            self.scan_stmt_for_mut_borrows(&stmt.node, &mut result);
+        }
+        result
+    }
+
+    fn scan_stmt_for_mut_borrows(&self, stmt: &Stmt, out: &mut FxHashSet<DefId>) {
+        match stmt {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr)) => {
+                self.scan_expr_for_mut_borrows(&expr.node, out);
+            }
+            Stmt::VarDecl { value, .. } => {
+                self.scan_expr_for_mut_borrows(&value.node, out);
+            }
+            Stmt::Assign { value, .. } => {
+                self.scan_expr_for_mut_borrows(&value.node, out);
+            }
+            Stmt::CompoundAssign { value, .. } => {
+                self.scan_expr_for_mut_borrows(&value.node, out);
+            }
+            Stmt::If { condition, then_body, elif_branches, else_body, .. } => {
+                self.scan_expr_for_mut_borrows(&condition.node, out);
+                for s in &then_body.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+                for (c, b) in elif_branches {
+                    self.scan_expr_for_mut_borrows(&c.node, out);
+                    for s in &b.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+                }
+                if let Some(eb) = else_body {
+                    for s in &eb.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+                }
+            }
+            Stmt::While { condition, body, .. } => {
+                self.scan_expr_for_mut_borrows(&condition.node, out);
+                for s in &body.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+            }
+            Stmt::Loop { body, .. } => {
+                for s in &body.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+            }
+            Stmt::For { body, .. } => {
+                for s in &body.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    if let MatchItem::Arm(a) = arm {
+                        self.scan_expr_for_mut_borrows(&a.body.node, out);
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    for s in &eb.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+                }
+            }
+            Stmt::With { body, .. } | Stmt::NamedScope { body, .. } | Stmt::Unsafe { body, .. } => {
+                for s in &body.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+            }
+            Stmt::Select { arms, else_arm, .. } => {
+                for arm in arms {
+                    for s in &arm.body.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+                }
+                if let Some(eb) = else_arm {
+                    for s in &eb.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+                }
+            }
+            Stmt::MetaFor { body, .. } => {
+                for s in &body.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+            }
+            Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
+                for s in &then_body.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+                for (_, b) in elif_branches {
+                    for s in &b.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+                }
+                if let Some(eb) = else_body {
+                    for s in &eb.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn scan_expr_for_mut_borrows(&self, expr: &Expr, out: &mut FxHashSet<DefId>) {
+        match expr {
+            Expr::MutableBorrow { expr: inner } => {
+                if let Expr::Identifier(name) = &inner.node {
+                    if let Some(def_id) = self.find_binding_def(name, inner.span) {
+                        let def = self.scopes.get_def(def_id);
+                        if let Some(tid) = def.type_id {
+                            if self.is_any_string(tid) {
+                                out.insert(def_id);
+                            }
+                        }
+                    }
+                }
+            }
+            Expr::Call { args, .. } | Expr::MethodCall { args, .. } => {
+                for arg in args {
+                    if let Expr::MutableBorrow { expr: inner } = &arg.node.value.node {
+                        if let Expr::Identifier(name) = &inner.node {
+                            if let Some(def_id) = self.find_binding_def(name, inner.span) {
+                                let def = self.scopes.get_def(def_id);
+                                if let Some(tid) = def.type_id {
+                                    if self.is_any_string(tid) {
+                                        out.insert(def_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.scan_expr_for_mut_borrows(&arg.node.value.node, out);
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                self.scan_expr_for_mut_borrows(&left.node, out);
+                self.scan_expr_for_mut_borrows(&right.node, out);
+            }
+            Expr::If { condition, then_branch, elif_branches, else_branch, .. } => {
+                self.scan_expr_for_mut_borrows(&condition.node, out);
+                self.scan_expr_for_mut_borrows(&then_branch.node, out);
+                for (c, b) in elif_branches {
+                    self.scan_expr_for_mut_borrows(&c.node, out);
+                    self.scan_expr_for_mut_borrows(&b.node, out);
+                }
+                if let Some(eb) = else_branch {
+                    self.scan_expr_for_mut_borrows(&eb.node, out);
+                }
+            }
+            Expr::Block(block) => {
+                for s in &block.stmts { self.scan_stmt_for_mut_borrows(&s.node, out); }
+            }
+            _ => {}
+        }
+    }
+
     /// Infer provenance for a function's parameters, body, and return type.
     fn infer_function(&mut self, func: &FunctionDef) {
         let func_def_id = self.find_func_def_id(func);
+
+        // Collect &-borrowed String locals so we don't downgrade them
+        self.mut_borrowed_strings = match &func.body {
+            FunctionBody::Block(block) => self.collect_mut_borrowed_strings(&block.stmts),
+            _ => FxHashSet::default(),
+        };
 
         // Parameters — bare borrow String params become views
         for (i, param) in func.params.iter().enumerate() {
@@ -552,9 +753,9 @@ impl<'a> ProvenanceCtx<'a> {
             self.check_assignments(&stmt.node, &mut string_vars);
         }
 
-        // Apply downgrades for variables that stayed View
+        // Apply downgrades for variables that stayed View (skip &-borrowed vars)
         for (def_id, prov) in &string_vars {
-            if *prov == StringProvenance::View {
+            if *prov == StringProvenance::View && !self.mut_borrowed_strings.contains(def_id) {
                 self.downgrade_to_view(*def_id);
             }
         }
@@ -678,13 +879,14 @@ impl<'a> ProvenanceCtx<'a> {
                 self.maybe_downgrade_for_binding(pattern, iterable);
                 self.infer_block(body);
             }
-            Stmt::Match { scrutinee, arms, else_arm, .. } => {
-                let scrutinee_is_string = self.is_string_expr(scrutinee);
+            Stmt::Match { scrutinee: _, arms, else_arm, .. } => {
+                // Downgrade all string-typed pattern bindings to view.
+                // Match bindings borrow from the scrutinee for the arm's duration,
+                // whether the scrutinee is a string directly or a generic type
+                // containing strings (Option[str], Result[str, E], etc.).
                 for arm in arms {
                     if let MatchItem::Arm(a) = arm {
-                        if scrutinee_is_string {
-                            self.downgrade_pattern_bindings(&a.pattern);
-                        }
+                        self.downgrade_pattern_bindings(&a.pattern);
                     }
                 }
                 if let Some(else_block) = else_arm {
@@ -763,7 +965,14 @@ fn collect_return_exprs<'a>(stmts: &'a [Spanned<Stmt>], out: &mut Vec<&'a Spanne
             Stmt::For { body, .. } => {
                 collect_return_exprs(&body.stmts, out);
             }
-            Stmt::Match { else_arm, .. } => {
+            Stmt::Match { arms, else_arm, .. } => {
+                for item in arms {
+                    if let MatchItem::Arm(arm) = item {
+                        if let Expr::Block(block) = &arm.body.node {
+                            collect_return_exprs(&block.stmts, out);
+                        }
+                    }
+                }
                 if let Some(else_block) = else_arm {
                     collect_return_exprs(&else_block.stmts, out);
                 }
@@ -801,6 +1010,13 @@ fn infer_items(ctx: &mut ProvenanceCtx, items: &[Spanned<Item>]) {
             Item::Equip(equip) => {
                 for method in &equip.items {
                     ctx.infer_function(&method.node);
+                }
+            }
+            Item::Trait(trait_def) => {
+                for trait_item in &trait_def.items {
+                    if let TraitItem::Method(f) = &trait_item.node {
+                        ctx.infer_function(f);
+                    }
                 }
             }
             Item::Test(t) => ctx.infer_block(&t.body),

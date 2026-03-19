@@ -10521,7 +10521,7 @@ fn try_emit_result_wrapped_call(
                 let ct = effective_c_type(idx, func, registry, type_overrides);
                 !ct.ends_with('*') && (
                     ct == "GorgetArray" || ct.starts_with("Vector__")
-                    || ct.starts_with("Gorget") // GorgetX25519KeyPair, GorgetCipherContext, etc.
+                    || (ct.starts_with("Gorget") && ct != "GorgetString") // GorgetX25519KeyPair, GorgetCipherContext, etc. (NOT GorgetString — handled as Str below)
                 )
             } else { false };
             // Check if arg is Str and function wants const char*
