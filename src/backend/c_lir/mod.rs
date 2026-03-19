@@ -902,6 +902,11 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         }
     }
 
+    // Emit struct drop functions for structs with Recursive drop strategy.
+    // These are needed when a Recursive-drop struct appears as a field in
+    // another struct — the parent's field drop calls {Name}__drop.
+    emit_recursive_struct_drops(&mut out, module, &struct_names);
+
     // Function definitions
     writeln!(out, "// ── Function Definitions ──").unwrap();
     let has_test_runner = !module.test_fns.is_empty() || !module.bench_fns.is_empty() || module.is_test_module;
@@ -2909,29 +2914,17 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     write!(out, "memset(&{}, 0, sizeof({}));", s(*slot), ty_name).unwrap();
                 } else if val_is_ptr {
                     // Value is a pointer to source data — use memcpy.
-                    // Check for size mismatch: Str ptr → GorgetString slot needs coercion.
-                    let pointee = ptr_pointee.get(value.0 as usize).and_then(|t| t.as_ref());
-                    let pointee_is_gs = pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString")));
-                    let pointee_is_str = pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str")));
-                    if slot_is_str && pointee_is_gs {
-                        // GorgetString* → Str: extract .data and .len
-                        write!(out, "{{ GorgetString __gs = *(GorgetString*){}; {} = (Str){{ .data = __gs.data, .len = __gs.len, .cap = 0, .alloc = NULL }}; }}", v(*value), s(*slot)).unwrap();
-                    } else if slot_is_gs && pointee_is_str {
-                        // Str* → GorgetString slot: promote via gorget_string_from_str
-                        write!(out, "{} = gorget_string_from_str(*(Str*){});", s(*slot), v(*value)).unwrap();
-                    } else {
-                        write!(out, "memcpy(&{}, {}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
-                    }
+                    // Str and GorgetString are the same 32-byte struct (unified).
+                    write!(out, "memcpy(&{}, {}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
                 } else {
                     // Value is a struct by value (e.g., from ParamRef or function return).
-                    // GorgetString → Str coercion: extract .data and .len
+                    // Str and GorgetString are the same 32-byte struct (unified);
+                    // cross-type assigns are direct.
                     let val_is_gs = matches!(val_ty, Some(LirType::Struct(sid)) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString"));
                     let val_is_str = matches!(val_ty, Some(LirType::Struct(sid)) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
-                    if slot_is_str && val_is_gs {
-                        write!(out, "{{ GorgetString __gs = {}; {} = (Str){{ .data = __gs.data, .len = __gs.len, .cap = 0, .alloc = NULL }}; }}", v(*value), s(*slot)).unwrap();
-                    } else if slot_is_gs && val_is_str {
-                        // Str value → GorgetString slot: promote via gorget_string_from_str
-                        write!(out, "{} = gorget_string_from_str({});", s(*slot), v(*value)).unwrap();
+                    if (slot_is_str && val_is_gs) || (slot_is_gs && val_is_str) {
+                        // Unified: direct assignment via memcpy
+                        write!(out, "memcpy(&{}, &{}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
                     } else if !matches!(val_ty, Some(LirType::Struct(_)) | None) {
                         // Scalar → single-field struct coercion (newtype wrapping).
                         if let LirType::Struct(sid) = slot_ty {
@@ -3243,19 +3236,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 } else if matches!(dst_pointee, Some(LirType::Ptr) | Some(LirType::Void)) {
                     write!(out, "*(void**)({p}) = {val};", p = v(*ptr), val = v(*value)).unwrap();
                 } else {
-                    // GorgetString* → Str*: truncate by extracting .data/.len (24→16 bytes).
-                    let src_is_gs = pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString")));
-                    let dst_is_str = dst_pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str")));
-                    let src_is_str = pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str")));
-                    let dst_is_gs = dst_pointee.map_or(false, |pt| matches!(pt, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString")));
-                    if src_is_gs && dst_is_str {
-                        write!(out, "{{ GorgetString __gs = *(GorgetString*){val}; *(Str*){p} = (Str){{ .data = __gs.data, .len = __gs.len, .cap = 0, .alloc = NULL }}; }}",
-                            p = v(*ptr), val = v(*value)).unwrap();
-                    } else if src_is_str && dst_is_gs {
-                        // Str* → GorgetString*: promote via gorget_string_from_str
-                        write!(out, "*(GorgetString*)({p}) = gorget_string_from_str(*(Str*){val});",
-                            p = v(*ptr), val = v(*value)).unwrap();
-                    } else {
+                    // Str and GorgetString are the same 32-byte struct (unified).
+                    // Cross-type stores are just memcpy.
+                    {
                         // Prefer destination pointee type for sizing (it's the allocation we write into).
                         let size_ty = dst_pointee.or(pointee);
                         if let Some(ty) = size_ty {
@@ -5797,6 +5780,40 @@ fn is_gorget_string_type(ty: Option<&LirType>, sn: &HashMap<u32, String>) -> boo
         name == "GorgetString"
     } else {
         false
+    }
+}
+
+/// Emit drop functions for user structs with Recursive drop strategy.
+/// When a struct has fields that need dropping (e.g., GorgetString), the drop
+/// elaboration marks it as Recursive. When that struct appears as a field in
+/// another struct, the parent's drop emits a call to `{Name}__drop`. This
+/// function generates the actual `{Name}__drop` function body.
+fn emit_recursive_struct_drops(out: &mut String, module: &LirModule, sn: &HashMap<u32, String>) {
+    for (idx, sdef) in module.structs.iter().enumerate() {
+        let type_name = &sdef.name;
+
+        // Check if this is a struct that needs a Recursive drop function
+        let drop_info = match module.recursive_drop_structs.get(type_name.as_str()) {
+            Some(info) => info,
+            None => continue,
+        };
+
+        // Check if a drop function already exists (custom Drop trait impl)
+        let drop_fn_name = format!("{type_name}__drop");
+        if module.functions.iter().any(|f| f.name == drop_fn_name) {
+            continue;
+        }
+
+        // Use the C struct name (e.g., __lir_s10) instead of the Gorget name
+        let c_name = sn.get(&(idx as u32)).cloned().unwrap_or_else(|| type_name.clone());
+
+        // Generate the drop function
+        writeln!(out, "static inline void {drop_fn_name}({c_name}* self) {{").unwrap();
+        for (field_name, drop_fn) in drop_info {
+            writeln!(out, "    {drop_fn}(&self->{field_name});").unwrap();
+        }
+        writeln!(out, "}}").unwrap();
+        writeln!(out).unwrap();
     }
 }
 

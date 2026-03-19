@@ -721,6 +721,10 @@ pub struct LirModule {
     pub hot_reload_state_hash: u64,
     /// Whether the module defines a `reload()` function.
     pub hot_reload_has_reload_fn: bool,
+    /// Recursive drop structs: type_name → Vec<(field_name, drop_fn_name)>.
+    /// Populated during LIR lowering for structs that have `Recursive` drop strategy
+    /// but no user-defined `{Name}__drop` function.
+    pub recursive_drop_structs: HashMap<String, Vec<(String, String)>>,
 }
 
 impl LirModule {
@@ -745,6 +749,7 @@ impl LirModule {
             hot_reload_state_type: None,
             hot_reload_state_hash: 0,
             hot_reload_has_reload_fn: false,
+            recursive_drop_structs: HashMap::new(),
         }
     }
 

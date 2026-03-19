@@ -1991,7 +1991,8 @@ pub fn meta_str_to_type(s: &str) -> Type {
         "float32" => AstType::Primitive(PrimitiveType::Float32),
         "float64" => AstType::Primitive(PrimitiveType::Float64),
         "bool"    => AstType::Primitive(PrimitiveType::Bool),
-        "str" | "String" => AstType::Primitive(PrimitiveType::Str),
+        "str"     => AstType::Primitive(PrimitiveType::Str),
+        "String"  => AstType::Primitive(PrimitiveType::StringType),
         "void"    => AstType::Primitive(PrimitiveType::Void),
         other     => AstType::Named { name: Spanned::dummy(other.to_string()), generic_args: vec![] },
     }

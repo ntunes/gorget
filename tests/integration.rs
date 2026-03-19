@@ -5856,7 +5856,7 @@ fn lifetime_reassign_error() {
 fn lifetime_fstring_return_error() {
     check_gg_fails(
         "lifetime_fstring_return_error.gg",
-        "cannot return owned String from function returning `str`",
+        "f-string creates an owned String",
     );
 }
 
@@ -5864,7 +5864,7 @@ fn lifetime_fstring_return_error() {
 fn lifetime_fstring_bind_error() {
     check_gg_fails(
         "lifetime_fstring_bind_error.gg",
-        "cannot bind `str",
+        "cannot bind `str` variable",
     );
 }
 

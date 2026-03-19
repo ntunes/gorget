@@ -201,6 +201,9 @@ fn lower_var_decl(
             } else {
                 gir_type
             };
+            // After str→StringType unification, provenance may have downgraded this
+            // binding's semantic type_id to view. Adjust the GIR type accordingly.
+            let gir_type = ctx.provenance_adjusted_string_type(gir_type, name, pattern.span);
             // Box[Callable[...]] variables pre-register with a "Box__Callable__unknown" type from the
             // generic collector. We need to reinfer from the actual RHS to get the real closure type.
             let gir_type_is_box_callable = ctx.type_name_for_id(gir_type)

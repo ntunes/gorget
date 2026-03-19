@@ -725,12 +725,12 @@ impl<'a> TypeChecker<'a> {
                     a
                 }
             }
-            // str ↔ String coercion (view ↔ owned: both are string types)
+            // String→str coercion: String auto-coerces to str (owned → view)
             (ResolvedType::Primitive(PrimitiveType::Str), ResolvedType::Primitive(PrimitiveType::StringType))
             | (ResolvedType::Primitive(PrimitiveType::StringType), ResolvedType::Primitive(PrimitiveType::Str)) => {
-                a
+                a // accept the expected (lhs) type
             }
-            // str ↔ CStr coercion (both are char pointer types)
+            // cstr ↔ str coercion (both are const char* in S0)
             (ResolvedType::Primitive(PrimitiveType::Str), ResolvedType::Primitive(PrimitiveType::CStr))
             | (ResolvedType::Primitive(PrimitiveType::CStr), ResolvedType::Primitive(PrimitiveType::Str)) => {
                 a
@@ -907,7 +907,7 @@ impl<'a> TypeChecker<'a> {
                 } else if s.kind == crate::lexer::token::StringKind::CStr {
                     self.types.cstr_id
                 } else {
-                    self.types.string_id  // Plain string literal → str (view)
+                    self.types.string_id
                 }
             }
             Expr::NoneLiteral => {
@@ -3309,7 +3309,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
-                // View returns — borrow from receiver (pointer into receiver's data)
+                // View returns — no allocation, return str (Str)
                 "trim" | "strip" | "lstrip" | "rstrip" | "removeprefix" | "removesuffix" | "byte_slice"
                 | "substring"
                     => Some(self.types.string_id),
@@ -3318,6 +3318,7 @@ impl<'a> TypeChecker<'a> {
                     => Some(self.types.owned_string_id),
                 "enumerate" => Some(receiver_type),
                 "byte_at" => Some(self.types.primitive_id(PrimitiveType::Uint8)),
+                // char_at: deprecated compat alias — returns str (1-byte view, byte-indexed)
                 "char_at" => Some(self.types.string_id),
                 "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace"
                 | "is_upper" | "is_lower" | "is_hex_digit" | "is_ascii"

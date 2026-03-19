@@ -324,7 +324,7 @@ Vector[int] resolve_variant_field_types(int scrutinee_type, str variant_name, Sc
         while di < variant_name.len():
             after_dot = after_dot + variant_name.char_at(di)
             di = di + 1
-        lookup_name = !after_dot
+        lookup_name = after_dot
 
     ResolvedType rt = get_rtype_at(types.types, scrutinee_type)
 

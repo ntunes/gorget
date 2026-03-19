@@ -56,13 +56,14 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("alloc".into(), LirType::Ptr),
             ],
         },
-        // String — owned heap string
+        // String — owned heap string (unified with Str: same 32-byte layout)
         StructDef {
             name: "GorgetString".into(),
             fields: vec![
                 ("data".into(), LirType::Ptr),
                 ("len".into(), LirType::I64),
                 ("cap".into(), LirType::I64),
+                ("alloc".into(), LirType::Ptr),
             ],
         },
         // GorgetArray — dynamic array (Vector[T] backing)
@@ -184,7 +185,7 @@ mod tests {
         assert_eq!(defs[0].name, "Str");
         assert_eq!(defs[0].fields.len(), 4);
         assert_eq!(defs[1].name, "GorgetString");
-        assert_eq!(defs[1].fields.len(), 3);
+        assert_eq!(defs[1].fields.len(), 4);
     }
 
     #[test]

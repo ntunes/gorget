@@ -244,6 +244,59 @@ impl<'a> LoweringContext<'a> {
         self.module
     }
 
+    /// Populate `recursive_drop_structs` on the LirModule.
+    /// For each struct with `DropStrategy::Recursive`, collect its droppable fields
+    /// and the drop function to call on each. The C backend uses this to emit
+    /// `static inline void {Name}__drop({Name}* self)` function bodies.
+    fn populate_recursive_drop_structs(&mut self) {
+        use crate::ir::types::{DropStrategy, TypeDefKind};
+        let type_defs: Vec<_> = self.gir.type_registry.type_defs().iter()
+            .map(|td| (td.name.clone(), td.metadata.drop_strategy.clone(), td.kind.clone()))
+            .collect();
+        for (name, strategy, kind) in &type_defs {
+            if !matches!(strategy, DropStrategy::Recursive) {
+                continue;
+            }
+            let sdef = match kind {
+                TypeDefKind::Struct(s) => s,
+                _ => continue,
+            };
+            let mut field_drops: Vec<(String, String)> = Vec::new();
+            for field in &sdef.fields {
+                let field_type_name = match self.gir.type_registry.get(field.type_id) {
+                    Some(GirType::Named(n)) => n.clone(),
+                    _ => continue,
+                };
+                let field_drop_strategy = self.infer_drop_strategy(&field_type_name);
+                let drop_fn = match &field_drop_strategy {
+                    DropStrategy::Trivial(fn_name) => fn_name.clone(),
+                    DropStrategy::Custom(fn_name) => fn_name.clone(),
+                    DropStrategy::Recursive => {
+                        // Check if {Name}__drop exists as a NON-destructor function
+                        // (e.g., DataFrame.drop() column-drop method). If so, we can't
+                        // use it as the field drop function. Skip this field — the LIR
+                        // handles the drop inline via lower_field_drops.
+                        let candidate = format!("{field_type_name}__drop");
+                        // If a function with this name exists in the GIR and is NOT the
+                        // Drop trait impl, skip this field to avoid the naming collision.
+                        let is_non_destructor = self.gir.functions.iter().any(|f| {
+                            f.name == candidate && f.params.len() > 1
+                        });
+                        if is_non_destructor {
+                            continue;
+                        }
+                        candidate
+                    }
+                    DropStrategy::None => continue,
+                };
+                field_drops.push((field.name.clone(), drop_fn));
+            }
+            if !field_drops.is_empty() {
+                self.module.recursive_drop_structs.insert(name.clone(), field_drops);
+            }
+        }
+    }
+
     /// Compute drop recipes for all types that need compound element drops.
     /// A compound drop is needed when a type has Custom or Recursive drop and
     /// also has fields that need dropping (e.g., Container with Custom drop + data: Vector).
@@ -1543,7 +1596,14 @@ impl<'a> FuncLowering<'a> {
                     // Check if element type needs dropping (resource/move semantics).
                     let elem_type_name = base_type_name
                         .strip_prefix("Vector__")
-                        .or_else(|| base_type_name.strip_prefix("Dict__").and_then(|r| r.rsplit_once("__").map(|(_, v)| v)))
+                        .or_else(|| base_type_name.strip_prefix("Deque__"))
+                        .or_else(|| {
+                            // Dict__K__V → value type is everything after first "__" past key
+                            let rest = base_type_name.strip_prefix("Dict__")
+                                .or_else(|| base_type_name.strip_prefix("HashMap__"))?;
+                            let idx = rest.find("__")?;
+                            Some(&rest[idx + 2..])
+                        })
                         .unwrap_or("");
                     let elem_needs_zero = match self.infer_drop_strategy(elem_type_name) {
                         crate::ir::types::DropStrategy::None => false,

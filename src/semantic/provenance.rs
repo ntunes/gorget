@@ -44,6 +44,7 @@ const VIEW_METHODS: &[&str] = &[
 
 /// Run provenance inference on all functions in the module.
 /// Rewrites `DefInfo.type_id` from `owned_string_id` → `string_id` for view bindings.
+/// Returns a set of DefIds that were downgraded to view strings.
 pub fn infer_string_provenance(
     module: &Module,
     scopes: &mut ScopeTable,
@@ -72,6 +73,169 @@ pub fn infer_string_provenance(
     // before local functions reference them.
     // Phase 2: Local items (functions, equip methods, tests)
     infer_items(&mut ctx, &module.items);
+}
+
+/// Rewrite AST type annotations to match provenance-adjusted semantic type_ids.
+/// After str→StringType unification, all string annotations are `StringType`.
+/// Provenance downgrades some bindings' type_ids to `string_id` (view).
+/// This pass rewrites the AST `StringType` → `Str` for those bindings so the
+/// IR lowering emits correct drop elaboration and calling conventions.
+pub fn rewrite_ast_string_types(
+    module: &mut Module,
+    scopes: &ScopeTable,
+    types: &TypeTable,
+    function_info: &FxHashMap<DefId, FunctionInfo>,
+) {
+    let string_id = types.string_id;
+    let owned_string_id = types.owned_string_id;
+
+    for item in &mut module.items {
+        rewrite_item(&mut item.node, scopes, types, function_info, string_id, owned_string_id);
+    }
+}
+
+fn rewrite_item(
+    item: &mut Item,
+    scopes: &ScopeTable,
+    types: &TypeTable,
+    function_info: &FxHashMap<DefId, FunctionInfo>,
+    string_id: TypeId,
+    owned_string_id: TypeId,
+) {
+    match item {
+        Item::Function(f) => {
+            rewrite_function(f, scopes, types, function_info, string_id, owned_string_id);
+        }
+        Item::Equip(equip) => {
+            for method in &mut equip.items {
+                rewrite_function(&mut method.node, scopes, types, function_info, string_id, owned_string_id);
+            }
+        }
+        Item::Test(t) => {
+            rewrite_block_stmts(&mut t.body.stmts, scopes, string_id);
+        }
+        Item::Module { items, .. } => {
+            for sub in items {
+                rewrite_item(&mut sub.node, scopes, types, function_info, string_id, owned_string_id);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_function(
+    func: &mut FunctionDef,
+    scopes: &ScopeTable,
+    _types: &TypeTable,
+    function_info: &FxHashMap<DefId, FunctionInfo>,
+    string_id: TypeId,
+    _owned_string_id: TypeId,
+) {
+    // Rewrite parameter types based on provenance-adjusted type_ids
+    for param in &mut func.params {
+        if matches!(param.node.type_.node, Type::Primitive(PrimitiveType::StringType)) {
+            if let Some(def_id) = scopes.lookup_def_by_span(&param.node.name.node, param.node.name.span) {
+                let def = scopes.get_def(def_id);
+                if let Some(tid) = def.type_id {
+                    if tid == string_id {
+                        param.node.type_.node = Type::Primitive(PrimitiveType::Str);
+                    }
+                }
+            }
+        }
+    }
+
+    // Rewrite return type based on FunctionInfo
+    if matches!(func.return_type.node, Type::Primitive(PrimitiveType::StringType)) {
+        if let Some(def_id) = scopes.lookup_def_by_span(&func.name.node, func.name.span) {
+            if let Some(fi) = function_info.get(&def_id) {
+                if fi.return_type_id == Some(string_id) {
+                    func.return_type.node = Type::Primitive(PrimitiveType::Str);
+                }
+            }
+        }
+    }
+
+    // Rewrite VarDecl types in function body
+    if let FunctionBody::Block(block) = &mut func.body {
+        rewrite_block_stmts(&mut block.stmts, scopes, string_id);
+    }
+}
+
+fn rewrite_block_stmts(
+    stmts: &mut [Spanned<Stmt>],
+    scopes: &ScopeTable,
+    string_id: TypeId,
+) {
+    for stmt in stmts {
+        rewrite_stmt(&mut stmt.node, scopes, string_id);
+    }
+}
+
+fn rewrite_stmt(
+    stmt: &mut Stmt,
+    scopes: &ScopeTable,
+    string_id: TypeId,
+) {
+    match stmt {
+        Stmt::VarDecl { type_, pattern, .. } => {
+            if matches!(type_.node, Type::Primitive(PrimitiveType::StringType)) {
+                if let Pattern::Binding(name) = &pattern.node {
+                    if let Some(def_id) = scopes.lookup_def_by_span(name, pattern.span) {
+                        let def = scopes.get_def(def_id);
+                        if let Some(tid) = def.type_id {
+                            if tid == string_id {
+                                type_.node = Type::Primitive(PrimitiveType::Str);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Stmt::NamedScope { body, .. } | Stmt::Unsafe { body } => {
+            rewrite_block_stmts(&mut body.stmts, scopes, string_id);
+        }
+        Stmt::If { then_body, elif_branches, else_body, .. } => {
+            rewrite_block_stmts(&mut then_body.stmts, scopes, string_id);
+            for (_, elif_body) in elif_branches {
+                rewrite_block_stmts(&mut elif_body.stmts, scopes, string_id);
+            }
+            if let Some(else_b) = else_body {
+                rewrite_block_stmts(&mut else_b.stmts, scopes, string_id);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::Loop { body, .. } => {
+            rewrite_block_stmts(&mut body.stmts, scopes, string_id);
+        }
+        Stmt::For { body, .. } => {
+            rewrite_block_stmts(&mut body.stmts, scopes, string_id);
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            for arm in arms {
+                if let MatchItem::Arm(arm) = arm {
+                    // Match arm body is Spanned<Expr> — check for block expressions
+                    if let Expr::Block(block) = &mut arm.body.node {
+                        rewrite_block_stmts(&mut block.stmts, scopes, string_id);
+                    }
+                }
+            }
+            if let Some(else_b) = else_arm {
+                rewrite_block_stmts(&mut else_b.stmts, scopes, string_id);
+            }
+        }
+        Stmt::With { body, .. } => {
+            rewrite_block_stmts(&mut body.stmts, scopes, string_id);
+        }
+        Stmt::Select { arms, else_arm, .. } => {
+            for arm in arms {
+                rewrite_block_stmts(&mut arm.body.stmts, scopes, string_id);
+            }
+            if let Some(else_b) = else_arm {
+                rewrite_block_stmts(&mut else_b.stmts, scopes, string_id);
+            }
+        }
+        _ => {}
+    }
 }
 
 struct ProvenanceCtx<'a> {
@@ -262,7 +426,13 @@ impl<'a> ProvenanceCtx<'a> {
     }
 
     fn is_string_ast_type(&self, ty: &Type) -> bool {
-        matches!(ty, Type::Primitive(PrimitiveType::StringType | PrimitiveType::Str))
+        // When str→StringType parser unification is active, both `str` and `String`
+        // produce StringType in the AST and this processes all string types.
+        // Without the parser change (str → Str), the pass is a no-op: `str` bindings
+        // already have string_id (view), and `String` bindings should keep owned_string_id.
+        // Return false to disable provenance inference until the parser change is activated.
+        let _ = ty;
+        false
     }
 
     fn downgrade_to_view(&mut self, def_id: DefId) {

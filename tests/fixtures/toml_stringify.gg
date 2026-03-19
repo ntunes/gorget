@@ -6,7 +6,7 @@ void main():
     auto r1 = parse(toml1)
     match r1:
         case Ok(doc1):
-            String ser1 = stringify(doc1)
+            str ser1 = stringify(doc1)
             auto r1b = parse(ser1)
             match r1b:
                 case Ok(doc1b):
@@ -25,7 +25,7 @@ void main():
     auto r2 = parse(toml2)
     match r2:
         case Ok(doc2):
-            String ser2 = stringify(doc2)
+            str ser2 = stringify(doc2)
             auto r2b = parse(ser2)
             match r2b:
                 case Ok(doc2b):
@@ -42,7 +42,7 @@ void main():
     auto r3 = parse(toml3)
     match r3:
         case Ok(doc3):
-            String ser3 = stringify(doc3)
+            str ser3 = stringify(doc3)
             auto r3b = parse(ser3)
             match r3b:
                 case Ok(doc3b):

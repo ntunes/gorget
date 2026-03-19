@@ -376,6 +376,32 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// Adjust a GIR string type based on provenance analysis.
+    /// After str→StringType parser unification, all string annotations produce
+    /// `owned_string_type` in the IR. But provenance may have downgraded the
+    /// semantic type_id to `string_id` (view). This method checks the semantic
+    /// type_id and returns `str_type` if provenance determined the binding is a view.
+    pub fn provenance_adjusted_string_type(
+        &self,
+        gir_type: TypeId,
+        name: &str,
+        span: crate::span::Span,
+    ) -> TypeId {
+        if gir_type != self.type_mapper.owned_string_type {
+            return gir_type;
+        }
+        // Look up the provenance-adjusted type_id from semantic analysis
+        if let Some(def_id) = self.analysis.scopes.lookup_def_by_span(name, span) {
+            let def = self.analysis.scopes.get_def(def_id);
+            if let Some(sem_tid) = def.type_id {
+                if sem_tid == self.analysis.types.string_id {
+                    return self.type_mapper.str_type;
+                }
+            }
+        }
+        gir_type
+    }
+
     /// Extract the Ok type from a Result TypeId, if it is a Result type.
     pub fn unwrap_result_ok_type(&self, result_type: TypeId) -> Option<TypeId> {
         let name = self.type_registry.type_name(result_type)?;

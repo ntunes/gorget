@@ -24,7 +24,7 @@ void multi_branch[T]():
         meta if sizeof(T) == 32:
             print("32 bytes")
         else:
-            print("not 32 bytes")
+            print("not 16 bytes")
     else:
         print("other type")
 

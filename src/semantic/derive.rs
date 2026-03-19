@@ -276,7 +276,7 @@ fn format_type(ty: &crate::parser::ast::Type) -> String {
             PrimitiveType::Float32 => "float32".to_string(),
             PrimitiveType::Float64 => "float64".to_string(),
             PrimitiveType::Bool => "bool".to_string(),
-            PrimitiveType::Str => "String".to_string(),
+            PrimitiveType::Str => "str".to_string(),
             PrimitiveType::CStr => "cstr".to_string(),
             PrimitiveType::StringType => "String".to_string(),
             PrimitiveType::Void => "void".to_string(),
@@ -519,7 +519,7 @@ fn field_write_lines(expr: &str, type_name: &str, indent: &str) -> String {
         }
         Some(CollectionKind::Dict(ref key_ty, ref val_ty))
         | Some(CollectionKind::HashMap(ref key_ty, ref val_ty))
-            if key_ty == "str" || key_ty == "String" =>
+            if key_ty == "str" =>
         {
             let keys_var = next_var();
             let idx = next_var();
@@ -584,7 +584,7 @@ fn field_read_lines(name: &str, type_name: &str, indent: &str) -> String {
         }
         Some(CollectionKind::Dict(ref key_ty, ref val_ty))
         | Some(CollectionKind::HashMap(ref key_ty, ref val_ty))
-            if key_ty == "str" || key_ty == "String" =>
+            if key_ty == "str" =>
         {
             let keys_var = next_var();
             let idx = next_var();
