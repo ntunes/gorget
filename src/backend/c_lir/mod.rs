@@ -7482,21 +7482,56 @@ fn emit_test_runner_main(out: &mut String, module: &LirModule) {
 }
 
 /// Emit a bench runner `main()` that calls each benchmark function.
+/// Mirrors the interpreter bench runner: warmup, auto-calibrate, timing.
 fn emit_bench_runner_main(out: &mut String, module: &LirModule) {
     writeln!(out, "int main(int argc, char** argv) {{").unwrap();
     writeln!(out, "    gorget_init_args(argc, argv);").unwrap();
     writeln!(out, "    int __bench_count = {};", module.bench_fns.len()).unwrap();
-    writeln!(out, "    printf(\"Running %d benchmarks...\\n\", __bench_count);").unwrap();
+    writeln!(out, "    printf(\"Running %d benchmarks...\\n\\n\", __bench_count);").unwrap();
+
+    // Suite setup if present
+    if module.has_suite_setup {
+        writeln!(out, "    __suite_setup();").unwrap();
+    }
 
     for info in &module.bench_fns {
         let escaped = info.display_name.replace('\\', "\\\\").replace('"', "\\\"");
         let fn_name = c_func_name(&info.fn_name);
-        writeln!(out, "    printf(\"  bench: {escaped} ... \");").unwrap();
-        writeln!(out, "    fflush(stdout);").unwrap();
-        writeln!(out, "    {fn_name}();").unwrap();
-        writeln!(out, "    printf(\"done\\n\");").unwrap();
+
+        writeln!(out, "    {{").unwrap();
+        // Warmup: 3 iterations
+        writeln!(out, "        for (int __w = 0; __w < 3; __w++) {fn_name}();").unwrap();
+
+        // Auto-calibrate: start at 100 iterations, double until >= 1 second
+        writeln!(out, "        uint64_t __iters = 100;").unwrap();
+        writeln!(out, "        uint64_t __total_ns = 0;").unwrap();
+        writeln!(out, "        for (;;) {{").unwrap();
+        writeln!(out, "            struct timespec __bs, __be;").unwrap();
+        writeln!(out, "            clock_gettime(CLOCK_MONOTONIC, &__bs);").unwrap();
+        writeln!(out, "            for (uint64_t __i = 0; __i < __iters; __i++) {fn_name}();").unwrap();
+        writeln!(out, "            clock_gettime(CLOCK_MONOTONIC, &__be);").unwrap();
+        writeln!(out, "            __total_ns = (uint64_t)(__be.tv_sec - __bs.tv_sec) * 1000000000ULL").unwrap();
+        writeln!(out, "                       + (uint64_t)(__be.tv_nsec - __bs.tv_nsec);").unwrap();
+        writeln!(out, "            if (__total_ns >= 1000000000ULL) break;").unwrap();
+        writeln!(out, "            if (__total_ns < 10000000ULL) __iters *= 100;").unwrap();
+        writeln!(out, "            else __iters *= 2;").unwrap();
+        writeln!(out, "        }}").unwrap();
+
+        // Format and print result
+        writeln!(out, "        double __avg_ns = (double)__total_ns / (double)__iters;").unwrap();
+        writeln!(out, r#"        if (__avg_ns < 1000.0) printf("  bench: {escaped} ... %llu iters, %.0f ns/iter\n", (unsigned long long)__iters, __avg_ns);"#).unwrap();
+        writeln!(out, r#"        else if (__avg_ns < 1000000.0) printf("  bench: {escaped} ... %llu iters, %.2f us/iter\n", (unsigned long long)__iters, __avg_ns / 1000.0);"#).unwrap();
+        writeln!(out, r#"        else if (__avg_ns < 1000000000.0) printf("  bench: {escaped} ... %llu iters, %.2f ms/iter\n", (unsigned long long)__iters, __avg_ns / 1000000.0);"#).unwrap();
+        writeln!(out, r#"        else printf("  bench: {escaped} ... %llu iters, %.2f s/iter\n", (unsigned long long)__iters, __avg_ns / 1000000000.0);"#).unwrap();
+        writeln!(out, "    }}").unwrap();
     }
 
+    // Suite teardown if present
+    if module.has_suite_teardown {
+        writeln!(out, "    __suite_teardown();").unwrap();
+    }
+
+    writeln!(out, "    printf(\"\\n%d benchmarks complete.\\n\", __bench_count);").unwrap();
     writeln!(out, "    return 0;").unwrap();
     writeln!(out, "}}").unwrap();
 }

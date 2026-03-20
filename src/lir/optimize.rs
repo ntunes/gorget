@@ -120,6 +120,7 @@ fn find_live_functions(module: &LirModule) -> HashSet<FuncId> {
         let fid = FuncId(i as u32);
         if func.name == "main"
             || func.name.starts_with("__test")
+            || func.name.starts_with("__bench_")
             || func.name.starts_with("__suite_")
             || func.name.contains("__call")
             || spawned_names.contains(func.name.as_str())
