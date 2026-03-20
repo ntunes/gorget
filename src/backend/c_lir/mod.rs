@@ -507,8 +507,56 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
     }
     writeln!(out).unwrap();
 
-    // Struct definitions (skip runtime-provided structs and monomorphized wrappers)
-    for (i, def) in module.structs.iter().enumerate() {
+    // Struct definitions — topologically sorted so inline struct fields are
+    // defined before the structs that contain them.
+    let struct_order = {
+        let n = module.structs.len();
+        // deps[i] = list of j where struct i depends on struct j (has Struct(j) field).
+        let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
+        // dependents[j] = list of i where struct i depends on struct j.
+        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (i, def) in module.structs.iter().enumerate() {
+            for (_, fty) in &def.fields {
+                if let LirType::Struct(sid) = fty {
+                    let j = sid.0 as usize;
+                    if j != i && j < n {
+                        deps[i].push(j);
+                        dependents[j].push(i);
+                    }
+                }
+            }
+        }
+        // Kahn's algorithm: emit structs with no dependencies first.
+        let mut in_degree: Vec<usize> = deps.iter().map(|d| d.len()).collect();
+        let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+        for i in 0..n {
+            if in_degree[i] == 0 {
+                queue.push_back(i);
+            }
+        }
+        let mut order = Vec::with_capacity(n);
+        while let Some(k) = queue.pop_front() {
+            order.push(k);
+            for &i in &dependents[k] {
+                in_degree[i] -= 1;
+                if in_degree[i] == 0 {
+                    queue.push_back(i);
+                }
+            }
+        }
+        // Any remaining nodes (cycles) — append in original order.
+        if order.len() < n {
+            let in_order: std::collections::HashSet<usize> = order.iter().copied().collect();
+            for i in 0..n {
+                if !in_order.contains(&i) {
+                    order.push(i);
+                }
+            }
+        }
+        order
+    };
+    for &i in &struct_order {
+        let def = &module.structs[i];
         if skip_struct(def) { continue; }
         let cname = &struct_names[&(i as u32)];
         let is_vtable = def.name.ends_with("_VTable");

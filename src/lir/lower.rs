@@ -449,7 +449,12 @@ impl<'a> LoweringContext<'a> {
     }
 
     fn lower_type_defs(&mut self) {
-        for def in self.gir.type_registry.type_defs() {
+        // Two-pass registration to handle forward references (e.g., an enum
+        // whose variant payloads reference structs defined later in the file).
+
+        // Pass 1: Pre-register all type names with empty placeholder structs.
+        let mut deferred: Vec<(StructId, usize)> = Vec::new();
+        for (idx, def) in self.gir.type_registry.type_defs().iter().enumerate() {
             if self.struct_reg.lookup(&def.name).is_some() {
                 continue; // Already registered (builtin).
             }
@@ -469,6 +474,27 @@ impl<'a> LoweringContext<'a> {
                 continue;
             }
 
+            // Regular Box[T] is a heap pointer wrapper with a single `_0` field.
+            // Hardcode _0: Ptr to break recursive type cycles (e.g., Expr →
+            // Box__SpannedExpr → SpannedExpr → Expr). Trait boxes (Box[dyn Trait])
+            // have data/vtable fields and go through normal two-pass registration.
+            if def.name.starts_with("Box__") {
+                let is_regular_box = match &def.kind {
+                    gir_types::TypeDefKind::Struct(sdef) => {
+                        sdef.fields.len() == 1 && sdef.fields[0].name == "_0"
+                    }
+                    _ => false,
+                };
+                if is_regular_box {
+                    let sid = self.module.add_struct(StructDef {
+                        name: def.name.clone(),
+                        fields: vec![("_0".into(), LirType::Ptr)],
+                    });
+                    self.struct_reg.register(&def.name, sid);
+                    continue;
+                }
+            }
+
             // Guard struct types need a fixed layout: { ptr owner; ptr data; }
             if is_guard_struct_type(&def.name) {
                 let fields = vec![
@@ -484,9 +510,26 @@ impl<'a> LoweringContext<'a> {
             }
 
             match &def.kind {
+                gir_types::TypeDefKind::Struct(_) | gir_types::TypeDefKind::Enum(_) => {
+                    let sid = self.module.add_struct(StructDef {
+                        name: def.name.clone(),
+                        fields: vec![],
+                    });
+                    self.struct_reg.register(&def.name, sid);
+                    deferred.push((sid, idx));
+                }
+                gir_types::TypeDefKind::Alias(_) => {
+                    // Type aliases are transparent — no LIR struct needed.
+                }
+            }
+        }
+
+        // Pass 2: Fill in actual fields now that all type names are resolvable.
+        for (sid, idx) in deferred {
+            let def = &self.gir.type_registry.type_defs()[idx];
+            let fields = match &def.kind {
                 gir_types::TypeDefKind::Struct(sdef) => {
-                    let fields: Vec<(String, LirType)> = sdef
-                        .fields
+                    sdef.fields
                         .iter()
                         .map(|f| {
                             (
@@ -494,15 +537,9 @@ impl<'a> LoweringContext<'a> {
                                 map_gir_type_with_structs(&f.type_id, &self.gir.type_registry, Some(&self.struct_reg)),
                             )
                         })
-                        .collect();
-                    let sid = self.module.add_struct(StructDef {
-                        name: def.name.clone(),
-                        fields,
-                    });
-                    self.struct_reg.register(&def.name, sid);
+                        .collect()
                 }
                 gir_types::TypeDefKind::Enum(edef) => {
-                    // Enums become a struct with a tag field + variant fields.
                     let mut fields: Vec<(String, LirType)> = vec![("tag".into(), LirType::I32)];
                     for variant in &edef.variants {
                         for (i, f) in variant.fields.iter().enumerate() {
@@ -512,16 +549,11 @@ impl<'a> LoweringContext<'a> {
                             ));
                         }
                     }
-                    let sid = self.module.add_struct(StructDef {
-                        name: def.name.clone(),
-                        fields,
-                    });
-                    self.struct_reg.register(&def.name, sid);
+                    fields
                 }
-                gir_types::TypeDefKind::Alias(_) => {
-                    // Type aliases are transparent — no LIR struct needed.
-                }
-            }
+                _ => vec![],
+            };
+            self.module.structs[sid.0 as usize].fields = fields;
         }
     }
 

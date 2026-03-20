@@ -12,7 +12,7 @@
 
 - **LIR backend: bench function lowering not implemented** — `bench "..." :` items are lowered to GIR and metadata propagated to LIR, but the bench function BODIES are not lowered to LIR functions. The bench runner main references `__bench_0`/`__bench_1` etc. which don't exist. Tests: `bench_basic`. [added: 2026-03-20]
 
-- **LIR backend: self_host_parser inline test produces incorrect output** — The `self_host_parser/main.gg` fixture produces empty parse results when built via LIR. Likely a string/file-reading issue in the LIR-compiled parser binary. Tests: `self_host_parser`. [added: 2026-03-20]
+- **LIR backend: flat enum layout causes 39KB Stmt structs** — The two-pass type registration fix (2026-03-20) correctly resolves forward references, but the flat enum layout (all variant fields in a single C struct, no union) makes Stmt 39,256 bytes vs baseline's 1,328 bytes. This causes stack overflows in self-host resolver/typechecker comparison tests (746/797 crash). Fix: implement C union-based enum layout where variant fields share memory at the same offset. [added: 2026-03-20]
 
 - **LIR backend: generic_nested_collections double-free** — `Dict[str, Vector[int]]` test double-frees array values: arrays are moved out via `gorget_map_get` into local variables and freed, then the map element-drop loop frees the same array slots again. Pre-existing bug (present before string unification). Needs element-drop loop to skip moved-out values. [added: 2026-03-18]
 
