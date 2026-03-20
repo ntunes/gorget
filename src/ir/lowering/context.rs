@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ir::types::*;
 use crate::parser::ast::{Expr, Ownership, PrimitiveType, Type};
@@ -172,6 +172,9 @@ pub struct LoweringContext<'a> {
     /// LocalIds that are read-only reference params (bare struct Borrow params).
     /// These are Ptr (const pointer) in GIR and need auto-deref on read.
     pub ref_locals: FxHashMap<LocalId, TypeId>,
+    /// LocalIds that are T & references from collection borrowing reads.
+    /// The LIR lowering uses SlotLoad instead of SlotAddr for these locals.
+    pub collection_ref_locals: FxHashSet<LocalId>,
     /// Extern binding: Gorget name → C symbol name (e.g., "llabs_wrapper" → "llabs").
     pub extern_bindings: FxHashMap<String, String>,
     /// Default parameter values: fn_name → Vec<(param_index, default_expr)>.
@@ -251,6 +254,7 @@ impl<'a> LoweringContext<'a> {
             overflow_wrap: false,
             mut_capture_locals: FxHashMap::default(),
             ref_locals: FxHashMap::default(),
+            collection_ref_locals: FxHashSet::default(),
             extern_bindings: FxHashMap::default(),
             fn_defaults: FxHashMap::default(),
             fn_param_names: FxHashMap::default(),
@@ -340,6 +344,7 @@ impl<'a> LoweringContext<'a> {
         self.locals.clear();
         self.mut_capture_locals.clear();
         self.ref_locals.clear();
+        self.collection_ref_locals.clear();
         self.spawn.result_locals.clear();
         self.spawn.pending_fn = None;
         self.shared.locals.clear();

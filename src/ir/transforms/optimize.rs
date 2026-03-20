@@ -2313,6 +2313,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            collection_ref_locals: rustc_hash::FxHashSet::default(),
         }
     }
 

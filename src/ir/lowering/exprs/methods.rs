@@ -322,7 +322,13 @@ pub(super) fn lower_method_call(
             let is_result = tn.starts_with("Result__");
             let inner_type = if tn.starts_with("Option__") {
                 let inner_name = &tn["Option__".len()..];
-                resolve_inner_type(ctx, inner_name)
+                // Option__Ref_T → Ptr(T) (borrowed reference from collection)
+                if let Some(pointee_name) = inner_name.strip_prefix("Ref_") {
+                    let pointee_type = resolve_inner_type(ctx, pointee_name);
+                    ctx.type_registry.insert(GirType::Ptr(pointee_type))
+                } else {
+                    resolve_inner_type(ctx, inner_name)
+                }
             } else if is_result {
                 // Result__Ok__Err → extract Ok type (strip error type from end)
                 let rest = &tn["Result__".len()..];
@@ -378,6 +384,33 @@ pub(super) fn lower_method_call(
                     if is_resource_type_local(dst, builder, &ctx.type_registry) {
                         builder.move_zero(place.clone());
                         ctx.drops.mark_moved(place.local);
+                    }
+                    // T & reference: when the unwrapped value is Ptr(T), check
+                    // if the pointee is a collection type (keep as Ptr — access
+                    // through pointer) or not (deref to copy the value out).
+                    if let Some(GirType::Ptr(pointee)) = ctx.type_registry.get(inner_type) {
+                        let pointee = *pointee;
+                        let is_collection = match ctx.type_registry.get(pointee) {
+                            Some(GirType::Named(n)) => n.starts_with("Vector__")
+                                || n.starts_with("Dict__") || n.starts_with("HashMap__")
+                                || n.starts_with("Set__") || n.starts_with("HashSet__")
+                                || n == "GorgetArray" || n == "GorgetMap" || n == "GorgetSet",
+                            _ => false,
+                        };
+                        if !is_collection {
+                            // Non-collection (primitive, String, user struct):
+                            // deref the pointer to get the value.
+                            let deref_place = Place {
+                                local: dst,
+                                projections: vec![Projection::Deref],
+                            };
+                            let val_local = builder.add_local(pointee, None);
+                            builder.assign(Place::local(val_local), Operand::Copy(deref_place));
+                            return FunctionBuilder::copy(val_local);
+                        }
+                        // Collection: keep as Ptr(T). The var decl lowering will
+                        // propagate the Ptr type to the named local. All subsequent
+                        // field/method access uses pointee_type() + Deref naturally.
                     }
                     return FunctionBuilder::copy(dst);
                 }
@@ -1357,16 +1390,27 @@ pub(super) fn lower_method_call(
             }
         }
 
-        // For Vector.get() / .first() / .last() / .pop(), auto-register Option[T] and override return type
+        // Borrowing methods (get/first/last) on resource-type elements: Option__Ref_T (Ptr payload).
+        // Consuming methods (pop/remove) and primitive elements: Option__T (value payload).
         let fn_sig_ret = ctx.fn_sigs.get(&effective_name).map(|(_, ret)| *ret);
         if matches!(method_name, "get" | "first" | "last" | "remove" | "pop")
             && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
         {
             let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
-            let option_name = format!("Option__{elem_type_name}");
-            if ctx.lookup_type_by_name(&option_name).is_none() {
-                let inner_type = resolve_inner_type(ctx, elem_type_name);
-                ctx.ensure_option_type_registered(&option_name, inner_type);
+            let inner_type = resolve_inner_type(ctx, elem_type_name);
+            let is_borrowing = matches!(method_name, "get" | "first" | "last");
+            let is_resource_elem = ctx.type_registry.is_resource_type(inner_type);
+            if is_borrowing && is_resource_elem {
+                let option_name = format!("Option__Ref_{elem_type_name}");
+                if ctx.lookup_type_by_name(&option_name).is_none() {
+                    let ptr_type = ctx.type_registry.insert(GirType::Ptr(inner_type));
+                    ctx.ensure_option_type_registered(&option_name, ptr_type);
+                }
+            } else {
+                let option_name = format!("Option__{elem_type_name}");
+                if ctx.lookup_type_by_name(&option_name).is_none() {
+                    ctx.ensure_option_type_registered(&option_name, inner_type);
+                }
             }
         }
         // For Dict/HashMap.get(), auto-register Option[V] so get returns Option
@@ -1395,12 +1439,18 @@ pub(super) fn lower_method_call(
             }
         }
         let ret_type = if let Some(ret) = fn_sig_ret {
-            // Vector.get() / .first() / .last() / .pop() return Option[T], not T — override fn_sigs
             if matches!(method_name, "get" | "first" | "last" | "remove" | "pop")
                 && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
             {
                 let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
-                let option_name = format!("Option__{elem_type_name}");
+                let inner_type = resolve_inner_type(ctx, elem_type_name);
+                let is_borrowing = matches!(method_name, "get" | "first" | "last");
+                let is_resource_elem = ctx.type_registry.is_resource_type(inner_type);
+                let option_name = if is_borrowing && is_resource_elem {
+                    format!("Option__Ref_{elem_type_name}")
+                } else {
+                    format!("Option__{elem_type_name}")
+                };
                 ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
             } else if method_name == "get"
                 && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__"))
@@ -1585,11 +1635,16 @@ fn infer_collection_method_return_type(
         | "has" | "contains_key" | "has_key" => {
             BOOL_TYPE
         }
-        // Vector.get / .first / .last / .remove / .pop → Option[T] (bounds-checked safe access)
         "get" | "first" | "last" | "remove" | "pop" if is_vector => {
-            let elem_type_name = type_name.strip_prefix("Vector__")
-                .unwrap_or("int64_t");
-            let option_name = format!("Option__{elem_type_name}");
+            let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
+            let inner = ctx.type_mapper.lookup_named(elem_type_name).unwrap_or(I64_TYPE);
+            let is_borrowing = matches!(method_name, "get" | "first" | "last");
+            let is_resource = ctx.type_registry.is_resource_type(inner);
+            let option_name = if is_borrowing && is_resource {
+                format!("Option__Ref_{elem_type_name}")
+            } else {
+                format!("Option__{elem_type_name}")
+            };
             ctx.lookup_type_by_name(&option_name).unwrap_or(I64_TYPE)
         }
         // Dict/HashMap.get → Option[V] (safe access with NULL check)

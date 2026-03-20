@@ -198,6 +198,7 @@ pub fn lower_function(
     let mut func = builder.build();
     func.display_name = Some(name.to_string());
     func.def_span = Some(func_span);
+    func.collection_ref_locals = ctx.collection_ref_locals.clone();
     module.functions.push(func);
 }
 
@@ -356,6 +357,7 @@ pub fn lower_equip_method(
 
     let mut func = builder.build();
     func.display_name = Some(format!("{type_name}.{method_name}"));
+    func.collection_ref_locals = ctx.collection_ref_locals.clone();
     module.functions.push(func);
 }
 

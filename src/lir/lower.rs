@@ -3319,14 +3319,40 @@ impl<'a> FuncLowering<'a> {
     /// Get the address of a GIR place.
     fn lower_place_addr(&mut self, place: &Place, bb: BlockId) -> ValueId {
         let slot = self.local_to_slot[place.local.0 as usize];
+        let local_gir_type = self.gir_func.locals[place.local.0 as usize].type_id;
         let mut addr = self.lir_func.next_value();
-        self.lir_func
-            .block_mut(bb)
-            .insts
-            .push(Inst::SlotAddr { dst: addr, slot });
+
+        // T & references (Ptr-typed locals from collection reads): the slot
+        // contains a pointer to the referenced struct. Emit SlotLoad to get
+        // the pointer value — the pointer IS the address of the struct.
+        // This works for all subsequent operations: field access, method calls,
+        // index access, assignment — because addr is the struct address.
+        // T & reference locals from collection borrowing reads: the slot
+        // contains a pointer to the referenced struct. Emit SlotLoad to get
+        // the pointer value (which IS the struct address).
+        let is_ref_local = self.gir_func.collection_ref_locals.contains(&place.local);
+        if is_ref_local {
+            self.lir_func
+                .block_mut(bb)
+                .insts
+                .push(Inst::SlotLoad { dst: addr, slot, ty: LirType::Ptr });
+        } else {
+            self.lir_func
+                .block_mut(bb)
+                .insts
+                .push(Inst::SlotAddr { dst: addr, slot });
+        }
 
         // Track the current GIR type through each projection step.
-        let mut current_gir_type = self.gir_func.locals[place.local.0 as usize].type_id;
+        // For Ptr locals, resolve through the pointer to the pointee type.
+        let mut current_gir_type = if is_ref_local {
+            match self.gir_types.get(local_gir_type) {
+                Some(GirType::Ptr(inner)) => *inner,
+                _ => local_gir_type,
+            }
+        } else {
+            local_gir_type
+        };
 
         for proj in &place.projections {
             match proj {
@@ -5222,6 +5248,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            collection_ref_locals: rustc_hash::FxHashSet::default(),
         };
         module.functions.push(func);
         module
@@ -5296,6 +5323,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            collection_ref_locals: rustc_hash::FxHashSet::default(),
         };
         module.functions.push(func);
 
@@ -5328,6 +5356,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            collection_ref_locals: rustc_hash::FxHashSet::default(),
         });
         module.functions.push(Function {
             name: "caller".into(),
@@ -5352,6 +5381,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            collection_ref_locals: rustc_hash::FxHashSet::default(),
         });
 
         let lir = lower_module(&module);
@@ -5397,6 +5427,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            collection_ref_locals: rustc_hash::FxHashSet::default(),
         });
 
         let lir = lower_module(&module);
@@ -5445,6 +5476,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
+            collection_ref_locals: rustc_hash::FxHashSet::default(),
         });
 
         let lir = lower_module(&module);

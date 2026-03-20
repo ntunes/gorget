@@ -4067,7 +4067,28 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     } else {
                         None
                     };
-                    let effective_ty = recovered_ty.as_ref().or(dst_ty);
+                    // Check if the payload field is Ptr (T & reference from collection read).
+                    // If so, the extracted value is a pointer — use void* regardless of dst type.
+                    let payload_is_ptr = recovered_ty.as_ref().map_or(false, |t| matches!(t, LirType::Ptr))
+                        || {
+                            // Also check the struct definition directly when recovery didn't fire
+                            let arg0_idx2 = args[0].0 as usize;
+                            let check_struct = |sid: StructId| -> bool {
+                                module.structs.get(sid.0 as usize)
+                                    .and_then(|s| s.fields.get(payload_field_idx))
+                                    .map_or(false, |(_, t)| matches!(t, LirType::Ptr))
+                            };
+                            val_types.get(arg0_idx2).and_then(|t| t.as_ref()).map_or(false, |t| {
+                                matches!(t, LirType::Struct(sid) if check_struct(*sid))
+                            }) || ptr_pointee.get(arg0_idx2).and_then(|t| t.as_ref()).map_or(false, |t| {
+                                matches!(t, LirType::Struct(sid) if check_struct(*sid))
+                            })
+                        };
+                    let effective_ty = if payload_is_ptr {
+                        Some(&LirType::Ptr)
+                    } else {
+                        recovered_ty.as_ref().or(dst_ty)
+                    };
                     let ty_name = effective_ty.map(|t| c_type_named(t, sn))
                         .unwrap_or_else(|| "int64_t".to_string());
                     // Determine field access for the payload. Use named struct field access

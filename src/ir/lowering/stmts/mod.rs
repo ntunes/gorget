@@ -264,6 +264,30 @@ fn lower_var_decl(
                     ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
                 }
             }
+            // T & reference propagation: if the RHS operand is Ptr(T) (from a
+            // collection borrowing read) but the local has a non-Ptr type (from
+            // explicit annotation), override the local's type to Ptr(T).
+            // This ensures: no drop emitted, field/method access uses pointee_type().
+            if !needs_reinfer {
+                let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
+                if let Some(GirType::Ptr(_)) = ctx.type_registry.get(inferred) {
+                    if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
+                        builder.locals[local_id.0 as usize].type_id = inferred;
+                        ctx.register_local(name, local_id, inferred);
+                        ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
+                        ctx.collection_ref_locals.insert(local_id);
+                    }
+                }
+            }
+            // Also mark auto-reinferred locals that got Ptr type
+            if needs_reinfer {
+                let actual = builder.locals[local_id.0 as usize].type_id;
+                if let Some(GirType::Ptr(_)) = ctx.type_registry.get(actual) {
+                    if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
+                        ctx.collection_ref_locals.insert(local_id);
+                    }
+                }
+            }
             builder.assign(Place::local(local_id), operand.clone());
             // Track GorgetString temps assigned to Str or String variables.
             // Use the ACTUAL variable type (after reinference) not the original gir_type.
