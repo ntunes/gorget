@@ -368,6 +368,9 @@ pub enum SemanticErrorKind {
     /// Using a reference-type variable after its source has been moved.
     UseAfterSourceMoved { name: String, source_name: String, moved_at: Span },
 
+    /// Mutating a collection while an outstanding borrow exists.
+    MutationWhileBorrowed { source: String, borrow: String },
+
     /// Bodyless function returning a reference type with no `live` params.
     MissingLiveAnnotation { func_name: String },
 
@@ -689,6 +692,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. } => {
                 write!(f, "use of `{name}` after source `{source_name}` was moved")
+            }
+            SemanticErrorKind::MutationWhileBorrowed { source, borrow } => {
+                write!(f, "cannot mutate `{source}` while `{borrow}` borrows from it")
             }
             SemanticErrorKind::MissingLiveAnnotation { func_name } => {
                 write!(f, "function `{func_name}` returns a reference type but has no `live` parameter annotations")

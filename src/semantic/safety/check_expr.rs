@@ -319,6 +319,51 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
+                // Borrow invalidation: mutating collection methods invalidate
+                // outstanding T & borrows from the receiver. This prevents use of
+                // references after the collection is structurally modified.
+                // Only checks variables with explicit Ref types (from T & syntax),
+                // not legacy str view tracking from provenance.
+                {
+                    let method_name = method.node.as_str();
+                    let is_mutating_collection_method = matches!(
+                        method_name,
+                        "push" | "pop" | "set" | "clear" | "sort" | "reverse"
+                        | "insert" | "remove" | "extend" | "reserve" | "put"
+                        | "update" | "add" | "append"
+                    );
+                    if is_mutating_collection_method {
+                        if let Some(recv_def_id) = self.find_root_def_id(receiver) {
+                            let recv_name = self.scopes.get_def(recv_def_id).name.clone();
+                            for (&var_id, origin) in self.var_origins.iter() {
+                                if origin.references_def(recv_def_id) {
+                                    // Only flag explicit T & borrows, not legacy str views
+                                    let def = self.scopes.get_def(var_id);
+                                    let is_ref_type = def.type_id.map_or(false, |tid| {
+                                        matches!(self.types.get(tid), super::super::types::ResolvedType::Ref(_))
+                                    });
+                                    if !is_ref_type { continue; }
+                                    let is_alive = !matches!(
+                                        self.var_states.get(&var_id),
+                                        Some(VarState::Moved { .. })
+                                    );
+                                    if is_alive {
+                                        let var_name = self.scopes.get_def(var_id).name.clone();
+                                        self.error(
+                                            SemanticErrorKind::MutationWhileBorrowed {
+                                                source: recv_name.clone(),
+                                                borrow: var_name,
+                                            },
+                                            expr.span,
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Fallible unwrap tracking: detect guard calls and unwrap on Option/Result
                 if let Expr::Identifier(_) = &receiver.node {
                     if let Some(&recv_def_id) = self.resolution_map.get(&receiver.span.start) {
