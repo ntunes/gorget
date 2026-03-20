@@ -867,6 +867,12 @@ impl<'a> FuncLowering<'a> {
         lir_func.param_names = (0..gir_func.params.len())
             .map(|i| gir_func.locals.get(i + 1).and_then(|l| l.name_hint.clone()))
             .collect();
+        // Mark params that came from GirType::Ptr (bare borrow = const) vs MutPtr (& or !).
+        lir_func.const_params = gir_func
+            .params
+            .iter()
+            .map(|t| matches!(gir_types.get(*t), Some(GirType::Ptr(_))))
+            .collect();
 
         // Create LIR slots for each GIR local.
         let local_to_slot: Vec<SlotId> = gir_func

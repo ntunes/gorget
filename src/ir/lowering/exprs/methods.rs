@@ -1446,22 +1446,33 @@ pub(super) fn lower_method_call(
         };
 
         // Resolve extern bindings: use the C symbol name instead of the Gorget mangled name
+        let sig_name = effective_name.clone(); // keep for fn_param_ownerships lookup
         let call_name = if let Some(c_symbol) = ctx.extern_bindings.get(effective_name.as_str()) {
             c_symbol.clone()
         } else {
             effective_name
         };
 
-        // Collect Move-ownership Move-type arg locals for post-call MoveZero
+        // Collect Move-ownership Move-type arg locals for post-call MoveZero.
+        // Includes both (a) explicit !arg at call site and (b) bare args whose callee
+        // param is declared Move (e.g., collection push/set consuming resource-type args).
         let move_zero_locals: Vec<Place> = args.iter()
-            .zip(lowered_method_args.iter())
-            .filter_map(|(arg, op)| {
-                if !matches!(arg.node.ownership, Ownership::Move) { return None; }
-                if let Operand::Copy(place) | Operand::Move(place) = op {
-                    if place.projections.is_empty()
-                        && is_resource_type_local(place.local, builder, &ctx.type_registry)
-                    {
-                        return Some(place.clone());
+            .enumerate()
+            .filter_map(|(i, arg)| {
+                // Check call-site explicit Move
+                let call_site_move = matches!(arg.node.ownership, Ownership::Move);
+                // Check callee param Move (i+1 because index 0 is self)
+                let callee_move = ctx.fn_param_ownerships.get(&sig_name)
+                    .and_then(|ownerships| ownerships.get(i + 1))
+                    .map(|o| matches!(o, Ownership::Move))
+                    .unwrap_or(false);
+                if !call_site_move && !callee_move { return None; }
+                // Resolve the original local from the arg expression
+                if let Expr::Identifier(name) = &arg.node.value.node {
+                    if let Some((local_id, _)) = ctx.lookup_local(name) {
+                        if is_resource_type_local(local_id, builder, &ctx.type_registry) {
+                            return Some(Place::local(local_id));
+                        }
                     }
                 }
                 None

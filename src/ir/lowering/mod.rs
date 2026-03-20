@@ -2036,56 +2036,67 @@ fn register_collection_method_sigs(
             })
             .unwrap_or(I64_TYPE);
 
-        // Helper: insert fn_sigs + fn_param_abis (self by ptr, rest by value)
-        let mut insert_collection_sig = |name: String, params: Vec<TypeId>, ret: TypeId| {
+        // Helper: insert fn_sigs + fn_param_abis + fn_param_ownerships.
+        // `move_indices` marks which non-self params take ownership (indices into params, 1-based).
+        let mut insert_collection_sig = |name: String, params: Vec<TypeId>, ret: TypeId, move_indices: &[usize]| {
             let abis: Vec<context::ParamABI> = params.iter().enumerate()
                 .map(|(i, _)| if i == 0 { context::ParamABI::ByPtr } else { context::ParamABI::ByValue })
                 .collect();
+            let ownerships: Vec<ast::Ownership> = params.iter().enumerate()
+                .map(|(i, _)| {
+                    if i == 0 { ast::Ownership::MutableBorrow }
+                    else if move_indices.contains(&i) { ast::Ownership::Move }
+                    else { ast::Ownership::Borrow }
+                })
+                .collect();
             ctx.fn_sigs.insert(name.clone(), (params, ret));
-            ctx.fn_param_abis.insert(name, abis);
+            ctx.fn_param_abis.insert(name.clone(), abis);
+            ctx.fn_param_ownerships.insert(name, ownerships);
         };
 
         match base_name {
             "Vector" => {
-                let sigs = vec![
-                    (format!("{mangled_name}__push"), vec![self_ptr, elem_type], UNIT_TYPE),
-                    (format!("{mangled_name}__pop"), vec![self_ptr], elem_type),
-                    (format!("{mangled_name}__get"), vec![self_ptr, I64_TYPE], elem_type),
-                    (format!("{mangled_name}__set"), vec![self_ptr, I64_TYPE, elem_type], UNIT_TYPE),
-                    (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE),
-                    (format!("{mangled_name}__contains"), vec![self_ptr, elem_type], BOOL_TYPE),
-                    (format!("{mangled_name}__remove"), vec![self_ptr, I64_TYPE], elem_type),
-                    (format!("{mangled_name}__insert"), vec![self_ptr, I64_TYPE, elem_type], UNIT_TYPE),
-                    (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE),
-                    (format!("{mangled_name}__clone"), vec![self_ptr], array_type),
-                    (format!("{mangled_name}__iter"), vec![self_ptr], array_type),
+                // (name, params, return_type, move_indices)
+                // move_indices: 1-based param indices that take ownership
+                let sigs: Vec<(String, Vec<TypeId>, TypeId, &[usize])> = vec![
+                    (format!("{mangled_name}__push"), vec![self_ptr, elem_type], UNIT_TYPE, &[1]),    // elem consumed
+                    (format!("{mangled_name}__pop"), vec![self_ptr], elem_type, &[]),
+                    (format!("{mangled_name}__get"), vec![self_ptr, I64_TYPE], elem_type, &[]),
+                    (format!("{mangled_name}__set"), vec![self_ptr, I64_TYPE, elem_type], UNIT_TYPE, &[2]),  // elem consumed
+                    (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE, &[]),
+                    (format!("{mangled_name}__contains"), vec![self_ptr, elem_type], BOOL_TYPE, &[]),
+                    (format!("{mangled_name}__remove"), vec![self_ptr, I64_TYPE], elem_type, &[]),
+                    (format!("{mangled_name}__insert"), vec![self_ptr, I64_TYPE, elem_type], UNIT_TYPE, &[2]),  // elem consumed
+                    (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE, &[]),
+                    (format!("{mangled_name}__clone"), vec![self_ptr], array_type, &[]),
+                    (format!("{mangled_name}__iter"), vec![self_ptr], array_type, &[]),
                 ];
-                for (name, params, ret) in sigs {
-                    insert_collection_sig(name, params, ret);
+                for (name, params, ret, moves) in sigs {
+                    insert_collection_sig(name, params, ret, moves);
                 }
             }
             "Dict" | "HashMap" => {
                 // Dict/HashMap have key and value types
                 // (GorgetDict/GorgetMap are opaque C types, not struct-based in GIR)
-                let sigs = vec![
-                    (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE),
-                    (format!("{mangled_name}__contains"), vec![self_ptr, I64_TYPE], BOOL_TYPE),
-                    (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE),
+                let sigs: Vec<(String, Vec<TypeId>, TypeId, &[usize])> = vec![
+                    (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE, &[]),
+                    (format!("{mangled_name}__contains"), vec![self_ptr, I64_TYPE], BOOL_TYPE, &[]),
+                    (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE, &[]),
                 ];
-                for (name, params, ret) in sigs {
-                    insert_collection_sig(name, params, ret);
+                for (name, params, ret, moves) in sigs {
+                    insert_collection_sig(name, params, ret, moves);
                 }
             }
             "Set" | "HashSet" => {
-                let sigs = vec![
-                    (format!("{mangled_name}__add"), vec![self_ptr, elem_type], UNIT_TYPE),
-                    (format!("{mangled_name}__contains"), vec![self_ptr, elem_type], BOOL_TYPE),
-                    (format!("{mangled_name}__remove"), vec![self_ptr, elem_type], BOOL_TYPE),
-                    (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE),
-                    (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE),
+                let sigs: Vec<(String, Vec<TypeId>, TypeId, &[usize])> = vec![
+                    (format!("{mangled_name}__add"), vec![self_ptr, elem_type], UNIT_TYPE, &[1]),    // elem consumed
+                    (format!("{mangled_name}__contains"), vec![self_ptr, elem_type], BOOL_TYPE, &[]),
+                    (format!("{mangled_name}__remove"), vec![self_ptr, elem_type], BOOL_TYPE, &[]),
+                    (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE, &[]),
+                    (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE, &[]),
                 ];
-                for (name, params, ret) in sigs {
-                    insert_collection_sig(name, params, ret);
+                for (name, params, ret, moves) in sigs {
+                    insert_collection_sig(name, params, ret, moves);
                 }
             }
             _ => {}

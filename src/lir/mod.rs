@@ -521,6 +521,8 @@ pub struct LirFunction {
     pub display_name: Option<String>,
     /// Original Gorget parameter names for trace output.
     pub param_names: Vec<Option<String>>,
+    /// Which pointer params are const (came from `GirType::Ptr`, i.e. bare borrow, not `&`/`!`).
+    pub const_params: Vec<bool>,
 }
 
 impl LirFunction {
@@ -535,6 +537,7 @@ impl LirFunction {
             is_test_fn: false,
             display_name: None,
             param_names: Vec::new(),
+            const_params: Vec::new(),
         }
     }
 

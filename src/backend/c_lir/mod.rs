@@ -858,7 +858,10 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
                 if i > 0 {
                     write!(out, ", ").unwrap();
                 }
-                let ty_str = if matches!(p, LirType::Void) { "void*".to_string() } else { c_type_named(p, &struct_names) };
+                let mut ty_str = if matches!(p, LirType::Void) { "void*".to_string() } else { c_type_named(p, &struct_names) };
+                if func.const_params.get(i) == Some(&true) && matches!(p, LirType::Ptr) {
+                    ty_str = format!("const {ty_str}");
+                }
                 write!(out, "{ty_str} __p{i}").unwrap();
             }
         }
@@ -2273,7 +2276,10 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                     write!(out, ", ").unwrap();
                 }
                 // Void as non-sole param is invalid C — use void* (closure env ptr).
-                let ty_str = if matches!(p, LirType::Void) { "void*".to_string() } else { c_type_named(p, sn) };
+                let mut ty_str = if matches!(p, LirType::Void) { "void*".to_string() } else { c_type_named(p, sn) };
+                if func.const_params.get(i) == Some(&true) && matches!(p, LirType::Ptr) {
+                    ty_str = format!("const {ty_str}");
+                }
                 write!(out, "{ty_str} __p{i}").unwrap();
             }
         }

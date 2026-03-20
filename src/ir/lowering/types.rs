@@ -534,7 +534,12 @@ pub(super) fn register_collection_alias(
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
     mapper.named_types.insert(mangled_name.to_string(), type_id);
 
-    // For Box types, also register a TypeDef so the C backend can emit the typedef
+    // Register TypeDefs for Box types (Resource semantics + free).
+    // Collection types (Vector, Dict, Set) are intentionally left WITHOUT TypeDefs:
+    // giving them Resource semantics requires deep-clone on element extraction (get/pop/remove),
+    // which is not yet implemented. Without deep clone, `auto x = v.get(0).unwrap()` creates
+    // a shallow copy sharing the same data pointer, causing double-free when both x and v are dropped.
+    // See TODO.md for the collection Resource semantics roadmap.
     if base_name == "Box" {
         let inner_type = mapper.map_ast_type(&_type_args[0].node);
         let type_def = TypeDef {
@@ -551,9 +556,6 @@ pub(super) fn register_collection_alias(
         };
         registry.add_type_def(type_def);
     }
-    // NOTE: Collection types remain registered without a TypeDef (Copy semantics).
-    // Changing to Resource requires the full ownership pipeline to handle collection
-    // copies/moves correctly everywhere — not just field extraction. See TODO.md.
 }
 
 /// Register a user-defined enum from AST into the TypeRegistry and TypeMapper.
