@@ -135,7 +135,7 @@ The `?.` operator short-circuits a chain of field accesses when any step produce
 `None`:
 
 ```gorget
-Option[str] city = user?.address?.city
+Option[String] city = user?.address?.city
 ```
 
 If `user` is `None`, the whole expression is `None`. If `user` is `Some` but
@@ -146,7 +146,7 @@ Without `?.`, you'd need nested matches:
 
 ```gorget
 # Without optional chaining — verbose
-Option[str] city = None()
+Option[String] city = None()
 match user:
     case Some(u):
         match u.address:
@@ -168,7 +168,7 @@ The `??` operator provides a default when an `Option` is `None`. The right-hand 
 is **lazy** — it is only evaluated when the left-hand side is `None`:
 
 ```gorget
-str name = user?.name ?? "anonymous"
+String name = user?.name ?? "anonymous"
 int port = config?.port ?? 8080
 ```
 
@@ -176,7 +176,7 @@ This reads naturally: "use this value, or if it's absent, use that default." It
 composes beautifully with `?.`:
 
 ```gorget
-str greeting = user?.profile?.greeting ?? "hello"
+String greeting = user?.profile?.greeting ?? "hello"
 ```
 
 The difference from `unwrap_or`: the `??` operator works directly on `Option` values
@@ -190,8 +190,8 @@ context.
 `Option` answers "is there a value?" `Result` answers "did the operation succeed?"
 
 ```gorget
-Result[int, str] success = Ok(42)
-Result[int, str] failure = Error("something went wrong")
+Result[int, String] success = Ok(42)
+Result[int, String] failure = Error("something went wrong")
 ```
 
 `Result[T, E]` is a generic enum: `T` is the success type, `E` is the error type.
@@ -200,7 +200,7 @@ Like `Option`, the compiler forces you to handle both variants.
 ### Pattern Matching
 
 ```gorget
-Result[int, str] r = parse_number(input)
+Result[int, String] r = parse_number(input)
 match r:
     case Ok(value):
         print(f"parsed: {value}")
@@ -220,13 +220,13 @@ if r is Error(msg):
 ### Common Methods
 
 ```gorget
-Result[int, str] ok = Ok(10)
-Result[int, str] err = Error("fail")
+Result[int, String] ok = Ok(10)
+Result[int, String] err = Error("fail")
 
 ok.unwrap()             # 10 — panics if Error
 ok.unwrap_or(0)         # 10 — eager: default always evaluated
 err.unwrap_or(99)       # 99
-err.unwrap_or_else((str e): 0)  # 0 — lazy: closure only called on Error
+err.unwrap_or_else((String e): 0)  # 0 — lazy: closure only called on Error
 
 ok.is_ok()              # true
 err.is_error()          # true
@@ -238,28 +238,28 @@ err.unwrap_error()      # "fail" — extract error, panics if Ok
 `map` transforms the success value, leaving errors untouched:
 
 ```gorget
-Result[int, str] doubled = ok.map((int x): x * 2)      # Ok(20)
-Result[int, str] still_err = err.map((int x): x * 2)   # Error("fail")
+Result[int, String] doubled = ok.map((int x): x * 2)      # Ok(20)
+Result[int, String] still_err = err.map((int x): x * 2)   # Error("fail")
 ```
 
 `map_err` transforms the error value, leaving successes untouched:
 
 ```gorget
-Result[int, int] coded = err.map_err((str e): e.len())   # Error(4)
+Result[int, int] coded = err.map_err((String e): e.len())   # Error(4)
 ```
 
 `and_then` chains operations that themselves return `Result`:
 
 ```gorget
-Result[int, str] chained = ok.and_then((int x): Ok(x + 1))   # Ok(11)
+Result[int, String] chained = ok.and_then((int x): Ok(x + 1))   # Ok(11)
 ```
 
 `or` and `or_else` provide fallback results:
 
 ```gorget
-Result[int, str] alt = Ok(77)
-Result[int, str] from_ok = ok.or(alt)     # Ok(10) — already succeeded
-Result[int, str] from_err = err.or(alt)   # Ok(77) — falls back to alt
+Result[int, String] alt = Ok(77)
+Result[int, String] from_ok = ok.or(alt)     # Ok(10) — already succeeded
+Result[int, String] from_err = err.or(alt)   # Ok(77) — falls back to alt
 ```
 
 ### Full Method Table
@@ -287,16 +287,16 @@ Here's a secret that connects this chapter to the next: Gorget's `throws` keywor
 is syntactic sugar for `Result`. A function declared as:
 
 ```gorget
-int parse_port(str input) throws str:
+int parse_port(String input) throws String:
 ```
 
-compiles to a function that returns `Result[int, str]`. The `throw` keyword becomes
+compiles to a function that returns `Result[int, String]`. The `throw` keyword becomes
 an early return of `Error(...)`. When the destination variable is typed as `Result[T, E]`,
 the compiler captures the full `Result` instead of auto-unwrapping.
 
 You don't need to think about this to use `throws` — the next chapter covers that
 model in full. But knowing the connection means you can move freely between the two
-styles. A function that returns `Result[int, str]` and a function that `throws str`
+styles. A function that returns `Result[int, String]` and a function that `throws String`
 are interchangeable from the caller's perspective.
 
 **When to use which:** Use `throws` when you're writing application code and want
@@ -320,13 +320,13 @@ A few examples:
 
 ```gorget
 # Option — absence is expected and normal
-Option[str] middle_name = user.middle_name       # many people don't have one
+Option[String] middle_name = user.middle_name       # many people don't have one
 Option[int] index = text.index_of("needle")      # the text might not contain it
 Option[User] found = users.find((User u): u.id == target_id)
 
 # Result — failure means something went wrong
-Result[File, str] file = File.open("/etc/config")
-Result[int, str] parsed = int.try_parse(input)
+Result[File, String] file = File.open("/etc/config")
+Result[int, String] parsed = int.try_parse(input)
 Result[Response, HttpError] response = http.get(url)
 ```
 

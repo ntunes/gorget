@@ -13,7 +13,7 @@ is a tour, not a reference — it shows what's available and how to get started.
 ```gorget
 from std.fs import read_file, write_file, file_exists, mkdir
 
-str content = read_file("config.toml")
+String content = read_file("config.toml")
 write_file("output.txt", "hello world")
 
 if file_exists("data.json"):
@@ -30,9 +30,9 @@ Key functions: `read_file`, `write_file`, `append_file`, `file_exists`,
 ```gorget
 from std.path import path_join, path_basename, path_extension
 
-str full = path_join("/home/user", "docs/readme.md")
-str base = path_basename(full)       # "readme.md"
-str ext = path_extension(full)       # "md"
+String full = path_join("/home/user", "docs/readme.md")
+String base = path_basename(full)       # "readme.md"
+String ext = path_extension(full)       # "md"
 ```
 
 Also: `path_parent`, `path_stem`, `path_normalize`.
@@ -42,10 +42,10 @@ Also: `path_parent`, `path_stem`, `path_normalize`.
 ```gorget
 from std.os import getenv, getcwd, args, platform, exit
 
-str home = getenv("HOME")
-str cwd = getcwd()
-str os = platform()          # "linux", "macos", "windows"
-Vector[str] argv = args()
+String home = getenv("HOME")
+String cwd = getcwd()
+String os = platform()          # "linux", "macos", "windows"
+Vector[String] argv = args()
 
 if argv.len() < 2:
     print("usage: tool <file>")
@@ -57,7 +57,7 @@ if argv.len() < 2:
 ```gorget
 from std.conv import int_to_str, parse_int, parse_float, ord, chr
 
-str s = int_to_str(42)          # "42"
+String s = int_to_str(42)          # "42"
 int n = parse_int("100")        # 100
 char c = chr(65)                # 'A'
 int code = ord('A')             # 65
@@ -115,7 +115,7 @@ from std.process import process_spawn
 
 auto proc = process_spawn("python3", ["-u", "server.py"]).unwrap()
 proc.write_stdin("hello\n")
-str output = proc.read_stdout()
+String output = proc.read_stdout()
 proc.kill()
 ```
 
@@ -124,8 +124,8 @@ proc.kill()
 ```gorget
 from std.io import readline, input
 
-str line = readline()              # read line from stdin
-str name = input("Your name: ")   # prompt + read
+String line = readline()              # read line from stdin
+String name = input("Your name: ")   # prompt + read
 ```
 
 ### Collections (`std.collections`)
@@ -135,7 +135,7 @@ Beyond the prelude types (`Vector`, `Dict`):
 ```gorget
 from std.collections import HashMap, Set, Box
 
-HashMap[str, int] map = HashMap[str, int]()
+HashMap[String, int] map = HashMap[String, int]()
 Set[int] unique = Set[int]()
 Box[int] heap_val = Box(42)
 ```
@@ -194,10 +194,10 @@ files, keep-alive.
 from gg.json import json_parse, json_stringify, Json
 
 Json doc = json_parse("{\"name\": \"Alice\", \"age\": 30}")
-str name = doc["name"].as_str()
+String name = doc["name"].as_str()
 int age = doc["age"].as_int()
 
-str output = json_stringify(doc)
+String output = json_stringify(doc)
 ```
 
 ### Serialization
@@ -207,11 +207,11 @@ For automatic JSON conversion, use `@derive`:
 ```gorget
 @derive(Serializable, Deserializable)
 struct User:
-    str name
+    String name
     int age
 
 User u = User("Alice", 30)
-str json = serialize(u)
+String json = serialize(u)
 User u2 = deserialize[User](json)
 ```
 
@@ -220,7 +220,7 @@ User u2 = deserialize[User](json)
 ```gorget
 from gg.csv import parse_table
 
-Vector[Vector[str]] rows = parse_table(csv_text)
+Vector[Vector[String]] rows = parse_table(csv_text)
 for row in rows:
     print(f"{row[0]}, {row[1]}")
 ```
@@ -261,7 +261,7 @@ log_error(f"connection failed: {reason}")
 ```gorget
 from gg.uuid import uuid4
 
-str id = uuid4()    # "550e8400-e29b-41d4-a716-446655440000"
+String id = uuid4()    # "550e8400-e29b-41d4-a716-446655440000"
 ```
 
 ### SSH (`gg.ssh`)

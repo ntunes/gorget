@@ -132,14 +132,14 @@ automatically in most cases.
 The compiler tracks where borrows come from and ensures they're valid:
 
 ```gorget
-str get_greeting():
+String get_greeting():
     return "hello"         # string literal — always valid
 
-str identity(str s):
+String identity(String s):
     return s               # returns input — lifetime follows parameter
 
-str forward(str s):
-    str local = s          # alias — same lifetime
+String forward(String s):
+    String local = s       # alias — same lifetime
     return local
 ```
 
@@ -154,12 +154,12 @@ When the compiler can't infer lifetimes (trait methods, FFI, ambiguous cases),
 annotate explicitly:
 
 ```gorget
-str first_live(live str a, str b):
+String first_live(live String a, String b):
     return a
 ```
 
 The `live` annotation tells the compiler that the return value borrows from `a`.
-Without it, with two `str` parameters and no body to analyze (e.g., in a trait
+Without it, with two `String` parameters and no body to analyze (e.g., in a trait
 declaration), the compiler wouldn't know which parameter the result depends on.
 
 ### Named Lifetime Groups
@@ -167,7 +167,7 @@ declaration), the compiler wouldn't know which parameter the result depends on.
 For complex cases with multiple borrow sources:
 
 ```gorget
-str pick(live(x) str a, live(y) str b) where x outlives y:
+String pick(live(x) String a, live(y) String b) where x outlives y:
     return a
 ```
 
@@ -182,9 +182,9 @@ Structs can hold borrowed values:
 
 ```gorget
 struct View:
-    str name
+    String name
 
-View make_view(str s):
+View make_view(String s):
     return View(s)         # View borrows from s
 
 void main():
@@ -224,6 +224,6 @@ code.
 | Mutable borrow | `f(&x)` or `f(mutable x)` | Write access, exclusive |
 | Mutable parameter | `void f(Type &x)` | Declares mutable borrow |
 | Auto-borrowing | `x.method()` | Compiler inserts borrow for `self`/`&self` |
-| Lifetime annotation | `live str s` | Explicit borrow tracking |
-| Named lifetimes | `live(name) str s` | Grouped lifetime relationships |
+| Lifetime annotation | `live String s` | Explicit borrow tracking |
+| Named lifetimes | `live(name) String s` | Grouped lifetime relationships |
 | Borrow rule | — | Many readers OR one writer, never both |

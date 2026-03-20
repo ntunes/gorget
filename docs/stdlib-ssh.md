@@ -16,7 +16,7 @@ from gg.ssh import connect, Session, CommandResult
 from gg.ssh import connect, Session, CommandResult
 
 void main():
-    Result[Session, str] res = connect("myserver", 22, "deploy", "s3cret")
+    Result[Session, String] res = connect("myserver", 22, "deploy", "s3cret")
     Session session = res.unwrap()
 
     CommandResult result = session.run("uname -a")
@@ -34,8 +34,8 @@ Holds the output of a remote command.
 
 ```gorget
 struct CommandResult:
-    str stdout
-    str stderr
+    String stdout
+    String stderr
     int exit_code
 ```
 
@@ -65,9 +65,9 @@ Parsed connection parameters from `~/.ssh/config`.
 
 ```gorget
 struct SshConfig:
-    str hostname
+    String hostname
     int port
-    str user
+    String user
 ```
 
 ## Free Functions
@@ -75,7 +75,7 @@ struct SshConfig:
 ### connect
 
 ```gorget
-Result[Session, str] connect(str host, int port, str user, str password)
+Result[Session, String] connect(String host, int port, String user, String password)
 ```
 
 Open an SSH connection, perform key exchange, and authenticate.
@@ -89,7 +89,7 @@ Returns `Error` if the TCP connection fails or authentication is rejected.
 ### parse_ssh_config
 
 ```gorget
-SshConfig parse_ssh_config(str host, int default_port, str default_user)
+SshConfig parse_ssh_config(String host, int default_port, String default_user)
 ```
 
 Parse `~/.ssh/config` and return the resolved settings for `host`. Falls back
@@ -100,13 +100,13 @@ to the provided defaults if the config file is missing or contains no matching
 
 | Signature | Description |
 |---|---|
-| `CommandResult run(&self, str cmd)` | Execute a command and return its output |
+| `CommandResult run(&self, String cmd)` | Execute a command and return its output |
 | `void close(&self)` | Send SSH disconnect and close the socket |
 
 ### run
 
 ```gorget
-CommandResult run(&self, str cmd)
+CommandResult run(&self, String cmd)
 ```
 
 Execute `cmd` on the remote server. Opens a session channel, sends an exec

@@ -85,7 +85,6 @@ These flags work with `build` and `run`:
 
 | Flag | Output |
 |------|--------|
-| `--emit-gir` | Gorget IR (high-level) |
 | `--emit-lir` | Low-level SSA IR |
 | `--emit-c-lir` | Generated C code |
 

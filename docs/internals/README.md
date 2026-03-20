@@ -30,6 +30,7 @@ Semantic       src/semantic/
   Pass 2.5       rewrite.rs         Struct call -> struct literal rewrite
   Pass 3         traits.rs          Trait registry, impl validation
   Pass 4         typecheck.rs       Type inference, exhaustiveness, method resolution
+  Pass 4.5       provenance.rs      String provenance inference (view vs owned)
   Pass 5         safety/            Ownership, lifetimes, concurrency  <-- documented
   |
   v
@@ -40,7 +41,6 @@ LIR            src/lir/             SSA lowering, optimization           <-- doc
   |
   v
 Backend        src/backend/c_lir/   LIR -> C code generation
-               src/backend/c/       GIR -> C code generation (legacy)
   |
   v
 cc -> binary

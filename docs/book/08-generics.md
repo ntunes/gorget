@@ -16,7 +16,7 @@ T identity[T](T x): x
 
 `T` is a *type parameter* — a placeholder that the compiler fills in at each call
 site. When you call `identity[int](42)`, the compiler generates a version specialized
-for `int`. When you call `identity[str]("hello")`, it generates another for `str`.
+for `int`. When you call `identity[String]("hello")`, it generates another for `String`.
 
 Type parameters can appear in parameter types, return types, and local variables:
 
@@ -41,7 +41,7 @@ Specify the type arguments explicitly:
 void main():
     int a = identity[int](42)
     float b = identity[float](3.14)
-    str c = identity[str]("hello")
+    String c = identity[String]("hello")
     int d = first[int](10, 20)
     print(f"{a}")    # 42
     print(f"{b}")    # 3.14
@@ -70,8 +70,8 @@ doesn't infer them at construction sites:
 ```gorget
 void main():
     Container[int] c = Container[int](42)
-    Container[str] s = Container[str]("hello")
-    Pair[int, str] p = Pair[int, str](10, "world")
+    Container[String] s = Container[String]("hello")
+    Pair[int, String] p = Pair[int, String](10, "world")
     print(f"{p.first}")     # 10
     print(f"{p.second}")    # world
 ```
@@ -105,7 +105,7 @@ void main():
     Container[int] c2 = c.wrap()
     print(f"{c2.get()}")             # 42
 
-    Pair[int, str] p = Pair[int, str](10, "world")
+    Pair[int, String] p = Pair[int, String](10, "world")
     print(f"{p.get_first()}")        # 10
     print(f"{p.get_second()}")       # world
 ```
@@ -124,7 +124,7 @@ This extends to standard library types:
 
 ```gorget
 Vector[Vector[int]] grid = Vector[Vector[int]]()
-Dict[str, Vector[int]] groups = Dict[str, Vector[int]]()
+Dict[String, Vector[int]] groups = Dict[String, Vector[int]]()
 Option[Vector[int]] maybe_items = Some(items)
 ```
 
@@ -150,9 +150,9 @@ These are built-in — you don't need to define them. Their variants (`Some`, `N
 
 ```gorget
 Option[int] x = Some(42)
-Option[str] name = None()
-Result[int, str] ok = Ok(100)
-Result[int, str] err = Error("failed")
+Option[String] name = None()
+Result[int, String] ok = Ok(100)
+Result[int, String] err = Error("failed")
 ```
 
 User-defined generic enums follow the same pattern:
@@ -162,7 +162,7 @@ enum Either[A, B]:
     Left(A)
     Right(B)
 
-Either[int, str] val = Either.Left(42)
+Either[int, String] val = Either.Left(42)
 ```
 
 Note: user-defined enum variants require qualified access (`Either.Left`), while the
@@ -182,7 +182,7 @@ Place the trait name before the type parameter:
 
 ```gorget
 trait Printable:
-    str show(self)
+    String show(self)
 
 T echo[Printable T](T x):
     return x
@@ -196,7 +196,7 @@ struct Num:
     int val
 
 equip Num with Printable:
-    str show(self):
+    String show(self):
         return "num"
 
 void main():
@@ -252,7 +252,7 @@ Each monomorphized instantiation gets its own implementation:
 ```gorget
 void main():
     Container[int] c1 = Container[int](100)
-    Container[str] c2 = Container[str]("hello")
+    Container[String] c2 = Container[String]("hello")
     print(f"{c1.code()}")    # 42
     print(f"{c2.code()}")    # 42
 ```
@@ -290,11 +290,11 @@ T identity[T](T x): x
 
 void main():
     identity[int](42)
-    identity[str]("hello")
+    identity[String]("hello")
     identity[float](3.14)
 ```
 
-The compiler generates three separate functions — one for `int`, one for `str`, one
+The compiler generates three separate functions — one for `int`, one for `String`, one
 for `float`. At runtime, there's no indirection and no type erasure. A generic
 function is exactly as fast as a hand-written specialized version.
 

@@ -21,7 +21,7 @@ float average(float x, float y):
 Functions that don't return a value use `void`:
 
 ```gorget
-void greet(str name):
+void greet(String name):
     print(f"Hello, {name}!")
 ```
 
@@ -45,7 +45,7 @@ function fits on one line.
 Parameters are typed with the type-first style:
 
 ```gorget
-str format_greeting(str name, int age):
+String format_greeting(String name, int age):
     return f"Hello {name}, age {age}"
 ```
 
@@ -83,7 +83,7 @@ copied.
 Functions can return tuples:
 
 ```gorget
-str, int parse(str line):
+String, int parse(String line):
     return "key", 42
 
 void main():
@@ -193,7 +193,7 @@ The type syntax is `ReturnType(ParamTypes)`:
 ```gorget
 int(int) transformer            # takes int, returns int
 void() callback                 # takes nothing, returns nothing
-bool(str, str) comparator       # takes two strings, returns bool
+bool(String, String) comparator  # takes two strings, returns bool
 ```
 
 ### Passing Functions as Arguments
@@ -215,8 +215,8 @@ void main():
 |---------|--------|---------|
 | Function | `RetType name(params): body` | `int add(int a, int b): return a + b` |
 | Expression body | `RetType name(params): expr` | `int double(int x): x * 2` |
-| Void function | `void name(params): body` | `void greet(str s): print(s)` |
-| Multiple returns | `T1, T2 name(params):` | `str, int parse(str s):` |
+| Void function | `void name(params): body` | `void greet(String s): print(s)` |
+| Multiple returns | `T1, T2 name(params):` | `String, int parse(String s):` |
 | Closure | `(params): expr` | `(x): x * 2` |
 | Move closure | `!(params): expr` | `!(x): process(x)` |
 | Function type | `RetType(ParamTypes)` | `int(int, int)` |

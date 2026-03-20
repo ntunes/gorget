@@ -24,7 +24,7 @@ else:
 
 ```gorget
 int abs_val = if x >= 0: x else: -x
-str label = if count == 1: "item" else: "items"
+String label = if count == 1: "item" else: "items"
 ```
 
 ---
@@ -103,7 +103,7 @@ else:
 
 ```gorget
 loop:
-    str input = readline()
+    String input = readline()
     if input == "quit":
         break
     process(input)
@@ -181,7 +181,7 @@ match result:
 ```
 
 ```gorget
-Result[int, str] r = Ok(100)
+Result[int, String] r = Ok(100)
 match r:
     case Ok(v):
         print(f"success: {v}")
@@ -208,7 +208,7 @@ match value:
 ### Match as an Expression
 
 ```gorget
-str label = match color:
+String label = match color:
     case "red": "danger"
     case "green": "safe"
     else: "neutral"

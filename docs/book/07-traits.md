@@ -13,7 +13,7 @@ A trait is a named set of method signatures:
 ```gorget
 trait Shape:
     float area(self)
-    str describe(self)
+    String describe(self)
 ```
 
 Any type that implements `Shape` must provide both methods. The `self` parameter
@@ -23,7 +23,7 @@ Traits can require multiple methods, or just one:
 
 ```gorget
 trait Printable:
-    str show(self)
+    String show(self)
 ```
 
 ---
@@ -39,7 +39,7 @@ struct Circle:
 equip Circle with Shape:
     float area(self):
         return 3.14159 * self.radius * self.radius
-    str describe(self):
+    String describe(self):
         return f"circle with radius {self.radius}"
 ```
 
@@ -76,25 +76,25 @@ the trait can override the default or inherit it:
 
 ```gorget
 trait Greeter:
-    str name(self)
-    str greeting(self):
+    String name(self)
+    String greeting(self):
         return "hello"
 
 struct English:
-    str person
+    String person
 
 struct French:
-    str person
+    String person
 
 equip English with Greeter:
-    str name(self):
+    String name(self):
         return self.person
     # greeting() inherited — returns "hello"
 
 equip French with Greeter:
-    str name(self):
+    String name(self):
         return self.person
-    str greeting(self):
+    String greeting(self):
         return "bonjour"    # override the default
 ```
 
@@ -110,9 +110,9 @@ Default methods can call other methods in the same trait:
 
 ```gorget
 trait Summary:
-    str title(self)
-    str body(self)
-    str full(self):
+    String title(self)
+    String body(self)
+    String full(self):
         return f"{self.title()}: {self.body()}"
 ```
 
@@ -128,22 +128,22 @@ parent too:
 
 ```gorget
 trait Named:
-    str name(self)
+    String name(self)
 
 trait Greeter extends Named:
-    str greet(self)
+    String greet(self)
 ```
 
 To equip a type with `Greeter`, you must provide both `name()` and `greet()`:
 
 ```gorget
 struct Person:
-    str first_name
+    String first_name
 
 equip Person with Greeter:
-    str name(self):
+    String name(self):
         return self.first_name
-    str greet(self):
+    String greet(self):
         return f"hi, I'm {self.name()}"
 ```
 
@@ -178,7 +178,7 @@ a trait:
 
 ```gorget
 trait Printable:
-    str show(self)
+    String show(self)
 
 T echo[Printable T](T x):
     return x
@@ -207,13 +207,13 @@ field:
 
 ```gorget
 trait Showable:
-    str show(self)
+    String show(self)
 
 struct Inner:
-    str label
+    String label
 
 equip Inner with Showable:
-    str show(self):
+    String show(self):
         return self.label
 
 struct Outer:
@@ -230,7 +230,7 @@ You can also provide a block to override specific methods while delegating the r
 
 ```gorget
 equip Outer with Showable via inner:
-    str show(self):
+    String show(self):
         return f"Outer: {self.inner.show()}"
 ```
 
@@ -251,7 +251,7 @@ struct Point:
     float y
 
 equip Point with Displayable:
-    str display(self):
+    String display(self):
         return f"({self.x}, {self.y})"
 
 void main():
@@ -337,7 +337,7 @@ Payload values are ignored — only the variant's position matters:
 enum Token:
     Plus
     Number(float)
-    Ident(str)
+    Ident(String)
 
 print(Token.Plus.ordinal())        # 0
 print(Token.Ident("x").ordinal())  # 2
@@ -410,7 +410,7 @@ struct Config:
     int width
     int height
     bool enabled
-    str name
+    String name
 
 Config c = Config.default()    # Config(0, 0, false, "")
 ```
@@ -419,7 +419,7 @@ Config c = Config.default()    # Config(0, 0, false, "")
 
 | Trait | Required Method | Enables |
 |-------|----------------|---------|
-| `Displayable` | `str display(self)` | f-string interpolation, `print()` |
+| `Displayable` | `String display(self)` | f-string interpolation, `print()` |
 | `Equatable` | `bool eq(self, Self other)` | `==` and `!=` |
 | `Comparable` | `int compare(self, Self other)` | `<`, `>`, `<=`, `>=` |
 | `Hashable` | `int hash(self)` | `Dict` keys, `Set` elements |
@@ -429,10 +429,10 @@ Config c = Config.default()    # Config(0, 0, false, "")
 | `Iterator[T]` | `Option[T] next(&self)` | `for` loop iteration |
 | `Iterable[T]` | `Iterator[T] iter(&self)` | `for` loop on collections |
 | `Default` | `Self default()` (static) | Zero/default construction |
-| `Parseable` | `Option[Self] parse(str)` (static) | String parsing |
+| `Parseable` | `Option[Self] parse(String)` (static) | String parsing |
 | `Measurable` | `int len(self)` | `len(x)` free function |
 | `From[T]` | `Self from(T)` (static) | Infallible conversion |
-| `TryFrom[T]` | `Result[Self, str] try_from(T)` (static) | Fallible conversion |
+| `TryFrom[T]` | `Result[Self, String] try_from(T)` (static) | Fallible conversion |
 | `Add[Out]` .. `Neg[Out]` | Various | Operator overloading |
 | `Index[K, V]` | `V get(self, K key)` | `a[k]` read access |
 | `IndexMut[K, V]` | `void set(&self, K key, V value)` | `a[k] = v` write access |

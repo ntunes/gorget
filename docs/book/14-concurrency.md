@@ -104,7 +104,7 @@ can proceed:
 ```gorget
 async void main():
     Channel[int] urgent   = Channel[int](1)
-    Channel[str] messages = Channel[str](4)
+    Channel[String] messages = Channel[String](4)
 
     # ... spawn senders elsewhere ...
 
@@ -113,7 +113,7 @@ async void main():
             case int code = urgent.recv():
                 print(f"urgent: {code}")
                 break
-            case str msg = messages.recv():
+            case String msg = messages.recv():
                 print(msg)
 ```
 
@@ -129,7 +129,7 @@ You declare one with the `shared` keyword:
 
 ```gorget
 shared int counter = 0
-shared Vector[str] log_entries = Vector[str]()
+shared Vector[String] log_entries = Vector[String]()
 ```
 
 The compiler wraps the value in an `Arc<Mutex<T>>` internally. You never touch the lock
@@ -339,7 +339,7 @@ shared variable; all other tasks read via `with`.
 ```gorget
 struct Config:
     int timeout_ms
-    str upstream_host
+    String upstream_host
 
 async void config_manager(Config &cfg, Channel[Config] updates):
     while True:
@@ -348,7 +348,7 @@ async void config_manager(Config &cfg, Channel[Config] updates):
 
 async void handler(Config &cfg, int request_id):
     with cfg:
-        str host = cfg.upstream_host
+        String host = cfg.upstream_host
         int ms   = cfg.timeout_ms
     # use host and ms outside the lock — no yield while holding it
     print(f"request {request_id} → {host} ({ms}ms)")

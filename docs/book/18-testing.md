@@ -278,7 +278,7 @@ test "arithmetic":
     snapshot "doubled" x * 2
 
 test "config":
-    str greeting = "hello world"
+    String greeting = "hello world"
     snapshot "greeting" greeting
 ```
 
@@ -297,7 +297,7 @@ gg test app.gg --snapshot delete "v1"        # remove a version
 **Rules:**
 
 - `snapshot` is only valid inside `test` blocks.
-- The expression must be a primitive (`int`, `float`, `str`, `bool`) or implement
+- The expression must be a primitive (`int`, `float`, `String`, `bool`) or implement
   `Serializable`.
 - Snapshots are stored in `.gorget/snapshots/<file_stem>/<version>.json`.
 

@@ -15,7 +15,7 @@ struct Point:
     float y
 
 struct Person:
-    str name
+    String name
     int age
     bool active
 ```
@@ -33,7 +33,7 @@ Person alice = Person("Alice", 30, true)
 
 ```gorget
 float x = p.x
-str name = alice.name
+String name = alice.name
 print(f"{alice.name} is {alice.age}")
 ```
 
@@ -163,8 +163,8 @@ The built-in `Option` and `Result` variants are available without qualification:
 ```gorget
 Option[int] x = Some(42)       # not Option.Some(42)
 Option[int] y = None()
-Result[int, str] ok = Ok(100)
-Result[int, str] err = Error("fail")
+Result[int, String] ok = Ok(100)
+Result[int, String] err = Error("fail")
 ```
 
 This is a prelude privilege — user-defined enums use qualified access or
@@ -236,16 +236,16 @@ Structs and enums compose freely:
 
 ```gorget
 struct Address:
-    str street
-    str city
+    String street
+    String city
 
 enum ContactMethod:
-    Email(str)
-    Phone(str)
+    Email(String)
+    Phone(String)
     Mail(Address)
 
 struct Person:
-    str name
+    String name
     ContactMethod preferred_contact
 
 Person p = Person("Alice", .Email("alice@example.com"))

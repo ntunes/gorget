@@ -92,7 +92,7 @@ void sdl_quit()                # Shut down SDL, SDL_image, and SDL_ttf.
 ### Window
 
 ```gorget
-SDLWindow sdl_create_window(str title, int w, int h, int flags)
+SDLWindow sdl_create_window(String title, int w, int h, int flags)
 void sdl_destroy_window(SDLWindow win)
 int sdl_get_window_width(SDLWindow win)
 int sdl_get_window_height(SDLWindow win)
@@ -121,7 +121,7 @@ void sdl_set_blend_mode(SDLRenderer r, int mode)
 ### Textures (SDL2_image)
 
 ```gorget
-SDLTexture sdl_load_texture(SDLRenderer r, str path)
+SDLTexture sdl_load_texture(SDLRenderer r, String path)
 void sdl_destroy_texture(SDLTexture t)
 void sdl_render_texture(SDLRenderer r, SDLTexture t, int x, int y)
 void sdl_render_texture_sized(SDLRenderer r, SDLTexture t, int x, int y, int w, int h)
@@ -133,12 +133,12 @@ void sdl_set_texture_alpha(SDLTexture t, int alpha)
 ### Text (SDL2_ttf)
 
 ```gorget
-SDLFont sdl_load_font(str path, int size)
+SDLFont sdl_load_font(String path, int size)
 void sdl_close_font(SDLFont f)
-SDLTexture sdl_render_text(SDLRenderer r, SDLFont f, str text, int red, int green, int blue)
-void sdl_draw_text(SDLRenderer r, SDLFont f, str text, int x, int y, int red, int green, int blue)
-int sdl_text_width(SDLFont f, str text)
-int sdl_text_height(SDLFont f, str text)
+SDLTexture sdl_render_text(SDLRenderer r, SDLFont f, String text, int red, int green, int blue)
+void sdl_draw_text(SDLRenderer r, SDLFont f, String text, int x, int y, int red, int green, int blue)
+int sdl_text_width(SDLFont f, String text)
+int sdl_text_height(SDLFont f, String text)
 ```
 
 ### Events

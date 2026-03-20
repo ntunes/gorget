@@ -29,8 +29,8 @@ need prior exposure to follow along.
    multiple return values, closures.
 
 5. **[Strings and Collections](05-collections.md)**
-   Strings (`str` vs `String`), f-string interpolation, `Vector`, `Dict`,
-   `HashMap`, `Set`, `HashSet`, arrays, tuples, slices, comprehensions.
+   The `String` type (unified, provenance-inferred), f-string interpolation,
+   `Vector`, `Dict`, `HashMap`, `Set`, `HashSet`, arrays, tuples, slices, comprehensions.
 
 6. **[Structs and Enums](06-structs-enums.md)**
    Defining structs, field access, methods via `equip`, enums with payloads,

@@ -2,10 +2,15 @@
 
 > **Module:** `src/semantic/safety/`
 > **Entry point:** `pub fn check_module()` in `mod.rs`
-> **Runs after:** name resolution (Pass 2), type checking (Pass 4)
+> **Runs after:** name resolution (Pass 2), type checking (Pass 4), string provenance (Pass 4.5)
 
 The safety checker enforces ownership, lifetime, and concurrency invariants.
 It is the final semantic pass before IR lowering.
+
+> **String provenance:** Pass 4.5 (`src/semantic/provenance.rs`) runs between
+> type checking and safety checking. It infers view vs owned representation for
+> `String`-typed bindings. The safety checker sees the provenance-adjusted TypeIds
+> — view strings are Copy (no lifetime tracking), owned strings are Move.
 
 ## Module Layout
 

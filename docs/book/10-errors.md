@@ -33,7 +33,7 @@ The happy path reads like straight-line code.
 Add `throws` after the parameter list, with the error type:
 
 ```gorget
-int parse_port(str input) throws str:
+int parse_port(String input) throws String:
     if input.is_empty():
         throw "empty input"
     Option[int] n = int.parse(input)
@@ -46,7 +46,7 @@ int parse_port(str input) throws str:
             throw f"not a number: {input}"
 ```
 
-The function returns `int` on success. On failure, it `throw`s a `str` describing what
+The function returns `int` on success. On failure, it `throw`s a `String` describing what
 went wrong. The caller sees a clean signature: "give me a string, I'll give you an int
 or tell you why I can't."
 
@@ -63,7 +63,7 @@ void helper():
 You can throw any expression that matches the declared error type:
 
 ```gorget
-int divide(int a, int b) throws str:
+int divide(int a, int b) throws String:
     if b == 0:
         throw "division by zero"
     return a / b
@@ -76,7 +76,7 @@ automatically propagate errors. If the callee fails, the caller immediately retu
 error — no extra syntax needed.
 
 ```gorget
-Config load_config(str path) throws str:
+Config load_config(String path) throws String:
     String content = read_file(path)      # if this throws, we throw too
     Config cfg = parse_config(content)    # same here
     return cfg
@@ -97,7 +97,7 @@ This is similar to exceptions in other languages, but with two critical differen
 Auto-propagation also works in functions that explicitly return `Result`:
 
 ```gorget
-Result[int, str] double_parsed(str s):
+Result[int, String] double_parsed(String s):
     int val = parse_int(s)      # auto-propagates Error if parse fails
     return Ok(val * 2)
 ```
@@ -110,7 +110,7 @@ auto-unwrap and captures the full `Result` value:
 
 ```gorget
 void main():
-    Result[int, str] result = parse_port("8080")
+    Result[int, String] result = parse_port("8080")
     match result:
         case Ok(port):
             print(f"using port {port}")
@@ -129,7 +129,7 @@ When you just need a default value if something fails:
 
 ```gorget
 void main():
-    Result[int, str] port_result = parse_port(input)
+    Result[int, String] port_result = parse_port(input)
     int port = port_result.unwrap_or(8080)
     print(f"listening on {port}")
 ```
@@ -138,7 +138,7 @@ Or with pattern matching for more nuanced recovery:
 
 ```gorget
 void main():
-    Result[Connection, str] result = connect(host, port)
+    Result[Connection, String] result = connect(host, port)
     match result:
         case Ok(conn):
             handle(conn)
@@ -153,8 +153,8 @@ You can use Result capture inside a `throws` function too, when you want to inte
 an error rather than let it propagate:
 
 ```gorget
-Config load_with_fallback(str path) throws str:
-    Result[Config, str] result = load_config(path)
+Config load_with_fallback(String path) throws String:
+    Result[Config, String] result = load_config(path)
     match result:
         case Ok(cfg):
             return cfg
@@ -189,7 +189,7 @@ functions:
 
 ```gorget
 void main():
-    str content = read_file("config.json") catch (e): "{}"
+    String content = read_file("config.json") catch (e): "{}"
     Config cfg = parse_config(content) catch (e): Config.default()
     serve(cfg)
 ```
@@ -200,9 +200,9 @@ Often you want to add context or convert between error types as an error propaga
 The `rethrow` keyword does this concisely:
 
 ```gorget
-Config load_config(str path) throws ConfigError:
-    str content = read_file(path) rethrow (str e): ConfigError.Io(f"reading {path}: {e}")
-    Config cfg = parse(content) rethrow (str e): ConfigError.Parse(e)
+Config load_config(String path) throws ConfigError:
+    String content = read_file(path) rethrow (String e): ConfigError.Io(f"reading {path}: {e}")
+    Config cfg = parse(content) rethrow (String e): ConfigError.Parse(e)
     return cfg
 ```
 
@@ -243,11 +243,11 @@ Sometimes you need cleanup code that only runs when a function exits via error �
 example, closing a file you opened before the error occurred:
 
 ```gorget
-File open_and_process(str path) throws str:
+File open_and_process(String path) throws String:
     File f = File.open(path)
     on error:
         f.close()
-    str content = f.read_all()
+    String content = f.read_all()
     return process(content)
 ```
 
@@ -257,17 +257,17 @@ propagates. If everything succeeds, the block is skipped entirely.
 For single-statement cleanup, use the **inline form** — no colon, no indented block:
 
 ```gorget
-File open_and_process(str path) throws str:
+File open_and_process(String path) throws String:
     File f = File.open(path)
     on error f.close()
-    str content = f.read_all()
+    String content = f.read_all()
     return process(content)
 ```
 
 Multiple `on error` statements run in **reverse order** (last declared, first executed):
 
 ```gorget
-void setup() throws str:
+void setup() throws String:
     Resource a = acquire_a()
     on error:
         release_a(a)
@@ -310,21 +310,21 @@ natural boundaries — module edges, resource management, top-level handlers.
 
 ## Defining Error Types
 
-For simple cases, `str` is a perfectly fine error type. For larger programs, define an
+For simple cases, `String` is a perfectly fine error type. For larger programs, define an
 enum:
 
 ```gorget
 enum AppError:
-    Io(str)
-    Parse(str)
-    NotFound(str)
-    InvalidState(str)
+    Io(String)
+    Parse(String)
+    NotFound(String)
+    InvalidState(String)
 ```
 
 This gives callers the ability to match on the *kind* of error and respond differently:
 
 ```gorget
-void handle_request(str path) throws AppError:
+void handle_request(String path) throws AppError:
     Result[Data, AppError] result = load_resource(path)
     match result:
         case Ok(data):
@@ -358,8 +358,8 @@ couples everything.
 
 ```gorget
 enum DbError:
-    ConnectionFailed(str host, int port)
-    QueryFailed(str query, str reason)
+    ConnectionFailed(String host, int port)
+    QueryFailed(String query, String reason)
     Timeout(int elapsed_ms)
 ```
 
@@ -370,10 +370,10 @@ enum DbError:
 `throws` is syntactic sugar for `Result`. A function declared as:
 
 ```gorget
-int parse_port(str input) throws str:
+int parse_port(String input) throws String:
 ```
 
-compiles to a function that returns `Result[int, str]`. The `throw` keyword becomes an
+compiles to a function that returns `Result[int, String]`. The `throw` keyword becomes an
 early return of `Error(...)`. Auto-propagation becomes automatic unwrapping of `Ok` or
 early return of `Error`. Type-directed Result capture is the inverse — when the
 destination type is `Result[T, E]`, the compiler skips the auto-unwrap and gives you
@@ -381,7 +381,7 @@ the full `Result` value.
 
 This means `throws` functions and `Result`-returning functions are interchangeable from
 the caller's perspective. Auto-propagation works with both. You can call a library
-function that returns `Result[Config, str]` from a function that `throws str`, and the
+function that returns `Result[Config, String]` from a function that `throws String`, and the
 error propagates automatically — no conversion needed.
 
 **When to use which:** Use `throws` when you're writing application code and want clean
@@ -461,33 +461,33 @@ and `Option`:
 
 ```gorget
 enum ConfigError:
-    FileNotFound(str)
-    ParseFailed(str)
-    MissingField(str)
+    FileNotFound(String)
+    ParseFailed(String)
+    MissingField(String)
 
 struct Config:
-    str host
+    String host
     int port
-    str database
+    String database
 
-Config parse_config(str content) throws ConfigError:
+Config parse_config(String content) throws ConfigError:
     # Parse key=value pairs from a config file
-    Dict[str, str] pairs = Dict[str, str]()
+    Dict[String, String] pairs = Dict[String, String]()
     for line in content.split("\n"):
         if line.is_empty():
             continue
         Option[int] eq = line.index_of("=")
         match eq:
             case Some(pos):
-                str key = line.substring(0, pos).trim()
-                str val = line.substring(pos + 1, line.len()).trim()
+                String key = line.substring(0, pos).trim()
+                String val = line.substring(pos + 1, line.len()).trim()
                 pairs.put(key, val)
             case None:
                 throw ConfigError.ParseFailed(f"invalid line: {line}")
 
-    str host = pairs.get("host") ?? throw ConfigError.MissingField("host")
-    str port_str = pairs.get("port") ?? throw ConfigError.MissingField("port")
-    str db = pairs.get("database") ?? throw ConfigError.MissingField("database")
+    String host = pairs.get("host") ?? throw ConfigError.MissingField("host")
+    String port_str = pairs.get("port") ?? throw ConfigError.MissingField("port")
+    String db = pairs.get("database") ?? throw ConfigError.MissingField("database")
 
     Option[int] port = int.parse(port_str)
     match port:
@@ -496,8 +496,8 @@ Config parse_config(str content) throws ConfigError:
         case None:
             throw ConfigError.ParseFailed(f"invalid port: {port_str}")
 
-Config load_config(str path) throws ConfigError:
-    str content = read_file(path) rethrow (str e): ConfigError.FileNotFound(path)
+Config load_config(String path) throws ConfigError:
+    String content = read_file(path) rethrow (String e): ConfigError.FileNotFound(path)
     return parse_config(content)
 
 void main():

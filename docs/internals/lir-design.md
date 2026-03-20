@@ -2,19 +2,23 @@
 
 ## Motivation
 
-The current compilation pipeline is:
+> **Status (March 2026):** LIR is now the **sole backend**. The legacy GIR→C
+> backend (13,261 lines) has been retired. The pipeline below is the current
+> production pipeline. This document preserves the original design rationale.
+
+The original compilation pipeline was:
 
 ```
 .gg source → Lexer → Parser → Semantic → GIR lowering → C backend → binary
 ```
 
-GIR (Gorget IR) is a high-level, pre-SSA IR that carries type information and ownership semantics. The C backend then performs **31 categories of implicit semantic work** on top of GIR — drop glue emission, vtable construction, closure dispatch, type coercions, collection method inlining, iterator protocol, printf formatting, and more. This work lives entirely in the 10,000-line C backend and is invisible to the optimizer.
+GIR (Gorget IR) is a high-level, pre-SSA IR that carries type information and ownership semantics. The old C backend performed **31 categories of implicit semantic work** on top of GIR — drop glue emission, vtable construction, closure dispatch, type coercions, collection method inlining, iterator protocol, printf formatting, and more. This work lived entirely in the 10,000-line C backend and was invisible to the optimizer.
 
-This coupling creates two problems:
+This coupling created two problems:
 
-1. **Optimization ceiling.** Dead function elimination, copy propagation, and inlining all fail because the optimizer can't see what the backend will reference. Every optimization pass requires reverse-engineering C backend assumptions.
+1. **Optimization ceiling.** Dead function elimination, copy propagation, and inlining all failed because the optimizer couldn't see what the backend would reference. Every optimization pass required reverse-engineering C backend assumptions.
 
-2. **Backend lock-in.** Adding LLVM or WASM backends means reimplementing all 31 categories of implicit work. Each new backend is a full compiler, not a thin translation layer.
+2. **Backend lock-in.** Adding LLVM or WASM backends would mean reimplementing all 31 categories of implicit work. Each new backend would be a full compiler, not a thin translation layer.
 
 LIR solves both by making all implicit operations explicit *before* backend emission.
 
@@ -34,15 +38,17 @@ Key takeaways:
 - **MLIR rejected** — dialect infrastructure is overengineered for a single-language compiler.
 - **Ownership in LIR unnecessary** — Gorget's borrow checker runs on the AST. By LIR time, all ownership decisions are made and drops are inserted as regular calls. (Swift needs OSSA because its borrow analysis runs on SIL.)
 
-## New Pipeline
+## Pipeline
 
 ```
-.gg → Lexer → Parser → Semantic → GIR → LIR → Backend (C / LLVM / WASM)
+.gg → Lexer → Parser → Semantic → GIR → LIR → Backend (C)
 ```
 
-- **GIR** stays as-is: high-level, ownership-aware, good for monomorphization, drop insertion, closure lifting, trait dispatch. No changes needed.
-- **LIR** is a new SSA-form IR where every operation the backend performs is an explicit instruction. Backends become thin 1:1 translators.
-- **GIR → LIR lowering** is a new pass that absorbs the 10,000 lines of implicit C backend logic into structured IR.
+- **GIR** stays as-is: high-level, ownership-aware, good for monomorphization, drop insertion, closure lifting, trait dispatch.
+- **LIR** is an SSA-form IR where every operation the backend performs is an explicit instruction. Backends are thin 1:1 translators.
+- **GIR → LIR lowering** absorbs the implicit C backend logic into structured IR.
+
+The C LIR backend (`src/backend/c_lir/`) is the sole production backend.
 
 ## Design Principles
 
@@ -98,8 +104,7 @@ Structs cover all aggregate types:
 - Gorget structs → LIR Struct with named fields
 - Gorget enums → LIR Struct with `tag: I32` + union-like variant fields
 - Gorget tuples → LIR Struct with positional fields `_0`, `_1`, ...
-- `Str` → Struct `{ data: Ptr, len: I64 }`
-- `GorgetString` → Struct `{ data: Ptr, len: I64, cap: I64 }`
+- `Str` / `String` → Struct `{ data: Ptr, len: I64, cap: I64, alloc: Ptr }` (unified 32-byte struct; `cap == 0` = view, `cap > 0` = owned)
 - `GorgetArray` → Struct `{ data: Ptr, len: I64, cap: I64, elem_size: I64 }`
 - Closures → Struct `{ fn_ptr: Ptr, env: Ptr }`
 - Trait objects → Struct `{ data: Ptr, vtable: Ptr }`
@@ -112,8 +117,7 @@ Structs cover all aggregate types:
 | `int` / `int64` | `I64` |
 | `float` / `float64` | `F64` |
 | `bool` | `Bool` |
-| `str` | `Struct(Str)` |
-| `String` | `Struct(GorgetString)` |
+| `str` / `String` | `Struct(Str)` (unified 32-byte; provenance determines view vs owned) |
 | `cstr` | `Ptr` |
 | `Vector[T]` | `Struct(GorgetArray)` |
 | `Dict[K,V]` | `Struct(GorgetDict_K_V)` |
@@ -358,11 +362,16 @@ GIR `Drop { place }` is resolved during lowering using the type registry. The lo
 ### 4. Type Coercions → Explicit FieldPtr + Load/Store
 
 ```
-// GorgetString → Str (currently implicit in C backend):
-%data = load (field_ptr %gs, GorgetString, 0), Ptr
-%len  = load (field_ptr %gs, GorgetString, 1), I64
-store (field_ptr %str_slot, Str, 0), %data
-store (field_ptr %str_slot, Str, 1), %len
+// String struct copy (unified 32-byte Str):
+// Views (cap==0): shallow memcpy. Owned (cap>0): gorget_string_clone().
+%data  = load (field_ptr %src, Str, 0), Ptr
+%len   = load (field_ptr %src, Str, 1), I64
+%cap   = load (field_ptr %src, Str, 2), I64
+%alloc = load (field_ptr %src, Str, 3), Ptr
+store (field_ptr %dst, Str, 0), %data
+store (field_ptr %dst, Str, 1), %len
+store (field_ptr %dst, Str, 2), %cap
+store (field_ptr %dst, Str, 3), %alloc
 ```
 
 ### 5. Collection Methods → Call to Runtime Functions
@@ -438,59 +447,42 @@ All optimizations move to post-SSA LIR:
 | Tail call optimization | No | **New** — detect in terminators | |
 | Escape analysis | No | **New** — stack-allocate non-escaping | |
 
-## Implementation Plan
+## Implementation Status
 
-### Phase 1: Data Structures + Skeleton
+### Phase 1: Data Structures + Skeleton — **Complete**
 
 - `src/lir/mod.rs` — `LirModule`, `LirFunction`, `Block`, `Inst`, `Term`, `LirType`, `StructDef`
 - `src/lir/types.rs` — type IDs, struct registry, type mapping helpers
-- `src/lir/display.rs` — human-readable LIR dump (`gg build --dump-lir`)
-- `src/lir/validate.rs` — invariant checking (post-SSA: every use dominated by def, block params match jump args)
-- No behavioral changes — just data structures and printers.
 
-### Phase 2: GIR → LIR Lowering (Incremental)
+### Phase 2: GIR → LIR Lowering — **Complete**
 
-Emits **pre-SSA** LIR (slot-based, not SSA). Each sub-phase adds one category:
+All 11 categories of lowering implemented:
+scalars, calls, structs, enums, type conversions, drop elaboration, closures,
+vtables, collections, concurrency (spawn/coroutines/tasks), test harness.
 
-1. **Scalars + arithmetic + control flow** — constants, binops, cmp, branch, return
-2. **Function calls** — Call, CallExtern
-3. **Structs + field access** — SlotAddr, FieldPtr, Load/Store
-4. **Enums + match** — tag field, Switch
-5. **Type conversions** — all explicit Cast/Coercion instructions
-6. **Drop elaboration** — resolve GIR `Drop` into call sequences
-7. **Closures** — closure struct, CallPtr, adapter emission
-8. **Vtables + trait objects** — vtable globals, dispatch via CallPtr
-9. **Collections** — constructor/method lowering to runtime calls
-10. **Concurrency** — spawn wrappers, coroutine state machines, task types
-11. **Test harness** — test runner main()
+### Phase 2.5: SSA Construction — **Complete**
 
-### Phase 2.5: SSA Construction
+Braun et al. algorithm in `src/lir/ssa.rs`.
 
-- Implement Braun et al. algorithm for slot promotion
-- Validate with existing test suite
-- Add `--dump-lir` flag showing both pre-SSA and post-SSA forms
+### Phase 3: C Backend on LIR — **Complete (sole backend)**
 
-### Phase 3: C Backend on LIR
+- `src/backend/c_lir/` — C emitter
+- Legacy GIR→C backend retired (13,261 lines deleted)
+- 843 integration tests, 970 unit tests pass
 
-- New `src/backend/c_lir/` — thin C emitter (~2000 lines)
-- Wire `gg build --backend=c-lir` for A/B testing
-- Run integration tests against both backends
-- Once at parity, replace old C backend
+### Phase 4: LIR Optimizations — **In progress**
 
-### Phase 4: LIR Optimizations
+- Dead function elimination, constant folding implemented
+- Copy propagation blocked on Str/GorgetString TypeId aliasing (see TODO.md)
+- Function inlining, LICM not yet started
 
-- Dead function elimination (trivial — all refs explicit)
-- Copy propagation (trivial — coercions explicit)
-- Function inlining
-- Constant propagation on SSA (more powerful than GIR version)
-
-### Phase 5: LLVM Backend
+### Phase 5: LLVM Backend — **Planned**
 
 - `src/backend/llvm/` using `inkwell` crate
 - `gg build --backend=llvm`
 - Inherits all LIR optimizations
 
-### Phase 6: WASM Backend
+### Phase 6: WASM Backend — **Planned**
 
 - `src/backend/wasm/` with Relooper for structured control flow
 - `gg build --backend=wasm`

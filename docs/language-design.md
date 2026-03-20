@@ -159,7 +159,7 @@ All variables are **zero-initialized by default** (like Go). Declaring a variabl
 int x             # x == 0
 float y           # y == 0.0
 bool flag         # flag == false
-str name          # name == ""
+String name       # name == ""
 ```
 
 This eliminates an entire class of bugs from uninitialized memory reads. For types with no natural zero (e.g., enums, non-nullable structs), the compiler requires an explicit initializer.
@@ -213,14 +213,14 @@ C/Java-style: return type before name, typed parameters.
 int add(int a, int b):
     return a + b
 
-void greet(str name):
+void greet(String name):
     print("Hello, {name}")
 
 # Expression body shorthand for simple functions
 int double(int x): x * 2
 ```
 
-`void` means no return value. `str` is an immutable string slice (like Rust's `&str`). `String` is an owned, heap-allocated string.
+`void` means no return value. `String` is Gorget's unified string type — the compiler infers whether a value is a lightweight view or a heap-allocated owned string. `str` is a permanent alias for `String`.
 
 #### Multiple Return Values
 
@@ -241,7 +241,7 @@ auto (quotient, remainder) = divmod(17, 5)
 auto (_, remainder) = divmod(17, 5)
 
 # Works with any tuple size
-(str, int, bool) parse_header(str line):
+(String, int, bool) parse_header(String line):
     return (name, value, is_required)
 
 auto (name, value, _) = parse_header("Content-Type: text/html")
@@ -308,8 +308,8 @@ Every type in Gorget falls into one of two categories based on whether it owns a
 
 | Category | Meaning | Examples | Parameter passing |
 |----------|---------|----------|-------------------|
-| **Trivial** | Pure data — can be freely copied | `int`, `float`, `bool`, `str`, `Point { float x, float y }` | By value (copy) |
-| **Resource** | Owns a heap allocation, file handle, or lock — cannot be implicitly copied | `String`, `Vector[T]`, `Dict[K,V]`, `Guard[T]` | By pointer (const by default) |
+| **Trivial** | Pure data — can be freely copied | `int`, `float`, `bool`, `String` (view provenance), `Point { float x, float y }` | By value (copy) |
+| **Resource** | Owns a heap allocation, file handle, or lock — cannot be implicitly copied | `String` (owned provenance), `Vector[T]`, `Dict[K,V]`, `Guard[T]` | By pointer (const by default) |
 
 The distinction is about **what the type owns**, not how large it is. A `Point` with two floats is Trivial because it's just data. A `Vector[int]` is Resource because it owns a heap-allocated buffer that must be freed exactly once.
 
@@ -356,18 +356,18 @@ When explicit annotation is needed (e.g., trait methods without bodies), use the
 
 ```gorget
 # Compiler infers: return borrows from both x and y (no annotation needed)
-str longer(str x, str y):
+String longer(String x, String y):
     if x.len() > y.len():
         return x
     return y
 
 # Explicit: when compiler can't infer (e.g., trait methods)
 trait Container:
-    str get(live Container self, int index)
+    String get(live Container self, int index)
     # live tells compiler: return value depends on self's data
 
 # Combining live with & (mutable borrow whose data lives in the return)
-str process(live String &data):
+String process(live String &data):
     data.sort()
     return data.first()
 ```
@@ -383,30 +383,30 @@ str process(live String &data):
 **What requires `live` annotation:**
 - Trait method declarations (no body to analyze; `self` methods use elision, non-`self` multi-param methods need `live`)
 - Extern FFI declarations (no body; same elision rules as traits)
-- Struct fields holding borrowed data (`live str source` marks the field as a borrow)
-- Multiple independent borrow sources needing precision (named groups: `live(a) str x, live(b) str y`)
+- Struct fields holding borrowed data (`live String source` marks the field as a borrow)
+- Multiple independent borrow sources needing precision (named groups: `live(a) String x, live(b) String y`)
 - `outlives` constraints between borrow groups (`where a outlives b`)
 
 ```gorget
 # Explicit on parameters (when compiler can't see the body)
 trait Container:
-    str get(live Container self, int index)
+    String get(live Container self, int index)
 
 # Struct with borrowed data (live on field)
 struct Parser:
-    live str source
+    live String source
     int position
 
-    str remaining(self):
+    String remaining(self):
         return self.source[self.position..]
 
 # Multiple independent borrow sources (named groups)
 struct Merger:
-    live(left) str a
-    live(right) str b
+    live(left) String a
+    live(right) String b
 
 # Lifetime bounds
-str merge(live Merger m) where left outlives right:
+String merge(live Merger m) where left outlives right:
     ...
 ```
 
@@ -421,7 +421,7 @@ Gorget's lifetime system covers the same safety guarantees as Rust's but differs
 | Inference source | Signature only (elision rules) | Function body analysis + elision fallback |
 | Single ref param | Auto-inferred (elision rule 1) | Auto-inferred (same rule) |
 | `self` methods | Auto-inferred (elision rule 3) | Auto-inferred (same rule) |
-| Multi-param, has body | Must annotate: `fn f<'a>(x: &'a str, y: &str) -> &'a str` | Auto-inferred from body — compiler traces which params reach `return` |
+| Multi-param, has body | Must annotate: `fn f<'a>(x: &'a str, y: &str) -> &'a str` (Rust) | Auto-inferred from body — compiler traces which params reach `return` |
 | Multi-param, no body | Must annotate (same) | Must annotate with `live` keyword |
 | Syntax | `'a`, `'b`, `'static`, `where 'a: 'b` | `live`, `live(a)`, `live(b)`, `where a outlives b` |
 | Named lifetimes | Always named: `'a` | Only when needed for `outlives`; anonymous `live` covers most cases |
@@ -430,7 +430,7 @@ Gorget's lifetime system covers the same safety guarantees as Rust's but differs
 
 ```gorget
 # Gorget: no annotation needed — compiler reads the body
-str longer(str x, str y):
+String longer(String x, String y):
     if x.len() > y.len():
         return x
     return y
@@ -462,7 +462,7 @@ Every function is assigned one of four purity levels, from purest to most effect
 | **Pure** | Reads only its arguments, calls only pure functions, no globals or IO | `int double(int x): x * 2` |
 | **ReadOnly** | May read global variables but never mutates them, no IO | `int get_threshold(): return GLOBAL_MAX` |
 | **MutatesArgs** | May mutate `&` or `!` parameters but no globals or IO | `void push(Vector[int] &v, int x): v.push(x)` |
-| **HasSideEffects** | Anything else: IO, global mutation, shared variable access, extern calls | `void greet(str name): print(f"hello {name}")` |
+| **HasSideEffects** | Anything else: IO, global mutation, shared variable access, extern calls | `void greet(String name): print(f"hello {name}")` |
 
 Purity levels form a lattice ordered by increasing impurity. When a function calls another, its purity is the *join* (least-pure) of its local purity and all callee purities. This means purity propagates conservatively through the call graph.
 
@@ -546,7 +546,7 @@ Built-in `Option` and `Result` variants (`Ok`, `Error`, `Some`, `None`) are part
 ```gorget
 Color c = Color.Red()              # user enum — qualified required
 Option[int] x = Some(42)           # prelude — bare OK
-Result[int, str] r = Ok(42)        # prelude — bare OK
+Result[int, String] r = Ok(42)     # prelude — bare OK
 
 match c:
     case Color.Red():
@@ -648,7 +648,7 @@ struct Pair[A, B]:
 
 ```gorget
 trait Displayable:
-    str display(self)
+    String display(self)
 
 trait Comparable:
     int compare(self, Self other)
@@ -662,8 +662,8 @@ trait Greetable:
 
 # Trait inheritance with extends
 trait Animal extends Displayable:
-    str name(self)
-    str sound(self)
+    String name(self)
+    String sound(self)
 
 # Iteration traits (generic parameter pattern)
 trait Iterable[T]:
@@ -728,12 +728,12 @@ Method receivers are **auto-borrowed**: the compiler automatically takes a refer
 
 ```gorget
 equip Point with Displayable:
-    str display(self):
+    String display(self):
         return "({self.x}, {self.y})"
 
 # Generic implementation — bound on the equip's T
 equip[Displayable T] Vector[T] with Displayable:
-    str display(self):
+    String display(self):
         auto parts = [item.display() for item in self]
         return "[{parts.join(", ")}]"
 
@@ -765,7 +765,7 @@ void complex[Displayable & Cloneable T, Into[T] U](T a, U b):
 The `where` keyword is only for `outlives` borrow-group ordering:
 
 ```gorget
-str pick[Displayable T](live(a) T x, live(b) T y) where a outlives b:
+String pick[Displayable T](live(a) T x, live(b) T y) where a outlives b:
     return x
 ```
 
@@ -790,14 +790,14 @@ for shape in shapes:
     shape.render()        # vtable dispatch — could be Circle or Rectangle
 
 # Return type is a trait — caller doesn't know the concrete type
-Box[Shape] make_shape(str kind) throws ValueError:
+Box[Shape] make_shape(String kind) throws ValueError:
     match kind:
         case "circle": Box.new(Circle(1.0))
         case "rect": Box.new(Rectangle(1.0, 1.0))
         else: throw ValueError("unknown shape: {kind}")
 ```
 
-**Design rationale:** No `dyn`/`dynamic` keyword. The programmer focuses on *what* they want (a Shape), not *how* it's dispatched. The compiler has enough information to decide. Generics are still monomorphized — `Vector[int]` and `Vector[str]` generate separate specialized code. This combines the simplicity of Go's interfaces with the performance of Rust's monomorphized generics.
+**Design rationale:** No `dyn`/`dynamic` keyword. The programmer focuses on *what* they want (a Shape), not *how* it's dispatched. The compiler has enough information to decide. Generics are still monomorphized — `Vector[int]` and `Vector[String]` generate separate specialized code. This combines the simplicity of Go's interfaces with the performance of Rust's monomorphized generics.
 
 ### 4.9 Const Generics
 
@@ -892,7 +892,7 @@ String label = match color:
 `in` works as a boolean operator outside of `for` loops, testing whether a value exists in a collection:
 
 ```gorget
-# Works on Vector, Set, Dict (checks keys), Array, str, String, Range
+# Works on Vector, Set, Dict (checks keys), Array, String, Range
 if "admin" in roles:
     grant_access()
 
@@ -912,7 +912,7 @@ if "name" in config:
     print(config["name"])
 
 # Use in match guards and while conditions
-Result[int, str] parsed = parse(input)
+Result[int, String] parsed = parse(input)
 match parsed:
     case Ok(n) if n in 1..=100: print("valid")
     else: print("out of range")
@@ -1024,14 +1024,14 @@ Functions that can fail use `throws`. Errors auto-propagate without `?`:
 
 ```gorget
 # Clean: no ?, no Result wrapping
-Data process(str path) throws AppError:
+Data process(String path) throws AppError:
     String content = read_file(path)          # auto-propagates if error
     Config config = parse_config(content)     # auto-propagates if error
     return transform(config)
 
 # To handle an error locally, use type-directed Result capture:
-Data safe_process(str path) throws AppError:
-    Result[str, AppError] result = read_file(path)   # Result type suppresses auto-propagation
+Data safe_process(String path) throws AppError:
+    Result[String, AppError] result = read_file(path)   # Result type suppresses auto-propagation
     match result:
         case Ok(content): return parse(content)
         case Error(e):
@@ -1039,7 +1039,7 @@ Data safe_process(str path) throws AppError:
             return default_data()
 
 # To explicitly raise an error, use throw:
-Record parse_line(str line) throws ParseError:
+Record parse_line(String line) throws ParseError:
     if line.is_empty():
         throw ParseError("empty line")      # raises error, exits function
     return parse(line)
@@ -1070,7 +1070,7 @@ enum AppError:
     NotFound(String)
 
 equip AppError with Displayable:
-    str display(self):
+    String display(self):
         match self:
             case Io(e): "IO error: {e}"
             case Parse(e): "Parse error: {e}"
@@ -1094,7 +1094,7 @@ Three layers, from cheap to detailed:
 
 ```gorget
 # Adding context:
-Result[str, IOError] content = read_file(path)
+Result[String, IOError] content = read_file(path)
     .context("loading config from {path}")
 
 # Accessing trace:
@@ -1127,7 +1127,7 @@ void critical_section():
 **Result** = environmental failures (the external world didn't cooperate):
 - File I/O (open, read, write — file might not exist, permissions, disk full)
 - Network (connect, send, recv — host unreachable, timeout)
-- Parsing external data (JSON, TOML, regex compile, `str.to_int`)
+- Parsing external data (JSON, TOML, regex compile, `String.to_int`)
 - Process spawn (command not found, permission denied)
 - TLS/crypto (handshake failure, invalid certificate)
 
@@ -1488,7 +1488,7 @@ Postfix `.await()` as a method-call suffix (similar to Rust's `.await` but with 
 
 ```gorget
 # async + throws compose naturally
-async String fetch(str url) throws HttpError:
+async String fetch(String url) throws HttpError:
     Response resp = http.get(url).await()      # .await() is postfix
     return resp.text().await()
 
@@ -1514,12 +1514,12 @@ async void fetch_all():
     print("{a}, {b}")
 
 # async closures
-auto fetcher = async (str url):
+auto fetcher = async (String url):
     return http.get(url).await()
 
 # async with error handling (throws + Result capture)
-async void resilient_fetch(str url):
-    Result[str, IOError] result = fetch(url).await()
+async void resilient_fetch(String url):
+    Result[String, IOError] result = fetch(url).await()
     match result:
         case Ok(data): print(data)
         case Error(e): print("Failed: {e}")
@@ -1603,7 +1603,7 @@ unsafe:
 ```gorget
 # Declare external C functions
 extern "C":
-    int printf(str format, ...)
+    int printf(String format, ...)
     RawPtr[void] malloc(uint size)
     void free(RawPtr[void] ptr)
 
@@ -1633,7 +1633,7 @@ unsafe void dangerous_operation(RawPtr[int] ptr):
 F-strings (prefix `f`) support interpolation — any type implementing Displayable auto-formats:
 
 ```gorget
-str name = "world"
+String name = "world"
 int count = 42
 print(f"Hello, {name}! Count is {count}")
 print(f"Math: {2 + 2}")                     # expressions in braces
@@ -1694,7 +1694,7 @@ equip[Displayable T] List[T]:
             case Nil: 0
 
 equip[Displayable T] List[T] with Displayable:
-    str display(self):
+    String display(self):
         match self:
             case Cons(head, tail):
                 match *tail:
@@ -1729,7 +1729,7 @@ void main():
 | 8 | **Compilation target** | LLVM (Cranelift for debug builds in future) |
 | 9 | **Package management** | Built into `gg` CLI (`gg new`, `gg add`, `gg publish`, etc.) |
 | 10 | **Option handling** | `Option[T]` with rich sugar: `is` pattern matching, `?.` optional chaining, `??` default operator, `.unwrap()`, `.unwrap_or()`, `?` early return |
-| 11 | **Tuple syntax** | `(int, str)` — concise, universal |
+| 11 | **Tuple syntax** | `(int, String)` — concise, universal |
 | 12 | **Array syntax** | C-style: `int[5]` fixed array, `Vector[int]` growable, `int[]` slice |
 | 13 | **Operator overloading** | Via traits (like Rust) |
 | 14 | **Type aliases** | `type Name = String` |
@@ -1882,7 +1882,7 @@ Comprehensions produce **owned** collections. The iterator yields owned or clone
 
 ```gorget
 # Default: immutable borrow (people still valid after)
-Vector[str] names = [p.name for p in people]
+Vector[String] names = [p.name for p in people]
 
 # Consuming: takes ownership of each person (people is gone after)
 Vector[String] names = [!p.name for p in !people]
@@ -2043,26 +2043,34 @@ Vector[float] row = matrix[0]   # calls matrix.get(0)
 
 ## 23. String Types in Depth
 
+Gorget has a single `String` type. The compiler automatically infers whether a value is a **view** (lightweight, no allocation — backed by a pointer and length into existing data) or **owned** (heap-allocated, growable). Programmers write `String` everywhere and the compiler picks the cheapest representation. `str` is a permanent alias for `String` and can be used interchangeably.
+
+This is similar to how Swift's `String` unifies owned and borrowed representations behind a single type, but Gorget's provenance inference is fully compile-time — there is no reference-counting or copy-on-write at runtime.
+
+**Provenance inference rules:**
+- String literals (`"hello"`) are views into static data — zero allocation.
+- Concatenation, formatting, and mutation produce owned strings.
+- Passing a string to a function that only reads it keeps the view provenance.
+- The compiler inserts ownership promotion (copy to heap) only when needed — e.g., storing into a collection or returning from a function that outlives the source.
+
 ```gorget
-# str  - immutable string slice (borrowed, like Rust's &str)
-# String - owned, heap-allocated, growable (like Rust's String)
+# All of these are type String (str is an alias)
+String literal = "hello"               # view into static data — no allocation
+String owned = "hello" + " world"      # owned — concatenation allocates
 
-str literal = "hello"                # string literal, type is str
-String owned = String.from("hello")  # explicit owned string
-
-# Automatic coercion: String -> str (deref coercion)
-void takes_str(str s):
+# No coercion needed — it's the same type
+void greet(String s):
     print(s)
 
-String owned = String.from("world")
-takes_str(owned)           # String auto-coerces to str
+greet("hi")                            # view — no allocation
+greet("hello" + " world")             # owned — compiler promotes automatically
 
 # Raw strings (no escape processing)
-str regex = r"^\d+\.\d+$"
-str path = r"C:\Users\name\docs"
+String regex = r"^\d+\.\d+$"
+String path = r"C:\Users\name\docs"
 
 # Multi-line strings
-str query = """
+String query = """
     SELECT *
     FROM users
     WHERE active = true
@@ -2076,10 +2084,10 @@ char letter = 'A'
 char emoji = '\u{1F40D}'     # snake emoji
 
 # String interpolation (f-strings only)
-str greeting = f"Hello, {name}! You are {age} years old."
-str math = f"2 + 2 = {2 + 2}"
-str formatted = f"Pi is approximately {pi:.4f}"      # format specifiers
-str hex = f"Color: #{r:02x}{g:02x}{b:02x}"          # zero-padded hex
+String greeting = f"Hello, {name}! You are {age} years old."
+String math = f"2 + 2 = {2 + 2}"
+String formatted = f"Pi is approximately {pi:.4f}"      # format specifiers
+String hex = f"Color: #{r:02x}{g:02x}{b:02x}"          # zero-padded hex
 
 # String repetition (Python-style * operator)
 String line = "-" * 40                   # "----------------------------------------"
@@ -2087,7 +2095,7 @@ String indent = "  " * depth             # repeat by variable
 String border = "=-" * 20               # "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-"
 ```
 
-String repetition uses `*` with a string on the left and an integer on the right (like Python's `"abc" * 3`). This is implemented via the `Mul[int]` trait on `str` and `String`, so it composes naturally with operator overloading.
+String repetition uses `*` with a string on the left and an integer on the right (like Python's `"abc" * 3`). This is implemented via the `Mul[int]` trait on `String`, so it composes naturally with operator overloading.
 
 ---
 
@@ -2155,7 +2163,7 @@ Vector[int] v = [10, 20, 30]
 Option[int] x = v.get(5)            # None (not a panic)
 int y = v.get(1).unwrap()           # 20
 
-Dict[str, int] m = {"a": 1}
+Dict[String, int] m = {"a": 1}
 Option[int] val = m.get("z")        # None (not a panic)
 int fallback = m.get("z") ?? 0      # 0 via default operator
 ```
@@ -2172,7 +2180,7 @@ Python-style `with` for explicit resource scoping:
 
 ```gorget
 # In a throws function, errors auto-propagate:
-void read_data(str path) throws IoError:
+void read_data(String path) throws IoError:
     with File.open(path) as file:
         String content = file.read_all()
         print(content)
@@ -2312,7 +2320,7 @@ A plain `assert` with a comparison automatically captures and displays both side
 
 ```gorget
 test "string operations":
-    str result = greet("world")
+    String result = greet("world")
     assert result == "hello world"
 ```
 
@@ -2457,7 +2465,7 @@ bench "vector sort":
     data.sort()
 
 bench "string concat":
-    str s = "hello" + " world"
+    String s = "hello" + " world"
 ```
 
 ```bash
@@ -2640,11 +2648,11 @@ void platform_init():
     # Windows-specific setup
 
 @cfg(debug)
-void debug_log(str msg):
+void debug_log(String msg):
     print("[DEBUG] {msg}")
 
 @cfg(not(debug))
-void debug_log(str msg):
+void debug_log(String msg):
     pass    # no-op in release
 ```
 
@@ -2897,12 +2905,12 @@ struct Record:
     String name
     int value
 
-Record parse_line(str line) throws ProcessError:
-    auto parts = line.split(',').collect[Vector[str]]()
+Record parse_line(String line) throws ProcessError:
+    auto parts = line.split(',').collect[Vector[String]]()
     if parts.len() != 2:
         throw ProcessError.InvalidFormat("expected 2 fields, got {parts.len()}")
     String name = parts[0].trim().to_string()
-    Result[int, str] parsed = parts[1].trim().parse[int]()
+    Result[int, String] parsed = parts[1].trim().parse[int]()
     int value = parsed.map_err((e): ProcessError.Parse("invalid number: {e}")).unwrap()
     return Record(name, value)
 
@@ -2935,8 +2943,8 @@ void main():
 
 ```gorget
 trait Animal:
-    str name(self)
-    str speak(self)
+    String name(self)
+    String speak(self)
 
     String describe(self):
         return "{self.name()} says {self.speak()}"
@@ -2949,17 +2957,17 @@ struct Cat:
     bool indoor
 
 equip Dog with Animal:
-    str name(self):
+    String name(self):
         return self.name
 
-    str speak(self):
+    String speak(self):
         return "woof!"
 
 equip Cat with Animal:
-    str name(self):
+    String name(self):
         return self.name
 
-    str speak(self):
+    String speak(self):
         if self.indoor:
             return "mew"
         return "MEOW!"
@@ -3115,7 +3123,7 @@ Gorget ships with a rich standard library — everything you need for common tas
 ```
 std/
 ├── core/               # Auto-imported, always available
-│   ├── types           # Primitives, Option, Result, String, str, bool, tuples
+│   ├── types           # Primitives, Option, Result, String, bool, tuples
 │   ├── traits          # Displayable, Cloneable, Comparable, Equatable, Hashable, etc.
 │   ├── ops             # Add, Sub, Mul, Div, Mod, Index (operator traits)
 │   └── mem             # Box, Rc, Arc, size_of, drop
@@ -3268,7 +3276,7 @@ trait Default           # .default() — default value (static method)
 trait Iterable          # .iter() — produce an Iterator
 trait From[T]           # .from(T) — infallible type conversion (static method)
 trait TryFrom[T]        # .try_from(T) — fallible type conversion (static method)
-trait Parseable          # .parse(str) — fallible string parsing (static method)
+trait Parseable          # .parse(String) — fallible string parsing (static method)
 trait Serializable      # .serialize(ser) — serialization (derivable via @derive, import gg.json)
 trait Deserializable    # .deserialize(de) — deserialization (derivable via @derive, import gg.json)
 trait Debuggable        # *Not yet implemented* — development/debug representation

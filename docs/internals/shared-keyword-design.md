@@ -18,7 +18,7 @@ synchronization does this custody transfer need?"
 ```
 shared int count = 0                           # CFA decides: ARC + Mutex (if mutable borrows cross boundaries)
 shared Config config = load_config()           # CFA decides: ARC only (if only immutable borrows)
-shared(rwlock) Dict[str, str] cache = Dict()   # User override: ARC + RwLock
+shared(rwlock) Dict[String, String] cache = Dict()   # User override: ARC + RwLock
 shared(atomic) int flags = 0                   # User override: ARC + Atomic (scalars only)
 ```
 

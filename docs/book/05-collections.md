@@ -7,23 +7,23 @@ hash maps, sets, arrays, tuples, and comprehensions.
 
 ## Strings
 
-### str vs String
+### String
 
-Gorget has two string types with different ownership semantics:
-
-- **`str`** — an immutable, borrowed string slice. Zero-cost to pass around. Cannot
-  be grown or modified.
-- **`String`** — an owned, heap-allocated string. Can be concatenated, modified,
-  and built up.
+Gorget has a single string type: **`String`**. The compiler automatically decides
+whether a value is an owned, heap-allocated string or a lightweight view (borrowed
+slice) via **provenance inference** — you just write `String` everywhere.
 
 ```gorget
-String owned = "hello"        # owned String
-str borrowed = "world"        # borrowed slice
+String greeting = "hello"     # literal — view (no allocation)
+String combined = "a" + "b"   # concatenation — owned (heap-allocated)
 ```
 
-String literals adapt to context: in a `String` declaration they produce a `String`;
-as a function argument expecting `str` they produce a `str`. You usually don't need
-to think about it.
+String literals, function parameters, and for-loop bindings are typically inferred
+as views (zero-cost, no allocation). Concatenation, f-strings, and methods like
+`to_upper()` produce owned strings.
+
+> **Note:** `str` is accepted as a permanent alias for `String`. Older code using
+> `str` continues to work unchanged.
 
 ### Concatenation
 
@@ -40,7 +40,7 @@ print(a)
 Use f-strings to embed any expression inside `{}`:
 
 ```gorget
-str name = "Alice"
+String name = "Alice"
 int age = 30
 print(f"Name: {name}, Age: {age}")
 ```
@@ -51,7 +51,7 @@ For literal braces, double them: `f"{{x}}"` prints `{x}`.
 ### Common String Methods
 
 ```gorget
-str s = "Hello, World!"
+String s = "Hello, World!"
 
 s.starts_with("Hello")        # true
 s.ends_with("World!")         # true
@@ -66,9 +66,9 @@ s.replace("World", "Gorget") # "Hello, Gorget!"
 s.len()                      # character count
 s.byte_len()                 # byte count (may differ for Unicode)
 
-Vector[str] parts = "a,b,c".split(",")   # ["a", "b", "c"]
-Option[int] pos = s.index_of(",")        # Some(5)
-str sub = s.substring(0, 5)              # "Hello"
+Vector[String] parts = "a,b,c".split(",")   # ["a", "b", "c"]
+Option[int] pos = s.index_of(",")           # Some(5)
+String sub = s.substring(0, 5)              # "Hello"
 ```
 
 ### Raw Strings
@@ -91,7 +91,7 @@ print(raw)    # no \n escape here
 ```gorget
 auto v = [10, 20, 30]                # literal — inferred as Vector[int]
 Vector[int] empty = Vector[int]()    # empty vector with explicit type
-Vector[str] names = Vector[str]()
+Vector[String] names = Vector[String]()
 ```
 
 ### Basic Operations
@@ -132,8 +132,8 @@ auto c = a + b        # [1, 2, 3, 4, 5]
 ### Creation
 
 ```gorget
-auto d = {"x": 10, "y": 20}              # literal — Dict[str, int]
-Dict[str, int] empty = Dict[str, int]()   # explicit type
+auto d = {"x": 10, "y": 20}              # literal — Dict[String, int]
+Dict[String, int] empty = Dict[String, int]()   # explicit type
 ```
 
 ### Basic Operations
@@ -150,7 +150,7 @@ int len = d.len()     # 3
 ### Iteration
 
 ```gorget
-Dict[str, int] ages = Dict[str, int]()
+Dict[String, int] ages = Dict[String, int]()
 ages.put("Alice", 30)
 ages.put("Bob", 25)
 
@@ -217,7 +217,7 @@ performance, use `HashMap[K, V]` instead. It has the same API as `Dict`:
 ```gorget
 from std.collections import HashMap
 
-HashMap[str, int] counts = HashMap[str, int]()
+HashMap[String, int] counts = HashMap[String, int]()
 counts.put("apple", 3)
 counts.put("banana", 5)
 int c = counts.get("apple") ?? 0      # 3
@@ -305,7 +305,7 @@ print(f"{y}")    # 20
 Works with function return values:
 
 ```gorget
-str, int parse_header(str line):
+String, int parse_header(String line):
     return "Content-Type", 200
 
 auto name, code = parse_header("...")
@@ -356,8 +356,7 @@ All three forms support the optional `if` filter.
 
 | Type | Literal | Key Operations |
 |------|---------|----------------|
-| `str` | `"text"` | Borrowed, immutable, zero-cost |
-| `String` | `"text"` (owned context) | Owned, concatenation with `+` |
+| `String` | `"text"` | Provenance-inferred (view or owned) |
 | `Vector[T]` | `[1, 2, 3]` | `push`, `[]`, `len`, `for` |
 | `Dict[K, V]` | `{"k": v}` | `[]`, `put`, `get`, `len`, ordered |
 | `HashMap[K, V]` | (constructor) | Same API as `Dict`, unordered, faster |

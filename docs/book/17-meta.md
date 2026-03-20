@@ -13,7 +13,7 @@ Compile-time values, inlined everywhere they're used:
 ```gorget
 meta int MAX_CONNECTIONS = 1024
 meta int BUFFER_SIZE = MAX_CONNECTIONS * 64
-meta str VERSION = "2.1.0"
+meta String VERSION = "2.1.0"
 meta float PI = 3.14159265358979
 meta bool DEBUG = false
 ```
@@ -83,10 +83,10 @@ Enable features from the command line:
 
 ```gorget
 meta if feature("debug_logging"):
-    void log(str msg):
+    void log(String msg):
         print(f"[DEBUG] {msg}")
 else:
-    void log(str msg):
+    void log(String msg):
         pass
 ```
 
@@ -180,8 +180,8 @@ Available struct builtins:
 | `fields(T)` | List of (name, type) pairs |
 | `field_names(T)` | List of field names |
 | `field_count(T)` | Number of fields |
-| `has_field(T, str)` | Whether field exists |
-| `field_type(T, str)` | Type of a field |
+| `has_field(T, String)` | Whether field exists |
+| `field_type(T, String)` | Type of a field |
 | `field_value(val, name)` | Read field by name |
 | `field_set(obj, name, value)` | Write field by name |
 
@@ -203,7 +203,7 @@ void list_variants[T]():
 | `variant_names(T)` | List of variant names |
 | `variant_count(T)` | Number of variants |
 | `variant_payloads(T)` | List of [name, type] pairs |
-| `enum_ordinal(T, str)` | Ordinal of variant |
+| `enum_ordinal(T, String)` | Ordinal of variant |
 
 ### Trait Checking
 
@@ -258,13 +258,13 @@ Available at module level (no generic context needed):
 | `sizeof(Type)` | Size in bytes |
 | `alignof(Type)` | Alignment in bytes |
 | `typename(Type)` | Type name as string |
-| `embed_file(str)` | File contents embedded at compile time |
+| `embed_file(String)` | File contents embedded at compile time |
 
 ### Embedding Files
 
 ```gorget
-meta str SCHEMA = embed_file("schema.sql")
-meta str LICENSE = embed_file("../LICENSE")
+meta String SCHEMA = embed_file("schema.sql")
+meta String LICENSE = embed_file("../LICENSE")
 ```
 
 The file contents become a compile-time string constant. The path is relative

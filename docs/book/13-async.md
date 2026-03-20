@@ -52,7 +52,7 @@ To run things concurrently, you need tasks.
 immediately — it does not wait for the spawned task to finish.
 
 ```gorget
-async void download(str url):
+async void download(String url):
     # ... fetch data from url ...
     print(f"done: {url}")
 
@@ -101,7 +101,7 @@ calls obscure this analysis.
 line. This matters for the borrow checker:
 
 ```gorget
-async void example(str s):
+async void example(String s):
     auto task = spawn some_fn()
     print(s)     # fine: spawn doesn't suspend, s is still live
 ```
@@ -207,7 +207,7 @@ async void example():
 
 ```gorget
 async void example():
-    str msg = "hello"
+    String msg = "hello"
     some_task().await()
     print(msg)      # fine: "hello" lives in static memory
 ```
@@ -216,31 +216,26 @@ async void example():
 stack frame (and all its parameters) stays alive for the entire duration of the call.
 
 ```gorget
-async void process(str name):
+async void process(String name):
     some_task().await()
     print(name)     # fine: caller is blocked, name is live
 
 async void main():
-    str s = "world"
+    String s = "world"
     process(s)      # direct call — main is blocked until process returns
 ```
 
 ### What Cannot Cross an Await
 
-**`str` borrowed from a local `String`** — the `str` is a view into the `String`'s buffer.
-If the task suspends, the `String` might not be at the same memory address on resume.
+**A view derived from a local owned `String`** — if a string variable is an owned
+value (e.g., from concatenation), a view into its buffer cannot outlive it across
+a suspension point.
 
 ```gorget
-async void broken():
-    String owned = String.from("hello")
-    str s = owned.as_str()          # s borrows from owned
-    some_task().await()
-    print(s)                        # ERROR: s borrows from local
-
 async void fixed():
-    String owned = String.from("hello")
+    String owned = "hello" + " world"   # owned (concatenation)
     some_task().await()
-    print(owned)                    # OK: use the owned String directly
+    print(owned)                        # OK: use the owned String directly
 ```
 
 **References to local variables** — same reasoning. A `&T` into a local doesn't survive
@@ -255,15 +250,14 @@ span the `await`.
 This means even parameter borrows are not safe (unlike `await`, where the caller blocks):
 
 ```gorget
-async void worker(str name):
+async void worker(String name):
     print(name)
 
-void launch(str name):
+void launch(String name):
     auto t = spawn worker(name)     # ERROR: name may not outlive launch()
 ```
 
-The fix: pass owned data. If the spawned function needs a string, give it a `String`
-instead of a `str`.
+The fix: pass owned data. The spawned function should take ownership of its arguments.
 
 Closures follow the same rule — they can only capture owned or Copy types:
 
@@ -271,7 +265,7 @@ Closures follow the same rule — they can only capture owned or Copy types:
 int x = 42
 spawn ((): print(x))()             # OK: x is Copy
 
-str name = get_name()
+String name = get_name()
 spawn ((): print(name))()          # ERROR: name has borrowed origin
 ```
 

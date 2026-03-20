@@ -11,7 +11,7 @@ manually with `equip` or automatically with `@derive`.
 
 ```gorget
 trait Displayable:
-    str display(self)
+    String display(self)
 ```
 
 Enables string interpolation (`f"{value}"`) and `print`. All primitive types
@@ -85,7 +85,7 @@ trait Default:
     Self default()
 ```
 
-Factory for zero/empty values. `int.default()` is `0`, `str.default()` is `""`.
+Factory for zero/empty values. `int.default()` is `0`, `String.default()` is `""`.
 
 ---
 
@@ -186,7 +186,7 @@ Infallible conversion. Example: `float.from(42)` produces `42.0`.
 
 ```gorget
 trait TryFrom[T]:
-    Result[Self, str] try_from(T value)
+    Result[Self, String] try_from(T value)
 ```
 
 Fallible conversion. Returns `Error` if the conversion is invalid.
@@ -195,7 +195,7 @@ Fallible conversion. Returns `Error` if the conversion is invalid.
 
 ```gorget
 trait Parseable:
-    Option[Self] parse(str s)
+    Option[Self] parse(String s)
 ```
 
 Parse a value from a string. Returns `None` on invalid input.
@@ -211,7 +211,7 @@ trait Measurable:
     int len(self)
 ```
 
-Returns the number of elements. Implemented by `Vector`, `Dict`, `Set`, `str`.
+Returns the number of elements. Implemented by `Vector`, `Dict`, `Set`, `String`.
 
 ---
 
@@ -221,10 +221,10 @@ Returns the number of elements. Implemented by `Vector`, `Dict`, `Set`, `str`.
 
 ```gorget
 trait Serializable:
-    str serialize(self)
+    String serialize(self)
 
 trait Deserializable:
-    Self deserialize(str data)
+    Self deserialize(String data)
 ```
 
 JSON serialization. Use `@derive(Serializable, Deserializable)` for automatic
@@ -273,6 +273,6 @@ must be equal. For `Hashable`, all fields are combined into the hash. For
 | From[T] | `from` | Type conversion | No |
 | TryFrom[T] | `try_from` | Fallible conversion | No |
 | Measurable | `len` | `.len()` | No |
-| Parseable | `parse` | `.parse(str)` | No |
+| Parseable | `parse` | `.parse(String)` | No |
 | Serializable | `serialize` | JSON output | Yes |
 | Deserializable | `deserialize` | JSON input | Yes |

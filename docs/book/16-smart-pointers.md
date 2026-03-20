@@ -77,7 +77,7 @@ strategy.
 Override with annotations when needed:
 
 ```gorget
-shared(rwlock) Dict[str, str] cache = Dict[str, str]()
+shared(rwlock) Dict[String, String] cache = Dict[String, String]()
 shared(atomic) int counter = 0
 ```
 
@@ -153,7 +153,7 @@ Only one thread can hold the lock at a time. Others block until it's released.
 `RwLock[T]` allows multiple readers or one writer:
 
 ```gorget
-RwLock[Dict[str, int]] cache = RwLock[Dict[str, int]](Dict[str, int]())
+RwLock[Dict[String, int]] cache = RwLock[Dict[String, int]](Dict[String, int]())
 
 # Multiple readers can access simultaneously
 # Writers get exclusive access

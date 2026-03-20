@@ -51,8 +51,8 @@ The `!` operator transfers ownership:
 
 ```gorget
 struct Message:
-    str sender
-    str text
+    String sender
+    String text
 
 Message msg = Message("Alice", "hello")
 Message copy = !msg    # msg is moved to copy
@@ -127,7 +127,7 @@ Implement the `Drop` trait for cleanup logic:
 
 ```gorget
 struct Resource:
-    str name
+    String name
 
 equip Resource with Drop:
     void drop(!self):
@@ -174,7 +174,7 @@ Multiple resources:
 
 ```gorget
 with File.open("input.txt") as reader, File.create("output.txt") as writer:
-    str data = reader.read_all().unwrap()
+    String data = reader.read_all().unwrap()
     writer.write(data)
 # both closed here
 ```

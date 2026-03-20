@@ -15,8 +15,8 @@ Gorget is a statically typed, Python-like language with Rust-inspired ownership 
 
 ```bash
 cargo build              # build the compiler
-cargo test --lib         # unit tests (currently ~913)
-cargo test --test integration -- --test-threads=4  # integration tests (currently ~709, parallel with serial_test groups for fixture conflicts)
+cargo test --lib         # unit tests (currently ~970)
+cargo test --test integration -- --test-threads=4  # integration tests (currently ~843, parallel with serial_test groups for fixture conflicts)
 cargo test               # all tests
 ```
 
@@ -31,10 +31,10 @@ cargo test               # all tests
 
 - `src/lexer/` — Logos-based tokenizer with indentation tracking
 - `src/parser/` — Recursive descent parser producing AST
-- `src/semantic/` — Name resolution, type checking, trait registry, borrow checking
+- `src/semantic/` — Name resolution, type checking, trait registry, provenance inference, borrow checking
 - `src/ir/` — Intermediate representation and lowering from AST (monomorphization, drop insertion, closures)
-- `src/backend/c/` — GIR-to-C code generation (current default backend)
-- `src/lir/` + `src/backend/c_lir/` — SSA-based LIR backend (next-gen, in A/B testing)
+- `src/lir/` + `src/backend/c_lir/` — SSA-based LIR backend (sole production backend)
+- `src/backend/c/` — C runtime library and SQLite amalgamation
 - `src/formatter/` — Source formatter (`gg fmt`)
 - `src/sim/` — Interpreter / simulation runtime
 - `src/loader.rs`, `src/lockfile.rs`, `src/manifest.rs` — Package management
@@ -44,7 +44,7 @@ cargo test               # all tests
 
 ## Language Syntax (Quick Reference)
 
-- Indentation-based blocks (Python-style), type-first declarations: `int x = 5`, `str name = "hello"`
+- Indentation-based blocks (Python-style), type-first declarations: `int x = 5`, `String name = "hello"`
 - Functions: `int add(int a, int b): return a + b` / expression-body: `int double(int x): x * 2`
 - Closures: `(int x): x * 2` / function types: `int(int, int)` (return type first)
 - Match uses `case`: `match x: case 1: ... else: ...`
@@ -54,7 +54,7 @@ cargo test               # all tests
   `void modify(Message &msg)` ✓ — `void modify(&Message msg)` ✗
   `void consume(Message !msg)` ✓ — `void consume(!Message msg)` ✗
 
-**Always use type-first Gorget syntax** in code, plans, and examples: `int x = 5`, `str greet(str name)`.
+**Always use type-first Gorget syntax** in code, plans, and examples: `int x = 5`, `String greet(String name)`. Note: `str` is a permanent alias for `String` — both are accepted, but prefer `String` in new code and documentation.
 
 ## Solution Quality
 

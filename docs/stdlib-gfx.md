@@ -63,7 +63,7 @@ Created via `open()`, destroyed via `close()`.
 ### Window management
 
 ```gorget
-Canvas open(str title, int w, int h)  # Open a window and return a Canvas
+Canvas open(String title, int w, int h)  # Open a window and return a Canvas
 void close(Canvas c)                   # Close the window and shut down SDL
 int width(Canvas c)                    # Get window width in pixels
 int height(Canvas c)                   # Get window height in pixels

@@ -14,7 +14,7 @@ Variables are declared with the type first, then the name:
 int x = 5
 float pi = 3.14159
 bool active = true
-str greeting = "hello"
+String greeting = "hello"
 char letter = 'A'
 ```
 
@@ -87,27 +87,29 @@ char emoji = '\u{1F600}'
 
 ### Strings
 
-Gorget has two string types:
-
-- **`str`** — an immutable, borrowed string slice. Lightweight, no allocation.
-- **`String`** — an owned, heap-allocated string. Can be built, concatenated, grown.
+Gorget has a single string type: **`String`**.
 
 ```gorget
-String owned = "hello"         # string literal in declaration = String
-str borrowed = "world"         # str is a borrowed view
-
-String combined = owned + " " + borrowed   # concatenation creates new String
+String greeting = "hello"
+String name = "world"
+String combined = greeting + " " + name   # concatenation creates new String
 ```
 
-String literals automatically adapt: they become `String` in owned positions and
-`str` when borrowed (e.g., passed to a function expecting `str`).
+Behind the scenes, the compiler uses **provenance inference** to decide the
+representation: string literals and function parameters are lightweight views
+(no allocation), while concatenation, f-strings, and explicit construction
+produce owned, heap-allocated strings. You don't need to think about this —
+just use `String` everywhere.
+
+> **Note:** `str` is accepted as a permanent alias for `String` — older code
+> using `str` continues to work unchanged.
 
 ### String Interpolation
 
 Prefix a string with `f` to enable interpolation with `{}`:
 
 ```gorget
-str name = "Alice"
+String name = "Alice"
 int age = 30
 print(f"Name: {name}, Age: {age}")
 ```
@@ -120,7 +122,7 @@ To print literal braces in an f-string, double them: `f"{{escaped}}"` prints `{e
 a value use `void`:
 
 ```gorget
-void greet(str name):
+void greet(String name):
     print(f"Hello, {name}!")
 ```
 

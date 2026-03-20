@@ -241,7 +241,7 @@ Interpolation is only available in **f-strings** (strings prefixed with `f`). Ex
 | `f"""`    | Multi-line format | Yes    | Yes     |
 | `c`       | C string   | No            | Yes     |
 
-Type: `String` (owned, heap-allocated). String literals that appear in borrow position are implicitly `str` (immutable string slice).
+Type: `String`. The compiler's provenance inference pass automatically determines whether a `String` value is a lightweight view (when derived from a literal, parameter, or collection access) or an owned, heap-allocated value (when produced by concatenation, f-strings, or allocating methods like `to_upper()`).
 
 #### None Literal
 
@@ -371,13 +371,13 @@ Both operator and keyword forms are equivalent and may be used interchangeably.
 | `float64` | 64-bit  | Floating-point                  |
 | `bool`    | 1 byte  | Boolean (`true` or `false`)     |
 | `char`    | 4 bytes | Unicode scalar value            |
-| `str`     | —       | Immutable string slice (borrowed) |
-| `String`  | —       | Owned, heap-allocated string    |
+| `String`  | 32 bytes | String (provenance-inferred: view or owned) |
+| `str`     | 32 bytes | Permanent alias for `String`    |
 | `byte`    | 8-bit   | Alias for `uint8`               |
 | `cstr`    | pointer | Null-terminated C string pointer |
 | `void`    | 0       | No value (unit type)            |
 
-All primitive numeric types and `bool` and `char` are **Copy** types — they are implicitly copied on assignment and do not require `!` or `move` to transfer. `byte` is a convenience alias for `uint8`. `cstr` is a raw C string pointer (`const char*`) for FFI interop — prefer `str` for normal string handling.
+All primitive numeric types and `bool` and `char` are **Copy** types — they are implicitly copied on assignment and do not require `!` or `move` to transfer. `String` values are automatically classified by the compiler's provenance inference pass: string literals and function parameters are lightweight views (Copy), while concatenation and f-strings produce owned values (Move). `str` is a permanent alias for `String`. `byte` is a convenience alias for `uint8`. `cstr` is a raw C string pointer (`const char*`) for FFI interop — prefer `String` for normal string handling.
 
 ### 4.2 Compound Types
 
@@ -398,8 +398,8 @@ int x = pair.0
 
 ```gorget
 # Equivalent forms:
-(str, int, bool) parse(str line): ...
-str, int, bool parse(str line): ...    # bare form — preferred
+(String, int, bool) parse(String line): ...
+String, int, bool parse(String line): ...    # bare form — preferred
 ```
 
 The bare form is only valid in the return-type position of a function definition. In all other positions (variable types, function parameters, struct fields), parentheses are required.
@@ -583,7 +583,7 @@ function_def = { attribute } [ "public" ] [ qualifiers ]
                [ where_clause ] ( block | "=" expr NEWLINE | NEWLINE ) ;
 
 qualifiers    = { "async" | "const" | "static" | "unsafe" } ;
-return_type   = type { "," type } | "void" ;  (* bare tuple: str, int or (str, int) *)
+return_type   = type { "," type } | "void" ;  (* bare tuple: String, int or (String, int) *)
 param_list    = param { "," param } ;
 param         = [ "live" [ "(" IDENTIFIER ")" ] ]
                 type [ "&" | "!" | "mutable" | "move" ] IDENTIFIER [ "=" expr ]
@@ -634,13 +634,13 @@ Equivalent to a block body with `return`.
 The `live` keyword on a parameter indicates that the return value borrows from that parameter's data (explicit lifetime annotation):
 
 ```gorget
-str get(live Container self, int index)
+String get(live Container self, int index)
 ```
 
 Named borrow groups on parameters distinguish independent lifetimes when a function takes multiple borrowed inputs. The compiler uses body analysis to determine which groups flow to the return value, so moving a non-return-contributing source doesn't trigger false positives:
 
 ```gorget
-str pick_first(live(a) str x, live(b) str y) where a outlives b:
+String pick_first(live(a) String x, live(b) String y) where a outlives b:
     return x
 ```
 
@@ -652,7 +652,7 @@ On struct fields, `live` marks fields that hold borrowed data. The struct cannot
 
 ```gorget
 struct Parser:
-    live str source
+    live String source
     int position
 ```
 
@@ -660,8 +660,8 @@ Named borrow groups also work on struct fields to distinguish independent lifeti
 
 ```gorget
 struct Merger:
-    live(left) str a
-    live(right) str b
+    live(left) String a
+    live(right) String b
 ```
 
 ### 5.2 Structs
@@ -730,7 +730,7 @@ Option[int] x = Some(42)      # prelude — bare OK
 from gg.log import LogLevel, Logger
 
 LogLevel lvl = LogLevel.Info
-Result[int, str] err = Error("bad")    # prelude Error — unambiguous
+Result[int, String] err = Error("bad")    # prelude Error — unambiguous
 match lvl:
     case LogLevel.Info:
         print("info")
@@ -795,8 +795,8 @@ trait Iterator[T]:
 
 ```gorget
 trait Animal extends Displayable:
-    str name(self)
-    str sound(self)
+    String name(self)
+    String sound(self)
 ```
 
 ### 5.5 Equip Blocks
@@ -837,7 +837,7 @@ When `via field_name` is specified, any trait method not explicitly provided in 
 
 ```gorget
 equip Wrapper with Describable via inner:
-    str describe(self):
+    String describe(self):
         return self.label   # explicit override
     # count() auto-forwarded to self.inner.count()
 ```
@@ -925,7 +925,7 @@ Declares foreign functions (FFI). The optional string specifies the ABI (default
 
 ```gorget
 extern "C":
-    int printf(str format, ...)
+    int printf(String format, ...)
     void free(RawPtr[void] ptr)
 ```
 
@@ -995,7 +995,7 @@ const auto pi = 3.14
 ```gorget
 shared int count = 0                           # CFA decides sync strategy
 shared Config config = load_config()           # read-only across boundaries → ARC only
-shared(rwlock) Dict[str, str] cache = Dict()   # user override: ARC + RwLock
+shared(rwlock) Dict[String, String] cache = Dict()   # user override: ARC + RwLock
 shared(atomic) int flags = 0                   # user override: ARC + Atomic
 ```
 
@@ -1071,7 +1071,7 @@ Exits the enclosing function, optionally with a value. Must appear inside a func
 **Bare tuple return.** Returning multiple values can be written as a comma-separated list without parentheses:
 
 ```gorget
-str, int parse(str line):
+String, int parse(String line):
     return "key", 42        # bare — preferred
     # return ("key", 42)    # parenthesized — also valid
 ```
@@ -1087,7 +1087,7 @@ throw_stmt = "throw" expr NEWLINE ;
 Raises an error. Must appear inside a function declared with `throws`.
 
 ```gorget
-Record parse_line(str line) throws ParseError:
+Record parse_line(String line) throws ParseError:
     if line.is_empty():
         throw ParseError("empty line")
     return parse(line)
@@ -1195,7 +1195,7 @@ else:
 **Bare tuple pattern.** When iterating over a collection of tuples, the loop variable can be a comma-separated list of bindings without parentheses:
 
 ```gorget
-Vector[(int, str)] pairs = ...
+Vector[(int, String)] pairs = ...
 for i, s in pairs:          # bare — preferred
     print("{i}: {s}")
 # for (i, s) in pairs:      # parenthesized — also valid
@@ -1300,7 +1300,7 @@ void main():
 **Thread safety via RAII.** `Task[T]`'s drop implementation joins the thread. Tasks created inside a named scope are joined before the block exits, so outer borrows remain valid for the entire scope:
 
 ```gorget
-void crunch(str data):
+void crunch(String data):
     workers:
         # data is borrowed inside — safe because tasks are joined at scope exit
         Task[void] t1 = spawn analyse(data)
@@ -1446,18 +1446,18 @@ Arithmetic operators require matching numeric types. Comparison operators produc
 The `+` and `+=` operators also work on strings, producing a new concatenated string:
 
 ```gorget
-str greeting = "hello" + " " + "world"   # "hello world"
-str s = "foo"
+String greeting = "hello" + " " + "world"   # "hello world"
+String s = "foo"
 s += "bar"                                # "foobar"
 ```
 
-For building strings from many parts, prefer collecting into a `Vector[str]` and using `join` (§15.2):
+For building strings from many parts, prefer collecting into a `Vector[String]` and using `join` (§15.2):
 
 ```gorget
-Vector[str] parts = Vector[str]()
+Vector[String] parts = Vector[String]()
 parts.push("hello")
 parts.push("world")
-str result = " ".join(parts)   # "hello world"
+String result = " ".join(parts)   # "hello world"
 ```
 
 The `+` operator on Vectors produces a new concatenated Vector without modifying the originals:
@@ -1578,7 +1578,7 @@ String name = user?.name ?? "anonymous"
 When the destination variable's type is `Result[T, E]`, the compiler suppresses auto-unwrap and captures the full `Result`:
 
 ```gorget
-Result[str, IOError] result = read_file(path)
+Result[String, IOError] result = read_file(path)
 match result:
     case Ok(content): print(content)
     case Error(e): print("Error: {e}")
@@ -1634,7 +1634,7 @@ Converts between types. The following cast pairs are allowed:
 | `int` | `uint8` | Common for byte manipulation |
 | `bool` | `int` | `true` → 1, `false` → 0 |
 
-Casts between unrelated types (e.g., `str as int`) are a compile error. Use `str.to_int()` for parsing.
+Casts between unrelated types (e.g., `String as int`) are a compile error. Use `String.to_int()` for parsing.
 
 ```gorget
 float f = 42 as float       # int → float
@@ -1775,7 +1775,7 @@ dict_literal = "{" [ expr ":" expr { "," expr ":" expr } [ "," ] ] "}" ;
 
 ```gorget
 auto ages = {"alice": 30, "bob": 25, "carol": 35}
-Dict[str, int] empty = {}
+Dict[String, int] empty = {}
 ```
 
 Dict literals create a `Dict[K, V]` (insertion-order-preserving). Types are inferred from the first key-value pair. Empty dict literals require a type annotation.
@@ -1882,11 +1882,11 @@ An `.await()` expression is a **suspension point** — execution may pause and r
 **What can cross an `.await()`:**
 - **Owned types** (`String`, structs, enums, collections) — they own their data, so the data moves with the suspended state.
 - **Copy types** (`int`, `float`, `bool`, `char`) — trivially duplicated, no pointers involved.
-- **Static string literals** (`str s = "hello"`) — point to program-global storage that is always valid.
-- **`str` parameters** — the caller is blocked at the direct-await call site, so `str` params and any `str` derived from them remain alive across the suspension.
+- **Static string literals** (`String s = "hello"`) — point to program-global storage that is always valid.
+- **`String` parameters** — the caller is blocked at the direct-await call site, so `String` params and any `String` derived from them remain alive across the suspension.
 
 **What cannot cross an `.await()`:**
-- **`str` derived from a local `String`** — the local variable owns the data; a borrow of it cannot outlive the variable's scope across a suspension point.
+- **`String` derived from a local `String`** — the local variable owns the data; a borrow of it cannot outlive the variable's scope across a suspension point.
 - **`&T` references to local variables** — same reasoning.
 
 ```gorget
@@ -1896,27 +1896,27 @@ async int compute():
     some_task().await()
     return x               # fine: int is Copy
 
-# OK: static str crosses await
+# OK: static String crosses await
 async void greet():
-    str msg = "hello"
+    String msg = "hello"
     some_task().await()
     print(msg)             # fine: "hello" is a static literal
 
-# OK: str parameter crosses await (caller is blocked, param stays alive)
-async void process(str name):
+# OK: String parameter crosses await (caller is blocked, param stays alive)
+async void process(String name):
     some_task().await()
     print(name)            # fine: caller is blocked, name is live
 
-# OK: str derived from a parameter is also safe
-async void process2(str data):
-    str slice = get_prefix(data)
+# OK: String derived from a parameter is also safe
+async void process2(String data):
+    String slice = get_prefix(data)
     some_task().await()
     print(slice)           # fine: data (and thus slice) is live
 
-# ERROR: str borrowed from a local variable
+# ERROR: String borrowed from a local variable
 async void process_local():
     String owned = String.from("hello")
-    str s = owned.as_str()
+    String s = owned.as_str()
     some_task().await()
     print(s)               # error: s borrows from local `owned`
 
@@ -1945,30 +1945,30 @@ spawn ((): print("hello"))()    # OK — string literal is Static
 auto c = (): print(x)
 spawn c()                       # OK — closure variable with Copy capture
 
-str name = get_name()
+String name = get_name()
 spawn ((): print(name))()       # ERROR — name has borrowed origin
 
 Shared[int] counter = Shared[int](0)
 spawn ((): print(counter.get()))()  # OK — Shared[T] is Copy
 ```
 
-**`spawn` with borrowed references is rejected.** Unlike `.await()`, `spawn` launches a fire-and-forget thread that may outlive the current function. The compiler rejects passing borrowed references (`str` params, `&T`) to spawned tasks:
+**`spawn` with borrowed references is rejected.** Unlike `.await()`, `spawn` launches a fire-and-forget thread that may outlive the current function. The compiler rejects passing borrowed references (`String` params, `&T`) to spawned tasks:
 
 ```gorget
-async void worker(str name):
+async void worker(String name):
     print(name)
 
-void launch(str name):
-    # ERROR: name is a borrowed str — thread may outlive launch()
+void launch(String name):
+    # ERROR: name is a borrowed String — thread may outlive launch()
     auto t = spawn worker(name)
     # FIX: pass an owned String instead
-    auto t2 = spawn worker(String(name).as_str())   # or redesign worker to take String
+    auto t2 = spawn worker(String(name))   # or redesign worker to take String
 ```
 
 **`spawn` is not a suspension point.** The current function continues immediately after `spawn`, so non-borrowed values remain valid:
 
 ```gorget
-async void example(str s):
+async void example(String s):
     auto task = spawn some_async_fn()
     print(s)               # fine: spawn doesn't suspend, s is still live
 ```
@@ -1987,13 +1987,13 @@ select_op   = type IDENT "=" expr ".recv()" | expr ".send(" expr ")" ;
 
 ```gorget
 Channel[int] ch1 = Channel[int]()
-Channel[str] ch2 = Channel[str]()
+Channel[String] ch2 = Channel[String]()
 
 select:
     case int val = ch1.recv():
         print(f"got int: {val}")
-    case str msg = ch2.recv():
-        print(f"got str: {msg}")
+    case String msg = ch2.recv():
+        print(f"got String: {msg}")
     else:
         print("nothing ready")
 ```
@@ -2164,7 +2164,7 @@ The compiler automatically infers which parameters' data flows into a function's
 **Single reference parameter** — when a function takes exactly one reference-type parameter and returns a reference type, the compiler assumes the return borrows from that parameter:
 
 ```gorget
-str trim_prefix(str s):
+String trim_prefix(String s):
     return s.byte_slice(1, s.byte_len())
 ```
 
@@ -2172,14 +2172,14 @@ str trim_prefix(str s):
 
 ```gorget
 equip Holder:
-    str get_name(self):
+    String get_name(self):
         return self.name
 ```
 
 **Body analysis with multiple reference parameters** — the compiler traces return expressions through the function body to determine which parameters contribute:
 
 ```gorget
-str longer(str x, str y):
+String longer(String x, String y):
     if x.len() >= y.len():
         return x
     return y
@@ -2190,15 +2190,15 @@ Here the compiler sees both `x` and `y` in return positions and records that the
 **Transitive through calls** — when a return expression calls another function, the compiler uses that function's already-computed metadata to determine which arguments (and therefore which outer parameters) flow through:
 
 ```gorget
-str chain(str s):
+String chain(String s):
     return identity(s)
 ```
 
 **Local variable aliases** — assignments from parameters to locals are traced, so returning a local that holds parameter data is correctly attributed:
 
 ```gorget
-str forward(str s):
-    str local = s
+String forward(String s):
+    String local = s
     return local
 ```
 
@@ -2208,19 +2208,19 @@ str forward(str s):
 
 ```gorget
 trait Container:
-    str get(live Container self, int index)
+    String get(live Container self, int index)
 ```
 
 **Extern FFI declarations** also have no body. With two or more reference-type parameters and no `self`, the elision rules cannot determine which parameter the return borrows from:
 
 ```gorget
-extern str pick_better(live str a, str b)
+extern String pick_better(live String a, String b)
 ```
 
 **Multiple independent borrow sources** needing precision use named groups and `outlives` constraints. This lets the compiler reject moving one source while the other is still in use:
 
 ```gorget
-str pick_first(live(a) str x, live(b) str y) where a outlives b:
+String pick_first(live(a) String x, live(b) String y) where a outlives b:
     return x
 ```
 
@@ -2230,7 +2230,7 @@ Named groups are optional — the compiler's body analysis already determines th
 
 ```gorget
 struct Parser:
-    live str source
+    live String source
     int position
 ```
 
@@ -2238,8 +2238,8 @@ Named groups on struct fields distinguish independent lifetimes:
 
 ```gorget
 struct Merger:
-    live(left) str a
-    live(right) str b
+    live(left) String a
+    live(right) String b
 ```
 
 ---
@@ -2253,7 +2253,7 @@ Gorget uses a `throws`/`throw` model that desugars to `Result[T, E]`.
 A function declared with `throws` may fail:
 
 ```gorget
-Data process(str path) throws AppError:
+Data process(String path) throws AppError:
     String content = read_file(path)    # auto-propagates errors
     return transform(content)
 ```
@@ -2275,7 +2275,7 @@ It is a compile-time error to use `throw` in a function not declared with `throw
 When the destination variable's type is `Result[T, E]`, the compiler suppresses auto-propagation and captures the full `Result` value:
 
 ```gorget
-Result[str, IOError] result = read_file(path)
+Result[String, IOError] result = read_file(path)
 match result:
     case Ok(content): use(content)
     case Error(e): handle(e)
@@ -2297,9 +2297,9 @@ void main() throws int:
 **Binding form** — bind the original error and transform it:
 
 ```gorget
-int load_config(str path) throws ConfigError:
-    str content = read_file(path) rethrow (str e): ConfigError.Io(f"loading {path}: {e}")
-    return parse(content) rethrow (str e): ConfigError.Parse(e)
+int load_config(String path) throws ConfigError:
+    String content = read_file(path) rethrow (String e): ConfigError.Io(f"loading {path}: {e}")
+    return parse(content) rethrow (String e): ConfigError.Parse(e)
 ```
 
 On success, the expression's value passes through unchanged. On error, the transform expression is evaluated and thrown. In the binding form, the original error is available to the transform; in the bare form, it is discarded.
@@ -2347,21 +2347,21 @@ The `on error` statement registers cleanup code that runs only if the function e
 **Block form** — for multi-line cleanup:
 
 ```gorget
-File open_and_process(str path) throws str:
+File open_and_process(String path) throws String:
     File f = File.open(path)
     on error:
         f.close()
-    str content = f.read_all()
+    String content = f.read_all()
     return process(content)
 ```
 
 **Inline form** — for single-statement cleanup:
 
 ```gorget
-File open_and_process(str path) throws str:
+File open_and_process(String path) throws String:
     File f = File.open(path)
     on error f.close()
-    str content = f.read_all()
+    String content = f.read_all()
     return process(content)
 ```
 
@@ -2444,7 +2444,7 @@ void process[Displayable & Cloneable & Comparable T](T item):
 The `where` keyword is retained solely for `outlives` borrow-group ordering constraints:
 
 ```gorget
-str pick[Displayable T](live(a) T x, live(b) T y) where a outlives b:
+String pick[Displayable T](live(a) T x, live(b) T y) where a outlives b:
     return x
 ```
 
@@ -2514,7 +2514,7 @@ int x = 42
 print(f"The answer is {x}")
 print(f"Math: {2 + 2}")
 print(f"Escaped brace: {{literal}}")
-str name = "world"
+String name = "world"
 print(f"Hello, {name}!")
 ```
 
@@ -2567,12 +2567,12 @@ print(f"{255:#b}")       # "0b11111111" — binary with 0b prefix
 The `+` operator concatenates two strings and returns a new string. The `+=` operator appends in place. See also §7.5.
 
 ```gorget
-str a = "hello"
-str b = a + " world"     # "hello world"
+String a = "hello"
+String b = a + " world"     # "hello world"
 a += "!"                  # "hello!"
 
 # Chaining works left-to-right
-str full = "a" + "b" + "c"   # "abc"
+String full = "a" + "b" + "c"   # "abc"
 ```
 
 ---
@@ -2600,7 +2600,7 @@ The compiler automatically registers the following core traits. They cannot be r
 
 | Trait | Required Method | Returns | Compiler Feature |
 |---|---|---|---|
-| `Displayable` | `str display(self)` | `str` | String interpolation, `print()` |
+| `Displayable` | `String display(self)` | `String` | String interpolation, `print()` |
 | `Equatable` | `bool eq(self, Self other)` | `bool` | `==` and `!=` operators |
 | `Hashable` | `int hash(self)` | `int` | `Dict` keys, `Set` elements |
 | `Ordinal` | `int ordinal(self)` | `int` | Zero-based variant index (enums only) |
@@ -2620,8 +2620,8 @@ The compiler automatically registers the following core traits. They cannot be r
 | `Iterable[T]` | `Iterator[T] iter(&self)` | `Iterator[T]` | `for` loop desugaring (§6.11) |
 | `Default` | `Self default()` (static) | `Self` | Zero/default values, `@derive(Default)` |
 | `From[T]` | `Self from(T value)` (static) | `Self` | Infallible type conversion, `@derive(From)` |
-| `TryFrom[T]` | `Result[Self, str] try_from(T value)` (static) | `Result[Self, str]` | Fallible type conversion, `@derive(TryFrom)` |
-| `Parseable` | `Option[Self] parse(str s)` (static) | `Option[Self]` | Fallible string parsing via `Type.parse(s)` |
+| `TryFrom[T]` | `Result[Self, String] try_from(T value)` (static) | `Result[Self, String]` | Fallible type conversion, `@derive(TryFrom)` |
+| `Parseable` | `Option[Self] parse(String s)` (static) | `Option[Self]` | Fallible string parsing via `Type.parse(s)` |
 | `Measurable` | `int len(self)` | `int` | Types with a length; enables `len(x)` free function |
 
 #### Displayable
@@ -2634,7 +2634,7 @@ struct Point:
     float y
 
 equip Point with Displayable:
-    str display(self):
+    String display(self):
         return "({self.x}, {self.y})"
 
 Point p = Point(3.0, 4.0)
@@ -2690,7 +2690,7 @@ enum Token:
     Plus
     Minus
     Number(float)
-    Ident(str)
+    Ident(String)
 
 Token t = Token.Number(3.14)
 print(t.ordinal())  # 2
@@ -2772,13 +2772,13 @@ for n in NumberRange(1, 5):
 
 #### Default
 
-Provides a default value for a type via a static `default()` method. Derivable for structs with `@derive(Default)` — each field gets its zero value (`0` for int, `""` for str, etc.).
+Provides a default value for a type via a static `default()` method. Derivable for structs with `@derive(Default)` — each field gets its zero value (`0` for int, `""` for String, etc.).
 
 ```gorget
 @derive(Default)
 struct Config:
     int timeout
-    str host
+    String host
     bool verbose
 
 Config c = Config.default()  # Config(0, "", false)
@@ -2804,13 +2804,13 @@ Celsius c = Celsius.from(Fahrenheit(212.0))  # Celsius(100.0)
 
 #### TryFrom[T]
 
-Fallible type conversion. Like `From[T]` but returns `Result[Self, str]` to handle conversion failures. Derivable for single-field structs (newtypes) with `@derive(TryFrom)`.
+Fallible type conversion. Like `From[T]` but returns `Result[Self, String]` to handle conversion failures. Derivable for single-field structs (newtypes) with `@derive(TryFrom)`.
 
 ```gorget
 newtype Percentage(int)
 
 equip Percentage with TryFrom[int]:
-    static Result[Percentage, str] try_from(int value):
+    static Result[Percentage, String] try_from(int value):
         if value < 0 or value > 100:
             return Error("percentage must be 0-100")
         return Ok(Percentage(value))
@@ -2842,7 +2842,7 @@ User-defined types can equip `Parseable`:
 newtype Hex(int)
 
 equip Hex with Parseable:
-    static Option[Hex] parse(str s):
+    static Option[Hex] parse(String s):
         Option[int] n = int.parse(s)
         if n is Some(val):
             return Some(Hex(val))
@@ -2950,12 +2950,12 @@ Note: `IndexMut.set` takes `&self` (mutable borrow) since it modifies the receiv
 
 ```gorget
 trait Greetable:
-    str name(self)
-    str greet(self):
+    String name(self)
+    String greet(self):
         return "Hello, {self.name()}!"
 
 equip Person with Greetable:
-    str name(self):
+    String name(self):
         return self.first_name
     # greet() uses the default implementation
 ```
@@ -2964,7 +2964,7 @@ equip Person with Greetable:
 
 ```gorget
 trait Animal extends Displayable:
-    str sound(self)
+    String sound(self)
 ```
 
 **Delegation via field.** The `via` clause on equip blocks auto-forwards unimplemented trait methods through a struct field (§5.5):
@@ -2985,31 +2985,31 @@ The following methods are available on built-in types without any import.
 | `len()` | `→ int` | Number of Unicode codepoints (O(n) UTF-8 walk) |
 | `byte_len()` | `→ int` | Byte length of the UTF-8 representation (O(1)) |
 | `is_empty()` | `→ bool` | True if length is zero |
-| `contains(needle)` | `str → bool` | True if `needle` is a substring |
-| `starts_with(prefix)` | `str → bool` | True if string starts with `prefix` |
-| `ends_with(suffix)` | `str → bool` | True if string ends with `suffix` |
-| `index_of(needle)` | `str → Option[int]` | Codepoint index of first occurrence (`None` if not found) |
-| `count(needle)` | `str → int` | Number of non-overlapping occurrences |
+| `contains(needle)` | `String → bool` | True if `needle` is a substring |
+| `starts_with(prefix)` | `String → bool` | True if string starts with `prefix` |
+| `ends_with(suffix)` | `String → bool` | True if string ends with `suffix` |
+| `index_of(needle)` | `String → Option[int]` | Codepoint index of first occurrence (`None` if not found) |
+| `count(needle)` | `String → int` | Number of non-overlapping occurrences |
 | `char_at(index)` | `int → char` | Byte at byte index (panics if out of bounds; for parser/codec use) |
-| `byte_slice(start, end)` | `int, int → str` | Byte-range substring view (O(1), for parser/codec use) |
-| `substring(start, end)` | `int, int → str` | Codepoint-range substring view from `start` to `end` (panics if out of bounds) |
-| `trim()` | `→ str` | Strip leading/trailing Unicode whitespace (view, no allocation) |
-| `strip(chars?)` | `str? → str` | Strip codepoints (or whitespace) from both ends (view) |
-| `lstrip(chars?)` | `str? → str` | Strip codepoints (or whitespace) from left (view) |
-| `rstrip(chars?)` | `str? → str` | Strip codepoints (or whitespace) from right (view) |
+| `byte_slice(start, end)` | `int, int → String` | Byte-range substring view (O(1), for parser/codec use) |
+| `substring(start, end)` | `int, int → String` | Codepoint-range substring view from `start` to `end` (panics if out of bounds) |
+| `trim()` | `→ String` | Strip leading/trailing Unicode whitespace (view, no allocation) |
+| `strip(chars?)` | `String? → String` | Strip codepoints (or whitespace) from both ends (view) |
+| `lstrip(chars?)` | `String? → String` | Strip codepoints (or whitespace) from left (view) |
+| `rstrip(chars?)` | `String? → String` | Strip codepoints (or whitespace) from right (view) |
 | `to_upper()` | `→ String` | Unicode-aware uppercase (Latin/Greek/Cyrillic) |
 | `to_lower()` | `→ String` | Unicode-aware lowercase (Latin/Greek/Cyrillic) |
-| `replace(old, new)` | `str, str → String` | Replace all occurrences of `old` with `new` |
-| `split(delim)` | `str → Vector[str]` | Split into parts by delimiter |
-| `join(parts)` | `Vector[str] → String` | Join strings with receiver as separator |
+| `replace(old, new)` | `String, String → String` | Replace all occurrences of `old` with `new` |
+| `split(delim)` | `String → Vector[String]` | Split into parts by delimiter |
+| `join(parts)` | `Vector[String] → String` | Join strings with receiver as separator |
 | `repeat(n)` | `int → String` | Repeat string `n` times |
-| `removeprefix(prefix)` | `str → str` | Remove `prefix` if present, otherwise return unchanged (view) |
-| `removesuffix(suffix)` | `str → str` | Remove `suffix` if present, otherwise return unchanged (view) |
+| `removeprefix(prefix)` | `String → String` | Remove `prefix` if present, otherwise return unchanged (view) |
+| `removesuffix(suffix)` | `String → String` | Remove `suffix` if present, otherwise return unchanged (view) |
 | `pad_left(n, char)` | `int, char → String` | Left-pad to width `n` with fill character |
 | `pad_right(n, char)` | `int, char → String` | Right-pad to width `n` with fill character |
 | `bytes()` | `→ Vector[uint8]` | Raw UTF-8 bytes as a vector |
 | `codepoints()` | `→ Vector[int]` | Unicode codepoint values as a vector |
-| `chars()` | `→ Vector[str]` | Individual characters (codepoints) as `str` views |
+| `chars()` | `→ Vector[String]` | Individual characters (codepoints) as `String` views |
 | `hash()` | `→ int` | Hash value |
 
 **Unicode support scope:**
@@ -3023,10 +3023,10 @@ The following methods are available on built-in types without any import.
 
 | Operation | Result type | Description |
 |---|---|---|
-| `s[i]` | `str` | Returns the i-th Unicode codepoint as a string view (O(n) walk) |
-| `s[i..j]` | `str` | Returns codepoint range [i, j) as a non-allocating view (O(n) walk) |
-| `s[-1]` | `str` | Negative indexing counts from end |
-| `for ch in s:` | yields `str` | Iterates Unicode codepoints (O(n) total, single UTF-8 pass) |
+| `s[i]` | `String` | Returns the i-th Unicode codepoint as a string view (O(n) walk) |
+| `s[i..j]` | `String` | Returns codepoint range [i, j) as a non-allocating view (O(n) walk) |
+| `s[-1]` | `String` | Negative indexing counts from end |
+| `for ch in s:` | yields `String` | Iterates Unicode codepoints (O(n) total, single UTF-8 pass) |
 
 For byte-level access (useful in parsers and codecs), use `char_at(i)` (returns `char`) and `byte_slice(a, b)` (returns `str` byte-range view in O(1)).
 
@@ -3034,10 +3034,10 @@ For byte-level access (useful in parsers and codecs), use `char_at(i)` (returns 
 
 | Boundary | Return type | On invalid UTF-8 |
 |---|---|---|
-| `File.read_all()` | `Result[String, str]` | Returns `Error("invalid UTF-8 in file")` |
-| `Socket.read_line()` | `Result[String, str]` | Returns `Error("invalid UTF-8 from socket")` |
-| `TlsSocket.read_line()` | `Result[String, str]` | Returns `Error("invalid UTF-8 from socket")` |
-| `bytes_to_str(buf)` | `Result[str, str]` | Returns `Error("invalid UTF-8 in byte buffer")` |
+| `File.read_all()` | `Result[String, String]` | Returns `Error("invalid UTF-8 in file")` |
+| `Socket.read_line()` | `Result[String, String]` | Returns `Error("invalid UTF-8 from socket")` |
+| `TlsSocket.read_line()` | `Result[String, String]` | Returns `Error("invalid UTF-8 from socket")` |
+| `bytes_to_str(buf)` | `Result[String, String]` | Returns `Error("invalid UTF-8 in byte buffer")` |
 
 String literals are validated at compile time by the lexer. Internal string operations (slicing, concatenation, indexing) preserve UTF-8 validity by construction.
 
@@ -3050,13 +3050,13 @@ String literals are validated at compile time by the lexer. Internal string oper
 | `len()` | `→ int` | Number of Unicode codepoints |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `capacity()` | `→ int` | Current allocated capacity in bytes |
-| `push(s)` | `str → void` | Append a string |
+| `push(s)` | `String → void` | Append a string |
 | `push_char(c)` | `char → void` | Append a single character |
-| `push_line(s)` | `str → void` | Append a string followed by a newline |
+| `push_line(s)` | `String → void` | Append a string followed by a newline |
 | `clear()` | `→ void` | Remove all content (keeps allocated capacity) |
-| `str()` | `→ str` | View as immutable `str` slice |
+| `str()` | `→ String` | View as immutable `String` slice |
 
-`String` also inherits all read-only `str` methods: `contains()`, `starts_with()`, `split()`, `trim()`, etc.
+`String` also inherits all read-only string methods: `contains()`, `starts_with()`, `split()`, `trim()`, etc.
 
 **`char`** — Character methods
 
@@ -3200,7 +3200,7 @@ Same API as `Set` but does not preserve insertion order. Use when order is irrel
 | Method | Signature | Description |
 |---|---|---|
 | `unwrap()` | `→ T` | Extract value (panics if `None`) |
-| `expect(msg)` | `str → T` | Extract value (panics with `msg` if `None`) |
+| `expect(msg)` | `String → T` | Extract value (panics with `msg` if `None`) |
 | `unwrap_or(default)` | `T → T` | Extract value or return default (eager) |
 | `unwrap_or_else(f)` | `() → T → T` | Extract value or compute default (lazy) |
 | `is_some()` | `→ bool` | True if `Some` |
@@ -3217,7 +3217,7 @@ Same API as `Set` but does not preserve insertion order. Use when order is irrel
 | Method | Signature | Description |
 |---|---|---|
 | `unwrap()` | `→ T` | Extract value (panics if `Error`) |
-| `expect(msg)` | `str → T` | Extract value (panics with `msg` if `Error`) |
+| `expect(msg)` | `String → T` | Extract value (panics with `msg` if `Error`) |
 | `unwrap_or(default)` | `T → T` | Extract value or return default (eager) |
 | `unwrap_or_else(f)` | `(E) → T → T` | Extract value or compute default from error (lazy) |
 | `is_ok()` | `→ bool` | True if `Ok` |
@@ -3240,8 +3240,8 @@ Same API as `Set` but does not preserve insertion order. Use when order is irrel
 
 | Method | Signature | Description |
 |---|---|---|
-| `read_all()` | `→ Result[String, str]` | Read entire file contents (validates UTF-8) |
-| `write(data)` | `str → void` | Write string to file |
+| `read_all()` | `→ Result[String, String]` | Read entire file contents (validates UTF-8) |
+| `write(data)` | `String → void` | Write string to file |
 | `close()` | `→ void` | Close the file handle |
 
 ### 15.3 Standard Library Modules
@@ -3252,39 +3252,39 @@ The following functions are available via `import`:
 
 | Function | Signature | Description |
 |---|---|---|
-| `read_file` | `str(str)` | Read entire file to string |
-| `write_file` | `void(str, str)` | Write string to file |
-| `append_file` | `void(str, str)` | Append string to file |
-| `file_exists` | `bool(str)` | Check if file exists |
-| `delete_file` | `bool(str)` | Delete a file |
-| `mkdir` | `bool(str)` | Create a directory |
-| `rmdir` | `bool(str)` | Remove a directory |
-| `rename` | `bool(str, str)` | Rename a file or directory |
-| `copy_file` | `bool(str, str)` | Copy a file from source to destination |
-| `file_size` | `int(str)` | Get file size in bytes |
-| `is_dir` | `bool(str)` | Check if path is a directory |
+| `read_file` | `String(String)` | Read entire file to string |
+| `write_file` | `void(String, String)` | Write string to file |
+| `append_file` | `void(String, String)` | Append string to file |
+| `file_exists` | `bool(String)` | Check if file exists |
+| `delete_file` | `bool(String)` | Delete a file |
+| `mkdir` | `bool(String)` | Create a directory |
+| `rmdir` | `bool(String)` | Remove a directory |
+| `rename` | `bool(String, String)` | Rename a file or directory |
+| `copy_file` | `bool(String, String)` | Copy a file from source to destination |
+| `file_size` | `int(String)` | Get file size in bytes |
+| `is_dir` | `bool(String)` | Check if path is a directory |
 
 **`std.path`** — Path manipulation
 
 | Function | Signature | Description |
 |---|---|---|
-| `path_join` | `str(str, str)` | Join two path segments |
-| `path_parent` | `str(str)` | Parent directory |
-| `path_basename` | `str(str)` | File name component |
-| `path_extension` | `str(str)` | File extension |
-| `path_stem` | `str(str)` | File name without extension |
+| `path_join` | `String(String, String)` | Join two path segments |
+| `path_parent` | `String(String)` | Parent directory |
+| `path_basename` | `String(String)` | File name component |
+| `path_extension` | `String(String)` | File extension |
+| `path_stem` | `String(String)` | File name without extension |
 
 **`std.os`** — Operating system
 
 | Function | Signature | Description |
 |---|---|---|
 | `exit` | `void(int)` | Exit with status code |
-| `getenv` | `str(str)` | Get environment variable |
-| `setenv` | `void(str, str)` | Set environment variable |
-| `getcwd` | `str()` | Current working directory |
-| `platform` | `str()` | OS name: `"macos"`, `"linux"`, `"windows"`, `"freebsd"` |
-| `args` | `Vector[str]()` | CLI arguments |
-| `readdir` | `Vector[str](str)` | List directory entries |
+| `getenv` | `String(String)` | Get environment variable |
+| `setenv` | `void(String, String)` | Set environment variable |
+| `getcwd` | `String()` | Current working directory |
+| `platform` | `String()` | OS name: `"macos"`, `"linux"`, `"windows"`, `"freebsd"` |
+| `args` | `Vector[String]()` | CLI arguments |
+| `readdir` | `Vector[String](String)` | List directory entries |
 
 **`std.conv`** — Type conversions
 
@@ -3292,13 +3292,13 @@ The following functions are available via `import`:
 |---|---|---|
 | `ord` | `int(char)` | Character to integer code point |
 | `chr` | `char(int)` | Integer code point to character |
-| `parse_int` | `int(str)` | Parse string as integer |
-| `parse_float` | `float(str)` | Parse string as float |
-| `int_to_str` | `str(int)` | Integer to string |
-| `float_to_str` | `str(float)` | Float to string (compact format) |
-| `bool_to_str` | `str(bool)` | Bool to `"true"` or `"false"` |
-| `char_to_str` | `str(char)` | Single character to string |
-| `codepoint_to_str` | `str(int)` | Unicode code point to string |
+| `parse_int` | `int(String)` | Parse string as integer |
+| `parse_float` | `float(String)` | Parse string as float |
+| `int_to_str` | `String(int)` | Integer to string |
+| `float_to_str` | `String(float)` | Float to string (compact format) |
+| `bool_to_str` | `String(bool)` | Bool to `"true"` or `"false"` |
+| `char_to_str` | `String(char)` | Single character to string |
+| `codepoint_to_str` | `String(int)` | Unicode code point to string |
 
 > **Note:** `parse_int` and `parse_float` panic on invalid input. For fallible parsing, use the `Parseable` trait: `int.parse(s)` returns `Option[int]`, `float.parse(s)` returns `Option[float]` (see §15.1).
 
@@ -3311,8 +3311,8 @@ The following functions are available via `import`:
 | `getchar` | `int()` | Read one byte from stdin (-1 on EOF) |
 | `term_cols` | `int()` | Terminal width in columns |
 | `term_rows` | `int()` | Terminal height in rows |
-| `input` | `str(str)` | Print prompt, read a line from stdin |
-| `readline` | `str()` | Read a line from stdin (no prompt) |
+| `input` | `String(String)` | Print prompt, read a line from stdin |
+| `readline` | `String()` | Read a line from stdin (no prompt) |
 
 **`std.random`** — Random numbers
 
@@ -3361,29 +3361,29 @@ Re-exports the `Displayable` trait and `format` builtin for discoverability. Bot
 
 | Name | Signature | Description |
 |---|---|---|
-| `ExecResult` | struct | Result of a process: `output: str`, `errors: str`, `exit_code: int` |
-| `exec` | `int(str)` | Run a shell command, return exit code |
-| `exec_output` | `ExecResult(str)` | Run a command, capture stdout and exit code |
-| `process_spawn` | `Result[Process, str](str, Vector[str])` | Spawn a child process with full pipe control |
+| `ExecResult` | struct | Result of a process: `output: String`, `errors: String`, `exit_code: int` |
+| `exec` | `int(String)` | Run a shell command, return exit code |
+| `exec_output` | `ExecResult(String)` | Run a command, capture stdout and exit code |
+| `process_spawn` | `Result[Process, String](String, Vector[String])` | Spawn a child process with full pipe control |
 | `getpid` | `int()` | Return the current process ID |
 | `Process` | struct (opaque) | Handle to a child process |
 | `Process.wait` | `int()` | Wait for the process to exit; returns its exit code |
 | `Process.kill` | `void()` | Send SIGKILL to the process |
 | `Process.pid` | `int()` | Return the child's PID |
-| `Process.write_stdin` | `void(str)` | Write data to the child's stdin pipe |
+| `Process.write_stdin` | `void(String)` | Write data to the child's stdin pipe |
 | `Process.close_stdin` | `void()` | Close the child's stdin pipe (signals EOF) |
-| `Process.read_stdout` | `str()` | Read all remaining stdout from the child |
-| `Process.read_stderr` | `str()` | Read all remaining stderr from the child |
+| `Process.read_stdout` | `String()` | Read all remaining stdout from the child |
+| `Process.read_stderr` | `String()` | Read all remaining stderr from the child |
 
 Use `exec` / `exec_output` for quick shell one-liners. Use `process_spawn` when you need argument safety (no shell interpretation), bidirectional pipe I/O, or fine-grained process lifecycle control.
 
 ```gorget
 from std.process import process_spawn, getpid
 
-Result[Process, str] result = process_spawn("echo", Vector[str]("hello world"))
+Result[Process, String] result = process_spawn("echo", Vector[String]("hello world"))
 match result:
     case Ok(p):
-        str out = p.read_stdout()
+        String out = p.read_stdout()
         int code = p.wait()
         print(out)         # hello world
         print(code)        # 0
@@ -3481,10 +3481,10 @@ Contrast with `spawn`: async tasks share a thread pool cooperatively; OS threads
 
 | Name | Kind | Description |
 |---|---|---|
-| `Json` | enum | JSON value: `Null`, `Bool(bool)`, `Int(int)`, `Float(float)`, `Str(str)`, `Arr(Vector[Json])`, `Obj(Dict[str, Json])` |
-| `json_parse` | `Json(str)` | Parse a JSON string into a `Json` value |
-| `json_stringify` | `str(Json)` | Serialize a `Json` value to a compact JSON string |
-| `json_pretty` | `str(Json)` | Serialize a `Json` value to a pretty-printed JSON string |
+| `Json` | enum | JSON value: `Null`, `Bool(bool)`, `Int(int)`, `Float(float)`, `Str(String)`, `Arr(Vector[Json])`, `Obj(Dict[String, Json])` |
+| `json_parse` | `Json(String)` | Parse a JSON string into a `Json` value |
+| `json_stringify` | `String(Json)` | Serialize a `Json` value to a compact JSON string |
+| `json_pretty` | `String(Json)` | Serialize a `Json` value to a pretty-printed JSON string |
 | `Serializer` | trait | Serialization backend: `write_bool`, `write_int`, `write_float`, `write_str`, `write_null`, `begin_struct`/`end_struct`, `begin_seq`/`end_seq`, `result` |
 | `Serializable` | trait | `void serialize(self, Box[Serializer] ser)` — types implement this to be serialized (derivable via `@derive`) |
 | `Deserializer` | trait | Deserialization backend: `read_bool`, `read_int`, `read_float`, `read_str`, `is_null`, `begin_struct`/`end_struct`, `begin_seq`/`end_seq` |
@@ -3501,17 +3501,17 @@ from gg.log import LogLevel, Logger, log_info, log_warn
 | `LogLevel` | enum | `Debug`, `Info`, `Warn`, `Err` |
 | `Logger` | struct | Leveled logger with optional timestamps and prefix |
 | `Logger.new` | `Logger(LogLevel)` | Create logger with minimum level |
-| `Logger.with_prefix` | `Logger(LogLevel, str)` | Logger with prefix string |
+| `Logger.with_prefix` | `Logger(LogLevel, String)` | Logger with prefix string |
 | `Logger.with_timestamps` | `Logger(LogLevel)` | Logger with `[YYYY-MM-DD HH:MM:SS]` timestamps |
 | `Logger.set_level` | `void(&self, LogLevel)` | Change minimum level at runtime |
-| `Logger.debug` | `void(&self, str)` | Log at Debug level |
-| `Logger.info` | `void(&self, str)` | Log at Info level |
-| `Logger.warn` | `void(&self, str)` | Log at Warn level |
-| `Logger.error` | `void(&self, str)` | Log at Error level |
-| `log_debug` | `void(str)` | Module-level Debug (always emits) |
-| `log_info` | `void(str)` | Module-level Info (always emits) |
-| `log_warn` | `void(str)` | Module-level Warn (always emits) |
-| `log_error` | `void(str)` | Module-level Error (always emits) |
+| `Logger.debug` | `void(&self, String)` | Log at Debug level |
+| `Logger.info` | `void(&self, String)` | Log at Info level |
+| `Logger.warn` | `void(&self, String)` | Log at Warn level |
+| `Logger.error` | `void(&self, String)` | Log at Error level |
+| `log_debug` | `void(String)` | Module-level Debug (always emits) |
+| `log_info` | `void(String)` | Module-level Info (always emits) |
+| `log_warn` | `void(String)` | Module-level Warn (always emits) |
+| `log_error` | `void(String)` | Module-level Error (always emits) |
 
 Messages below the logger's minimum level are suppressed. Module-level convenience functions always emit (no filtering).
 
@@ -3529,17 +3529,17 @@ void main():
 
 | Name | Kind | Description |
 |---|---|---|
-| `TomlValue` | enum | TOML value: `Str(str)`, `Int(int)`, `Float(float)`, `Bool(bool)`, `DateTime(str)`, `Array(Vector[TomlValue])`, `Table(Dict[str, TomlValue])` — **`DateTime` stores raw text only; year/month/day fields are not decomposed** |
-| `parse` | `TomlValue(str)` | Parse a TOML string into a `TomlValue` |
-| `stringify` | `str(TomlValue)` | Serialize a `TomlValue` to a TOML string |
+| `TomlValue` | enum | TOML value: `Str(String)`, `Int(int)`, `Float(float)`, `Bool(bool)`, `DateTime(String)`, `Array(Vector[TomlValue])`, `Table(Dict[String, TomlValue])` — **`DateTime` stores raw text only; year/month/day fields are not decomposed** |
+| `parse` | `TomlValue(String)` | Parse a TOML string into a `TomlValue` |
+| `stringify` | `String(TomlValue)` | Serialize a `TomlValue` to a TOML string |
 
 **`gg.xml`** — XML parsing and serialization
 
 | Name | Kind | Description |
 |---|---|---|
-| `XmlNode` | enum | XML node: `Element` (tag, attributes, children), `Text(str)` |
-| `xml_parse` | `XmlNode(str)` | Parse an XML string into an `XmlNode` tree |
-| `xml_stringify` | `str(XmlNode)` | Serialize an `XmlNode` tree to an XML string |
+| `XmlNode` | enum | XML node: `Element` (tag, attributes, children), `Text(String)` |
+| `xml_parse` | `XmlNode(String)` | Parse an XML string into an `XmlNode` tree |
+| `xml_stringify` | `String(XmlNode)` | Serialize an `XmlNode` tree to an XML string |
 
 **`std.encoding`** — Text encoding/decoding (URL, HTML, UTF-8, Latin-1)
 
@@ -3547,56 +3547,56 @@ void main():
 
 | Function | Signature | Description |
 |---|---|---|
-| `url_encode` | `str(str)` | Percent-encode non-unreserved characters |
-| `url_decode` | `Result[str, str](str)` | Decode percent-encoded string |
-| `form_encode` | `str(str)` | URL-encode for `application/x-www-form-urlencoded` (space → `+`) |
-| `form_decode` | `Result[str, str](str)` | Decode form-encoded string (`+` → space) |
+| `url_encode` | `String(String)` | Percent-encode non-unreserved characters |
+| `url_decode` | `Result[String, String](String)` | Decode percent-encoded string |
+| `form_encode` | `String(String)` | URL-encode for `application/x-www-form-urlencoded` (space → `+`) |
+| `form_decode` | `Result[String, String](String)` | Decode form-encoded string (`+` → space) |
 
 *HTML entity escaping:*
 
 | Function | Signature | Description |
 |---|---|---|
-| `html_escape` | `str(str)` | Escape `& < > " '` to named entities |
-| `html_unescape` | `str(str)` | Decode named entities, `&#DDD;`, and `&#xHH;` references |
+| `html_escape` | `String(String)` | Escape `& < > " '` to named entities |
+| `html_unescape` | `String(String)` | Decode named entities, `&#DDD;`, and `&#xHH;` references |
 
 *UTF-8 utilities:*
 
 | Function | Signature | Description |
 |---|---|---|
-| `utf8_len` | `int(str)` | Count Unicode codepoints (not bytes) |
-| `utf8_codepoints` | `Vector[int](str)` | Extract all codepoints as integers |
-| `utf8_is_valid` | `bool(str)` | Validate UTF-8 byte sequence structure |
-| `utf8_char_at` | `int(str, int)` | Get nth codepoint (0-indexed); returns -1 if out of range |
+| `utf8_len` | `int(String)` | Count Unicode codepoints (not bytes) |
+| `utf8_codepoints` | `Vector[int](String)` | Extract all codepoints as integers |
+| `utf8_is_valid` | `bool(String)` | Validate UTF-8 byte sequence structure |
+| `utf8_char_at` | `int(String, int)` | Get nth codepoint (0-indexed); returns -1 if out of range |
 
 *Latin-1 (ISO 8859-1):*
 
 | Function | Signature | Description |
 |---|---|---|
-| `latin1_encode` | `Result[Vector[uint8], str](str)` | UTF-8 → Latin-1 bytes; fails if any codepoint > 255 |
-| `latin1_decode` | `str(Vector[uint8])` | Latin-1 bytes → UTF-8 string |
+| `latin1_encode` | `Result[Vector[uint8], String](String)` | UTF-8 → Latin-1 bytes; fails if any codepoint > 255 |
+| `latin1_decode` | `String(Vector[uint8])` | Latin-1 bytes → UTF-8 string |
 
 ```gorget
 from std.encoding import url_encode, url_decode, html_escape
 
-str enc_url = url_encode("hello world")        # "hello%20world"
+String enc_url = url_encode("hello world")        # "hello%20world"
 auto dec_url = url_decode("hello%20world")      # Ok("hello world")
-str safe = html_escape("<b>Tom & Jerry</b>")    # "&lt;b&gt;Tom &amp; Jerry&lt;/b&gt;"
+String safe = html_escape("<b>Tom & Jerry</b>")    # "&lt;b&gt;Tom &amp; Jerry&lt;/b&gt;"
 ```
 
 **`gg.csv`** — RFC 4180 CSV parsing and serialization
 
 | Function | Signature | Description |
 |---|---|---|
-| `parse` | `Result[Vector[Vector[str]], str](str)` | Parse CSV string into rows of fields |
-| `parse_delim` | `Result[Vector[Vector[str]], str](str, str)` | Parse with custom delimiter (e.g. `"\t"` for TSV) |
-| `parse_table` | `Result[CsvTable, str](str)` | Parse CSV where first row = headers |
-| `parse_table_delim` | `Result[CsvTable, str](str, str)` | Parse table with custom delimiter |
-| `stringify` | `str(Vector[Vector[str]])` | Serialize rows to CSV string (CRLF line endings) |
-| `stringify_delim` | `str(Vector[Vector[str]], str)` | Serialize with custom delimiter |
-| `stringify_table` | `str(CsvTable)` | Serialize table (headers + rows) to CSV |
-| `stringify_table_delim` | `str(CsvTable, str)` | Serialize table with custom delimiter |
+| `parse` | `Result[Vector[Vector[String]], String](String)` | Parse CSV string into rows of fields |
+| `parse_delim` | `Result[Vector[Vector[String]], String](String, String)` | Parse with custom delimiter (e.g. `"\t"` for TSV) |
+| `parse_table` | `Result[CsvTable, String](String)` | Parse CSV where first row = headers |
+| `parse_table_delim` | `Result[CsvTable, String](String, String)` | Parse table with custom delimiter |
+| `stringify` | `String(Vector[Vector[String]])` | Serialize rows to CSV string (CRLF line endings) |
+| `stringify_delim` | `String(Vector[Vector[String]], String)` | Serialize with custom delimiter |
+| `stringify_table` | `String(CsvTable)` | Serialize table (headers + rows) to CSV |
+| `stringify_table_delim` | `String(CsvTable, String)` | Serialize table with custom delimiter |
 
-`CsvTable` methods: `row_count()`, `col_count()`, `headers()`, `row(int)`, `get(int, int)`, `get_named(int, str)`, `has_column(str)`, `column_index(str)`.
+`CsvTable` methods: `row_count()`, `col_count()`, `headers()`, `row(int)`, `get(int, int)`, `get_named(int, String)`, `has_column(String)`, `column_index(String)`.
 
 ```gorget
 from gg.csv import parse_table, stringify, CsvTable
@@ -3615,10 +3615,10 @@ match result:
 
 | Function | Signature | Description |
 |---|---|---|
-| `bytes_from_str` | `Vector[uint8](str)` | Convert string to byte vector |
-| `bytes_to_str` | `Result[str, str](Vector[uint8])` | Convert byte vector to string (validates UTF-8) |
-| `bytes_from_hex` | `Vector[uint8](str)` | Decode hex string to bytes |
-| `bytes_to_hex` | `str(Vector[uint8])` | Encode bytes as hex string |
+| `bytes_from_str` | `Vector[uint8](String)` | Convert string to byte vector |
+| `bytes_to_str` | `Result[String, String](Vector[uint8])` | Convert byte vector to string (validates UTF-8) |
+| `bytes_from_hex` | `Vector[uint8](String)` | Decode hex string to bytes |
+| `bytes_to_hex` | `String(Vector[uint8])` | Encode bytes as hex string |
 | `bytes_write_u32_be` | `void(Vector[uint8], int)` | Write 32-bit big-endian integer |
 | `bytes_read_u32_be` | `int(Vector[uint8])` | Read 32-bit big-endian integer |
 | `bytes_write_u16_be` | `void(Vector[uint8], int)` | Write 16-bit big-endian integer |
@@ -3631,9 +3631,9 @@ match result:
 
 | Name | Kind | Description |
 |---|---|---|
-| `crypto_sha256` | `str(str)` | SHA-256 hash (hex string) |
-| `crypto_sha1` | `str(str)` | SHA-1 hash (hex string) |
-| `crypto_hmac` | `str(str, str, str)` | HMAC (algorithm, key, message) |
+| `crypto_sha256` | `String(String)` | SHA-256 hash (hex string) |
+| `crypto_sha1` | `String(String)` | SHA-1 hash (hex string) |
+| `crypto_hmac` | `String(String, String, String)` | HMAC (algorithm, key, message) |
 | `crypto_aes_ctr_new` | `CipherContext(Vector[uint8], Vector[uint8])` | Create AES-CTR cipher context |
 | `CipherContext` | struct | Cipher state with `encrypt`/`decrypt` methods |
 | `BigNum` | struct | Arbitrary-precision integer for cryptographic operations |
@@ -3652,7 +3652,7 @@ Supports HTTP and HTTPS (TLS). Follows redirects automatically (up to 5 hops).
 ```gorget
 from gg.http import get, post, put, delete, patch, HttpResponse
 
-Result[HttpResponse, str] r = get("https://api.example.com/data")
+Result[HttpResponse, String] r = get("https://api.example.com/data")
 if r.is_ok():
     HttpResponse resp = r.unwrap()
     print("{resp.status_code}")   # e.g. 200
@@ -3665,24 +3665,24 @@ if r.is_ok():
 | Field | Type | Description |
 |---|---|---|
 | `status_code` | `int` | HTTP status code (200, 404, …) |
-| `body_text` | `str` | Response body decoded as UTF-8 |
-| `headers` | `Dict[str, str]` | Response headers (lowercase names) |
+| `body_text` | `String` | Response body decoded as UTF-8 |
+| `headers` | `Dict[String, String]` | Response headers (lowercase names) |
 
-Client functions (all return `Result[HttpResponse, str]`):
+Client functions (all return `Result[HttpResponse, String]`):
 
 | Function | Signature | Description |
 |---|---|---|
-| `get` | `(str url, Dict[str,str] headers={})` | GET request |
-| `post` | `(str url, str body="", Dict[str,str] headers={})` | POST request |
-| `put` | `(str url, str body="", Dict[str,str] headers={})` | PUT request |
-| `delete` | `(str url, Dict[str,str] headers={})` | DELETE request |
-| `patch` | `(str url, str body="", Dict[str,str] headers={})` | PATCH request |
+| `get` | `(String url, Dict[String,String] headers={})` | GET request |
+| `post` | `(String url, String body="", Dict[String,String] headers={})` | POST request |
+| `put` | `(String url, String body="", Dict[String,String] headers={})` | PUT request |
+| `delete` | `(String url, Dict[String,String] headers={})` | DELETE request |
+| `patch` | `(String url, String body="", Dict[String,String] headers={})` | PATCH request |
 
 Helper:
 
 | Function | Signature | Description |
 |---|---|---|
-| `parse_url` | `(str url) → (str host, int port, str path, bool use_tls)` | Parse a URL into components |
+| `parse_url` | `(String url) → (String host, int port, String path, bool use_tls)` | Parse a URL into components |
 
 ---
 
@@ -3714,47 +3714,47 @@ async void main():
 
 | Field | Type | Description |
 |---|---|---|
-| `method` | `str` | `"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`, … |
-| `path` | `str` | URL path (e.g. `"/api/users"`) |
-| `query_string` | `str` | Raw query string without leading `?` |
-| `http_version` | `str` | `"HTTP/1.1"` |
-| `headers` | `Dict[str, str]` | Request headers (lowercase names) |
-| `body` | `str` | Request body |
-| `params` | `Dict[str, str]` | URL path parameters captured by the Router |
+| `method` | `String` | `"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`, … |
+| `path` | `String` | URL path (e.g. `"/api/users"`) |
+| `query_string` | `String` | Raw query string without leading `?` |
+| `http_version` | `String` | `"HTTP/1.1"` |
+| `headers` | `Dict[String, String]` | Request headers (lowercase names) |
+| `body` | `String` | Request body |
+| `params` | `Dict[String, String]` | URL path parameters captured by the Router |
 
 `HttpRequest` methods:
 
 | Method | Returns | Description |
 |---|---|---|
-| `query_params()` | `Dict[str, str]` | Parse `query_string` into key/value pairs |
+| `query_params()` | `Dict[String, String]` | Parse `query_string` into key/value pairs |
 
 **`HttpServerResponse`** fields:
 
 | Field | Type | Description |
 |---|---|---|
 | `status_code` | `int` | HTTP status code |
-| `body` | `str` | Response body |
-| `content_type` | `str` | `Content-Type` header value |
-| `headers` | `Dict[str, str]` | Additional response headers |
+| `body` | `String` | Response body |
+| `content_type` | `String` | `Content-Type` header value |
+| `headers` | `Dict[String, String]` | Additional response headers |
 
 `HttpServerResponse` factory methods (static):
 
 | Method | Description |
 |---|---|
-| `HttpServerResponse.ok(str body)` | 200 text/plain |
-| `HttpServerResponse.html(str body)` | 200 text/html |
-| `HttpServerResponse.json(str body)` | 200 application/json |
+| `HttpServerResponse.ok(String body)` | 200 text/plain |
+| `HttpServerResponse.html(String body)` | 200 text/html |
+| `HttpServerResponse.json(String body)` | 200 application/json |
 | `HttpServerResponse.not_found()` | 404 |
-| `HttpServerResponse.bad_request(str msg)` | 400 |
-| `HttpServerResponse.internal_error(str msg)` | 500 |
-| `HttpServerResponse.redirect(str location)` | 302 with `Location` header |
+| `HttpServerResponse.bad_request(String msg)` | 400 |
+| `HttpServerResponse.internal_error(String msg)` | 500 |
+| `HttpServerResponse.redirect(String location)` | 302 with `Location` header |
 
 Instance methods:
 
 | Method | Returns | Description |
 |---|---|---|
-| `with_header(str name, str value)` | `HttpServerResponse` | Return copy with additional header |
-| `status_text()` | `str` | Human-readable status (e.g. `"OK"`, `"Not Found"`) |
+| `with_header(String name, String value)` | `HttpServerResponse` | Return copy with additional header |
+| `status_text()` | `String` | Human-readable status (e.g. `"OK"`, `"Not Found"`) |
 
 **`Router`** — URL-pattern dispatcher:
 
@@ -3806,8 +3806,8 @@ from gg.httpserver import http_serve_file, http_mime_type
 router.get("/static/:file", (req): http_serve_file("./public", req))
 ```
 
-`parse_query_string(str) → Dict[str, str]` — parse a raw query string.
-`http_mime_type(str path) → str` — return MIME type for a file path by extension.
+`parse_query_string(String) → Dict[String, String]` — parse a raw query string.
+`http_mime_type(String path) → String` — return MIME type for a file path by extension.
 
 ---
 
@@ -3815,8 +3815,8 @@ router.get("/static/:file", (req): http_serve_file("./public", req))
 
 | Name | Kind | Description |
 |---|---|---|
-| `Socket` | struct | TCP socket with `read`, `read_exact`, `write`, `write_str`, `read_line` (returns `Result[String, str]`), `set_timeout`, `close` methods |
-| `socket_connect` | `Result[Socket, str](str, int)` | Connect to host:port |
+| `Socket` | struct | TCP socket with `read`, `read_exact`, `write`, `write_str`, `read_line` (returns `Result[String, String]`), `set_timeout`, `close` methods |
+| `socket_connect` | `Result[Socket, String](String, int)` | Connect to host:port |
 
 **`gg.gfx`** — Canvas graphics
 
@@ -3824,7 +3824,7 @@ router.get("/static/:file", (req): http_serve_file("./public", req))
 |---|---|---|
 | `Canvas` | struct | Drawing canvas |
 | `Color` | struct | RGBA color |
-| `open` | `Result[Canvas, str](str, int, int)` | Open a canvas (title, width, height) |
+| `open` | `Result[Canvas, String](String, int, int)` | Open a canvas (title, width, height) |
 | `close` | `void(Canvas)` | Close a canvas |
 | `fill_circle` | `void(Canvas, int, int, int, Color)` | Draw filled circle |
 | `draw_circle` | `void(Canvas, int, int, int, Color)` | Draw circle outline |
@@ -3851,7 +3851,7 @@ Low-level SDL2 bindings for window management, rendering, input handling, and au
 
 | Name | Kind | Description |
 |---|---|---|
-| `Session` | struct | SSH session with `exec(str) → CommandResult` method for remote command execution |
+| `Session` | struct | SSH session with `exec(String) → CommandResult` method for remote command execution |
 | `CommandResult` | struct | Command execution result (exit code, output) |
 | `connect` | `Session(...)` | Establish SSH connection (host, port, username, password, crypto parameters) |
 
@@ -3863,40 +3863,40 @@ The SSH module implements the SSH-2 protocol including key exchange, encryption,
 |---|---|---|
 | `Regex` | struct | Compiled regular expression pattern |
 | `Match` | struct | Result of a successful match (text, offsets, groups) |
-| `regex_compile` | `Result[Regex, str](str)` | Compile a regex pattern |
-| `regex_compile_with` | `Result[Regex, str](str, str)` | Compile with flags (`"i"`, `"m"`, `"s"`, `"x"`, `"u"`, `"U"`) |
-| `regex_escape` | `String(str)` | Escape special regex characters in a string |
-| `regex_is_match` | `bool(str, str)` | Convenience: compile + test (pattern, subject) |
-| `regex_find` | `Option[Match](str, str)` | Convenience: compile + find first match |
-| `regex_replace` | `String(str, str, str)` | Convenience: compile + replace first match |
+| `regex_compile` | `Result[Regex, String](String)` | Compile a regex pattern |
+| `regex_compile_with` | `Result[Regex, String](String, String)` | Compile with flags (`"i"`, `"m"`, `"s"`, `"x"`, `"u"`, `"U"`) |
+| `regex_escape` | `String(String)` | Escape special regex characters in a string |
+| `regex_is_match` | `bool(String, String)` | Convenience: compile + test (pattern, subject) |
+| `regex_find` | `Option[Match](String, String)` | Convenience: compile + find first match |
+| `regex_replace` | `String(String, String, String)` | Convenience: compile + replace first match |
 
 **Regex methods:**
 
 | Method | Signature | Description |
 |---|---|---|
-| `is_match` | `bool(self, str)` | Test if pattern matches anywhere in subject |
-| `find` | `Option[Match](self, str)` | Find first match |
-| `find_at` | `Option[Match](self, str, int)` | Find first match starting at byte offset |
-| `find_all` | `Vector[Match](self, str)` | Find all non-overlapping matches |
-| `replace` | `String(self, str, str)` | Replace first match |
-| `replace_all` | `String(self, str, str)` | Replace all matches |
-| `split` | `Vector[str](self, str)` | Split string by pattern |
-| `splitn` | `Vector[str](self, str, int)` | Split with maximum number of parts |
-| `fullmatch` | `Option[Match](self, str)` | Match entire string |
+| `is_match` | `bool(self, String)` | Test if pattern matches anywhere in subject |
+| `find` | `Option[Match](self, String)` | Find first match |
+| `find_at` | `Option[Match](self, String, int)` | Find first match starting at byte offset |
+| `find_all` | `Vector[Match](self, String)` | Find all non-overlapping matches |
+| `replace` | `String(self, String, String)` | Replace first match |
+| `replace_all` | `String(self, String, String)` | Replace all matches |
+| `split` | `Vector[String](self, String)` | Split string by pattern |
+| `splitn` | `Vector[String](self, String, int)` | Split with maximum number of parts |
+| `fullmatch` | `Option[Match](self, String)` | Match entire string |
 | `capture_count` | `int(self)` | Number of capture groups |
-| `group_names` | `Vector[str](self)` | Names of named capture groups |
-| `pattern_str` | `str(self)` | Original pattern string |
+| `group_names` | `Vector[String](self)` | Names of named capture groups |
+| `pattern_str` | `String(self)` | Original pattern string |
 
 **Match methods:**
 
 | Method | Signature | Description |
 |---|---|---|
-| `text` | `str(self)` | Full matched text |
+| `text` | `String(self)` | Full matched text |
 | `start` | `int(self)` | Start byte offset |
 | `end_pos` | `int(self)` | End byte offset |
-| `group` | `Option[str](self, int)` | Get capture group by index (0-based) |
-| `group_by_name` | `Option[str](self, str)` | Get capture group by name |
-| `groups` | `Vector[str](self)` | All capture group values |
+| `group` | `Option[String](self, int)` | Get capture group by index (0-based) |
+| `group_by_name` | `Option[String](self, String)` | Get capture group by name |
+| `groups` | `Vector[String](self)` | All capture group values |
 | `group_count` | `int(self)` | Number of capture groups |
 
 Flags for `regex_compile_with`: `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended), `u` (Unicode), `U` (ungreedy). Requires PCRE2 (`libpcre2-8`).
@@ -3984,15 +3984,15 @@ from gg.dataframe import DataFrame, Column, df_from_columns, df_from_csv,
 
 | Name | Signature | Description |
 |---|---|---|
-| `df_from_columns` | `DataFrame(Vector[str] names, Vector[Column] cols)` | Build from typed columns |
-| `df_from_csv` | `Result[DataFrame, str](str csv_text)` | Parse CSV with type inference |
-| `df_from_records` | `DataFrame(Vector[str] headers, Vector[Vector[str]] rows)` | Build from string rows |
+| `df_from_columns` | `DataFrame(Vector[String] names, Vector[Column] cols)` | Build from typed columns |
+| `df_from_csv` | `Result[DataFrame, String](String csv_text)` | Parse CSV with type inference |
+| `df_from_records` | `DataFrame(Vector[String] headers, Vector[Vector[String]] rows)` | Build from string rows |
 | `col_from_ints` | `Column(Vector[int] data)` | Create int column (all present) |
 | `col_from_floats` | `Column(Vector[float] data)` | Create float column (all present) |
-| `col_from_strs` | `Column(Vector[str] data)` | Create str column (all present) |
+| `col_from_strs` | `Column(Vector[String] data)` | Create String column (all present) |
 | `col_from_bools` | `Column(Vector[bool] data)` | Create bool column (all present) |
 | `col_ints_null` | `Column(Vector[int] data, Vector[bool] mask)` | Create nullable int column; mask[i]=false means null |
-| `col_strs_null` | `Column(Vector[str] data, Vector[bool] mask)` | Create nullable str column; mask[i]=false means null |
+| `col_strs_null` | `Column(Vector[String] data, Vector[bool] mask)` | Create nullable String column; mask[i]=false means null |
 
 **DataFrame methods (equip DataFrame):**
 
@@ -4000,42 +4000,42 @@ from gg.dataframe import DataFrame, Column, df_from_columns, df_from_csv,
 |---|---|---|
 | `nrows` | `int(self)` | Row count |
 | `ncols` | `int(self)` | Column count |
-| `has_column` | `bool(self, str name)` | Column existence check |
-| `get_column` | `Column(self, str name)` | Get a column by name |
-| `column_names` | `Vector[str](self)` | All column names |
+| `has_column` | `bool(self, String name)` | Column existence check |
+| `get_column` | `Column(self, String name)` | Get a column by name |
+| `column_names` | `Vector[String](self)` | All column names |
 | `head` | `DataFrame(self, int n)` | First n rows |
 | `tail` | `DataFrame(self, int n)` | Last n rows |
 | `df_slice` | `DataFrame(self, int start, int end)` | Row slice `[start, end)` |
-| `select` | `DataFrame(self, Vector[str] cols)` | Keep listed columns |
-| `drop` | `DataFrame(self, str col)` | Drop one column |
-| `rename` | `DataFrame(self, str old, str new)` | Rename column |
-| `filter_by` | `DataFrame(self, str col, str op, str val)` | Filter rows (`"=="`, `"!="`, `"<"`, `">"`, `"<="`, `">="`) |
-| `sort_by` | `DataFrame(self, str col, bool ascending)` | Sort rows |
-| `add_column` | `DataFrame(self, str name, Column col)` | Append a column |
-| `drop_column` | `DataFrame(self, str name)` | Remove a column |
-| `apply_int` | `DataFrame(self, str col, int(int) f)` | Map function over int column |
-| `apply_float` | `DataFrame(self, str col, float(float) f)` | Map function over float column |
-| `apply_str` | `DataFrame(self, str col, str(str) f)` | Map function over str column |
-| `fillna_int` | `DataFrame(self, str col, int val)` | Fill nulls in int column |
-| `fillna_float` | `DataFrame(self, str col, float val)` | Fill nulls in float column |
-| `fillna_str` | `DataFrame(self, str col, str val)` | Fill nulls in str column |
+| `select` | `DataFrame(self, Vector[String] cols)` | Keep listed columns |
+| `drop` | `DataFrame(self, String col)` | Drop one column |
+| `rename` | `DataFrame(self, String old, String new)` | Rename column |
+| `filter_by` | `DataFrame(self, String col, String op, String val)` | Filter rows (`"=="`, `"!="`, `"<"`, `">"`, `"<="`, `">="`) |
+| `sort_by` | `DataFrame(self, String col, bool ascending)` | Sort rows |
+| `add_column` | `DataFrame(self, String name, Column col)` | Append a column |
+| `drop_column` | `DataFrame(self, String name)` | Remove a column |
+| `apply_int` | `DataFrame(self, String col, int(int) f)` | Map function over int column |
+| `apply_float` | `DataFrame(self, String col, float(float) f)` | Map function over float column |
+| `apply_str` | `DataFrame(self, String col, String(String) f)` | Map function over String column |
+| `fillna_int` | `DataFrame(self, String col, int val)` | Fill nulls in int column |
+| `fillna_float` | `DataFrame(self, String col, float val)` | Fill nulls in float column |
+| `fillna_str` | `DataFrame(self, String col, String val)` | Fill nulls in String column |
 | `dropna` | `DataFrame(self)` | Remove rows with any null |
-| `df_sum` | `str(self, str col)` | Column sum (as string) |
-| `df_mean` | `str(self, str col)` | Column mean |
-| `df_min` | `str(self, str col)` | Column minimum |
-| `df_max` | `str(self, str col)` | Column maximum |
-| `df_count` | `int(self, str col)` | Non-null count |
-| `df_std` | `str(self, str col)` | Standard deviation |
+| `df_sum` | `String(self, String col)` | Column sum (as string) |
+| `df_mean` | `String(self, String col)` | Column mean |
+| `df_min` | `String(self, String col)` | Column minimum |
+| `df_max` | `String(self, String col)` | Column maximum |
+| `df_count` | `int(self, String col)` | Non-null count |
+| `df_std` | `String(self, String col)` | Standard deviation |
 | `describe` | `DataFrame(self)` | Summary statistics per column |
-| `value_counts` | `DataFrame(self, str col)` | Count unique values |
+| `value_counts` | `DataFrame(self, String col)` | Count unique values |
 
 **Column methods (equip Column):**
 
 | Method | Signature | Description |
 |---|---|---|
 | `col_len` | `int(self)` | Number of rows |
-| `dtype_name` | `str(self)` | `"int"`, `"float"`, `"str"`, or `"bool"` |
-| `value_as_str` | `str(self, int idx)` | Get value as string (`"null"` if masked) |
+| `dtype_name` | `String(self)` | `"int"`, `"float"`, `"str"`, or `"bool"` |
+| `value_as_str` | `String(self, int idx)` | Get value as string (`"null"` if masked) |
 | `is_null_at` | `bool(self, int idx)` | True if row is null |
 | `null_count` | `int(self)` | Number of null rows |
 
@@ -4043,11 +4043,11 @@ from gg.dataframe import DataFrame, Column, df_from_columns, df_from_csv,
 
 | Name | Signature | Description |
 |---|---|---|
-| `df_group_by` | `GroupBy(DataFrame df, str col)` | Group by column |
-| `.agg` | `DataFrame(self, str target, str op)` | Aggregate groups (`"sum"`, `"mean"`, `"min"`, `"max"`, `"count"`) |
-| `df_inner_join` | `DataFrame(DataFrame left, DataFrame right, str on)` | Inner join on key column |
+| `df_group_by` | `GroupBy(DataFrame df, String col)` | Group by column |
+| `.agg` | `DataFrame(self, String target, String op)` | Aggregate groups (`"sum"`, `"mean"`, `"min"`, `"max"`, `"count"`) |
+| `df_inner_join` | `DataFrame(DataFrame left, DataFrame right, String on)` | Inner join on key column |
 | `df_concat` | `DataFrame(DataFrame a, DataFrame b)` | Vertical concat (same schema) |
-| `df_to_csv` | `str(DataFrame df)` | Serialize to CSV string |
+| `df_to_csv` | `String(DataFrame df)` | Serialize to CSV string |
 
 **`std.alloc`** — Memory Allocators
 
@@ -4245,14 +4245,14 @@ Shared types and traits used by all database backends (`gg.sqlite`, `gg.influx`,
 
 | Type | Kind | Description |
 |---|---|---|
-| `Row` | struct | Query result row; `columns: Dict[str, str]` |
-| `Value` | enum | Typed column value: `IntVal(int)`, `FloatVal(float)`, `StrVal(str)`, `BoolVal(bool)`, `NullVal` |
-| `Param` | enum | Query parameter: `IntParam(int)`, `FloatParam(float)`, `StrParam(str)`, `BoolParam(bool)`, `NullParam` |
+| `Row` | struct | Query result row; `columns: Dict[String, String]` |
+| `Value` | enum | Typed column value: `IntVal(int)`, `FloatVal(float)`, `StrVal(String)`, `BoolVal(bool)`, `NullVal` |
+| `Param` | enum | Query parameter: `IntParam(int)`, `FloatParam(float)`, `StrParam(String)`, `BoolParam(bool)`, `NullParam` |
 | `FromRow` | trait | `Self from_row(Row row)` — derivable via `@derive(FromRow)` |
 | `Queryable` | trait | `query_raw`, `exec`, `exec_simple` |
 | `DbConnection` | trait | Extends `Queryable` with `is_connected` and `close` |
 
-Row methods: `str get(str col)`, `int get_int(str col)`, `float get_float(str col)`, `bool get_bool(str col)`, `bool has(str col)`.
+Row methods: `String get(String col)`, `int get_int(String col)`, `float get_float(String col)`, `bool get_bool(String col)`, `bool has(String col)`.
 
 **`gg.sqlite`** — SQLite database client
 
@@ -4262,7 +4262,7 @@ from gg.sqlite import SqliteConn, open
 
 | Function | Signature | Description |
 |---|---|---|
-| `open` | `Result[SqliteConn, str](str path)` | Open or create a SQLite database |
+| `open` | `Result[SqliteConn, String](String path)` | Open or create a SQLite database |
 
 `SqliteConn` implements `DbConnection`: `is_connected`, `close`, `query_raw`, `exec`, `exec_simple`.
 
@@ -4274,7 +4274,7 @@ from gg.influx import InfluxClient, influx_connect
 
 | Function | Signature | Description |
 |---|---|---|
-| `influx_connect` | `Result[InfluxClient, str](str url, str token, str org, str bucket)` | Connect to InfluxDB instance |
+| `influx_connect` | `Result[InfluxClient, String](String url, String token, String org, String bucket)` | Connect to InfluxDB instance |
 
 `InfluxClient` implements `DbConnection`. `query_raw` executes Flux queries; `exec` writes line protocol data.
 
@@ -4287,9 +4287,9 @@ from gg.uuid import UUID, v4, parse
 | Function | Signature | Description |
 |---|---|---|
 | `v4` | `UUID()` | Generate random UUID v4 |
-| `parse` | `Result[UUID, str](str s)` | Parse UUID from string |
+| `parse` | `Result[UUID, String](String s)` | Parse UUID from string |
 
-UUID methods: `str to_string()`, `bool equals(UUID other)`, `int version()`.
+UUID methods: `String to_string()`, `bool equals(UUID other)`, `int version()`.
 
 **`gg.cli`** — Command-line argument parsing
 
@@ -4299,14 +4299,14 @@ from gg.cli import CliParser
 
 | Method | Signature | Description |
 |---|---|---|
-| `new` | `CliParser(str name, str desc)` | Create parser |
-| `add_flag` | `void(str long, str short, str help)` | Register boolean flag |
-| `add_option` | `void(str long, str short, str help, str default)` | Register named option with default |
-| `add_positional` | `void(str name, str help)` | Register positional argument |
-| `parse` | `Result[bool, str](Vector[str] argv)` | Parse arguments |
-| `has` | `bool(str name)` | Check if flag/option was provided |
-| `get` | `str(str name)` | Get option value |
-| `positionals` | `Vector[str]()` | Get positional arguments |
+| `new` | `CliParser(String name, String desc)` | Create parser |
+| `add_flag` | `void(String long, String short, String help)` | Register boolean flag |
+| `add_option` | `void(String long, String short, String help, String default)` | Register named option with default |
+| `add_positional` | `void(String name, String help)` | Register positional argument |
+| `parse` | `Result[bool, String](Vector[String] argv)` | Parse arguments |
+| `has` | `bool(String name)` | Check if flag/option was provided |
+| `get` | `String(String name)` | Get option value |
+| `positionals` | `Vector[String]()` | Get positional arguments |
 | `print_help` | `void()` | Print usage |
 
 **`gg.jsonpath`** — JSONPath query and mutation
@@ -4317,12 +4317,12 @@ from gg.jsonpath import get, get_all, exists, count, set, delete
 
 | Function | Signature | Description |
 |---|---|---|
-| `get` | `Json(Json doc, str path)` | Get first matching value |
-| `get_all` | `Vector[Json](Json doc, str path)` | Get all matching values |
-| `exists` | `bool(Json doc, str path)` | Check if path matches |
-| `count` | `int(Json doc, str path)` | Count matching values |
-| `set` | `bool(Json &doc, str path, Json value)` | Set value at path (in-place) |
-| `delete` | `bool(Json &doc, str path)` | Delete value at path (in-place) |
+| `get` | `Json(Json doc, String path)` | Get first matching value |
+| `get_all` | `Vector[Json](Json doc, String path)` | Get all matching values |
+| `exists` | `bool(Json doc, String path)` | Check if path matches |
+| `count` | `int(Json doc, String path)` | Count matching values |
+| `set` | `bool(Json &doc, String path, Json value)` | Set value at path (in-place) |
+| `delete` | `bool(Json &doc, String path)` | Delete value at path (in-place) |
 
 Path syntax: `name.child`, `[0]`, `[-1]`, `*`, `..key`, `#`, `#(age>30)`, `[0:3]`.
 
@@ -4338,18 +4338,18 @@ Core functions:
 
 | Function | Description |
 |---|---|
-| `p2p_create_node(str addr, int port)` | Create and bind a P2P node |
+| `p2p_create_node(String addr, int port)` | Create and bind a P2P node |
 | `p2p_generate_identity()` | Generate Ed25519 keypair |
 | `p2p_poll(Node &node, int timeout_ms)` | Main event loop — drives retransmission, discovery, and event delivery |
-| `p2p_add_peer(Node &node, str host, int port)` | Add a peer via PING |
-| `p2p_bootstrap(Node &node, Vector[str] addrs)` | Bootstrap from known peers |
+| `p2p_add_peer(Node &node, String host, int port)` | Add a peer via PING |
+| `p2p_bootstrap(Node &node, Vector[String] addrs)` | Bootstrap from known peers |
 | `p2p_send(Node &node, PeerId target, Vector[uint8] data)` | Send message to known peer |
-| `p2p_subscribe(Node &node, str topic)` | Subscribe to gossip topic |
-| `p2p_publish(Node &node, str topic, Vector[uint8] data)` | Publish to topic |
+| `p2p_subscribe(Node &node, String topic)` | Subscribe to gossip topic |
+| `p2p_publish(Node &node, String topic, Vector[uint8] data)` | Publish to topic |
 | `p2p_dht_store(Node &node, Vector[uint8] key, Vector[uint8] val)` | Store in DHT |
 | `p2p_dht_get(Node &node, Vector[uint8] key, int timeout_ms)` | Query DHT |
-| `p2p_stream_open(Node &node, str peer_hex)` | Open reliable stream |
-| `p2p_stream_open_encrypted(Node &node, str peer_hex)` | Open encrypted stream |
+| `p2p_stream_open(Node &node, String peer_hex)` | Open reliable stream |
+| `p2p_stream_open_encrypted(Node &node, String peer_hex)` | Open encrypted stream |
 
 ---
 
@@ -4757,7 +4757,7 @@ test "exec returns exit code":
     assert code == 0
 ```
 
-`ExecResult` has fields: `output: str`, `errors: str`, `exit_code: int`.
+`ExecResult` has fields: `output: String`, `errors: String`, `exit_code: int`.
 
 ### 18.9 Coexisting with `main()`
 
@@ -4823,7 +4823,7 @@ bench "addition":
     int x = 1 + 2
 
 bench "string concat":
-    str s = "hello" + " world"
+    String s = "hello" + " world"
 ```
 
 Run with `gg test --bench <file>`. Each bench block is:
@@ -4857,7 +4857,7 @@ All meta-compatible types: `int`, `int8`–`int64`, `uint`–`uint64`, `float`, 
 ```gorget
 meta int   MAX_CONNECTIONS = 1024
 meta int   BUFFER_SIZE     = MAX_CONNECTIONS * 64
-meta str   VERSION         = "2.1.0"
+meta String VERSION         = "2.1.0"
 meta float PI              = 3.14159265358979
 meta bool  VERBOSE         = false
 ```
@@ -4907,7 +4907,7 @@ meta log "page size:", PAGE_SIZE, "pages:", PAGES
 Inside generic function bodies, `meta log` is evaluated at monomorphization time:
 
 ```gorget
-str describe[T]():
+String describe[T]():
     meta log "describe called for type:", typename(T)
     meta if typename(T) == "int":
         return "integer"
@@ -4930,7 +4930,7 @@ Multiple comma-separated arguments are space-separated in the output. `meta log`
 ```gorget
 meta type Num      = int
 meta type IntVec   = Vector[int]
-meta type Callback = int(str, int)
+meta type Callback = int(String, int)
 ```
 
 Generic args on use sites are preserved:
@@ -4969,10 +4969,10 @@ Feature-gated code:
 ```gorget
 meta if feature("metrics"):
     import std.metrics
-    void record_hit(str key):
+    void record_hit(String key):
         std.metrics.increment(key)
 else:
-    void record_hit(str key):
+    void record_hit(String key):
         pass   # no-op in non-metrics build
 ```
 
@@ -5056,23 +5056,23 @@ These are always available in meta contexts:
 
 | Function | Return | Description |
 |----------|--------|-------------|
-| `platform()` | `str` | `"linux"`, `"macos"`, `"windows"`, `"unknown"` |
-| `arch()` | `str` | `"x86_64"`, `"aarch64"`, `"arm"`, `"wasm32"`, `"unknown"` |
+| `platform()` | `String` | `"linux"`, `"macos"`, `"windows"`, `"unknown"` |
+| `arch()` | `String` | `"x86_64"`, `"aarch64"`, `"arm"`, `"wasm32"`, `"unknown"` |
 | `arch_word_bits()` | `int` | Native word size in bits (32 or 64) |
-| `feature(str)` | `bool` | True if `--feature <name>` was passed to `gg build` |
+| `feature(String)` | `bool` | True if `--feature <name>` was passed to `gg build` |
 | `debug()` | `bool` | Shorthand for `feature("debug")` |
 | `sizeof(Type)` | `int` | Size in bytes (primitive types and `str`, `cstr`, `String`) |
 | `alignof(Type)` | `int` | Alignment in bytes (primitive types) |
-| `typename(Type)` | `str` | String representation, e.g. `"int"`, `"Vector[int]"` |
-| `embed_file(str)` | `str` | Read a file at compile time, embed its contents as a string |
+| `typename(Type)` | `String` | String representation, e.g. `"int"`, `"Vector[int]"` |
+| `embed_file(String)` | `String` | Read a file at compile time, embed its contents as a string |
 
 `sizeof` and `alignof` support primitive types and the built-in string types. User-defined struct sizes are not available during Phase 0 meta evaluation (which runs before layout computation). Inside generic function bodies, `sizeof(T)` resolves the generic parameter to its concrete type at monomorphization time (see §19.12).
 
 ```gorget
 meta int  INT_SIZE  = sizeof(int)          # 8
-meta int  STR_SIZE  = sizeof(str)          # 16
+meta int  STR_SIZE  = sizeof(String)       # 16
 meta int  PTR_ALIGN = alignof(cstr)        # 8
-meta str  INT_NAME  = typename(int)        # "int"
+meta String INT_NAME = typename(int)        # "int"
 meta bool IS_64     = arch_word_bits() == 64
 meta bool HAS_TLS   = feature("tls")
 ```
@@ -5082,15 +5082,15 @@ The path is resolved relative to the source file's directory. It is a compilatio
 file does not exist:
 
 ```gorget
-meta str SQL      = embed_file("queries/get_users.sql")
-meta str SHADER   = embed_file("shaders/vertex.glsl")
-meta str TEMPLATE = embed_file("templates/email.html")
+meta String SQL      = embed_file("queries/get_users.sql")
+meta String SHADER   = embed_file("shaders/vertex.glsl")
+meta String TEMPLATE = embed_file("templates/email.html")
 
 void main():
     print(SQL)       # prints the file contents at runtime — no I/O at runtime
 ```
 
-The embedded string becomes an ordinary `meta str` constant and is substituted throughout the
+The embedded string becomes an ordinary `meta String` constant and is substituted throughout the
 module like any other meta constant. Multiline files work naturally — the string preserves all
 whitespace and newlines.
 
@@ -5158,7 +5158,7 @@ meta assert QUEUE_SIZE > MAX_WORKERS, "queue too small"
 **Platform-specific defaults:**
 
 ```gorget
-meta str CONFIG_DIR = "/etc/myapp" if platform() == "linux" else "/Library/Application Support/myapp"
+meta String CONFIG_DIR = "/etc/myapp" if platform() == "linux" else "/Library/Application Support/myapp"
 ```
 
 ---
@@ -5209,7 +5209,7 @@ void emit_info[Numeric T]():
 - Bodies may contain any valid runtime statements (if, while, return, etc.) since the winning body is lowered as ordinary code.
 
 ```gorget
-str type_label[T](T val):
+String type_label[T](T val):
     meta if typename(T) == "int":
         return "integer"
     elif typename(T) == "float":
@@ -5275,33 +5275,33 @@ monomorphization time.
 
 | Builtin | Returns | Description |
 |---------|---------|-------------|
-| `typename(T)` | `str` | Canonical type name; resolves `T` at monomorphization |
-| `typeof(T)` | `str` | Alias for `typename(T)` |
+| `typename(T)` | `String` | Canonical type name; resolves `T` at monomorphization |
+| `typeof(T)` | `String` | Alias for `typename(T)` |
 | `sizeof(T)` | `int` | Byte size; resolves `T` at monomorphization |
 | `bitwidth(T)` | `int` | Bit width of numeric types (§19.21) |
 | `min_val(T)` | `int` | Minimum value for integer types (§19.21) |
 | `max_val(T)` | `int` | Maximum value for integer types (§19.21) |
-| `implements(T, str)` | `bool` | True if T implements the named trait (§19.22) |
+| `implements(T, String)` | `bool` | True if T implements the named trait (§19.22) |
 
 **Struct reflection:**
 
 | Builtin | Returns | Description |
 |---------|---------|-------------|
-| `fields(T)` | `List[[str,str]]` | `[name, type]` pairs for all fields (§19.14) |
-| `field_names(T)` | `List[str]` | Field names in declaration order (§19.19) |
+| `fields(T)` | `List[[String,String]]` | `[name, type]` pairs for all fields (§19.14) |
+| `field_names(T)` | `List[String]` | Field names in declaration order (§19.19) |
 | `field_count(T)` | `int` | Number of fields (§19.19) |
-| `has_field(T, str)` | `bool` | True if the named field exists (§19.19) |
-| `field_type(T, str)` | `str` | Canonical type name of a named field (§19.19) |
+| `has_field(T, String)` | `bool` | True if the named field exists (§19.19) |
+| `field_type(T, String)` | `String` | Canonical type name of a named field (§19.19) |
 
 **Enum reflection:**
 
 | Builtin | Returns | Description |
 |---------|---------|-------------|
-| `variant_names(T)` | `List[str]` | Variant names in declaration order (§19.20) |
+| `variant_names(T)` | `List[String]` | Variant names in declaration order (§19.20) |
 | `variant_count(T)` | `int` | Number of variants (§19.20) |
-| `variant_payloads(T)` | `List[[str,str]]` | `[name, inner_type]` pairs (§19.20) |
-| `enum_ordinal(T, str)` | `int` | Zero-based ordinal of a named variant (§19.16) |
-| `enum_from_ordinal(T, int)` | `str` | Variant name at ordinal n (§19.16) |
+| `variant_payloads(T)` | `List[[String,String]]` | `[name, inner_type]` pairs (§19.20) |
+| `enum_ordinal(T, String)` | `int` | Zero-based ordinal of a named variant (§19.16) |
+| `enum_from_ordinal(T, int)` | `String` | Variant name at ordinal n (§19.16) |
 
 **Comparison: Phase 0 vs delayed:**
 
@@ -5315,7 +5315,7 @@ monomorphization time.
 **Example — dispatching on `sizeof`:**
 
 ```gorget
-str size_class[Numeric T]():
+String size_class[Numeric T]():
     meta if sizeof(T) == 1:
         return "byte"
     elif sizeof(T) == 4:
@@ -5372,7 +5372,7 @@ T clamp[T](T val, T lo, T hi):
     else:
         return min(max(val, lo), hi)
 
-str classify[T]():
+String classify[T]():
     meta if T is float:
         return "float"
     elif T is signed:
@@ -5430,7 +5430,7 @@ void count_numeric_fields[T]():
     print(count)
 
 struct Player:
-    str name
+    String name
     int health
     bool alive
 
@@ -5456,8 +5456,8 @@ name. Use `ftype`, `ty`, `field_type`, or any other non-keyword identifier.
 
 ```gorget
 # Form 1 — meta-loop variable (most common)
-str to_debug[T](T val):
-    str out = ""
+String to_debug[T](T val):
+    String out = ""
     meta for fname, ftype in fields(T):
         meta if ftype == "int":
             int v = field_value(val, fname)   # fname is substituted to "x", "y", ... per iteration
@@ -5510,8 +5510,8 @@ field_set(p, "x", 42)   # same as p.x = 42
 **Generic field_value and field_set example:**
 
 ```gorget
-str to_debug[T](T val):
-    str out = ""
+String to_debug[T](T val):
+    String out = ""
     meta for fname, ftype in fields(T):
         if out != "":
             out = out + ","
@@ -5519,7 +5519,7 @@ str to_debug[T](T val):
             int v = field_value(val, fname)
             out = out + "{fname}={v}"
         elif ftype == "str":
-            str v = field_value(val, fname)
+            String v = field_value(val, fname)
             out = out + "{fname}={v}"
         elif ftype == "bool":
             bool v = field_value(val, fname)
@@ -5651,7 +5651,7 @@ string literal before the body is lowered.
 
 ```gorget
 trait FromStr:
-    Option[Self] from_str(str s):
+    Option[Self] from_str(String s):
         meta if Self is Enum:
             meta for vname in variant_names(Self):
                 if s == vname:
@@ -5711,10 +5711,10 @@ to be a struct and are evaluated at monomorphization time in generic bodies.
 
 | Builtin | Signature | Description |
 |---------|-----------|-------------|
-| `field_names(T)` | `→ List[str]` | All field names in declaration order |
+| `field_names(T)` | `→ List[String]` | All field names in declaration order |
 | `field_count(T)` | `→ int` | Number of fields |
 | `has_field(T, "name")` | `→ bool` | True if the named field exists |
-| `field_type(T, "name")` | `→ str` | Canonical Gorget type name of the named field |
+| `field_type(T, "name")` | `→ String` | Canonical Gorget type name of the named field |
 
 **`field_names(T)`** is the lower-level companion to `fields(T)` — it returns only the name
 strings without the paired type strings. Prefer `fields(T)` when both name and type are needed;
@@ -5763,9 +5763,9 @@ Three builtins introspect enum variants at monomorphization time. All require `T
 
 | Builtin | Signature | Description |
 |---------|-----------|-------------|
-| `variant_names(T)` | `→ List[str]` | All variant names in declaration order |
+| `variant_names(T)` | `→ List[String]` | All variant names in declaration order |
 | `variant_count(T)` | `→ int` | Number of variants |
-| `variant_payloads(T)` | `→ List[[str, str]]` | `[variant_name, inner_type]` pairs |
+| `variant_payloads(T)` | `→ List[[String, String]]` | `[variant_name, inner_type]` pairs |
 
 #### `variant_names(T)` and `variant_count(T)`
 
@@ -5808,7 +5808,7 @@ per variant, where the inner type is the canonical Gorget name of the single pay
 |---------|--------------------------|
 | `IntCol(TypedColumn[int])` | `["IntCol", "int"]` |
 | `FloatCol(TypedColumn[float])` | `["FloatCol", "float"]` |
-| `StrCol(TypedColumn[str])` | `["StrCol", "str"]` |
+| `StrCol(TypedColumn[String])` | `["StrCol", "str"]` |
 
 For unit variants or multi-field variants, the inner type string is `""`. The primary use case is
 collapsing per-variant dispatch into a single `meta for` block (see §19.24).
@@ -5829,7 +5829,7 @@ They all resolve generic type parameters to their concrete values at monomorphiz
 
 | Builtin | Signature | Description |
 |---------|-----------|-------------|
-| `typeof(T)` | `→ str` | Canonical Gorget type name — alias for `typename(T)` |
+| `typeof(T)` | `→ String` | Canonical Gorget type name — alias for `typename(T)` |
 | `bitwidth(T)` | `→ int` | Bit width of a numeric type |
 | `min_val(T)` | `→ int` | Minimum value for an integer type |
 | `max_val(T)` | `→ int` | Maximum representable value for an integer type |
@@ -5899,7 +5899,7 @@ interfaces the concrete type provides.
 - Second argument: a string literal — the exact trait name as declared.
 
 ```gorget
-str maybe_display[T](T val):
+String maybe_display[T](T val):
     meta if implements(T, "Displayable"):
         return "{val}"
     else:
@@ -6032,7 +6032,7 @@ Column col_slice(Column col, int start, int end):
     match col:
         case IntCol(c):   return IntCol(col_slice_inner[int](c, start, end))
         case FloatCol(c): return FloatCol(col_slice_inner[float](c, start, end))
-        case StrCol(c):   return StrCol(col_slice_inner[str](c, start, end))
+        case StrCol(c):   return StrCol(col_slice_inner[String](c, start, end))
         case BoolCol(c):  return BoolCol(col_slice_inner[bool](c, start, end))
 ```
 
@@ -6094,7 +6094,7 @@ The scrutinee `<expr>` must be a compile-time evaluable expression — typically
 #### Example — Type-Specific Dispatch
 
 ```gorget
-str type_name[T]():
+String type_name[T]():
     meta match typename(T):
         case "int":   return "integer"
         case "float": return "floating-point"
@@ -6103,7 +6103,7 @@ str type_name[T]():
 
 void main():
     print(type_name[int]())    # prints: integer
-    print(type_name[str]())    # prints: string
+    print(type_name[String]())    # prints: string
 ```
 
 #### Example — Bitwidth-Based Selection
@@ -6196,7 +6196,7 @@ function_def = { attribute } [ "public" ] { qualifier }
                "(" [ param_list ] ")" [ throws_clause ]
                [ where_clause ] ( block | "=" expr NEWLINE | NEWLINE ) ;
 qualifier     = "async" | "const" | "static" | "unsafe" ;
-return_type   = type { "," type } | "void" ;  (* bare tuple: str, int or (str, int) *)
+return_type   = type { "," type } | "void" ;  (* bare tuple: String, int or (String, int) *)
 param_list    = param { "," param } ;
 param         = [ "live" [ "(" IDENTIFIER ")" ] ]
                 type [ "&" | "!" | "mutable" | "move" ] IDENTIFIER [ "=" expr ]

@@ -42,7 +42,7 @@ expose it in Gorget as `llabs_wrapper`.
 
 ```gorget
 extern:
-    int open(str path, int flags)
+    int open(String path, int flags)
     int read(int fd, RawPtr[void] buf, int count)
     int close(int fd)
 ```
