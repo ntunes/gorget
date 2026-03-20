@@ -2666,7 +2666,10 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     }
 
     // Pre-pass: identify CallExtern results from view-eligible string methods whose
-    // destination slot is Str-typed (view). These can use zero-copy _view variants.
+    // destination slot is Str-typed (view) AND whose value never escapes to a
+    // non-Str destination (struct field, function arg, return). Views are only safe
+    // when they don't outlive their source — storing a view into a struct field that
+    // outlives the source causes use-after-free.
     let mut view_method_vals: Vec<bool> = vec![false; max_val as usize];
     {
         let view_eligible = |name: &str| -> bool {
@@ -2678,6 +2681,31 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                 | "gorget_str_slice"
             )
         };
+        // Build set of Str slots that are only stored to and then consumed by
+        // print/comparison — never loaded for reuse. A slot is safe for _view
+        // only if it's never read back (SlotLoad). If it IS loaded, the value
+        // could flow into a struct field, function arg, or return that outlives
+        // the source string.
+        let mut loaded_str_slots: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let Inst::SlotLoad { slot, .. } = inst {
+                    let slot_ty = &func.slots[slot.0 as usize].ty;
+                    let is_str = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
+                    if is_str {
+                        loaded_str_slots.insert(slot.0);
+                    }
+                }
+                // SlotAddr also escapes — pointer to the slot could be used anywhere
+                if let Inst::SlotAddr { slot, .. } = inst {
+                    let slot_ty = &func.slots[slot.0 as usize].ty;
+                    let is_str = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
+                    if is_str {
+                        loaded_str_slots.insert(slot.0);
+                    }
+                }
+            }
+        }
         for block in &func.blocks {
             let insts = &block.insts;
             for (i, inst) in insts.iter().enumerate() {
@@ -2688,7 +2716,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                             if *value == *d {
                                 let slot_ty = &func.slots[slot.0 as usize].ty;
                                 let is_str = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
-                                if is_str {
+                                if is_str && !loaded_str_slots.contains(&slot.0) {
                                     view_method_vals[d.0 as usize] = true;
                                 }
                             }
