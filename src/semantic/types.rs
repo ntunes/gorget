@@ -50,6 +50,12 @@ pub enum ResolvedType {
     /// Boxed callable trait object: Box[Callable[int(int)]]
     BoxedCallable { kind: ClosureKind, inner: TypeId },
 
+    /// Borrowed reference: `Type &`
+    Ref(TypeId),
+
+    /// Owned/moved value: `Type !`
+    Owned(TypeId),
+
     /// Type variable for inference: ?T0, ?T1, ...
     Var(u32),
 
@@ -286,6 +292,8 @@ impl TypeTable {
             ResolvedType::MutCallableTrait(inner) => format!("MutCallable[{}]", self.display(*inner)),
             ResolvedType::ConsumeCallableTrait(inner) => format!("ConsumeCallable[{}]", self.display(*inner)),
             ResolvedType::BoxedCallable { kind, inner } => format!("Box[{}[{}]]", kind.name(), self.display(*inner)),
+            ResolvedType::Ref(inner) => format!("{} &", self.display(*inner)),
+            ResolvedType::Owned(inner) => format!("{} !", self.display(*inner)),
             ResolvedType::Var(n) => format!("?T{n}"),
             ResolvedType::Error => "<error>".into(),
             ResolvedType::Void => "void".into(),
@@ -302,6 +310,7 @@ impl TypeTable {
 pub fn is_reference_type(type_id: TypeId, types: &TypeTable, ref_type_structs: &FxHashSet<DefId>) -> bool {
     match types.get(type_id) {
         ResolvedType::Primitive(PrimitiveType::Str) => true,
+        ResolvedType::Ref(_) => true,
         ResolvedType::Slice(_) => true,
         ResolvedType::Defined(def_id) => ref_type_structs.contains(def_id),
         ResolvedType::Generic(def_id, _) => ref_type_structs.contains(def_id),
@@ -469,6 +478,16 @@ pub fn ast_type_to_resolved(
             // Self type — resolved based on enclosing impl block's self_type
             // For now, return error (resolved during type checking)
             Ok(types.error_id)
+        }
+
+        ast::Type::Ref(inner) => {
+            let inner_id = ast_type_to_resolved(&inner.node, inner.span, scopes, types)?;
+            Ok(types.insert(ResolvedType::Ref(inner_id)))
+        }
+
+        ast::Type::Owned(inner) => {
+            let inner_id = ast_type_to_resolved(&inner.node, inner.span, scopes, types)?;
+            Ok(types.insert(ResolvedType::Owned(inner_id)))
         }
 
         ast::Type::Inferred => {

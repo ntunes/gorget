@@ -74,6 +74,9 @@ fn check_type_visibility(ty: &Type, type_vis: &FxHashMap<String, Visibility>) ->
                 private_types.extend(check_type_visibility(&param.node, type_vis));
             }
         }
+        Type::Ref(inner) | Type::Owned(inner) => {
+            private_types.extend(check_type_visibility(&inner.node, type_vis));
+        }
         _ => {}
     }
     private_types

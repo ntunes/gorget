@@ -66,6 +66,12 @@ pub(super) fn substitute_type(ty: &Type, subs: &[(String, Type)]) -> Type {
                 element: Box::new(Spanned::dummy(substitute_type(&element.node, subs))),
             }
         }
+        Type::Ref(inner) => {
+            Type::Ref(Box::new(Spanned::dummy(substitute_type(&inner.node, subs))))
+        }
+        Type::Owned(inner) => {
+            Type::Owned(Box::new(Spanned::dummy(substitute_type(&inner.node, subs))))
+        }
         // Primitives and other types pass through unchanged
         _ => ty.clone(),
     }

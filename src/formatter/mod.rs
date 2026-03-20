@@ -1540,6 +1540,14 @@ impl Formatter {
                 }
                 self.emitter.write(")");
             }
+            Type::Ref(inner) => {
+                self.format_type(inner);
+                self.emitter.write(" &");
+            }
+            Type::Owned(inner) => {
+                self.format_type(inner);
+                self.emitter.write(" !");
+            }
             Type::SelfType => self.emitter.write("Self"),
             Type::Inferred => self.emitter.write("auto"),
         }

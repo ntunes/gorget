@@ -51,6 +51,10 @@ pub(super) fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTab
             // Arena/TrackingAllocator/PoolAllocator/TlsfAllocator/FixedBufferAllocator/FallbackAllocator are Copy — they're pointers
             matches!(scopes.get_def(*def_id).name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator" | "FixedBufferAllocator" | "FallbackAllocator")
         }
+        // Type & is Copy — it's a pointer/reference
+        ResolvedType::Ref(_) => true,
+        // Type ! is non-Copy — it owns the value
+        ResolvedType::Owned(_) => false,
         // Everything else is non-Copy (String, structs, enums, etc.)
         _ => false,
     }
@@ -63,6 +67,7 @@ pub(super) fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTab
 pub(super) fn is_ast_type_ref(ty: &Type, scopes: &ScopeTable, ref_structs: &FxHashSet<DefId>) -> bool {
     match ty {
         Type::Primitive(PrimitiveType::Str) => true,
+        Type::Ref(_) => true,
         Type::Slice { .. } => true,
         Type::Named { name, .. } => {
             // Search from module scope (scope 0) since struct defs are module-level.

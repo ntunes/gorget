@@ -103,6 +103,9 @@ fn rewrite_type_to_str(ty: &mut Type) {
                 rewrite_type_to_str(&mut p.node);
             }
         }
+        Type::Ref(inner) | Type::Owned(inner) => {
+            rewrite_type_to_str(&mut inner.node);
+        }
         _ => {}
     }
 }

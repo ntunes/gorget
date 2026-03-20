@@ -6990,6 +6990,8 @@ fn format_type_canonical(ty: &Type) -> String {
             let ps: Vec<String> = params.iter().map(|p| format_type_canonical(&p.node)).collect();
             format!("{ret}({})", ps.join(", "))
         }
+        Type::Ref(inner) => format!("{} &", format_type_canonical(&inner.node)),
+        Type::Owned(inner) => format!("{} !", format_type_canonical(&inner.node)),
         Type::SelfType => "Self".to_string(),
         Type::Inferred => "auto".to_string(),
     }
@@ -10236,6 +10238,12 @@ fn describe_type_canonical(
                 kind.name(),
                 describe_type_canonical(*inner, scopes, types)
             )
+        }
+        ResolvedType::Ref(inner) => {
+            format!("{} &", describe_type_canonical(*inner, scopes, types))
+        }
+        ResolvedType::Owned(inner) => {
+            format!("{} !", describe_type_canonical(*inner, scopes, types))
         }
         ResolvedType::Var(n) => format!("?{n}"),
         ResolvedType::Error => "<error>".to_string(),

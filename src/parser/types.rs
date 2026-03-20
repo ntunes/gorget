@@ -14,6 +14,25 @@ impl Parser {
         self.parse_type_postfix(base, start)
     }
 
+    /// Parse a type with optional trailing ownership suffix (`&` or `!`).
+    /// Used in generic args and return types — NOT in param parsing
+    /// (params use separate `parse_ownership_modifier()` for the `Param.ownership` field).
+    pub fn parse_type_with_ownership(&mut self) -> Result<Spanned<Type>, ParseError> {
+        let ty = self.parse_type()?;
+        let start = ty.span;
+        if self.check(&Token::Ampersand) {
+            self.advance();
+            let end = self.previous_span();
+            Ok(Spanned::new(Type::Ref(Box::new(ty)), start.merge(end)))
+        } else if self.check(&Token::Bang) {
+            self.advance();
+            let end = self.previous_span();
+            Ok(Spanned::new(Type::Owned(Box::new(ty)), start.merge(end)))
+        } else {
+            Ok(ty)
+        }
+    }
+
     pub(crate) fn parse_base_type(&mut self) -> Result<Spanned<Type>, ParseError> {
         let start = self.peek_span();
 
@@ -97,7 +116,7 @@ impl Parser {
         let mut generic_args = Vec::new();
         if self.match_token(&Token::LBracket) {
             while !self.check(&Token::RBracket) && !self.at_end() {
-                generic_args.push(self.parse_type()?);
+                generic_args.push(self.parse_type_with_ownership()?);
                 if !self.check(&Token::RBracket) {
                     self.expect(&Token::Comma)?;
                 }

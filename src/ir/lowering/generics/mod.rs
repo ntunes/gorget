@@ -304,6 +304,9 @@ impl GenericCollector {
             Type::Array { element, .. } | Type::Slice { element } => {
                 self.scan_type(element);
             }
+            Type::Ref(inner) | Type::Owned(inner) => {
+                self.scan_type(inner);
+            }
             _ => {}
         }
     }

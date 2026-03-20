@@ -73,6 +73,15 @@ impl TypeMapper {
                 // Callers needing function pointer types should use map_ast_type_mut.
                 None
             }
+            Type::Ref(_) => {
+                // Immutable path can't register Ptr types — return None.
+                // Callers needing Ref types should use map_ast_type_mut.
+                None
+            }
+            Type::Owned(inner) => {
+                // Type ! → just the inner type (ownership annotation only)
+                self.try_map_ast_type(&inner.node)
+            }
             Type::SelfType => None,
             Type::Array { .. } | Type::Slice { .. } => None,
         }
@@ -226,6 +235,13 @@ impl TypeMapper {
                     .map(|p| self.map_ast_type_mut(&p.node, registry))
                     .collect();
                 registry.insert(GirType::FnPtr { params: param_types, return_type: ret })
+            }
+            Type::Ref(inner) => {
+                let inner_id = self.map_ast_type_mut(&inner.node, registry);
+                registry.insert(GirType::Ptr(inner_id))
+            }
+            Type::Owned(inner) => {
+                self.map_ast_type_mut(&inner.node, registry)
             }
             _ => self.map_ast_type(ty),
         }
@@ -695,6 +711,8 @@ pub fn mangle_type_for_name(ty: &Type) -> String {
         // Callable[T(Params)] has a Type::Function as its generic arg — all callables
         // are GorgetClosure at runtime, so use that as the C name fragment.
         Type::Function { .. } => "GorgetClosure".to_string(),
+        Type::Ref(inner) => format!("Ref_{}", mangle_type_for_name(&inner.node)),
+        Type::Owned(inner) => mangle_type_for_name(&inner.node),
         _ => "unknown".to_string(),
     }
 }

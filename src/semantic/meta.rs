@@ -359,6 +359,9 @@ fn expand_generic_alias_in_type(
                 expand_generic_alias_in_type(p, generic);
             }
         }
+        Type::Ref(inner) | Type::Owned(inner) => {
+            expand_generic_alias_in_type(inner, generic);
+        }
         Type::Primitive(_) | Type::SelfType | Type::Inferred => {}
     }
 }
@@ -417,6 +420,14 @@ fn substitute_alias_params(
                 span: element.span,
             }),
         },
+        Type::Ref(inner) => Type::Ref(Box::new(Spanned {
+            node: substitute_alias_params(&inner.node, param_names, args),
+            span: inner.span,
+        })),
+        Type::Owned(inner) => Type::Owned(Box::new(Spanned {
+            node: substitute_alias_params(&inner.node, param_names, args),
+            span: inner.span,
+        })),
         _ => ty.clone(),
     }
 }
@@ -1827,6 +1838,9 @@ fn substitute_type(ty: &mut Spanned<Type>, type_env: &FxHashMap<String, Type>) {
             for p in params {
                 substitute_type(p, type_env);
             }
+        }
+        Type::Ref(inner) | Type::Owned(inner) => {
+            substitute_type(inner, type_env);
         }
         Type::Primitive(_) | Type::SelfType | Type::Inferred => {}
     }

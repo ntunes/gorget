@@ -421,6 +421,12 @@ pub enum Type {
         param_ownerships: Vec<Ownership>,
     },
 
+    /// Borrowed reference: `Type &`
+    Ref(Box<Spanned<Type>>),
+
+    /// Owned/moved value: `Type !`
+    Owned(Box<Spanned<Type>>),
+
     /// Self type
     SelfType,
 
