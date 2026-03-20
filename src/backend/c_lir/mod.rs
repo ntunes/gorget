@@ -4659,22 +4659,33 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
                     }
                 }
+                // When the payload field is Ptr (i.e. Option[T &] — a borrowed reference),
+                // store the pointer directly instead of dereferencing. The reference
+                // borrows from the collection; no clone or drop needed.
+                let payload_is_ptr = matches!(payload_ty, Some(LirType::Ptr));
                 // When the payload is a resource type (GorgetArray, GorgetMap, GorgetSet, GorgetString),
                 // clone it instead of shallow-copying, because the collection still owns the original
                 // and freeing the local copy would cause a double-free.
-                let clone_fn = match payload_c.as_str() {
-                    "GorgetArray" => Some("gorget_array_clone"),
-                    "GorgetMap" => Some("gorget_map_clone"),
-                    "GorgetSet" => Some("gorget_set_clone"),
-                    "GorgetString" => Some("gorget_string_clone"),
-                    _ => None,
+                let clone_fn = if payload_is_ptr {
+                    None // Borrowed reference — no clone needed
+                } else {
+                    match payload_c.as_str() {
+                        "GorgetArray" => Some("gorget_array_clone"),
+                        "GorgetMap" => Some("gorget_map_clone"),
+                        "GorgetSet" => Some("gorget_set_clone"),
+                        "GorgetString" => Some("gorget_string_clone"),
+                        _ => None,
+                    }
                 };
                 // Note: we deliberately do NOT deep-clone resource fields within
                 // Option payloads from collection reads.  The GIR drop elaborator treats
                 // these as borrows (no Drop emitted), so cloning here leaks because the
                 // clone is never freed.  Shallow copy + no free matches GIR behaviour.
                 let deep_clone_ops: Option<Vec<String>> = None;
-                if let Some(cfn) = clone_fn {
+                if payload_is_ptr {
+                    // Option[T &]: store pointer directly (borrowed, not dereferenced)
+                    write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = __tmp; }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
+                } else if let Some(cfn) = clone_fn {
                     write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = {cfn}(({payload_c}*)__tmp); }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
                 } else if let Some(ops) = deep_clone_ops {
                     write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = *({payload_c}*)__tmp;", dv = v(d)).unwrap();

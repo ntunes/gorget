@@ -740,6 +740,24 @@ impl<'a> TypeChecker<'a> {
             | (ResolvedType::Primitive(PrimitiveType::StringType), ResolvedType::Primitive(PrimitiveType::CStr)) => {
                 a
             }
+            // Auto-deref coercion: Ref(T) ↔ T — borrowed reference auto-dereferences
+            (ResolvedType::Ref(inner), _) => {
+                self.unify(*inner, b, span);
+                a // keep the expected (lhs) type
+            }
+            (_, ResolvedType::Ref(inner)) => {
+                self.unify(a, *inner, span);
+                a
+            }
+            // Owned(T) ↔ T — owned annotation is transparent for unification
+            (ResolvedType::Owned(inner), _) => {
+                self.unify(*inner, b, span);
+                a
+            }
+            (_, ResolvedType::Owned(inner)) => {
+                self.unify(a, *inner, span);
+                a
+            }
             // Mutex[T]/Shared[T] ↔ T coercion for shared variables:
             // A shared variable has type T but may be passed where Mutex[T] or Shared[T]
             // is expected (e.g., spawned functions that receive the raw wrapper).
@@ -1882,10 +1900,15 @@ impl<'a> TypeChecker<'a> {
                 // Reject: struct→primitive, collection→primitive, etc.
                 let src = self.resolve_type(source_type);
                 let tgt = self.resolve_type(target_type);
+                // Unwrap Ref/Owned for castability check (auto-deref)
+                let src_inner = match self.types.get(src) {
+                    ResolvedType::Ref(inner) | ResolvedType::Owned(inner) => self.resolve_type(*inner),
+                    _ => src,
+                };
                 let src_castable = matches!(
-                    self.types.get(src),
+                    self.types.get(src_inner),
                     ResolvedType::Primitive(_) | ResolvedType::Error | ResolvedType::Void
-                ) || self.is_enum_type(src);
+                ) || self.is_enum_type(src_inner);
                 let tgt_castable = matches!(
                     self.types.get(tgt),
                     ResolvedType::Primitive(_) | ResolvedType::Error | ResolvedType::Void
@@ -3211,9 +3234,20 @@ impl<'a> TypeChecker<'a> {
         match type_name.as_str() {
             "Vector" => match method {
                 "push" => Some(self.types.void_id),
-                "pop" | "remove" | "get" => {
+                // Borrowing methods: get/first/last return Option[T &]
+                "get" | "first" | "last" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
-                        Some(self.types.intern_generic(option_def_id, vec![elem_type()]))
+                        let ref_elem = self.types.insert(ResolvedType::Ref(elem_type()));
+                        Some(self.types.intern_generic(option_def_id, vec![ref_elem]))
+                    } else {
+                        Some(elem_type())
+                    }
+                }
+                // Consuming methods: pop/remove return Option[T !]
+                "pop" | "remove" => {
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        let owned_elem = self.types.insert(ResolvedType::Owned(elem_type()));
+                        Some(self.types.intern_generic(option_def_id, vec![owned_elem]))
                     } else {
                         Some(elem_type())
                     }
@@ -3230,13 +3264,6 @@ impl<'a> TypeChecker<'a> {
                 "clear" | "reserve" | "sort" | "reverse" | "insert" | "extend" => Some(self.types.void_id),
                 "is_empty" | "contains" | "any" | "all" => Some(self.types.bool_id),
                 "sorted" | "reversed" | "unique" | "slice" | "enumerate" => Some(receiver_type),
-                "first" | "last" => {
-                    if let Some(option_def_id) = self.scopes.lookup("Option") {
-                        Some(self.types.intern_generic(option_def_id, vec![elem_type()]))
-                    } else {
-                        Some(elem_type())
-                    }
-                }
                 "binary_search" => Some(self.types.int_id),
                 _ => None,
             },
@@ -3244,7 +3271,8 @@ impl<'a> TypeChecker<'a> {
                 "put" | "update" | "set" => Some(self.types.void_id),
                 "get" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
-                        Some(self.types.intern_generic(option_def_id, vec![val_type()]))
+                        let ref_val = self.types.insert(ResolvedType::Ref(val_type()));
+                        Some(self.types.intern_generic(option_def_id, vec![ref_val]))
                     } else {
                         Some(val_type())
                     }
