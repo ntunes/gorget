@@ -516,6 +516,11 @@ pub struct LirFunction {
     next_value: u32,
     /// Whether this function is a test function (needs cleanup stack registration).
     pub is_test_fn: bool,
+    /// Human-readable Gorget function name for trace output (e.g. "add", "Point.distance").
+    /// None for compiler-generated functions (closures, vtable methods, etc.).
+    pub display_name: Option<String>,
+    /// Original Gorget parameter names for trace output.
+    pub param_names: Vec<Option<String>>,
 }
 
 impl LirFunction {
@@ -528,6 +533,8 @@ impl LirFunction {
             blocks: Vec::new(),
             next_value: 0,
             is_test_fn: false,
+            display_name: None,
+            param_names: Vec::new(),
         }
     }
 

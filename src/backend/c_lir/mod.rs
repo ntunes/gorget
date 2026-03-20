@@ -919,13 +919,12 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
     }
 
     // Test runner main (when test_fns is non-empty or is_test_module).
-    if !module.test_fns.is_empty() || module.is_test_module {
-        emit_test_runner_main(&mut out, module);
-    }
-
-    // Bench runner main.
-    if !module.bench_fns.is_empty() && module.test_fns.is_empty() && !module.is_test_module {
+    // NOTE: bench runner main requires LIR bench function lowering (not yet implemented).
+    // bench_fns metadata is present but the bench function bodies are not lowered to LIR.
+    if !module.bench_fns.is_empty() && module.functions.iter().any(|f| f.name.starts_with("__bench_")) {
         emit_bench_runner_main(&mut out, module);
+    } else if !module.test_fns.is_empty() || module.is_test_module {
+        emit_test_runner_main(&mut out, module);
     }
 
     out
@@ -2231,6 +2230,27 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             }
         }
         writeln!(out, ") {{").unwrap();
+
+        // Trace entry: emit call event with function name, parameter values, and depth.
+        if module.trace_filename.is_some() {
+            if let Some(ref display_name) = func.display_name {
+                let escaped = display_name.replace('\\', "\\\\").replace('"', "\\\"");
+                out.push_str("    if (__gorget_trace_fp) {\n");
+                let _ = writeln!(out, "        fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"call\\\",\\\"fn\\\":\\\"{escaped}\\\",\\\"args\\\":{{\");");
+                for (i, p) in func.params.iter().enumerate() {
+                    let formatter = lir_trace_formatter(p, module);
+                    let comma = if i == 0 { "" } else { "," };
+                    let pname = func.param_names.get(i)
+                        .and_then(|n| n.as_deref())
+                        .unwrap_or("_");
+                    let esc_name = pname.replace('\\', "\\\\").replace('"', "\\\"");
+                    let _ = writeln!(out, "        fprintf(__gorget_trace_fp, \"{comma}\\\"{esc_name}\\\":\");");
+                    let _ = writeln!(out, "        {formatter}(__gorget_trace_fp, __p{i});");
+                }
+                let _ = writeln!(out, "        fprintf(__gorget_trace_fp, \"}},\\\"depth\\\":%d}}\\n\", __gorget_trace_depth++);");
+                out.push_str("    }\n");
+            }
+        }
     }
 
     // Value declarations — collect all values defined in the function.
@@ -2819,9 +2839,35 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     // Track which slots have been registered on the cleanup stack (test functions only).
     let mut test_cleanup_pushed = std::collections::HashSet::<u32>::new();
 
+    let tracing = module.trace_filename.is_some();
+    let is_main = func.name == "main";
+
+    // Pre-scan: collect which blocks are the "then" target of Branch terminators.
+    let trace_then_blocks: std::collections::HashSet<u32> = if tracing {
+        func.blocks.iter().filter_map(|b| {
+            if let Term::Branch { then_block, .. } = &b.terminator {
+                Some(then_block.0)
+            } else {
+                None
+            }
+        }).collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+
     // Blocks
     for block in &func.blocks {
         writeln!(out, "__bb{}:", block.id.0).unwrap();
+
+        // Branch event: emitted when a "then" block is actually entered.
+        if tracing && trace_then_blocks.contains(&block.id.0) {
+            let _ = writeln!(out, "    if (__gorget_trace_fp) {{ fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"branch\\\",\\\"depth\\\":%d}}\\n\", __gorget_trace_depth); }}");
+        }
+
+        // Stmt_start event: emitted at the start of each block.
+        if tracing {
+            let _ = writeln!(out, "    if (__gorget_trace_fp) {{ fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"stmt_start\\\",\\\"depth\\\":%d}}\\n\", __gorget_trace_depth++); }}");
+        }
 
         // Move block params from temporaries.
         for (vid, _) in &block.params {
@@ -2847,6 +2893,21 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // Stmt_end event: emitted after instructions, before the terminator.
+        if tracing {
+            let _ = writeln!(out, "    if (__gorget_trace_fp) {{ fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"stmt_end\\\",\\\"depth\\\":%d}}\\n\", --__gorget_trace_depth); }}");
+        }
+
+        // Trace return event: inject before each return statement for non-main functions.
+        if tracing && !is_main {
+            if matches!(&block.terminator, Term::Ret(_) | Term::RetVoid) {
+                if let Some(ref display_name) = func.display_name {
+                    let escaped = display_name.replace('\\', "\\\\").replace('"', "\\\"");
+                    let _ = writeln!(out, "    if (__gorget_trace_fp) {{ fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"return\\\",\\\"fn\\\":\\\"{escaped}\\\",\\\"depth\\\":%d}}\\n\", __gorget_trace_depth--); }}");
                 }
             }
         }
@@ -7249,6 +7310,10 @@ fn emit_test_runner_main(out: &mut String, module: &LirModule) {
         }
 
         if !info.skipped {
+            // Trace: test_start event
+            if module.trace_filename.is_some() {
+                writeln!(out, "    if (__gorget_trace_fp) fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_start\\\",\\\"name\\\":\\\"{escaped}\\\"}}\\n\");").unwrap();
+            }
             writeln!(out, "    printf(\"  test: {escaped} ... \");").unwrap();
             writeln!(out, "    fflush(stdout);").unwrap();
             writeln!(out, "    {{").unwrap();
@@ -7328,6 +7393,10 @@ fn emit_test_runner_main(out: &mut String, module: &LirModule) {
                 writeln!(out, "        }}").unwrap();
             }
 
+            // Trace: test_end event with status and duration
+            if module.trace_filename.is_some() {
+                writeln!(out, "        if (__gorget_trace_fp) fprintf(__gorget_trace_fp, \"{{\\\"type\\\":\\\"test_end\\\",\\\"name\\\":\\\"{escaped}\\\",\\\"status\\\":\\\"%s\\\",\\\"duration_ms\\\":%ld}}\\n\", __results[{idx}] == 1 ? \"pass\" : __results[{idx}] == 2 ? \"fail\" : \"skip\", __t_ms);").unwrap();
+            }
             writeln!(out, "    }}").unwrap();
         }
 
@@ -7527,6 +7596,25 @@ fn c_func_name(name: &str) -> String {
         format!("__gg_{name}")
     } else {
         name.to_string()
+    }
+}
+
+/// Map an LIR type to the appropriate trace formatter function name.
+fn lir_trace_formatter(ty: &LirType, module: &LirModule) -> &'static str {
+    match ty {
+        LirType::Bool => "__gorget_trace_val_bool",
+        LirType::F32 | LirType::F64 => "__gorget_trace_val_float",
+        LirType::I8 | LirType::I16 | LirType::I32 | LirType::I64
+        | LirType::U8 | LirType::U16 | LirType::U32 | LirType::U64 => "__gorget_trace_val_int",
+        LirType::Struct(sid) => {
+            if let Some(s) = module.structs.get(sid.0 as usize) {
+                if s.name == "Str" || s.name == "GorgetString" {
+                    return "__gorget_trace_val_Str";
+                }
+            }
+            "__gorget_trace_val_int" // fallback
+        }
+        _ => "__gorget_trace_val_int", // fallback for Ptr, Void
     }
 }
 

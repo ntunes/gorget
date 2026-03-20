@@ -356,8 +356,7 @@ fn parse_features(args: &[String]) -> Vec<String> {
     features
 }
 
-/// Build a .gg source file using the GIR pipeline (--ir mode).
-/// Parses, analyzes, lowers to GIR, generates C via the GIR backend, compiles to binary.
+/// Build a .gg source file: parse → analyze → GIR → LIR → C → binary.
 fn try_build_ir(
     filename: &str,
     source: &str,
@@ -370,7 +369,6 @@ fn try_build_ir(
     emit_gir: bool,
     emit_lir: bool,
     emit_c_lir: bool,
-    use_lir_backend: bool,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -492,9 +490,8 @@ fn try_build_ir(
         return Ok(PathBuf::from(stem));
     }
 
-    // ── LIR backend: full build through LIR → C → binary ──────────
-    if use_lir_backend {
-        // Lower GIR → LIR → SSA → optimize → backend
+    // ── LIR → C → binary ──────────
+    // Lower GIR → LIR → SSA → optimize → backend
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
@@ -732,241 +729,6 @@ fn try_build_ir(
                 "Failed to run C compiler '{cc}': {e}\nGenerated C file (LIR): {}",
                 c_path.display()
             )),
-        };
-    }
-
-    // Determine output paths
-    let input_path = Path::new(filename);
-    let default_dir = input_path.parent().unwrap_or(Path::new("."));
-    let dir = output_dir.unwrap_or(default_dir);
-    let stem = input_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("output");
-    let (c_path, exe_path) = if let Some(out) = output_exe {
-        let out = std::path::absolute(out).unwrap_or(out.to_path_buf());
-        let c_path = out.with_extension("c");
-        (c_path, out)
-    } else {
-        let c_path = dir.join(format!("{stem}.c"));
-        let exe_path = dir.join(stem);
-        let exe_path = std::path::absolute(&exe_path).unwrap_or(exe_path);
-        (c_path, exe_path)
-    };
-
-    // Build hot-reload options if needed
-    let hr_opts = if gir_module.runtime.hot_reload {
-        let abs_filename = std::path::absolute(Path::new(filename))
-            .unwrap_or_else(|_| PathBuf::from(filename));
-        let guest_lib_name = format!("{stem}_guest");
-        #[cfg(target_os = "macos")]
-        let dylib_ext = ".dylib";
-        #[cfg(not(target_os = "macos"))]
-        let dylib_ext = ".so";
-        let guest_lib_file = format!("{guest_lib_name}{dylib_ext}");
-        let recompile_cmd = format!(
-            "{} build --shared {} -o {}",
-            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gg")).display(),
-            abs_filename.display(),
-            dir.join(&guest_lib_file).display(),
-        );
-        Some(gorget::backend::HotReloadOpts {
-            watch_path: abs_filename.display().to_string(),
-            guest_lib_name: guest_lib_name.clone(),
-            recompile_cmd,
-        })
-    } else {
-        None
-    };
-
-    // Generate C from GIR
-    let gir_output = gorget::backend::c::generate_c_with_opts(&gir_module, hr_opts.as_ref());
-
-    // ── --shared: build as shared library (used by hot-reload recompile) ──
-    if let Some(shared_path) = shared_output {
-        let shared_c_code = gir_output.guest_code.as_deref().unwrap_or(&gir_output.c_code);
-        let shared_c_path = dir.join(format!("{stem}_guest.c"));
-        if let Err(e) = fs::write(&shared_c_path, shared_c_code) {
-            return Err(format!("Error writing {}: {e}", shared_c_path.display()));
-        }
-        let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
-        let mut cc_cmd = Command::new(&cc);
-        cc_cmd
-            .arg("-std=c11")
-            .arg("-shared")
-            .arg("-fPIC")
-            .arg("-Wall")
-            .arg("-Wextra")
-            .arg("-Wno-unused-parameter")
-            .arg("-Wno-unused-variable")
-            .arg("-Wno-unused-function")
-            .arg("-Wno-unused-but-set-variable")
-            .arg("-o")
-            .arg(shared_path)
-            .arg(&shared_c_path)
-            .arg("-lm");
-        if options.overflow_wrap || gir_module.runtime.overflow_wrap { cc_cmd.arg("-fwrapv"); }
-        if options.sanitize {
-            cc_cmd.arg("-fsanitize=address,undefined");
-            cc_cmd.arg("-fno-omit-frame-pointer");
-            cc_cmd.arg("-g");
-        }
-        add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx"), shared_c_code);
-        add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || gir_output.needs_tls);
-        add_crypto_flags(&mut cc_cmd, concat_source.contains("gg.crypto") || concat_source.contains("gg.p2p"));
-        add_regex_flags(&mut cc_cmd, concat_source.contains("gg.regex"));
-        add_thread_flags(&mut cc_cmd, concat_source.contains("std.async") || concat_source.contains("gg.p2p"));
-        let status = cc_cmd.status();
-        return match status {
-            Ok(s) if s.success() => Ok(shared_path.to_path_buf()),
-            Ok(s) => Err(format!("Shared library compilation failed: {s}\nGenerated: {}", shared_c_path.display())),
-            Err(e) => Err(format!("Failed to run C compiler '{cc}': {e}")),
-        };
-    }
-
-    // Hot-reload: two-phase build (host binary + guest shared library).
-    if gir_module.runtime.hot_reload {
-        let host_code = gir_output.host_code.as_deref().unwrap_or(&gir_output.c_code);
-        let guest_code = gir_output.guest_code.as_deref().unwrap_or(&gir_output.c_code);
-
-        let host_c_path = dir.join(format!("{stem}_host.c"));
-        let guest_c_path = dir.join(format!("{stem}_guest.c"));
-        let hr = hr_opts.as_ref().unwrap();
-        #[cfg(target_os = "macos")]
-        let dylib_ext = ".dylib";
-        #[cfg(not(target_os = "macos"))]
-        let dylib_ext = ".so";
-        let guest_lib_path = dir.join(format!("{}_guest{dylib_ext}", hr.guest_lib_name.trim_end_matches("_guest")));
-
-        if let Err(e) = fs::write(&host_c_path, host_code) {
-            return Err(format!("Error writing {}: {e}", host_c_path.display()));
-        }
-        if let Err(e) = fs::write(&guest_c_path, guest_code) {
-            return Err(format!("Error writing {}: {e}", guest_c_path.display()));
-        }
-
-        let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
-
-        // Compile guest shared library
-        let mut guest_cmd = Command::new(&cc);
-        guest_cmd
-            .arg("-std=c11").arg("-shared").arg("-fPIC")
-            .arg("-Wall").arg("-Wextra")
-            .arg("-Wno-unused-parameter").arg("-Wno-unused-variable").arg("-Wno-unused-function")
-            .arg("-Wno-unused-but-set-variable")
-            .arg("-o").arg(&guest_lib_path)
-            .arg(&guest_c_path).arg("-lm");
-        if options.sanitize {
-            guest_cmd.arg("-fsanitize=address,undefined");
-            guest_cmd.arg("-fno-omit-frame-pointer");
-            guest_cmd.arg("-g");
-        }
-        let guest_status = guest_cmd.status();
-        match guest_status {
-            Ok(s) if !s.success() => return Err(format!("Guest compilation failed: {s}\nGenerated: {}", guest_c_path.display())),
-            Err(e) => return Err(format!("Failed to run '{cc}': {e}")),
-            _ => {}
-        }
-
-        // Compile host binary
-        let mut host_cmd = Command::new(&cc);
-        host_cmd.arg("-std=c11")
-            .arg("-Wall").arg("-Wextra")
-            .arg("-Wno-unused-parameter").arg("-Wno-unused-variable").arg("-Wno-unused-function")
-            .arg("-Wno-unused-but-set-variable")
-            .arg("-o").arg(&exe_path)
-            .arg(&host_c_path).arg("-lm").arg("-ldl");
-        if options.overflow_wrap || gir_module.runtime.overflow_wrap { host_cmd.arg("-fwrapv"); }
-        if options.sanitize {
-            host_cmd.arg("-fsanitize=address,undefined");
-            host_cmd.arg("-fno-omit-frame-pointer");
-            host_cmd.arg("-g");
-        }
-        let host_status = host_cmd.status();
-        return match host_status {
-            Ok(s) if s.success() => Ok(exe_path),
-            Ok(s) => Err(format!("Host compilation failed: {s}\nGenerated: {}", host_c_path.display())),
-            Err(e) => Err(format!("Failed to run '{cc}': {e}")),
-        };
-    }
-
-    // Normal single-binary compile.
-    let c_code = &gir_output.c_code;
-    if let Err(e) = fs::write(&c_path, c_code) {
-        return Err(format!("Error writing {}: {e}", c_path.display()));
-    }
-
-    let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
-    let mut cc_cmd = Command::new(&cc);
-    let needs_metal = concat_source.contains("gg.metal");
-    cc_cmd
-        .arg("-std=c11")
-        .arg("-Wall")
-        .arg("-Wextra")
-        .arg("-Wno-unused-parameter")
-        .arg("-Wno-unused-variable")
-        .arg("-Wno-unused-function")
-        .arg("-Wno-unused-label")
-        .arg("-Wno-unused-but-set-variable")
-        .arg("-Wno-discarded-qualifiers")          // GCC
-        .arg("-Wno-ignored-qualifiers")             // clang
-        .arg("-Wno-sometimes-uninitialized")        // clang: conditional branch init
-        .arg("-Wno-unknown-warning-option")         // suppress GCC/clang flag mismatch
-        .arg("-ffunction-sections")
-        .arg("-fdata-sections")
-        .arg("-o")
-        .arg(&exe_path);
-    // Metal requires Objective-C compilation — must come before source file
-    #[cfg(target_os = "macos")]
-    if needs_metal {
-        cc_cmd.arg("-x").arg("objective-c");
-        cc_cmd.arg("-Wno-deprecated-declarations");
-        cc_cmd.arg("-Wno-objc-method-access");
-        cc_cmd.arg("-Wno-arc-bridge-casts-disallowed-in-nonarc");
-        cc_cmd.arg("-Wno-incompatible-pointer-types-discards-qualifiers");
-        cc_cmd.arg("-Wno-nonnull");
-    }
-    cc_cmd.arg(&c_path)
-        .arg("-lm");
-
-    // Let the linker strip unused functions/data (dead code elimination).
-    #[cfg(not(target_os = "macos"))]
-    cc_cmd.arg("-Wl,--gc-sections");
-    #[cfg(target_os = "macos")]
-    cc_cmd.arg("-Wl,-dead_strip");
-
-    if options.overflow_wrap || gir_module.runtime.overflow_wrap {
-        cc_cmd.arg("-fwrapv");
-    }
-
-    if options.sanitize {
-        cc_cmd.arg("-fsanitize=address,undefined");
-        cc_cmd.arg("-fno-omit-frame-pointer");
-        cc_cmd.arg("-g");
-    }
-
-    add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx") || concat_source.contains("gg.gl") || needs_metal, c_code);
-    add_gl_flags(&mut cc_cmd, concat_source.contains("gg.gl"));
-    add_audio_flags(&mut cc_cmd, concat_source.contains("gg.audio"));
-    add_compress_flags(&mut cc_cmd, concat_source.contains("gg.compress"));
-    add_metal_flags(&mut cc_cmd, needs_metal);
-    add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || gir_output.needs_tls);
-    add_crypto_flags(&mut cc_cmd, concat_source.contains("gg.crypto") || concat_source.contains("gg.p2p"));
-    add_regex_flags(&mut cc_cmd, concat_source.contains("gg.regex"));
-    add_thread_flags(&mut cc_cmd, concat_source.contains("std.async") || concat_source.contains("gg.p2p"));
-
-    let status = cc_cmd.status();
-
-    match status {
-        Ok(s) if s.success() => Ok(exe_path),
-        Ok(s) => Err(format!(
-            "C compiler exited with: {s}\nGenerated C file: {}",
-            c_path.display()
-        )),
-        Err(e) => Err(format!(
-            "Failed to run C compiler '{cc}': {e}\nGenerated C file: {}",
-            c_path.display()
-        )),
     }
 }
 
@@ -1112,7 +874,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false) {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false) {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1148,7 +910,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false) {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false) {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1426,8 +1188,7 @@ fn main() {
         println!("  --sanitize              Enable AddressSanitizer + UBSan for runtime bug detection");
         println!("  --emit-gir              Dump GIR (intermediate representation) to stdout instead of compiling");
         println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
-        println!("  --emit-c-lir            Dump C code generated from LIR to stdout (for A/B testing)");
-        println!("  --backend=gir           Build through legacy GIR→C backend instead of LIR→C");
+        println!("  --emit-c-lir            Dump C code generated from LIR to stdout");
         return;
     }
 
@@ -1470,8 +1231,7 @@ fn main() {
             sanitize, scheduler_mode: parse_scheduler(&args),
             ..Default::default()
         };
-        let use_lir = !args.iter().any(|a| a == "--backend=gir");
-        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, use_lir)
+        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false)
             .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
         let status = Command::new(&exe_path)
             .status()
@@ -1592,7 +1352,6 @@ fn main() {
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
     let warn_const = args.iter().any(|a| a == "--warn-const");
-    let use_lir_backend = !args.iter().any(|a| a == "--backend=gir");
     let features = parse_features(&args);
     // Parse -o <path> for shared output
     let shared_output_path: Option<PathBuf> = {
@@ -1763,7 +1522,7 @@ fn main() {
                     sanitize, scheduler_mode,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, use_lir_backend);
+                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built shared library: {}", p.display()); }
                     Err(e) => {
@@ -1793,7 +1552,7 @@ fn main() {
                     sanitize,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, use_lir_backend);
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built: {}", p.display()); }
                     Err(e) => {
@@ -1829,7 +1588,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, use_lir_backend);
+            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false);
             match result {
                 Ok(exe_path) => {
                     let status = Command::new(&exe_path)
@@ -2060,7 +1819,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false)
+            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false)
                 .unwrap_or_else(|e| {
                     eprintln!("{e}");
                     process::exit(1);

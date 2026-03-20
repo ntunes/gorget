@@ -1241,6 +1241,10 @@ pub(super) fn lower_method_call(
             );
             if is_ptr {
                 call_args.push(FunctionBuilder::copy(place.local));
+            } else if recv_type_id.0 < crate::ir::types::PRIMITIVE_TYPE_COUNT {
+                // Scalar types (int, float, bool, uint8, etc.) — pass by value, not by reference.
+                // Equip methods on scalars (e.g. uint8.is_alpha()) expect the value directly.
+                call_args.push(recv.clone());
             } else if needs_mut {
                 let pt = ctx.register_mut_ptr_type(recv_type_id);
                 let pl = builder.add_local(pt, None);

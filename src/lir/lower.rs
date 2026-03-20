@@ -830,6 +830,11 @@ impl<'a> FuncLowering<'a> {
         let return_type = map_gir_type_with_structs(&gir_func.return_type, gir_types, Some(struct_reg));
         let mut lir_func = LirFunction::new(gir_func.name.clone(), params, return_type);
         lir_func.is_test_fn = gir_func.is_test_fn;
+        lir_func.display_name = gir_func.display_name.clone();
+        // Propagate param name hints (GIR locals[1..N] are the params).
+        lir_func.param_names = (0..gir_func.params.len())
+            .map(|i| gir_func.locals.get(i + 1).and_then(|l| l.name_hint.clone()))
+            .collect();
 
         // Create LIR slots for each GIR local.
         let local_to_slot: Vec<SlotId> = gir_func
@@ -4724,6 +4729,11 @@ fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
             return Some("gorget_write_guard_release".into());
         }
         return Some(format!("gorget_write_guard_{method}"));
+    }
+    // uint8_t__method → gorget_uint8_method (byte equip methods)
+    if name.starts_with("uint8_t__") {
+        let method = name.strip_prefix("uint8_t__")?;
+        return Some(format!("gorget_uint8_{method}"));
     }
     // Bare stdlib helpers → gorget_ prefixed runtime functions.
     // Delegates to the shared map_stdlib_name() in crate::backend.

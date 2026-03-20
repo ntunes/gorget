@@ -10,12 +10,9 @@
 
 - **LIR backend: remaining clone-on-read for direct resource types in Option payloads**: The `clone_fn` path (line ~4444 of c_lir/mod.rs) still clones GorgetArray/GorgetMap/etc. when they appear as direct Option payloads from collection reads. These 6 clones in gorget-arena are small/bounded but should also be removed for consistency. The GIR backend never clones on collection reads. [added: 2026-03-17]
 
-- **LIR backend: remaining gaps vs GIR**: LIR is now the default backend (696 A/B tests, 825 integration tests pass). Known gaps still using `--backend=gir` fallback:
-  - Trace instrumentation (`--trace`/`--no-trace`) — per-function trace not ported to LIR
-  - Self-host comparison tests (lexer/parser/resolver/typechecker) — use `--backend=gir` for now
-  [updated: 2026-03-16]
+- **LIR backend: bench function lowering not implemented** — `bench "..." :` items are lowered to GIR and metadata propagated to LIR, but the bench function BODIES are not lowered to LIR functions. The bench runner main references `__bench_0`/`__bench_1` etc. which don't exist. Tests: `bench_basic`. [added: 2026-03-20]
 
-- **LIR backend: Phase 5 — old backend retirement**: Delete `src/backend/c/mod.rs` (12,918 lines) after transition period. Keep `c_runtime.rs`. Remove `--backend=gir` flag. -12,918 lines of the most complex, duplicated code in the project. [added: 2026-03-11]
+- **LIR backend: self_host_parser inline test produces incorrect output** — The `self_host_parser/main.gg` fixture produces empty parse results when built via LIR. Likely a string/file-reading issue in the LIR-compiled parser binary. Tests: `self_host_parser`. [added: 2026-03-20]
 
 - **LIR backend: generic_nested_collections double-free** — `Dict[str, Vector[int]]` test double-frees array values: arrays are moved out via `gorget_map_get` into local variables and freed, then the map element-drop loop frees the same array slots again. Pre-existing bug (present before string unification). Needs element-drop loop to skip moved-out values. [added: 2026-03-18]
 

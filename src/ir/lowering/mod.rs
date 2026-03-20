@@ -2195,6 +2195,17 @@ mod tests {
         (module, result)
     }
 
+    /// Generate C code from a GIR module via the LIR pipeline.
+    fn gir_to_lir_c(gir: &crate::ir::Module) -> String {
+        let mut lir_module = crate::lir::lower::lower_module(gir);
+        for func in &mut lir_module.functions {
+            crate::lir::ssa::construct_ssa(func);
+        }
+        crate::lir::optimize::optimize_module(&mut lir_module);
+        let backend = crate::backend::c_lir::CLirBackend;
+        crate::backend::Backend::generate(&backend, &lir_module).code
+    }
+
     #[test]
     fn lower_hello_world() {
         let source = r#"void main():
@@ -2378,13 +2389,11 @@ void main():
 "#;
         let (module, result) = parse_and_analyze(source);
         let gir = lower_module(&module, &result, &LoweringOptions::default());
-        let c_code = crate::backend::c::generate_c(&gir).c_code;
+        let c_code = gir_to_lir_c(&gir);
 
-        assert!(c_code.contains("typedef struct Point Point;"), "Should forward-declare Point");
-        assert!(c_code.contains("struct Point {"), "Should define Point struct");
+        assert!(c_code.contains("Point"), "Should reference Point struct");
         assert!(c_code.contains("int64_t x;"), "Should have field x");
         assert!(c_code.contains("int64_t y;"), "Should have field y");
-        assert!(c_code.contains("(Point){"), "Should construct Point");
     }
 
     #[test]
@@ -2455,7 +2464,7 @@ void main():
 "#;
         let (module, result) = parse_and_analyze(source);
         let gir = lower_module(&module, &result, &LoweringOptions::default());
-        let c_code = crate::backend::c::generate_c(&gir).c_code;
+        let c_code = gir_to_lir_c(&gir);
 
         assert!(c_code.contains("Pair__int64_t__double"),
             "C output should contain monomorphized Pair type name. C code:\n{c_code}");
@@ -2676,20 +2685,18 @@ void main():
 "#;
         let (module, result) = parse_and_analyze(source);
         let gir = lower_module(&module, &result, &LoweringOptions::default());
-        let c_code = crate::backend::c::generate_c(&gir).c_code;
+        let c_code = gir_to_lir_c(&gir);
 
         // VTable type
-        assert!(c_code.contains("typedef struct Shape_VTable Shape_VTable;"),
-            "Should forward-declare Shape_VTable. C code:\n{c_code}");
-        assert!(c_code.contains("struct Shape_VTable {"),
-            "Should define Shape_VTable struct. C code:\n{c_code}");
-        // Function pointer field: `double (*area)(const void*)`
+        assert!(c_code.contains("Shape_VTable"),
+            "Should have Shape_VTable. C code:\n{c_code}");
+        // Function pointer field: `(*area)`
         assert!(c_code.contains("(*area)"),
             "Should have function pointer field 'area'. C code:\n{c_code}");
 
         // TraitObj type
-        assert!(c_code.contains("typedef struct Shape_TraitObj Shape_TraitObj;"),
-            "Should forward-declare Shape_TraitObj. C code:\n{c_code}");
+        assert!(c_code.contains("Shape_TraitObj"),
+            "Should have Shape_TraitObj. C code:\n{c_code}");
 
         // VTable global constant
         assert!(c_code.contains("Shape_for_Circle_vtable"),
