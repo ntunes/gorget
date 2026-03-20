@@ -4663,11 +4663,13 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 // store the pointer directly instead of dereferencing. The reference
                 // borrows from the collection; no clone or drop needed.
                 let payload_is_ptr = matches!(payload_ty, Some(LirType::Ptr));
-                // When the payload is a resource type (GorgetArray, GorgetMap, GorgetSet, GorgetString),
-                // clone it instead of shallow-copying, because the collection still owns the original
-                // and freeing the local copy would cause a double-free.
+                // For resource-type payloads, clone to avoid double-free when both
+                // the collection and the extracted element are dropped. This leaks
+                // the clone (GIR doesn't drop collection-read results), but is safe.
+                // Phase 6 (Collection Resource Semantics) will replace this with
+                // proper borrow tracking + Ptr payloads to eliminate the leak.
                 let clone_fn = if payload_is_ptr {
-                    None // Borrowed reference — no clone needed
+                    None // Option[T &] with Ptr payload — borrowed, no clone needed
                 } else {
                     match payload_c.as_str() {
                         "GorgetArray" => Some("gorget_array_clone"),
@@ -4677,10 +4679,6 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         _ => None,
                     }
                 };
-                // Note: we deliberately do NOT deep-clone resource fields within
-                // Option payloads from collection reads.  The GIR drop elaborator treats
-                // these as borrows (no Drop emitted), so cloning here leaks because the
-                // clone is never freed.  Shallow copy + no free matches GIR behaviour.
                 let deep_clone_ops: Option<Vec<String>> = None;
                 if payload_is_ptr {
                     // Option[T &]: store pointer directly (borrowed, not dereferenced)
