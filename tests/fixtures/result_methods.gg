@@ -1,6 +1,6 @@
 void main():
-    Result[int, str] ok = Ok(10)
-    Result[int, str] err = Error("fail")
+    Result[int, String] ok = Ok(10)
+    Result[int, String] err = Error("fail")
     print(f"{ok.unwrap()}")
     print(f"{ok.unwrap_or(0)}")
     print(f"{err.unwrap_or(99)}")

@@ -2,17 +2,17 @@ from gg.dataframe import DataFrame, Column, df_from_columns, df_left_join, df_ri
 
 void main():
     # Left table: employees
-    Vector[str] emp_names = Vector[str]()
+    Vector[String] emp_names = Vector[String]()
     emp_names.push("Alice")
     emp_names.push("Bob")
     emp_names.push("Charlie")
 
-    Vector[str] emp_depts = Vector[str]()
+    Vector[String] emp_depts = Vector[String]()
     emp_depts.push("eng")
     emp_depts.push("sales")
     emp_depts.push("eng")
 
-    Vector[str] left_cols = Vector[str]()
+    Vector[String] left_cols = Vector[String]()
     left_cols.push("name")
     left_cols.push("dept")
     Vector[Column] left_data = Vector[Column]()
@@ -21,7 +21,7 @@ void main():
     DataFrame left = df_from_columns(left_cols, left_data)
 
     # Right table: dept info
-    Vector[str] dept_ids = Vector[str]()
+    Vector[String] dept_ids = Vector[String]()
     dept_ids.push("eng")
     dept_ids.push("hr")
 
@@ -29,7 +29,7 @@ void main():
     budgets.push(100)
     budgets.push(50)
 
-    Vector[str] right_cols = Vector[str]()
+    Vector[String] right_cols = Vector[String]()
     right_cols.push("dept")
     right_cols.push("budget")
     Vector[Column] right_data = Vector[Column]()

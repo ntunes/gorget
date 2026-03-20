@@ -1,27 +1,27 @@
 void main():
-    str s = "hello"
+    String s = "hello"
 
-    # codepoint indexing — returns str
-    str first = s[0]
+    # codepoint indexing — returns String
+    String first = s[0]
     print(first)
 
-    str last = s[4]
+    String last = s[4]
     print(last)
 
     # codepoint slicing
-    str sub = s[1..3]
+    String sub = s[1..3]
     print(sub)
 
-    str prefix = s[0..2]
+    String prefix = s[0..2]
     print(prefix)
 
-    # for-in iteration — yields str
-    str word = "abc"
+    # for-in iteration — yields String
+    String word = "abc"
     for ch in word:
         print(ch)
 
     # multi-byte UTF-8
-    str cafe = "café"
+    String cafe = "café"
     print(cafe[3])
     print(cafe.len())
     print(cafe[0..3])

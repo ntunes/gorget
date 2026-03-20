@@ -1,6 +1,6 @@
 meta int MAX = 1024
 meta int HALF = MAX / 2
-meta str VERSION = "1.0"
+meta String VERSION = "1.0"
 meta bool ENABLED = true
 meta int COMPUTED = 10 + 20 * 3
 meta assert MAX > 0, "MAX must be positive"

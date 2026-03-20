@@ -1,44 +1,44 @@
-# Test higher-order methods on Vector[str].
+# Test higher-order methods on Vector[String].
 # Filter, map, fold, any/all, sorted, and chaining.
 
 void main():
-    Vector[str] vs = Vector[str]()
+    Vector[String] vs = Vector[String]()
     vs.push("hello")
     vs.push("world")
     vs.push("hi")
     vs.push("gorget")
 
     # filter: keep strings longer than 3 chars
-    Vector[str] long = vs.filter((str s): s.len() > 3)
+    Vector[String] long = vs.filter((String s): s.len() > 3)
     print(long.len())
     print(long[0])
     print(long[1])
     print(long[2])
 
     # map: convert to upper case
-    Vector[str] upper = vs.map((str s): s.to_upper())
+    Vector[String] upper = vs.map((String s): s.to_upper())
     print(upper[0])
     print(upper[1])
     print(upper[2])
     print(upper[3])
 
     # fold: concatenate all strings
-    str joined = vs.fold("", (str acc, str s): acc + s)
+    String joined = vs.fold("", (String acc, String s): acc + s)
     print(joined)
 
     # any/all (prints 1/0)
-    print(vs.any((str s): s.len() > 5))
-    print(vs.all((str s): s.len() > 1))
-    print(vs.any((str s): s.len() > 10))
-    print(vs.all((str s): s.len() > 3))
+    print(vs.any((String s): s.len() > 5))
+    print(vs.all((String s): s.len() > 1))
+    print(vs.any((String s): s.len() > 10))
+    print(vs.all((String s): s.len() > 3))
 
     # sorted
-    Vector[str] sorted_vs = vs.sorted()
+    Vector[String] sorted_vs = vs.sorted()
     print(sorted_vs[0])
     print(sorted_vs[1])
     print(sorted_vs[2])
     print(sorted_vs[3])
 
     # chaining: filter then fold
-    str chain = vs.filter((str s): s.len() > 3).fold("", (str a, str s): a + s)
+    String chain = vs.filter((String s): s.len() > 3).fold("", (String a, String s): a + s)
     print(chain)

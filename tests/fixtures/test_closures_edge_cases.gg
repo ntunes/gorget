@@ -42,11 +42,11 @@ void main():
     print(results[3])  # 9
 
     # 7. Closure with string operations
-    str prefix = "hello"
-    auto make_greeting = (str name): prefix + " " + name
-    str g1 = make_greeting("world")
+    String prefix = "hello"
+    auto make_greeting = (String name): prefix + " " + name
+    String g1 = make_greeting("world")
     print(g1)  # hello world
-    str g2 = make_greeting("gorget")
+    String g2 = make_greeting("gorget")
     print(g2)  # hello gorget
 
     # 8. Nested closures: closure wrapping closure

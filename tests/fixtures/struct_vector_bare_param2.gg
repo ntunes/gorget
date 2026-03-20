@@ -10,7 +10,7 @@ struct TextureSet:
     int white_texture
     int patch_offset
     Vector[int] diffuse_textures
-    Vector[str] shader_names
+    Vector[String] shader_names
 
 TextureSet build_texture_set():
     Vector[int] draws = Vector[int]()
@@ -32,7 +32,7 @@ TextureSet build_texture_set():
     diffuse.push(400)
     diffuse.push(500)
 
-    Vector[str] names = Vector[str]()
+    Vector[String] names = Vector[String]()
     names.push("tex0")
     names.push("tex1")
 

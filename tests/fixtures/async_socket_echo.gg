@@ -6,7 +6,7 @@ async void echo_server(ServerSocket !srv):
     Socket conn = srv.accept().unwrap()
     srv.close()
     conn.set_timeout(2000)
-    str line = conn.read_line().unwrap()
+    String line = conn.read_line().unwrap()
     conn.write_str(line + "\n")
     conn.close()
 
@@ -18,7 +18,7 @@ async void main():
 
     Socket c = socket_connect("127.0.0.1", port).unwrap()
     c.write_str("hello\n")
-    str reply = c.read_line().unwrap()
+    String reply = c.read_line().unwrap()
     int reply_len = reply.len()
     c.close()
     server.await()

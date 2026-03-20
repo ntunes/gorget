@@ -18,8 +18,8 @@ void main():
             print("err")
 
     # Prelude variants (Ok, Error, Some, None) stay bare — always
-    Result[int, str] ok_val = Ok(42)
-    Result[int, str] err_val = Error("bad")
+    Result[int, String] ok_val = Ok(42)
+    Result[int, String] err_val = Error("bad")
     match ok_val:
         case Ok(n):
             print(f"{n}")

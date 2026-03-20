@@ -1,5 +1,5 @@
 trait FromStr:
-    Option[Self] from_str(str s):
+    Option[Self] from_str(String s):
         meta if Self is Enum:
             meta for vname in variant_names(Self):
                 if s == vname:

@@ -17,7 +17,7 @@ void main():
     P2PEvent ev2 = p2p_poll(&nodeA, 1000)
 
     # A opens stream to B
-    str b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
+    String b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
     int sid_ab = p2p_stream_open(&nodeA, b_hex).unwrap()
 
     # B accepts
@@ -32,7 +32,7 @@ void main():
         print("A->B connected")
 
     # B opens stream to A
-    str a_hex = p2p_peer_id_hex(nodeA.identity.peer_id)
+    String a_hex = p2p_peer_id_hex(nodeA.identity.peer_id)
     int sid_ba = p2p_stream_open(&nodeB, a_hex).unwrap()
 
     # A accepts
@@ -51,8 +51,8 @@ void main():
     p2p_stream_send(&nodeB, sid_ba, bytes_from_str("hello from B"))
 
     # Poll loop: flush + receive (polls both flush and process incoming data)
-    str a_received = ""
-    str b_received = ""
+    String a_received = ""
+    String b_received = ""
     int rounds = 0
     while rounds < 20:
         P2PEvent aev = p2p_poll(&nodeA, 50)

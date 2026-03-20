@@ -2,7 +2,7 @@ from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_
 
 void main():
     # Setup: 4-row DataFrame
-    Vector[str] names = Vector[str]()
+    Vector[String] names = Vector[String]()
     names.push("Alice")
     names.push("Bob")
     names.push("Charlie")
@@ -20,7 +20,7 @@ void main():
     scores.push(7.5)
     scores.push(9.5)
 
-    Vector[str] col_names = Vector[str]()
+    Vector[String] col_names = Vector[String]()
     col_names.push("name")
     col_names.push("age")
     col_names.push("score")
@@ -56,7 +56,7 @@ void main():
     null_mask.push(false)
     null_mask.push(true)
     Column null_age_col = col_ints_null(null_ages, null_mask)
-    Vector[str] na_names = Vector[str]()
+    Vector[String] na_names = Vector[String]()
     na_names.push("age")
     Vector[Column] na_cols = Vector[Column]()
     na_cols.push(null_age_col)
@@ -93,7 +93,7 @@ void main():
     print(f"{df.df_median("score")}")
 
     # ── variance ──
-    str var_result = df.df_var("age")
+    String var_result = df.df_var("age")
     # ages: 25, 30, 35, 25 → mean=28.75, var=((25-28.75)^2+(30-28.75)^2+(35-28.75)^2+(25-28.75)^2)/4
     # = (14.0625 + 1.5625 + 39.0625 + 14.0625)/4 = 68.75/4 = 17.1875
     print(f"{var_result}")

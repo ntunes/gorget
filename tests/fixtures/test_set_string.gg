@@ -2,10 +2,10 @@
 from std.collections import Set, HashSet
 
 void main():
-    # ===== Set[str] =====
+    # ===== Set[String] =====
 
     # --- Construction ---
-    Set[str] s = Set[str]()
+    Set[String] s = Set[String]()
     print(f"{s.len()}")
     print(f"{s.is_empty()}")
 
@@ -30,47 +30,47 @@ void main():
     print(f"{s.len()}")
 
     # --- clear ---
-    Set[str] s2 = Set[str]()
+    Set[String] s2 = Set[String]()
     s2.add("x")
     s2.clear()
     print(f"{s2.len()}")
     print(f"{s2.is_empty()}")
 
     # --- Set algebra ---
-    Set[str] a = Set[str]()
+    Set[String] a = Set[String]()
     a.add("alpha")
     a.add("beta")
     a.add("gamma")
-    Set[str] b = Set[str]()
+    Set[String] b = Set[String]()
     b.add("beta")
     b.add("gamma")
     b.add("delta")
 
     # union
-    Set[str] u = a.union(b)
+    Set[String] u = a.union(b)
     print(f"{u.len()}")
 
     # intersection
-    Set[str] inter = a.intersection(b)
+    Set[String] inter = a.intersection(b)
     print(f"{inter.len()}")
 
     # difference (asymmetric)
-    Set[str] diff_ab = a.difference(b)
+    Set[String] diff_ab = a.difference(b)
     print(f"{diff_ab.len()}")
     print(f"{diff_ab.contains('alpha')}")
-    Set[str] diff_ba = b.difference(a)
+    Set[String] diff_ba = b.difference(a)
     print(f"{diff_ba.len()}")
     print(f"{diff_ba.contains('delta')}")
 
     # symmetric_difference
-    Set[str] sym = a.symmetric_difference(b)
+    Set[String] sym = a.symmetric_difference(b)
     print(f"{sym.len()}")
     print(f"{sym.contains('alpha')}")
     print(f"{sym.contains('delta')}")
     print(f"{sym.contains('beta')}")
 
     # --- is_subset / is_superset ---
-    Set[str] sub = Set[str]()
+    Set[String] sub = Set[String]()
     sub.add("alpha")
     sub.add("beta")
     print(f"{sub.is_subset(a)}")
@@ -81,27 +81,27 @@ void main():
     print(f"{sub.is_superset(a)}")
 
     # --- Edge cases ---
-    Set[str] empty = Set[str]()
-    Set[str] u_empty = a.union(empty)
+    Set[String] empty = Set[String]()
+    Set[String] u_empty = a.union(empty)
     print(f"{u_empty.len()}")
-    Set[str] disjoint = Set[str]()
+    Set[String] disjoint = Set[String]()
     disjoint.add("x")
     disjoint.add("y")
-    Set[str] i_dis = a.intersection(disjoint)
+    Set[String] i_dis = a.intersection(disjoint)
     print(f"{i_dis.len()}")
 
     # --- filter ---
-    Set[str] long_names = a.filter((str x): x.len() > 4)
+    Set[String] long_names = a.filter((String x): x.len() > 4)
     print(f"{long_names.len()}")
 
     # --- fold ---
-    int total_len = a.fold(0, (int acc, str x): acc + x.len())
+    int total_len = a.fold(0, (int acc, String x): acc + x.len())
     print(f"{total_len}")
 
-    # ===== HashSet[str] =====
+    # ===== HashSet[String] =====
 
     # --- Construction ---
-    HashSet[str] hs = HashSet[str]()
+    HashSet[String] hs = HashSet[String]()
     print(f"{hs.len()}")
     print(f"{hs.is_empty()}")
 
@@ -126,46 +126,46 @@ void main():
     print(f"{hs.len()}")
 
     # --- clear ---
-    HashSet[str] hs2 = HashSet[str]()
+    HashSet[String] hs2 = HashSet[String]()
     hs2.add("z")
     hs2.clear()
     print(f"{hs2.len()}")
     print(f"{hs2.is_empty()}")
 
     # --- Set algebra (order-independent checks) ---
-    HashSet[str] ha = HashSet[str]()
+    HashSet[String] ha = HashSet[String]()
     ha.add("one")
     ha.add("two")
     ha.add("three")
-    HashSet[str] hb = HashSet[str]()
+    HashSet[String] hb = HashSet[String]()
     hb.add("two")
     hb.add("three")
     hb.add("four")
 
     # union
-    HashSet[str] hu = ha.union(hb)
+    HashSet[String] hu = ha.union(hb)
     print(f"{hu.len()}")
 
     # intersection
-    HashSet[str] hinter = ha.intersection(hb)
+    HashSet[String] hinter = ha.intersection(hb)
     print(f"{hinter.len()}")
 
     # difference
-    HashSet[str] hdiff = ha.difference(hb)
+    HashSet[String] hdiff = ha.difference(hb)
     print(f"{hdiff.len()}")
     print(f"{hdiff.contains('one')}")
 
     # symmetric_difference
-    HashSet[str] hsym = ha.symmetric_difference(hb)
+    HashSet[String] hsym = ha.symmetric_difference(hb)
     print(f"{hsym.len()}")
     print(f"{hsym.contains('one')}")
     print(f"{hsym.contains('four')}")
     print(f"{hsym.contains('two')}")
 
     # --- fold (order-independent: total length) ---
-    int hs_total = ha.fold(0, (int acc, str x): acc + x.len())
+    int hs_total = ha.fold(0, (int acc, String x): acc + x.len())
     print(f"{hs_total}")
 
     # --- filter ---
-    HashSet[str] h_short = ha.filter((str x): x.len() <= 3)
+    HashSet[String] h_short = ha.filter((String x): x.len() <= 3)
     print(f"{h_short.len()}")

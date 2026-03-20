@@ -1,5 +1,5 @@
 void main():
-    str s = "hello"
+    String s = "hello"
     print(f"{s.len()}")
-    str empty = ""
+    String empty = ""
     print(f"{empty.len()}")

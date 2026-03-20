@@ -53,8 +53,8 @@ async int do_result_work():
     sleep(1)
 
     # --- Creation after yield point ---
-    Result[int, str] ok_val = Ok(10)
-    Result[int, str] err_val = Error("bad")
+    Result[int, String] ok_val = Ok(10)
+    Result[int, String] err_val = Error("bad")
 
     # --- unwrap ---
     print(ok_val.unwrap())
@@ -72,9 +72,9 @@ async int do_result_work():
     print(or2)
 
     # --- map ---
-    Result[int, str] mapped = ok_val.map((int x): x * 5)
+    Result[int, String] mapped = ok_val.map((int x): x * 5)
     print(mapped.unwrap())
-    Result[int, str] mapped_err = err_val.map((int x): x * 5)
+    Result[int, String] mapped_err = err_val.map((int x): x * 5)
     print(mapped_err.is_error())
 
     # --- unwrap_error ---

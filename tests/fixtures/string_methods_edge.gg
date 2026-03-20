@@ -1,9 +1,9 @@
 void main():
-    str empty = ""
+    String empty = ""
     print(empty.len())
     print(empty.is_empty())
 
-    str s = "Hello, World!"
+    String s = "Hello, World!"
     print(s.starts_with("Hello"))
     print(s.ends_with("World!"))
     print(s.contains("lo, W"))

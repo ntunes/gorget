@@ -7,21 +7,21 @@ from gg.math3d import Vec2, Vec3
 # and function return/pass patterns.
 
 struct Person:
-    str name
+    String name
     int age
-    Vector[str] hobbies
+    Vector[String] hobbies
 
 struct Team:
-    str team_name
+    String team_name
     Vector[Person] members
 
 Person make_person(int id):
-    Vector[str] h = Vector[str]()
+    Vector[String] h = Vector[String]()
     h.push(f"hobby-{id}-a")
     h.push(f"hobby-{id}-b")
     return Person(f"person-{id}", 20 + id, h)
 
-Team make_team(str name, int size):
+Team make_team(String name, int size):
     Vector[Person] members = Vector[Person]()
     int i = 0
     while i < size:
@@ -47,7 +47,7 @@ void main():
         Person p = make_person(i)
         i = i + 1
 
-    # --- Section 2: Nested struct (Team -> Vector[Person] -> Vector[str]) ---
+    # --- Section 2: Nested struct (Team -> Vector[Person] -> Vector[String]) ---
     i = 0
     while i < 100:
         Team t = make_team(f"team-{i}", 10)

@@ -279,8 +279,8 @@ Tensor[T] tensor_clone[Numeric T](Tensor[T] t):
 
 # ── Display ───────────────────────────────────────────────────
 
-str tensor_display[Numeric T](Tensor[T] t):
-    str out = "Tensor(shape=["
+String tensor_display[Numeric T](Tensor[T] t):
+    String out = "Tensor(shape=["
     int i = 0
     while i < t.shape.len():
         if i > 0:
@@ -349,7 +349,7 @@ Tensor[T] scalar_div[Numeric T](Tensor[T] t, T val): tensor_scalar_op[T](t, val,
 # ── Broadcasting ──────────────────────────────────────────────
 
 # Broadcast shape: left-pad shorter with 1s, per-dim must match or one must be 1.
-Result[Vector[int], str] tensor_broadcast_shape(Vector[int] a, Vector[int] b):
+Result[Vector[int], String] tensor_broadcast_shape(Vector[int] a, Vector[int] b):
     int na = a.len()
     int nb = b.len()
     int n = na

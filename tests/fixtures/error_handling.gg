@@ -1,13 +1,13 @@
-int risky(int x) throws str:
+int risky(int x) throws String:
     if x < 0:
         throw "negative input"
     return x * 2
 
-int throw_var(str msg) throws str:
+int throw_var(String msg) throws String:
     throw msg
     return 0
 
-int propagate(int x) throws str:
+int propagate(int x) throws String:
     int val = risky(x)
     return val + 1
 
@@ -29,7 +29,7 @@ void main():
     print(f"{d}")
 
     # Result capture for full control
-    Result[int, str] r = propagate(-1)
+    Result[int, String] r = propagate(-1)
     match r:
         case Ok(v): print(f"{v}")
         case Error(e): print(f"caught: {e}")

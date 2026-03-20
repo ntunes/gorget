@@ -4,17 +4,17 @@
 # 1. Result.or_else() — FIXED: added ResultOrElse inline method
 # 3. ResultAndThen — FIXED: closure error now propagated correctly
 # Remaining bugs:
-# 2. Result[bool, str].unwrap() — skips tag check, segfaults
+# 2. Result[bool, String].unwrap() — skips tag check, segfaults
 # 4. f-string in map/map_err closure — generates GorgetString instead of Str
-# 5. Error("str") inside and_then closure — infers Result[int,int] not Result[int,str]
+# 5. Error("str") inside and_then closure — infers Result[int,int] not Result[int,String]
 
 void main():
-    Result[int, str] ok = Ok(42)
-    Result[int, str] err = Error("initial error")
+    Result[int, String] ok = Ok(42)
+    Result[int, String] err = Error("initial error")
 
     # --- or: complex scenarios ---
-    Result[int, str] fallback_ok = Ok(100)
-    Result[int, str] fallback_err = Error("also failed")
+    Result[int, String] fallback_ok = Ok(100)
+    Result[int, String] fallback_err = Error("also failed")
     # Ok.or(x) returns Ok (self wins)
     print(f"{ok.or(fallback_ok).unwrap()}")
     # Error.or(Ok) returns the Ok fallback
@@ -22,22 +22,22 @@ void main():
     # Error.or(Error) returns the second Error
     print(err.or(fallback_err).unwrap_error())
     # Error.or(Error).or(Ok) chains correctly
-    Result[int, str] err2 = Error("second")
+    Result[int, String] err2 = Error("second")
     print(f"{err.or(err2).or(fallback_ok).unwrap()}")
     # Error.or(Error).or(Error) chains correctly
-    Result[int, str] err3 = Error("third")
+    Result[int, String] err3 = Error("third")
     print(err.or(err2).or(err3).unwrap_error())
 
     # --- and_then chain: all Ok ---
-    Result[int, str] chain1 = ok.and_then((int x): Ok(x + 1)).and_then((int x): Ok(x * 2))
+    Result[int, String] chain1 = ok.and_then((int x): Ok(x + 1)).and_then((int x): Ok(x * 2))
     print(f"{chain1.unwrap()}")
 
     # --- and_then chain: original Error propagates through ---
-    Result[int, str] chain2 = err.and_then((int x): Ok(x + 1)).and_then((int x): Ok(x * 2))
+    Result[int, String] chain2 = err.and_then((int x): Ok(x + 1)).and_then((int x): Ok(x * 2))
     print(chain2.unwrap_error())
 
     # --- and_then: closure returns Error (bug #3 fixed: now propagates closure's error) ---
-    Result[int, str] chain3 = ok.and_then((int x): Error("nope"))
+    Result[int, String] chain3 = ok.and_then((int x): Error("nope"))
     print(f"{chain3.is_error()}")
     print(chain3.unwrap_error())
 
@@ -48,37 +48,37 @@ void main():
     print(f"{result2}")
 
     # --- map_err ---
-    Result[int, str] prefixed = err.map_err((str e): "wrapped")
+    Result[int, String] prefixed = err.map_err((String e): "wrapped")
     print(prefixed.unwrap_error())
-    Result[int, str] ok_me = ok.map_err((str e): "wrapped")
+    Result[int, String] ok_me = ok.map_err((String e): "wrapped")
     print(f"{ok_me.unwrap()}")
 
     # --- and_then -> unwrap_or_else ---
-    int result3 = ok.and_then((int x): Ok(x + 10)).unwrap_or_else((str e): -1)
+    int result3 = ok.and_then((int x): Ok(x + 10)).unwrap_or_else((String e): -1)
     print(f"{result3}")
-    int result4 = err.and_then((int x): Ok(x + 10)).unwrap_or_else((str e): -1)
+    int result4 = err.and_then((int x): Ok(x + 10)).unwrap_or_else((String e): -1)
     print(f"{result4}")
 
     # --- or_else (bug #1 fixed: was not implemented) ---
-    Result[int, str] oe1 = ok.or_else((str e): Ok(999))
+    Result[int, String] oe1 = ok.or_else((String e): Ok(999))
     print(f"{oe1.unwrap()}")
-    Result[int, str] oe2 = err.or_else((str e): Ok(999))
+    Result[int, String] oe2 = err.or_else((String e): Ok(999))
     print(f"{oe2.unwrap()}")
-    Result[int, str] oe3 = err.or_else((str e): Error("replaced"))
+    Result[int, String] oe3 = err.or_else((String e): Error("replaced"))
     print(oe3.unwrap_error())
 
-    # --- map with type conversion (int -> str) then match ---
-    Result[str, str] as_str = ok.map((int x): "yes")
+    # --- map with type conversion (int -> String) then match ---
+    Result[String, String] as_str = ok.map((int x): "yes")
     match as_str:
         case Ok(v):
             print(v)
         else:
             print("no")
-    Result[str, str] err_as_str = err.map((int x): "yes")
+    Result[String, String] err_as_str = err.map((int x): "yes")
     print(f"{err_as_str.is_error()}")
 
-    # --- Cross-type map_err (str -> int) then match ---
-    Result[int, int] coded = err.map_err((str e): e.len())
+    # --- Cross-type map_err (String -> int) then match ---
+    Result[int, int] coded = err.map_err((String e): e.len())
     match coded:
         case Error(code):
             print(f"{code}")

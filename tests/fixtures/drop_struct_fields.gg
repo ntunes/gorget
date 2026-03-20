@@ -1,9 +1,9 @@
 struct Inner:
-    str label
+    String label
 
 equip Inner with Drop:
     void drop(!self):
-        str l = self.label
+        String l = self.label
         print(f"drop inner {l}")
 
 # Struct with non-Copy field, NO explicit Drop → auto field drop
@@ -13,11 +13,11 @@ struct Wrapper:
 # Struct with non-Copy field AND explicit Drop → user drop + auto field drop
 struct Container:
     Inner inner
-    str tag
+    String tag
 
 equip Container with Drop:
     void drop(!self):
-        str t = self.tag
+        String t = self.tag
         print(f"drop container {t}")
 
 # Struct with String field → auto string free (no crash = success)

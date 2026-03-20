@@ -1,4 +1,4 @@
-int try_parse(str s) throws str:
+int try_parse(String s) throws String:
     if s == "":
         throw "empty input"
     return 42

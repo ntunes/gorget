@@ -2,7 +2,7 @@ enum Shape:
     Circle(float)
     Rect(float, float)
 
-str describe(Shape s):
+String describe(Shape s):
     match s:
         case Circle(r) if r > 10.0:
             return "big circle"

@@ -1,14 +1,14 @@
 from std.collections import Vector
 
 void main():
-    str s = "hello world"
+    String s = "hello world"
 
     # substring
     print(s.substring(0, 5))
     print(s.substring(6, 11))
 
     # subscript
-    str c = s[0]
+    String c = s[0]
     print(f"{c}")
 
     # index_of
@@ -18,7 +18,7 @@ void main():
     print(f"{not_found}")
 
     # count
-    str s2 = "abcabcabc"
+    String s2 = "abcabcabc"
     print(f"{s2.count("abc")}")
     print(f"{s2.count("x")}")
 
@@ -27,7 +27,7 @@ void main():
     print("!".repeat(0))
 
     # join
-    Vector[str] parts = Vector[str]()
+    Vector[String] parts = Vector[String]()
     parts.push("a")
     parts.push("b")
     parts.push("c")

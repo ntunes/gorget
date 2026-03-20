@@ -1,11 +1,11 @@
 from std.collections import Dict, Vector
 
 void main():
-    Dict[str, int] d1 = Dict[str, int]()
+    Dict[String, int] d1 = Dict[String, int]()
     d1.put("a", 1)
     d1.put("b", 2)
 
-    Dict[str, int] d2 = Dict[str, int]()
+    Dict[String, int] d2 = Dict[String, int]()
     d2.put("b", 20)
     d2.put("c", 30)
 

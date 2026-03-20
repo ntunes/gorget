@@ -21,7 +21,7 @@ void main():
     Vector[int] sb = Vector[int]()
     sb.push(1)
     sb.push(4)
-    Result[Vector[int], str] bc = tensor_broadcast_shape(sa, sb)
+    Result[Vector[int], String] bc = tensor_broadcast_shape(sa, sb)
     Vector[int] shape = bc.unwrap()
     print(f"{shape.get(0).unwrap()}")
     print(f"{shape.get(1).unwrap()}")

@@ -2,7 +2,7 @@ trait Printable:
     void print_val(self)
 
 struct Dog:
-    str name
+    String name
 
 equip Dog with Printable:
     void print_val(self):
@@ -31,7 +31,7 @@ void main():
     check_numeric[float]()
     check_numeric[int8]()
     check_numeric[uint64]()
-    check_numeric[str]()
+    check_numeric[String]()
     check_numeric[bool]()
     check_comparable[int]()
     check_comparable[float32]()

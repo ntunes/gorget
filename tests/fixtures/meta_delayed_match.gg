@@ -1,4 +1,4 @@
-str type_name[T]():
+String type_name[T]():
     meta match typename(T):
         case "int":   return "integer"
         case "float": return "float"
@@ -14,7 +14,7 @@ int null_sentinel[T]():
 void main():
     print(type_name[int]())
     print(type_name[float]())
-    print(type_name[str]())
+    print(type_name[String]())
     print(type_name[bool]())
     print(null_sentinel[int]())
     print(null_sentinel[float]())

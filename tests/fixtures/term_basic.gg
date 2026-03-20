@@ -15,7 +15,7 @@ void main():
     String multi = red("a") + green("b") + bold("c")
     print(strip_ansi(multi))
     # String without ANSI passes through unchanged
-    str no_ansi = "plain text"
+    String no_ansi = "plain text"
     print(strip_ansi(no_ansi))
     # Dim and underline
     String dimmed = dim("faint")

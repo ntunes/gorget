@@ -6,13 +6,13 @@ void main():
     a.push(2)
     a.push(3)
 
-    Vector[str] b = Vector[str]()
+    Vector[String] b = Vector[String]()
     b.push("x")
     b.push("y")
     b.push("z")
 
     # zip two vectors of same length
-    Vector[(int, str)] zipped = a.zip(b)
+    Vector[(int, String)] zipped = a.zip(b)
     print(f"{zipped.len()}")
 
     # access tuple fields
@@ -23,7 +23,7 @@ void main():
     Vector[int] short = Vector[int]()
     short.push(10)
     short.push(20)
-    Vector[(int, str)] partial = short.zip(b)
+    Vector[(int, String)] partial = short.zip(b)
     print(f"{partial.len()}")
     for (n, s) in partial:
         print(f"{n}:{s}")

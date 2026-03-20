@@ -13,9 +13,9 @@ enum Json:
     Bool(bool)
     Int(int)
     Float(float)
-    Str(str)
+    Str(String)
     Arr(Vector[Json])
-    Obj(Dict[str, Json])
+    Obj(Dict[String, Json])
 
 # ── Serialization traits ────────────────────────────────────
 
@@ -23,15 +23,15 @@ trait Serializer:
     void write_bool(&self, bool v)
     void write_int(&self, int v)
     void write_float(&self, float v)
-    void write_str(&self, str v)
+    void write_str(&self, String v)
     void write_null(&self)
-    void begin_struct(&self, str name, int field_count)
-    void field(&self, str name, int index)
+    void begin_struct(&self, String name, int field_count)
+    void field(&self, String name, int index)
     void end_struct(&self)
     void begin_seq(&self, int len)
     void elem(&self, int index)
     void end_seq(&self)
-    str result(self)
+    String result(self)
 
 trait Serializable:
     void serialize(self, Box[Serializer] ser)
@@ -42,26 +42,26 @@ trait Deserializer:
     bool read_bool(&self)
     int read_int(&self)
     float read_float(&self)
-    str read_str(&self)
+    String read_str(&self)
     bool is_null(self)
     bool is_string(self)
     bool is_struct(self)
     bool is_seq(self)
     void begin_struct(&self)
-    bool has_field(self, str name)
-    void field(&self, str name)
+    bool has_field(self, String name)
+    void field(&self, String name)
     void end_struct(&self)
     int begin_seq(&self)
     void elem(&self, int index)
     void end_seq(&self)
-    Vector[str] keys(self)
+    Vector[String] keys(self)
     bool has_error(self)
-    str error(self)
+    String error(self)
 
 struct JsonDeserializer:
     Json de_current
     Vector[Json] de_stack
-    str de_err
+    String de_err
 
 equip JsonDeserializer with Deserializer:
     bool read_bool(&self):
@@ -96,7 +96,7 @@ equip JsonDeserializer with Deserializer:
                 self.de_err = "expected float"
                 return 0.0
 
-    str read_str(&self):
+    String read_str(&self):
         if self.de_err != "":
             return ""
         match self.de_current:
@@ -142,13 +142,13 @@ equip JsonDeserializer with Deserializer:
         else:
             self.de_err = "expected object"
 
-    bool has_field(self, str name):
+    bool has_field(self, String name):
         if self.de_stack.len() == 0:
             return false
         Json de_top = self.de_stack.get(self.de_stack.len() - 1).unwrap()
         return de_top.has(name)
 
-    void field(&self, str name):
+    void field(&self, String name):
         if self.de_err != "":
             return
         if self.de_stack.len() == 0:
@@ -192,35 +192,35 @@ equip JsonDeserializer with Deserializer:
             return
         self.de_current = self.de_stack.pop().unwrap()
 
-    Vector[str] keys(self):
+    Vector[String] keys(self):
         if self.de_stack.len() == 0:
-            return Vector[str]()
+            return Vector[String]()
         Json de_top = self.de_stack.get(self.de_stack.len() - 1).unwrap()
         return de_top.keys()
 
     bool has_error(self):
         return self.de_err != ""
 
-    str error(self):
+    String error(self):
         return self.de_err
 
 # ── Internal parser ──────────────────────────────────────────
 
 struct JsonParser:
-    str input
+    String input
     int pos
-    str err
+    String err
 
 equip JsonParser:
     bool failed(self): self.err != ""
 
-    void fail(&self, str msg):
+    void fail(&self, String msg):
         if self.err == "":
             self.err = move msg
 
     void skip_whitespace(&self):
         while self.pos < self.input.byte_len():
-            str c = self.input.char_at(self.pos)
+            String c = self.input.char_at(self.pos)
             if c == ' ' or c == '\t' or c == '\n' or c == '\r':
                 self.pos = self.pos + 1
             else:
@@ -233,7 +233,7 @@ equip JsonParser:
         if self.pos >= self.input.byte_len():
             self.fail("unexpected end of input")
             return Null()
-        str c = self.input.char_at(self.pos)
+        String c = self.input.char_at(self.pos)
         if c == '"':
             return self.parse_string_value()
         if c == '{':
@@ -248,17 +248,17 @@ equip JsonParser:
         return Null()
 
     Json parse_string_value(&self):
-        str s = self.parse_string()
+        String s = self.parse_string()
         if self.failed():
             return Null()
         return Str(s)
 
-    str parse_string(&self):
+    String parse_string(&self):
         # Skip opening quote
         self.pos = self.pos + 1
-        str result = ""
+        String result = ""
         while self.pos < self.input.byte_len():
-            str c = self.input.char_at(self.pos)
+            String c = self.input.char_at(self.pos)
             if c == '"':
                 self.pos = self.pos + 1
                 return result
@@ -267,7 +267,7 @@ equip JsonParser:
                 if self.pos >= self.input.byte_len():
                     self.fail("unterminated string escape")
                     return ""
-                str esc = self.input.char_at(self.pos)
+                String esc = self.input.char_at(self.pos)
                 self.pos = self.pos + 1
                 if esc == '"':
                     result = result + "\""
@@ -367,7 +367,7 @@ equip JsonParser:
                 self.pos = self.pos + 1
             while self.pos < self.input.byte_len() and self.input.char_at(self.pos) >= '0' and self.input.char_at(self.pos) <= '9':
                 self.pos = self.pos + 1
-        str num_str = self.input.byte_slice(start, self.pos)
+        String num_str = self.input.byte_slice(start, self.pos)
         if is_float:
             float f = parse_float(num_str).unwrap_or(0.0)
             return Float(f)
@@ -406,7 +406,7 @@ equip JsonParser:
         # Skip '{'
         self.pos = self.pos + 1
         self.skip_whitespace()
-        Dict[str, Json] obj = Dict[str, Json]()
+        Dict[String, Json] obj = Dict[String, Json]()
         if self.pos < self.input.byte_len() and self.input.char_at(self.pos) == '}':
             self.pos = self.pos + 1
             return Obj(obj)
@@ -415,7 +415,7 @@ equip JsonParser:
             if self.pos >= self.input.byte_len() or self.input.char_at(self.pos) != '"':
                 self.fail("expected string key in object")
                 return Null()
-            str key = self.parse_string()
+            String key = self.parse_string()
             if self.failed():
                 return Null()
             self.skip_whitespace()
@@ -457,7 +457,7 @@ equip JsonParser:
 
 # ── Public API ───────────────────────────────────────────────
 
-Result[Json, str] json_parse(str input):
+Result[Json, String] json_parse(String input):
     JsonParser p = JsonParser(input, 0, "")
     Json value = p.parse_value()
     if p.failed():
@@ -469,11 +469,11 @@ Result[Json, str] json_parse(str input):
 
 # ── Serialization ────────────────────────────────────────────
 
-private str escape_string(str s):
-    str result = "\""
+private String escape_string(String s):
+    String result = "\""
     int i = 0
     while i < s.byte_len():
-        str c = s.char_at(i)
+        String c = s.char_at(i)
         if c == '"':
             result = result + "\\\""
         elif c == '\\':
@@ -489,8 +489,8 @@ private str escape_string(str s):
         i = i + 1
     return result + "\""
 
-private str make_indent(int depth):
-    str result = ""
+private String make_indent(int depth):
+    String result = ""
     int i = 0
     while i < depth:
         result = result + "  "
@@ -536,7 +536,7 @@ String json_stringify_internal(Json value, bool pretty, int depth):
         case Obj(obj_map):
             if obj_map.len() == 0:
                 return "\{\}"
-            Vector[str] key_list = obj_map.keys()
+            Vector[String] key_list = obj_map.keys()
             String buf = String()
             buf.push("\{")
             if pretty:
@@ -549,7 +549,7 @@ String json_stringify_internal(Json value, bool pretty, int depth):
                         buf.push("\n")
                 if pretty:
                     buf.push(make_indent(depth + 1))
-                str key_str = key_list.get(idx).unwrap()
+                String key_str = key_list.get(idx).unwrap()
                 buf.push(escape_string(key_str))
                 if pretty:
                     buf.push(": ")
@@ -572,7 +572,7 @@ String json_pretty(Json value):
 # ── Accessor methods ─────────────────────────────────────────
 
 equip Json:
-    bool has(self, str key):
+    bool has(self, String key):
         match self:
             case Obj(d):
                 return d.contains(key)
@@ -586,7 +586,7 @@ equip Json:
             else:
                 return false
 
-    Json get(self, str key):
+    Json get(self, String key):
         match self:
             case Obj(d):
                 if d.contains(key):
@@ -604,7 +604,7 @@ equip Json:
             else:
                 return Null()
 
-    str as_str(self):
+    String as_str(self):
         match self:
             case Str(s):
                 return s
@@ -687,17 +687,17 @@ equip Json:
             else:
                 return 0
 
-    Vector[str] keys(self):
+    Vector[String] keys(self):
         match self:
             case Obj(d):
                 return d.keys()
             else:
-                return Vector[str]()
+                return Vector[String]()
 
 # ── JSON serializer ─────────────────────────────────────────
 
 struct JsonSerializer:
-    str ser_out
+    String ser_out
 
 equip JsonSerializer with Serializer:
     void write_bool(&self, bool v):
@@ -709,13 +709,13 @@ equip JsonSerializer with Serializer:
         self.ser_out = self.ser_out + int_to_str(v)
     void write_float(&self, float v):
         self.ser_out = self.ser_out + float_to_str(v)
-    void write_str(&self, str v):
+    void write_str(&self, String v):
         self.ser_out = self.ser_out + escape_string(v)
     void write_null(&self):
         self.ser_out = self.ser_out + "null"
-    void begin_struct(&self, str name, int field_count):
+    void begin_struct(&self, String name, int field_count):
         self.ser_out = self.ser_out + "\{"
-    void field(&self, str name, int index):
+    void field(&self, String name, int index):
         if index > 0:
             self.ser_out = self.ser_out + ","
         self.ser_out = self.ser_out + escape_string(name) + ":"
@@ -728,5 +728,5 @@ equip JsonSerializer with Serializer:
             self.ser_out = self.ser_out + ","
     void end_seq(&self):
         self.ser_out = self.ser_out + "]"
-    str result(self):
+    String result(self):
         return self.ser_out

@@ -1,10 +1,10 @@
 from std.process import process_spawn, getpid
 
 void main():
-    Vector[str] args = Vector[str]()
+    Vector[String] args = Vector[String]()
     args.push("hello")
     args.push("world")
-    Result[Process, str] r = process_spawn("echo", args)
+    Result[Process, String] r = process_spawn("echo", args)
     match r:
         case Ok(proc):
             String out = proc.read_stdout()

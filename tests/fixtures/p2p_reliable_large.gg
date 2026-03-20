@@ -17,7 +17,7 @@ void main():
     P2PEvent ev2 = p2p_poll(&nodeA, 1000)
 
     # Open stream: A -> B
-    str b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
+    String b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
     int stream_id = p2p_stream_open(&nodeA, b_hex).unwrap()
 
     # B accepts

@@ -1,4 +1,4 @@
 void main():
-    str a = "hello"
-    str b = "world"
+    String a = "hello"
+    String b = "world"
     assert a == b

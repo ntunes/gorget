@@ -12,7 +12,7 @@ HttpServerResponse handle(HttpRequest req):
 async void serve_once(ServerSocket !srv):
     Socket client = srv.accept().unwrap()
     srv.close()
-    Result[HttpRequest, str] r = http_server_parse_request(&client)
+    Result[HttpRequest, String] r = http_server_parse_request(&client)
     match r:
         case Ok(req):
             http_server_write_response(&client, handle(req))

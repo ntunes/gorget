@@ -4,7 +4,7 @@ from std.collections import Dict
 
 void main():
     # For-loop tuple destructuring over Dict
-    Dict[str, int] scores = Dict[str, int]()
+    Dict[String, int] scores = Dict[String, int]()
     scores.put("a", 10)
     scores.put("b", 20)
     int total = 0
@@ -13,6 +13,6 @@ void main():
     print(f"{total}")
 
     # For-loop with enumerate still works
-    Vector[str] words = ["hello", "world"]
+    Vector[String] words = ["hello", "world"]
     for (i, w) in words.enumerate():
         print(f"{i} {w}")

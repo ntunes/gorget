@@ -10,8 +10,8 @@ from gg.httpserver import http_serve_file, http_mime_type, HttpRequest, HttpServ
 from std.collections import Dict
 from std.fs import write_file, delete_file, mkdir, rmdir
 
-HttpRequest fake_req(str path):
-    return HttpRequest("GET", path, "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+HttpRequest fake_req(String path):
+    return HttpRequest("GET", path, "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
 
 void main():
     # ── MIME type detection ──────────────────────────────────────

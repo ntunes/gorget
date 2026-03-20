@@ -1,7 +1,7 @@
 from std.collections import Dict
 
 void main():
-    Dict[str, int] d = Dict[str, int]()
+    Dict[String, int] d = Dict[String, int]()
     d["x"] = 1
     d["y"] = 2
     d["z"] = 3

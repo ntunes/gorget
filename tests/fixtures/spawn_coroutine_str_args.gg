@@ -1,7 +1,7 @@
 # Test string literal arguments passed to functions within a coroutine.
 # Verifies Constant::Str operands are wrapped in gorget_str_from_literal.
 
-String format_greeting(str prefix, str name):
+String format_greeting(String prefix, String name):
     return prefix + " " + name
 
 async int compute(int x):

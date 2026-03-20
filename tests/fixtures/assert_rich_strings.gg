@@ -1,6 +1,6 @@
 void main():
-    str a = "hello"
-    str b = "hello"
+    String a = "hello"
+    String b = "hello"
     assert a == b
     assert "abc" < "def"
     assert "xyz" > "abc"

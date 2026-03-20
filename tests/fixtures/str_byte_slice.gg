@@ -1,7 +1,7 @@
 void main():
-    str s = "hello world"
+    String s = "hello world"
     print(s.byte_slice(0, 5))
     print(s.byte_slice(6, 11))
-    str emoji = "café"
+    String emoji = "café"
     print(emoji.byte_slice(0, 3))
     print(emoji.byte_slice(3, 5))

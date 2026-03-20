@@ -1,10 +1,10 @@
 from std.conv import ord, chr, parse_int
 
 void main():
-    str c1 = "A"
-    str c2 = "3"
-    str c3 = " "
-    str c4 = "!"
+    String c1 = "A"
+    String c2 = "3"
+    String c3 = " "
+    String c4 = "!"
     print(f"{c1.is_alpha()}")
     print(f"{c2.is_alpha()}")
     print(f"{c1.is_digit()}")
@@ -15,7 +15,7 @@ void main():
     print(f"{c4.is_whitespace()}")
     int code = ord("A")
     print(f"{code}")
-    str back = chr(65)
+    String back = chr(65)
     print(f"{back}")
     int n = parse_int("42").unwrap_or(0)
     print(f"{n}")

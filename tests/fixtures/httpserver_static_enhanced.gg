@@ -14,47 +14,47 @@ from gg.httpserver import http_serve_file, HttpRequest, HttpServerResponse
 from std.collections import Dict
 from std.fs import write_file, delete_file, mkdir, rmdir
 
-void check(str label, bool ok):
+void check(String label, bool ok):
     if not ok:
         print("FAIL: " + label)
     else:
         print("ok")
 
-HttpRequest make_req(str path, Dict[str, str] hdrs):
-    return HttpRequest("GET", path, "", "HTTP/1.1", hdrs, "", Dict[str, str]())
+HttpRequest make_req(String path, Dict[String, String] hdrs):
+    return HttpRequest("GET", path, "", "HTTP/1.1", hdrs, "", Dict[String, String]())
 
 void main():
     mkdir("/tmp/gg_static_enhanced")
     write_file("/tmp/gg_static_enhanced/test.txt", "Hello!")
 
     # 1. Normal 200 response includes ETag header
-    Dict[str, str] hdrs1 = Dict[str, str]()
+    Dict[String, String] hdrs1 = Dict[String, String]()
     HttpServerResponse r1 = http_serve_file("/tmp/gg_static_enhanced", make_req("/test.txt", hdrs1))
     check("ok_200_etag", r1.status_code == 200 and r1.headers.contains("ETag"))
 
     # Capture the ETag for subsequent requests
-    str etag = r1.headers["ETag"]
+    String etag = r1.headers["ETag"]
 
     # 2. If-None-Match matching ETag → 304
-    Dict[str, str] hdrs2 = Dict[str, str]()
+    Dict[String, String] hdrs2 = Dict[String, String]()
     hdrs2.put("if-none-match", etag)
     HttpServerResponse r2 = http_serve_file("/tmp/gg_static_enhanced", make_req("/test.txt", hdrs2))
     check("not_modified_304", r2.status_code == 304)
 
     # 3. If-None-Match with wrong value → 200 (full content)
-    Dict[str, str] hdrs3 = Dict[str, str]()
+    Dict[String, String] hdrs3 = Dict[String, String]()
     hdrs3.put("if-none-match", "\"wrong-etag\"")
     HttpServerResponse r3 = http_serve_file("/tmp/gg_static_enhanced", make_req("/test.txt", hdrs3))
     check("etag_miss_200", r3.status_code == 200 and r3.body == "Hello!")
 
     # 4. Range bytes=0-3 → 206, body = "Hell" (bytes 0-3 inclusive)
-    Dict[str, str] hdrs4 = Dict[str, str]()
+    Dict[String, String] hdrs4 = Dict[String, String]()
     hdrs4.put("range", "bytes=0-3")
     HttpServerResponse r4 = http_serve_file("/tmp/gg_static_enhanced", make_req("/test.txt", hdrs4))
     check("range_0_3", r4.status_code == 206 and r4.body == "Hell")
 
     # 5. Range bytes=5- → 206, body = "!" (last byte)
-    Dict[str, str] hdrs5 = Dict[str, str]()
+    Dict[String, String] hdrs5 = Dict[String, String]()
     hdrs5.put("range", "bytes=5-")
     HttpServerResponse r5 = http_serve_file("/tmp/gg_static_enhanced", make_req("/test.txt", hdrs5))
     check("range_5_end", r5.status_code == 206 and r5.body == "!")

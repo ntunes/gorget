@@ -2,10 +2,10 @@ struct Inner:
     int value
 
 trait Showable:
-    str show(self)
+    String show(self)
 
 equip Inner with Showable:
-    str show(self):
+    String show(self):
         return "inner"
 
 struct Outer:
@@ -16,30 +16,30 @@ equip Outer with Showable via inner:
     pass
 
 trait Describable:
-    str describe(self)
+    String describe(self)
     int count(self)
 
 equip Inner with Describable:
-    str describe(self):
+    String describe(self):
         return "desc"
     int count(self):
         return self.value
 
 struct Wrapper:
     Inner inner
-    str label
+    String label
 
 equip Wrapper with Describable via inner:
-    str describe(self):
+    String describe(self):
         return self.label
 
 void main():
     Inner i = Inner(42)
     Outer o = Outer(Inner(10), 5)
-    str s = o.show()
+    String s = o.show()
     print(s)
     Wrapper w = Wrapper(Inner(7), "custom")
-    str d = w.describe()
+    String d = w.describe()
     print(d)
     int c = w.count()
     print(f"{c}")

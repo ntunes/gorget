@@ -1,10 +1,10 @@
-int try_parse(str s) throws str:
+int try_parse(String s) throws String:
     if s == "bad":
         throw "not a number"
     return 42
 
-int validated_port(str s) throws str:
-    int port = try_parse(s) rethrow (str e): f"port error: {e}"
+int validated_port(String s) throws String:
+    int port = try_parse(s) rethrow (String e): f"port error: {e}"
     if port < 0:
         throw "port must be positive"
     return port

@@ -2,7 +2,7 @@ from gg.regex import regex_compile, regex_compile_with, regex_escape, regex_is_m
 
 void main():
     # Test 1: compile and is_match
-    Result[Regex, str] rx_result = regex_compile(r"\d+")
+    Result[Regex, String] rx_result = regex_compile(r"\d+")
     match rx_result:
         case Ok(rx):
             bool m1 = rx.is_match("abc 123 def")
@@ -13,7 +13,7 @@ void main():
             print("error")
 
     # Test 2: find with groups
-    Result[Regex, str] grp_result = regex_compile(r"(\w+)@(\w+)\.(\w+)")
+    Result[Regex, String] grp_result = regex_compile(r"(\w+)@(\w+)\.(\w+)")
     match grp_result:
         case Ok(rx):
             Option[Match] m_opt = rx.find("contact user@example.com please")
@@ -26,19 +26,19 @@ void main():
                     print(f"{ep}")
                     int gc = m.group_count()
                     print(f"{gc}")
-                    Option[str] g1 = m.group(0)
+                    Option[String] g1 = m.group(0)
                     match g1:
                         case Some(g):
                             print(g)
                         case None:
                             print("none")
-                    Option[str] g2 = m.group(1)
+                    Option[String] g2 = m.group(1)
                     match g2:
                         case Some(g):
                             print(g)
                         case None:
                             print("none")
-                    Option[str] g3 = m.group(2)
+                    Option[String] g3 = m.group(2)
                     match g3:
                         case Some(g):
                             print(g)
@@ -50,7 +50,7 @@ void main():
             print("error")
 
     # Test 3: find_all
-    Result[Regex, str] word_result = regex_compile(r"\w+")
+    Result[Regex, String] word_result = regex_compile(r"\w+")
     match word_result:
         case Ok(rx):
             Vector[Match] matches = rx.find_all("hello world foo")
@@ -65,7 +65,7 @@ void main():
             print("error")
 
     # Test 4: replace
-    Result[Regex, str] dig_result = regex_compile(r"\d+")
+    Result[Regex, String] dig_result = regex_compile(r"\d+")
     match dig_result:
         case Ok(rx):
             String replaced = rx.replace("abc 123 def 456", "NUM")
@@ -76,11 +76,11 @@ void main():
             print("error")
 
     # Test 5: split
-    str comma_pat = r",\s*"
-    Result[Regex, str] comma_result = regex_compile(comma_pat)
+    String comma_pat = r",\s*"
+    Result[Regex, String] comma_result = regex_compile(comma_pat)
     match comma_result:
         case Ok(rx):
-            Vector[str] parts = rx.split("a, b,  c,d")
+            Vector[String] parts = rx.split("a, b,  c,d")
             int plen = parts.len()
             print(f"{plen}")
             int idx = 0
@@ -91,26 +91,26 @@ void main():
             print("error")
 
     # Test 6: named groups
-    str named_pat = r"(?P<year>\d\d\d\d)-(?P<month>\d\d)-(?P<day>\d\d)"
-    Result[Regex, str] named_result = regex_compile(named_pat)
+    String named_pat = r"(?P<year>\d\d\d\d)-(?P<month>\d\d)-(?P<day>\d\d)"
+    Result[Regex, String] named_result = regex_compile(named_pat)
     match named_result:
         case Ok(rx):
             Option[Match] m_opt = rx.find("date: 2025-01-15")
             match m_opt:
                 case Some(m):
-                    Option[str] yr = m.group_by_name("year")
+                    Option[String] yr = m.group_by_name("year")
                     match yr:
                         case Some(v):
                             print(v)
                         case None:
                             print("none")
-                    Option[str] mo = m.group_by_name("month")
+                    Option[String] mo = m.group_by_name("month")
                     match mo:
                         case Some(v):
                             print(v)
                         case None:
                             print("none")
-                    Option[str] dy = m.group_by_name("day")
+                    Option[String] dy = m.group_by_name("day")
                     match dy:
                         case Some(v):
                             print(v)
@@ -119,7 +119,7 @@ void main():
                 case None:
                     print("no match")
             # group_names
-            Vector[str] names = rx.group_names()
+            Vector[String] names = rx.group_names()
             int nlen = names.len()
             print(f"{nlen}")
             # capture_count
@@ -147,7 +147,7 @@ void main():
     print(conv_r.data)
 
     # Test 9: fullmatch
-    Result[Regex, str] full_result = regex_compile(r"\d\d\d")
+    Result[Regex, String] full_result = regex_compile(r"\d\d\d")
     match full_result:
         case Ok(rx):
             Option[Match] fm1 = rx.fullmatch("123")
@@ -166,7 +166,7 @@ void main():
             print("error")
 
     # Test 10: compile error
-    Result[Regex, str] bad_result = regex_compile("[invalid")
+    Result[Regex, String] bad_result = regex_compile("[invalid")
     match bad_result:
         case Ok(rx):
             print("should not reach here")
@@ -174,7 +174,7 @@ void main():
             print("compile error caught")
 
     # Test 11: case-insensitive with flags
-    Result[Regex, str] ci_result = regex_compile_with("hello", "i")
+    Result[Regex, String] ci_result = regex_compile_with("hello", "i")
     match ci_result:
         case Ok(rx):
             bool ci_match = rx.is_match("HELLO WORLD")
@@ -184,10 +184,10 @@ void main():
             print("error")
 
     # Test 12: splitn
-    Result[Regex, str] sn_result = regex_compile(",")
+    Result[Regex, String] sn_result = regex_compile(",")
     match sn_result:
         case Ok(rx):
-            Vector[str] parts = rx.splitn("a,b,c,d,e", 3)
+            Vector[String] parts = rx.splitn("a,b,c,d,e", 3)
             int plen = parts.len()
             print(f"{plen}")
             int idx = 0

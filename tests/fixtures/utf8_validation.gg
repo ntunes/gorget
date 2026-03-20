@@ -6,7 +6,7 @@ void main():
     Vector[uint8] valid = Vector[uint8]()
     valid.push(104)
     valid.push(105)
-    Result[str, str] r1 = bytes_to_str(valid)
+    Result[String, String] r1 = bytes_to_str(valid)
     match r1:
         case Ok(s):
             print(s)
@@ -17,7 +17,7 @@ void main():
     Vector[uint8] invalid = Vector[uint8]()
     invalid.push(255)
     invalid.push(254)
-    Result[str, str] r2 = bytes_to_str(invalid)
+    Result[String, String] r2 = bytes_to_str(invalid)
     match r2:
         case Ok(s):
             print(s)
@@ -31,7 +31,7 @@ void main():
     multi.push(102)
     multi.push(195)
     multi.push(169)
-    Result[str, str] r3 = bytes_to_str(multi)
+    Result[String, String] r3 = bytes_to_str(multi)
     match r3:
         case Ok(s):
             print(s)
@@ -41,7 +41,7 @@ void main():
     # Truncated multibyte (0xC3 alone is incomplete 2-byte)
     Vector[uint8] trunc = Vector[uint8]()
     trunc.push(195)
-    Result[str, str] r4 = bytes_to_str(trunc)
+    Result[String, String] r4 = bytes_to_str(trunc)
     match r4:
         case Ok(s):
             print(s)

@@ -8,7 +8,7 @@ from std.conv import int_to_str
 
 # ── Helpers ──────────────────────────────────────────────────
 
-private str strip_dashes(str s):
+private String strip_dashes(String s):
     int i = 0
     int slen = s.byte_len()
     while i < slen and s.char_at(i) == '-':
@@ -18,44 +18,44 @@ private str strip_dashes(str s):
 # ── Arg descriptor ───────────────────────────────────────────
 
 struct CliArg:
-    str long_name       # e.g., "--verbose" or "" for positionals
-    str short_name      # e.g., "-v" or ""
-    str help
-    str default_val     # default value for options; "" for flags
+    String long_name       # e.g., "--verbose" or "" for positionals
+    String short_name      # e.g., "-v" or ""
+    String help
+    String default_val     # default value for options; "" for flags
     bool is_flag        # true = flag (no value), false = option or positional
     bool positional
-    str pos_name        # display name for positional args
+    String pos_name        # display name for positional args
 
 # ── Parser ───────────────────────────────────────────────────
 
 struct CliParser:
-    str app_name
-    str app_desc
+    String app_name
+    String app_desc
     Vector[CliArg] args
-    Dict[str, str] parsed
-    Vector[str] positional_vals
-    Vector[str] pos_spec_names
+    Dict[String, String] parsed
+    Vector[String] positional_vals
+    Vector[String] pos_spec_names
 
 equip CliParser:
-    CliParser new(str name, str desc):
-        return CliParser(name, desc, Vector[CliArg](), Dict[str, str](), Vector[str](), Vector[str]())
+    CliParser new(String name, String desc):
+        return CliParser(name, desc, Vector[CliArg](), Dict[String, String](), Vector[String](), Vector[String]())
 
-    void add_flag(&self, str long, str short, str help):
+    void add_flag(&self, String long, String short, String help):
         self.args.push(CliArg(long, short, help, "", true, false, ""))
 
-    void add_option(&self, str long, str short, str help, str default):
-        str key = strip_dashes(long)
+    void add_option(&self, String long, String short, String help, String default):
+        String key = strip_dashes(long)
         self.args.push(CliArg(long, short, help, default, false, false, ""))
         self.parsed.put(key, default)
 
-    void add_positional(&self, str name, str help):
+    void add_positional(&self, String name, String help):
         self.pos_spec_names.push(name)
         self.args.push(CliArg("", "", help, "", false, true, name))
 
-    Result[bool, str] parse(&self, Vector[str] argv):
+    Result[bool, String] parse(&self, Vector[String] argv):
         int i = 0
         while i < argv.len():
-            str tok = argv.get(i).unwrap()
+            String tok = argv.get(i).unwrap()
             if tok.byte_len() >= 2 and tok.char_at(0) == '-':
                 # Named argument: find matching CliArg
                 bool found = false
@@ -64,7 +64,7 @@ equip CliParser:
                     CliArg a = self.args.get(ai).unwrap()
                     bool matches_tok = tok == a.long_name or tok == a.short_name
                     if not a.positional and matches_tok:
-                        str key = strip_dashes(a.long_name)
+                        String key = strip_dashes(a.long_name)
                         if a.is_flag:
                             self.parsed.put(key, "true")
                         else:
@@ -83,18 +83,18 @@ equip CliParser:
             i = i + 1
         return Ok(true)
 
-    bool has(self, str name):
+    bool has(self, String name):
         if not self.parsed.contains(name):
             return false
-        str val = self.parsed[name]
+        String val = self.parsed[name]
         return val != ""
 
-    str get(self, str name):
+    String get(self, String name):
         if self.parsed.contains(name):
             return self.parsed[name]
         return ""
 
-    Vector[str] positionals(self):
+    Vector[String] positionals(self):
         return self.positional_vals
 
     void print_help(self):

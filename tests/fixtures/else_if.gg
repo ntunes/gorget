@@ -6,7 +6,7 @@ void classify(int x):
     else:
         print("zero")
 
-void multi_branch(str s):
+void multi_branch(String s):
     if s == "a":
         print("first")
     else if s == "b":

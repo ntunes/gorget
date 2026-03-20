@@ -1,7 +1,7 @@
 from std.collections import Vector
 
 void main():
-    str s = "Hello, World!"
+    String s = "Hello, World!"
 
     # starts_with / ends_with via interpolation
     print(f"{s.starts_with("Hello")}")
@@ -9,7 +9,7 @@ void main():
     print(f"{s.starts_with("World")}")
 
     # is_empty
-    str empty = ""
+    String empty = ""
     print(f"{empty.is_empty()}")
     print(f"{s.is_empty()}")
 
@@ -17,7 +17,7 @@ void main():
     print(f"{s.contains("World")}")
 
     # trim — print method call result directly
-    str padded = "  hi  "
+    String padded = "  hi  "
     print(padded.trim())
 
     # to_upper / to_lower
@@ -29,6 +29,6 @@ void main():
     print(replaced)
 
     # split
-    str csv = "a,b,c"
-    Vector[str] parts = csv.split(",")
+    String csv = "a,b,c"
+    Vector[String] parts = csv.split(",")
     print(f"{parts.len()}")

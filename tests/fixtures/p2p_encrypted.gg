@@ -24,7 +24,7 @@ void main():
         print("peers connected")
 
     # A opens an ENCRYPTED reliable stream to B
-    str b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
+    String b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
     int stream_id = p2p_stream_open_encrypted(&nodeA, b_hex).unwrap()
 
     # B polls — should receive SYN (event_type 8 = STREAM_SYN)

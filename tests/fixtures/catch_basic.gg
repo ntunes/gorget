@@ -1,4 +1,4 @@
-int parse_number(str s) throws str:
+int parse_number(String s) throws String:
     if s == "bad":
         throw "invalid number"
     return 42

@@ -8,7 +8,7 @@ async int test_dict():
     sleep(1)
 
     # --- put / contains / len ---
-    Dict[str, int] d = Dict[str, int]()
+    Dict[String, int] d = Dict[String, int]()
     d.put("a", 10)
     d.put("b", 20)
     d.put("c", 30)
@@ -23,11 +23,11 @@ async int test_dict():
     print(d.len())
 
     # --- filter (higher-order on Dict) ---
-    Dict[str, int] big = d.filter((str k, int v): v > 15)
+    Dict[String, int] big = d.filter((String k, int v): v > 15)
     print(big.len())
 
     # --- fold (higher-order on Dict) ---
-    int total = d.fold(0, (int acc, str k, int v): acc + v)
+    int total = d.fold(0, (int acc, String k, int v): acc + v)
     print(total)
 
     return total

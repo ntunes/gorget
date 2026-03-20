@@ -1,7 +1,7 @@
 from std.collections import Vector
 
 struct Container:
-    str label
+    String label
     Vector[int] data
 
 equip Container with Drop:
@@ -12,7 +12,7 @@ struct Wrapper:
     Container inner
     int id
 
-Container make_container(str label, int val):
+Container make_container(String label, int val):
     Container c = Container(label, Vector[int]())
     c.data.push(val)
     return c

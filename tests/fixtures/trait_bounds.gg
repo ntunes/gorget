@@ -1,11 +1,11 @@
 trait Printable:
-    str show(self)
+    String show(self)
 
 struct Num:
     int val
 
 equip Num with Printable:
-    str show(self):
+    String show(self):
         return "num"
 
 T echo[Printable T](T x):
@@ -14,5 +14,5 @@ T echo[Printable T](T x):
 void main():
     Num n = Num(42)
     Num m = echo[Num](n)
-    str s = m.show()
+    String s = m.show()
     print(f"{s}")

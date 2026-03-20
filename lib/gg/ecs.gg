@@ -11,7 +11,7 @@ struct Entity:
     int gen
 
 equip Entity with Displayable:
-    str display(self):
+    String display(self):
         return "Entity({self.id}:{self.gen})"
 
 struct EntityPool:

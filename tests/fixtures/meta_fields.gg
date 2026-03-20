@@ -3,7 +3,7 @@ struct Point:
     float y
 
 struct Player:
-    str name
+    String name
     int health
     bool alive
 

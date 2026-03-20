@@ -14,40 +14,40 @@ from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_s
 # ── TOML value type ─────────────────────────────────────────
 
 enum TomlValue:
-    Str(str)
+    Str(String)
     Int(int)
     Float(float)
     Bool(bool)
-    DateTime(str)
+    DateTime(String)
     Arr(Vector[TomlValue])
-    Tbl(Dict[str, TomlValue])
+    Tbl(Dict[String, TomlValue])
 
 # ── Section collection ──────────────────────────────────────
 # Each [table] or [[array-of-tables]] header starts a new section.
 # Root-level key-value pairs belong to section with empty path.
 
 struct TomlSection:
-    Vector[str] sec_path
-    Dict[str, TomlValue] sec_data
+    Vector[String] sec_path
+    Dict[String, TomlValue] sec_data
     bool sec_is_aot
 
 # ── Internal parser ─────────────────────────────────────────
 
 struct TomlParser:
-    str source
+    String source
     int pos
-    str err
+    String err
     Vector[TomlSection] sections
     int current_sec
 
 equip TomlParser:
     bool failed(self): self.err != ""
 
-    void fail(&self, str msg):
+    void fail(&self, String msg):
         if self.err == "":
             self.err = move msg
 
-    str peek(self):
+    String peek(self):
         if self.pos < self.source.byte_len():
             return self.source.char_at(self.pos)
         return '\0'
@@ -56,7 +56,7 @@ equip TomlParser:
 
     void skip_ws(&self):
         while self.pos < self.source.byte_len():
-            str ch = self.source.char_at(self.pos)
+            String ch = self.source.char_at(self.pos)
             if ch == ' ' or ch == '\t':
                 self.pos = self.pos + 1
             else:
@@ -64,7 +64,7 @@ equip TomlParser:
 
     void skip_ws_and_newlines(&self):
         while self.pos < self.source.byte_len():
-            str ch = self.source.char_at(self.pos)
+            String ch = self.source.char_at(self.pos)
             if ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r':
                 self.pos = self.pos + 1
             elif ch == '#':
@@ -79,7 +79,7 @@ equip TomlParser:
     void skip_to_newline(&self):
         self.skip_ws()
         if self.pos < self.source.byte_len():
-            str ch = self.source.char_at(self.pos)
+            String ch = self.source.char_at(self.pos)
             if ch == '#':
                 self.skip_comment()
             if self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '\n':
@@ -91,10 +91,10 @@ equip TomlParser:
 
     # ── Key parsing ─────────────────────────────────────────
 
-    str parse_bare_key(&self):
+    String parse_bare_key(&self):
         int start = self.pos
         while self.pos < self.source.byte_len():
-            str ch = self.source.char_at(self.pos)
+            String ch = self.source.char_at(self.pos)
             if ch >= 'a' and ch <= 'z':
                 self.pos = self.pos + 1
             elif ch >= 'A' and ch <= 'Z':
@@ -110,26 +110,26 @@ equip TomlParser:
             return ""
         return self.source.byte_slice(start, self.pos)
 
-    str parse_key_part(&self):
+    String parse_key_part(&self):
         if self.pos >= self.source.byte_len():
             self.fail("expected key")
             return ""
-        str ch = self.source.char_at(self.pos)
+        String ch = self.source.char_at(self.pos)
         if ch == '"':
             return self.parse_basic_string()
         elif ch == '\'':
             return self.parse_literal_string()
         return self.parse_bare_key()
 
-    Vector[str] parse_key(&self):
-        Vector[str] parts = Vector[str]()
-        str first_part = self.parse_key_part()
+    Vector[String] parse_key(&self):
+        Vector[String] parts = Vector[String]()
+        String first_part = self.parse_key_part()
         if self.failed():
             return parts
         parts.push(first_part)
         while self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '.':
             self.pos = self.pos + 1
-            str next_part = self.parse_key_part()
+            String next_part = self.parse_key_part()
             if self.failed():
                 return parts
             parts.push(next_part)
@@ -137,16 +137,16 @@ equip TomlParser:
 
     # ── String parsing ──────────────────────────────────────
 
-    str parse_basic_string(&self):
+    String parse_basic_string(&self):
         # Skip opening "
         self.pos = self.pos + 1
         # Check for multi-line """
         if self.pos + 1 < self.source.byte_len() and self.source.char_at(self.pos) == '"' and self.source.char_at(self.pos + 1) == '"':
             self.pos = self.pos + 2
             return self.parse_ml_basic_string()
-        str toml_result = ""
+        String toml_result = ""
         while self.pos < self.source.byte_len():
-            str ch = self.source.char_at(self.pos)
+            String ch = self.source.char_at(self.pos)
             if ch == '"':
                 self.pos = self.pos + 1
                 return toml_result
@@ -158,22 +158,22 @@ equip TomlParser:
         self.fail("unterminated basic string")
         return ""
 
-    str parse_ml_basic_string(&self):
+    String parse_ml_basic_string(&self):
         # Skip optional first newline after """
         if self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '\n':
             self.pos = self.pos + 1
         elif self.pos + 1 < self.source.byte_len() and self.source.char_at(self.pos) == '\r' and self.source.char_at(self.pos + 1) == '\n':
             self.pos = self.pos + 2
-        str toml_result = ""
+        String toml_result = ""
         while self.pos < self.source.byte_len():
             if self.pos + 2 < self.source.byte_len() and self.source.char_at(self.pos) == '"' and self.source.char_at(self.pos + 1) == '"' and self.source.char_at(self.pos + 2) == '"':
                 self.pos = self.pos + 3
                 return toml_result
-            str ch = self.source.char_at(self.pos)
+            String ch = self.source.char_at(self.pos)
             if ch == '\\':
                 self.pos = self.pos + 1
                 if self.pos < self.source.byte_len():
-                    str next_ch = self.source.char_at(self.pos)
+                    String next_ch = self.source.char_at(self.pos)
                     if next_ch == '\n' or next_ch == '\r':
                         self.skip_ws_and_newlines()
                     else:
@@ -188,12 +188,12 @@ equip TomlParser:
         self.fail("unterminated multi-line basic string")
         return ""
 
-    str parse_escape(&self):
+    String parse_escape(&self):
         self.pos = self.pos + 1
         if self.pos >= self.source.byte_len():
             self.fail("unterminated escape sequence")
             return ""
-        str esc = self.source.char_at(self.pos)
+        String esc = self.source.char_at(self.pos)
         self.pos = self.pos + 1
         if esc == '"':
             return "\""
@@ -237,14 +237,14 @@ equip TomlParser:
         self.fail("invalid escape sequence")
         return ""
 
-    str parse_literal_string(&self):
+    String parse_literal_string(&self):
         self.pos = self.pos + 1
         if self.pos + 1 < self.source.byte_len() and self.source.char_at(self.pos) == '\'' and self.source.char_at(self.pos + 1) == '\'':
             self.pos = self.pos + 2
             return self.parse_ml_literal_string()
-        str toml_result = ""
+        String toml_result = ""
         while self.pos < self.source.byte_len():
-            str ch = self.source.char_at(self.pos)
+            String ch = self.source.char_at(self.pos)
             if ch == '\'':
                 self.pos = self.pos + 1
                 return toml_result
@@ -253,12 +253,12 @@ equip TomlParser:
         self.fail("unterminated literal string")
         return ""
 
-    str parse_ml_literal_string(&self):
+    String parse_ml_literal_string(&self):
         if self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '\n':
             self.pos = self.pos + 1
         elif self.pos + 1 < self.source.byte_len() and self.source.char_at(self.pos) == '\r' and self.source.char_at(self.pos + 1) == '\n':
             self.pos = self.pos + 2
-        str toml_result = ""
+        String toml_result = ""
         while self.pos < self.source.byte_len():
             if self.pos + 2 < self.source.byte_len() and self.source.char_at(self.pos) == '\'' and self.source.char_at(self.pos + 1) == '\'' and self.source.char_at(self.pos + 2) == '\'':
                 self.pos = self.pos + 3
@@ -277,12 +277,12 @@ equip TomlParser:
         if self.at_end():
             self.fail("unexpected end of input")
             return Str("")
-        str ch = self.peek()
+        String ch = self.peek()
         if ch == '"':
-            str sv = self.parse_basic_string()
+            String sv = self.parse_basic_string()
             return Str(sv)
         elif ch == '\'':
-            str sv = self.parse_literal_string()
+            String sv = self.parse_literal_string()
             return Str(sv)
         elif ch == 't' or ch == 'f':
             return self.parse_bool()
@@ -348,14 +348,14 @@ equip TomlParser:
 
     TomlValue parse_inline_table(&self):
         self.pos = self.pos + 1
-        Dict[str, TomlValue] tbl = Dict[str, TomlValue]()
+        Dict[String, TomlValue] tbl = Dict[String, TomlValue]()
         self.skip_ws()
         if self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '}':
             self.pos = self.pos + 1
             return Tbl(tbl)
         while self.pos < self.source.byte_len():
             self.skip_ws()
-            Vector[str] key_parts = self.parse_key()
+            Vector[String] key_parts = self.parse_key()
             if self.failed():
                 return Str("")
             self.skip_ws()
@@ -401,7 +401,7 @@ equip TomlParser:
             self.pos = self.pos + 1
         # Handle signed special floats: -inf, +inf, -nan, +nan
         if self.pos + 3 <= self.source.byte_len():
-            str num_special = self.source.byte_slice(self.pos, self.pos + 3)
+            String num_special = self.source.byte_slice(self.pos, self.pos + 3)
             if num_special == "inf":
                 self.pos = self.pos + 3
                 if is_negative:
@@ -412,7 +412,7 @@ equip TomlParser:
                 return Float(0.0 / 0.0)
         # Check for hex/oct/bin prefixes
         if self.pos + 1 < self.source.byte_len() and self.source.char_at(self.pos) == '0':
-            str num_prefix = self.source.char_at(self.pos + 1)
+            String num_prefix = self.source.char_at(self.pos + 1)
             if num_prefix == 'x' or num_prefix == 'o' or num_prefix == 'b':
                 return self.parse_prefixed_int(start, is_negative, num_prefix)
         # Scan digits
@@ -420,7 +420,7 @@ equip TomlParser:
         bool has_exp = false
         bool could_be_date = false
         while self.pos < self.source.byte_len():
-            str ch = self.source.char_at(self.pos)
+            String ch = self.source.char_at(self.pos)
             if ch >= '0' and ch <= '9':
                 self.pos = self.pos + 1
             elif ch == '_':
@@ -432,7 +432,7 @@ equip TomlParser:
                 has_exp = true
                 self.pos = self.pos + 1
                 if self.pos < self.source.byte_len():
-                    str sign_ch = self.source.char_at(self.pos)
+                    String sign_ch = self.source.char_at(self.pos)
                     if sign_ch == '+' or sign_ch == '-':
                         self.pos = self.pos + 1
             elif ch == '-' or ch == ':' or ch == 'T' or ch == 'Z':
@@ -443,17 +443,17 @@ equip TomlParser:
                 self.pos = self.pos + 1
             else:
                 break
-        str num_text = self.source.byte_slice(start, self.pos)
+        String num_text = self.source.byte_slice(start, self.pos)
         if could_be_date:
             return DateTime(num_text)
-        str cleaned = strip_underscores(num_text)
+        String cleaned = strip_underscores(num_text)
         if has_dot or has_exp:
             float fv = parse_float(cleaned).unwrap_or(0.0)
             return Float(fv)
         int iv = parse_int(cleaned).unwrap_or(0)
         return Int(iv)
 
-    TomlValue parse_prefixed_int(&self, int start, bool is_negative, str num_prefix):
+    TomlValue parse_prefixed_int(&self, int start, bool is_negative, String num_prefix):
         self.pos = self.pos + 2
         int val = 0
         int base = 16
@@ -492,29 +492,29 @@ equip TomlParser:
 
     # ── Section-based key-value storage ─────────────────────
 
-    void add_kv(&self, Vector[str] key_parts, TomlValue toml_val):
+    void add_kv(&self, Vector[String] key_parts, TomlValue toml_val):
         # For dotted keys like a.b.c = val, we store key "a" → wrap_dotted
         # For simple keys, store directly in current section
         TomlSection cur = self.sections.get(self.current_sec).unwrap()
-        Dict[str, TomlValue] sd = cur.sec_data
+        Dict[String, TomlValue] sd = cur.sec_data
         if key_parts.len() == 1:
             sd.put(key_parts.get(0).unwrap(), toml_val)
         else:
             # Build nested value for dotted key
-            str top_key = key_parts.get(0).unwrap()
+            String top_key = key_parts.get(0).unwrap()
             TomlValue wrapped = wrap_dotted(key_parts, 1, toml_val)
             if sd.contains(top_key):
                 # Merge with existing table (e.g. name.first + name.last)
-                Dict[str, TomlValue] wd = extract_tbl(wrapped)
-                Dict[str, TomlValue] merged = merge_into(sd[top_key], wd)
+                Dict[String, TomlValue] wd = extract_tbl(wrapped)
+                Dict[String, TomlValue] merged = merge_into(sd[top_key], wd)
                 sd.put(top_key, Tbl(merged))
             else:
                 sd.put(top_key, wrapped)
         TomlSection updated = TomlSection(cur.sec_path, sd, cur.sec_is_aot)
         self.sections.set(self.current_sec, updated)
 
-    void start_section(&self, Vector[str] hdr_path, bool is_aot):
-        Dict[str, TomlValue] new_data = Dict[str, TomlValue]()
+    void start_section(&self, Vector[String] hdr_path, bool is_aot):
+        Dict[String, TomlValue] new_data = Dict[String, TomlValue]()
         TomlSection new_sec = TomlSection(hdr_path, new_data, is_aot)
         self.sections.push(new_sec)
         self.current_sec = self.sections.len() - 1
@@ -524,7 +524,7 @@ equip TomlParser:
     void parse_document(&self):
         self.skip_ws_and_newlines()
         while self.pos < self.source.byte_len() and not self.failed():
-            str ch = self.source.char_at(self.pos)
+            String ch = self.source.char_at(self.pos)
             if ch == '#':
                 self.skip_comment()
                 self.skip_ws_and_newlines()
@@ -534,7 +534,7 @@ equip TomlParser:
             elif ch == '\n' or ch == '\r':
                 self.pos = self.pos + 1
             else:
-                Vector[str] kv_key = self.parse_key()
+                Vector[String] kv_key = self.parse_key()
                 if self.failed():
                     return
                 self.skip_ws()
@@ -557,7 +557,7 @@ equip TomlParser:
             is_array_table = true
             self.pos = self.pos + 1
         self.skip_ws()
-        Vector[str] hdr_key = self.parse_key()
+        Vector[String] hdr_key = self.parse_key()
         if self.failed():
             return
         self.skip_ws()
@@ -575,24 +575,24 @@ equip TomlParser:
 
 # ── Helper free functions ───────────────────────────────────
 
-private TomlValue wrap_dotted(Vector[str] key_parts, int from_idx, TomlValue leaf_val):
+private TomlValue wrap_dotted(Vector[String] key_parts, int from_idx, TomlValue leaf_val):
     # Wraps a value in nested Tbl() wrappers for dotted key parts[from_idx..]
     if from_idx >= key_parts.len() - 1:
         # Last part — just wrap key → val
-        Dict[str, TomlValue] leaf_tbl = Dict[str, TomlValue]()
+        Dict[String, TomlValue] leaf_tbl = Dict[String, TomlValue]()
         leaf_tbl.put(key_parts.get(key_parts.len() - 1).unwrap(), leaf_val)
         return Tbl(leaf_tbl)
     # Recurse: inner = wrap_dotted(parts, from_idx+1, val)
     TomlValue inner = wrap_dotted(key_parts, from_idx + 1, leaf_val)
-    Dict[str, TomlValue] outer = Dict[str, TomlValue]()
+    Dict[String, TomlValue] outer = Dict[String, TomlValue]()
     outer.put(key_parts.get(from_idx).unwrap(), inner)
     return Tbl(outer)
 
-private str strip_underscores(str txt):
-    str cleaned = ""
+private String strip_underscores(String txt):
+    String cleaned = ""
     int ti = 0
     while ti < txt.byte_len():
-        str tc = txt.char_at(ti)
+        String tc = txt.char_at(ti)
         if tc != '_':
             cleaned = cleaned + tc
         ti = ti + 1
@@ -605,17 +605,17 @@ private TomlValue assemble(Vector[TomlSection] secs):
     # Each section has a path (e.g. ["server", "tls"]) and a local Dict.
     # We assemble bottom-up: create the root Dict, then place each section's
     # entries at the correct path using recursive wrapping.
-    Dict[str, TomlValue] root = Dict[str, TomlValue]()
+    Dict[String, TomlValue] root = Dict[String, TomlValue]()
     int si = 0
     while si < secs.len():
         TomlSection sec = secs.get(si).unwrap()
         if sec.sec_path.len() == 0:
             # Root section — copy entries directly
-            Dict[str, TomlValue] sd = sec.sec_data
-            Vector[str] rk = sd.keys()
+            Dict[String, TomlValue] sd = sec.sec_data
+            Vector[String] rk = sd.keys()
             int ri = 0
             while ri < rk.len():
-                str rkey = rk.get(ri).unwrap()
+                String rkey = rk.get(ri).unwrap()
                 root.put(rkey, sd[rkey])
                 ri = ri + 1
         else:
@@ -628,34 +628,34 @@ private TomlValue assemble(Vector[TomlSection] secs):
         si = si + 1
     return Tbl(root)
 
-private void place_table(Dict[str, TomlValue] &root, Vector[str] tpath, int idx, Dict[str, TomlValue] sec_data):
+private void place_table(Dict[String, TomlValue] &root, Vector[String] tpath, int idx, Dict[String, TomlValue] sec_data):
     if idx == tpath.len() - 1:
         # Place at this level
-        str final_key = tpath.get(idx).unwrap()
+        String final_key = tpath.get(idx).unwrap()
         if root.contains(final_key):
             # Merge into existing table — entries from sec_data into existing
             # Since we can't modify nested Dict in-place, we rebuild
             TomlValue existing = root[final_key]
-            Dict[str, TomlValue] merged = merge_into(existing, sec_data)
+            Dict[String, TomlValue] merged = merge_into(existing, sec_data)
             root.put(final_key, Tbl(merged))
         else:
             root.put(final_key, Tbl(sec_data))
         return
     # Need to navigate deeper — extract, recurse, put back
-    str nav_key = tpath.get(idx).unwrap()
+    String nav_key = tpath.get(idx).unwrap()
     if root.contains(nav_key):
         TomlValue existing = root[nav_key]
-        Dict[str, TomlValue] sub = extract_tbl(existing)
+        Dict[String, TomlValue] sub = extract_tbl(existing)
         place_table(&sub, tpath, idx + 1, sec_data)
         root.put(nav_key, Tbl(sub))
     else:
-        Dict[str, TomlValue] fresh = Dict[str, TomlValue]()
+        Dict[String, TomlValue] fresh = Dict[String, TomlValue]()
         place_table(&fresh, tpath, idx + 1, sec_data)
         root.put(nav_key, Tbl(fresh))
 
-private void place_aot(Dict[str, TomlValue] &root, Vector[str] tpath, Dict[str, TomlValue] sec_data):
+private void place_aot(Dict[String, TomlValue] &root, Vector[String] tpath, Dict[String, TomlValue] sec_data):
     if tpath.len() == 1:
-        str aot_key = tpath.get(0).unwrap()
+        String aot_key = tpath.get(0).unwrap()
         if root.contains(aot_key):
             # Append to existing array
             TomlValue existing = root[aot_key]
@@ -668,24 +668,24 @@ private void place_aot(Dict[str, TomlValue] &root, Vector[str] tpath, Dict[str, 
             root.put(aot_key, Arr(new_arr))
         return
     # Navigate to parent, recurse
-    str nav_key = tpath.get(0).unwrap()
-    Vector[str] rest_path = subpath(tpath, 1)
+    String nav_key = tpath.get(0).unwrap()
+    Vector[String] rest_path = subpath(tpath, 1)
     if root.contains(nav_key):
         TomlValue existing = root[nav_key]
-        Dict[str, TomlValue] sub = extract_tbl(existing)
+        Dict[String, TomlValue] sub = extract_tbl(existing)
         place_aot(&sub, rest_path, sec_data)
         root.put(nav_key, Tbl(sub))
     else:
-        Dict[str, TomlValue] fresh = Dict[str, TomlValue]()
+        Dict[String, TomlValue] fresh = Dict[String, TomlValue]()
         place_aot(&fresh, rest_path, sec_data)
         root.put(nav_key, Tbl(fresh))
 
-private Dict[str, TomlValue] extract_tbl(TomlValue tv):
+private Dict[String, TomlValue] extract_tbl(TomlValue tv):
     match tv:
         case Tbl(td):
             return td
         else:
-            return Dict[str, TomlValue]()
+            return Dict[String, TomlValue]()
 
 private Vector[TomlValue] extract_arr(TomlValue tv):
     match tv:
@@ -694,18 +694,18 @@ private Vector[TomlValue] extract_arr(TomlValue tv):
         else:
             return Vector[TomlValue]()
 
-private Dict[str, TomlValue] merge_into(TomlValue existing, Dict[str, TomlValue] new_data):
-    Dict[str, TomlValue] base = extract_tbl(existing)
-    Vector[str] nk = new_data.keys()
+private Dict[String, TomlValue] merge_into(TomlValue existing, Dict[String, TomlValue] new_data):
+    Dict[String, TomlValue] base = extract_tbl(existing)
+    Vector[String] nk = new_data.keys()
     int ni = 0
     while ni < nk.len():
-        str nkey = nk.get(ni).unwrap()
+        String nkey = nk.get(ni).unwrap()
         base.put(nkey, new_data[nkey])
         ni = ni + 1
     return base
 
-private Vector[str] subpath(Vector[str] full_path, int from_idx):
-    Vector[str] sub = Vector[str]()
+private Vector[String] subpath(Vector[String] full_path, int from_idx):
+    Vector[String] sub = Vector[String]()
     int si = from_idx
     while si < full_path.len():
         sub.push(full_path.get(si).unwrap())
@@ -714,10 +714,10 @@ private Vector[str] subpath(Vector[str] full_path, int from_idx):
 
 # ── Public API ──────────────────────────────────────────────
 
-Result[TomlValue, str] parse(str input):
+Result[TomlValue, String] parse(String input):
     Vector[TomlSection] secs = Vector[TomlSection]()
-    Dict[str, TomlValue] root_data = Dict[str, TomlValue]()
-    Vector[str] root_path = Vector[str]()
+    Dict[String, TomlValue] root_data = Dict[String, TomlValue]()
+    Vector[String] root_path = Vector[String]()
     TomlSection root_sec = TomlSection(root_path, root_data, false)
     secs.push(root_sec)
     TomlParser tp = TomlParser(input, 0, "", secs, 0)
@@ -728,11 +728,11 @@ Result[TomlValue, str] parse(str input):
 
 # ── Serialization ───────────────────────────────────────────
 
-private str escape_string(str sv):
-    str toml_out = "\""
+private String escape_string(String sv):
+    String toml_out = "\""
     int si = 0
     while si < sv.byte_len():
-        str sc = sv.char_at(si)
+        String sc = sv.char_at(si)
         if sc == '"':
             toml_out = toml_out + "\\\""
         elif sc == '\\':
@@ -748,7 +748,7 @@ private str escape_string(str sv):
         si = si + 1
     return toml_out + "\""
 
-str stringify_value(TomlValue tv):
+String stringify_value(TomlValue tv):
     match tv:
         case Str(sv):
             return escape_string(sv)
@@ -765,7 +765,7 @@ str stringify_value(TomlValue tv):
         case Arr(av):
             if av.len() == 0:
                 return "[]"
-            str arr_out = "["
+            String arr_out = "["
             int ai = 0
             while ai < av.len():
                 if ai > 0:
@@ -776,24 +776,24 @@ str stringify_value(TomlValue tv):
         case Tbl(tv_tbl):
             if tv_tbl.len() == 0:
                 return "\{\}"
-            Vector[str] tbl_keys = tv_tbl.keys()
-            str tbl_out = "\{"
+            Vector[String] tbl_keys = tv_tbl.keys()
+            String tbl_out = "\{"
             int ti = 0
             while ti < tbl_keys.len():
                 if ti > 0:
                     tbl_out = tbl_out + ", "
-                str tk = tbl_keys.get(ti).unwrap()
+                String tk = tbl_keys.get(ti).unwrap()
                 tbl_out = tbl_out + tk + " = " + stringify_value(tv_tbl[tk])
                 ti = ti + 1
             return tbl_out + "\}"
 
-private str stringify_section(str sec_prefix, Dict[str, TomlValue] tbl):
-    str sec_out = ""
-    Vector[str] sec_keys = tbl.keys()
+private String stringify_section(String sec_prefix, Dict[String, TomlValue] tbl):
+    String sec_out = ""
+    Vector[String] sec_keys = tbl.keys()
     # First pass: simple key-value pairs (not sub-tables or array-of-tables)
     int si = 0
     while si < sec_keys.len():
-        str sk1 = sec_keys.get(si).unwrap()
+        String sk1 = sec_keys.get(si).unwrap()
         TomlValue sv1 = tbl[sk1]
         bool skip_val = is_subtable(sv1)
         if not skip_val:
@@ -802,9 +802,9 @@ private str stringify_section(str sec_prefix, Dict[str, TomlValue] tbl):
     # Second pass: sub-tables and arrays-of-tables
     si = 0
     while si < sec_keys.len():
-        str sk2 = sec_keys.get(si).unwrap()
+        String sk2 = sec_keys.get(si).unwrap()
         TomlValue sv2 = tbl[sk2]
-        str child_prefix = sk2
+        String child_prefix = sk2
         if sec_prefix != "":
             child_prefix = sec_prefix + "." + sk2
         match sv2:
@@ -838,8 +838,8 @@ private bool is_aot_arr(Vector[TomlValue] items):
         else:
             return false
 
-private str stringify_aot(str aot_prefix, Vector[TomlValue] aot_items):
-    str aot_out = ""
+private String stringify_aot(String aot_prefix, Vector[TomlValue] aot_items):
+    String aot_out = ""
     int aoti = 0
     while aoti < aot_items.len():
         TomlValue aot_elem = aot_items.get(aoti).unwrap()
@@ -852,7 +852,7 @@ private str stringify_aot(str aot_prefix, Vector[TomlValue] aot_items):
         aoti = aoti + 1
     return aot_out
 
-str stringify(TomlValue tv):
+String stringify(TomlValue tv):
     match tv:
         case Tbl(root_tbl):
             return stringify_section("", root_tbl)
@@ -862,7 +862,7 @@ str stringify(TomlValue tv):
 # ── Accessor methods ────────────────────────────────────────
 
 equip TomlValue:
-    bool has(self, str key):
+    bool has(self, String key):
         match self:
             case Tbl(tbl_data):
                 return tbl_data.contains(key)
@@ -876,7 +876,7 @@ equip TomlValue:
             else:
                 return false
 
-    TomlValue get(self, str key):
+    TomlValue get(self, String key):
         match self:
             case Tbl(tbl_data):
                 if tbl_data.contains(key):
@@ -894,7 +894,7 @@ equip TomlValue:
             else:
                 return Str("")
 
-    str as_str(self):
+    String as_str(self):
         match self:
             case Str(sv):
                 return sv
@@ -984,9 +984,9 @@ equip TomlValue:
             else:
                 return 0
 
-    Vector[str] keys(self):
+    Vector[String] keys(self):
         match self:
             case Tbl(td):
                 return td.keys()
             else:
-                return Vector[str]()
+                return Vector[String]()

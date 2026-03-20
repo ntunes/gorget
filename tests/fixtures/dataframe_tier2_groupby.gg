@@ -2,14 +2,14 @@ from gg.dataframe import DataFrame, Column, df_from_columns, df_group_by_multi, 
 
 void main():
     # Setup
-    Vector[str] depts = Vector[str]()
+    Vector[String] depts = Vector[String]()
     depts.push("eng")
     depts.push("eng")
     depts.push("sales")
     depts.push("sales")
     depts.push("eng")
 
-    Vector[str] levels = Vector[str]()
+    Vector[String] levels = Vector[String]()
     levels.push("jr")
     levels.push("sr")
     levels.push("jr")
@@ -23,7 +23,7 @@ void main():
     salaries.push(80)
     salaries.push(55)
 
-    Vector[str] col_names = Vector[str]()
+    Vector[String] col_names = Vector[String]()
     col_names.push("dept")
     col_names.push("level")
     col_names.push("salary")
@@ -36,7 +36,7 @@ void main():
     DataFrame df = df_from_columns(col_names, cols)
 
     # ── multi-column groupby ──
-    Vector[str] group_cols = Vector[str]()
+    Vector[String] group_cols = Vector[String]()
     group_cols.push("dept")
     group_cols.push("level")
 
@@ -51,23 +51,23 @@ void main():
     print(f"{cnt_col.value_as_str(0)}")
 
     # ── df_from_records_typed (type inference) ──
-    Vector[str] headers = Vector[str]()
+    Vector[String] headers = Vector[String]()
     headers.push("id")
     headers.push("score")
     headers.push("name")
     headers.push("active")
 
-    Vector[str] r1 = Vector[str]()
+    Vector[String] r1 = Vector[String]()
     r1.push("1")
     r1.push("9.5")
     r1.push("Alice")
     r1.push("true")
-    Vector[str] r2 = Vector[str]()
+    Vector[String] r2 = Vector[String]()
     r2.push("2")
     r2.push("8.0")
     r2.push("Bob")
     r2.push("false")
-    Vector[Vector[str]] rows = Vector[Vector[str]]()
+    Vector[Vector[String]] rows = Vector[Vector[String]]()
     rows.push(r1)
     rows.push(r2)
 

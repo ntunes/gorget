@@ -1,21 +1,21 @@
 # Test Option[T] as struct field — constructor mangling + None codegen
 
 struct Greeting:
-    Option[str] message
+    Option[String] message
     Option[int] priority
 
 String describe(Greeting g):
-    str msg = "no message"
+    String msg = "no message"
     match g.message:
         case Some(m):
             msg = m
-    str pri = "no priority"
+    String pri = "no priority"
     match g.priority:
         case Some(p):
             pri = f"{p}"
     return f"{msg} ({pri})"
 
-str main():
+String main():
     Greeting a = Greeting(Some("hello"), Some(1))
     print(describe(a))
     Greeting b = Greeting(None, None)

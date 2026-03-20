@@ -1,6 +1,6 @@
 void main():
-    str text = """hello
+    String text = """hello
 world"""
     print(text)
-    str single = """one line"""
+    String single = """one line"""
     print(single)

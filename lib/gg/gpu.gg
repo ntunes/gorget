@@ -142,7 +142,7 @@ meta if platform() == "macos":
             int h = metal_create_texture_2d(self.handle, width, height, mtl_format, mtl_usage, mtl_storage)
             return GpuTexture(h, width, height, format)
 
-        GpuPipeline create_pipeline(&self, str vertex_src, str fragment_src):
+        GpuPipeline create_pipeline(&self, String vertex_src, String fragment_src):
             int lib = metal_create_library(self.handle, vertex_src)
             int vert_fn = metal_library_function(lib, "vertex_main")
             int frag_fn = metal_library_function(lib, "fragment_main")
@@ -285,7 +285,7 @@ else:
             gl_tex_parameter_i(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
             return GpuTexture(h, width, height, format)
 
-        GpuPipeline create_pipeline(&self, str vertex_src, str fragment_src):
+        GpuPipeline create_pipeline(&self, String vertex_src, String fragment_src):
             int vs = gl_create_shader(GL_VERTEX_SHADER)
             gl_shader_source(vs, vertex_src)
             gl_compile_shader(vs)

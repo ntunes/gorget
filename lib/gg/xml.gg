@@ -13,12 +13,12 @@ from std.conv import int_to_str, parse_int, chr
 # Element(tag_name, attributes, child_nodes) | Text(content)
 
 enum XmlNode:
-    Element(str, Dict[str, str], Vector[XmlNode])
-    Text(str)
+    Element(String, Dict[String, String], Vector[XmlNode])
+    Text(String)
 
 # ── Hex parsing helper ────────────────────────────────────
 
-private int hex_to_int(str hex_str):
+private int hex_to_int(String hex_str):
     if hex_str.byte_len() == 0:
         return -1
     int result = 0
@@ -40,17 +40,17 @@ private int hex_to_int(str hex_str):
 
 # ── Entity decoding / encoding ─────────────────────────────
 
-private str decode_entities(str raw_text):
-    str decoded = ""
+private String decode_entities(String raw_text):
+    String decoded = ""
     int ei = 0
     while ei < raw_text.byte_len():
-        str ec = raw_text.char_at(ei)
+        String ec = raw_text.char_at(ei)
         if ec == '&':
             int semi_pos = ei + 1
             while semi_pos < raw_text.byte_len() and raw_text.char_at(semi_pos) != ';':
                 semi_pos = semi_pos + 1
             if semi_pos < raw_text.byte_len():
-                str entity_name = raw_text.byte_slice(ei + 1, semi_pos)
+                String entity_name = raw_text.byte_slice(ei + 1, semi_pos)
                 if entity_name == "amp":
                     decoded = decoded + "&"
                     ei = semi_pos + 1
@@ -69,18 +69,18 @@ private str decode_entities(str raw_text):
                 else:
                     int nc_code = -1
                     if entity_name.byte_len() > 1:
-                        str en_first = entity_name.char_at(0)
+                        String en_first = entity_name.char_at(0)
                         if en_first == '#':
-                            str ref_body = entity_name.byte_slice(1, entity_name.byte_len())
+                            String ref_body = entity_name.byte_slice(1, entity_name.byte_len())
                             if ref_body.byte_len() > 1:
-                                str rb_first = ref_body.char_at(0)
+                                String rb_first = ref_body.char_at(0)
                                 if rb_first == 'x' or rb_first == 'X':
                                     nc_code = hex_to_int(ref_body.byte_slice(1, ref_body.byte_len()))
                             if nc_code < 0 and ref_body.byte_len() > 0:
                                 bool all_digits = true
                                 int di = 0
                                 while di < ref_body.byte_len():
-                                    str dc = ref_body.char_at(di)
+                                    String dc = ref_body.char_at(di)
                                     if dc < '0' or dc > '9':
                                         all_digits = false
                                     di = di + 1
@@ -100,11 +100,11 @@ private str decode_entities(str raw_text):
             ei = ei + 1
     return decoded
 
-private str encode_text(str raw_text):
-    str encoded = ""
+private String encode_text(String raw_text):
+    String encoded = ""
     int ti = 0
     while ti < raw_text.byte_len():
-        str tc = raw_text.char_at(ti)
+        String tc = raw_text.char_at(ti)
         if tc == '&':
             encoded = encoded + "&amp;"
         elif tc == '<':
@@ -116,11 +116,11 @@ private str encode_text(str raw_text):
         ti = ti + 1
     return encoded
 
-private str encode_attr(str raw_attr):
-    str encoded = ""
+private String encode_attr(String raw_attr):
+    String encoded = ""
     int ai = 0
     while ai < raw_attr.byte_len():
-        str ac = raw_attr.char_at(ai)
+        String ac = raw_attr.char_at(ai)
         if ac == '&':
             encoded = encoded + "&amp;"
         elif ac == '<':
@@ -139,18 +139,18 @@ private str encode_attr(str raw_attr):
 # ── Internal parser ────────────────────────────────────────
 
 struct XmlParser:
-    str xml_input
+    String xml_input
     int pos
-    str err
+    String err
 
 equip XmlParser:
     bool failed(self): self.err != ""
 
-    void fail(&self, str msg):
+    void fail(&self, String msg):
         if self.err == "":
             self.err = move msg
 
-    str peek(self):
+    String peek(self):
         if self.pos < self.xml_input.byte_len():
             return self.xml_input.char_at(self.pos)
         return '\0'
@@ -161,36 +161,36 @@ equip XmlParser:
 
     void skip_ws(&self):
         while self.pos < self.xml_input.byte_len():
-            str wc = self.xml_input.char_at(self.pos)
+            String wc = self.xml_input.char_at(self.pos)
             if wc == ' ' or wc == '\t' or wc == '\n' or wc == '\r':
                 self.pos = self.pos + 1
             else:
                 return
 
-    bool starts_with_at(self, str prefix):
+    bool starts_with_at(self, String prefix):
         int plen = prefix.byte_len()
         if self.pos + plen > self.xml_input.byte_len():
             return false
         return self.xml_input.byte_slice(self.pos, self.pos + plen) == prefix
 
-    void consume_str(&self, str expected):
+    void consume_str(&self, String expected):
         int elen = expected.byte_len()
         if self.pos + elen > self.xml_input.byte_len():
-            str cs_err = "expected {expected}"
+            String cs_err = "expected {expected}"
             self.fail(cs_err)
             return
         if self.xml_input.byte_slice(self.pos, self.pos + elen) != expected:
-            str cs_err = "expected {expected}"
+            String cs_err = "expected {expected}"
             self.fail(cs_err)
             return
         self.pos = self.pos + elen
 
     # ── Tag name parsing ────────────────────────────────────
 
-    str parse_tag_name(&self):
+    String parse_tag_name(&self):
         int start = self.pos
         while self.pos < self.xml_input.byte_len():
-            str tc = self.xml_input.char_at(self.pos)
+            String tc = self.xml_input.char_at(self.pos)
             if tc >= 'a' and tc <= 'z':
                 self.pos = self.pos + 1
             elif tc >= 'A' and tc <= 'Z':
@@ -208,18 +208,18 @@ equip XmlParser:
 
     # ── Attribute parsing ───────────────────────────────────
 
-    str parse_attr_value(&self):
+    String parse_attr_value(&self):
         if self.pos >= self.xml_input.byte_len():
             self.fail("expected attribute value")
             return ""
-        str quote_ch = self.xml_input.char_at(self.pos)
+        String quote_ch = self.xml_input.char_at(self.pos)
         if quote_ch != '"' and quote_ch != '\'':
             self.fail("expected quote in attribute value")
             return ""
         self.pos = self.pos + 1
-        str attr_val = ""
+        String attr_val = ""
         while self.pos < self.xml_input.byte_len():
-            str vc = self.xml_input.char_at(self.pos)
+            String vc = self.xml_input.char_at(self.pos)
             if vc == quote_ch:
                 self.pos = self.pos + 1
                 return decode_entities(attr_val)
@@ -228,16 +228,16 @@ equip XmlParser:
         self.fail("unterminated attribute value")
         return ""
 
-    Dict[str, str] parse_attributes(&self):
-        Dict[str, str] attr_map = Dict[str, str]()
+    Dict[String, String] parse_attributes(&self):
+        Dict[String, String] attr_map = Dict[String, String]()
         while self.pos < self.xml_input.byte_len():
             self.skip_ws()
             if self.pos >= self.xml_input.byte_len():
                 break
-            str ac = self.xml_input.char_at(self.pos)
+            String ac = self.xml_input.char_at(self.pos)
             if ac == '>' or ac == '/' or ac == '?':
                 break
-            str attr_key = self.parse_tag_name()
+            String attr_key = self.parse_tag_name()
             if self.failed():
                 return attr_map
             self.skip_ws()
@@ -245,7 +245,7 @@ equip XmlParser:
             if self.failed():
                 return attr_map
             self.skip_ws()
-            str attr_value = self.parse_attr_value()
+            String attr_value = self.parse_attr_value()
             if self.failed():
                 return attr_map
             attr_map.put(attr_key, attr_value)
@@ -264,9 +264,9 @@ equip XmlParser:
     # ── Node parsing ────────────────────────────────────────
 
     XmlNode parse_text(&self):
-        str text_val = ""
+        String text_val = ""
         while self.pos < self.xml_input.byte_len():
-            str xc = self.xml_input.char_at(self.pos)
+            String xc = self.xml_input.char_at(self.pos)
             if xc == '<':
                 break
             text_val = text_val + xc
@@ -276,10 +276,10 @@ equip XmlParser:
     XmlNode parse_element(&self):
         # Consume '<'
         self.pos = self.pos + 1
-        str elem_tag = self.parse_tag_name()
+        String elem_tag = self.parse_tag_name()
         if self.failed():
             return Text("")
-        Dict[str, str] elem_attrs = self.parse_attributes()
+        Dict[String, String] elem_attrs = self.parse_attributes()
         if self.failed():
             return Text("")
         self.skip_ws()
@@ -310,11 +310,11 @@ equip XmlParser:
         self.consume_str("</")
         if self.failed():
             return Text("")
-        str close_tag = self.parse_tag_name()
+        String close_tag = self.parse_tag_name()
         if self.failed():
             return Text("")
         if close_tag != elem_tag:
-            str tag_err = "mismatched closing tag: expected {elem_tag} got {close_tag}"
+            String tag_err = "mismatched closing tag: expected {elem_tag} got {close_tag}"
             self.fail(tag_err)
             return Text("")
         self.skip_ws()
@@ -350,7 +350,7 @@ equip XmlParser:
 
 # ── Public API ─────────────────────────────────────────────
 
-Result[XmlNode, str] xml_parse(str xml_src):
+Result[XmlNode, String] xml_parse(String xml_src):
     XmlParser xp = XmlParser(xml_src, 0, "")
     xp.skip_ws()
     XmlNode root_node = xp.parse_node()
@@ -360,14 +360,14 @@ Result[XmlNode, str] xml_parse(str xml_src):
 
 # ── Serialization ──────────────────────────────────────────
 
-String xml_stringify_node(XmlNode nd, Dict[str, str] nd_attrs, Vector[XmlNode] nd_kids, str nd_tag):
+String xml_stringify_node(XmlNode nd, Dict[String, String] nd_attrs, Vector[XmlNode] nd_kids, String nd_tag):
     String buf = String()
     buf.push("<")
     buf.push(nd_tag)
-    Vector[str] attr_keys = nd_attrs.keys()
+    Vector[String] attr_keys = nd_attrs.keys()
     int ki = 0
     while ki < attr_keys.len():
-        str akey = attr_keys.get(ki).unwrap()
+        String akey = attr_keys.get(ki).unwrap()
         buf.push(" ")
         buf.push(akey)
         buf.push("=\"")
@@ -398,14 +398,14 @@ String xml_stringify(XmlNode nd):
 # ── Accessor methods ───────────────────────────────────────
 
 equip XmlNode:
-    str tag(self):
+    String tag(self):
         match self:
             case Element(xtag, xattr_dict, xkids):
                 return xtag
             else:
                 return ""
 
-    str attr(self, str key):
+    String attr(self, String key):
         match self:
             case Element(xtag, xattr_dict, xkids):
                 if xattr_dict.contains(key):
@@ -421,12 +421,12 @@ equip XmlNode:
             else:
                 return Vector[XmlNode]()
 
-    str text(self):
+    String text(self):
         match self:
             case Text(xtv):
                 return xtv
             case Element(xtag, xattr_dict, xkids):
-                str combined = ""
+                String combined = ""
                 int ti = 0
                 while ti < xkids.len():
                     XmlNode child_nd = xkids.get(ti).unwrap()
@@ -434,7 +434,7 @@ equip XmlNode:
                     ti = ti + 1
                 return combined
 
-    XmlNode find(self, str find_tag):
+    XmlNode find(self, String find_tag):
         match self:
             case Element(xtag, xattr_dict, xkids):
                 int fi = 0
@@ -447,7 +447,7 @@ equip XmlNode:
             else:
                 return Text("")
 
-    Vector[XmlNode] find_all(self, str find_tag):
+    Vector[XmlNode] find_all(self, String find_tag):
         Vector[XmlNode] xml_matches = Vector[XmlNode]()
         match self:
             case Element(xtag, xattr_dict, xkids):

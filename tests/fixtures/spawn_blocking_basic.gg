@@ -1,13 +1,13 @@
 from std.fs import read_file, write_file
 
 # A regular (non-async) function that does blocking I/O.
-str blocking_read(str path):
+String blocking_read(String path):
     return read_file(path)
 
 async void main():
     write_file("/tmp/gorget_spawn_blocking.txt", "spawn_blocking works")
 
     # spawn blocking runs the function on the blocking thread pool
-    Task[str] t = spawn blocking blocking_read("/tmp/gorget_spawn_blocking.txt")
-    str result = t.await()
+    Task[String] t = spawn blocking blocking_read("/tmp/gorget_spawn_blocking.txt")
+    String result = t.await()
     print(result)

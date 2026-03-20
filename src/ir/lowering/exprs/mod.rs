@@ -1583,7 +1583,7 @@ pub(super) fn index_expr_to_mangle_fragment(expr: &Expr) -> Option<String> {
             "int" => "int64_t",
             "float" => "double",
             "bool" => "bool",
-            "str" => "Str",
+            "str" | "String" => "Str",
             "char" => "char",
             "byte" | "uint8" => "uint8_t",
             "uint16" => "uint16_t",

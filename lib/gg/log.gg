@@ -26,7 +26,7 @@ private int level_int(LogLevel log_l):
         case Err():
             return 3
 
-private str level_name(LogLevel log_l):
+private String level_name(LogLevel log_l):
     match log_l:
         case Debug():
             return "DEBUG"
@@ -42,13 +42,13 @@ private str level_name(LogLevel log_l):
 struct Logger:
     LogLevel log_min_level
     bool log_show_timestamp
-    str log_prefix
+    String log_prefix
 
 equip Logger:
     Logger new(LogLevel log_level):
         return Logger(log_level, false, "")
 
-    Logger with_prefix(LogLevel log_level, str log_pfx):
+    Logger with_prefix(LogLevel log_level, String log_pfx):
         return Logger(log_level, false, log_pfx)
 
     Logger with_timestamps(LogLevel log_level):
@@ -57,10 +57,10 @@ equip Logger:
     void set_level(&self, LogLevel log_l):
         self.log_min_level = log_l
 
-    void log_msg(&self, LogLevel log_l, str log_msg):
+    void log_msg(&self, LogLevel log_l, String log_msg):
         if level_int(log_l) < level_int(self.log_min_level):
             return
-        str log_out = ""
+        String log_out = ""
         if self.log_show_timestamp:
             int log_ts = time()
             log_out = log_out + "[" + format_time(log_ts, "%Y-%m-%d %H:%M:%S") + "] "
@@ -70,30 +70,30 @@ equip Logger:
         log_out = log_out + " " + log_msg
         print(log_out)
 
-    void debug(&self, str log_msg):
+    void debug(&self, String log_msg):
         self.log_msg(Debug(), log_msg)
 
-    void info(&self, str log_msg):
+    void info(&self, String log_msg):
         self.log_msg(Info(), log_msg)
 
-    void warn(&self, str log_msg):
+    void warn(&self, String log_msg):
         self.log_msg(Warn(), log_msg)
 
-    void error(&self, str log_msg):
+    void error(&self, String log_msg):
         self.log_msg(Err(), log_msg)
 
 # ── Module-level convenience functions ───────────────────────
 # These use a fixed Info-level logger — for configurable logging
 # use Logger.new() directly.
 
-void log_debug(str log_msg):
+void log_debug(String log_msg):
     print("[DEBUG] " + log_msg)
 
-void log_info(str log_msg):
+void log_info(String log_msg):
     print("[INFO] " + log_msg)
 
-void log_warn(str log_msg):
+void log_warn(String log_msg):
     print("[WARN] " + log_msg)
 
-void log_error(str log_msg):
+void log_error(String log_msg):
     print("[ERROR] " + log_msg)

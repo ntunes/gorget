@@ -2,7 +2,7 @@ from gg.xml import XmlNode, xml_parse, xml_stringify
 from std.collections import Vector
 
 void main():
-    Result[XmlNode, str] r = xml_parse(
+    Result[XmlNode, String] r = xml_parse(
         "<root><item id=\"1\">a</item><item id=\"2\">b</item><other>c</other></root>"
     )
     match r:
@@ -15,7 +15,7 @@ void main():
 
             # find: non-existent tag returns Text("")
             XmlNode missing = root.find("nope")
-            str missing_tag = missing.tag()
+            String missing_tag = missing.tag()
             int mlen = missing_tag.len()
             print(f"{mlen}")
 

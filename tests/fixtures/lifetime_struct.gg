@@ -1,20 +1,20 @@
 # Lifetime inference — struct borrowing (Phase 4, positive tests)
 
 struct View:
-    str name
+    String name
 
 struct Tagged:
-    str label
+    String label
     int count
 
 struct Nested:
     View inner
 
-# Struct with str field from string literal — always safe
+# Struct with String field from string literal — always safe
 View make_view_literal(): View("hello")
 
-# Struct with str field from parameter — safe (borrows from param)
-View make_view(str s): View(s)
+# Struct with String field from parameter — safe (borrows from param)
+View make_view(String s): View(s)
 
 # Struct with mixed fields — safe when source is a literal
 Tagged make_tagged(): Tagged("tag", 42)

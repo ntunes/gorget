@@ -6,5 +6,5 @@ void main():
     v.push(20)
     print(f"{v.len()}")
     print(f"{v.get(0).unwrap()}")
-    str s = "hello"
+    String s = "hello"
     print(f"{s.len()}")

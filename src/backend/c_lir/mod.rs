@@ -2665,6 +2665,40 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         }
     }
 
+    // Pre-pass: identify CallExtern results from view-eligible string methods whose
+    // destination slot is Str-typed (view). These can use zero-copy _view variants.
+    let mut view_method_vals: Vec<bool> = vec![false; max_val as usize];
+    {
+        let view_eligible = |name: &str| -> bool {
+            matches!(name,
+                "gorget_str_trim" | "gorget_str_byte_slice" | "gorget_str_char_at"
+                | "gorget_str_strip" | "gorget_str_lstrip" | "gorget_str_rstrip"
+                | "gorget_str_lstrip_ws" | "gorget_str_rstrip_ws"
+                | "gorget_str_removeprefix" | "gorget_str_removesuffix"
+                | "gorget_str_slice"
+            )
+        };
+        for block in &func.blocks {
+            let insts = &block.insts;
+            for (i, inst) in insts.iter().enumerate() {
+                if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
+                    if view_eligible(name) {
+                        // Check if the next instruction stores this val to a Str-typed slot.
+                        if let Some(Inst::SlotStore { slot, value }) = insts.get(i + 1) {
+                            if *value == *d {
+                                let slot_ty = &func.slots[slot.0 as usize].ty;
+                                let is_str = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
+                                if is_str {
+                                    view_method_vals[d.0 as usize] = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Slot declarations (emitted after cross-type fix-ups so slot_overrides are applied).
     for (i, slot) in func.slots.iter().enumerate() {
         let effective_ty = slot_overrides.get(&(i as u32)).unwrap_or(&slot.ty);
@@ -2769,7 +2803,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         // Instructions
         for inst in &block.insts {
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &null_vals, &ptr_pointee, &func_addr_targets, &spawn_source_fn, &_collection_get_vals);
+            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &null_vals, &ptr_pointee, &func_addr_targets, &spawn_source_fn, &_collection_get_vals, &view_method_vals);
             writeln!(out).unwrap();
 
             // In test functions, register droppable user-named slots on the cleanup stack
@@ -2798,7 +2832,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>], spawn_source_fn: &[Option<String>], _collection_get_vals: &[bool]) {
+fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>], spawn_source_fn: &[Option<String>], _collection_get_vals: &[bool], view_method_vals: &[bool]) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -2947,11 +2981,14 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     // cross-type assigns are direct.
                     let val_is_gs = matches!(val_ty, Some(LirType::Struct(sid)) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString"));
                     let val_is_str = matches!(val_ty, Some(LirType::Struct(sid)) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
-                    if (slot_is_str && val_is_gs) || (slot_is_gs && val_is_str) {
+                    if slot_is_str && val_is_str {
+                        // Both are Str views: shallow struct copy, no clone needed (cap=0, non-owning).
+                        write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
+                    } else if (slot_is_str && val_is_gs) || (slot_is_gs && val_is_str) {
                         // Unified cross-type (Str↔GorgetString): clone to ensure owned copy
                         write!(out, "{} = gorget_string_clone((const GorgetString*)&{});", s(*slot), v(*value)).unwrap();
                     } else if (slot_is_str || slot_is_gs) && matches!(val_ty, Some(LirType::Struct(_))) {
-                        // Same-type Str→Str or GorgetString→GorgetString: clone to prevent double-free
+                        // GorgetString→GorgetString: clone to prevent double-free
                         write!(out, "{} = gorget_string_clone((const GorgetString*)&{});", s(*slot), v(*value)).unwrap();
                     } else if !matches!(val_ty, Some(LirType::Struct(_)) | None) {
                         // Scalar → single-field struct coercion (newtype wrapping).
@@ -4037,6 +4074,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 || name == "gorget_string_format" || name == "gorget_string_format_alloc"
                 || name == "snprintf" || name == "sprintf";
             let strip_ws_name: String;
+            let view_name: String;
             let emit_name = if is_stderr_print { "fprintf" }
             else if args.len() == 1 {
                 match name.as_str() {
@@ -4047,6 +4085,13 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 }
             }
             else { name.as_str() };
+            // Apply _view suffix for view-eligible string methods whose destination is Str-typed.
+            let emit_name = if let Some(d) = dst {
+                if view_method_vals.get(d.0 as usize).copied().unwrap_or(false) {
+                    view_name = format!("{emit_name}_view");
+                    view_name.as_str()
+                } else { emit_name }
+            } else { emit_name };
 
             // ── Out-parameter functions (image_load, audio_load, deflate_decompress) ──
             // These C runtime functions use void+out-param ABI but GIR calls them

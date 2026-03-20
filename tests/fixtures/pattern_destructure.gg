@@ -3,7 +3,7 @@
 (int, int) get_pair():
     return (10, 20)
 
-(int, str) get_mixed():
+(int, String) get_mixed():
     return (42, "hello")
 
 void main():
@@ -13,7 +13,7 @@ void main():
     print(f"{b}")
 
     # VarDecl tuple destructuring from a variable
-    (int, str) pair = get_mixed()
+    (int, String) pair = get_mixed()
     auto (n, s) = pair
     print(f"{n}")
     print(s)

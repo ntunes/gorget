@@ -1,6 +1,6 @@
 Callable[void()] bad():
     String local = "hello" + ""
-    str v = local.as_str()
+    String v = local.as_str()
     return (): print(v)
 
 void main():

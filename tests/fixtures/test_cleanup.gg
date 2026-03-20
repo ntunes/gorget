@@ -1,11 +1,11 @@
 from std.collections import Box
 
 struct Resource:
-    str name
+    String name
 
 equip Resource with Drop:
     void drop(!self):
-        str n = self.name
+        String n = self.name
         print(f"dropping {n}")
 
 test "cleanup on failure":

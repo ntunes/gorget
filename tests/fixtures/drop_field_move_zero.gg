@@ -1,12 +1,12 @@
 from std.collections import Vector
 
 struct Holder:
-    str label
+    String label
     Vector[int] data
 
 # Test 3: self.field zeroing in equip method (mutable borrow)
 struct DataHolder:
-    str name
+    String name
     Vector[int] payload
 
 equip DataHolder:

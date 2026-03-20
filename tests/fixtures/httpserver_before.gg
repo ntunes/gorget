@@ -14,7 +14,7 @@
 from gg.httpserver import Router, HttpRequest, HttpServerResponse
 from std.collections import Dict
 
-void check(str label, bool ok):
+void check(String label, bool ok):
     if not ok:
         print("FAIL: " + label)
     else:
@@ -26,13 +26,13 @@ HttpServerResponse handle_hello(HttpRequest req):
 # Pre-middleware: reject /admin paths with 401
 Option[HttpServerResponse] auth_guard(HttpRequest req):
     if req.path.starts_with("/admin"):
-        return Some(HttpServerResponse(401, "Unauthorized", "text/plain", Dict[str, str]()))
+        return Some(HttpServerResponse(401, "Unauthorized", "text/plain", Dict[String, String]()))
     return None()
 
 # Pre-middleware 2: reject /blocked path
 Option[HttpServerResponse] block_guard(HttpRequest req):
     if req.path == "/blocked":
-        return Some(HttpServerResponse(403, "Forbidden", "text/plain", Dict[str, str]()))
+        return Some(HttpServerResponse(403, "Forbidden", "text/plain", Dict[String, String]()))
     return None()
 
 # Post-middleware: add X-Logged header to all responses
@@ -50,12 +50,12 @@ void main():
     router.use(logging_mw)
 
     # 1. /admin path → auth_guard returns Some(401), handler never called
-    HttpRequest req1 = HttpRequest("GET", "/admin/secret", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req1 = HttpRequest("GET", "/admin/secret", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse r1 = router.dispatch(req1)
     check("admin_blocked", r1.status_code == 401)
 
     # 2. Normal path → before() returns None(), handler runs → 200
-    HttpRequest req2 = HttpRequest("GET", "/hello", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req2 = HttpRequest("GET", "/hello", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse r2 = router.dispatch(req2)
     check("hello_ok", r2.status_code == 200)
 
@@ -63,7 +63,7 @@ void main():
     check("admin_logged", r1.headers.contains("X-Logged"))
 
     # 4. /blocked path → auth_guard returns None(), block_guard returns Some(403)
-    HttpRequest req3 = HttpRequest("GET", "/blocked", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req3 = HttpRequest("GET", "/blocked", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse r3 = router.dispatch(req3)
     check("blocked_403", r3.status_code == 403)
 

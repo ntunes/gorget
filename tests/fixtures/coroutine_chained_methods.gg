@@ -23,11 +23,11 @@ async int test_chains():
     print(r2)
 
     # Result chain: map → unwrap_or
-    Result[int, str] ok = Ok(5)
+    Result[int, String] ok = Ok(5)
     int r3 = ok.map((int x): x * 10).unwrap_or(0)
     print(r3)
 
-    Result[int, str] err = Error("fail")
+    Result[int, String] err = Error("fail")
     int r4 = err.map((int x): x * 10).unwrap_or(-1)
     print(r4)
 

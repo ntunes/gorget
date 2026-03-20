@@ -1,11 +1,11 @@
-int step1() throws str:
+int step1() throws String:
     throw "oops"
 
-int step2() throws str:
+int step2() throws String:
     int x = step1()
     return x + 1
 
-int step3() throws str:
+int step3() throws String:
     int x = step2()
     return x + 1
 

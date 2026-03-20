@@ -25,7 +25,7 @@ void main():
     print(f"{age_col.null_count()}")
 
     # ── col_strs_null ───────────────────────────────────────────
-    Vector[str] names = Vector[str]()
+    Vector[String] names = Vector[String]()
     names.push("Alice")
     names.push("")
     names.push("Bob")
@@ -37,7 +37,7 @@ void main():
     print(f"{name_col.is_null_at(1)}")
 
     # ── fillna_int ──────────────────────────────────────────────
-    Vector[str] col_names = Vector[str]()
+    Vector[String] col_names = Vector[String]()
     col_names.push("age")
     Vector[Column] cols = Vector[Column]()
     cols.push(age_col)
@@ -52,7 +52,7 @@ void main():
     print(f"{dropped.nrows()}")
 
     # ── column_names ────────────────────────────────────────────
-    Vector[str] cn2 = Vector[str]()
+    Vector[String] cn2 = Vector[String]()
     cn2.push("x")
     cn2.push("y")
     cn2.push("z")
@@ -65,12 +65,12 @@ void main():
     cols2.push(col_from_ints(xd))
     cols2.push(col_from_ints(xd))
     DataFrame df2 = df_from_columns(cn2, cols2)
-    Vector[str] cnames = df2.column_names()
+    Vector[String] cnames = df2.column_names()
     print(f"{cnames.len()}")
     print(f"{cnames.get(0).unwrap()}")
 
     # ── apply_float ─────────────────────────────────────────────
-    Vector[str] fcols = Vector[str]()
+    Vector[String] fcols = Vector[String]()
     fcols.push("score")
     Vector[float] scores = Vector[float]()
     scores.push(1.0)
@@ -86,21 +86,21 @@ void main():
     print(f"{dff2.ncols()}")
 
     # ── apply_str ───────────────────────────────────────────────
-    Vector[str] scols = Vector[str]()
+    Vector[String] scols = Vector[String]()
     scols.push("name")
-    Vector[str] sdata = Vector[str]()
+    Vector[String] sdata = Vector[String]()
     sdata.push("hello")
     sdata.push("world")
     Vector[Column] sc2 = Vector[Column]()
     sc2.push(col_from_strs(sdata))
     DataFrame dfs = df_from_columns(scols, sc2)
-    str(str) identity_fn = (str s): s
+    str(String) identity_fn = (String s): s
     DataFrame dfs2 = dfs.apply_str("name", identity_fn)
     Column nc = dfs2.get_column("name")
     print(f"{nc.value_as_str(0)}")
 
     # ── display() smoke test ─────────────────────────────────────
-    str disp = df2.display()
+    String disp = df2.display()
     print(f"{disp.byte_len() > 0}")
 
     # ── fillna_float ─────────────────────────────────────────────
@@ -111,7 +111,7 @@ void main():
     fm.push(true)
     fm.push(false)
     Column float_col = col_floats_null(fv, fm)
-    Vector[str] fn_names = Vector[str]()
+    Vector[String] fn_names = Vector[String]()
     fn_names.push("flt")
     Vector[Column] fn_cols = Vector[Column]()
     fn_cols.push(float_col)
@@ -122,14 +122,14 @@ void main():
     print(f"{flt_col.value_as_str(1)}")
 
     # ── fillna_str ────────────────────────────────────────────────
-    Vector[str] sv2 = Vector[str]()
+    Vector[String] sv2 = Vector[String]()
     sv2.push("hello")
     sv2.push("")
     Vector[bool] sm2 = Vector[bool]()
     sm2.push(true)
     sm2.push(false)
     Column str_col2 = col_strs_null(sv2, sm2)
-    Vector[str] sn_names = Vector[str]()
+    Vector[String] sn_names = Vector[String]()
     sn_names.push("msg")
     Vector[Column] sn_cols = Vector[Column]()
     sn_cols.push(str_col2)

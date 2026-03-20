@@ -2,7 +2,7 @@
 from std.conv import int_to_str
 
 void main():
-    Dict[str, int] d = Dict[str, int]()
+    Dict[String, int] d = Dict[String, int]()
     d.put("a", 1)
     d.put("b", 2)
     d.put("c", 3)

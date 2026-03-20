@@ -4,7 +4,7 @@ struct Point:
 
 void main():
     # 1. Simple variable interpolation
-    str name = "Alice"
+    String name = "Alice"
     print(f"Hello {name}")
 
     # 2. Expression interpolation
@@ -13,12 +13,12 @@ void main():
     print(f"sum = {x + 5}")
 
     # 3. Method call in interpolation
-    str s = "hello"
+    String s = "hello"
     print(f"len = {s.len()}")
 
     # 4. Multiple interpolations in one string
-    str a = "foo"
-    str b = "bar"
+    String a = "foo"
+    String b = "bar"
     print(f"{a} and {b}")
 
     # 5. Bool interpolation
@@ -30,7 +30,7 @@ void main():
     print(f"val = {f}")
 
     # 7. Empty string interpolation
-    str empty = ""
+    String empty = ""
     print(f"empty='{empty}'")
 
     # 8. Int interpolation with zero
@@ -51,7 +51,7 @@ void main():
     print(f"calc = {v * v + 1}")
 
     # 12. Adjacent text and interpolation
-    str who = "world"
+    String who = "world"
     print(f"[{who}]")
 
     # 13. Only interpolation, no surrounding text

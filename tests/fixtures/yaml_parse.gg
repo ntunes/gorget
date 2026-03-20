@@ -3,7 +3,7 @@ from std.collections import Vector, Dict
 
 void main():
     # ── Block mapping ────────────────────────────────────────
-    str yaml_block_map = "name: Alice\nage: 30\nactive: true\n"
+    String yaml_block_map = "name: Alice\nage: 30\nactive: true\n"
     Yaml yaml_bm = parse(yaml_block_map).unwrap()
     print(yaml_bm.get("name").as_str())
     int yaml_age = yaml_bm.get("age").as_int()
@@ -12,7 +12,7 @@ void main():
     print(f"{yaml_active}")
 
     # ── Block sequence ───────────────────────────────────────
-    str yaml_block_seq = "- apple\n- banana\n- cherry\n"
+    String yaml_block_seq = "- apple\n- banana\n- cherry\n"
     Yaml yaml_bs = parse(yaml_block_seq).unwrap()
     print(yaml_bs.at(0).as_str())
     print(yaml_bs.at(1).as_str())
@@ -21,7 +21,7 @@ void main():
     print(f"{yaml_seq_len}")
 
     # ── Nested mapping/sequence ──────────────────────────────
-    str yaml_nested = "server:\n  host: localhost\n  port: 8080\nitems:\n  - one\n  - two\n"
+    String yaml_nested = "server:\n  host: localhost\n  port: 8080\nitems:\n  - one\n  - two\n"
     Yaml yaml_n = parse(yaml_nested).unwrap()
     print(yaml_n.get("server").get("host").as_str())
     int yaml_port = yaml_n.get("server").get("port").as_int()
@@ -30,7 +30,7 @@ void main():
     print(yaml_n.get("items").at(1).as_str())
 
     # ── Flow mapping ─────────────────────────────────────────
-    str yaml_flow_map_str = r"{a: 1, b: 2}"
+    String yaml_flow_map_str = r"{a: 1, b: 2}"
     Yaml yaml_fm = parse(yaml_flow_map_str).unwrap()
     int yaml_fa = yaml_fm.get("a").as_int()
     int yaml_fb = yaml_fm.get("b").as_int()
@@ -38,7 +38,7 @@ void main():
     print(f"{yaml_fb}")
 
     # ── Flow sequence ────────────────────────────────────────
-    str yaml_flow_seq_str = "[10, 20, 30]"
+    String yaml_flow_seq_str = "[10, 20, 30]"
     Yaml yaml_fs = parse(yaml_flow_seq_str).unwrap()
     int yaml_f0 = yaml_fs.at(0).as_int()
     int yaml_f1 = yaml_fs.at(1).as_int()
@@ -48,13 +48,13 @@ void main():
     print(f"{yaml_f2}")
 
     # ── Quoted scalars ───────────────────────────────────────
-    str yaml_quoted = "dq: \"hello world\"\nsq: 'it''s fine'\n"
+    String yaml_quoted = "dq: \"hello world\"\nsq: 'it''s fine'\n"
     Yaml yaml_q = parse(yaml_quoted).unwrap()
     print(yaml_q.get("dq").as_str())
     print(yaml_q.get("sq").as_str())
 
     # ── Scalar resolution ────────────────────────────────────
-    str yaml_scalars = "n1: null\nn2: ~\nb1: true\nb2: false\ni1: 42\ni2: -7\nf1: 3.14\ns1: just a string\n"
+    String yaml_scalars = "n1: null\nn2: ~\nb1: true\nb2: false\ni1: 42\ni2: -7\nf1: 3.14\ns1: just a string\n"
     Yaml yaml_sc = parse(yaml_scalars).unwrap()
     bool yaml_n1_null = yaml_sc.get("n1").is_null()
     bool yaml_n2_null = yaml_sc.get("n2").is_null()
@@ -73,21 +73,21 @@ void main():
     print(yaml_sc.get("s1").as_str())
 
     # ── Comments ─────────────────────────────────────────────
-    str yaml_comments = "# This is a comment\nkey: value # inline comment\n"
+    String yaml_comments = "# This is a comment\nkey: value # inline comment\n"
     Yaml yaml_c = parse(yaml_comments).unwrap()
     print(yaml_c.get("key").as_str())
 
     # ── Document markers ─────────────────────────────────────
-    str yaml_doc_markers = "---\ntitle: Hello\n..."
+    String yaml_doc_markers = "---\ntitle: Hello\n..."
     Yaml yaml_dm = parse(yaml_doc_markers).unwrap()
     print(yaml_dm.get("title").as_str())
 
     # ── Stringify round-trip ─────────────────────────────────
-    str yaml_rt_str = stringify(yaml_fs)
+    String yaml_rt_str = stringify(yaml_fs)
     print(yaml_rt_str)
 
     # ── Pretty print ─────────────────────────────────────────
-    str yaml_pp = pretty(yaml_bm)
+    String yaml_pp = pretty(yaml_bm)
     print(yaml_pp)
 
     # ── Accessor methods ─────────────────────────────────────
@@ -115,73 +115,73 @@ void main():
     int yaml_map_len = yaml_bm.len()
     print(f"{yaml_map_len}")
 
-    Vector[str] yaml_ks = yaml_bm.keys()
+    Vector[String] yaml_ks = yaml_bm.keys()
     print(yaml_ks.get(0).unwrap())
 
     # ── Error case ───────────────────────────────────────────
-    str yaml_bad_input = r"{unclosed: true"
-    Result[Yaml, str] yaml_bad = parse(yaml_bad_input)
+    String yaml_bad_input = r"{unclosed: true"
+    Result[Yaml, String] yaml_bad = parse(yaml_bad_input)
     bool yaml_is_err = yaml_bad.is_error()
     print(f"{yaml_is_err}")
 
     # ── Phase 2: Literal block scalar ─────────────────────
-    str yaml_lit_src = "text: |\n  line 1\n  line 2\n  line 3\n"
+    String yaml_lit_src = "text: |\n  line 1\n  line 2\n  line 3\n"
     Yaml yaml_lit = parse(yaml_lit_src).unwrap()
-    str yaml_lit_val = yaml_lit.get("text").as_str()
+    String yaml_lit_val = yaml_lit.get("text").as_str()
     print("literal:")
     print(yaml_lit_val)
 
     # ── Phase 2: Folded block scalar ──────────────────────
-    str yaml_fold_src = "text: >\n  This is\n  a paragraph.\n\n  Another one.\n"
+    String yaml_fold_src = "text: >\n  This is\n  a paragraph.\n\n  Another one.\n"
     Yaml yaml_fold = parse(yaml_fold_src).unwrap()
-    str yaml_fold_val = yaml_fold.get("text").as_str()
+    String yaml_fold_val = yaml_fold.get("text").as_str()
     print("folded:")
     print(yaml_fold_val)
 
     # ── Phase 2: Chomping: strip ──────────────────────────
-    str yaml_strip_src = "text: |-\n  no trailing\n"
+    String yaml_strip_src = "text: |-\n  no trailing\n"
     Yaml yaml_strip = parse(yaml_strip_src).unwrap()
-    str yaml_strip_val = yaml_strip.get("text").as_str()
+    String yaml_strip_val = yaml_strip.get("text").as_str()
     print("strip:")
     print(yaml_strip_val)
     print("end-strip")
 
     # ── Phase 2: Chomping: keep ───────────────────────────
-    str yaml_keep_src = "text: |+\n  keep trailing\n\n\n"
+    String yaml_keep_src = "text: |+\n  keep trailing\n\n\n"
     Yaml yaml_keep = parse(yaml_keep_src).unwrap()
-    str yaml_keep_val = yaml_keep.get("text").as_str()
+    String yaml_keep_val = yaml_keep.get("text").as_str()
     print("keep:")
     print(yaml_keep_val)
     print("end-keep")
 
     # ── Phase 2: Multi-line plain scalar ──────────────────
-    str yaml_mlp_src = "desc: This is\n  a multi-line\n  plain scalar.\nother: val\n"
+    String yaml_mlp_src = "desc: This is\n  a multi-line\n  plain scalar.\nother: val\n"
     Yaml yaml_mlp = parse(yaml_mlp_src).unwrap()
     print(yaml_mlp.get("desc").as_str())
     print(yaml_mlp.get("other").as_str())
 
     # ── Phase 2: Block scalar in sequence ─────────────────
-    str yaml_seq_bs = "items:\n  - |\n    first item\n    multi line\n  - second\n"
+    String yaml_seq_bs = "items:\n  - |\n    first item\n    multi line\n  - second\n"
     Yaml yaml_seq_bs_v = parse(yaml_seq_bs).unwrap()
     print(yaml_seq_bs_v.get("items").at(0).as_str())
     print(yaml_seq_bs_v.get("items").at(1).as_str())
 
     # ── Phase 2: Folded with more-indented lines ──────────
-    str yaml_fold_mi = "text: >\n  paragraph\n    indented line\n  back to normal\n"
+    String yaml_fold_mi = "text: >\n  paragraph\n    indented line\n  back to normal\n"
     Yaml yaml_fold_mi_v = parse(yaml_fold_mi).unwrap()
-    str yaml_fold_mi_val = yaml_fold_mi_v.get("text").as_str()
+    String yaml_fold_mi_val = yaml_fold_mi_v.get("text").as_str()
     print("folded-indent:")
     print(yaml_fold_mi_val)
 
     # ── Phase 2: Pretty-print with block scalar ──────────
-    str yaml_pp_bs = "desc: |\n  multi\n  line\nname: test\n"
+    String yaml_pp_bs = "desc: |\n  multi\n  line\nname: test\n"
     Yaml yaml_pp_bs_v = parse(yaml_pp_bs).unwrap()
-    str yaml_pp_bs_out = pretty(yaml_pp_bs_v)
+    String yaml_pp_bs_out = pretty(yaml_pp_bs_v)
     print("pretty-block:")
     print(yaml_pp_bs_out)
 
     # ── Phase 3: Multi-document parsing ─────────────────────
-    str yaml_multi = "---\nfirst: 1\n---\nsecond: 2\n"
+    String yaml_multi = "---\nfirst: 1\n---\nsecond: 2\n"
     Vector[Yaml] yaml_all = parse_all(yaml_multi).unwrap()
     int yaml_ndocs = yaml_all.len()
     print(f"{yaml_ndocs}")
@@ -191,7 +191,7 @@ void main():
     print(f"{yaml_d2v}")
 
     # ── Phase 3: Multi-doc with ... separator ─────────────
-    str yaml_dots = "---\nalpha: a\n...\n---\nbeta: b\n"
+    String yaml_dots = "---\nalpha: a\n...\n---\nbeta: b\n"
     Vector[Yaml] yaml_dot_docs = parse_all(yaml_dots).unwrap()
     int yaml_ddocs = yaml_dot_docs.len()
     print(f"{yaml_ddocs}")
@@ -199,7 +199,7 @@ void main():
     print(yaml_dot_docs.get(1).unwrap().get("beta").as_str())
 
     # ── Phase 3: Single doc via parse_all ─────────────────
-    str yaml_single = "key: value\n"
+    String yaml_single = "key: value\n"
     Vector[Yaml] yaml_single_docs = parse_all(yaml_single).unwrap()
     int yaml_sdocs = yaml_single_docs.len()
     print(f"{yaml_sdocs}")
@@ -212,20 +212,20 @@ void main():
     print(pretty_all(yaml_all))
 
     # ── Phase 4: Scalar anchor + alias ───────────────────
-    str yaml_anchor1 = "name: &n Alice\ngreeting: *n\n"
+    String yaml_anchor1 = "name: &n Alice\ngreeting: *n\n"
     Yaml yaml_a1 = parse(yaml_anchor1).unwrap()
     print(yaml_a1.get("name").as_str())
     print(yaml_a1.get("greeting").as_str())
 
     # ── Phase 4: Sequence with anchor/alias ──────────────
-    str yaml_anchor2 = "- &item first\n- second\n- *item\n"
+    String yaml_anchor2 = "- &item first\n- second\n- *item\n"
     Yaml yaml_a2 = parse(yaml_anchor2).unwrap()
     print(yaml_a2.at(0).as_str())
     print(yaml_a2.at(1).as_str())
     print(yaml_a2.at(2).as_str())
 
     # ── Phase 4: Mapping anchor + merge key ──────────────
-    str yaml_anchor3 = "defaults: &defs\n  host: localhost\n  port: 3000\ndev:\n  <<: *defs\n  db: dev_db\n"
+    String yaml_anchor3 = "defaults: &defs\n  host: localhost\n  port: 3000\ndev:\n  <<: *defs\n  db: dev_db\n"
     Yaml yaml_a3 = parse(yaml_anchor3).unwrap()
     print(yaml_a3.get("dev").get("host").as_str())
     int yaml_a3_port = yaml_a3.get("dev").get("port").as_int()
@@ -233,7 +233,7 @@ void main():
     print(yaml_a3.get("dev").get("db").as_str())
 
     # ── Phase 4: Existing keys take precedence over merge ─
-    str yaml_anchor4 = "d: &d\n  a: 1\n  b: 2\nobj:\n  <<: *d\n  a: 99\n"
+    String yaml_anchor4 = "d: &d\n  a: 1\n  b: 2\nobj:\n  <<: *d\n  a: 99\n"
     Yaml yaml_a4 = parse(yaml_anchor4).unwrap()
     int yaml_a4_a = yaml_a4.get("obj").get("a").as_int()
     int yaml_a4_b = yaml_a4.get("obj").get("b").as_int()
@@ -241,7 +241,7 @@ void main():
     print(f"{yaml_a4_b}")
 
     # ── Phase 4: Merge with sequence of mappings ─────────
-    str yaml_anchor5 = "b: &b\n  x: 1\ne: &e\n  y: 2\nr:\n  <<: [*b, *e]\n  z: 3\n"
+    String yaml_anchor5 = "b: &b\n  x: 1\ne: &e\n  y: 2\nr:\n  <<: [*b, *e]\n  z: 3\n"
     Yaml yaml_a5 = parse(yaml_anchor5).unwrap()
     int yaml_a5_x = yaml_a5.get("r").get("x").as_int()
     int yaml_a5_y = yaml_a5.get("r").get("y").as_int()
@@ -251,7 +251,7 @@ void main():
     print(f"{yaml_a5_z}")
 
     # ── Phase 4: Flow context anchor/alias ───────────────
-    str yaml_anchor6 = "a: &val 42\nb: *val\n"
+    String yaml_anchor6 = "a: &val 42\nb: *val\n"
     Yaml yaml_a6 = parse(yaml_anchor6).unwrap()
     int yaml_a6_a = yaml_a6.get("a").as_int()
     int yaml_a6_b = yaml_a6.get("b").as_int()
@@ -259,49 +259,49 @@ void main():
     print(f"{yaml_a6_b}")
 
     # ── Phase 5: Hex integer ─────────────────────────────────
-    str yaml_p5_hex = "h: 0xFF\n"
+    String yaml_p5_hex = "h: 0xFF\n"
     Yaml yaml_p5_hv = parse(yaml_p5_hex).unwrap()
     int yaml_p5_hex_val = yaml_p5_hv.get("h").as_int()
     print(f"{yaml_p5_hex_val}")
 
     # ── Phase 5: Octal integer ────────────────────────────────
-    str yaml_p5_oct = "o: 0o17\n"
+    String yaml_p5_oct = "o: 0o17\n"
     Yaml yaml_p5_ov = parse(yaml_p5_oct).unwrap()
     int yaml_p5_oct_val = yaml_p5_ov.get("o").as_int()
     print(f"{yaml_p5_oct_val}")
 
     # ── Phase 5: Binary integer ───────────────────────────────
-    str yaml_p5_bin = "b: 0b1010\n"
+    String yaml_p5_bin = "b: 0b1010\n"
     Yaml yaml_p5_bv = parse(yaml_p5_bin).unwrap()
     int yaml_p5_bin_val = yaml_p5_bv.get("b").as_int()
     print(f"{yaml_p5_bin_val}")
 
     # ── Phase 5: Underscored integer ──────────────────────────
-    str yaml_p5_us = "u: 1_000_000\n"
+    String yaml_p5_us = "u: 1_000_000\n"
     Yaml yaml_p5_uv = parse(yaml_p5_us).unwrap()
     int yaml_p5_us_val = yaml_p5_uv.get("u").as_int()
     print(f"{yaml_p5_us_val}")
 
     # ── Phase 5: Negative hex ─────────────────────────────────
-    str yaml_p5_nhex = "nh: -0xFF\n"
+    String yaml_p5_nhex = "nh: -0xFF\n"
     Yaml yaml_p5_nhv = parse(yaml_p5_nhex).unwrap()
     int yaml_p5_nhex_val = yaml_p5_nhv.get("nh").as_int()
     print(f"{yaml_p5_nhex_val}")
 
     # ── Phase 5: Scientific float ─────────────────────────────
-    str yaml_p5_sci = "s: 1.5e2\n"
+    String yaml_p5_sci = "s: 1.5e2\n"
     Yaml yaml_p5_sv = parse(yaml_p5_sci).unwrap()
     float yaml_p5_sci_val = yaml_p5_sv.get("s").as_float()
     print(f"{yaml_p5_sci_val}")
 
     # ── Phase 5: Positive integer with sign ───────────────────
-    str yaml_p5_pos = "p: +42\n"
+    String yaml_p5_pos = "p: +42\n"
     Yaml yaml_p5_pv = parse(yaml_p5_pos).unwrap()
     int yaml_p5_pos_val = yaml_p5_pv.get("p").as_int()
     print(f"{yaml_p5_pos_val}")
 
     # ── Phase 5: Special floats (.inf, -.inf, .nan) ───────────
-    str yaml_p5_inf = "a: .inf\nb: -.inf\nc: .nan\n"
+    String yaml_p5_inf = "a: .inf\nb: -.inf\nc: .nan\n"
     Yaml yaml_p5_infv = parse(yaml_p5_inf).unwrap()
     bool yaml_p5_inf_num = yaml_p5_infv.get("a").is_number()
     bool yaml_p5_ninf_num = yaml_p5_infv.get("b").is_number()
@@ -311,75 +311,75 @@ void main():
     print(f"{yaml_p5_nan_num}")
 
     # ── Phase 5: Leading underscore → string (bug fix) ────────
-    str yaml_p5_lu = "v: _100\n"
+    String yaml_p5_lu = "v: _100\n"
     Yaml yaml_p5_luv = parse(yaml_p5_lu).unwrap()
     bool yaml_p5_lu_str = yaml_p5_luv.get("v").is_string()
     print(f"{yaml_p5_lu_str}")
     print(yaml_p5_luv.get("v").as_str())
 
     # ── Phase 5: Unknown escape → error (bug fix) ─────────────
-    str yaml_p5_be = "v: \"hello\\qworld\"\n"
-    Result[Yaml, str] yaml_p5_ber = parse(yaml_p5_be)
+    String yaml_p5_be = "v: \"hello\\qworld\"\n"
+    Result[Yaml, String] yaml_p5_ber = parse(yaml_p5_be)
     bool yaml_p5_be_err = yaml_p5_ber.is_error()
     print(f"{yaml_p5_be_err}")
 
     # ── Phase 5: Known escape sequences ───────────────────────
-    str yaml_p5_esc = "v: \"line1\\nline2\"\n"
+    String yaml_p5_esc = "v: \"line1\\nline2\"\n"
     Yaml yaml_p5_escv = parse(yaml_p5_esc).unwrap()
     print(yaml_p5_escv.get("v").as_str())
 
     # ── Phase 5: Backslash and quote escapes ──────────────────
-    str yaml_p5_bse = "v: \"a\\\\b\\\"c\"\n"
+    String yaml_p5_bse = "v: \"a\\\\b\\\"c\"\n"
     Yaml yaml_p5_bsev = parse(yaml_p5_bse).unwrap()
     print(yaml_p5_bsev.get("v").as_str())
 
     # ── Phase 5: Error — unterminated double-quoted string ────
-    str yaml_p5_e1 = "v: \"unclosed\n"
+    String yaml_p5_e1 = "v: \"unclosed\n"
     bool yaml_p5_e1_f = parse(yaml_p5_e1).is_error()
     print(f"{yaml_p5_e1_f}")
 
     # ── Phase 5: Error — unterminated single-quoted string ────
-    str yaml_p5_e2 = "v: 'unclosed\n"
+    String yaml_p5_e2 = "v: 'unclosed\n"
     bool yaml_p5_e2_f = parse(yaml_p5_e2).is_error()
     print(f"{yaml_p5_e2_f}")
 
     # ── Phase 5: Error — unterminated flow sequence ───────────
-    str yaml_p5_e3 = "[1, 2, 3\n"
+    String yaml_p5_e3 = "[1, 2, 3\n"
     bool yaml_p5_e3_f = parse(yaml_p5_e3).is_error()
     print(f"{yaml_p5_e3_f}")
 
     # ── Phase 5: Error — unterminated flow mapping ────────────
-    str yaml_p5_e4 = r"{a: 1, b: 2"
+    String yaml_p5_e4 = r"{a: 1, b: 2"
     bool yaml_p5_e4_f = parse(yaml_p5_e4).is_error()
     print(f"{yaml_p5_e4_f}")
 
     # ── Phase 5: Error — undefined alias ──────────────────────
-    str yaml_p5_e5 = "v: *nonexistent\n"
+    String yaml_p5_e5 = "v: *nonexistent\n"
     bool yaml_p5_e5_f = parse(yaml_p5_e5).is_error()
     print(f"{yaml_p5_e5_f}")
 
     # ── Phase 5: Empty value → null ───────────────────────────
-    str yaml_p5_ev = "key:\nother: ok\n"
+    String yaml_p5_ev = "key:\nother: ok\n"
     Yaml yaml_p5_evv = parse(yaml_p5_ev).unwrap()
     bool yaml_p5_ev_null = yaml_p5_evv.get("key").is_null()
     print(f"{yaml_p5_ev_null}")
     print(yaml_p5_evv.get("other").as_str())
 
     # ── Phase 5: Quoted keys ──────────────────────────────────
-    str yaml_p5_qk = "\"special:key\": value1\n'quoted key': value2\n"
+    String yaml_p5_qk = "\"special:key\": value1\n'quoted key': value2\n"
     Yaml yaml_p5_qkv = parse(yaml_p5_qk).unwrap()
     print(yaml_p5_qkv.get("special:key").as_str())
     print(yaml_p5_qkv.get("quoted key").as_str())
 
     # ── Phase 5: Empty collections ────────────────────────────
-    str yaml_p5_em = r"{}"
+    String yaml_p5_em = r"{}"
     Yaml yaml_p5_emv = parse(yaml_p5_em).unwrap()
     bool yaml_p5_em_obj = yaml_p5_emv.is_object()
     int yaml_p5_em_len = yaml_p5_emv.len()
     print(f"{yaml_p5_em_obj}")
     print(f"{yaml_p5_em_len}")
 
-    str yaml_p5_es = "[]"
+    String yaml_p5_es = "[]"
     Yaml yaml_p5_esv = parse(yaml_p5_es).unwrap()
     bool yaml_p5_es_arr = yaml_p5_esv.is_array()
     int yaml_p5_es_len = yaml_p5_esv.len()
@@ -387,18 +387,18 @@ void main():
     print(f"{yaml_p5_es_len}")
 
     # ── Phase 5: Plain scalar # handling ──────────────────────
-    str yaml_p5_hash = "v1: value#not-comment\nv2: value # comment\n"
+    String yaml_p5_hash = "v1: value#not-comment\nv2: value # comment\n"
     Yaml yaml_p5_hashv = parse(yaml_p5_hash).unwrap()
     print(yaml_p5_hashv.get("v1").as_str())
     print(yaml_p5_hashv.get("v2").as_str())
 
     # ── Phase 5: Anchor redefine ──────────────────────────────
-    str yaml_p5_redef = "a: &x first\nb: &x second\nc: *x\n"
+    String yaml_p5_redef = "a: &x first\nb: &x second\nc: *x\n"
     Yaml yaml_p5_rv = parse(yaml_p5_redef).unwrap()
     print(yaml_p5_rv.get("c").as_str())
 
     # ── Phase 5: Null variants ────────────────────────────────
-    str yaml_p5_nulls = "n1: null\nn2: Null\nn3: NULL\nn4: ~\n"
+    String yaml_p5_nulls = "n1: null\nn2: Null\nn3: NULL\nn4: ~\n"
     Yaml yaml_p5_nv = parse(yaml_p5_nulls).unwrap()
     bool yaml_p5_n1 = yaml_p5_nv.get("n1").is_null()
     bool yaml_p5_n2 = yaml_p5_nv.get("n2").is_null()
@@ -410,7 +410,7 @@ void main():
     print(f"{yaml_p5_n4}")
 
     # ── Phase 5: Bool variants ────────────────────────────────
-    str yaml_p5_bools = "b1: True\nb2: TRUE\nb3: False\nb4: FALSE\n"
+    String yaml_p5_bools = "b1: True\nb2: TRUE\nb3: False\nb4: FALSE\n"
     Yaml yaml_p5_bov = parse(yaml_p5_bools).unwrap()
     bool yaml_p5_b1 = yaml_p5_bov.get("b1").as_bool()
     bool yaml_p5_b2 = yaml_p5_bov.get("b2").as_bool()
@@ -422,7 +422,7 @@ void main():
     print(f"{yaml_p5_b4}")
 
     # ── Phase 5: Nested flow collections ──────────────────────
-    str yaml_p5_nfc = r"{a: [1, 2], b: {x: 3}}"
+    String yaml_p5_nfc = r"{a: [1, 2], b: {x: 3}}"
     Yaml yaml_p5_nfcv = parse(yaml_p5_nfc).unwrap()
     int yaml_p5_nfc_a0 = yaml_p5_nfcv.get("a").at(0).as_int()
     int yaml_p5_nfc_a1 = yaml_p5_nfcv.get("a").at(1).as_int()
@@ -432,20 +432,20 @@ void main():
     print(f"{yaml_p5_nfc_bx}")
 
     # ── Phase 5: Deeply nested block structure ────────────────
-    str yaml_p5_deep = "l1:\n  l2:\n    l3: deep\n"
+    String yaml_p5_deep = "l1:\n  l2:\n    l3: deep\n"
     Yaml yaml_p5_dv = parse(yaml_p5_deep).unwrap()
     print(yaml_p5_dv.get("l1").get("l2").get("l3").as_str())
 
     # ── Phase 5: Multiple keys same mapping ───────────────────
-    str yaml_p5_multi = "a: 1\nb: 2\nc: 3\nd: 4\ne: 5\n"
+    String yaml_p5_multi = "a: 1\nb: 2\nc: 3\nd: 4\ne: 5\n"
     Yaml yaml_p5_mv = parse(yaml_p5_multi).unwrap()
     int yaml_p5_m_len = yaml_p5_mv.len()
     print(f"{yaml_p5_m_len}")
 
     # ── Phase 5: Stringify special values ─────────────────────
-    str yaml_p5_sn = stringify(Null())
-    str yaml_p5_sb = stringify(Bool(true))
-    str yaml_p5_si = stringify(Int(42))
+    String yaml_p5_sn = stringify(Null())
+    String yaml_p5_sb = stringify(Bool(true))
+    String yaml_p5_si = stringify(Int(42))
     print(yaml_p5_sn)
     print(yaml_p5_sb)
     print(yaml_p5_si)

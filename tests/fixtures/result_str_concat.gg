@@ -1,4 +1,4 @@
-Result[int, str] make_error(str prefix, str suffix):
+Result[int, String] make_error(String prefix, String suffix):
     return Error(prefix + ": " + suffix)
 
 void main():

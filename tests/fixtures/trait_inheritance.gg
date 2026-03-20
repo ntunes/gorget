@@ -1,21 +1,21 @@
 trait Named:
-    str name(self)
+    String name(self)
 
 trait Greeter extends Named:
-    str greet(self)
+    String greet(self)
 
 struct Person:
-    str first_name
+    String first_name
 
 equip Person with Greeter:
-    str name(self):
+    String name(self):
         return self.first_name
-    str greet(self):
+    String greet(self):
         return "hi"
 
 void main():
     Person p = Person("Alice")
-    str n = p.name()
-    str g = p.greet()
+    String n = p.name()
+    String g = p.greet()
     print(n)
     print(g)

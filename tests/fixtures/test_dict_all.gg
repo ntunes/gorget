@@ -3,7 +3,7 @@ from std.collections import Dict, Vector
 
 void main():
     # ===== Construction =====
-    Dict[str, int] d = Dict[str, int]()
+    Dict[String, int] d = Dict[String, int]()
     print(f"{d.len()}")
     print(f"{d.is_empty()}")
 
@@ -50,7 +50,7 @@ void main():
     print(f"{d.contains("b")}")
 
     # ===== clear =====
-    Dict[str, int] d2 = Dict[str, int]()
+    Dict[String, int] d2 = Dict[String, int]()
     d2["x"] = 100
     d2["y"] = 200
     print(f"{d2.len()}")
@@ -62,11 +62,11 @@ void main():
     print(f"{d2.len()}")
 
     # ===== keys =====
-    Dict[str, int] d3 = Dict[str, int]()
+    Dict[String, int] d3 = Dict[String, int]()
     d3["x"] = 10
     d3["y"] = 20
     d3["z"] = 30
-    Vector[str] ks = d3.keys()
+    Vector[String] ks = d3.keys()
     print(f"{ks.len()}")
     # Verify all keys present via contains (order not guaranteed)
     # But insertion order IS preserved in gorget dicts
@@ -81,7 +81,7 @@ void main():
     print(f"{val_sum}")
 
     # ===== items =====
-    Vector[(str, int)] its = d3.items()
+    Vector[(String, int)] its = d3.items()
     print(f"{its.len()}")
     # Access tuple fields
     auto first = its.get(0).unwrap()
@@ -89,16 +89,16 @@ void main():
     print(f"{first.1}")
 
     # ===== keys/values/items on empty dict =====
-    Dict[str, int] ed = Dict[str, int]()
+    Dict[String, int] ed = Dict[String, int]()
     print(f"{ed.keys().len()}")
     print(f"{ed.values().len()}")
     print(f"{ed.items().len()}")
 
     # ===== update =====
-    Dict[str, int] u1 = Dict[str, int]()
+    Dict[String, int] u1 = Dict[String, int]()
     u1["a"] = 1
     u1["b"] = 2
-    Dict[str, int] u2 = Dict[str, int]()
+    Dict[String, int] u2 = Dict[String, int]()
     u2["b"] = 20
     u2["c"] = 30
     u1.update(u2)
@@ -112,7 +112,7 @@ void main():
     print(f"{u1.get_or("missing", 99)}")
 
     # ===== get_or_put =====
-    Dict[str, int] gd = Dict[str, int]()
+    Dict[String, int] gd = Dict[String, int]()
     gd["a"] = 5
     # Existing key: returns existing value, does NOT overwrite
     int gop1 = gd.get_or_put("a", 100)
@@ -125,27 +125,27 @@ void main():
     print(f"{gd.len()}")
 
     # ===== filter =====
-    Dict[str, int] scores = Dict[str, int]()
+    Dict[String, int] scores = Dict[String, int]()
     scores["low"] = 3
     scores["mid"] = 15
     scores["high"] = 25
     scores["tiny"] = 1
-    Dict[str, int] above_ten = scores.filter((str k, int v): v > 10)
+    Dict[String, int] above_ten = scores.filter((String k, int v): v > 10)
     print(f"{above_ten.len()}")
     # Fold the filtered dict to verify sum
-    int filtered_sum = above_ten.fold(0, (int acc, str k, int v): acc + v)
+    int filtered_sum = above_ten.fold(0, (int acc, String k, int v): acc + v)
     print(f"{filtered_sum}")
 
     # ===== fold =====
-    int total = scores.fold(0, (int acc, str k, int v): acc + v)
+    int total = scores.fold(0, (int acc, String k, int v): acc + v)
     print(f"{total}")
     # Fold on empty dict
-    Dict[str, int] empty_fold = Dict[str, int]()
-    int zero = empty_fold.fold(0, (int acc, str k, int v): acc + v)
+    Dict[String, int] empty_fold = Dict[String, int]()
+    int zero = empty_fold.fold(0, (int acc, String k, int v): acc + v)
     print(f"{zero}")
 
     # ===== put then remove then re-add =====
-    Dict[str, int] cycle = Dict[str, int]()
+    Dict[String, int] cycle = Dict[String, int]()
     cycle["k"] = 1
     cycle.remove("k")
     print(f"{cycle.is_empty()}")
@@ -154,7 +154,7 @@ void main():
     print(f"{cycle.len()}")
 
     # ===== Multiple removes =====
-    Dict[str, int] multi = Dict[str, int]()
+    Dict[String, int] multi = Dict[String, int]()
     multi["a"] = 1
     multi["b"] = 2
     multi["c"] = 3
@@ -164,7 +164,7 @@ void main():
     print(f"{multi.get("b").unwrap()}")
 
     # ===== Overwrite via subscript preserves len =====
-    Dict[str, int] ow = Dict[str, int]()
+    Dict[String, int] ow = Dict[String, int]()
     ow["x"] = 10
     ow["x"] = 20
     ow["x"] = 30

@@ -6,8 +6,8 @@ Vector[int] make_nums():
     v.push(20)
     return v
 
-Dict[str, int] make_scores():
-    Dict[str, int] d = Dict[str, int]()
+Dict[String, int] make_scores():
+    Dict[String, int] d = Dict[String, int]()
     d["alice"] = 100
     return d
 
@@ -25,11 +25,11 @@ void main():
     print(f"{nums.len()}")
 
     # Function-returned Dict — buffer freed at scope exit
-    Dict[str, int] scores = make_scores()
+    Dict[String, int] scores = make_scores()
     print(f"{scores.len()}")
 
     # Method-returned Vector — .keys() returns fresh buffer
-    Vector[str] ks = scores.keys()
+    Vector[String] ks = scores.keys()
     print(f"{ks.len()}")
 
     # Chained: function return used then freed

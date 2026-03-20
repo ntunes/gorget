@@ -45,8 +45,8 @@ void main():
     print(f"{is_none2}")
 
     # Result combinators
-    Result[int, str] ok = Ok(10)
-    Result[int, str] err = Error("fail")
+    Result[int, String] ok = Ok(10)
+    Result[int, String] err = Error("fail")
 
     # unwrap_or_else
     print(f"{ok.unwrap_or_else((str e): 0)}")
@@ -56,16 +56,16 @@ void main():
     print(err.unwrap_error())
 
     # map_err
-    Result[int, str] mapped_err = err.map_err((str e): "mapped")
+    Result[int, String] mapped_err = err.map_err((String e): "mapped")
     print(mapped_err.unwrap_error())
 
     # or
-    Result[int, str] alt_ok = Ok(77)
-    Result[int, str] or_ok = ok.or(alt_ok)
-    Result[int, str] or_err = err.or(alt_ok)
+    Result[int, String] alt_ok = Ok(77)
+    Result[int, String] or_ok = ok.or(alt_ok)
+    Result[int, String] or_err = err.or(alt_ok)
     print(f"{or_ok.unwrap()}")
     print(f"{or_err.unwrap()}")
 
     # map (verify type checker integration)
-    Result[int, str] doubled_r = ok.map((int x): x * 2)
+    Result[int, String] doubled_r = ok.map((int x): x * 2)
     print(f"{doubled_r.unwrap()}")

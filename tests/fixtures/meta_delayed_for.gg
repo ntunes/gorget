@@ -7,7 +7,7 @@ void emit_labels[Numeric T]():
         else:
             print("third")
 
-str type_or_unknown[T]():
+String type_or_unknown[T]():
     meta if typename(T) == "int":
         return "int"
     elif typename(T) == "float":
@@ -20,9 +20,9 @@ str type_or_unknown[T]():
 void main():
     emit_labels[int]()
     emit_labels[float]()
-    str s1 = type_or_unknown[int]()
-    str s2 = type_or_unknown[float]()
-    str s3 = type_or_unknown[bool]()
+    String s1 = type_or_unknown[int]()
+    String s2 = type_or_unknown[float]()
+    String s3 = type_or_unknown[bool]()
     print(f"{s1}")
     print(f"{s2}")
     print(f"{s3}")

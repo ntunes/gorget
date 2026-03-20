@@ -12,7 +12,7 @@
 from gg.httpserver import HttpRequest, HttpServerResponse, Router, parse_query_string
 from std.collections import Dict
 
-void check(str label, bool ok):
+void check(String label, bool ok):
     if not ok:
         print("FAIL: " + label)
     else:
@@ -26,22 +26,22 @@ HttpServerResponse handle_data(HttpRequest req):
 
 void main():
     # 1. URL-decoded query string: %20 → space
-    Dict[str, str] qp = parse_query_string("q=hello%20world&name=John%20Doe")
+    Dict[String, String] qp = parse_query_string("q=hello%20world&name=John%20Doe")
     check("query_decode_q", qp["q"] == "hello world")
 
     # 2. URL-decoded path test via a raw path through parse_query_string
     #    (parse_query_string now decodes, test that + stays as + in url_decode)
-    Dict[str, str] qp2 = parse_query_string("tag=hello%2Bworld")
+    Dict[String, String] qp2 = parse_query_string("tag=hello%2Bworld")
     check("query_decode_plus", qp2["tag"] == "hello+world")
 
     # 3. 405: POST /data when only GET /data is registered
     Router router = Router.new()
     router.get("/data", handle_data)
-    HttpRequest post_req = HttpRequest("POST", "/data", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest post_req = HttpRequest("POST", "/data", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse r405 = router.dispatch(post_req)
     check("405_status", r405.status_code == 405)
 
     # 4. 404: unknown path
-    HttpRequest miss_req = HttpRequest("GET", "/missing", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest miss_req = HttpRequest("GET", "/missing", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse r404 = router.dispatch(miss_req)
     check("404_status", r404.status_code == 404)

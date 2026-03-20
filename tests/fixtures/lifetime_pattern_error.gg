@@ -1,10 +1,10 @@
-# Lifetime error: str view source moved, used in match arm
+# Lifetime error: String view source moved, used in match arm
 void consume(String !s):
     pass
 
 void main():
     String s = "hello" + ""
-    str v = s.as_str()
+    String v = s.as_str()
     consume(!s)
     int x = 1
     match x:

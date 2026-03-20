@@ -1,4 +1,4 @@
-str describe[T]():
+String describe[T]():
     meta if typename(T) == "int":
         meta if sizeof(T) == 8:
             return "int64"
@@ -29,12 +29,12 @@ void multi_branch[T]():
         print("other type")
 
 void main():
-    str r1 = describe[int]()
-    str r2 = describe[float]()
-    str r3 = describe[bool]()
+    String r1 = describe[int]()
+    String r2 = describe[float]()
+    String r3 = describe[bool]()
     print(f"{r1}")
     print(f"{r2}")
     print(f"{r3}")
     multi_branch[int]()
-    multi_branch[str]()
+    multi_branch[String]()
     multi_branch[bool]()

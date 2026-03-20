@@ -144,7 +144,7 @@ void main():
     print(v10.binary_search(99))
 
     # === 11. Sort strings lexicographically ===
-    Vector[str] vs = Vector[str]()
+    Vector[String] vs = Vector[String]()
     vs.push("cherry")
     vs.push("apple")
     vs.push("banana")
@@ -156,11 +156,11 @@ void main():
     print(vs[3])
 
     # sorted() on strings
-    Vector[str] vs2 = Vector[str]()
+    Vector[String] vs2 = Vector[String]()
     vs2.push("zebra")
     vs2.push("alpha")
     vs2.push("mango")
-    Vector[str] vs2s = vs2.sorted()
+    Vector[String] vs2s = vs2.sorted()
     print(vs2s[0])
     print(vs2s[1])
     print(vs2s[2])

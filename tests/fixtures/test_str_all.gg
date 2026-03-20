@@ -1,11 +1,11 @@
-# Comprehensive str method coverage
+# Comprehensive String method coverage
 from std.collections import Vector
 
 void main():
     # --- Core ---
-    str s = "hello world"
+    String s = "hello world"
     print(f"{s.len()}")
-    str empty = ""
+    String empty = ""
     print(f"{empty.is_empty()}")
     print(f"{s.is_empty()}")
 
@@ -21,7 +21,7 @@ void main():
     print(f"{s.ends_with("hello")}")
 
     # --- Transform ---
-    str mixed = "Hello World"
+    String mixed = "Hello World"
     print(mixed.to_upper())
     print(mixed.to_lower())
     String no_match = s.replace("xyz", "abc")
@@ -33,28 +33,28 @@ void main():
     print("x".repeat(0))
 
     # --- Trim / Strip ---
-    str ws = "  hello  "
+    String ws = "  hello  "
     print(ws.trim())
     print(ws.strip())
     print(f"[{ws.lstrip()}]")
     print(f"[{ws.rstrip()}]")
     # no whitespace
-    str clean = "abc"
+    String clean = "abc"
     print(clean.trim())
 
     # --- Prefix / Suffix ---
-    str pf = "hello world"
+    String pf = "hello world"
     print(pf.removeprefix("hello "))
     print(pf.removeprefix("xyz"))
-    str sf = "config.toml"
+    String sf = "config.toml"
     print(sf.removesuffix(".toml"))
     print(sf.removesuffix(".json"))
 
     # --- Padding ---
-    str num = "42"
+    String num = "42"
     print(num.pad_left(5, '0'))
     print(num.pad_left(2, '0'))
-    str hi = "hi"
+    String hi = "hi"
     print(hi.pad_right(5, '.'))
     print(hi.pad_right(2, '.'))
 
@@ -63,35 +63,35 @@ void main():
     print(f"{"hello".byte_len()}")
     uint8 b0 = s.byte_at(0)
     print(f"{b0}")
-    str ch0 = s.char_at(0)
+    String ch0 = s.char_at(0)
     print(ch0)
-    str ch4 = s.char_at(4)
+    String ch4 = s.char_at(4)
     print(ch4)
     print(f"{s.find("world").unwrap()}")
     print(f"{s.find("xyz").is_none()}")
 
     # --- Slicing ---
-    str sub = s.substring(0, 5)
+    String sub = s.substring(0, 5)
     print(sub)
-    str bsl = s.byte_slice(0, 5)
+    String bsl = s.byte_slice(0, 5)
     print(bsl)
-    str ch = s[0]
+    String ch = s[0]
     print(ch)
 
     # --- Split / Join ---
-    str csv = "a,b,c"
-    Vector[str] parts = csv.split(",")
+    String csv = "a,b,c"
+    Vector[String] parts = csv.split(",")
     print(f"{parts.len()}")
     String joined = ",".join(parts)
     print(joined)
 
     # --- Iterators ---
-    str abc = "abc"
+    String abc = "abc"
     Vector[uint8] bs = abc.bytes()
     print(f"{bs.len()}")
     Vector[int] cps = abc.codepoints()
     print(f"{cps.len()}")
-    Vector[str] chs = abc.chars()
+    Vector[String] chs = abc.chars()
     print(f"{chs.len()}")
     print(f"{chs.get(0).unwrap()}")
     print(f"{chs.get(2).unwrap()}")
@@ -104,7 +104,7 @@ void main():
     print(f"{"12a".is_digit()}")
     print(f"{"abc123".is_alphanumeric()}")
     print(f"{"abc!".is_alphanumeric()}")
-    str ws2 = " \t"
+    String ws2 = " \t"
     print(f"{ws2.is_whitespace()}")
     print(f"{" a".is_whitespace()}")
     print(f"{"ABC".is_upper()}")

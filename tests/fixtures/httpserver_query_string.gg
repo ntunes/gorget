@@ -17,43 +17,43 @@ from std.collections import Dict
 
 void main():
     # Empty string → empty dict (size 0)
-    Dict[str, str] d1 = parse_query_string("")
+    Dict[String, String] d1 = parse_query_string("")
     int size1 = d1.keys().len()
     print(f"{size1}")
 
     # "key" → {"key": ""}
-    Dict[str, str] d2 = parse_query_string("key")
+    Dict[String, String] d2 = parse_query_string("key")
     if d2.contains("key"):
-        str v2 = d2["key"]
+        String v2 = d2["key"]
         if v2 == "":
             print("empty")
         else:
             print(v2)
 
     # "key=value" → value
-    Dict[str, str] d3 = parse_query_string("key=value")
+    Dict[String, String] d3 = parse_query_string("key=value")
     print(d3["key"])
 
     # "a=1&b=2&c=3"
-    Dict[str, str] d4 = parse_query_string("a=1&b=2&c=3")
+    Dict[String, String] d4 = parse_query_string("a=1&b=2&c=3")
     print(d4["a"])
     print(d4["b"])
     print(d4["c"])
 
     # "key=a=b" — first = splits, rest is value
-    Dict[str, str] d5 = parse_query_string("key=a=b")
+    Dict[String, String] d5 = parse_query_string("key=a=b")
     print(d5["key"])
 
     # "key=" → {"key": ""}
-    Dict[str, str] d6 = parse_query_string("key=")
-    str v6 = d6["key"]
+    Dict[String, String] d6 = parse_query_string("key=")
+    String v6 = d6["key"]
     if v6 == "":
         print("empty")
     else:
         print(v6)
 
     # HttpRequest.query_params() convenience method
-    HttpRequest req = HttpRequest("GET", "/search", "q=hello&page=2", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
-    Dict[str, str] qp = req.query_params()
+    HttpRequest req = HttpRequest("GET", "/search", "q=hello&page=2", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
+    Dict[String, String] qp = req.query_params()
     print(qp["q"])
     print(qp["page"])

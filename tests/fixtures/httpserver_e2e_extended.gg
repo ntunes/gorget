@@ -37,7 +37,7 @@ async void serve_n(ServerSocket !srv, int n):
     TaskGroup group = TaskGroup()
     int i = 0
     while i < n:
-        Result[Socket, str] ar = srv.accept()
+        Result[Socket, String] ar = srv.accept()
         if ar.is_ok():
             Socket client = ar.unwrap()
             group.spawn(spawn http_server_handle_conn_ka(!client, handle, 500))
@@ -45,7 +45,7 @@ async void serve_n(ServerSocket !srv, int n):
     group.join()
     srv.close()
 
-void check(str label, bool ok):
+void check(String label, bool ok):
     if not ok:
         print("FAIL: " + label)
     else:
@@ -61,8 +61,8 @@ async void main():
     String base = "http://127.0.0.1:" + int_to_str(port)
 
     # 1. PUT request with body → 200 + body echoed
-    Dict[str, str] empty_hdrs = Dict[str, str]()
-    Result[HttpResponse, str] r1 = put(base + "/resource", "put-body", empty_hdrs)
+    Dict[String, String] empty_hdrs = Dict[String, String]()
+    Result[HttpResponse, String] r1 = put(base + "/resource", "put-body", empty_hdrs)
     if r1.is_ok():
         HttpResponse resp1 = r1.unwrap()
         check("put status", resp1.status_code == 200)
@@ -72,7 +72,7 @@ async void main():
         print("FAIL: put body")
 
     # 2. DELETE request → 200
-    Result[HttpResponse, str] r2 = delete(base + "/resource", empty_hdrs)
+    Result[HttpResponse, String] r2 = delete(base + "/resource", empty_hdrs)
     if r2.is_ok():
         HttpResponse resp2 = r2.unwrap()
         check("delete status", resp2.status_code == 200)
@@ -80,7 +80,7 @@ async void main():
         print("FAIL: " + r2.unwrap_error())
 
     # 3. Empty body POST → 200 + empty-ok
-    Result[HttpResponse, str] r3 = post(base + "/empty", "", empty_hdrs)
+    Result[HttpResponse, String] r3 = post(base + "/empty", "", empty_hdrs)
     if r3.is_ok():
         HttpResponse resp3 = r3.unwrap()
         check("empty post", resp3.body_text == "empty-ok")
@@ -88,7 +88,7 @@ async void main():
         print("FAIL: " + r3.unwrap_error())
 
     # 4. Multiple custom response headers propagated to client
-    Result[HttpResponse, str] r4 = get(base + "/multi-header", empty_hdrs)
+    Result[HttpResponse, String] r4 = get(base + "/multi-header", empty_hdrs)
     if r4.is_ok():
         HttpResponse resp4 = r4.unwrap()
         check("multi-header-a", resp4.headers["x-header-a"] == "alpha")

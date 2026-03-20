@@ -16,7 +16,7 @@ bool is_weekend(Weekday d):
         else:
             return false
 
-str day_type(Weekday d):
+String day_type(Weekday d):
     if is_weekend(d):
         return "weekend"
     return "weekday"

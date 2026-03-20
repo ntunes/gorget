@@ -47,24 +47,24 @@ enum CmpOp:
     WildNeq
 
 enum Segment:
-    Key(str)
+    Key(String)
     Index(int)
     Wildcard
-    RecursiveDescent(str)
+    RecursiveDescent(String)
     ArrayLen
-    Filter(str, CmpOp, str)
+    Filter(String, CmpOp, String)
     Slice(int, int, int)
 
 # ── Path parser ───────────────────────────────────────────
 
 struct PathParser:
-    str input
+    String input
     int pos
 
 equip PathParser:
     bool at_end(self): self.pos >= self.input.byte_len()
 
-    str peek(self):
+    String peek(self):
         if self.at_end():
             return ""
         return self.input.char_at(self.pos)
@@ -73,14 +73,14 @@ equip PathParser:
         if not self.at_end():
             self.pos = self.pos + 1
 
-    void skip_char(&self, str expected):
+    void skip_char(&self, String expected):
         if not self.at_end() and self.peek() == expected:
             self.advance()
 
-    str parse_bare_key(&self):
+    String parse_bare_key(&self):
         int start = self.pos
         while not self.at_end():
-            str c = self.peek()
+            String c = self.peek()
             if c >= 'a' and c <= 'z':
                 self.advance()
             elif c >= 'A' and c <= 'Z':
@@ -93,12 +93,12 @@ equip PathParser:
                 break
         return self.input.byte_slice(start, self.pos)
 
-    str parse_quoted(&self):
-        str quote = self.peek()
+    String parse_quoted(&self):
+        String quote = self.peek()
         self.advance()
-        str result = ""
+        String result = ""
         while not self.at_end():
-            str c = self.peek()
+            String c = self.peek()
             if c == quote:
                 self.advance()
                 return result
@@ -118,12 +118,12 @@ equip PathParser:
             self.advance()
         while not self.at_end() and self.peek() >= '0' and self.peek() <= '9':
             self.advance()
-        str num_str = self.input.byte_slice(start, self.pos)
+        String num_str = self.input.byte_slice(start, self.pos)
         return parse_int(num_str).unwrap_or(0)
 
     CmpOp parse_cmp_op(&self):
         if not self.at_end():
-            str c = self.peek()
+            String c = self.peek()
             if c == '=':
                 self.advance()
                 if not self.at_end() and self.peek() == '=':
@@ -148,9 +148,9 @@ equip PathParser:
                 return .Gt
         return .Eq
 
-    str parse_pred_value(&self):
+    String parse_pred_value(&self):
         if not self.at_end():
-            str c = self.peek()
+            String c = self.peek()
             if c == '"' or c == '\'':
                 return self.parse_quoted()
         int start = self.pos
@@ -159,9 +159,9 @@ equip PathParser:
         return self.input.byte_slice(start, self.pos)
 
     Segment parse_filter(&self):
-        str field = self.parse_bare_key()
+        String field = self.parse_bare_key()
         CmpOp op = self.parse_cmp_op()
-        str value = self.parse_pred_value()
+        String value = self.parse_pred_value()
         bool has_glob = value.contains("*") or value.contains("?")
         if has_glob:
             match op:
@@ -176,13 +176,13 @@ equip PathParser:
 
     Segment parse_bracket(&self):
         if not self.at_end():
-            str c = self.peek()
+            String c = self.peek()
             if c == '*':
                 self.advance()
                 self.skip_char("]")
                 return .Wildcard
             if c == '"' or c == '\'':
-                str key = self.parse_quoted()
+                String key = self.parse_quoted()
                 self.skip_char("]")
                 return Key(key)
             if c == '-' or c >= '0' and c <= '9':
@@ -219,12 +219,12 @@ equip PathParser:
     Vector[Segment] parse(&self):
         Vector[Segment] segments = Vector[Segment]()
         while not self.at_end():
-            str c = self.peek()
+            String c = self.peek()
             if c == '.':
                 self.advance()
                 if not self.at_end() and self.peek() == '.':
                     self.advance()
-                    str rkey = self.parse_bare_key()
+                    String rkey = self.parse_bare_key()
                     if rkey != "":
                         segments.push(RecursiveDescent(rkey))
                     continue
@@ -251,7 +251,7 @@ equip PathParser:
                 self.advance()
                 segments.push(.Wildcard)
                 continue
-            str key = self.parse_bare_key()
+            String key = self.parse_bare_key()
             if key != "":
                 segments.push(Key(key))
             else:
@@ -260,7 +260,7 @@ equip PathParser:
 
 # ── Wildcard string matching ──────────────────────────────
 
-private bool wildcard_match(str pattern, str text):
+private bool wildcard_match(String pattern, String text):
     int pi = 0
     int ti = 0
     int plen = pattern.byte_len()
@@ -290,7 +290,7 @@ private bool wildcard_match(str pattern, str text):
 
 # ── Json value helpers for comparison ─────────────────────
 
-private str json_as_cmp_str(Json val):
+private String json_as_cmp_str(Json val):
     match val:
         case Str(s):
             return s
@@ -325,7 +325,7 @@ private bool json_is_numeric(Json val):
 
 # ── Predicate evaluation ──────────────────────────────────
 
-private bool eval_predicate(Json item, str field, CmpOp op, str value):
+private bool eval_predicate(Json item, String field, CmpOp op, String value):
     Json fval = item.get(field)
     if fval.is_null():
         return false
@@ -354,7 +354,7 @@ private bool eval_predicate(Json item, str field, CmpOp op, str value):
                 return lhs >= rhs
             else:
                 return false
-    str lhs_str = json_as_cmp_str(fval)
+    String lhs_str = json_as_cmp_str(fval)
     match op:
         case Eq:
             return lhs_str == value
@@ -365,14 +365,14 @@ private bool eval_predicate(Json item, str field, CmpOp op, str value):
 
 # ── Recursive descent helper ─────────────────────────────
 
-private void collect_recursive(Json node, str target_key, Vector[Json] &results):
+private void collect_recursive(Json node, String target_key, Vector[Json] &results):
     if node.is_object():
         if node.has(target_key):
             results.push(node.get(target_key))
-        Vector[str] ks = node.keys()
+        Vector[String] ks = node.keys()
         int i = 0
         while i < ks.len():
-            str k = ks.get(i).unwrap()
+            String k = ks.get(i).unwrap()
             collect_recursive(node.get(k), target_key, &results)
             i = i + 1
     elif node.is_array():
@@ -411,10 +411,10 @@ private void query_step(Vector[Json] current, Segment seg, Vector[Json] &out):
                         out.push(node.at(resolved))
             case Wildcard:
                 if node.is_object():
-                    Vector[str] ks = node.keys()
+                    Vector[String] ks = node.keys()
                     int ki = 0
                     while ki < ks.len():
-                        str k = ks.get(ki).unwrap()
+                        String k = ks.get(ki).unwrap()
                         out.push(node.get(k))
                         ki = ki + 1
                 elif node.is_array():
@@ -468,28 +468,28 @@ private Vector[Json] query_segments(Json doc, Vector[Segment] segments):
 
 # ── Parse path helper ─────────────────────────────────────
 
-private Vector[Segment] parse_path(str path):
+private Vector[Segment] parse_path(String path):
     PathParser pp = PathParser(path, 0)
     return pp.parse()
 
 # ── Public query API ──────────────────────────────────────
 
-Json query(Json doc, str path):
+Json query(Json doc, String path):
     Vector[Segment] segments = parse_path(path)
     Vector[Json] results = query_segments(doc, segments)
     if results.len() > 0:
         return results.get(0).unwrap()
     return Null()
 
-Vector[Json] query_all(Json doc, str path):
+Vector[Json] query_all(Json doc, String path):
     Vector[Segment] segments = parse_path(path)
     return query_segments(doc, segments)
 
-bool query_exists(Json doc, str path):
+bool query_exists(Json doc, String path):
     Json result = query(doc, path)
     return not result.is_null()
 
-int query_count(Json doc, str path):
+int query_count(Json doc, String path):
     Vector[Json] results = query_all(doc, path)
     return results.len()
 
@@ -498,7 +498,7 @@ int query_count(Json doc, str path):
 # Walks the path, creating intermediate objects as needed.
 # Mutates doc in-place via &doc. Returns true on success.
 
-bool query_set(Json &doc, str path, Json value):
+bool query_set(Json &doc, String path, Json value):
     Vector[Segment] segments = parse_path(path)
     if segments.len() == 0:
         return false
@@ -536,7 +536,7 @@ private bool set_recursive(Json &node, Vector[Segment] segments, int depth, Json
 
 # ── In-place mutation: delete ─────────────────────────────
 
-bool query_delete(Json &doc, str path):
+bool query_delete(Json &doc, String path):
     Vector[Segment] segments = parse_path(path)
     if segments.len() == 0:
         return false
@@ -576,23 +576,23 @@ private bool del_recursive(Json &node, Vector[Segment] segments, int depth):
 
 # ── Json mutation primitives ──────────────────────────────
 
-private bool obj_put(Json &node, str key, Json value):
+private bool obj_put(Json &node, String key, Json value):
     match node:
         case Obj(d):
             d.put(key, value)
             node = Obj(d)
             return true
         else:
-            Dict[str, Json] new_d = Dict[str, Json]()
+            Dict[String, Json] new_d = Dict[String, Json]()
             new_d.put(key, value)
             node = Obj(new_d)
             return true
 
-private void obj_ensure(Json &node, str key):
+private void obj_ensure(Json &node, String key):
     if not node.is_object():
-        node = Obj(Dict[str, Json]())
+        node = Obj(Dict[String, Json]())
     if not node.has(key):
-        obj_put(&node, key, Obj(Dict[str, Json]()))
+        obj_put(&node, key, Obj(Dict[String, Json]()))
 
 private bool arr_set(Json &node, int index, Json value):
     match node:
@@ -605,15 +605,15 @@ private bool arr_set(Json &node, int index, Json value):
         else:
             return false
 
-private bool obj_delete(Json &node, str key):
+private bool obj_delete(Json &node, String key):
     # Rebuild dict without the key (avoids codegen issue with Dict.remove return type)
     match node:
         case Obj(d):
-            Dict[str, Json] clean = Dict[str, Json]()
-            Vector[str] dk = d.keys()
+            Dict[String, Json] clean = Dict[String, Json]()
+            Vector[String] dk = d.keys()
             int i = 0
             while i < dk.len():
-                str k = dk.get(i).unwrap()
+                String k = dk.get(i).unwrap()
                 if k != key:
                     clean.put(k, d[k])
                 i = i + 1

@@ -3,17 +3,17 @@ from std.collections import Vector, Dict
 
 void main():
     # df_from_records: build from string headers + rows
-    Vector[str] headers = Vector[str]()
+    Vector[String] headers = Vector[String]()
     headers.push("name")
     headers.push("score")
 
-    Vector[str] row0 = Vector[str]()
+    Vector[String] row0 = Vector[String]()
     row0.push("Alice")
     row0.push("90")
-    Vector[str] row1 = Vector[str]()
+    Vector[String] row1 = Vector[String]()
     row1.push("Bob")
     row1.push("80")
-    Vector[Vector[str]] rows = Vector[Vector[str]]()
+    Vector[Vector[String]] rows = Vector[Vector[String]]()
     rows.push(row0)
     rows.push(row1)
 
@@ -23,23 +23,23 @@ void main():
     print(f"{nr}")
     print(f"{nc}")
 
-    # row_as_dict: returns Dict[str, str] for a row
-    Dict[str, str] r0d = df.row_as_dict(0)
-    str name0 = r0d["name"]
-    str score0 = r0d["score"]
+    # row_as_dict: returns Dict[String, String] for a row
+    Dict[String, String] r0d = df.row_as_dict(0)
+    String name0 = r0d["name"]
+    String score0 = r0d["score"]
     print(name0)
     print(score0)
 
     # value_counts: count occurrences in a column
-    Vector[str] cat_headers = Vector[str]()
+    Vector[String] cat_headers = Vector[String]()
     cat_headers.push("color")
-    Vector[str] c0 = Vector[str]()
+    Vector[String] c0 = Vector[String]()
     c0.push("red")
-    Vector[str] c1 = Vector[str]()
+    Vector[String] c1 = Vector[String]()
     c1.push("blue")
-    Vector[str] c2 = Vector[str]()
+    Vector[String] c2 = Vector[String]()
     c2.push("red")
-    Vector[Vector[str]] cat_rows = Vector[Vector[str]]()
+    Vector[Vector[String]] cat_rows = Vector[Vector[String]]()
     cat_rows.push(c0)
     cat_rows.push(c1)
     cat_rows.push(c2)

@@ -1,4 +1,4 @@
-# Prerequisite test for Phase C: verify Dict[str, Callable[...]] works.
+# Prerequisite test for Phase C: verify Dict[String, Callable[...]] works.
 # Uses two-step pattern: assign to Callable local first, then put/call.
 from std.collections import Dict
 
@@ -9,7 +9,7 @@ int triple_it(int x):
     return x * 3
 
 void main():
-    Dict[str, Callable[int(int)]] fns = Dict[str, Callable[int(int)]]()
+    Dict[String, Callable[int(int)]] fns = Dict[String, Callable[int(int)]]()
     Callable[int(int)] dfn = double_it
     Callable[int(int)] tfn = triple_it
     int factor = 10

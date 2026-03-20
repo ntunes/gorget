@@ -24,8 +24,8 @@ void main():
     Container[int] c1 = Container[int](42)
     print(f"{c1.get()}")
 
-    Container[str] c2 = Container[str]("hello")
-    str s1 = c2.get()
+    Container[String] c2 = Container[String]("hello")
+    String s1 = c2.get()
     print(f"{s1}")
 
     # Wrap returns a new Container of the same type
@@ -33,9 +33,9 @@ void main():
     print(f"{c3.get()}")
 
     # Pair with two different type args
-    Pair[int, str] p = Pair[int, str](10, "world")
+    Pair[int, String] p = Pair[int, String](10, "world")
     print(f"{p.get_first()}")
-    str s2 = p.get_second()
+    String s2 = p.get_second()
     print(f"{s2}")
 
     # Nested: Container[Container[int]]

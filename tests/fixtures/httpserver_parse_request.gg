@@ -39,7 +39,7 @@ async void serve_n(ServerSocket !srv, int n):
     TaskGroup group = TaskGroup()
     int i = 0
     while i < n:
-        Result[Socket, str] ar = srv.accept()
+        Result[Socket, String] ar = srv.accept()
         if ar.is_ok():
             Socket client = ar.unwrap()
             group.spawn(spawn http_server_handle_conn_ka(!client, handle, 500))
@@ -47,7 +47,7 @@ async void serve_n(ServerSocket !srv, int n):
     group.join()
     srv.close()
 
-void check(str label, bool ok):
+void check(String label, bool ok):
     if not ok:
         print("FAIL: " + label)
     else:
@@ -63,40 +63,40 @@ async void main():
     String base = "http://127.0.0.1:" + int_to_str(port)
 
     # 1. GET method parsed correctly
-    Result[HttpResponse, str] r1 = get(base + "/method")
+    Result[HttpResponse, String] r1 = get(base + "/method")
     if r1.is_ok():
         check("method", r1.unwrap().body_text == "GET")
     else:
         print("FAIL: " + r1.unwrap_error())
 
     # 2. Query string in path → split correctly
-    Result[HttpResponse, str] r2 = get(base + "/query?key=value&a=1")
+    Result[HttpResponse, String] r2 = get(base + "/query?key=value&a=1")
     if r2.is_ok():
         check("query", r2.unwrap().body_text == "key=value&a=1")
     else:
         print("FAIL: " + r2.unwrap_error())
 
     # 3. POST with Content-Length body parsed
-    Dict[str, str] post_hdrs = Dict[str, str]()
-    Result[HttpResponse, str] r3 = post(base + "/body", "hello", post_hdrs)
+    Dict[String, String] post_hdrs = Dict[String, String]()
+    Result[HttpResponse, String] r3 = post(base + "/body", "hello", post_hdrs)
     if r3.is_ok():
         check("body", r3.unwrap().body_text == "hello")
     else:
         print("FAIL: " + r3.unwrap_error())
 
     # 4. Custom header accessible in handler
-    Dict[str, str] custom_hdrs = Dict[str, str]()
+    Dict[String, String] custom_hdrs = Dict[String, String]()
     custom_hdrs.put("x-test", "myvalue")
-    Result[HttpResponse, str] r4 = get(base + "/header", custom_hdrs)
+    Result[HttpResponse, String] r4 = get(base + "/header", custom_hdrs)
     if r4.is_ok():
         check("header", r4.unwrap().body_text == "myvalue")
     else:
         print("FAIL: " + r4.unwrap_error())
 
     # 5. Header names lowercased by parser (send X-Case, server checks x-case)
-    Dict[str, str] upper_hdrs = Dict[str, str]()
+    Dict[String, String] upper_hdrs = Dict[String, String]()
     upper_hdrs.put("X-Case", "test")
-    Result[HttpResponse, str] r5 = get(base + "/lower", upper_hdrs)
+    Result[HttpResponse, String] r5 = get(base + "/lower", upper_hdrs)
     if r5.is_ok():
         check("lowercase", r5.unwrap().body_text == "lower")
     else:

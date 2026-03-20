@@ -1,4 +1,4 @@
-int process() throws str:
+int process() throws String:
     on error print("should not print")
     print("working")
     return 1

@@ -8,7 +8,7 @@
 # Construction:
 #   df_from_columns(names, cols), df_from_records(headers, rows)
 #   df_from_records_typed(headers, rows) — with type inference
-#   df_from_csv(csv_text) → Result[DataFrame, str]
+#   df_from_csv(csv_text) → Result[DataFrame, String]
 #
 # Access:
 #   df.get_column(name), df.nrows(), df.ncols(), df.head(n), df.tail(n)
@@ -58,7 +58,7 @@ from std.conv import int_to_str, float_to_str, bool_to_str, parse_int, parse_flo
 from std.math import sqrt, floor, ceil
 
 # Returns true if s represents a valid integer (optional leading -, then digits)
-bool str_is_int(str s):
+bool str_is_int(String s):
     int n = s.byte_len()
     if n == 0:
         return false
@@ -75,7 +75,7 @@ bool str_is_int(str s):
     return true
 
 # Returns true if s represents a valid float (integer or decimal)
-bool str_is_float(str s):
+bool str_is_float(String s):
     int n = s.byte_len()
     if n == 0:
         return false
@@ -87,7 +87,7 @@ bool str_is_float(str s):
     bool has_dot = false
     int i = start
     while i < n:
-        str c = s.char_at(i)
+        String c = s.char_at(i)
         if c == '.':
             if has_dot:
                 return false
@@ -107,20 +107,20 @@ struct TypedColumn[T]:
 enum Column:
     IntCol(TypedColumn[int])
     FloatCol(TypedColumn[float])
-    StrCol(TypedColumn[str])
+    StrCol(TypedColumn[String])
     BoolCol(TypedColumn[bool])
 
 struct DataFrame:
-    Dict[str, Column] columns
-    Vector[str] col_names
+    Dict[String, Column] columns
+    Vector[String] col_names
     int num_rows
 
 # ── GroupBy ──────────────────────────────────────────────────
 
 struct GroupBy:
     DataFrame source
-    str group_col
-    Dict[str, Vector[int]] groups
+    String group_col
+    Dict[String, Vector[int]] groups
 
 # ── Column Access Helpers ────────────────────────────────────
 
@@ -156,7 +156,7 @@ equip Column:
                 case vname(c):
                     return c.is_null(idx)
 
-    str value_as_str(self, int idx):
+    String value_as_str(self, int idx):
         match self:
             case IntCol(c):
                 if c.is_null(idx):
@@ -175,7 +175,7 @@ equip Column:
                     return "null"
                 return bool_to_str(c.get_val(idx))
 
-    str dtype_name(self):
+    String dtype_name(self):
         match self:
             case IntCol(_):
                 return "int"
@@ -212,14 +212,14 @@ Column col_from_floats(Vector[float] data):
         i = i + 1
     return FloatCol(TypedColumn[float](d, mask))
 
-Column col_from_strs(Vector[str] data):
-    Vector[str] d = vec_str_copy(data)
+Column col_from_strs(Vector[String] data):
+    Vector[String] d = vec_str_copy(data)
     Vector[bool] mask = Vector[bool]()
     int i = 0
     while i < data.len():
         mask.push(true)
         i = i + 1
-    return StrCol(TypedColumn[str](d, mask))
+    return StrCol(TypedColumn[String](d, mask))
 
 Column col_from_bools(Vector[bool] data):
     Vector[bool] d = vec_bool_copy(data)
@@ -234,8 +234,8 @@ Column col_from_bools(Vector[bool] data):
 Column col_ints_null(Vector[int] data, Vector[bool] mask):
     return IntCol(TypedColumn[int](vec_int_copy(data), vec_bool_copy(mask)))
 
-Column col_strs_null(Vector[str] data, Vector[bool] mask):
-    return StrCol(TypedColumn[str](vec_str_copy(data), vec_bool_copy(mask)))
+Column col_strs_null(Vector[String] data, Vector[bool] mask):
+    return StrCol(TypedColumn[String](vec_str_copy(data), vec_bool_copy(mask)))
 
 Column col_floats_null(Vector[float] data, Vector[bool] mask):
     return FloatCol(TypedColumn[float](vec_float_copy(data), vec_bool_copy(mask)))
@@ -344,12 +344,12 @@ Column col_concat(Column a, Column b):
 
 # ── D1: DataFrame Core ───────────────────────────────────────
 
-DataFrame df_from_columns(Vector[str] names, Vector[Column] cols):
-    Dict[str, Column] columns = Dict[str, Column]()
+DataFrame df_from_columns(Vector[String] names, Vector[Column] cols):
+    Dict[String, Column] columns = Dict[String, Column]()
     int nr = 0
     int i = 0
     while i < names.len():
-        str name = names.get(i).unwrap()
+        String name = names.get(i).unwrap()
         Column col = cols.get(i).unwrap()
         columns.set(name, col)
         if col.col_len() > nr:
@@ -358,13 +358,13 @@ DataFrame df_from_columns(Vector[str] names, Vector[Column] cols):
     return DataFrame(columns, vec_str_copy(names), nr)
 
 equip DataFrame:
-    Column get_column(self, str name):
+    Column get_column(self, String name):
         return self.columns.get(name).unwrap()
 
-    bool has_column(self, str name):
+    bool has_column(self, String name):
         return self.columns.has(name)
 
-    Vector[str] column_names(self):
+    Vector[String] column_names(self):
         return vec_str_copy(self.col_names)
 
     int nrows(self): self.num_rows
@@ -378,7 +378,7 @@ equip DataFrame:
         Vector[Column] new_cols = Vector[Column]()
         int i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             Column col = self.columns.get(name).unwrap()
             new_cols.push(col_slice(col, 0, end))
             i = i + 1
@@ -391,21 +391,21 @@ equip DataFrame:
         Vector[Column] new_cols = Vector[Column]()
         int i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             Column col = self.columns.get(name).unwrap()
             new_cols.push(col_slice(col, start, self.num_rows))
             i = i + 1
         return df_from_columns(self.col_names, new_cols)
 
     # Display as aligned table
-    str display(self):
+    String display(self):
         if self.col_names.len() == 0:
             return "DataFrame(empty)"
         # Collect max widths per column
         Vector[int] widths = Vector[int]()
         int i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             int w = name.byte_len()
             Column col = self.columns.get(name).unwrap()
             int j = 0
@@ -417,12 +417,12 @@ equip DataFrame:
             widths.push(w)
             i = i + 1
         # Header row
-        str out = ""
+        String out = ""
         i = 0
         while i < self.col_names.len():
             if i > 0:
                 out = out + "  "
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             int w = widths.get(i).unwrap()
             out = out + name
             int pad = w - name.byte_len()
@@ -451,9 +451,9 @@ equip DataFrame:
             while i < self.col_names.len():
                 if i > 0:
                     out = out + "  "
-                str name = self.col_names.get(i).unwrap()
+                String name = self.col_names.get(i).unwrap()
                 Column col = self.columns.get(name).unwrap()
-                str val = col.value_as_str(r)
+                String val = col.value_as_str(r)
                 int w = widths.get(i).unwrap()
                 out = out + val
                 int pad = w - val.byte_len()
@@ -469,21 +469,21 @@ equip DataFrame:
 # ── D2: Selection & Filtering ────────────────────────────────
 
 equip DataFrame:
-    DataFrame select(self, Vector[str] cols):
+    DataFrame select(self, Vector[String] cols):
         Vector[Column] new_cols = Vector[Column]()
         int i = 0
         while i < cols.len():
-            str name = cols.get(i).unwrap()
+            String name = cols.get(i).unwrap()
             new_cols.push(self.columns.get(name).unwrap())
             i = i + 1
         return df_from_columns(cols, new_cols)
 
-    DataFrame drop(self, str col_name):
-        Vector[str] new_names = Vector[str]()
+    DataFrame drop(self, String col_name):
+        Vector[String] new_names = Vector[String]()
         Vector[Column] new_cols = Vector[Column]()
         int i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             if name != col_name:
                 new_names.push(name)
                 new_cols.push(self.columns.get(name).unwrap())
@@ -500,7 +500,7 @@ equip DataFrame:
         Vector[Column] new_cols = Vector[Column]()
         int i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             Column col = self.columns.get(name).unwrap()
             new_cols.push(col_slice(col, s, e))
             i = i + 1
@@ -510,7 +510,7 @@ equip DataFrame:
         Vector[Column] new_cols = Vector[Column]()
         int i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             Column col = self.columns.get(name).unwrap()
             new_cols.push(col_filter(col, mask))
             i = i + 1
@@ -518,13 +518,13 @@ equip DataFrame:
 
     # filter_by: filter rows where col op val (val as string)
     # op: "==", "!=", "<", ">", "<=", ">="
-    DataFrame filter_by(self, str col_name, str op, str val):
+    DataFrame filter_by(self, String col_name, String op, String val):
         Column col = self.columns.get(col_name).unwrap()
         Vector[bool] mask = Vector[bool]()
         int i = 0
         match col:
             case IntCol(c):
-                Result[int, str] parsed_int = parse_int(val)
+                Result[int, String] parsed_int = parse_int(val)
                 while i < self.num_rows:
                     bool keep = false
                     if c.is_null(i):
@@ -547,7 +547,7 @@ equip DataFrame:
                     mask.push(keep)
                     i = i + 1
             case FloatCol(c):
-                Result[float, str] parsed_flt = parse_float(val)
+                Result[float, String] parsed_flt = parse_float(val)
                 while i < self.num_rows:
                     bool keep = false
                     if c.is_null(i):
@@ -573,7 +573,7 @@ equip DataFrame:
                 while i < self.num_rows:
                     bool keep = false
                     if not c.is_null(i):
-                        str sv = c.data.get(i).unwrap()
+                        String sv = c.data.get(i).unwrap()
                         if op == "==":
                             keep = sv == val
                         elif op == "!=":
@@ -592,7 +592,7 @@ equip DataFrame:
                 while i < self.num_rows:
                     bool keep = false
                     if not c.is_null(i):
-                        str sv = bool_to_str(c.data.get(i).unwrap())
+                        String sv = bool_to_str(c.data.get(i).unwrap())
                         if op == "==":
                             keep = sv == val
                         elif op == "!=":
@@ -601,11 +601,11 @@ equip DataFrame:
                     i = i + 1
         return self.filter_mask(mask)
 
-    Dict[str, str] row_as_dict(self, int idx):
-        Dict[str, str] d = Dict[str, str]()
+    Dict[String, String] row_as_dict(self, int idx):
+        Dict[String, String] d = Dict[String, String]()
         int i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             Column col = self.columns.get(name).unwrap()
             d.set(name, col.value_as_str(idx))
             i = i + 1
@@ -614,7 +614,7 @@ equip DataFrame:
 # ── D3: Aggregation ──────────────────────────────────────────
 
 equip DataFrame:
-    str df_sum(self, str col_name):
+    String df_sum(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case IntCol(c):
@@ -636,7 +636,7 @@ equip DataFrame:
             else:
                 return "N/A"
 
-    str df_mean(self, str col_name):
+    String df_mean(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case IntCol(c):
@@ -666,7 +666,7 @@ equip DataFrame:
             else:
                 return "N/A"
 
-    str df_min(self, str col_name):
+    String df_min(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case IntCol(c):
@@ -700,7 +700,7 @@ equip DataFrame:
             else:
                 return "N/A"
 
-    str df_max(self, str col_name):
+    String df_max(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case IntCol(c):
@@ -734,11 +734,11 @@ equip DataFrame:
             else:
                 return "N/A"
 
-    int df_count(self, str col_name):
+    int df_count(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
         return col.col_len() - col.null_count()
 
-    str df_std(self, str col_name):
+    String df_std(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case FloatCol(c):
@@ -787,17 +787,17 @@ equip DataFrame:
 
     # Describe: summary stats for numeric columns
     DataFrame describe(self):
-        Vector[str] stat_names = Vector[str]()
+        Vector[String] stat_names = Vector[String]()
         stat_names.push("stat")
         int i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             Column col = self.columns.get(name).unwrap()
-            str dt = col.dtype_name()
+            String dt = col.dtype_name()
             if dt == "int" or dt == "float":
                 stat_names.push(name)
             i = i + 1
-        Vector[str] stat_labels = Vector[str]()
+        Vector[String] stat_labels = Vector[String]()
         stat_labels.push("count")
         stat_labels.push("sum")
         stat_labels.push("mean")
@@ -809,8 +809,8 @@ equip DataFrame:
         out_cols.push(label_col)
         i = 1
         while i < stat_names.len():
-            str name = stat_names.get(i).unwrap()
-            Vector[str] vals = Vector[str]()
+            String name = stat_names.get(i).unwrap()
+            Vector[String] vals = Vector[String]()
             vals.push(int_to_str(self.df_count(name)))
             vals.push(self.df_sum(name))
             vals.push(self.df_mean(name))
@@ -822,28 +822,28 @@ equip DataFrame:
         return df_from_columns(stat_names, out_cols)
 
     # value_counts: count occurrences of each unique value in a column (O(n) via Dict)
-    DataFrame value_counts(self, str col_name):
+    DataFrame value_counts(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
-        Dict[str, int] count_map = Dict[str, int]()
-        Vector[str] order = Vector[str]()
+        Dict[String, int] count_map = Dict[String, int]()
+        Vector[String] order = Vector[String]()
         int i = 0
         while i < self.num_rows:
-            str sv = col.value_as_str(i)
+            String sv = col.value_as_str(i)
             if count_map.has(sv):
                 count_map.set(sv, count_map.get(sv).unwrap() + 1)
             else:
                 count_map.set(sv, 1)
                 order.push(sv)
             i = i + 1
-        Vector[str] vals = Vector[str]()
+        Vector[String] vals = Vector[String]()
         Vector[int] counts = Vector[int]()
         i = 0
         while i < order.len():
-            str key = order.get(i).unwrap()
+            String key = order.get(i).unwrap()
             vals.push(key)
             counts.push(count_map.get(key).unwrap())
             i = i + 1
-        Vector[str] col_keys = Vector[str]()
+        Vector[String] col_keys = Vector[String]()
         col_keys.push(col_name)
         col_keys.push("count")
         Vector[Column] out_cols = Vector[Column]()
@@ -881,11 +881,11 @@ int col_compare(Column col, int ia, int ib):
                 return 1
             return 0
         case StrCol(c):
-            str va = c.data.get(ia).unwrap()
-            str vb = c.data.get(ib).unwrap()
+            String va = c.data.get(ia).unwrap()
+            String vb = c.data.get(ib).unwrap()
             # Try numeric comparison for string columns with numeric values
-            Result[float, str] fa = parse_float(va)
-            Result[float, str] fb = parse_float(vb)
+            Result[float, String] fa = parse_float(va)
+            Result[float, String] fb = parse_float(vb)
             if fa.is_ok() and fb.is_ok():
                 float fva = fa.unwrap()
                 float fvb = fb.unwrap()
@@ -963,7 +963,7 @@ Vector[int] merge_sort_idxs(Vector[int] idxs, Column col, bool ascending):
 # ── D4: Transformation ───────────────────────────────────────
 
 equip DataFrame:
-    DataFrame sort_by(self, str col_name, bool ascending):
+    DataFrame sort_by(self, String col_name, bool ascending):
         Column col = self.columns.get(col_name).unwrap()
         Vector[int] idxs = Vector[int]()
         int i = 0
@@ -974,30 +974,30 @@ equip DataFrame:
         Vector[Column] new_cols = Vector[Column]()
         i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             Column src = self.columns.get(name).unwrap()
             new_cols.push(col_gather(src, sorted_idxs))
             i = i + 1
         return df_from_columns(self.col_names, new_cols)
 
-    DataFrame add_column(self, str name, Column col):
-        Vector[str] new_names = vec_str_copy(self.col_names)
+    DataFrame add_column(self, String name, Column col):
+        Vector[String] new_names = vec_str_copy(self.col_names)
         new_names.push(name)
         Vector[Column] new_cols = Vector[Column]()
         int i = 0
         while i < self.col_names.len():
-            str n = self.col_names.get(i).unwrap()
+            String n = self.col_names.get(i).unwrap()
             new_cols.push(self.columns.get(n).unwrap())
             i = i + 1
         new_cols.push(col)
         return df_from_columns(new_names, new_cols)
 
     # Replace a column at its original position (preserves column order)
-    DataFrame replace_column(self, str name, Column col):
+    DataFrame replace_column(self, String name, Column col):
         Vector[Column] new_cols = Vector[Column]()
         int i = 0
         while i < self.col_names.len():
-            str n = self.col_names.get(i).unwrap()
+            String n = self.col_names.get(i).unwrap()
             if n == name:
                 new_cols.push(col)
             else:
@@ -1005,7 +1005,7 @@ equip DataFrame:
             i = i + 1
         return df_from_columns(self.col_names, new_cols)
 
-    DataFrame apply_int(self, str col_name, int(int) f):
+    DataFrame apply_int(self, String col_name, int(int) f):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case IntCol(c):
@@ -1024,7 +1024,7 @@ equip DataFrame:
             else:
                 return self.df_slice(0, self.num_rows)
 
-    DataFrame apply_float(self, str col_name, float(float) f):
+    DataFrame apply_float(self, String col_name, float(float) f):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case FloatCol(c):
@@ -1043,11 +1043,11 @@ equip DataFrame:
             else:
                 return self.df_slice(0, self.num_rows)
 
-    DataFrame apply_str(self, str col_name, str(str) f):
+    DataFrame apply_str(self, String col_name, str(String) f):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case StrCol(c):
-                Vector[str] new_data = Vector[str]()
+                Vector[String] new_data = Vector[String]()
                 Vector[bool] new_mask = Vector[bool]()
                 int i = 0
                 while i < c.data.len():
@@ -1058,11 +1058,11 @@ equip DataFrame:
                         new_data.push("")
                         new_mask.push(false)
                     i = i + 1
-                return self.replace_column(col_name, StrCol(TypedColumn[str](new_data, new_mask)))
+                return self.replace_column(col_name, StrCol(TypedColumn[String](new_data, new_mask)))
             else:
                 return self.df_slice(0, self.num_rows)
 
-    DataFrame fillna_int(self, str col_name, int val):
+    DataFrame fillna_int(self, String col_name, int val):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case IntCol(c):
@@ -1080,7 +1080,7 @@ equip DataFrame:
             else:
                 return self.df_slice(0, self.num_rows)
 
-    DataFrame fillna_float(self, str col_name, float val):
+    DataFrame fillna_float(self, String col_name, float val):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case FloatCol(c):
@@ -1098,11 +1098,11 @@ equip DataFrame:
             else:
                 return self.df_slice(0, self.num_rows)
 
-    DataFrame fillna_str(self, str col_name, str val):
+    DataFrame fillna_str(self, String col_name, String val):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case StrCol(c):
-                Vector[str] new_data = Vector[str]()
+                Vector[String] new_data = Vector[String]()
                 Vector[bool] new_mask = Vector[bool]()
                 int i = 0
                 while i < c.data.len():
@@ -1112,7 +1112,7 @@ equip DataFrame:
                         new_data.push(val)
                     new_mask.push(true)
                     i = i + 1
-                return self.replace_column(col_name, StrCol(TypedColumn[str](new_data, new_mask)))
+                return self.replace_column(col_name, StrCol(TypedColumn[String](new_data, new_mask)))
             else:
                 return self.df_slice(0, self.num_rows)
 
@@ -1123,7 +1123,7 @@ equip DataFrame:
             bool row_ok = true
             int j = 0
             while j < self.col_names.len():
-                str name = self.col_names.get(j).unwrap()
+                String name = self.col_names.get(j).unwrap()
                 Column col = self.columns.get(name).unwrap()
                 if col.is_null_at(i):
                     row_ok = false
@@ -1135,12 +1135,12 @@ equip DataFrame:
 
 # ── D5: GroupBy & Joins ──────────────────────────────────────
 
-GroupBy df_group_by(DataFrame df, str col):
-    Dict[str, Vector[int]] groups = Dict[str, Vector[int]]()
+GroupBy df_group_by(DataFrame df, String col):
+    Dict[String, Vector[int]] groups = Dict[String, Vector[int]]()
     Column col_data = df.columns.get(col).unwrap()
     int i = 0
     while i < df.num_rows:
-        str key = col_data.value_as_str(i)
+        String key = col_data.value_as_str(i)
         if groups.has(key):
             Vector[int] existing = groups.get(key).unwrap()
             existing.push(i)
@@ -1155,17 +1155,17 @@ GroupBy df_group_by(DataFrame df, str col):
 equip GroupBy:
     # Aggregate a target column by op (sum/mean/count/min/max)
     # Produces typed output: count→int, sum/min/max→preserve source type, mean→float
-    DataFrame agg(self, str target_col, str op):
-        Vector[str] keys = self.groups.keys()
-        Vector[str] key_vals = Vector[str]()
+    DataFrame agg(self, String target_col, String op):
+        Vector[String] keys = self.groups.keys()
+        Vector[String] key_vals = Vector[String]()
         Column src_col = self.source.columns.get(target_col).unwrap()
-        str dt = src_col.dtype_name()
+        String dt = src_col.dtype_name()
         # Collect aggregated values per group
         Vector[int] int_results = Vector[int]()
         Vector[float] float_results = Vector[float]()
         int i = 0
         while i < keys.len():
-            str key = keys.get(i).unwrap()
+            String key = keys.get(i).unwrap()
             key_vals.push(key)
             Vector[int] row_idxs = self.groups.get(key).unwrap()
             if op == "count":
@@ -1239,7 +1239,7 @@ equip GroupBy:
                     else:
                         float_results.push(0.0)
             i = i + 1
-        Vector[str] names = Vector[str]()
+        Vector[String] names = Vector[String]()
         names.push(self.group_col)
         names.push(target_col + "_" + op)
         Vector[Column] cols = Vector[Column]()
@@ -1254,14 +1254,14 @@ equip GroupBy:
             cols.push(col_from_floats(float_results))
         return df_from_columns(names, cols)
 
-DataFrame df_inner_join(DataFrame left, DataFrame right, str on):
+DataFrame df_inner_join(DataFrame left, DataFrame right, String on):
     Column lc = left.columns.get(on).unwrap()
     Column rc = right.columns.get(on).unwrap()
     # Build right index: value → list of row indices
-    Dict[str, Vector[int]] right_idx = Dict[str, Vector[int]]()
+    Dict[String, Vector[int]] right_idx = Dict[String, Vector[int]]()
     int i = 0
     while i < right.num_rows:
-        str key = rc.value_as_str(i)
+        String key = rc.value_as_str(i)
         if right_idx.has(key):
             right_idx.get(key).unwrap().push(i)
         else:
@@ -1274,7 +1274,7 @@ DataFrame df_inner_join(DataFrame left, DataFrame right, str on):
     Vector[int] right_rows = Vector[int]()
     i = 0
     while i < left.num_rows:
-        str key = lc.value_as_str(i)
+        String key = lc.value_as_str(i)
         if right_idx.has(key):
             Vector[int] rs = vec_int_copy(right_idx.get(key).unwrap())
             int j = 0
@@ -1284,12 +1284,12 @@ DataFrame df_inner_join(DataFrame left, DataFrame right, str on):
                 j = j + 1
         i = i + 1
     # Build output columns using col_gather (preserves types and nulls)
-    Vector[str] out_names = Vector[str]()
+    Vector[String] out_names = Vector[String]()
     Vector[Column] out_cols = Vector[Column]()
     # Left columns
     i = 0
     while i < left.col_names.len():
-        str name = left.col_names.get(i).unwrap()
+        String name = left.col_names.get(i).unwrap()
         out_names.push(name)
         Column src = left.columns.get(name).unwrap()
         out_cols.push(col_gather(src, left_rows))
@@ -1297,7 +1297,7 @@ DataFrame df_inner_join(DataFrame left, DataFrame right, str on):
     # Right columns (except join key)
     i = 0
     while i < right.col_names.len():
-        str name = right.col_names.get(i).unwrap()
+        String name = right.col_names.get(i).unwrap()
         if name != on:
             out_names.push(name)
             Column src = right.columns.get(name).unwrap()
@@ -1309,7 +1309,7 @@ DataFrame df_concat(DataFrame a, DataFrame b):
     Vector[Column] new_cols = Vector[Column]()
     int i = 0
     while i < a.col_names.len():
-        str name = a.col_names.get(i).unwrap()
+        String name = a.col_names.get(i).unwrap()
         Column ca = a.columns.get(name).unwrap()
         Column cb = b.columns.get(name).unwrap()
         new_cols.push(col_concat(ca, cb))
@@ -1318,17 +1318,17 @@ DataFrame df_concat(DataFrame a, DataFrame b):
 
 # ── D6: I/O ──────────────────────────────────────────────────
 
-DataFrame df_from_records(Vector[str] headers, Vector[Vector[str]] rows):
+DataFrame df_from_records(Vector[String] headers, Vector[Vector[String]] rows):
     int ncols = headers.len()
     int nrows = rows.len()
     Vector[Column] cols = Vector[Column]()
     int ci = 0
     while ci < ncols:
-        Vector[str] col_vals = Vector[str]()
+        Vector[String] col_vals = Vector[String]()
         int ri = 0
         while ri < nrows:
-            Vector[str] row = rows.get(ri).unwrap()
-            str val = ""
+            Vector[String] row = rows.get(ri).unwrap()
+            String val = ""
             if ci < row.len():
                 val = row.get(ci).unwrap()
             col_vals.push(val)
@@ -1337,14 +1337,14 @@ DataFrame df_from_records(Vector[str] headers, Vector[Vector[str]] rows):
         ci = ci + 1
     return df_from_columns(headers, cols)
 
-Result[DataFrame, str] df_from_csv(str csv_text):
+Result[DataFrame, String] df_from_csv(String csv_text):
     # Simple CSV parser: split by newlines then by commas
-    Vector[str] lines = csv_text.split("\n")
+    Vector[String] lines = csv_text.split("\n")
     if lines.len() == 0:
         return Error("empty CSV")
     # Remove trailing empty lines
     while lines.len() > 0:
-        str last = lines.get(lines.len() - 1).unwrap()
+        String last = lines.get(lines.len() - 1).unwrap()
         if last == "" or last == "\r":
             lines.pop()
         else:
@@ -1352,29 +1352,29 @@ Result[DataFrame, str] df_from_csv(str csv_text):
     if lines.len() == 0:
         return Error("empty CSV after stripping")
     # Parse header
-    str header_line = lines.get(0).unwrap()
-    Vector[str] headers = header_line.split(",")
+    String header_line = lines.get(0).unwrap()
+    Vector[String] headers = header_line.split(",")
     # Trim whitespace from headers
-    Vector[str] clean_headers = Vector[str]()
+    Vector[String] clean_headers = Vector[String]()
     int i = 0
     while i < headers.len():
         clean_headers.push(headers.get(i).unwrap().trim())
         i = i + 1
     # Parse data rows
-    Vector[Vector[str]] rows = Vector[Vector[str]]()
+    Vector[Vector[String]] rows = Vector[Vector[String]]()
     int r = 1
     while r < lines.len():
-        str line = lines.get(r).unwrap().trim()
+        String line = lines.get(r).unwrap().trim()
         if line != "":
-            Vector[str] fields = line.split(",")
-            Vector[str] clean_fields = Vector[str]()
+            Vector[String] fields = line.split(",")
+            Vector[String] clean_fields = Vector[String]()
             int fi = 0
             while fi < fields.len():
                 clean_fields.push(fields.get(fi).unwrap().trim())
                 fi = fi + 1
             rows.push(clean_fields)
         r = r + 1
-    # Infer column types: try int, then float, default to str
+    # Infer column types: try int, then float, default to String
     int ncols = clean_headers.len()
     int nrows = rows.len()
     Vector[Column] cols = Vector[Column]()
@@ -1385,8 +1385,8 @@ Result[DataFrame, str] df_from_csv(str csv_text):
         bool all_float = true
         int ri = 0
         while ri < nrows:
-            Vector[str] row = rows.get(ri).unwrap()
-            str val = ""
+            Vector[String] row = rows.get(ri).unwrap()
+            String val = ""
             if i < row.len():
                 val = row.get(i).unwrap()
             if val != "" and val != "null" and val != "N/A":
@@ -1400,8 +1400,8 @@ Result[DataFrame, str] df_from_csv(str csv_text):
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[str] row = rows.get(ri).unwrap()
-                str val = ""
+                Vector[String] row = rows.get(ri).unwrap()
+                String val = ""
                 if i < row.len():
                     val = row.get(i).unwrap()
                 if val == "" or val == "null" or val == "N/A":
@@ -1417,8 +1417,8 @@ Result[DataFrame, str] df_from_csv(str csv_text):
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[str] row = rows.get(ri).unwrap()
-                str val = ""
+                Vector[String] row = rows.get(ri).unwrap()
+                String val = ""
                 if i < row.len():
                     val = row.get(i).unwrap()
                 if val == "" or val == "null" or val == "N/A":
@@ -1430,12 +1430,12 @@ Result[DataFrame, str] df_from_csv(str csv_text):
                 ri = ri + 1
             cols.push(FloatCol(TypedColumn[float](data, mask)))
         else:
-            Vector[str] data = Vector[str]()
+            Vector[String] data = Vector[String]()
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[str] row = rows.get(ri).unwrap()
-                str val = ""
+                Vector[String] row = rows.get(ri).unwrap()
+                String val = ""
                 if i < row.len():
                     val = row.get(i).unwrap()
                 if val == "" or val == "null" or val == "N/A":
@@ -1445,12 +1445,12 @@ Result[DataFrame, str] df_from_csv(str csv_text):
                     data.push(val)
                     mask.push(true)
                 ri = ri + 1
-            cols.push(StrCol(TypedColumn[str](data, mask)))
+            cols.push(StrCol(TypedColumn[String](data, mask)))
         i = i + 1
     return Ok(df_from_columns(clean_headers, cols))
 
-str df_to_csv(DataFrame df):
-    str out = ""
+String df_to_csv(DataFrame df):
+    String out = ""
     # Header
     int i = 0
     while i < df.col_names.len():
@@ -1466,9 +1466,9 @@ str df_to_csv(DataFrame df):
         while i < df.col_names.len():
             if i > 0:
                 out = out + ","
-            str name = df.col_names.get(i).unwrap()
+            String name = df.col_names.get(i).unwrap()
             Column col = df.columns.get(name).unwrap()
-            str val = col.value_as_str(r)
+            String val = col.value_as_str(r)
             if val == "null":
                 val = ""
             out = out + val
@@ -1481,12 +1481,12 @@ str df_to_csv(DataFrame df):
 
 equip DataFrame:
     # rename_column: rename a single column
-    DataFrame rename_column(self, str old_name, str new_name):
-        Vector[str] new_names = Vector[str]()
+    DataFrame rename_column(self, String old_name, String new_name):
+        Vector[String] new_names = Vector[String]()
         Vector[Column] new_cols = Vector[Column]()
         int i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             if name == old_name:
                 new_names.push(new_name)
             else:
@@ -1497,16 +1497,16 @@ equip DataFrame:
 
     # dtypes: return a DataFrame with columns "column" and "dtype"
     DataFrame dtypes(self):
-        Vector[str] col_names_out = Vector[str]()
-        Vector[str] dtype_vals = Vector[str]()
+        Vector[String] col_names_out = Vector[String]()
+        Vector[String] dtype_vals = Vector[String]()
         int i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             col_names_out.push(name)
             Column col = self.columns.get(name).unwrap()
             dtype_vals.push(col.dtype_name())
             i = i + 1
-        Vector[str] out_names = Vector[str]()
+        Vector[String] out_names = Vector[String]()
         out_names.push("column")
         out_names.push("dtype")
         Vector[Column] out_cols = Vector[Column]()
@@ -1515,41 +1515,41 @@ equip DataFrame:
         return df_from_columns(out_names, out_cols)
 
     # isna: boolean mask column where true means null
-    DataFrame isna(self, str col_name):
+    DataFrame isna(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
         Vector[bool] result = Vector[bool]()
         int i = 0
         while i < self.num_rows:
             result.push(col.is_null_at(i))
             i = i + 1
-        Vector[str] out_names = Vector[str]()
+        Vector[String] out_names = Vector[String]()
         out_names.push(col_name + "_isna")
         Vector[Column] out_cols = Vector[Column]()
         out_cols.push(col_from_bools(result))
         return df_from_columns(out_names, out_cols)
 
     # notna: boolean mask column where true means not null
-    DataFrame notna(self, str col_name):
+    DataFrame notna(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
         Vector[bool] result = Vector[bool]()
         int i = 0
         while i < self.num_rows:
             result.push(not col.is_null_at(i))
             i = i + 1
-        Vector[str] out_names = Vector[str]()
+        Vector[String] out_names = Vector[String]()
         out_names.push(col_name + "_notna")
         Vector[Column] out_cols = Vector[Column]()
         out_cols.push(col_from_bools(result))
         return df_from_columns(out_names, out_cols)
 
     # df_unique: return DataFrame with unique values of a column
-    DataFrame df_unique(self, str col_name):
+    DataFrame df_unique(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
-        Dict[str, bool] seen = Dict[str, bool]()
+        Dict[String, bool] seen = Dict[String, bool]()
         Vector[int] keep_idxs = Vector[int]()
         int i = 0
         while i < self.num_rows:
-            str sv = col.value_as_str(i)
+            String sv = col.value_as_str(i)
             if not seen.has(sv):
                 seen.set(sv, true)
                 keep_idxs.push(i)
@@ -1557,26 +1557,26 @@ equip DataFrame:
         Vector[Column] new_cols = Vector[Column]()
         i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             Column src = self.columns.get(name).unwrap()
             new_cols.push(col_gather(src, keep_idxs))
             i = i + 1
         return df_from_columns(self.col_names, new_cols)
 
     # df_nunique: count of unique values in a column
-    int df_nunique(self, str col_name):
+    int df_nunique(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
-        Dict[str, bool] seen = Dict[str, bool]()
+        Dict[String, bool] seen = Dict[String, bool]()
         int i = 0
         while i < self.num_rows:
-            str sv = col.value_as_str(i)
+            String sv = col.value_as_str(i)
             if not seen.has(sv):
                 seen.set(sv, true)
             i = i + 1
         return seen.keys().len()
 
     # median: middle value of a numeric column
-    str df_median(self, str col_name):
+    String df_median(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case IntCol(c):
@@ -1637,7 +1637,7 @@ equip DataFrame:
                 return "N/A"
 
     # variance (population): var = sum((x - mean)^2) / n
-    str df_var(self, str col_name):
+    String df_var(self, String col_name):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case FloatCol(c):
@@ -1685,12 +1685,12 @@ equip DataFrame:
                 return "N/A"
 
     # nlargest: top n rows by column value
-    DataFrame nlargest(self, int n, str col_name):
+    DataFrame nlargest(self, int n, String col_name):
         DataFrame sorted_df = self.sort_by(col_name, false)
         return sorted_df.head(n)
 
     # nsmallest: bottom n rows by column value
-    DataFrame nsmallest(self, int n, str col_name):
+    DataFrame nsmallest(self, int n, String col_name):
         DataFrame sorted_df = self.sort_by(col_name, true)
         return sorted_df.head(n)
 
@@ -1725,7 +1725,7 @@ equip DataFrame:
         Vector[Column] new_cols = Vector[Column]()
         i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             Column src = self.columns.get(name).unwrap()
             new_cols.push(col_gather(src, sample_idxs))
             i = i + 1
@@ -1736,7 +1736,7 @@ equip DataFrame:
         return self.sample(self.num_rows, seed)
 
     # sort_by_multi: sort by multiple columns
-    DataFrame sort_by_multi(self, Vector[str] col_names_list, Vector[bool] ascending_list):
+    DataFrame sort_by_multi(self, Vector[String] col_names_list, Vector[bool] ascending_list):
         Vector[int] idxs = Vector[int]()
         int i = 0
         while i < self.num_rows:
@@ -1746,7 +1746,7 @@ equip DataFrame:
         Vector[Column] sort_cols = Vector[Column]()
         i = 0
         while i < col_names_list.len():
-            str cn = col_names_list.get(i).unwrap()
+            String cn = col_names_list.get(i).unwrap()
             sort_cols.push(self.columns.get(cn).unwrap())
             i = i + 1
         # Bottom-up merge sort with multi-key comparison
@@ -1812,14 +1812,14 @@ equip DataFrame:
         Vector[Column] new_cols = Vector[Column]()
         i = 0
         while i < self.col_names.len():
-            str name = self.col_names.get(i).unwrap()
+            String name = self.col_names.get(i).unwrap()
             Column src = self.columns.get(name).unwrap()
             new_cols.push(col_gather(src, idxs))
             i = i + 1
         return df_from_columns(self.col_names, new_cols)
 
     # Column arithmetic: add two numeric columns element-wise
-    DataFrame col_add(self, str col_a, str col_b, str result_name):
+    DataFrame col_add(self, String col_a, String col_b, String result_name):
         Column a = self.columns.get(col_a).unwrap()
         Column b = self.columns.get(col_b).unwrap()
         match a:
@@ -1865,7 +1865,7 @@ equip DataFrame:
                 return self.df_slice(0, self.num_rows)
 
     # Column arithmetic: subtract two numeric columns element-wise
-    DataFrame col_sub(self, str col_a, str col_b, str result_name):
+    DataFrame col_sub(self, String col_a, String col_b, String result_name):
         Column a = self.columns.get(col_a).unwrap()
         Column b = self.columns.get(col_b).unwrap()
         match a:
@@ -1911,7 +1911,7 @@ equip DataFrame:
                 return self.df_slice(0, self.num_rows)
 
     # Column arithmetic: multiply two numeric columns element-wise
-    DataFrame col_mul(self, str col_a, str col_b, str result_name):
+    DataFrame col_mul(self, String col_a, String col_b, String result_name):
         Column a = self.columns.get(col_a).unwrap()
         Column b = self.columns.get(col_b).unwrap()
         match a:
@@ -1958,14 +1958,14 @@ equip DataFrame:
 
 # ── D8: Join Variants ────────────────────────────────────────
 
-DataFrame df_left_join(DataFrame left, DataFrame right, str on):
+DataFrame df_left_join(DataFrame left, DataFrame right, String on):
     Column lc = left.columns.get(on).unwrap()
     Column rc = right.columns.get(on).unwrap()
     # Build right index
-    Dict[str, Vector[int]] right_idx = Dict[str, Vector[int]]()
+    Dict[String, Vector[int]] right_idx = Dict[String, Vector[int]]()
     int i = 0
     while i < right.num_rows:
-        str key = rc.value_as_str(i)
+        String key = rc.value_as_str(i)
         if right_idx.has(key):
             right_idx.get(key).unwrap().push(i)
         else:
@@ -1978,7 +1978,7 @@ DataFrame df_left_join(DataFrame left, DataFrame right, str on):
     Vector[int] right_rows = Vector[int]()
     i = 0
     while i < left.num_rows:
-        str key = lc.value_as_str(i)
+        String key = lc.value_as_str(i)
         if right_idx.has(key):
             Vector[int] rs = vec_int_copy(right_idx.get(key).unwrap())
             int j = 0
@@ -1991,12 +1991,12 @@ DataFrame df_left_join(DataFrame left, DataFrame right, str on):
             right_rows.push(-1)
         i = i + 1
     # Build output columns
-    Vector[str] out_names = Vector[str]()
+    Vector[String] out_names = Vector[String]()
     Vector[Column] out_cols = Vector[Column]()
     # Left columns via gather
     i = 0
     while i < left.col_names.len():
-        str name = left.col_names.get(i).unwrap()
+        String name = left.col_names.get(i).unwrap()
         out_names.push(name)
         Column src = left.columns.get(name).unwrap()
         out_cols.push(col_gather(src, left_rows))
@@ -2004,7 +2004,7 @@ DataFrame df_left_join(DataFrame left, DataFrame right, str on):
     # Right columns (except join key) — with null for unmatched
     i = 0
     while i < right.col_names.len():
-        str name = right.col_names.get(i).unwrap()
+        String name = right.col_names.get(i).unwrap()
         if name != on:
             out_names.push(name)
             Column src = right.columns.get(name).unwrap()
@@ -2012,17 +2012,17 @@ DataFrame df_left_join(DataFrame left, DataFrame right, str on):
         i = i + 1
     return df_from_columns(out_names, out_cols)
 
-DataFrame df_right_join(DataFrame left, DataFrame right, str on):
+DataFrame df_right_join(DataFrame left, DataFrame right, String on):
     return df_left_join(right, left, on)
 
-DataFrame df_outer_join(DataFrame left, DataFrame right, str on):
+DataFrame df_outer_join(DataFrame left, DataFrame right, String on):
     Column lc = left.columns.get(on).unwrap()
     Column rc = right.columns.get(on).unwrap()
     # Build right index
-    Dict[str, Vector[int]] right_idx = Dict[str, Vector[int]]()
+    Dict[String, Vector[int]] right_idx = Dict[String, Vector[int]]()
     int i = 0
     while i < right.num_rows:
-        str key = rc.value_as_str(i)
+        String key = rc.value_as_str(i)
         if right_idx.has(key):
             right_idx.get(key).unwrap().push(i)
         else:
@@ -2031,12 +2031,12 @@ DataFrame df_outer_join(DataFrame left, DataFrame right, str on):
             right_idx.set(key, rows)
         i = i + 1
     # Track which right rows were matched
-    Dict[str, bool] right_matched = Dict[str, bool]()
+    Dict[String, bool] right_matched = Dict[String, bool]()
     Vector[int] left_rows = Vector[int]()
     Vector[int] right_rows = Vector[int]()
     i = 0
     while i < left.num_rows:
-        str key = lc.value_as_str(i)
+        String key = lc.value_as_str(i)
         if right_idx.has(key):
             Vector[int] rs = vec_int_copy(right_idx.get(key).unwrap())
             int j = 0
@@ -2058,18 +2058,18 @@ DataFrame df_outer_join(DataFrame left, DataFrame right, str on):
             right_rows.push(i)
         i = i + 1
     # Build output
-    Vector[str] out_names = Vector[str]()
+    Vector[String] out_names = Vector[String]()
     Vector[Column] out_cols = Vector[Column]()
     i = 0
     while i < left.col_names.len():
-        str name = left.col_names.get(i).unwrap()
+        String name = left.col_names.get(i).unwrap()
         out_names.push(name)
         Column src = left.columns.get(name).unwrap()
         out_cols.push(col_gather_nullable(src, left_rows))
         i = i + 1
     i = 0
     while i < right.col_names.len():
-        str name = right.col_names.get(i).unwrap()
+        String name = right.col_names.get(i).unwrap()
         if name != on:
             out_names.push(name)
             Column src = right.columns.get(name).unwrap()
@@ -2088,18 +2088,18 @@ DataFrame df_cross_join(DataFrame left, DataFrame right):
             right_rows.push(j)
             j = j + 1
         i = i + 1
-    Vector[str] out_names = Vector[str]()
+    Vector[String] out_names = Vector[String]()
     Vector[Column] out_cols = Vector[Column]()
     i = 0
     while i < left.col_names.len():
-        str name = left.col_names.get(i).unwrap()
+        String name = left.col_names.get(i).unwrap()
         out_names.push(name)
         Column src = left.columns.get(name).unwrap()
         out_cols.push(col_gather(src, left_rows))
         i = i + 1
     i = 0
     while i < right.col_names.len():
-        str name = right.col_names.get(i).unwrap()
+        String name = right.col_names.get(i).unwrap()
         out_names.push(name)
         Column src = right.columns.get(name).unwrap()
         out_cols.push(col_gather(src, right_rows))
@@ -2110,18 +2110,18 @@ DataFrame df_cross_join(DataFrame left, DataFrame right):
 
 struct MultiGroupBy:
     DataFrame source
-    Vector[str] group_cols
-    Dict[str, Vector[int]] groups
+    Vector[String] group_cols
+    Dict[String, Vector[int]] groups
 
-MultiGroupBy df_group_by_multi(DataFrame df, Vector[str] cols):
-    Dict[str, Vector[int]] groups = Dict[str, Vector[int]]()
+MultiGroupBy df_group_by_multi(DataFrame df, Vector[String] cols):
+    Dict[String, Vector[int]] groups = Dict[String, Vector[int]]()
     int i = 0
     while i < df.num_rows:
         # Build composite key from multiple columns
-        str key = ""
+        String key = ""
         int ci = 0
         while ci < cols.len():
-            str col_name = cols.get(ci).unwrap()
+            String col_name = cols.get(ci).unwrap()
             Column col = df.columns.get(col_name).unwrap()
             if ci > 0:
                 key = key + "~"
@@ -2137,26 +2137,26 @@ MultiGroupBy df_group_by_multi(DataFrame df, Vector[str] cols):
     return MultiGroupBy(df, cols, groups)
 
 equip MultiGroupBy:
-    DataFrame agg(self, str target_col, str op):
-        Vector[str] keys = self.groups.keys()
+    DataFrame agg(self, String target_col, String op):
+        Vector[String] keys = self.groups.keys()
         Column src_col = self.source.columns.get(target_col).unwrap()
-        str dt = src_col.dtype_name()
+        String dt = src_col.dtype_name()
         # Build group key columns
         int num_group_cols = self.group_cols.len()
-        Vector[Vector[str]] key_columns = Vector[Vector[str]]()
+        Vector[Vector[String]] key_columns = Vector[Vector[String]]()
         int gi = 0
         while gi < num_group_cols:
-            key_columns.push(Vector[str]())
+            key_columns.push(Vector[String]())
             gi = gi + 1
         Vector[int] int_results = Vector[int]()
         Vector[float] float_results = Vector[float]()
         int i = 0
         while i < keys.len():
-            str composite_key = keys.get(i).unwrap()
-            Vector[str] parts = composite_key.split("~")
+            String composite_key = keys.get(i).unwrap()
+            Vector[String] parts = composite_key.split("~")
             gi = 0
             while gi < num_group_cols:
-                str part = ""
+                String part = ""
                 if gi < parts.len():
                     part = parts.get(gi).unwrap()
                 key_columns.get(gi).unwrap().push(part)
@@ -2233,7 +2233,7 @@ equip MultiGroupBy:
                     else:
                         float_results.push(0.0)
             i = i + 1
-        Vector[str] out_names = Vector[str]()
+        Vector[String] out_names = Vector[String]()
         Vector[Column] out_cols = Vector[Column]()
         gi = 0
         while gi < num_group_cols:
@@ -2253,7 +2253,7 @@ equip MultiGroupBy:
 
 # ── D10: Type-inferring df_from_records ──────────────────────
 
-DataFrame df_from_records_typed(Vector[str] headers, Vector[Vector[str]] rows):
+DataFrame df_from_records_typed(Vector[String] headers, Vector[Vector[String]] rows):
     int ncols = headers.len()
     int nrows = rows.len()
     Vector[Column] cols = Vector[Column]()
@@ -2265,8 +2265,8 @@ DataFrame df_from_records_typed(Vector[str] headers, Vector[Vector[str]] rows):
         bool all_bool = true
         int ri = 0
         while ri < nrows:
-            Vector[str] row = rows.get(ri).unwrap()
-            str val = ""
+            Vector[String] row = rows.get(ri).unwrap()
+            String val = ""
             if ci < row.len():
                 val = row.get(ci).unwrap()
             if val != "" and val != "null" and val != "N/A":
@@ -2282,8 +2282,8 @@ DataFrame df_from_records_typed(Vector[str] headers, Vector[Vector[str]] rows):
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[str] row = rows.get(ri).unwrap()
-                str val = ""
+                Vector[String] row = rows.get(ri).unwrap()
+                String val = ""
                 if ci < row.len():
                     val = row.get(ci).unwrap()
                 if val == "" or val == "null" or val == "N/A":
@@ -2299,8 +2299,8 @@ DataFrame df_from_records_typed(Vector[str] headers, Vector[Vector[str]] rows):
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[str] row = rows.get(ri).unwrap()
-                str val = ""
+                Vector[String] row = rows.get(ri).unwrap()
+                String val = ""
                 if ci < row.len():
                     val = row.get(ci).unwrap()
                 if val == "" or val == "null" or val == "N/A":
@@ -2316,8 +2316,8 @@ DataFrame df_from_records_typed(Vector[str] headers, Vector[Vector[str]] rows):
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[str] row = rows.get(ri).unwrap()
-                str val = ""
+                Vector[String] row = rows.get(ri).unwrap()
+                String val = ""
                 if ci < row.len():
                     val = row.get(ci).unwrap()
                 if val == "" or val == "null" or val == "N/A":
@@ -2329,12 +2329,12 @@ DataFrame df_from_records_typed(Vector[str] headers, Vector[Vector[str]] rows):
                 ri = ri + 1
             cols.push(BoolCol(TypedColumn[bool](data, mask)))
         else:
-            Vector[str] data = Vector[str]()
+            Vector[String] data = Vector[String]()
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[str] row = rows.get(ri).unwrap()
-                str val = ""
+                Vector[String] row = rows.get(ri).unwrap()
+                String val = ""
                 if ci < row.len():
                     val = row.get(ci).unwrap()
                 if val == "" or val == "null" or val == "N/A":
@@ -2344,7 +2344,7 @@ DataFrame df_from_records_typed(Vector[str] headers, Vector[Vector[str]] rows):
                     data.push(val)
                     mask.push(true)
                 ri = ri + 1
-            cols.push(StrCol(TypedColumn[str](data, mask)))
+            cols.push(StrCol(TypedColumn[String](data, mask)))
         ci = ci + 1
     return df_from_columns(headers, cols)
 
@@ -2358,12 +2358,12 @@ Column col_gather_nullable(Column col, Vector[int] idxs):
         case FloatCol(c):
             return FloatCol(col_gather_nullable_inner[float](c, idxs, 0.0))
         case StrCol(c):
-            return StrCol(col_gather_nullable_inner[str](c, idxs, ""))
+            return StrCol(col_gather_nullable_inner[String](c, idxs, ""))
         case BoolCol(c):
             return BoolCol(col_gather_nullable_inner[bool](c, idxs, false))
 
-Vector[str] vec_str_copy(Vector[str] v):
-    Vector[str] out = Vector[str]()
+Vector[String] vec_str_copy(Vector[String] v):
+    Vector[String] out = Vector[String]()
     int i = 0
     while i < v.len():
         out.push(v.get(i).unwrap())
@@ -2402,18 +2402,18 @@ DataFrame df_copy(DataFrame df):
     Vector[Column] cols = Vector[Column]()
     int i = 0
     while i < df.col_names.len():
-        str name = df.col_names.get(i).unwrap()
+        String name = df.col_names.get(i).unwrap()
         cols.push(df.get_column(name))
         i = i + 1
     return df_from_columns(df.col_names, cols)
 
 # Internal: rebuild df with col_name replaced by new_col.
 # new_col is a parameter so no `!` operator is needed at call sites.
-DataFrame df_replace_col(DataFrame df, str col_name, Column new_col):
+DataFrame df_replace_col(DataFrame df, String col_name, Column new_col):
     Vector[Column] new_cols = Vector[Column]()
     int i = 0
     while i < df.col_names.len():
-        str name = df.col_names.get(i).unwrap()
+        String name = df.col_names.get(i).unwrap()
         if name == col_name:
             new_cols.push(new_col)
         else:
@@ -2426,7 +2426,7 @@ DataFrame df_replace_col(DataFrame df, str col_name, Column new_col):
 # Target type has already been validated by the caller. Nulls propagate;
 # str→int/float that fails to parse becomes null.
 
-Column cast_int_col(TypedColumn[int] c, str target_type):
+Column cast_int_col(TypedColumn[int] c, String target_type):
     int n = c.data.len()
     if target_type == "float":
         Vector[float] d = Vector[float]()
@@ -2442,7 +2442,7 @@ Column cast_int_col(TypedColumn[int] c, str target_type):
             j = j + 1
         return FloatCol(TypedColumn[float](d, m))
     elif target_type == "str":
-        Vector[str] d = Vector[str]()
+        Vector[String] d = Vector[String]()
         Vector[bool] m = Vector[bool]()
         int j = 0
         while j < n:
@@ -2453,7 +2453,7 @@ Column cast_int_col(TypedColumn[int] c, str target_type):
                 d.push("")
                 m.push(false)
             j = j + 1
-        return StrCol(TypedColumn[str](d, m))
+        return StrCol(TypedColumn[String](d, m))
     elif target_type == "bool":
         Vector[bool] d = Vector[bool]()
         Vector[bool] m = Vector[bool]()
@@ -2469,7 +2469,7 @@ Column cast_int_col(TypedColumn[int] c, str target_type):
         return BoolCol(TypedColumn[bool](d, m))
     return IntCol(c)
 
-Column cast_float_col(TypedColumn[float] c, str target_type):
+Column cast_float_col(TypedColumn[float] c, String target_type):
     int n = c.data.len()
     if target_type == "int":
         # Truncate toward zero: floor for positives, -floor(-x) for negatives
@@ -2492,7 +2492,7 @@ Column cast_float_col(TypedColumn[float] c, str target_type):
             j = j + 1
         return IntCol(TypedColumn[int](d, m))
     elif target_type == "str":
-        Vector[str] d = Vector[str]()
+        Vector[String] d = Vector[String]()
         Vector[bool] m = Vector[bool]()
         int j = 0
         while j < n:
@@ -2503,7 +2503,7 @@ Column cast_float_col(TypedColumn[float] c, str target_type):
                 d.push("")
                 m.push(false)
             j = j + 1
-        return StrCol(TypedColumn[str](d, m))
+        return StrCol(TypedColumn[String](d, m))
     elif target_type == "bool":
         Vector[bool] d = Vector[bool]()
         Vector[bool] m = Vector[bool]()
@@ -2520,7 +2520,7 @@ Column cast_float_col(TypedColumn[float] c, str target_type):
         return BoolCol(TypedColumn[bool](d, m))
     return FloatCol(c)
 
-Column cast_str_col(TypedColumn[str] c, str target_type):
+Column cast_str_col(TypedColumn[String] c, String target_type):
     int n = c.data.len()
     if target_type == "int":
         Vector[int] d = Vector[int]()
@@ -2528,7 +2528,7 @@ Column cast_str_col(TypedColumn[str] c, str target_type):
         int j = 0
         while j < n:
             if c.mask.get(j).unwrap():
-                Result[int, str] ri = parse_int(c.data.get(j).unwrap())
+                Result[int, String] ri = parse_int(c.data.get(j).unwrap())
                 if ri.is_ok():
                     d.push(ri.unwrap())
                     m.push(true)
@@ -2546,7 +2546,7 @@ Column cast_str_col(TypedColumn[str] c, str target_type):
         int j = 0
         while j < n:
             if c.mask.get(j).unwrap():
-                Result[float, str] rf = parse_float(c.data.get(j).unwrap())
+                Result[float, String] rf = parse_float(c.data.get(j).unwrap())
                 if rf.is_ok():
                     d.push(rf.unwrap())
                     m.push(true)
@@ -2564,7 +2564,7 @@ Column cast_str_col(TypedColumn[str] c, str target_type):
         int j = 0
         while j < n:
             if c.mask.get(j).unwrap():
-                str sv = c.data.get(j).unwrap()
+                String sv = c.data.get(j).unwrap()
                 d.push(sv == "true" or sv == "1")
                 m.push(true)
             else:
@@ -2574,7 +2574,7 @@ Column cast_str_col(TypedColumn[str] c, str target_type):
         return BoolCol(TypedColumn[bool](d, m))
     return StrCol(c)
 
-Column cast_bool_col(TypedColumn[bool] c, str target_type):
+Column cast_bool_col(TypedColumn[bool] c, String target_type):
     int n = c.data.len()
     if target_type == "int":
         Vector[int] d = Vector[int]()
@@ -2609,7 +2609,7 @@ Column cast_bool_col(TypedColumn[bool] c, str target_type):
             j = j + 1
         return FloatCol(TypedColumn[float](d, m))
     elif target_type == "str":
-        Vector[str] d = Vector[str]()
+        Vector[String] d = Vector[String]()
         Vector[bool] m = Vector[bool]()
         int j = 0
         while j < n:
@@ -2620,16 +2620,16 @@ Column cast_bool_col(TypedColumn[bool] c, str target_type):
                 d.push("")
                 m.push(false)
             j = j + 1
-        return StrCol(TypedColumn[str](d, m))
+        return StrCol(TypedColumn[String](d, m))
     return BoolCol(c)
 
 # df_cast: convert a column to target_type ("int", "float", "str", "bool").
 # Nulls propagate; str→int/float that fails to parse becomes null.
 # Returns Error if column not found or cast is unsupported.
-Result[DataFrame, str] df_cast(DataFrame df, str col_name, str target_type):
+Result[DataFrame, String] df_cast(DataFrame df, String col_name, String target_type):
     if not df.has_column(col_name):
         return Error("df_cast: column '" + col_name + "' not found")
-    str src_type = df.get_column(col_name).dtype_name()
+    String src_type = df.get_column(col_name).dtype_name()
     if src_type == target_type:
         return Ok(df)
     if not (target_type == "int" or target_type == "float" or target_type == "str" or target_type == "bool"):
@@ -2651,10 +2651,10 @@ Result[DataFrame, str] df_cast(DataFrame df, str col_name, str target_type):
 # df_clip: clamp non-null values in a numeric column to [lo, hi].
 # Non-numeric columns are returned unchanged. Nulls are preserved.
 # For int columns: lo rounds up (ceil) and hi rounds down (floor) to nearest integer.
-DataFrame df_clip(DataFrame df, str col_name, float lo, float hi):
+DataFrame df_clip(DataFrame df, String col_name, float lo, float hi):
     if not df.has_column(col_name):
         return df_copy(df)
-    str dt = df.get_column(col_name).dtype_name()
+    String dt = df.get_column(col_name).dtype_name()
     if dt != "int" and dt != "float":
         return df_copy(df)
     match df.get_column(col_name):

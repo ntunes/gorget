@@ -26,7 +26,7 @@ void main():
     while i < 500:
         String prefix = f"item-{i}"
         auto make_label = (int n): f"{prefix}-{n}"
-        str label = make_label(42)
+        String label = make_label(42)
         i = i + 1
 
     # --- Section 3: Vector.map with closures ---

@@ -1,4 +1,4 @@
-int half(int x) throws str:
+int half(int x) throws String:
     if x % 2 != 0:
         throw "not even"
     return x / 2

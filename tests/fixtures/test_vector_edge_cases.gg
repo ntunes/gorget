@@ -3,8 +3,8 @@
 #   - any/all returns int not bool (prints 1/0 instead of true/false)
 
 void main():
-    # === Vector[str] ===
-    Vector[str] vs = Vector[str]()
+    # === Vector[String] ===
+    Vector[String] vs = Vector[String]()
     vs.push("hello")
     vs.push("world")
     vs.push("foo")
@@ -14,14 +14,14 @@ void main():
     print(vs[0])                            # hello
     print(vs[1])                            # world
 
-    # Vector[str] filter — was broken (closure param typed int64_t), now fixed
-    Vector[str] filtered = vs.filter((w): w != "foo")
+    # Vector[String] filter — was broken (closure param typed int64_t), now fixed
+    Vector[String] filtered = vs.filter((w): w != "foo")
     print(filtered.len())                   # 2
     print(filtered[0])                      # hello
     print(filtered[1])                      # world
 
-    # Vector[str] map
-    Vector[str] upper = vs.map((w): w.to_upper())
+    # Vector[String] map
+    Vector[String] upper = vs.map((w): w.to_upper())
     print(upper[0])                         # HELLO
 
     # Vector[float] sort — was broken (memcmp comparison), now fixed
@@ -38,8 +38,8 @@ void main():
     float fsum = vf.fold(0.0, (acc, x): acc + x)
     print(fsum)                             # 7.27
 
-    # Vector[str] sort
-    Vector[str] vs2 = Vector[str]()
+    # Vector[String] sort
+    Vector[String] vs2 = Vector[String]()
     vs2.push("cherry")
     vs2.push("apple")
     vs2.push("banana")

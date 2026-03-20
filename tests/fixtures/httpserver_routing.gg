@@ -22,7 +22,7 @@ HttpServerResponse handle_users(HttpRequest req):
 HttpServerResponse handle_posts(HttpRequest req):
     return HttpServerResponse.ok("posts:" + req.params["id"])
 
-void check(str label, bool ok):
+void check(String label, bool ok):
     if not ok:
         print("FAIL: " + label)
     else:
@@ -34,12 +34,12 @@ void main():
     router.get("/files/*rest", handle_files)
 
     # 1. Wildcard matches multi-segment path
-    HttpRequest req1 = HttpRequest("GET", "/files/img/logo.png", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req1 = HttpRequest("GET", "/files/img/logo.png", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse r1 = router.dispatch(req1)
     check("wildcard_match", r1.status_code == 200 and r1.body == "file:img/logo.png")
 
     # 2. Wildcard does not match different prefix
-    HttpRequest req2 = HttpRequest("GET", "/other/img/logo.png", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req2 = HttpRequest("GET", "/other/img/logo.png", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse r2 = router.dispatch(req2)
     check("wildcard_no_match", r2.status_code == 404)
 
@@ -52,16 +52,16 @@ void main():
     parent.prefix_mount("/api/v1", sub)
 
     # 3. Mounted exact route dispatches correctly
-    HttpRequest req3 = HttpRequest("GET", "/api/v1/users", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req3 = HttpRequest("GET", "/api/v1/users", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse r3 = parent.dispatch(req3)
     check("prefix_exact", r3.status_code == 200 and r3.body == "users")
 
     # 4. Mounted param route dispatches correctly
-    HttpRequest req4 = HttpRequest("GET", "/api/v1/posts/42", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req4 = HttpRequest("GET", "/api/v1/posts/42", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse r4 = parent.dispatch(req4)
     check("prefix_param", r4.status_code == 200 and r4.body == "posts:42")
 
     # 5. Unmounted path returns 404
-    HttpRequest req5 = HttpRequest("GET", "/api/v2/users", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req5 = HttpRequest("GET", "/api/v2/users", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse r5 = parent.dispatch(req5)
     check("prefix_not_mounted", r5.status_code == 404)

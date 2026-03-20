@@ -4,8 +4,8 @@
 async int get_number():
     return 42
 
-# 2. Async function returning str
-async str get_greeting():
+# 2. Async function returning String
+async String get_greeting():
     return "hello"
 
 # 3. Async function with parameters
@@ -36,8 +36,8 @@ async void main():
     int n = get_number().await()
     print(n)
 
-    # 2. Async returning str
-    str g = get_greeting().await()
+    # 2. Async returning String
+    String g = get_greeting().await()
     print(g)
 
     # 3. Multiple awaits in sequence

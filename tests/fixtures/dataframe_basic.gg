@@ -1,13 +1,13 @@
 from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats, df_from_records
 
 void main():
-    # Build a 3-row DataFrame: name (str), age (int), score (float)
+    # Build a 3-row DataFrame: name (String), age (int), score (float)
     Vector[int] ages = Vector[int]()
     ages.push(25)
     ages.push(30)
     ages.push(35)
 
-    Vector[str] names = Vector[str]()
+    Vector[String] names = Vector[String]()
     names.push("Alice")
     names.push("Bob")
     names.push("Charlie")
@@ -17,7 +17,7 @@ void main():
     scores.push(9.0)
     scores.push(7.5)
 
-    Vector[str] col_names = Vector[str]()
+    Vector[String] col_names = Vector[String]()
     col_names.push("name")
     col_names.push("age")
     col_names.push("score")
@@ -53,11 +53,11 @@ void main():
     print(f"{tc.value_as_str(0)}")
 
     # df_from_records
-    Vector[str] hdrs = Vector[str]()
+    Vector[String] hdrs = Vector[String]()
     hdrs.push("x")
     hdrs.push("y")
-    Vector[Vector[str]] rows = Vector[Vector[str]]()
-    Vector[str] r1 = Vector[str]()
+    Vector[Vector[String]] rows = Vector[Vector[String]]()
+    Vector[String] r1 = Vector[String]()
     r1.push("1")
     r1.push("2")
     rows.push(r1)

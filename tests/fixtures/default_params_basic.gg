@@ -1,7 +1,7 @@
 int add(int a, int b = 10):
     return a + b
 
-String greet(str name = "world"):
+String greet(String name = "world"):
     return f"hello {name}"
 
 void main():

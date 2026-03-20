@@ -4,4 +4,4 @@ struct Point:
 
 void main():
     Point p = Point(1, 2)
-    str s = f"{p}"
+    String s = f"{p}"

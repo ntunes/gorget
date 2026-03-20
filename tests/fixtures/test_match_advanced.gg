@@ -71,7 +71,7 @@ void main():
             print("none")
 
     # Match on Result — Ok
-    Result[int, str] ok_res = Ok(10)
+    Result[int, String] ok_res = Ok(10)
     match ok_res:
         case Ok(val):
             print(val)
@@ -79,7 +79,7 @@ void main():
             print(e)
 
     # Match on Result — Error
-    Result[int, str] err_res = Error("bad")
+    Result[int, String] err_res = Error("bad")
     match err_res:
         case Ok(val):
             print(val)

@@ -1,10 +1,10 @@
-int parse_number(str s) throws str:
+int parse_number(String s) throws String:
     if s == "bad":
         throw "invalid number"
     return 42
 
-int load_value(str input) throws str:
-    int n = parse_number(input) rethrow (str e): f"load failed: {e}"
+int load_value(String input) throws String:
+    int n = parse_number(input) rethrow (String e): f"load failed: {e}"
     return n
 
 void main():

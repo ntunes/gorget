@@ -85,7 +85,7 @@ pub(super) fn lower_method_call(
 
             // Check if this is a known type name (including primitives like int, float, bool)
             let is_primitive_type = matches!(name.as_str(), "int" | "float" | "bool" | "uint8" | "uint16" | "uint32" | "uint64"
-                | "int8" | "int16" | "int32" | "str" | "char" | "byte");
+                | "int8" | "int16" | "int32" | "str" | "String" | "char" | "byte");
             if is_primitive_type || ctx.type_mapper.lookup_named(name).is_some() || ctx.resolve_enum_variant(name).is_some() {
                 let lowered_args: Vec<Operand> = args.iter()
                     .map(|arg| lower_expr(ctx, builder, &arg.node.value))
@@ -96,7 +96,7 @@ pub(super) fn lower_method_call(
                     "int" => "int64_t",
                     "float" => "double",
                     "bool" => "bool",
-                    "str" => "Str",
+                    "str" | "String" => "Str",
                     "char" => "char",
                     "byte" | "uint8" => "uint8_t",
                     "uint16" => "uint16_t",

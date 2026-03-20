@@ -4,5 +4,5 @@ test "arithmetic":
     snapshot "doubled" x * 2
 
 test "strings":
-    str greeting = "hello world"
+    String greeting = "hello world"
     snapshot "greeting" greeting

@@ -1,16 +1,16 @@
 from std.collections import Dict, Vector
 
 void main():
-    Dict[str, int] ages = Dict[str, int]()
+    Dict[String, int] ages = Dict[String, int]()
     ages.put("alice", 30)
     ages.put("bob", 25)
     ages.put("carol", 35)
 
     # keys — insertion order preserved
-    Vector[str] ks = ages.keys()
+    Vector[String] ks = ages.keys()
     int i = 0
     while i < ks.len():
-        str k = ks.get(i).unwrap()
+        String k = ks.get(i).unwrap()
         print(k)
         i = i + 1
 
@@ -21,6 +21,6 @@ void main():
     print(f"{vs.get(2).unwrap()}")
 
     # fold
-    int total = ages.fold(0, (int acc, str k, int v): acc + v)
+    int total = ages.fold(0, (int acc, String k, int v): acc + v)
     print(f"{total}")
     print(f"{ks.len()}")

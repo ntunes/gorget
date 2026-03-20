@@ -1,9 +1,9 @@
-int risky(int x) throws str:
+int risky(int x) throws String:
     if x < 0:
         throw "negative"
     return x * 2
 
-int with_cleanup(int x) throws str:
+int with_cleanup(int x) throws String:
     print("enter")
     on error print("cleanup")
     int val = risky(x)

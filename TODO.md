@@ -21,11 +21,7 @@
 
 ## Medium
 
-- **Unified String type: all integration tests passing** — Parser change done (`str` → `PrimitiveType::StringType`), provenance pass active (Pass 4.5 downgrades views), AST rewrite active (Pass 4.6 converts downgraded bindings to `Str`). Phase 5 runtime fixes done (owned slicing + clone-on-copy in LIR backend). All 844 integration tests pass, 976 unit tests pass, 703 LIR A/B tests pass. Remaining work: fixture migration (`str` → `String` in source), self-host migration, keyword removal. Note: `gorget_str_byte_slice` and all trim/strip functions now return owned copies (small performance cost, prevents use-after-free class of bugs). Future optimization: add view-returning variants for cases where lifetime analysis can prove safety. [updated: 2026-03-19]
-
-- **Unified String type: fixture migration (`str` → `String`)** — 352+ fixture files use `str` type. Migration to `String` is cosmetic but needed before removing `str` keyword. [added: 2026-03-18]
-
-- **Unified String type: self-host migration (`str` → `String`)** — 35 self-host .gg files use `str`. Same as fixture migration. [added: 2026-03-18]
+- **Unified String type: self-host migration (`str` → `String`)** — 36 self-host .gg files still use `str`. These have extensive internal `"str"` string comparisons for type-name matching that would need updating. Deferred since `str` remains a permanent alias. [updated: 2026-03-20]
 
 - **GorgetString temp leaks when str views escape via function args**: Phase 2 drop registration unregisters GorgetString temps when they flow to str-typed variables, fields, returns, or function arguments. This prevents use-after-free but means temps leak in patterns like `print("a" + "b")` where the callee only borrows the view transiently. The conservative approach is correct (no crashes) but leaves small bounded leaks. Fix requires either: (1) escape analysis to distinguish "callee stores view" from "callee borrows transiently", or (2) migrating all str-storing APIs to String parameters. [added: 2026-03-17]
 

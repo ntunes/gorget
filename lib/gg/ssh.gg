@@ -26,8 +26,8 @@ from std.conv import parse_int
 # ── Public types ─────────────────────────────────────────────
 
 struct CommandResult:
-    str stdout
-    str stderr
+    String stdout
+    String stderr
     int exit_code
 
 struct Session:
@@ -46,36 +46,36 @@ struct Session:
 # ── SSH config parsing ─────────────────────────────────────
 
 struct SshConfig:
-    str hostname
+    String hostname
     int port
-    str user
+    String user
 
 # Parse ~/.ssh/config and return resolved settings for the given host.
 # Supports Host, HostName, Port, User directives.
 # Wildcard Host * matches all hosts (used for defaults).
-SshConfig parse_ssh_config(str host, int default_port, str default_user):
-    str hostname = host
+SshConfig parse_ssh_config(String host, int default_port, String default_user):
+    String hostname = host
     int port = default_port
-    str user = default_user
+    String user = default_user
 
-    str home = getenv("HOME")
+    String home = getenv("HOME")
     if home == "":
         return SshConfig(hostname, port, user)
 
-    str config_path = path_join(home, ".ssh/config")
+    String config_path = path_join(home, ".ssh/config")
     if not file_exists(config_path):
         return SshConfig(hostname, port, user)
 
-    str content = read_file(config_path)
-    Vector[str] lines = content.split("\n")
+    String content = read_file(config_path)
+    Vector[String] lines = content.split("\n")
 
     # Track whether the current Host block matches our target
     bool in_matching_block = false
 
     int i = 0
     while i < lines.len():
-        str line = lines.get(i).unwrap()
-        str trimmed = line.trim()
+        String line = lines.get(i).unwrap()
+        String trimmed = line.trim()
 
         # Skip empty lines and comments
         if trimmed == "":
@@ -87,13 +87,13 @@ SshConfig parse_ssh_config(str host, int default_port, str default_user):
 
         # Split on first whitespace (or =)
         String normalized = trimmed.replace("=", " ")
-        Vector[str] parts = normalized.split(" ")
+        Vector[String] parts = normalized.split(" ")
         if parts.len() < 2:
             i = i + 1
             continue
 
-        str key = parts.get(0).unwrap()
-        str value = parts.get(1).unwrap()
+        String key = parts.get(0).unwrap()
+        String value = parts.get(1).unwrap()
 
         if key == "Host":
             # Check if this Host block matches our target
@@ -101,7 +101,7 @@ SshConfig parse_ssh_config(str host, int default_port, str default_user):
             in_matching_block = false
             int j = 1
             while j < parts.len():
-                str pattern = parts.get(j).unwrap()
+                String pattern = parts.get(j).unwrap()
                 if pattern == "":
                     j = j + 1
                     continue
@@ -152,7 +152,7 @@ const int SSH_MAX_PACKET_SIZE = 32768
 
 # ── Bounds-check helper ─────────────────────────────────────
 
-private void check_len(Vector[uint8] buf, int required, str context):
+private void check_len(Vector[uint8] buf, int required, String context):
     if buf.len() < required:
         print("ssh: protocol error: buffer too short in " + context)
         exit(1)
@@ -160,7 +160,7 @@ private void check_len(Vector[uint8] buf, int required, str context):
 # ── Helpers ──────────────────────────────────────────────────
 
 # Build a name-list payload (comma-separated string as SSH binary)
-Vector[uint8] make_name_list(str names):
+Vector[uint8] make_name_list(String names):
     Vector[uint8] data = bytes_from_str(names)
     Vector[uint8] buf = bytes_from_hex("00000000")
     bytes_write_u32_be(&buf, 0, data.len())
@@ -204,7 +204,7 @@ Vector[uint8] dh_group14_prime():
     return bytes_from_hex("FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7EDEE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3BE39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA051015728E5A8AACAA68FFFFFFFFFFFFFFFF")
 
 # Helper to derive a key: HASH(K || H || letter || session_id)
-Vector[uint8] derive_key(Vector[uint8] k_mpint, Vector[uint8] h, str letter, Vector[uint8] session_id):
+Vector[uint8] derive_key(Vector[uint8] k_mpint, Vector[uint8] h, String letter, Vector[uint8] session_id):
     Vector[uint8] input = bytes_concat(k_mpint, h)
     input = bytes_concat(input, bytes_from_str(letter))
     input = bytes_concat(input, session_id)
@@ -302,9 +302,9 @@ Vector[uint8] read_packet(Session &session):
 
 # ── Version exchange ─────────────────────────────────────────
 
-str version_exchange(Socket &sock):
+String version_exchange(Socket &sock):
     sock.write_str("SSH-2.0-Gorget_1.0\r\n")
-    str server_version = sock.read_line().unwrap()
+    String server_version = sock.read_line().unwrap()
     return server_version
 
 # ── Key Exchange ─────────────────────────────────────────────
@@ -334,7 +334,7 @@ Vector[uint8] build_kexinit():
 
     return msg
 
-void kex_dh_group14(Session &session, str client_version, str server_version, Vector[uint8] client_kexinit, Vector[uint8] server_kexinit):
+void kex_dh_group14(Session &session, String client_version, String server_version, Vector[uint8] client_kexinit, Vector[uint8] server_kexinit):
     Vector[uint8] prime_bytes = dh_group14_prime()
     BigNum p = crypto_bn_from_bytes(prime_bytes)
     Vector[uint8] g_bytes = bytes_from_hex("02")
@@ -436,7 +436,7 @@ void kex_dh_group14(Session &session, str client_version, str server_version, Ve
 
 # ── Authentication ───────────────────────────────────────────
 
-void auth_password(Session &session, str user, str password):
+void auth_password(Session &session, String user, String password):
     # Service request: ssh-userauth
     Vector[uint8] svc = bytes_from_hex("05")
     svc = bytes_concat(svc, make_name_list("ssh-userauth"))
@@ -463,7 +463,7 @@ void auth_password(Session &session, str user, str password):
 
 # ── Channel operations ───────────────────────────────────────
 
-CommandResult channel_exec(Session &session, str cmd):
+CommandResult channel_exec(Session &session, String cmd):
     # Open a session channel
     Vector[uint8] open_msg = bytes_from_hex("5a")
     open_msg = bytes_concat(open_msg, make_name_list("session"))
@@ -511,7 +511,7 @@ CommandResult channel_exec(Session &session, str cmd):
                     int req_name_len = bytes_read_u32_be(msg, 5)
                     check_len(msg, 9 + req_name_len, "channel_exec request name")
                     Vector[uint8] req_name = bytes_slice(msg, 9, 9 + req_name_len)
-                    str req_str = bytes_to_str(req_name).unwrap()
+                    String req_str = bytes_to_str(req_name).unwrap()
                     if req_str == "exit-status":
                         check_len(msg, 9 + req_name_len + 1 + 4, "channel_exec exit-status")
                         exit_code = bytes_read_u32_be(msg, 9 + req_name_len + 1)
@@ -526,7 +526,7 @@ CommandResult channel_exec(Session &session, str cmd):
                             send_packet(&session, close_msg)
                             done = true
 
-    str stdout_str = bytes_to_str(stdout_data).unwrap()
+    String stdout_str = bytes_to_str(stdout_data).unwrap()
     return CommandResult(stdout_str, "", exit_code)
 
 # ── Interactive channel operations ───────────────────────────
@@ -546,7 +546,7 @@ int channel_open_session(Session &session):
     return remote_channel
 
 # Request a subsystem on an open channel
-void channel_request_subsystem(Session &session, int remote_channel, str subsystem_name):
+void channel_request_subsystem(Session &session, int remote_channel, String subsystem_name):
     Vector[uint8] msg = bytes_from_hex("62")
     msg = bytes_concat(msg, make_u32(remote_channel))
     msg = bytes_concat(msg, make_name_list("subsystem"))
@@ -555,15 +555,15 @@ void channel_request_subsystem(Session &session, int remote_channel, str subsyst
     send_packet(&session, msg)
 
 # Send data over an open channel
-void channel_write_data(Session &session, int remote_channel, str data):
+void channel_write_data(Session &session, int remote_channel, String data):
     Vector[uint8] msg = bytes_from_hex("5e")
     msg = bytes_concat(msg, make_u32(remote_channel))
     msg = bytes_concat(msg, make_name_list(data))
     send_packet(&session, msg)
 
 # Read from channel until delimiter found, return accumulated data including delimiter
-str channel_read_until(Session &session, str delimiter):
-    str buffer = ""
+String channel_read_until(Session &session, String delimiter):
+    String buffer = ""
     bool done = false
 
     while not done:
@@ -601,13 +601,13 @@ str channel_read_until(Session &session, str delimiter):
 # ── Public API ───────────────────────────────────────────────
 
 equip Session:
-    Result[Session, str] connect(str host, int port, str user, str password):
+    Result[Session, String] connect(String host, int port, String user, String password):
         return connect(host, port, user, password)
 
-    CommandResult run(&self, str cmd):
+    CommandResult run(&self, String cmd):
         return channel_exec(&self, cmd)
 
-    Result[bool, str] open_subsystem(&self, str name):
+    Result[bool, String] open_subsystem(&self, String name):
         int remote = channel_open_session(&self)
         self.channel_id = remote
         channel_request_subsystem(&self, remote, name)
@@ -628,10 +628,10 @@ equip Session:
                         pass
         return Error("unexpected end of stream")
 
-    void write_data(&self, str data):
+    void write_data(&self, String data):
         channel_write_data(&self, self.channel_id, data)
 
-    str read_until(&self, str delimiter):
+    String read_until(&self, String delimiter):
         return channel_read_until(&self, delimiter)
 
     void close_channel(&self):
@@ -653,12 +653,12 @@ equip Session:
         send_packet(&self, disc)
         self.sock.close()
 
-Result[Session, str] connect(str host, int port, str user, str password):
+Result[Session, String] connect(String host, int port, String user, String password):
     # Resolve connection parameters via ~/.ssh/config
     SshConfig config = parse_ssh_config(host, port, user)
-    str resolved_host = config.hostname
+    String resolved_host = config.hostname
     int resolved_port = config.port
-    str resolved_user = config.user
+    String resolved_user = config.user
 
     # Caller-provided user/port override config only if they differ from defaults
     # (port 22 and empty user are treated as "use config value")
@@ -676,8 +676,8 @@ Result[Session, str] connect(str host, int port, str user, str password):
     Session session = Session(sock, bytes_from_hex(""), crypto_aes_ctr_new(dummy_key, dummy_iv), crypto_aes_ctr_new(dummy_key, dummy_iv), bytes_from_hex(""), bytes_from_hex(""), 0, 0, false, 0, false)
 
     # Version exchange
-    str server_version = version_exchange(&session.sock)
-    str client_version = "SSH-2.0-Gorget_1.0"
+    String server_version = version_exchange(&session.sock)
+    String client_version = "SSH-2.0-Gorget_1.0"
 
     # Send our KEXINIT
     Vector[uint8] client_kexinit = build_kexinit()

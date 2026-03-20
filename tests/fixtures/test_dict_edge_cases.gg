@@ -3,8 +3,8 @@
 from std.collections import Dict, Vector
 
 void main():
-    # --- 1. Dict[int, str]: integer keys ---
-    Dict[int, str] id_names = Dict[int, str]()
+    # --- 1. Dict[int, String]: integer keys ---
+    Dict[int, String] id_names = Dict[int, String]()
     id_names.put(1, "alice")
     id_names.put(2, "bob")
     id_names.put(3, "carol")
@@ -18,8 +18,8 @@ void main():
     print(f"{id_names.len()}")
     print(f"{id_names.get(2).is_none()}")
 
-    # --- 2. Dict[str, bool]: boolean values ---
-    Dict[str, bool] flags = Dict[str, bool]()
+    # --- 2. Dict[String, bool]: boolean values ---
+    Dict[String, bool] flags = Dict[String, bool]()
     flags.put("debug", true)
     flags.put("verbose", false)
     print(f"{flags.get("debug").unwrap()}")
@@ -27,7 +27,7 @@ void main():
     print(f"{flags.len()}")
 
     # --- 3. Overwrite: put same key twice ---
-    Dict[str, int] ow = Dict[str, int]()
+    Dict[String, int] ow = Dict[String, int]()
     ow.put("x", 10)
     ow.put("y", 20)
     ow.put("x", 30)
@@ -35,10 +35,10 @@ void main():
     print(f"{ow.len()}")
 
     # --- 4. Empty dict operations ---
-    Dict[str, int] empty = Dict[str, int]()
-    Vector[str] ek = empty.keys()
+    Dict[String, int] empty = Dict[String, int]()
+    Vector[String] ek = empty.keys()
     Vector[int] ev = empty.values()
-    Vector[(str, int)] ei = empty.items()
+    Vector[(String, int)] ei = empty.items()
     print(f"{ek.len()}")
     print(f"{ev.len()}")
     print(f"{ei.len()}")
@@ -48,7 +48,7 @@ void main():
     print(f"{empty.len()}")
 
     # --- 5. get_or and get_or_put ---
-    Dict[str, int] gd = Dict[str, int]()
+    Dict[String, int] gd = Dict[String, int]()
     gd.put("a", 5)
     int go1 = gd.get_or("a", 99)
     int go2 = gd.get_or("missing", 99)
@@ -62,10 +62,10 @@ void main():
     print(f"{gd.get("b").unwrap()}")
 
     # --- 6. update with overlap ---
-    Dict[str, int] base = Dict[str, int]()
+    Dict[String, int] base = Dict[String, int]()
     base.put("x", 1)
     base.put("y", 2)
-    Dict[str, int] patch = Dict[str, int]()
+    Dict[String, int] patch = Dict[String, int]()
     patch.put("y", 200)
     patch.put("z", 300)
     base.update(patch)
@@ -74,8 +74,8 @@ void main():
     print(f"{base.get("y").unwrap()}")
     print(f"{base.get("z").unwrap()}")
 
-    # --- 7. Dict[str, Vector[int]]: collection values ---
-    Dict[str, Vector[int]] groups = Dict[str, Vector[int]]()
+    # --- 7. Dict[String, Vector[int]]: collection values ---
+    Dict[String, Vector[int]] groups = Dict[String, Vector[int]]()
     Vector[int] va = Vector[int]()
     va.push(10)
     va.push(20)
@@ -92,7 +92,7 @@ void main():
     print(f"{got_b.get(0).unwrap()}")
 
     # --- 8. Single-entry dict: remove only entry ---
-    Dict[str, int] single = Dict[str, int]()
+    Dict[String, int] single = Dict[String, int]()
     single.put("only", 7)
     print(f"{single.len()}")
     bool rem_only = single.remove("only")
@@ -102,14 +102,14 @@ void main():
     print(f"{single.get("only").is_none()}")
 
     # --- 9. filter and fold ---
-    Dict[str, int] scores = Dict[str, int]()
+    Dict[String, int] scores = Dict[String, int]()
     scores.put("a", 10)
     scores.put("b", 3)
     scores.put("c", 25)
     scores.put("d", 1)
-    Dict[str, int] big = scores.filter((str k, int v): v > 5)
+    Dict[String, int] big = scores.filter((String k, int v): v > 5)
     print(f"{big.len()}")
-    int total = scores.fold(0, (int acc, str k, int v): acc + v)
+    int total = scores.fold(0, (int acc, String k, int v): acc + v)
     print(f"{total}")
 
     print("done")

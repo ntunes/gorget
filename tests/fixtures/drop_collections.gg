@@ -1,11 +1,11 @@
 from std.collections import Vector, Dict, Set, Box
 
 struct Tracked:
-    str label
+    String label
 
 equip Tracked with Drop:
     void drop(!self):
-        str l = self.label
+        String l = self.label
         print(f"drop {l}")
 
 void main():
@@ -15,7 +15,7 @@ void main():
     nums.push(2)
 
     # Dict buffer cleanup
-    Dict[str, int] scores = Dict[str, int]()
+    Dict[String, int] scores = Dict[String, int]()
     scores["alice"] = 100
 
     # Set buffer cleanup
@@ -44,7 +44,7 @@ void main():
     string_vec.push(String("world"))
 
     # Dict value drops (silent)
-    Dict[str, String] string_dict = Dict[str, String]()
+    Dict[String, String] string_dict = Dict[String, String]()
     string_dict["x"] = String("one")
 
     # Nested: Vector[Vector[String]]

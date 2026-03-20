@@ -1,17 +1,17 @@
-int parse_int(str s) throws str:
+int parse_int(String s) throws String:
     if s == "42":
         return 42
     throw "not 42"
 
-int double_parsed(str s) throws str:
+int double_parsed(String s) throws String:
     int val = parse_int(s)
     return val * 2
 
-int add_ten(str s) throws str:
+int add_ten(String s) throws String:
     int val = parse_int(s)
     return val + 10
 
-int chain(str s) throws str:
+int chain(String s) throws String:
     int a = parse_int(s)
     int b = double_parsed(s)
     return a + b

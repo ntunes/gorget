@@ -3,14 +3,14 @@ from std.collections import Dict
 
 void main():
     # Single-key object built via Dict (avoids string interpolation issues)
-    Dict[str, Json] obj = Dict[str, Json]()
+    Dict[String, Json] obj = Dict[String, Json]()
     obj.put("name", Str("Alice"))
     Json j = Obj(obj)
     String pp = json_pretty(j)
     print(pp)
 
     # Array prettification
-    Result[Json, str] r2 = json_parse("[1,2,3]")
+    Result[Json, String] r2 = json_parse("[1,2,3]")
     match r2:
         case Ok(j2):
             String pp2 = json_pretty(j2)

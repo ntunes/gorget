@@ -15,7 +15,7 @@ void main():
     print(n2b.attr("href"))
 
     # ── Error: mismatched closing tag ──
-    Result[XmlNode, str] r3 = xml_parse("<a></b>")
+    Result[XmlNode, String] r3 = xml_parse("<a></b>")
     bool r3_err = r3.is_error()
     print(f"{r3_err}")
 
@@ -24,7 +24,7 @@ void main():
     print(n4.text())
 
     # ── Error: unterminated comment ──
-    Result[XmlNode, str] r5 = xml_parse("<!-- unterminated")
+    Result[XmlNode, String] r5 = xml_parse("<!-- unterminated")
     bool r5_err = r5.is_error()
     print(f"{r5_err}")
 

@@ -28,7 +28,7 @@ struct Canvas:
 
 # ── Window management ─────────────────────────────────────────
 
-Result[Canvas, str] open(str title, int w, int h):
+Result[Canvas, String] open(String title, int w, int h):
     sdl_init(SDL_INIT_VIDEO)
     SDLWindow win = sdl_create_window_try(title, w, h, SDL_WINDOW_SHOWN)
     if sdl_window_is_null(win):

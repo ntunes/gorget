@@ -7,7 +7,7 @@ void main():
 
     show(c"via function")
 
-    str view = c"coerced to str"
+    String view = c"coerced to str"
     print(view)
 
     cstr raw_val = "str to cstr"

@@ -3,7 +3,7 @@ from std.collections import Box
 
 @derive(Serializable)
 struct User:
-    str name
+    String name
     int age
     bool active
 
@@ -15,7 +15,7 @@ enum Color:
 
 @derive(Serializable)
 struct Profile:
-    str label
+    String label
     User user
 
 void main():
@@ -24,7 +24,7 @@ void main():
     JsonSerializer js1 = JsonSerializer("")
     Box[Serializer] ser1 = Box.new(js1)
     u.serialize(ser1)
-    str r1 = ser1.result()
+    String r1 = ser1.result()
     print(r1)
 
     # Enum unit variant
@@ -32,7 +32,7 @@ void main():
     JsonSerializer js2 = JsonSerializer("")
     Box[Serializer] ser2 = Box.new(js2)
     c1.serialize(ser2)
-    str r2 = ser2.result()
+    String r2 = ser2.result()
     print(r2)
 
     # Enum data variant
@@ -40,7 +40,7 @@ void main():
     JsonSerializer js3 = JsonSerializer("")
     Box[Serializer] ser3 = Box.new(js3)
     c2.serialize(ser3)
-    str r3 = ser3.result()
+    String r3 = ser3.result()
     print(r3)
 
     # Nested struct
@@ -48,5 +48,5 @@ void main():
     JsonSerializer js4 = JsonSerializer("")
     Box[Serializer] ser4 = Box.new(js4)
     p.serialize(ser4)
-    str r4 = ser4.result()
+    String r4 = ser4.result()
     print(r4)

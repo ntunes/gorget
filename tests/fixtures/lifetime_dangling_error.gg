@@ -1,7 +1,7 @@
-# Previously a lifetime error: returning a str view of a local String.
+# Previously a lifetime error: returning a String view of a local String.
 # After str→String unification, String s = "hello" is a literal view (Copy).
 # Returning a Copy value is always safe.
-str get():
+String get():
     String s = "hello"
     return s
 

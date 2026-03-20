@@ -2,8 +2,8 @@ from gg.dataframe import DataFrame, Column, df_from_columns, df_concat, col_from
 from std.collections import Vector
 
 void main():
-    # Build a DataFrame with name (str) and age (int) columns
-    Vector[str] names_data = Vector[str]()
+    # Build a DataFrame with name (String) and age (int) columns
+    Vector[String] names_data = Vector[String]()
     names_data.push("Charlie")
     names_data.push("Alice")
     names_data.push("Bob")
@@ -17,7 +17,7 @@ void main():
     ages_data.push(28)
     ages_data.push(40)
 
-    Vector[str] col_names = Vector[str]()
+    Vector[String] col_names = Vector[String]()
     col_names.push("name")
     col_names.push("age")
 
@@ -78,7 +78,7 @@ void main():
     print(f"{sn}")
 
     # ── Test 8: df_concat ────────────────────────────────────
-    Vector[str] names_a = Vector[str]()
+    Vector[String] names_a = Vector[String]()
     names_a.push("X")
     names_a.push("Y")
     Vector[int] ages_a = Vector[int]()
@@ -89,7 +89,7 @@ void main():
     cols_a.push(col_from_ints(ages_a))
     DataFrame dfa = df_from_columns(col_names, cols_a)
 
-    Vector[str] names_b = Vector[str]()
+    Vector[String] names_b = Vector[String]()
     names_b.push("Z")
     Vector[int] ages_b = Vector[int]()
     ages_b.push(30)
@@ -103,11 +103,11 @@ void main():
     print(f"{cnc}")
 
     # ── Test 9: sort_by float column ascending ───────────────
-    Vector[str] float_vals = Vector[str]()
+    Vector[String] float_vals = Vector[String]()
     float_vals.push("9.0")
     float_vals.push("10.5")
     float_vals.push("2.3")
-    Vector[str] float_col_names = Vector[str]()
+    Vector[String] float_col_names = Vector[String]()
     float_col_names.push("score")
     Vector[Column] float_cols = Vector[Column]()
     float_cols.push(col_from_strs(float_vals))

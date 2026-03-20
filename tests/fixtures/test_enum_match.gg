@@ -10,7 +10,7 @@ enum Direction:
 # --- Enum with single payload ---
 enum Wrapper:
     IntVal(int)
-    StrVal(str)
+    StrVal(String)
     FloatVal(float)
 
 # --- Enum with multiple payloads per variant ---
@@ -27,7 +27,7 @@ enum Priority:
     High
 
 # --- Functions that accept/return enums ---
-str direction_name(Direction d):
+String direction_name(Direction d):
     match d:
         case North:
             return "north"

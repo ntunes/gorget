@@ -13,7 +13,7 @@ async void test_vector():
     print(total)
 
 async void test_dict():
-    Dict[str, int] scores = Dict[str, int]()
+    Dict[String, int] scores = Dict[String, int]()
     scores["a"] = 10
     scores["b"] = 20
     int total = 0
@@ -23,7 +23,7 @@ async void test_dict():
     print(total)
 
 async void test_string():
-    str word = "abc"
+    String word = "abc"
     int count = 0
     for ch in word:
         int val = process(1).await()

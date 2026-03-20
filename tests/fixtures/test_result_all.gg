@@ -2,8 +2,8 @@
 
 void main():
     # --- Construction ---
-    Result[int, str] ok = Ok(10)
-    Result[int, str] err = Error("fail")
+    Result[int, String] ok = Ok(10)
+    Result[int, String] err = Error("fail")
 
     # --- unwrap / expect ---
     print(f"{ok.unwrap()}")
@@ -27,52 +27,52 @@ void main():
     print(f"{err.unwrap_or_else((str e): 99)}")
 
     # --- map ---
-    Result[int, str] doubled = ok.map((int x): x * 2)
+    Result[int, String] doubled = ok.map((int x): x * 2)
     print(f"{doubled.unwrap()}")
-    Result[int, str] mapped_err = err.map((int x): x * 2)
+    Result[int, String] mapped_err = err.map((int x): x * 2)
     print(f"{mapped_err.is_error()}")
 
     # --- map_err ---
-    Result[int, str] err_mapped = err.map_err((str e): "mapped")
+    Result[int, String] err_mapped = err.map_err((String e): "mapped")
     print(err_mapped.unwrap_error())
-    Result[int, str] ok_map_err = ok.map_err((str e): "nope")
+    Result[int, String] ok_map_err = ok.map_err((String e): "nope")
     print(f"{ok_map_err.unwrap()}")
 
     # --- and_then ---
-    Result[int, str] chained = ok.and_then((int x): Ok(x + 1))
+    Result[int, String] chained = ok.and_then((int x): Ok(x + 1))
     print(f"{chained.unwrap()}")
-    Result[int, str] chain_to_err = ok.and_then((int x): Error("oops"))
+    Result[int, String] chain_to_err = ok.and_then((int x): Error("oops"))
     print(f"{chain_to_err.is_error()}")
 
     # --- or ---
-    Result[int, str] alt = Ok(77)
+    Result[int, String] alt = Ok(77)
     print(f"{ok.or(alt).unwrap()}")
     print(f"{err.or(alt).unwrap()}")
 
     # --- or_else ---
-    Result[int, str] or_else_ok = ok.or_else((str e): Ok(0))
+    Result[int, String] or_else_ok = ok.or_else((String e): Ok(0))
     print(f"{or_else_ok.unwrap()}")
-    Result[int, str] or_else_err = err.or_else((str e): Ok(999))
+    Result[int, String] or_else_err = err.or_else((String e): Ok(999))
     print(f"{or_else_err.unwrap()}")
-    Result[int, str] or_else_err2 = err.or_else((str e): Error("still bad"))
+    Result[int, String] or_else_err2 = err.or_else((String e): Error("still bad"))
     print(f"{or_else_err2.is_error()}")
     print(or_else_err2.unwrap_error())
 
     # --- and_then on Error passes through ---
-    Result[int, str] and_err = err.and_then((int x): Ok(x + 1))
+    Result[int, String] and_err = err.and_then((int x): Ok(x + 1))
     print(f"{and_err.is_error()}")
     print(and_err.unwrap_error())
 
     # --- or on Ok returns self ---
-    Result[int, str] fallback = Error("nope")
+    Result[int, String] fallback = Error("nope")
     print(f"{ok.or(fallback).unwrap()}")
 
     # --- map on Error passes through ---
-    Result[int, str] map_pass = err.map((int x): x + 100)
+    Result[int, String] map_pass = err.map((int x): x + 100)
     print(map_pass.unwrap_error())
 
     # --- map_err on Ok passes through ---
-    Result[int, str] maperr_pass = ok.map_err((str e): "changed")
+    Result[int, String] maperr_pass = ok.map_err((String e): "changed")
     print(f"{maperr_pass.unwrap()}")
 
     # --- Chaining ---
@@ -84,5 +84,5 @@ void main():
     print(f"{result2}")
 
     # --- unwrap_or_else with Error content ---
-    int result3 = err.unwrap_or_else((str e): len(e))
+    int result3 = err.unwrap_or_else((String e): len(e))
     print(f"{result3}")

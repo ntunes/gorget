@@ -8,7 +8,7 @@ void main():
     print(f"{d.get("carol").unwrap()}")
 
     # Empty dict with type hint
-    Dict[str, int] empty = {}
+    Dict[String, int] empty = {}
     print(f"{empty.len()}")
 
     # Integer keys

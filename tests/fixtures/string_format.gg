@@ -1,6 +1,6 @@
 void main():
     # Basic string interpolation — format() now returns String
-    str name = "world"
+    String name = "world"
     String greeting = format(f"hello {name}")
     print(greeting)
 
@@ -29,18 +29,18 @@ void main():
     auto assigned = f"value is {v}"
     print(assigned)
 
-    # Interpolation in function argument (coerced to str for concat)
-    str who = "gorget"
+    # Interpolation in function argument (coerced to String for concat)
+    String who = "gorget"
     print("hello " + f"from {who}")
 
     # Direct String assignment from interpolated literal
     String direct = f"hi {name}"
     print(direct)
 
-    # Plain string literal stays str
-    str plain_str = "no interp here"
+    # Plain string literal stays String
+    String plain_str = "no interp here"
     print(plain_str)
 
-    # str variable from format — coercion String → str
-    str coerced = format(f"coerced {x}")
+    # String variable from format — coercion String → String
+    String coerced = format(f"coerced {x}")
     print(coerced)

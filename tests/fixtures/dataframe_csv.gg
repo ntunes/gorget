@@ -1,16 +1,16 @@
 from gg.dataframe import DataFrame, Column, df_from_csv, df_to_csv
 
 void main():
-    str csv_text = "name,age,score\nAlice,25,8.5\nBob,30,9.0\nCharlie,35,7.5"
-    Result[DataFrame, str] res = df_from_csv(csv_text)
+    String csv_text = "name,age,score\nAlice,25,8.5\nBob,30,9.0\nCharlie,35,7.5"
+    Result[DataFrame, String] res = df_from_csv(csv_text)
     DataFrame df = res.unwrap()
 
     print(f"{df.nrows()}")
     print(f"{df.ncols()}")
 
-    str age_col = "age"
-    str name_col = "name"
-    str score_col = "score"
+    String age_col = "age"
+    String name_col = "name"
+    String score_col = "score"
     Column ac = df.get_column(age_col)
     print(f"{ac.dtype_name()}")
     print(f"{ac.value_as_str(0)}")
@@ -23,8 +23,8 @@ void main():
     print(f"{nc.value_as_str(2)}")
 
     # round-trip: to_csv preserves shape
-    str csv_out = df_to_csv(df)
-    Result[DataFrame, str] res2 = df_from_csv(csv_out)
+    String csv_out = df_to_csv(df)
+    Result[DataFrame, String] res2 = df_from_csv(csv_out)
     DataFrame df2 = res2.unwrap()
     print(f"{df2.nrows()}")
     print(f"{df2.ncols()}")

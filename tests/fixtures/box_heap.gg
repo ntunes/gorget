@@ -7,5 +7,5 @@ void main():
     print(f"{val}")
     b.set(100)
     print(f"{b.get()}")
-    Box[str] s = Box.new("hello")
+    Box[String] s = Box.new("hello")
     print(f"{*s}")

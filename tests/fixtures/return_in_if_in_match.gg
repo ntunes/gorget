@@ -6,7 +6,7 @@ enum Shape:
 
 # Returns a description based on shape + size category.
 # Tests: return inside if inside match arm (previously generated goto arm_end).
-str classify(Shape s, float threshold):
+String classify(Shape s, float threshold):
     match s:
         case Circle(r):
             if r > threshold:
@@ -27,7 +27,7 @@ str classify(Shape s, float threshold):
             return "small triangle"
 
 # Returns Ok(x*2) for positive, Error for zero, Ok(0) for negative.
-Result[int, str] double_positive(int x):
+Result[int, String] double_positive(int x):
     match x:
         case 0:
             return Error("zero")
@@ -37,7 +37,7 @@ Result[int, str] double_positive(int x):
             return Ok(0)
 
 # Multi-branch with elif chains inside match arms.
-str grade(int score):
+String grade(int score):
     match score:
         case 0:
             return "zero"
@@ -63,11 +63,11 @@ void main():
     print(classify(Triangle(2.0, 2.0), 5.0))   # small triangle
 
     # double_positive: return inside if in else arm
-    Result[int, str] r1 = double_positive(5)
+    Result[int, String] r1 = double_positive(5)
     print(f"{r1.unwrap()}")      # 10
-    Result[int, str] r2 = double_positive(0)
+    Result[int, String] r2 = double_positive(0)
     print(f"{r2.is_ok()}")      # false
-    Result[int, str] r3 = double_positive(-3)
+    Result[int, String] r3 = double_positive(-3)
     print(f"{r3.unwrap()}")     # 0
 
     # grade: elif chain inside match else arm

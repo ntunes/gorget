@@ -13,7 +13,7 @@ void main():
     nums.push(30)
     print(f"{len(nums)}")
 
-    str greeting = "hello"
+    String greeting = "hello"
     print(f"{len(greeting)}")
 
     # len() on user type equipped with Measurable

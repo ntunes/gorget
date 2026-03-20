@@ -3,7 +3,7 @@ struct Inner:
 
 struct Middle:
     Inner inner
-    str name
+    String name
 
 struct Outer:
     Middle mid

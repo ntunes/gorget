@@ -21,7 +21,7 @@ void check_max[T]():
         case 32767: print("int16-max")
         else:       print("other-max")
 
-str get_type[T]():
+String get_type[T]():
     meta if typeof(T) == "int8":
         return "int8"
     elif typeof(T) == "uint8":

@@ -6,12 +6,12 @@ void main():
     ages.push(20)
     ages.push(25)
 
-    Vector[str] names = Vector[str]()
+    Vector[String] names = Vector[String]()
     names.push("Bob")
     names.push("Alice")
     names.push("Charlie")
 
-    Vector[str] col_names = Vector[str]()
+    Vector[String] col_names = Vector[String]()
     col_names.push("name")
     col_names.push("age")
 
@@ -22,8 +22,8 @@ void main():
     DataFrame df = df_from_columns(col_names, cols)
 
     # sort_by ascending
-    str age_col = "age"
-    str name_col = "name"
+    String age_col = "age"
+    String name_col = "name"
     DataFrame sorted = df.sort_by(age_col, true)
     Column sc = sorted.get_column(age_col)
     print(f"{sc.value_as_str(0)}")
@@ -40,7 +40,7 @@ void main():
     scores.push(8.5)
     scores.push(9.0)
     scores.push(7.5)
-    str score_col = "score"
+    String score_col = "score"
     DataFrame df2 = df.add_column(score_col, col_from_floats(scores))
     print(f"{df2.ncols()}")
 

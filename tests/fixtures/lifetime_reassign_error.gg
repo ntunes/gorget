@@ -4,6 +4,6 @@
 
 void main():
     String s = "hello" + ""
-    str v = s.as_str()
+    String v = s.as_str()
     s = "world" + ""
     print(v)

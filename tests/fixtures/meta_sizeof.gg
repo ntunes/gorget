@@ -1,6 +1,6 @@
 meta int INT_SIZE = sizeof(int)
 meta int BOOL_SIZE = sizeof(bool)
-meta int STR_SIZE = sizeof(str)
+meta int STR_SIZE = sizeof(String)
 meta int CSTR_SIZE = sizeof(cstr)
 meta int I8_SIZE = sizeof(int8)
 meta int I16_SIZE = sizeof(int16)
@@ -9,12 +9,12 @@ meta int F32_SIZE = sizeof(float32)
 
 meta int INT_ALIGN = alignof(int)
 meta int BOOL_ALIGN = alignof(bool)
-meta int STR_ALIGN = alignof(str)
+meta int STR_ALIGN = alignof(String)
 
-meta str INT_NAME = typename(int)
-meta str BOOL_NAME = typename(bool)
-meta str VEC_NAME = typename(Vector[int])
-meta str STR_NAME = typename(str)
+meta String INT_NAME = typename(int)
+meta String BOOL_NAME = typename(bool)
+meta String VEC_NAME = typename(Vector[int])
+meta String STR_NAME = typename(String)
 
 void main():
     print(INT_SIZE)

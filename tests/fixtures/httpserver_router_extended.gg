@@ -39,28 +39,28 @@ void main():
     router.post("/posts/:id", handle_post_item)
 
     # 1. Method mismatch: POST /hello (only GET registered) → 405
-    HttpRequest req1 = HttpRequest("POST", "/hello", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req1 = HttpRequest("POST", "/hello", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp1 = router.dispatch(req1)
     print(f"{resp1.status_code}")
 
     # 2. Param route with wrong segment count → 404
-    HttpRequest req2 = HttpRequest("GET", "/users/42/extra", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req2 = HttpRequest("GET", "/users/42/extra", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp2 = router.dispatch(req2)
     print(f"{resp2.status_code}")
 
     # 3. Trailing slash: GET /hello/ → 404 (registered as /hello, not /hello/)
-    HttpRequest req3 = HttpRequest("GET", "/hello/", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req3 = HttpRequest("GET", "/hello/", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp3 = router.dispatch(req3)
     print(f"{resp3.status_code}")
 
     # 4. Empty router → 404
     Router empty_router = Router.new()
-    HttpRequest req4 = HttpRequest("GET", "/anything", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req4 = HttpRequest("GET", "/anything", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp4 = empty_router.dispatch(req4)
     print(f"{resp4.status_code}")
 
     # 5. POST param route correctly selected
-    HttpRequest req5 = HttpRequest("POST", "/posts/7", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req5 = HttpRequest("POST", "/posts/7", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp5 = router.dispatch(req5)
     print(resp5.body)
 
@@ -70,6 +70,6 @@ void main():
     mw_router.use(mw1)
     mw_router.use(mw2)
     mw_router.use(mw3)
-    HttpRequest req6 = HttpRequest("GET", "/base", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req6 = HttpRequest("GET", "/base", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp6 = mw_router.dispatch(req6)
     print(resp6.body)

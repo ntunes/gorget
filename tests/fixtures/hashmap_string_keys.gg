@@ -1,9 +1,9 @@
 from std.collections import Dict
 
 void main():
-    Dict[str, int] m = Dict[str, int]()
-    str key1 = "hello"
-    str key2 = "hello"
+    Dict[String, int] m = Dict[String, int]()
+    String key1 = "hello"
+    String key2 = "hello"
     m.put(key1, 42)
     int val = m.get(key2).unwrap()
     print(f"{val}")

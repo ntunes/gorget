@@ -1,7 +1,7 @@
 void main():
-    str path = r"C:\Users\test"
+    String path = r"C:\Users\test"
     print(path)
-    str regex = r"\d+\.\d+"
+    String regex = r"\d+\.\d+"
     print(regex)
-    str braces = r"no {interp} here"
+    String braces = r"no {interp} here"
     print(braces)

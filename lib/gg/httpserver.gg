@@ -28,43 +28,43 @@ from gg.json import Json, json_parse, json_stringify
 # ── Request and response types ────────────────────────────────
 
 struct HttpRequest:
-    str method          # "GET", "POST", ...
-    str path            # "/api/users"
-    str query_string    # raw query string without leading "?"
-    str http_version    # "HTTP/1.1"
-    Dict[str, str] headers   # lowercase header names
-    str body
-    Dict[str, str] params    # URL path parameters (populated by Router)
+    String method          # "GET", "POST", ...
+    String path            # "/api/users"
+    String query_string    # raw query string without leading "?"
+    String http_version    # "HTTP/1.1"
+    Dict[String, String] headers   # lowercase header names
+    String body
+    Dict[String, String] params    # URL path parameters (populated by Router)
 
 struct HttpServerResponse:
     int status_code
-    str body
-    str content_type
-    Dict[str, str] headers   # additional response headers (e.g. Set-Cookie, CORS)
+    String body
+    String content_type
+    Dict[String, String] headers   # additional response headers (e.g. Set-Cookie, CORS)
 
 equip HttpServerResponse:
-    HttpServerResponse ok(str body): HttpServerResponse(200, body, "text/plain", Dict[str, str]())
-    HttpServerResponse html(str body): HttpServerResponse(200, body, "text/html", Dict[str, str]())
-    HttpServerResponse json(str body): HttpServerResponse(200, body, "application/json", Dict[str, str]())
+    HttpServerResponse ok(String body): HttpServerResponse(200, body, "text/plain", Dict[String, String]())
+    HttpServerResponse html(String body): HttpServerResponse(200, body, "text/html", Dict[String, String]())
+    HttpServerResponse json(String body): HttpServerResponse(200, body, "application/json", Dict[String, String]())
     # Build a 200 application/json response by serializing a Json value.
     HttpServerResponse of_json(Json val):
-        str body = json_stringify(val).str()
-        return HttpServerResponse(200, body, "application/json", Dict[str, str]())
-    HttpServerResponse not_found(): HttpServerResponse(404, "Not Found", "text/plain", Dict[str, str]())
-    HttpServerResponse bad_request(str msg): HttpServerResponse(400, msg, "text/plain", Dict[str, str]())
-    HttpServerResponse internal_error(str msg): HttpServerResponse(500, msg, "text/plain", Dict[str, str]())
+        String body = json_stringify(val).str()
+        return HttpServerResponse(200, body, "application/json", Dict[String, String]())
+    HttpServerResponse not_found(): HttpServerResponse(404, "Not Found", "text/plain", Dict[String, String]())
+    HttpServerResponse bad_request(String msg): HttpServerResponse(400, msg, "text/plain", Dict[String, String]())
+    HttpServerResponse internal_error(String msg): HttpServerResponse(500, msg, "text/plain", Dict[String, String]())
 
-    HttpServerResponse with_header(self, str name, str value):
-        Dict[str, str] new_headers = self.headers
+    HttpServerResponse with_header(self, String name, String value):
+        Dict[String, String] new_headers = self.headers
         new_headers.put(name, value)
         return HttpServerResponse(self.status_code, self.body, self.content_type, new_headers)
 
-    HttpServerResponse redirect(str location):
-        Dict[str, str] hdrs = Dict[str, str]()
+    HttpServerResponse redirect(String location):
+        Dict[String, String] hdrs = Dict[String, String]()
         hdrs.put("Location", location)
         return HttpServerResponse(302, "", "text/plain", hdrs)
 
-    str status_text(self):
+    String status_text(self):
         int sc = self.status_code
         if sc == 200:
             return "OK"
@@ -96,7 +96,7 @@ equip HttpServerResponse:
 
 # ── Chunked body helpers ──────────────────────────────────────
 
-int http_server_parse_hex(str s):
+int http_server_parse_hex(String s):
     int val = 0
     int i = 0
     while i < s.byte_len():
@@ -114,12 +114,12 @@ int http_server_parse_hex(str s):
         i = i + 1
     return val
 
-str http_server_read_body_chunked(Socket &conn):
+String http_server_read_body_chunked(Socket &conn):
     Vector[uint8] buf = Vector[uint8]()
     bool reading = true
     while reading:
-        Result[str, str] sl_r = conn.read_line()
-        str size_line = ""
+        Result[String, String] sl_r = conn.read_line()
+        String size_line = ""
         if sl_r.is_ok():
             size_line = sl_r.unwrap()
         else:
@@ -135,25 +135,25 @@ str http_server_read_body_chunked(Socket &conn):
         else:
             Vector[uint8] chunk = conn.read_exact(chunk_sz)
             buf = bytes_concat(buf, chunk)
-            Result[str, str] crlf_r = conn.read_line()
-    Result[str, str] trl_r = conn.read_line()
-    str trailer = ""
+            Result[String, String] crlf_r = conn.read_line()
+    Result[String, String] trl_r = conn.read_line()
+    String trailer = ""
     if trl_r.is_ok():
         trailer = trl_r.unwrap()
     while trailer != "":
-        Result[str, str] next_r = conn.read_line()
+        Result[String, String] next_r = conn.read_line()
         if next_r.is_ok():
             trailer = next_r.unwrap()
         else:
             trailer = ""
     return bytes_to_str(buf).unwrap()
 
-str http_server_read_body_chunked_tls(TlsSocket &conn):
+String http_server_read_body_chunked_tls(TlsSocket &conn):
     Vector[uint8] buf = Vector[uint8]()
     bool reading = true
     while reading:
-        Result[str, str] sl_r = conn.read_line()
-        str size_line = ""
+        Result[String, String] sl_r = conn.read_line()
+        String size_line = ""
         if sl_r.is_ok():
             size_line = sl_r.unwrap()
         else:
@@ -169,13 +169,13 @@ str http_server_read_body_chunked_tls(TlsSocket &conn):
         else:
             Vector[uint8] chunk = conn.read_exact(chunk_sz)
             buf = bytes_concat(buf, chunk)
-            Result[str, str] crlf_r = conn.read_line()
-    Result[str, str] trl_r2 = conn.read_line()
-    str trailer2 = ""
+            Result[String, String] crlf_r = conn.read_line()
+    Result[String, String] trl_r2 = conn.read_line()
+    String trailer2 = ""
     if trl_r2.is_ok():
         trailer2 = trl_r2.unwrap()
     while trailer2 != "":
-        Result[str, str] next_r2 = conn.read_line()
+        Result[String, String] next_r2 = conn.read_line()
         if next_r2.is_ok():
             trailer2 = next_r2.unwrap()
         else:
@@ -184,44 +184,44 @@ str http_server_read_body_chunked_tls(TlsSocket &conn):
 
 # ── Request parser ────────────────────────────────────────────
 
-Result[HttpRequest, str] http_server_parse_request(Socket &conn, int max_body_bytes = 16777216):
+Result[HttpRequest, String] http_server_parse_request(Socket &conn, int max_body_bytes = 16777216):
     # Request line: "METHOD /path?query HTTP/1.1"
-    str req_line = conn.read_line()
+    String req_line = conn.read_line()
 
     Option[int] sp1_opt = req_line.index_of(" ")
     if sp1_opt.is_none():
         return Error("malformed request line")
     int sp1 = sp1_opt.unwrap()
-    str req_method = req_line.byte_slice(0, sp1)
-    str req_rest = req_line.byte_slice(sp1 + 1, req_line.byte_len())
+    String req_method = req_line.byte_slice(0, sp1)
+    String req_rest = req_line.byte_slice(sp1 + 1, req_line.byte_len())
 
     Option[int] sp2_opt = req_rest.index_of(" ")
     if sp2_opt.is_none():
         return Error("malformed request line")
     int sp2 = sp2_opt.unwrap()
-    str raw_path = req_rest.byte_slice(0, sp2)
-    str req_version = req_rest.byte_slice(sp2 + 1, req_rest.byte_len())
+    String raw_path = req_rest.byte_slice(0, sp2)
+    String req_version = req_rest.byte_slice(sp2 + 1, req_rest.byte_len())
 
     # Split path at "?" then percent-decode both parts
-    str req_path = raw_path
-    str req_query = ""
+    String req_path = raw_path
+    String req_query = ""
     Option[int] qm_opt = raw_path.index_of("?")
     if qm_opt.is_some():
         int qm = qm_opt.unwrap()
         req_path = raw_path.byte_slice(0, qm)
         req_query = raw_path.byte_slice(qm + 1, raw_path.byte_len())
-    Result[str, str] pd = url_decode(req_path)
+    Result[String, String] pd = url_decode(req_path)
     if pd.is_ok():
         req_path = pd.unwrap()
-    Result[str, str] qd = url_decode(req_query)
+    Result[String, String] qd = url_decode(req_query)
     if qd.is_ok():
         req_query = qd.unwrap()
 
     # Headers (read until blank line)
-    Dict[str, str] req_headers = Dict[str, str]()
+    Dict[String, String] req_headers = Dict[String, String]()
     bool reading_headers = true
     while reading_headers:
-        str hdr_line = conn.read_line()
+        String hdr_line = conn.read_line()
         if hdr_line == "":
             reading_headers = false
         else:
@@ -229,43 +229,43 @@ Result[HttpRequest, str] http_server_parse_request(Socket &conn, int max_body_by
             if colon_opt.is_some():
                 int colon = colon_opt.unwrap()
                 String hdr_name = hdr_line.byte_slice(0, colon).trim().to_lower()
-                str hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim()
+                String hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim()
                 req_headers.put(hdr_name, hdr_val)
 
     # Body: chunked transfer-encoding takes priority over content-length
-    str req_body = ""
+    String req_body = ""
     if req_headers.contains("transfer-encoding"):
-        str te = req_headers["transfer-encoding"]
+        String te = req_headers["transfer-encoding"]
         if te.to_lower().contains("chunked"):
             req_body = http_server_read_body_chunked(&conn)
     elif req_headers.contains("content-length"):
-        str cl_str = req_headers["content-length"]
+        String cl_str = req_headers["content-length"]
         Option[int] cl_opt = int.parse(cl_str)
         if cl_opt is Some(cl_v):
             if cl_v > max_body_bytes:
                 return Error("request body too large")
             if cl_v > 0:
                 Vector[uint8] body_bytes = conn.read_exact(cl_v)
-                Result[str, str] body_r = bytes_to_str(body_bytes)
+                Result[String, String] body_r = bytes_to_str(body_bytes)
                 if body_r.is_ok():
                     req_body = body_r.unwrap()
 
-    return Ok(HttpRequest(req_method, req_path, req_query, req_version, req_headers, req_body, Dict[str, str]()))
+    return Ok(HttpRequest(req_method, req_path, req_query, req_version, req_headers, req_body, Dict[String, String]()))
 
 # ── Response writers ──────────────────────────────────────────
 
 # Write response with "Connection: close" (legacy/single-request).
 void http_server_write_response(Socket &conn, HttpServerResponse resp):
     String status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
-    str body_len = int_to_str(resp.body.byte_len())
+    String body_len = int_to_str(resp.body.byte_len())
     conn.write_str(status_line)
     conn.write_str("Content-Type: " + resp.content_type + "\r\n")
     conn.write_str("Content-Length: " + body_len + "\r\n")
     # Emit any custom headers
-    Vector[str] hdr_keys = resp.headers.keys()
+    Vector[String] hdr_keys = resp.headers.keys()
     int hi = 0
     while hi < hdr_keys.len():
-        str hk = hdr_keys[hi]
+        String hk = hdr_keys[hi]
         conn.write_str(hk + ": " + resp.headers[hk] + "\r\n")
         hi = hi + 1
     conn.write_str("Connection: close\r\n\r\n")
@@ -274,15 +274,15 @@ void http_server_write_response(Socket &conn, HttpServerResponse resp):
 # Write response with Connection header based on keep_alive flag.
 void http_server_write_response_ka(Socket &conn, HttpServerResponse resp, bool keep_alive):
     String status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
-    str body_len = int_to_str(resp.body.byte_len())
+    String body_len = int_to_str(resp.body.byte_len())
     conn.write_str(status_line)
     conn.write_str("Content-Type: " + resp.content_type + "\r\n")
     conn.write_str("Content-Length: " + body_len + "\r\n")
     # Emit any custom headers
-    Vector[str] hdr_keys = resp.headers.keys()
+    Vector[String] hdr_keys = resp.headers.keys()
     int hi = 0
     while hi < hdr_keys.len():
-        str hk = hdr_keys[hi]
+        String hk = hdr_keys[hi]
         conn.write_str(hk + ": " + resp.headers[hk] + "\r\n")
         hi = hi + 1
     if keep_alive:
@@ -295,7 +295,7 @@ void http_server_write_response_ka(Socket &conn, HttpServerResponse resp, bool k
 
 # Legacy single-request handler (kept for backward compat — httpserver_basic uses it directly).
 void http_server_handle_conn(Socket !conn, Callable[HttpServerResponse(HttpRequest)] handler):
-    Result[HttpRequest, str] r = http_server_parse_request(&conn)
+    Result[HttpRequest, String] r = http_server_parse_request(&conn)
     match r:
         case Ok(req):
             HttpServerResponse resp = handler(req)
@@ -313,7 +313,7 @@ async void http_server_handle_conn_ka(Socket !conn, Callable[HttpServerResponse(
     conn.set_timeout(timeout_ms)
     bool alive = true
     while alive:
-        Result[HttpRequest, str] r = http_server_parse_request(&conn)
+        Result[HttpRequest, String] r = http_server_parse_request(&conn)
         match r:
             case Ok(req):
                 bool client_wants_close = false
@@ -335,7 +335,7 @@ async void http_server_handle_conn_ka_limited(Socket !conn, Callable[HttpServerR
     bool alive = true
     int req_count = 0
     while alive:
-        Result[HttpRequest, str] r = http_server_parse_request(&conn)
+        Result[HttpRequest, String] r = http_server_parse_request(&conn)
         match r:
             case Ok(req):
                 bool client_wants_close = false
@@ -355,41 +355,41 @@ async void http_server_handle_conn_ka_limited(Socket !conn, Callable[HttpServerR
 # ── TLS connection handlers ───────────────────────────────────
 
 # Parse an HTTP/1.1 request from a TLS socket (identical logic to plain-TCP version).
-Result[HttpRequest, str] http_server_parse_request_tls(TlsSocket &conn, int max_body_bytes = 16777216):
-    str req_line = conn.read_line()
+Result[HttpRequest, String] http_server_parse_request_tls(TlsSocket &conn, int max_body_bytes = 16777216):
+    String req_line = conn.read_line()
 
     Option[int] sp1_opt = req_line.index_of(" ")
     if sp1_opt.is_none():
         return Error("malformed request line")
     int sp1 = sp1_opt.unwrap()
-    str req_method = req_line.byte_slice(0, sp1)
-    str req_rest = req_line.byte_slice(sp1 + 1, req_line.byte_len())
+    String req_method = req_line.byte_slice(0, sp1)
+    String req_rest = req_line.byte_slice(sp1 + 1, req_line.byte_len())
 
     Option[int] sp2_opt = req_rest.index_of(" ")
     if sp2_opt.is_none():
         return Error("malformed request line")
     int sp2 = sp2_opt.unwrap()
-    str raw_path = req_rest.byte_slice(0, sp2)
-    str req_version = req_rest.byte_slice(sp2 + 1, req_rest.byte_len())
+    String raw_path = req_rest.byte_slice(0, sp2)
+    String req_version = req_rest.byte_slice(sp2 + 1, req_rest.byte_len())
 
-    str req_path = raw_path
-    str req_query = ""
+    String req_path = raw_path
+    String req_query = ""
     Option[int] qm_opt = raw_path.index_of("?")
     if qm_opt.is_some():
         int qm = qm_opt.unwrap()
         req_path = raw_path.byte_slice(0, qm)
         req_query = raw_path.byte_slice(qm + 1, raw_path.byte_len())
-    Result[str, str] tls_pd = url_decode(req_path)
+    Result[String, String] tls_pd = url_decode(req_path)
     if tls_pd.is_ok():
         req_path = tls_pd.unwrap()
-    Result[str, str] tls_qd = url_decode(req_query)
+    Result[String, String] tls_qd = url_decode(req_query)
     if tls_qd.is_ok():
         req_query = tls_qd.unwrap()
 
-    Dict[str, str] req_headers = Dict[str, str]()
+    Dict[String, String] req_headers = Dict[String, String]()
     bool reading_headers = true
     while reading_headers:
-        str hdr_line = conn.read_line()
+        String hdr_line = conn.read_line()
         if hdr_line == "":
             reading_headers = false
         else:
@@ -397,39 +397,39 @@ Result[HttpRequest, str] http_server_parse_request_tls(TlsSocket &conn, int max_
             if colon_opt.is_some():
                 int colon = colon_opt.unwrap()
                 String hdr_name = hdr_line.byte_slice(0, colon).trim().to_lower()
-                str hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim()
+                String hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim()
                 req_headers.put(hdr_name, hdr_val)
 
-    str req_body = ""
+    String req_body = ""
     if req_headers.contains("transfer-encoding"):
-        str te = req_headers["transfer-encoding"]
+        String te = req_headers["transfer-encoding"]
         if te.to_lower().contains("chunked"):
             req_body = http_server_read_body_chunked_tls(&conn)
     elif req_headers.contains("content-length"):
-        str cl_str = req_headers["content-length"]
+        String cl_str = req_headers["content-length"]
         Option[int] cl_opt = int.parse(cl_str)
         if cl_opt is Some(cl_v):
             if cl_v > max_body_bytes:
                 return Error("request body too large")
             if cl_v > 0:
                 Vector[uint8] body_bytes = conn.read_exact(cl_v)
-                Result[str, str] body_r = bytes_to_str(body_bytes)
+                Result[String, String] body_r = bytes_to_str(body_bytes)
                 if body_r.is_ok():
                     req_body = body_r.unwrap()
 
-    return Ok(HttpRequest(req_method, req_path, req_query, req_version, req_headers, req_body, Dict[str, str]()))
+    return Ok(HttpRequest(req_method, req_path, req_query, req_version, req_headers, req_body, Dict[String, String]()))
 
 # Write a keep-alive HTTP response over a TLS socket.
 void http_server_write_response_tls_ka(TlsSocket &conn, HttpServerResponse resp, bool keep_alive):
     String status_line = "HTTP/1.1 " + int_to_str(resp.status_code) + " " + resp.status_text() + "\r\n"
-    str body_len = int_to_str(resp.body.byte_len())
+    String body_len = int_to_str(resp.body.byte_len())
     conn.write_str(status_line)
     conn.write_str("Content-Type: " + resp.content_type + "\r\n")
     conn.write_str("Content-Length: " + body_len + "\r\n")
-    Vector[str] hdr_keys = resp.headers.keys()
+    Vector[String] hdr_keys = resp.headers.keys()
     int hi = 0
     while hi < hdr_keys.len():
-        str hk = hdr_keys[hi]
+        String hk = hdr_keys[hi]
         conn.write_str(hk + ": " + resp.headers[hk] + "\r\n")
         hi = hi + 1
     if keep_alive:
@@ -443,7 +443,7 @@ async void http_server_handle_conn_tls_ka(TlsSocket !conn, Callable[HttpServerRe
     conn.set_timeout(timeout_ms)
     bool alive = true
     while alive:
-        Result[HttpRequest, str] r = http_server_parse_request_tls(&conn)
+        Result[HttpRequest, String] r = http_server_parse_request_tls(&conn)
         match r:
             case Ok(req):
                 bool client_wants_close = false
@@ -465,7 +465,7 @@ async void http_server_handle_conn_tls_ka_limited(TlsSocket !conn, Callable[Http
     bool alive = true
     int req_count = 0
     while alive:
-        Result[HttpRequest, str] r = http_server_parse_request_tls(&conn)
+        Result[HttpRequest, String] r = http_server_parse_request_tls(&conn)
         match r:
             case Ok(req):
                 bool client_wants_close = false
@@ -485,25 +485,25 @@ async void http_server_handle_conn_tls_ka_limited(TlsSocket !conn, Callable[Http
 # ── HttpServer ────────────────────────────────────────────────
 
 struct HttpServer:
-    str host
+    String host
     int port
     int keep_alive_timeout_ms
     bool use_tls
-    str cert_path
-    str key_path
+    String cert_path
+    String key_path
     int max_body_bytes
     # Maximum number of requests per keep-alive connection (0 = unlimited).
     int max_requests_per_conn
 
 equip HttpServer:
-    HttpServer new(str host, int port): HttpServer(host, port, 5000, false, "", "", 16777216, 0)
-    HttpServer with_timeout(str host, int port, int timeout_ms): HttpServer(host, port, timeout_ms, false, "", "", 16777216, 0)
-    HttpServer with_max_body(str host, int port, int max_bytes): HttpServer(host, port, 5000, false, "", "", max_bytes, 0)
+    HttpServer new(String host, int port): HttpServer(host, port, 5000, false, "", "", 16777216, 0)
+    HttpServer with_timeout(String host, int port, int timeout_ms): HttpServer(host, port, timeout_ms, false, "", "", 16777216, 0)
+    HttpServer with_max_body(String host, int port, int max_bytes): HttpServer(host, port, 5000, false, "", "", max_bytes, 0)
     # Limit the number of requests served per keep-alive connection.
-    HttpServer with_max_requests(str host, int port, int max_req): HttpServer(host, port, 5000, false, "", "", 16777216, max_req)
+    HttpServer with_max_requests(String host, int port, int max_req): HttpServer(host, port, 5000, false, "", "", 16777216, max_req)
 
     # Construct a TLS-enabled server that will use the given PEM cert and key files.
-    HttpServer new_tls(str host, int port, str cert_path, str key_path):
+    HttpServer new_tls(String host, int port, String cert_path, String key_path):
         return HttpServer(host, port, 5000, true, cert_path, key_path, 16777216, 0)
 
     # Bind and accept connections in a loop, calling handler for each.
@@ -516,26 +516,26 @@ equip HttpServer:
 
     # Plain TCP accept loop with per-connection keep-alive.
     async void serve_plain(self, Callable[HttpServerResponse(HttpRequest)] handler):
-        Result[ServerSocket, str] bind_r = server_socket_bind(self.host, self.port)
+        Result[ServerSocket, String] bind_r = server_socket_bind(self.host, self.port)
         if bind_r.is_error():
             return
         ServerSocket srv = bind_r.unwrap()
         TaskGroup group = TaskGroup()
         loop:
-            Result[Socket, str] ar = srv.accept()
+            Result[Socket, String] ar = srv.accept()
             if ar.is_ok():
                 Socket client = ar.unwrap()
                 group.spawn(spawn http_server_handle_conn_ka_limited(!client, handler, self.keep_alive_timeout_ms, self.max_requests_per_conn))
 
     # TLS accept loop with per-connection keep-alive.
     async void serve_tls(self, Callable[HttpServerResponse(HttpRequest)] handler):
-        Result[TlsServerSocket, str] bind_r = tls_server_bind(self.host, self.port, self.cert_path, self.key_path)
+        Result[TlsServerSocket, String] bind_r = tls_server_bind(self.host, self.port, self.cert_path, self.key_path)
         if bind_r.is_error():
             return
         TlsServerSocket srv = bind_r.unwrap()
         TaskGroup group = TaskGroup()
         loop:
-            Result[TlsSocket, str] ar = srv.accept()
+            Result[TlsSocket, String] ar = srv.accept()
             if ar.is_ok():
                 TlsSocket client = ar.unwrap()
                 group.spawn(spawn http_server_handle_conn_tls_ka_limited(!client, handler, self.keep_alive_timeout_ms, self.max_requests_per_conn))
@@ -543,14 +543,14 @@ equip HttpServer:
     # Bind and accept exactly n connections, then close the socket and return.
     # Useful for testing and graceful shutdown scenarios.
     async void accept_n(self, Callable[HttpServerResponse(HttpRequest)] handler, int n):
-        Result[ServerSocket, str] bind_r = server_socket_bind(self.host, self.port)
+        Result[ServerSocket, String] bind_r = server_socket_bind(self.host, self.port)
         if bind_r.is_error():
             return
         ServerSocket srv = bind_r.unwrap()
         TaskGroup group = TaskGroup()
         int i = 0
         while i < n:
-            Result[Socket, str] ar = srv.accept()
+            Result[Socket, String] ar = srv.accept()
             if ar.is_ok():
                 Socket client = ar.unwrap()
                 group.spawn(spawn http_server_handle_conn_ka_limited(!client, handler, self.keep_alive_timeout_ms, self.max_requests_per_conn))
@@ -560,48 +560,48 @@ equip HttpServer:
 
 # ── Query string parser ───────────────────────────────────────
 
-Dict[str, str] parse_query_string(str qs):
-    Dict[str, str] params = Dict[str, str]()
+Dict[String, String] parse_query_string(String qs):
+    Dict[String, String] params = Dict[String, String]()
     if qs == "":
         return params
-    Vector[str] pairs = qs.split("&")
+    Vector[String] pairs = qs.split("&")
     int i = 0
     while i < pairs.len():
-        str pair = pairs[i]
+        String pair = pairs[i]
         Option[int] eq_opt = pair.index_of("=")
         if eq_opt.is_some():
             int eq = eq_opt.unwrap()
-            str raw_key = pair.byte_slice(0, eq)
-            str raw_val = pair.byte_slice(eq + 1, pair.byte_len())
-            Result[str, str] dk = url_decode(raw_key)
-            Result[str, str] dv = url_decode(raw_val)
+            String raw_key = pair.byte_slice(0, eq)
+            String raw_val = pair.byte_slice(eq + 1, pair.byte_len())
+            Result[String, String] dk = url_decode(raw_key)
+            Result[String, String] dv = url_decode(raw_val)
             params.put(dk.unwrap_or(raw_key), dv.unwrap_or(raw_val))
         else:
-            Result[str, str] dk2 = url_decode(pair)
+            Result[String, String] dk2 = url_decode(pair)
             params.put(dk2.unwrap_or(pair), "")
         i = i + 1
     return params
 
 # Parse an application/x-www-form-urlencoded body into a key→value dict.
 # Keys and values are decoded using form_decode (+ → space, %XX → byte).
-Dict[str, str] parse_form_body(str body):
-    Dict[str, str] params = Dict[str, str]()
+Dict[String, String] parse_form_body(String body):
+    Dict[String, String] params = Dict[String, String]()
     if body == "":
         return params
-    Vector[str] pairs = body.split("&")
+    Vector[String] pairs = body.split("&")
     int i = 0
     while i < pairs.len():
-        str pair = pairs[i]
+        String pair = pairs[i]
         Option[int] eq_opt = pair.index_of("=")
         if eq_opt.is_some():
             int eq = eq_opt.unwrap()
-            str raw_key = pair.byte_slice(0, eq)
-            str raw_val = pair.byte_slice(eq + 1, pair.byte_len())
-            Result[str, str] dk = form_decode(raw_key)
-            Result[str, str] dv = form_decode(raw_val)
+            String raw_key = pair.byte_slice(0, eq)
+            String raw_val = pair.byte_slice(eq + 1, pair.byte_len())
+            Result[String, String] dk = form_decode(raw_key)
+            Result[String, String] dv = form_decode(raw_val)
             params.put(dk.unwrap_or(raw_key), dv.unwrap_or(raw_val))
         else:
-            Result[str, str] dk2 = form_decode(pair)
+            Result[String, String] dk2 = form_decode(pair)
             params.put(dk2.unwrap_or(pair), "")
         i = i + 1
     return params
@@ -609,43 +609,43 @@ Dict[str, str] parse_form_body(str body):
 # Parse a Cookie header value into a name→value dict.
 # Cookies are split by ";", trimmed, and split at the first "=".
 # No decoding is applied (cookie values are raw).
-Dict[str, str] parse_cookies(str header):
-    Dict[str, str] cookies = Dict[str, str]()
+Dict[String, String] parse_cookies(String header):
+    Dict[String, String] cookies = Dict[String, String]()
     if header == "":
         return cookies
-    Vector[str] parts = header.split(";")
+    Vector[String] parts = header.split(";")
     int i = 0
     while i < parts.len():
-        str part = parts[i].trim()
+        String part = parts[i].trim()
         Option[int] eq_opt = part.index_of("=")
         if eq_opt.is_some():
             int eq = eq_opt.unwrap()
-            str name = part.byte_slice(0, eq).trim()
-            str value = part.byte_slice(eq + 1, part.byte_len()).trim()
+            String name = part.byte_slice(0, eq).trim()
+            String value = part.byte_slice(eq + 1, part.byte_len()).trim()
             if name != "":
                 cookies.put(name, value)
         i = i + 1
     return cookies
 
 equip HttpRequest:
-    Dict[str, str] query_params(self):
+    Dict[String, String] query_params(self):
         return parse_query_string(self.query_string)
 
     # Parse the request body as application/x-www-form-urlencoded.
     # Returns empty dict if body is empty or has no = pairs.
-    Dict[str, str] form_params(self):
+    Dict[String, String] form_params(self):
         return parse_form_body(self.body)
 
     # Parse the Cookie header into a name→value dict.
     # Returns empty dict if no Cookie header is present.
-    Dict[str, str] cookies(self):
+    Dict[String, String] cookies(self):
         if self.headers.contains("cookie"):
             return parse_cookies(self.headers["cookie"])
-        return Dict[str, str]()
+        return Dict[String, String]()
 
     # Parse the request body as JSON.
     # Returns Ok(Json) on success or Err(message) on parse failure.
-    Result[Json, str] json(self):
+    Result[Json, String] json(self):
         return json_parse(self.body)
 
 # ── Router ────────────────────────────────────────────────────
@@ -665,16 +665,16 @@ equip HttpRequest:
 # Match a URL path against a route pattern.
 # Returns Ok(params_dict) on match, Error("") on miss.
 # Pattern segments starting with ":" (e.g. ":id") capture the path segment.
-Result[Dict[str, str], str] http_router_match_pattern(Vector[str] pattern, Vector[str] parts):
+Result[Dict[String, String], String] http_router_match_pattern(Vector[String] pattern, Vector[String] parts):
     if pattern.len() != parts.len():
         return Error("")
-    Dict[str, str] params = Dict[str, str]()
+    Dict[String, String] params = Dict[String, String]()
     int i = 0
     while i < pattern.len():
-        str seg = pattern[i]
-        str part = parts[i]
+        String seg = pattern[i]
+        String part = parts[i]
         if seg.starts_with(":"):
-            str param_name = seg.byte_slice(1, seg.byte_len())
+            String param_name = seg.byte_slice(1, seg.byte_len())
             params.put(param_name, part)
         elif seg != part:
             return Error("")
@@ -685,13 +685,13 @@ Result[Dict[str, str], str] http_router_match_pattern(Vector[str] pattern, Vecto
 # A segment starting with "*" captures all remaining path segments (joined by "/").
 # Example: pattern "/files/*rest" matches "/files/img/logo.png" → params["rest"] = "img/logo.png"
 # Returns Ok(params_dict) on match, Error("") on miss.
-Result[Dict[str, str], str] http_router_match_wildcard(Vector[str] pattern, Vector[str] parts):
+Result[Dict[String, String], String] http_router_match_wildcard(Vector[String] pattern, Vector[String] parts):
     # Find the wildcard segment index
     int wc_idx = -1
-    str wc_name = ""
+    String wc_name = ""
     int pi = 0
     while pi < pattern.len():
-        str seg = pattern[pi]
+        String seg = pattern[pi]
         if seg.starts_with("*"):
             wc_idx = pi
             wc_name = seg.byte_slice(1, seg.byte_len())
@@ -702,21 +702,21 @@ Result[Dict[str, str], str] http_router_match_wildcard(Vector[str] pattern, Vect
     if parts.len() < wc_idx:
         return Error("")
     # Match all segments before the wildcard exactly
-    Dict[str, str] params = Dict[str, str]()
+    Dict[String, String] params = Dict[String, String]()
     int si = 0
     while si < wc_idx:
         if si >= pattern.len() or si >= parts.len():
             return Error("")
-        str pseg = pattern[si]
-        str ppart = parts[si]
+        String pseg = pattern[si]
+        String ppart = parts[si]
         if pseg.starts_with(":"):
-            str pname = pseg.byte_slice(1, pseg.byte_len())
+            String pname = pseg.byte_slice(1, pseg.byte_len())
             params.put(pname, ppart)
         elif pseg != ppart:
             return Error("")
         si = si + 1
     # Capture remaining parts into the wildcard param
-    str captured = ""
+    String captured = ""
     int ri = wc_idx
     while ri < parts.len():
         if ri > wc_idx:
@@ -727,15 +727,15 @@ Result[Dict[str, str], str] http_router_match_wildcard(Vector[str] pattern, Vect
     return Ok(params)
 
 struct Router:
-    Dict[str, Callable[HttpServerResponse(HttpRequest)]] exact_routes
+    Dict[String, Callable[HttpServerResponse(HttpRequest)]] exact_routes
     # Parameterized routes: key = "METHOD|/path/:param" (method + "|" + original path).
     # Segments are re-derived from the key at dispatch time by splitting on "/".
-    # This avoids storing Vector[str] inside a Dict (which causes use-after-free when
+    # This avoids storing Vector[String] inside a Dict (which causes use-after-free when
     # the shallow-copied vector is freed while the dict still owns the data).
-    Dict[str, Callable[HttpServerResponse(HttpRequest)]] param_routes
+    Dict[String, Callable[HttpServerResponse(HttpRequest)]] param_routes
     # Wildcard routes: key = "METHOD|/prefix/*name". The *name segment captures all
     # remaining path segments (including slashes) into params["name"].
-    Dict[str, Callable[HttpServerResponse(HttpRequest)]] wildcard_routes
+    Dict[String, Callable[HttpServerResponse(HttpRequest)]] wildcard_routes
     # Post-dispatch middleware: called after handler, receives (req, resp) → resp.
     # Use cases: add CORS headers, inject X-headers, log status codes, etc.
     Vector[Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]] middlewares
@@ -747,14 +747,14 @@ struct Router:
 
 equip Router:
     Router new():
-        Dict[str, Callable[HttpServerResponse(HttpRequest)]] ex = Dict[str, Callable[HttpServerResponse(HttpRequest)]]()
-        Dict[str, Callable[HttpServerResponse(HttpRequest)]] pr = Dict[str, Callable[HttpServerResponse(HttpRequest)]]()
-        Dict[str, Callable[HttpServerResponse(HttpRequest)]] wr = Dict[str, Callable[HttpServerResponse(HttpRequest)]]()
+        Dict[String, Callable[HttpServerResponse(HttpRequest)]] ex = Dict[String, Callable[HttpServerResponse(HttpRequest)]]()
+        Dict[String, Callable[HttpServerResponse(HttpRequest)]] pr = Dict[String, Callable[HttpServerResponse(HttpRequest)]]()
+        Dict[String, Callable[HttpServerResponse(HttpRequest)]] wr = Dict[String, Callable[HttpServerResponse(HttpRequest)]]()
         Vector[Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]] mw = Vector[Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]]()
         Vector[Callable[Option[HttpServerResponse](HttpRequest)]] pre = Vector[Callable[Option[HttpServerResponse](HttpRequest)]]()
         return Router(ex, pr, wr, mw, pre)
 
-    void route(&self, str method, str path, Callable[HttpServerResponse(HttpRequest)] handler):
+    void route(&self, String method, String path, Callable[HttpServerResponse(HttpRequest)] handler):
         Callable[HttpServerResponse(HttpRequest)] h = handler
         if path.contains("*"):
             String wkey = method + "|" + path
@@ -766,19 +766,19 @@ equip Router:
             String key = method + " " + path
             self.exact_routes.put(key, h)
 
-    void get(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
+    void get(&self, String path, Callable[HttpServerResponse(HttpRequest)] handler):
         self.route("GET", path, handler)
 
-    void post(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
+    void post(&self, String path, Callable[HttpServerResponse(HttpRequest)] handler):
         self.route("POST", path, handler)
 
-    void put(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
+    void put(&self, String path, Callable[HttpServerResponse(HttpRequest)] handler):
         self.route("PUT", path, handler)
 
-    void delete(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
+    void delete(&self, String path, Callable[HttpServerResponse(HttpRequest)] handler):
         self.route("DELETE", path, handler)
 
-    void patch(&self, str path, Callable[HttpServerResponse(HttpRequest)] handler):
+    void patch(&self, String path, Callable[HttpServerResponse(HttpRequest)] handler):
         self.route("PATCH", path, handler)
 
     # Register a post-dispatch middleware hook. Called after the handler, can modify response.
@@ -798,55 +798,55 @@ equip Router:
     # Mount all routes from a sub-router under a path prefix.
     # Routes from sub are copied into self with `prefix` prepended.
     # Middlewares from sub are NOT copied (parent controls the pipeline).
-    void prefix_mount(&self, str prefix, Router sub):
-        Vector[str] ex_keys = sub.exact_routes.keys()
+    void prefix_mount(&self, String prefix, Router sub):
+        Vector[String] ex_keys = sub.exact_routes.keys()
         int ei = 0
         while ei < ex_keys.len():
-            str k = ex_keys[ei]
+            String k = ex_keys[ei]
             Option[int] sp = k.index_of(" ")
             if sp.is_some():
-                str mth = k.byte_slice(0, sp.unwrap())
-                str pth = k.byte_slice(sp.unwrap() + 1, k.byte_len())
+                String mth = k.byte_slice(0, sp.unwrap())
+                String pth = k.byte_slice(sp.unwrap() + 1, k.byte_len())
                 Callable[HttpServerResponse(HttpRequest)] h = sub.exact_routes[k]
                 self.exact_routes.put(mth + " " + prefix + pth, h)
             ei = ei + 1
-        Vector[str] pr_keys = sub.param_routes.keys()
+        Vector[String] pr_keys = sub.param_routes.keys()
         int pri = 0
         while pri < pr_keys.len():
-            str k = pr_keys[pri]
+            String k = pr_keys[pri]
             Option[int] sp2 = k.index_of("|")
             if sp2.is_some():
-                str mth = k.byte_slice(0, sp2.unwrap())
-                str pth = k.byte_slice(sp2.unwrap() + 1, k.byte_len())
+                String mth = k.byte_slice(0, sp2.unwrap())
+                String pth = k.byte_slice(sp2.unwrap() + 1, k.byte_len())
                 Callable[HttpServerResponse(HttpRequest)] h = sub.param_routes[k]
                 self.param_routes.put(mth + "|" + prefix + pth, h)
             pri = pri + 1
-        Vector[str] wr_keys = sub.wildcard_routes.keys()
+        Vector[String] wr_keys = sub.wildcard_routes.keys()
         int wri = 0
         while wri < wr_keys.len():
-            str k = wr_keys[wri]
+            String k = wr_keys[wri]
             Option[int] sp3 = k.index_of("|")
             if sp3.is_some():
-                str mth = k.byte_slice(0, sp3.unwrap())
-                str pth = k.byte_slice(sp3.unwrap() + 1, k.byte_len())
+                String mth = k.byte_slice(0, sp3.unwrap())
+                String pth = k.byte_slice(sp3.unwrap() + 1, k.byte_len())
                 Callable[HttpServerResponse(HttpRequest)] h = sub.wildcard_routes[k]
                 self.wildcard_routes.put(mth + "|" + prefix + pth, h)
             wri = wri + 1
 
     # Collect all HTTP methods registered for a given path (exact or matching param pattern).
     # Used by HEAD and OPTIONS auto-handling.
-    Vector[str] allowed_methods(&self, str path):
-        Vector[str] all_methods = Vector[str]()
+    Vector[String] allowed_methods(&self, String path):
+        Vector[String] all_methods = Vector[String]()
         all_methods.push("GET")
         all_methods.push("POST")
         all_methods.push("PUT")
         all_methods.push("DELETE")
         all_methods.push("PATCH")
-        Vector[str] found = Vector[str]()
-        Vector[str] path_parts = path.split("/")
+        Vector[String] found = Vector[String]()
+        Vector[String] path_parts = path.split("/")
         int ai = 0
         while ai < all_methods.len():
-            str m = all_methods[ai]
+            String m = all_methods[ai]
             String exact_key = m + " " + path
             if self.exact_routes.contains(exact_key):
                 found.push(m)
@@ -854,27 +854,27 @@ equip Router:
                 continue
             String mpfx = m + "|"
             int mpfx_len = m.byte_len() + 1
-            Vector[str] pkeys = self.param_routes.keys()
+            Vector[String] pkeys = self.param_routes.keys()
             int pi = 0
             bool matched = false
             while pi < pkeys.len():
-                str pkey = pkeys[pi]
+                String pkey = pkeys[pi]
                 if pkey.starts_with(mpfx):
-                    str route_path = pkey.byte_slice(mpfx_len, pkey.byte_len())
-                    Vector[str] pattern = route_path.split("/")
-                    Result[Dict[str, str], str] mr = http_router_match_pattern(pattern, path_parts)
+                    String route_path = pkey.byte_slice(mpfx_len, pkey.byte_len())
+                    Vector[String] pattern = route_path.split("/")
+                    Result[Dict[String, String], String] mr = http_router_match_pattern(pattern, path_parts)
                     if mr.is_ok():
                         matched = true
                 pi = pi + 1
             if not matched:
-                Vector[str] wkeys = self.wildcard_routes.keys()
+                Vector[String] wkeys = self.wildcard_routes.keys()
                 int wi = 0
                 while wi < wkeys.len():
-                    str wkey = wkeys[wi]
+                    String wkey = wkeys[wi]
                     if wkey.starts_with(mpfx):
-                        str wpath = wkey.byte_slice(mpfx_len, wkey.byte_len())
-                        Vector[str] wpat = wpath.split("/")
-                        Result[Dict[str, str], str] wmr = http_router_match_wildcard(wpat, path_parts)
+                        String wpath = wkey.byte_slice(mpfx_len, wkey.byte_len())
+                        Vector[String] wpat = wpath.split("/")
+                        Result[Dict[String, String], String] wmr = http_router_match_wildcard(wpat, path_parts)
                         if wmr.is_ok():
                             matched = true
                     wi = wi + 1
@@ -891,36 +891,36 @@ equip Router:
             Callable[HttpServerResponse(HttpRequest)] h = self.exact_routes[key]
             return h(req)
         # 2. Parameterized match (linear scan over param_routes)
-        Vector[str] path_parts = req.path.split("/")
-        Vector[str] pkeys = self.param_routes.keys()
+        Vector[String] path_parts = req.path.split("/")
+        Vector[String] pkeys = self.param_routes.keys()
         String method_prefix = req.method + "|"
         int method_prefix_len = req.method.byte_len() + 1
         int pi = 0
         while pi < pkeys.len():
-            str pkey = pkeys[pi]
+            String pkey = pkeys[pi]
             if pkey.starts_with(method_prefix):
-                str route_path = pkey.byte_slice(method_prefix_len, pkey.byte_len())
-                Vector[str] pattern = route_path.split("/")
-                Result[Dict[str, str], str] m = http_router_match_pattern(pattern, path_parts)
+                String route_path = pkey.byte_slice(method_prefix_len, pkey.byte_len())
+                Vector[String] pattern = route_path.split("/")
+                Result[Dict[String, String], String] m = http_router_match_pattern(pattern, path_parts)
                 if m.is_ok():
-                    Dict[str, str] extracted = m.unwrap()
+                    Dict[String, String] extracted = m.unwrap()
                     HttpRequest matched_req = HttpRequest(req.method, req.path, req.query_string, req.http_version, req.headers, req.body, extracted)
                     Callable[HttpServerResponse(HttpRequest)] h = self.param_routes[pkey]
                     return h(matched_req)
             pi = pi + 1
         # 2b. Wildcard match (linear scan over wildcard_routes)
-        Vector[str] wkeys = self.wildcard_routes.keys()
+        Vector[String] wkeys = self.wildcard_routes.keys()
         String wpfx = req.method + "|"
         int wpfx_len = req.method.byte_len() + 1
         int wi = 0
         while wi < wkeys.len():
-            str wkey = wkeys[wi]
+            String wkey = wkeys[wi]
             if wkey.starts_with(wpfx):
-                str wpath = wkey.byte_slice(wpfx_len, wkey.byte_len())
-                Vector[str] wpat = wpath.split("/")
-                Result[Dict[str, str], str] wm = http_router_match_wildcard(wpat, path_parts)
+                String wpath = wkey.byte_slice(wpfx_len, wkey.byte_len())
+                Vector[String] wpat = wpath.split("/")
+                Result[Dict[String, String], String] wm = http_router_match_wildcard(wpat, path_parts)
                 if wm.is_ok():
-                    Dict[str, str] wextracted = wm.unwrap()
+                    Dict[String, String] wextracted = wm.unwrap()
                     HttpRequest wmatched_req = HttpRequest(req.method, req.path, req.query_string, req.http_version, req.headers, req.body, wextracted)
                     Callable[HttpServerResponse(HttpRequest)] wh = self.wildcard_routes[wkey]
                     return wh(wmatched_req)
@@ -932,28 +932,28 @@ equip Router:
             return HttpServerResponse(get_resp.status_code, "", get_resp.content_type, get_resp.headers)
         # 4. OPTIONS auto-handling: respond with allowed methods for this path.
         if req.method == "OPTIONS":
-            Vector[str] allowed = self.allowed_methods(req.path)
+            Vector[String] allowed = self.allowed_methods(req.path)
             if allowed.len() == 0:
                 return HttpServerResponse.not_found()
             # Always include HEAD and OPTIONS in Allow header
-            str allow_str = "OPTIONS, HEAD"
+            String allow_str = "OPTIONS, HEAD"
             int oi = 0
             while oi < allowed.len():
                 allow_str = allow_str + ", " + allowed[oi]
                 oi = oi + 1
-            Dict[str, str] opts_hdrs = Dict[str, str]()
+            Dict[String, String] opts_hdrs = Dict[String, String]()
             opts_hdrs.put("Allow", allow_str)
             opts_hdrs.put("Content-Length", "0")
             return HttpServerResponse(200, "", "text/plain", opts_hdrs)
         # 5. Fallback: check if path exists under a different method → 405, else 404
-        Vector[str] am = self.allowed_methods(req.path)
+        Vector[String] am = self.allowed_methods(req.path)
         if am.len() > 0:
-            str allow_str_405 = "OPTIONS, HEAD"
+            String allow_str_405 = "OPTIONS, HEAD"
             int oi405 = 0
             while oi405 < am.len():
                 allow_str_405 = allow_str_405 + ", " + am[oi405]
                 oi405 = oi405 + 1
-            Dict[str, str] m405_hdrs = Dict[str, str]()
+            Dict[String, String] m405_hdrs = Dict[String, String]()
             m405_hdrs.put("Allow", allow_str_405)
             return HttpServerResponse(405, "Method Not Allowed", "text/plain", m405_hdrs)
         return HttpServerResponse.not_found()
@@ -987,8 +987,8 @@ equip Router:
 # ── Static file serving ───────────────────────────────────────
 
 # Return the MIME type string for a file path based on its extension.
-str http_mime_type(str path):
-    str ext = path_extension(path)
+String http_mime_type(String path):
+    String ext = path_extension(path)
     if ext == "html":
         return "text/html"
     elif ext == "htm":
@@ -1030,7 +1030,7 @@ str http_mime_type(str path):
     return "application/octet-stream"
 
 # Compute an ETag value for file content (SHA-1 hex, double-quoted per RFC 7232).
-str http_etag(str content):
+String http_etag(String content):
     Vector[uint8] sha = crypto_sha1(bytes_from_str(content))
     return "\"" + bytes_to_hex(sha) + "\""
 
@@ -1041,35 +1041,35 @@ str http_etag(str content):
 # - Returns 304 Not Modified when If-None-Match header matches the ETag.
 # - Returns 206 Partial Content for Range requests (bytes=start-end or bytes=start-).
 # - Returns 404 for missing files, 400 for invalid paths.
-HttpServerResponse http_serve_file(str base_dir, HttpRequest req):
+HttpServerResponse http_serve_file(String base_dir, HttpRequest req):
     if req.path.contains(".."):
         return HttpServerResponse.bad_request("invalid path")
-    mutable str file_path = path_join(base_dir, req.path)
+    mutable String file_path = path_join(base_dir, req.path)
     if is_dir(file_path):
         file_path = path_join(file_path, "index.html")
     if not file_exists(file_path):
         return HttpServerResponse.not_found()
-    str content = read_file(file_path)
-    str mime = http_mime_type(file_path)
-    str etag = http_etag(content)
+    String content = read_file(file_path)
+    String mime = http_mime_type(file_path)
+    String etag = http_etag(content)
     # 304 Not Modified: check If-None-Match
     if req.headers.contains("if-none-match"):
-        str inm = req.headers["if-none-match"]
+        String inm = req.headers["if-none-match"]
         if inm == etag:
-            Dict[str, str] nm_hdrs = Dict[str, str]()
+            Dict[String, String] nm_hdrs = Dict[String, String]()
             nm_hdrs.put("ETag", etag)
             return HttpServerResponse(304, "", mime, nm_hdrs)
     # 206 Partial Content: handle Range header
     if req.headers.contains("range"):
-        str range_hdr = req.headers["range"]
+        String range_hdr = req.headers["range"]
         if range_hdr.starts_with("bytes="):
-            str spec = range_hdr.byte_slice(6, range_hdr.byte_len())
+            String spec = range_hdr.byte_slice(6, range_hdr.byte_len())
             int total = content.byte_len()
             Option[int] dash_opt = spec.index_of("-")
             if dash_opt.is_some():
                 int dash = dash_opt.unwrap()
-                str start_s = spec.byte_slice(0, dash).trim()
-                str end_s = spec.byte_slice(dash + 1, spec.byte_len()).trim()
+                String start_s = spec.byte_slice(0, dash).trim()
+                String end_s = spec.byte_slice(dash + 1, spec.byte_len()).trim()
                 Option[int] start_opt = int.parse(start_s)
                 if start_opt.is_some():
                     int start = start_opt.unwrap()
@@ -1079,12 +1079,12 @@ HttpServerResponse http_serve_file(str base_dir, HttpRequest req):
                         if end_opt.is_some():
                             end_exclusive = end_opt.unwrap() + 1
                     if start < total and start < end_exclusive:
-                        str partial = content.byte_slice(start, end_exclusive)
-                        Dict[str, str] rhdrs = Dict[str, str]()
+                        String partial = content.byte_slice(start, end_exclusive)
+                        Dict[String, String] rhdrs = Dict[String, String]()
                         rhdrs.put("Content-Range", "bytes " + int_to_str(start) + "-" + int_to_str(end_exclusive - 1) + "/" + int_to_str(total))
                         rhdrs.put("ETag", etag)
                         return HttpServerResponse(206, partial, mime, rhdrs)
     # 200 OK
-    Dict[str, str] ok_hdrs = Dict[str, str]()
+    Dict[String, String] ok_hdrs = Dict[String, String]()
     ok_hdrs.put("ETag", etag)
     return HttpServerResponse(200, content, mime, ok_hdrs)

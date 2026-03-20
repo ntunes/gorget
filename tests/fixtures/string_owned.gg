@@ -13,8 +13,8 @@ void main():
     String greeting = "hello" + " world"
     print(greeting)
 
-    # Auto-coercion: String to str
-    str view = greeting.str()
+    # Auto-coercion: String to String
+    String view = greeting.str()
     print(view)
 
     # String push
@@ -30,7 +30,7 @@ void main():
     builder.clear()
     print(builder.len())
 
-    # str + str returns String
+    # String + String returns String
     auto result = "foo" + "bar"
     print(result)
 
@@ -44,7 +44,7 @@ void main():
     String upper = src.to_upper()
     print(upper)
 
-    str padded = "  hi  "
+    String padded = "  hi  "
     String trimmed = padded.trim()
     print(trimmed)
 
@@ -58,5 +58,5 @@ void main():
     String ch = String('A')
     print(ch)
 
-    # String passed to function expecting str
+    # String passed to function expecting String
     print(greeting.len())

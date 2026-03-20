@@ -1,14 +1,14 @@
 from std.collections import Vector, Dict
 
 void main():
-    Vector[str] names = Vector[str]()
+    Vector[String] names = Vector[String]()
     names.push("alice")
     names.push("bob")
-    str first = names.get(0).unwrap()
+    String first = names.get(0).unwrap()
     print(first)
-    str popped = names.pop().unwrap()
+    String popped = names.pop().unwrap()
     print(popped)
-    Dict[str, int] ages = Dict[str, int]()
+    Dict[String, int] ages = Dict[String, int]()
     ages.put("alice", 30)
     ages.put("bob", 25)
     int age = ages.get("alice").unwrap()

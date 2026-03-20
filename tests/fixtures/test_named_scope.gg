@@ -68,8 +68,8 @@ void main():
 
     # 9. Named scope with string operations
     formatting:
-        str greeting = "hello"
-        str name = "world"
+        String greeting = "hello"
+        String name = "world"
         print(f"{greeting} {name}")
 
     # 10. Named scope after loop

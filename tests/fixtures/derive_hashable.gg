@@ -16,7 +16,7 @@ void main():
     if h1 == h2:
         print("int hash consistent")
 
-    str s = "hello"
+    String s = "hello"
     int sh = s.hash()
     if sh != 0:
         print("str hash nonzero")

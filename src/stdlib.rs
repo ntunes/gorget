@@ -3468,7 +3468,7 @@ mod tests {
         let src = source.unwrap();
         assert!(src.contains("struct Canvas"));
         assert!(src.contains("struct Color"));
-        assert!(src.contains("Result[Canvas, str] open("));
+        assert!(src.contains("Result[Canvas, String] open("));
         assert!(src.contains("void close("));
         assert!(src.contains("void fill_circle("));
     }
@@ -3894,7 +3894,7 @@ mod tests {
         assert!(src.contains("stringify"));
         assert!(src.contains("equip TomlValue"));
         assert!(src.contains("Arr(Vector[TomlValue])"));
-        assert!(src.contains("Tbl(Dict[str, TomlValue])"));
+        assert!(src.contains("Tbl(Dict[String, TomlValue])"));
     }
 
     #[test]
@@ -4238,8 +4238,8 @@ mod tests {
         let src = source.unwrap();
         assert!(src.contains("struct CsvParser"));
         assert!(src.contains("struct CsvTable"));
-        assert!(src.contains("Result[Vector[Vector[str]], str] parse("));
-        assert!(src.contains("str stringify("));
+        assert!(src.contains("Result[Vector[Vector[String]], String] parse("));
+        assert!(src.contains("String stringify("));
         assert!(src.contains("equip CsvParser"));
         assert!(src.contains("equip CsvTable"));
     }
@@ -4612,7 +4612,7 @@ mod tests {
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct SqliteConn"));
-        assert!(src.contains("Result[SqliteConn, str] open("));
+        assert!(src.contains("Result[SqliteConn, String] open("));
         assert!(src.contains("DbConnection"));
     }
 

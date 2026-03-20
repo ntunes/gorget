@@ -7,19 +7,19 @@ void main():
 
     DateTime dt2000 = DateTime(2000, 1, 1, 0, 0, 0, 0)
 
-    str date_str = dt2000.format("%Y-%m-%d")
+    String date_str = dt2000.format("%Y-%m-%d")
     print(date_str)
 
-    str time_str = dt2000.format("%H:%M:%S")
+    String time_str = dt2000.format("%H:%M:%S")
     print(time_str)
 
     DateTime dt2024 = DateTime(2024, 7, 15, 14, 30, 45, 0)
-    str datetime_str = dt2024.format("%Y/%m/%d %H:%M")
+    String datetime_str = dt2024.format("%Y/%m/%d %H:%M")
     print(datetime_str)
 
     # 1970-01-01 was a Thursday
     DateTime dt1970 = DateTime(1970, 1, 1, 0, 0, 0, 0)
-    str weekday_str = dt1970.format("%A")
+    String weekday_str = dt1970.format("%A")
     print(weekday_str)
 
     print("done")

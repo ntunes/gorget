@@ -1,9 +1,9 @@
 struct Tracked:
-    str label
+    String label
 
 equip Tracked with Drop:
     void drop(!self):
-        str l = self.label
+        String l = self.label
         print(f"drop {l}")
 
 async int compute(int x):

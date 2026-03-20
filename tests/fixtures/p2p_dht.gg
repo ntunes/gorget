@@ -34,8 +34,8 @@ void main():
     p2p_poll(&node_b, 1000)
 
     # Verify B has the value locally
-    str key_hex = bytes_to_hex(key)
-    Result[Vector[uint8], str] b_result = p2p_dht_local_get(node_b, key_hex)
+    String key_hex = bytes_to_hex(key)
+    Result[Vector[uint8], String] b_result = p2p_dht_local_get(node_b, key_hex)
     if b_result.is_ok():
         print(bytes_to_str(b_result.unwrap()).unwrap())
 

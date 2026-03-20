@@ -1,4 +1,4 @@
-int process() throws str:
+int process() throws String:
     on error print("cleanup 1")
     on error print("cleanup 2")
     on error print("cleanup 3")

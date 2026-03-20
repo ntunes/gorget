@@ -8,7 +8,7 @@ void main():
     cli.add_positional("input", "Input file to process")
 
     # Parse a simple set of arguments
-    Vector[str] argv1 = Vector[str]()
+    Vector[String] argv1 = Vector[String]()
     argv1.push("--verbose")
     argv1.push("--output")
     argv1.push("result.txt")
@@ -18,34 +18,34 @@ void main():
     print(f"{ok1}")
 
     bool has_verbose = cli.has("verbose")
-    str output = cli.get("output")
-    Vector[str] pos = cli.positionals()
+    String output = cli.get("output")
+    Vector[String] pos = cli.positionals()
     print(f"{has_verbose}")
     print(output)
     int pos_count = pos.len()
     print(f"{pos_count}")
-    str first_pos = pos.get(0).unwrap()
+    String first_pos = pos.get(0).unwrap()
     print(first_pos)
 
     # Default value: --output not provided
     CliParser cli2 = CliParser.new("app2", "Another app")
     cli2.add_option("--out", "-o", "Output path", "default.txt")
-    Vector[str] argv2 = Vector[str]()
+    Vector[String] argv2 = Vector[String]()
     auto r2 = cli2.parse(argv2)
-    str def_out = cli2.get("out")
+    String def_out = cli2.get("out")
     print(def_out)
 
     # Flag not set → has returns false
     CliParser cli3 = CliParser.new("app3", "Third app")
     cli3.add_flag("--debug", "-d", "Debug mode")
-    Vector[str] argv3 = Vector[str]()
+    Vector[String] argv3 = Vector[String]()
     auto r3 = cli3.parse(argv3)
     bool no_debug = cli3.has("debug")
     print(f"{no_debug}")
 
     # Unknown option → Error result
     CliParser cli4 = CliParser.new("app4", "App4")
-    Vector[str] argv4 = Vector[str]()
+    Vector[String] argv4 = Vector[String]()
     argv4.push("--unknown")
     auto r4 = cli4.parse(argv4)
     bool is_err = r4.is_error()

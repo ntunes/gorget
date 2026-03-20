@@ -64,5 +64,5 @@ void main():
     print(r302.status_text())
 
     # Unknown code → "Unknown"
-    HttpServerResponse r_unk = HttpServerResponse(999, "", "text/plain", Dict[str, str]())
+    HttpServerResponse r_unk = HttpServerResponse(999, "", "text/plain", Dict[String, String]())
     print(r_unk.status_text())

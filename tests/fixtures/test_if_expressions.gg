@@ -72,15 +72,15 @@ void main():
 
     # 15. String if-expression (true branch)
     bool sf = true
-    str st1 = if sf: "yes" else: "no"
+    String st1 = if sf: "yes" else: "no"
     print(st1)
 
     # 16. String if-expression (false branch)
     bool sf2 = false
-    str st2 = if sf2: "yes" else: "no"
+    String st2 = if sf2: "yes" else: "no"
     print(st2)
 
     # 17. String if-expression with comparison
     int score = 85
-    str grade = if score > 70: "pass" else: "fail"
+    String grade = if score > 70: "pass" else: "fail"
     print(grade)

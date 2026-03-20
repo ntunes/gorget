@@ -1,6 +1,6 @@
 enum Outcome:
     Success(int)
-    Failure(str)
+    Failure(String)
 
 enum Maybe:
     Just(int)

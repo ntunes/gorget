@@ -1,11 +1,11 @@
 void main():
     # Vector enumerate
-    Vector[str] words = ["hello", "world", "foo"]
+    Vector[String] words = ["hello", "world", "foo"]
     for (i, word) in words.enumerate():
         print(f"{i}: {word}")
 
     # String enumerate
-    str text = "abc"
+    String text = "abc"
     for (i, ch) in text.enumerate():
         print(f"{i}: {ch}")
 

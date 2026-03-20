@@ -6,7 +6,7 @@ void main():
     vals.push(2.0)
     vals.push(4.0)
 
-    Vector[str] col_names = Vector[str]()
+    Vector[String] col_names = Vector[String]()
     col_names.push("val")
 
     Vector[Column] cols = Vector[Column]()
@@ -16,7 +16,7 @@ void main():
 
     # apply_float with a fractional multiplier — requires correct float(float) closure return type
     float(float) scale_fn = (float x): x * 2.5
-    str val_col = "val"
+    String val_col = "val"
     DataFrame df2 = df.apply_float(val_col, scale_fn)
     Column c = df2.get_column(val_col)
     print(f"{c.value_as_str(0)}")

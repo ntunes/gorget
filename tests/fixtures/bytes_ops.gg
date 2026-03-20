@@ -8,19 +8,19 @@ from std.bytes import base64_encode, base64_decode
 from std.collections import Vector
 
 void main():
-    # str → bytes → str roundtrip
+    # String → bytes → String roundtrip
     Vector[uint8] b = bytes_from_str("Hello")
     print(f"{b.len()}")
-    str s = bytes_to_str(b).unwrap()
+    String s = bytes_to_str(b).unwrap()
     print(s)
 
     # hex roundtrip
     Vector[uint8] h = bytes_from_hex("48656c6c6f")
-    str hs = bytes_to_str(h).unwrap()
+    String hs = bytes_to_str(h).unwrap()
     print(hs)
 
     # bytes_to_hex
-    str hex = bytes_to_hex(h)
+    String hex = bytes_to_hex(h)
     print(hex)
 
     # big-endian u32 read/write
@@ -46,7 +46,7 @@ void main():
     print(f"{le_val}")
     # verify byte order: 305419896 = 0x12345678
     # LE stores as 78 56 34 12
-    str le_hex = bytes_to_hex(le_buf)
+    String le_hex = bytes_to_hex(le_buf)
     print(le_hex)
 
     # little-endian u16 read/write
@@ -55,7 +55,7 @@ void main():
     int le_v16 = bytes_read_u16_le(le_buf16, 0)
     print(f"{le_v16}")
     # verify byte order: 4660 = 0x1234, LE stores as 34 12
-    str le_hex16 = bytes_to_hex(le_buf16)
+    String le_hex16 = bytes_to_hex(le_buf16)
     print(le_hex16)
 
     # concat

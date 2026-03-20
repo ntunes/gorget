@@ -1,10 +1,10 @@
-# Lifetime error: str view borrows from a local String that gets moved
+# Lifetime error: String view borrows from a local String that gets moved
 
 void consume(String !s):
     pass
 
 void main():
     String s = "hello" + ""
-    str v = s.as_str()
+    String v = s.as_str()
     consume(!s)
     print(v)

@@ -41,7 +41,7 @@ def main():
     v.push(30)
     assert v.len() == 3
 
-    str s = "hello"
+    String s = "hello"
     assert s.len() == 5
 
     # 9. Assert with message (should not trigger)

@@ -16,7 +16,7 @@ void main():
     P2PEvent ev1 = p2p_poll(&nodeB, 1000)
     P2PEvent ev2 = p2p_poll(&nodeA, 1000)
 
-    str b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
+    String b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
 
     # A opens TWO streams to B
     int s1 = p2p_stream_open(&nodeA, b_hex).unwrap()
@@ -49,8 +49,8 @@ void main():
     p2p_stream_send(&nodeA, s2, bytes_from_str("control channel"))
 
     # Poll loop to flush and receive
-    str recv1 = ""
-    str recv2 = ""
+    String recv1 = ""
+    String recv2 = ""
     int rounds = 0
     while rounds < 30:
         P2PEvent aev = p2p_poll(&nodeA, 50)
@@ -59,7 +59,7 @@ void main():
             int data_sid = bytes_read_u32_be(bev.data, 0)
             Vector[uint8] d = p2p_stream_recv(&nodeB, data_sid)
             if d.len() > 0:
-                str msg = bytes_to_str(d).unwrap()
+                String msg = bytes_to_str(d).unwrap()
                 if msg == "data channel":
                     recv1 = msg
                 elif msg == "control channel":

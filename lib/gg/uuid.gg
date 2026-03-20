@@ -10,7 +10,7 @@ from std.conv import ord
 
 # ── Hex helpers ──────────────────────────────────────────────
 
-private int hex_val(str c):
+private int hex_val(String c):
     int code = ord(c)
     if code >= 48 and code <= 57:
         return code - 48
@@ -36,7 +36,7 @@ equip UUID:
         uuid_b.set(8, ((uuid_b8 & 63) | 128) as uint8)
         return UUID(uuid_b)
 
-    Result[UUID, str] parse(str uuid_s):
+    Result[UUID, String] parse(String uuid_s):
         if uuid_s.byte_len() != 36:
             return Error("invalid UUID length")
         Vector[uint8] uuid_out = Vector[uint8]()
@@ -57,9 +57,9 @@ equip UUID:
             return Error("UUID byte count mismatch")
         return Ok(UUID(uuid_out))
 
-    str to_string(self):
-        str uuid_hex = "0123456789abcdef"
-        str uuid_s = ""
+    String to_string(self):
+        String uuid_hex = "0123456789abcdef"
+        String uuid_s = ""
         int uuid_i = 0
         while uuid_i < 16:
             int uuid_bv = self.uuid_bytes.get(uuid_i).unwrap() as int

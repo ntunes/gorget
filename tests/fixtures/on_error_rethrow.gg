@@ -1,12 +1,12 @@
-int risky(int x) throws str:
+int risky(int x) throws String:
     if x < 0:
         throw "negative"
     return x * 2
 
-int process(int x) throws str:
+int process(int x) throws String:
     on error:
         print("cleanup")
-    int val = risky(x) rethrow (str e): f"process: {e}"
+    int val = risky(x) rethrow (String e): f"process: {e}"
     return val + 1
 
 void main():

@@ -1,4 +1,4 @@
-int risky(int x) throws str:
+int risky(int x) throws String:
     if x < 0:
         throw "negative"
     return x * 2

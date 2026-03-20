@@ -1,8 +1,8 @@
 from std.process import process_spawn
 
 void main():
-    Vector[str] args = Vector[str]()
-    Result[Process, str] r = process_spawn("cat", args)
+    Vector[String] args = Vector[String]()
+    Result[Process, String] r = process_spawn("cat", args)
     match r:
         case Ok(proc):
             proc.write_stdin("hello from gorget\n")

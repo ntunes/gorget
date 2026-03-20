@@ -23,7 +23,7 @@ int count_until_five(Vector[int] v):
     return -1
 
 # 4. Multiple return paths
-str classify(int n):
+String classify(int n):
     if n < 0:
         return "negative"
     if n == 0:
@@ -35,7 +35,7 @@ str classify(int n):
     return "large"
 
 # 5. Return in nested if/else
-str nested_check(int x, int y):
+String nested_check(int x, int y):
     if x > 0:
         if y > 0:
             return "both positive"
@@ -57,7 +57,7 @@ Option[int] find_index(Vector[int] v, int target):
     return None()
 
 # 7. Guard clause pattern
-String greet(str name):
+String greet(String name):
     if name == "":
         return "Hello, stranger!"
     return f"Hello, {name}!"

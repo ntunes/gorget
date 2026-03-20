@@ -1,5 +1,5 @@
-# Nested collection types: Vector[Vector[int]], Dict[str, Vector[int]],
-# Vector[Option[int]], Option[Vector[int]], Dict[str, Option[int]]
+# Nested collection types: Vector[Vector[int]], Dict[String, Vector[int]],
+# Vector[Option[int]], Option[Vector[int]], Dict[String, Option[int]]
 from std.collections import Vector, Dict
 
 void main():
@@ -36,9 +36,9 @@ void main():
     print(cloned[0])                           # 1 (independent)
     print(cloned.len())                        # 3
 
-    # === 2. Dict[str, Vector[int]] ===
+    # === 2. Dict[String, Vector[int]] ===
     print("--- dict_str_vec ---")
-    Dict[str, Vector[int]] groups = Dict[str, Vector[int]]()
+    Dict[String, Vector[int]] groups = Dict[String, Vector[int]]()
     Vector[int] evens = Vector[int]()
     evens.push(2)
     evens.push(4)
@@ -109,9 +109,9 @@ void main():
     Option[Vector[int]] none_vec = None()
     print(none_vec.is_none())                  # true
 
-    # === 5. Dict[str, Option[int]] ===
+    # === 5. Dict[String, Option[int]] ===
     print("--- dict_str_option ---")
-    Dict[str, Option[int]] scores = Dict[str, Option[int]]()
+    Dict[String, Option[int]] scores = Dict[String, Option[int]]()
     scores.put("alice", Some(95))
     Option[int] no_score = None()
     scores.put("bob", no_score)

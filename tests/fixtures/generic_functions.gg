@@ -14,7 +14,7 @@ void main():
     print(f"{a}")
     float b = identity[float](3.14)
     print(f"{b}")
-    str c = identity[str]("hello")
+    String c = identity[String]("hello")
     print(f"{c}")
     int d = first[int](10, 20)
     print(f"{d}")

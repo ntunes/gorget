@@ -1,4 +1,4 @@
-str classify[T]():
+String classify[T]():
     meta if T is float:
         return "float"
     elif T is signed:
@@ -10,19 +10,19 @@ str classify[T]():
     else:
         return "other"
 
-str numeric_check[T]():
+String numeric_check[T]():
     meta if T is numeric:
         return "numeric"
     else:
         return "not-numeric"
 
-str negation_check[T]():
+String negation_check[T]():
     meta if T is not signed:
         return "not-signed"
     else:
         return "signed"
 
-str exact_check[T]():
+String exact_check[T]():
     meta if T is float32:
         return "float32-exact"
     elif T is float:
@@ -30,7 +30,7 @@ str exact_check[T]():
     else:
         return "other"
 
-str or_check[T]():
+String or_check[T]():
     meta if T is signed or T is float:
         return "handles-signed-math"
     else:
@@ -44,7 +44,7 @@ void main():
     print(classify[uint8]())
     print(classify[uint]())
     print(classify[bool]())
-    print(classify[str]())
+    print(classify[String]())
     print(numeric_check[int]())
     print(numeric_check[float]())
     print(numeric_check[bool]())

@@ -7,7 +7,7 @@ void main():
     write_file("__test_a.txt", "a")
     write_file("__test_b.txt", "b")
 
-    Vector[str] entries = readdir(".")
+    Vector[String] entries = readdir(".")
     auto count = 0
     for e in entries:
         if e == "__test_a.txt":

@@ -1,7 +1,7 @@
 struct Builder:
     int width
     int height
-    str title
+    String title
 
 equip Builder:
     Builder with_width(self, int w):
@@ -10,7 +10,7 @@ equip Builder:
     Builder with_height(self, int h):
         return Builder(self.width, h, self.title)
 
-    Builder with_title(self, str t):
+    Builder with_title(self, String t):
         return Builder(self.width, self.height, t)
 
     String build(self):

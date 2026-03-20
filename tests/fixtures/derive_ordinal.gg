@@ -11,7 +11,7 @@ enum Token:
     Plus
     Minus
     Number(float)
-    Ident(str)
+    Ident(String)
 
 void main():
     # Unit variants — no parens needed

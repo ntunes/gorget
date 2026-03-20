@@ -19,7 +19,7 @@ T unwrap_rewrapped[T](Box2[T] b):
 
 # Generic function that operates on two generic struct instances
 bool same_value[T](Box2[T] a, Box2[T] b):
-    # Compare via formatted output — works for int and str
+    # Compare via formatted output — works for int and String
     return a.get() == b.get()
 
 struct Pair2[A, B]:
@@ -43,8 +43,8 @@ void main():
     int v1 = unwrap_box[int](b1)
     print(f"{v1}")
 
-    Box2[str] b2 = Box2[str]("hello")
-    str v2 = unwrap_box[str](b2)
+    Box2[String] b2 = Box2[String]("hello")
+    String v2 = unwrap_box[String](b2)
     print(v2)
 
     # Test generic function with method chaining
@@ -63,6 +63,6 @@ void main():
         print("not equal")
 
     # Test multi-param generic struct in generic function
-    Pair2[int, str] p = Pair2[int, str](10, "world")
-    int first = extract_first[int, str](p)
+    Pair2[int, String] p = Pair2[int, String](10, "world")
+    int first = extract_first[int, String](p)
     print(f"{first}")

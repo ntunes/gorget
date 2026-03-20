@@ -39,12 +39,12 @@ void main():
     print(lower.str())
 
     # --- trim ---
-    str padded = "  hi  "
+    String padded = "  hi  "
     String trimmed = padded.trim()
     print(trimmed)
 
     # --- contains ---
-    str src = "hello world"
+    String src = "hello world"
     print(f"{src.contains("world")}")
     print(f"{src.contains("xyz")}")
 

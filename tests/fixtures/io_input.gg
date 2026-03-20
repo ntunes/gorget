@@ -2,9 +2,9 @@ from std.io import input, readline
 
 void main():
     # readline reads a line from stdin (no prompt)
-    str line1 = readline()
+    String line1 = readline()
     print(f"got: {line1}")
 
     # input prints a prompt then reads a line
-    str line2 = input("name? ")
+    String line2 = input("name? ")
     print(f"hello {line2}")

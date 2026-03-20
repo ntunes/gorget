@@ -8,26 +8,26 @@ from std.collections import Vector
 # ── CsvParser ────────────────────────────────────────────────
 
 struct CsvParser:
-    str input
+    String input
     int pos
-    str err
-    str delim
+    String err
+    String delim
 
 equip CsvParser:
     bool failed(self): self.err != ""
 
-    void fail(&self, str msg):
+    void fail(&self, String msg):
         if self.err == "":
             self.err = move msg
 
     bool at_end(self): self.pos >= self.input.byte_len()
 
-    str peek(self): self.input.char_at(self.pos)
+    String peek(self): self.input.char_at(self.pos)
 
     void advance(&self):
         self.pos = self.pos + 1
 
-    str parse_field(&self):
+    String parse_field(&self):
         if self.failed():
             return ""
         if self.at_end():
@@ -35,21 +35,21 @@ equip CsvParser:
         if self.peek() == '"':
             return self.parse_quoted()
         # Unquoted field — consume until delimiter, \r, \n, or EOF
-        str val = ""
+        String val = ""
         while not self.at_end():
-            str ch = self.peek()
+            String ch = self.peek()
             if ch == self.delim or ch == '\r' or ch == '\n':
                 return val
             val = val + ch
             self.advance()
         return val
 
-    str parse_quoted(&self):
+    String parse_quoted(&self):
         # Skip opening quote
         self.advance()
-        str val = ""
+        String val = ""
         while not self.at_end():
-            str ch = self.peek()
+            String ch = self.peek()
             if ch == '"':
                 self.advance()
                 # "" inside quoted field = literal "
@@ -64,21 +64,21 @@ equip CsvParser:
         self.fail("unterminated quoted field")
         return ""
 
-    Vector[str] parse_record(&self):
-        Vector[str] fields = Vector[str]()
+    Vector[String] parse_record(&self):
+        Vector[String] fields = Vector[String]()
         if self.failed():
             return fields
         # Parse first field
-        str fld = self.parse_field()
+        String fld = self.parse_field()
         if self.failed():
             return fields
         fields.push(fld)
         # Parse remaining fields separated by delimiter
         while not self.at_end() and not self.failed():
-            str ch = self.peek()
+            String ch = self.peek()
             if ch == self.delim:
                 self.advance()
-                str next = self.parse_field()
+                String next = self.parse_field()
                 if self.failed():
                     return fields
                 fields.push(next)
@@ -93,8 +93,8 @@ equip CsvParser:
                 return fields
         return fields
 
-    Vector[Vector[str]] parse_all(&self):
-        Vector[Vector[str]] records = Vector[Vector[str]]()
+    Vector[Vector[String]] parse_all(&self):
+        Vector[Vector[String]] records = Vector[Vector[String]]()
         while not self.at_end() and not self.failed():
             # Skip bare trailing newlines
             if self.peek() == '\r' or self.peek() == '\n':
@@ -105,7 +105,7 @@ equip CsvParser:
                 else:
                     self.advance()
                 continue
-            Vector[str] rec = self.parse_record()
+            Vector[String] rec = self.parse_record()
             if self.failed():
                 return records
             records.push(rec)
@@ -114,31 +114,31 @@ equip CsvParser:
 # ── CsvTable ─────────────────────────────────────────────────
 
 struct CsvTable:
-    Vector[str] headers_data
-    Vector[Vector[str]] rows_data
+    Vector[String] headers_data
+    Vector[Vector[String]] rows_data
 
 equip CsvTable:
     int row_count(self): self.rows_data.len()
 
     int col_count(self): self.headers_data.len()
 
-    Vector[str] headers(self): self.headers_data
+    Vector[String] headers(self): self.headers_data
 
-    Vector[str] row(self, int n):
+    Vector[String] row(self, int n):
         return self.rows_data.get(n).unwrap()
 
-    str get(self, int row_idx, int col_idx):
-        Vector[str] r = self.rows_data.get(row_idx).unwrap()
+    String get(self, int row_idx, int col_idx):
+        Vector[String] r = self.rows_data.get(row_idx).unwrap()
         return r.get(col_idx).unwrap()
 
-    str get_named(self, int row_idx, str col):
+    String get_named(self, int row_idx, String col):
         int ci = self.column_index(col)
         if ci < 0:
             return ""
-        Vector[str] r = self.rows_data.get(row_idx).unwrap()
+        Vector[String] r = self.rows_data.get(row_idx).unwrap()
         return r.get(ci).unwrap()
 
-    bool has_column(self, str name):
+    bool has_column(self, String name):
         int k = 0
         while k < self.headers_data.len():
             if self.headers_data.get(k).unwrap() == name:
@@ -146,7 +146,7 @@ equip CsvTable:
             k = k + 1
         return false
 
-    int column_index(self, str name):
+    int column_index(self, String name):
         int k = 0
         while k < self.headers_data.len():
             if self.headers_data.get(k).unwrap() == name:
@@ -156,22 +156,22 @@ equip CsvTable:
 
 # ── Stringify helper ─────────────────────────────────────────
 
-private str stringify_field(str field, str sep):
+private String stringify_field(String field, String sep):
     # Check if quoting is needed
     bool need_quote = false
     int fi = 0
     while fi < field.byte_len():
-        str fc = field.char_at(fi)
+        String fc = field.char_at(fi)
         if fc == sep or fc == '"' or fc == '\n' or fc == '\r':
             need_quote = true
         fi = fi + 1
     if not need_quote:
         return field
     # Quote: wrap in " and double any " chars
-    str out = "\""
+    String out = "\""
     int fj = 0
     while fj < field.byte_len():
-        str qc = field.char_at(fj)
+        String qc = field.char_at(fj)
         if qc == '"':
             out = out + "\"\""
         else:
@@ -181,44 +181,44 @@ private str stringify_field(str field, str sep):
 
 # ── Public API ───────────────────────────────────────────────
 
-Result[Vector[Vector[str]], str] parse(str text):
+Result[Vector[Vector[String]], String] parse(String text):
     return parse_delim(text, ",")
 
-Result[Vector[Vector[str]], str] parse_delim(str text, str sep):
+Result[Vector[Vector[String]], String] parse_delim(String text, String sep):
     CsvParser p = CsvParser(text, 0, "", sep)
-    Vector[Vector[str]] recs = p.parse_all()
+    Vector[Vector[String]] recs = p.parse_all()
     if p.failed():
         return Error(p.err)
     return Ok(recs)
 
-Result[CsvTable, str] parse_table(str text):
+Result[CsvTable, String] parse_table(String text):
     return parse_table_delim(text, ",")
 
-Result[CsvTable, str] parse_table_delim(str text, str sep):
+Result[CsvTable, String] parse_table_delim(String text, String sep):
     CsvParser p = CsvParser(text, 0, "", sep)
-    Vector[Vector[str]] all = p.parse_all()
+    Vector[Vector[String]] all = p.parse_all()
     if p.failed():
         return Error(p.err)
     if all.len() == 0:
-        Vector[str] empty_hdr = Vector[str]()
-        Vector[Vector[str]] empty_rows = Vector[Vector[str]]()
+        Vector[String] empty_hdr = Vector[String]()
+        Vector[Vector[String]] empty_rows = Vector[Vector[String]]()
         return Ok(CsvTable(empty_hdr, empty_rows))
-    Vector[str] hdr = all.get(0).unwrap()
-    Vector[Vector[str]] data = Vector[Vector[str]]()
+    Vector[String] hdr = all.get(0).unwrap()
+    Vector[Vector[String]] data = Vector[Vector[String]]()
     int ri = 1
     while ri < all.len():
         data.push(all.get(ri).unwrap())
         ri = ri + 1
     return Ok(CsvTable(hdr, data))
 
-str stringify(Vector[Vector[str]] rows):
+String stringify(Vector[Vector[String]] rows):
     return stringify_delim(rows, ",")
 
-str stringify_delim(Vector[Vector[str]] rows, str sep):
-    str out = ""
+String stringify_delim(Vector[Vector[String]] rows, String sep):
+    String out = ""
     int ri = 0
     while ri < rows.len():
-        Vector[str] r = rows.get(ri).unwrap()
+        Vector[String] r = rows.get(ri).unwrap()
         int ci = 0
         while ci < r.len():
             if ci > 0:
@@ -229,11 +229,11 @@ str stringify_delim(Vector[Vector[str]] rows, str sep):
         ri = ri + 1
     return out
 
-str stringify_table(CsvTable tbl):
+String stringify_table(CsvTable tbl):
     return stringify_table_delim(tbl, ",")
 
-str stringify_table_delim(CsvTable tbl, str sep):
-    str out = ""
+String stringify_table_delim(CsvTable tbl, String sep):
+    String out = ""
     # Headers
     int hi = 0
     while hi < tbl.headers_data.len():
@@ -245,7 +245,7 @@ str stringify_table_delim(CsvTable tbl, str sep):
     # Rows
     int ri = 0
     while ri < tbl.rows_data.len():
-        Vector[str] r = tbl.rows_data.get(ri).unwrap()
+        Vector[String] r = tbl.rows_data.get(ri).unwrap()
         int ci = 0
         while ci < r.len():
             if ci > 0:

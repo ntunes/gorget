@@ -1,4 +1,4 @@
-String safe_divide(int a, int b) throws str:
+String safe_divide(int a, int b) throws String:
     if b == 0:
         throw "division by zero"
     return f"{a / b}"

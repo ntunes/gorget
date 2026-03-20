@@ -4,8 +4,8 @@ enum Direction:
     East
     West
 
-str name(Direction d):
-    str result = ""
+String name(Direction d):
+    String result = ""
     match d:
         case North:
             result = "N"

@@ -28,8 +28,8 @@ void main():
     print(f"{unwrapped.get(0).unwrap()}")
     print(f"{unwrapped.len()}")
 
-    # Dict[str, Vector[int]] — Dict with collection values
-    Dict[str, Vector[int]] groups = Dict[str, Vector[int]]()
+    # Dict[String, Vector[int]] — Dict with collection values
+    Dict[String, Vector[int]] groups = Dict[String, Vector[int]]()
     Vector[int] evens = Vector[int]()
     evens.push(2)
     evens.push(4)

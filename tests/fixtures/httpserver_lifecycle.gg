@@ -22,7 +22,7 @@ from std.signal import signal_ignore, SIGPIPE
 HttpServerResponse handle(HttpRequest req):
     return HttpServerResponse.ok("pong")
 
-void check(str label, bool ok):
+void check(String label, bool ok):
     if not ok:
         print("FAIL: " + label)
     else:
@@ -32,7 +32,7 @@ async void serve_n(ServerSocket !srv, int n):
     TaskGroup group = TaskGroup()
     int i = 0
     while i < n:
-        Result[Socket, str] ar = srv.accept()
+        Result[Socket, String] ar = srv.accept()
         if ar.is_ok():
             Socket client = ar.unwrap()
             group.spawn(spawn http_server_handle_conn_ka(!client, handle, 500))
@@ -44,7 +44,7 @@ async void serve_n_limited(ServerSocket !srv, int n, int max_req):
     TaskGroup group = TaskGroup()
     int i = 0
     while i < n:
-        Result[Socket, str] ar = srv.accept()
+        Result[Socket, String] ar = srv.accept()
         if ar.is_ok():
             Socket client = ar.unwrap()
             group.spawn(spawn http_server_handle_conn_ka_limited(!client, handle, 5000, max_req))
@@ -62,10 +62,10 @@ async void main():
 
     # Both get requests use Connection: close → 2 separate connections
     String base1 = "http://127.0.0.1:" + int_to_str(port1)
-    Result[HttpResponse, str] r1a = get(base1 + "/ping")
+    Result[HttpResponse, String] r1a = get(base1 + "/ping")
     check("serve_n_req1", r1a.is_ok() and r1a.unwrap().status_code == 200)
 
-    Result[HttpResponse, str] r1b = get(base1 + "/ping")
+    Result[HttpResponse, String] r1b = get(base1 + "/ping")
     check("serve_n_req2", r1b.is_ok() and r1b.unwrap().status_code == 200)
 
     server1.await()
@@ -77,7 +77,7 @@ async void main():
     Task[void] server2 = spawn serve_n_limited(!srv2, 1, 1)
     sleep(0.5).await()
 
-    Result[Socket, str] cr = socket_connect("127.0.0.1", port2)
+    Result[Socket, String] cr = socket_connect("127.0.0.1", port2)
     if cr.is_error():
         print("FAIL: connect")
         server2.await()
@@ -85,18 +85,18 @@ async void main():
     Socket conn = cr.unwrap()
 
     # Send req1 with Connection: keep-alive (server should close anyway after max_requests=1)
-    str req_str = "GET /ping HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n"
+    String req_str = "GET /ping HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n"
     conn.write_str(req_str)
 
     # Drain status line + headers, collect Content-Length
     int content_length = 0
     bool reading_hdrs = true
     while reading_hdrs:
-        Result[str, str] line_r = conn.read_line()
+        Result[String, String] line_r = conn.read_line()
         if line_r.is_error():
             reading_hdrs = false
         else:
-            str line = line_r.unwrap()
+            String line = line_r.unwrap()
             if line == "":
                 reading_hdrs = false
             else:
@@ -104,7 +104,7 @@ async void main():
                 if colon_opt.is_some():
                     int colon = colon_opt.unwrap()
                     String hname = line.byte_slice(0, colon).trim().to_lower()
-                    str hval = line.byte_slice(colon + 1, line.byte_len()).trim()
+                    String hval = line.byte_slice(colon + 1, line.byte_len()).trim()
                     if hname == "content-length":
                         Option[int] clv = int.parse(hval)
                         if clv.is_some():
@@ -118,12 +118,12 @@ async void main():
     # Set a short timeout so we don't hang if there's a bug.
     conn.set_timeout(500)
     # Attempt to read — should get EOF (Ok("")) because server closed the connection.
-    Result[str, str] resp2_r = conn.read_line()
+    Result[String, String] resp2_r = conn.read_line()
     bool closed = false
     if resp2_r.is_error():
         closed = true
     else:
-        str resp2_line = resp2_r.unwrap()
+        String resp2_line = resp2_r.unwrap()
         if resp2_line == "":
             closed = true
     check("max_req_closes", closed)

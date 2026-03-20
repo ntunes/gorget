@@ -27,7 +27,7 @@ void main():
         print(x)
 
     # iterate string chars
-    str s = "abc"
+    String s = "abc"
     for c in s:
         print(c)
 

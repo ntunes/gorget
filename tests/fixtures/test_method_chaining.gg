@@ -37,7 +37,7 @@ void main():
     print(f"{result5}")
 
     # === 6. Result map chain ===
-    Result[int, str] r6 = Ok(5)
+    Result[int, String] r6 = Ok(5)
     int result6 = r6.map((int x): x * 2).unwrap_or(0)
     print(f"{result6}")
 

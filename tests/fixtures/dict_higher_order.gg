@@ -1,19 +1,19 @@
 from std.collections import Dict
 
 void main():
-    Dict[str, int] ages = Dict[str, int]()
+    Dict[String, int] ages = Dict[String, int]()
     ages.put("alice", 30)
     ages.put("bob", 25)
     ages.put("carol", 35)
 
     # fold: sum all values
-    int total = ages.fold(0, (int acc, str k, int v): acc + v)
+    int total = ages.fold(0, (int acc, String k, int v): acc + v)
     print(f"{total}")
 
     # filter: keep entries where value > 28
-    Dict[str, int] older = ages.filter((str k, int v): v > 28)
+    Dict[String, int] older = ages.filter((String k, int v): v > 28)
     print(f"{older.len()}")
 
     # fold on filtered: sum the older ages
-    int older_total = older.fold(0, (int acc, str k, int v): acc + v)
+    int older_total = older.fold(0, (int acc, String k, int v): acc + v)
     print(f"{older_total}")

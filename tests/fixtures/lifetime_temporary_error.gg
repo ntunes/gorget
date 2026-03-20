@@ -1,5 +1,5 @@
-# Lifetime error: str view from owned String, source moved
-# (After str/String unification, str takes ownership of return value;
+# Lifetime error: String view from owned String, source moved
+# (After str/String unification, String takes ownership of return value;
 #  the original TemporaryBorrow error is subsumed by ownership transfer.
 #  This test now verifies use-after-move on a view derived from the owned result.)
 void consume(String !s):
@@ -7,6 +7,6 @@ void consume(String !s):
 
 void main():
     String s = "hello" + ""
-    str v = s.as_str()
+    String v = s.as_str()
     consume(!s)
     print(v)

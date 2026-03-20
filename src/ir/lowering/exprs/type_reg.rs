@@ -235,7 +235,7 @@ fn lookup_global_type(ctx: &LoweringContext, type_name: &str) -> Option<TypeId> 
             "int" | "i64" => Some(I64_TYPE),
             "float" | "f64" => Some(F64_TYPE),
             "bool" => Some(BOOL_TYPE),
-            "str" => Some(ctx.type_mapper.str_type),
+            "str" | "String" => Some(ctx.type_mapper.str_type),
             "i8" => Some(I8_TYPE),
             "i16" => Some(I16_TYPE),
             "i32" => Some(I32_TYPE),

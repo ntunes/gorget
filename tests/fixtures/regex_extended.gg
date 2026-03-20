@@ -3,7 +3,7 @@ from std.collections import Vector
 
 void main():
     # find_at: search for \d+ starting at an offset
-    Result[Regex, str] rx_result = regex_compile(r"\d+")
+    Result[Regex, String] rx_result = regex_compile(r"\d+")
     match rx_result:
         case Ok(rx):
             # "abc 42 def 99" — start at offset 7 → should find "99"
@@ -19,13 +19,13 @@ void main():
             print("error")
 
     # groups(): returns all capture groups as a vector
-    Result[Regex, str] grp_result = regex_compile(r"(\w+)-(\d+)")
+    Result[Regex, String] grp_result = regex_compile(r"(\w+)-(\d+)")
     match grp_result:
         case Ok(rx):
             Option[Match] m_opt = rx.find("item-42")
             match m_opt:
                 case Some(m):
-                    Vector[str] gs = m.groups()
+                    Vector[String] gs = m.groups()
                     int gcount = gs.len()
                     print(f"{gcount}")
                     int idx = 0

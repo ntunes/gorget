@@ -7,7 +7,7 @@ void main():
     ages.push(35)
     ages.push(40)
 
-    Vector[str] names = Vector[str]()
+    Vector[String] names = Vector[String]()
     names.push("Alice")
     names.push("Bob")
     names.push("Charlie")
@@ -19,7 +19,7 @@ void main():
     scores.push(7.5)
     scores.push(9.5)
 
-    Vector[str] col_names = Vector[str]()
+    Vector[String] col_names = Vector[String]()
     col_names.push("name")
     col_names.push("age")
     col_names.push("score")
@@ -32,7 +32,7 @@ void main():
     DataFrame df = df_from_columns(col_names, cols)
 
     # select subset of columns
-    Vector[str] sel = Vector[str]()
+    Vector[String] sel = Vector[String]()
     sel.push("name")
     sel.push("age")
     DataFrame df2 = df.select(sel)
@@ -56,7 +56,7 @@ void main():
     Column fc = filt.get_column("name")
     print(f"{fc.value_as_str(0)}")
 
-    # filter_by str column
+    # filter_by String column
     DataFrame filt2 = df.filter_by("name", "==", "Alice")
     print(f"{filt2.nrows()}")
     Column fc2 = filt2.get_column("age")

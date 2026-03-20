@@ -16,8 +16,8 @@ void main():
     print(f"{b}")   # 17
     print(f"{c}")   # 60
 
-    # Dict[str, int] compound assign
-    Dict[str, int] d = Dict[str, int]()
+    # Dict[String, int] compound assign
+    Dict[String, int] d = Dict[String, int]()
     d["a"] = 100
     d["b"] = 200
     d["a"] += 50
@@ -34,7 +34,7 @@ void main():
     print(f"{vi}")  # 117
 
     # Dict compound assign with variable key
-    str key = "a"
+    String key = "a"
     d[key] += 1000
     int dk = d["a"]
     print(f"{dk}")  # 1150

@@ -1,11 +1,11 @@
 void main():
-    str ascii = "hello"
+    String ascii = "hello"
     print(ascii.len())
     print(ascii.byte_len())
-    str emoji = "café"
+    String emoji = "café"
     print(emoji.len())
     print(emoji.byte_len())
-    str cjk = "你好"
+    String cjk = "你好"
     print(cjk.len())
     print(cjk.byte_len())
     print("".len())

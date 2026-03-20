@@ -1,7 +1,7 @@
 int add(int a, int b):
     return a + b
 
-int greet(str name, int age = 25):
+int greet(String name, int age = 25):
     print(f"{name} is {age}")
     return age
 

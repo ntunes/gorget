@@ -1,8 +1,8 @@
 # Ownership showcase — message pipeline with borrow, mutable borrow, and move
 
 struct Message:
-    str sender
-    str subject
+    String sender
+    String subject
     int priority
 
 void preview(Message msg):

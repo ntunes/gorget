@@ -4,9 +4,9 @@ enum Json:
     Null
     Bool(bool)
     Number(float)
-    Str(str)
+    Str(String)
     Arr(Vector[Json])
-    Obj(Dict[str, Json])
+    Obj(Dict[String, Json])
 
 void main():
     # Build {"name": "Alice", "tags": ["a", "b"], "active": true}
@@ -14,7 +14,7 @@ void main():
     tags.push(Str("a"))
     tags.push(Str("b"))
 
-    Dict[str, Json] obj = Dict[str, Json]()
+    Dict[String, Json] obj = Dict[String, Json]()
     obj.put("name", Str("Alice"))
     obj.put("tags", Arr(tags))
     obj.put("active", Bool(true))

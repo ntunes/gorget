@@ -3,7 +3,7 @@ void consume(String !s):
 
 void main():
     String s = "hello" + ""
-    str v = s.as_str()
+    String v = s.as_str()
     auto f = (): print(v)
     consume(!s)
     f()

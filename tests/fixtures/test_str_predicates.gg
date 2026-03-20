@@ -18,7 +18,7 @@ void main():
     print("abc!!".is_alphanumeric())
 
     # is_whitespace
-    str ws = "  \t"
+    String ws = "  \t"
     print(ws.is_whitespace())
     print(" a".is_whitespace())
 
@@ -44,7 +44,7 @@ void main():
     print("HELLO".to_lower())
 
     # trim
-    str padded = "  hello  "
+    String padded = "  hello  "
     print(padded.trim())
 
     # starts_with / ends_with

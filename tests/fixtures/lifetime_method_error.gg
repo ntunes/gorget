@@ -3,7 +3,7 @@ struct Holder:
     String name
 
 equip Holder:
-    str get_name(self):
+    String get_name(self):
         return self.name
 
 void consume(Holder !h):
@@ -11,6 +11,6 @@ void consume(Holder !h):
 
 void main():
     Holder h = Holder("hello")
-    str v = h.get_name()
+    String v = h.get_name()
     consume(!h)
     print(v)

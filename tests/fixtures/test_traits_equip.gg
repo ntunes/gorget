@@ -53,7 +53,7 @@ trait Named:
         return f"hello {self.name()}"
 
 struct Person:
-    str first
+    String first
 
 equip Person with Named:
     String name(self):

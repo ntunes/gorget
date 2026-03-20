@@ -32,7 +32,7 @@ HttpServerResponse handle(HttpRequest req):
     elif req.method == "GET" and req.path == "/powered":
         return HttpServerResponse.ok("ok").with_header("x-powered-by", "gorget")
     elif req.method == "GET" and req.path == "/search":
-        Dict[str, str] qp = parse_query_string(req.query_string)
+        Dict[String, String] qp = parse_query_string(req.query_string)
         if qp.contains("q"):
             return HttpServerResponse.ok("q=" + qp["q"])
         return HttpServerResponse.ok("no-q")
@@ -44,7 +44,7 @@ async void serve_n(ServerSocket !srv, int n):
     TaskGroup group = TaskGroup()
     int i = 0
     while i < n:
-        Result[Socket, str] ar = srv.accept()
+        Result[Socket, String] ar = srv.accept()
         if ar.is_ok():
             Socket client = ar.unwrap()
             group.spawn(spawn http_server_handle_conn_ka(!client, handle, 500))
@@ -54,7 +54,7 @@ async void serve_n(ServerSocket !srv, int n):
 
 # ── Test helper ───────────────────────────────────────────────
 
-void check(str label, bool ok):
+void check(String label, bool ok):
     if not ok:
         print("FAIL: " + label)
     else:
@@ -72,7 +72,7 @@ async void main():
     String base = "http://127.0.0.1:" + int_to_str(port)
 
     # 1. GET /hello → 200 "world"
-    Result[HttpResponse, str] r1 = get(base + "/hello")
+    Result[HttpResponse, String] r1 = get(base + "/hello")
     if r1.is_ok():
         HttpResponse resp1 = r1.unwrap()
         check("status 200", resp1.status_code == 200)
@@ -82,7 +82,7 @@ async void main():
         print("FAIL: body")
 
     # 2. GET /json → correct Content-Type in response headers
-    Result[HttpResponse, str] r2 = get(base + "/json")
+    Result[HttpResponse, String] r2 = get(base + "/json")
     if r2.is_ok():
         HttpResponse resp2 = r2.unwrap()
         check("json status", resp2.status_code == 200)
@@ -92,8 +92,8 @@ async void main():
         print("FAIL: content-type")
 
     # 3. POST /echo with body → body echoed
-    Dict[str, str] empty_hdrs = Dict[str, str]()
-    Result[HttpResponse, str] r3 = post(base + "/echo", "hello body", empty_hdrs)
+    Dict[String, String] empty_hdrs = Dict[String, String]()
+    Result[HttpResponse, String] r3 = post(base + "/echo", "hello body", empty_hdrs)
     if r3.is_ok():
         HttpResponse resp3 = r3.unwrap()
         check("echo status", resp3.status_code == 200)
@@ -103,7 +103,7 @@ async void main():
         print("FAIL: echo body")
 
     # 4. Unknown path → 404
-    Result[HttpResponse, str] r4 = get(base + "/unknown")
+    Result[HttpResponse, String] r4 = get(base + "/unknown")
     if r4.is_ok():
         HttpResponse resp4 = r4.unwrap()
         check("404", resp4.status_code == 404)
@@ -111,7 +111,7 @@ async void main():
         print("FAIL: " + r4.unwrap_error())
 
     # 5. Custom response header propagated to client
-    Result[HttpResponse, str] r5 = get(base + "/powered")
+    Result[HttpResponse, String] r5 = get(base + "/powered")
     if r5.is_ok():
         HttpResponse resp5 = r5.unwrap()
         check("custom header status", resp5.status_code == 200)
@@ -121,7 +121,7 @@ async void main():
         print("FAIL: custom header")
 
     # 6. Query string parsed by handler (path + ?q=gorget)
-    Result[HttpResponse, str] r6 = get(base + "/search?q=gorget")
+    Result[HttpResponse, String] r6 = get(base + "/search?q=gorget")
     if r6.is_ok():
         HttpResponse resp6 = r6.unwrap()
         check("query status", resp6.status_code == 200)

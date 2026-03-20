@@ -1,4 +1,4 @@
-Result[Option[int], str] find_number(str s):
+Result[Option[int], String] find_number(String s):
     if s == "":
         return Error("empty")
     if s == "none":

@@ -5,43 +5,43 @@ from std.async import sleep
 async int test_result_combinators():
     sleep(1)
 
-    Result[int, str] ok_val = Ok(10)
-    Result[int, str] err_val = Error("bad")
+    Result[int, String] ok_val = Ok(10)
+    Result[int, String] err_val = Error("bad")
 
     # --- or: Ok→self, Error→other ---
-    Result[int, str] or1 = ok_val.or(Ok(99))
+    Result[int, String] or1 = ok_val.or(Ok(99))
     print(or1.unwrap())
-    Result[int, str] or2 = err_val.or(Ok(99))
+    Result[int, String] or2 = err_val.or(Ok(99))
     print(or2.unwrap())
-    Result[int, str] or3 = err_val.or(Error("worse"))
+    Result[int, String] or3 = err_val.or(Error("worse"))
     print(or3.unwrap_error())
 
     # --- or_else: Error→closure ---
-    Result[int, str] ore1 = ok_val.or_else((str e): Ok(0))
+    Result[int, String] ore1 = ok_val.or_else((String e): Ok(0))
     print(ore1.unwrap())
-    Result[int, str] ore2 = err_val.or_else((str e): Ok(77))
+    Result[int, String] ore2 = err_val.or_else((String e): Ok(77))
     print(ore2.unwrap())
-    Result[int, str] ore3 = err_val.or_else((str e): Error("replaced"))
+    Result[int, String] ore3 = err_val.or_else((String e): Error("replaced"))
     print(ore3.unwrap_error())
 
     # --- map_err: Error→transformed, Ok→passthrough ---
-    Result[int, str] me1 = ok_val.map_err((str e): e.to_upper())
+    Result[int, String] me1 = ok_val.map_err((String e): e.to_upper())
     print(me1.unwrap())
-    Result[int, str] me2 = err_val.map_err((str e): e.to_upper())
+    Result[int, String] me2 = err_val.map_err((String e): e.to_upper())
     print(me2.unwrap_error())
 
     # --- unwrap_or_else ---
-    int uoe1 = ok_val.unwrap_or_else((str e): -1)
+    int uoe1 = ok_val.unwrap_or_else((String e): -1)
     print(uoe1)
-    int uoe2 = err_val.unwrap_or_else((str e): -1)
+    int uoe2 = err_val.unwrap_or_else((String e): -1)
     print(uoe2)
 
     # --- and_then: Ok→chain, Error→passthrough ---
-    Result[int, str] at1 = ok_val.and_then((int x): Ok(x * 5))
+    Result[int, String] at1 = ok_val.and_then((int x): Ok(x * 5))
     print(at1.unwrap())
-    Result[int, str] at2 = ok_val.and_then((int x): Error("fail"))
+    Result[int, String] at2 = ok_val.and_then((int x): Error("fail"))
     print(at2.unwrap_error())
-    Result[int, str] at3 = err_val.and_then((int x): Ok(x * 5))
+    Result[int, String] at3 = err_val.and_then((int x): Ok(x * 5))
     print(at3.unwrap_error())
 
     # --- chaining: map then unwrap_or ---

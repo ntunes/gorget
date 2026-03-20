@@ -1,4 +1,4 @@
 void main():
-    str s = "hi"
-    str c = s[5]
+    String s = "hi"
+    String c = s[5]
     print(f"{c}")

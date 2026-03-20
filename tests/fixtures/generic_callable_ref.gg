@@ -22,7 +22,7 @@ Option[int] do_advance(State &s):
     s.advance()
     return Some(s.get_pos())
 
-Option[str] do_fail(State &s):
+Option[String] do_fail(State &s):
     s.advance()
     return None
 
@@ -38,10 +38,10 @@ void main():
             print("none")
 
     # Failure case: advance then fail — position should be restored
-    Option[str] r2 = try_action[str](do_fail, &s)
+    Option[String] r2 = try_action[String](do_fail, &s)
     match r2:
         case Some(v):
-            str sv = v
+            String sv = v
             print(sv)
         else:
             print("restored")

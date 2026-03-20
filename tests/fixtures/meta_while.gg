@@ -25,7 +25,7 @@ void main():
     only_exotic[int8]()
     only_exotic[int]()
     only_if_int[float]()
-    only_if_int[str]()
+    only_if_int[String]()
     width_check[int8]()
     width_check[uint16]()
     width_check[int32]()

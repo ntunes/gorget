@@ -1,30 +1,30 @@
 # Lifetime inference — positive tests (should compile and run without errors)
 
 # Returning a string literal is always safe (Static origin)
-str get_greeting(): "hello"
+String get_greeting(): "hello"
 
 # Returning a parameter directly is safe (Param origin)
-str identity(str s): s
+String identity(String s): s
 
 # Chaining through multiple functions — origin propagates
-str first(str a, str b): a
+String first(String a, String b): a
 
-str chain(str s): identity(s)
+String chain(String s): identity(s)
 
-# Using str views from string literals — always safe
+# Using String views from string literals — always safe
 void use_literal_views():
-    str a = "hello"
-    str b = "world"
+    String a = "hello"
+    String b = "world"
     print(a)
     print(b)
 
-# str from param forwarded through a local
-str forward(str s):
-    str local = s
+# String from param forwarded through a local
+String forward(String s):
+    String local = s
     return local
 
 # live annotation on parameter
-str first_live(live str a, str b): a
+String first_live(live String a, String b): a
 
 void main():
     print(get_greeting())

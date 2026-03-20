@@ -1,7 +1,7 @@
 from std.collections import Vector
 
 struct Score:
-    str name
+    String name
     int value
 
 int sum_values(Vector[Score] scores):

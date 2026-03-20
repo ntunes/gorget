@@ -1,20 +1,20 @@
 # Named borrow groups: live(name) + where X outlives Y
 
-str pick_first(live(a) str x, live(b) str y) where a outlives b:
+String pick_first(live(a) String x, live(b) String y) where a outlives b:
     return x
 
-str pick_second(live(a) str x, live(b) str y) where a outlives b:
+String pick_second(live(a) String x, live(b) String y) where a outlives b:
     return y
 
 void main():
     # Basic usage: both sources alive for the entire function
     String s1 = "hello"
     String s2 = "world"
-    str r = pick_first(s1, s2)
+    String r = pick_first(s1, s2)
     print(r)
 
     # pick_second also works (borrows from group a still, per where clause)
-    str r2 = pick_second(s1, s2)
+    String r2 = pick_second(s1, s2)
     print(r2)
 
     # Bare live (no group name) still works

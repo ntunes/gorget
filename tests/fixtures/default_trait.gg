@@ -10,7 +10,7 @@ struct Config:
     int width
     int height
     bool enabled
-    str name
+    String name
 
 struct Nested:
     Point origin

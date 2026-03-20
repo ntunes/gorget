@@ -1,6 +1,6 @@
 void main():
     # .bytes() on ASCII
-    str hello = "abc"
+    String hello = "abc"
     Vector[uint8] bs = hello.bytes()
     print(bs.len())
     print(bs[0])
@@ -8,7 +8,7 @@ void main():
     print(bs[2])
 
     # .bytes() on multi-byte (café: c=0x63, a=0x61, f=0x66, é=0xC3 0xA9)
-    str cafe = f"caf\u{E9}"
+    String cafe = f"caf\u{E9}"
     Vector[uint8] cafe_bytes = cafe.bytes()
     print(cafe_bytes.len())
     print(cafe_bytes[4])
@@ -26,14 +26,14 @@ void main():
     print(cafe_cps[3])
 
     # .chars() on ASCII
-    Vector[str] chs = hello.chars()
+    Vector[String] chs = hello.chars()
     print(chs.len())
     print(chs[0])
     print(chs[1])
     print(chs[2])
 
     # .chars() on multi-byte
-    Vector[str] cafe_chs = cafe.chars()
+    Vector[String] cafe_chs = cafe.chars()
     print(cafe_chs.len())
     print(cafe_chs[3])
 

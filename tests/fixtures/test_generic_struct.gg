@@ -10,18 +10,18 @@ equip Pair[T, U]:
         return self.second
 
 void main():
-    Pair[int, str] p1 = Pair[int, str](42, "hello")
+    Pair[int, String] p1 = Pair[int, String](42, "hello")
     print(p1.first)
     print(p1.second)
     print(p1.get_first())
     print(p1.get_second())
 
-    Pair[str, bool] p2 = Pair[str, bool]("test", true)
+    Pair[String, bool] p2 = Pair[String, bool]("test", true)
     print(p2.first)
     print(p2.second)
 
     # Nested generic
-    Pair[int, Pair[str, int]] nested = Pair[int, Pair[str, int]](1, Pair[str, int]("inner", 99))
+    Pair[int, Pair[String, int]] nested = Pair[int, Pair[String, int]](1, Pair[String, int]("inner", 99))
     print(nested.first)
     print(nested.second.first)
     print(nested.second.second)
@@ -36,7 +36,7 @@ void main():
     print(pairs[1].second)
 
     # Option of generic struct
-    Option[Pair[int, str]] maybe = Some(Pair[int, str](7, "seven"))
+    Option[Pair[int, String]] maybe = Some(Pair[int, String](7, "seven"))
     print(maybe.is_some())
     print(maybe.unwrap().first)
     print(maybe.unwrap().second)

@@ -2,7 +2,7 @@ from std.sync import RWLock
 
 struct Config:
     int port
-    str name
+    String name
 
 void read_config(RWLock[Config] lock):
     ReadGuard[Config] rg = lock.read()

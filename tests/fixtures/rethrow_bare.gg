@@ -1,14 +1,14 @@
-int parse_number(str s) throws str:
+int parse_number(String s) throws String:
     if s == "bad":
         throw "invalid number"
     return 42
 
-int load_value(str input) throws int:
+int load_value(String input) throws int:
     int n = parse_number(input) rethrow 1
     return n
 
-int load_with_context(str input) throws str:
-    int n = parse_number(input) rethrow (str e): f"wrapped: {e}"
+int load_with_context(String input) throws String:
+    int n = parse_number(input) rethrow (String e): f"wrapped: {e}"
     return n
 
 void main():

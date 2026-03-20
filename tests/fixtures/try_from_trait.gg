@@ -8,7 +8,7 @@ struct Percentage:
     int value
 
 equip Percentage with TryFrom[int]:
-    Result[Percentage, str] try_from(int n):
+    Result[Percentage, String] try_from(int n):
         if n < 0:
             return Error("negative")
         if n > 100:
@@ -17,7 +17,7 @@ equip Percentage with TryFrom[int]:
 
 void main():
     # Derived TryFrom (newtype, always succeeds)
-    Result[Celsius, str] c = Celsius.try_from(98.6)
+    Result[Celsius, String] c = Celsius.try_from(98.6)
     match c:
         case Ok(val):
             print(val.value)
@@ -25,21 +25,21 @@ void main():
             print(e)
 
     # Manual equip TryFrom with validation
-    Result[Percentage, str] p1 = Percentage.try_from(50)
+    Result[Percentage, String] p1 = Percentage.try_from(50)
     match p1:
         case Ok(val):
             print(val.value)
         case Error(e):
             print(e)
 
-    Result[Percentage, str] p2 = Percentage.try_from(150)
+    Result[Percentage, String] p2 = Percentage.try_from(150)
     match p2:
         case Ok(val):
             print(val.value)
         case Error(e):
             print(e)
 
-    Result[Percentage, str] p3 = Percentage.try_from(-5)
+    Result[Percentage, String] p3 = Percentage.try_from(-5)
     match p3:
         case Ok(val):
             print(val.value)

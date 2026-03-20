@@ -4,8 +4,8 @@ from std.collections import Vector, Dict
 void main():
     with Arena(16384) as pool:
         Vector[int] nums = Vector[int]()
-        Vector[str] names = Vector[str]()
-        Dict[str, int] scores = Dict[str, int]()
+        Vector[String] names = Vector[String]()
+        Dict[String, int] scores = Dict[String, int]()
         nums.push(1)
         nums.push(2)
         nums.push(3)

@@ -3,14 +3,14 @@ from std.fs import read_file, write_file
 
 # This function has BOTH an await (sleep) and a blocking call (read_file).
 # The sleep makes it a coroutine; the read_file gets enter/exit guards.
-async str read_after_sleep(str path, int delay_ms):
+async String read_after_sleep(String path, int delay_ms):
     sleep(delay_ms)
-    str content = read_file(path)
+    String content = read_file(path)
     return content
 
 async void main():
     write_file("/tmp/gorget_bc_test.txt", "coroutine+blocking")
 
-    Task[str] t = spawn read_after_sleep("/tmp/gorget_bc_test.txt", 20)
-    str result = t.await()
+    Task[String] t = spawn read_after_sleep("/tmp/gorget_bc_test.txt", 20)
+    String result = t.await()
     print(result)

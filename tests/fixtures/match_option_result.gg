@@ -15,16 +15,16 @@ void main():
         case None:
             print("none")
 
-    # Match on Result[int, str] — Ok
-    Result[int, str] ok = Ok(100)
+    # Match on Result[int, String] — Ok
+    Result[int, String] ok = Ok(100)
     match ok:
         case Ok(v):
             print(f"{v}")
         case Error(e):
             print(f"{e}")
 
-    # Match on Result[int, str] — Error (tests string type inference)
-    Result[int, str] err = Error("fail")
+    # Match on Result[int, String] — Error (tests string type inference)
+    Result[int, String] err = Error("fail")
     match err:
         case Ok(v):
             print(f"{v}")

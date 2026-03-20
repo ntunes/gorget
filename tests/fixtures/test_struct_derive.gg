@@ -3,7 +3,7 @@
 # 1. Multiple derives with different field types
 @derive(Equatable, Displayable, Cloneable, Hashable, Default)
 struct Person:
-    str name
+    String name
     int age
     bool active
 

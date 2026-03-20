@@ -9,10 +9,10 @@ struct Wrapper[T]:
 enum Shape:
     Circle(Wrapper[float])
     Square(Wrapper[int])
-    Tag(Wrapper[str])
+    Tag(Wrapper[String])
 
 # Returns the variant name by dispatching with meta for in match
-str dispatch_name(Shape s):
+String dispatch_name(Shape s):
     match s:
         meta for vname, T in variant_payloads(Shape):
             case vname(w):
@@ -32,7 +32,7 @@ Shape rewrap_shape(Shape s):
 void main():
     Shape c = Shape.Circle(Wrapper[float](3.14))
     Shape sq = Shape.Square(Wrapper[int](42))
-    Shape t = Shape.Tag(Wrapper[str]("hello"))
+    Shape t = Shape.Tag(Wrapper[String]("hello"))
 
     # Test variant name dispatch
     print(dispatch_name(c))

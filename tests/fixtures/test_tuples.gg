@@ -1,13 +1,13 @@
 (int, int) swap(int a, int b):
     return b, a
 
-(int, str) get_pair():
+(int, String) get_pair():
     return 42, "hello"
 
 (int, int, int) triple():
     return 1, 2, 3
 
-(str, bool) tagged(str label, bool flag):
+(String, bool) tagged(String label, bool flag):
     return label, flag
 
 void main():

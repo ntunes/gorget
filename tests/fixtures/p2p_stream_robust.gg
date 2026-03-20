@@ -17,7 +17,7 @@ void main():
     P2PEvent ev1 = p2p_poll(&nodeB, 1000)
     P2PEvent ev2 = p2p_poll(&nodeA, 1000)
 
-    str b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
+    String b_hex = p2p_peer_id_hex(nodeB.identity.peer_id)
 
     # ── Test 1: Message Framing ──────────────────────────────
     # Open stream, send 3 framed messages, verify each arrives independently
@@ -102,7 +102,7 @@ void main():
     p2p_stream_close(&nodeA, s2)
 
     # Poll until B receives data and close event
-    str recv_data = ""
+    String recv_data = ""
     bool got_close = false
     int gr = 0
     while gr < 50:

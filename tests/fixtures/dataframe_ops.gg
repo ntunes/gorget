@@ -3,7 +3,7 @@ from std.collections import Vector, Dict
 
 void main():
     # ── Test 1: df_from_columns ──────────────────────────────
-    Vector[str] names_data = Vector[str]()
+    Vector[String] names_data = Vector[String]()
     names_data.push("Alice")
     names_data.push("Bob")
     names_data.push("Carol")
@@ -15,7 +15,7 @@ void main():
     ages_data.push(35)
     Column ages_col = col_from_ints(ages_data)
 
-    Vector[str] col_names = Vector[str]()
+    Vector[String] col_names = Vector[String]()
     col_names.push("name")
     col_names.push("age")
     Vector[Column] cols = Vector[Column]()
@@ -31,36 +31,36 @@ void main():
     print(df.has_column("score"))
 
     # column_names
-    Vector[str] cn = df.column_names()
+    Vector[String] cn = df.column_names()
     int cnlen = cn.len()
     print(f"{cnlen}")
     print(cn.get(0).unwrap())
     print(cn.get(1).unwrap())
 
     # row_as_dict
-    Dict[str, str] row0 = df.row_as_dict(0)
+    Dict[String, String] row0 = df.row_as_dict(0)
     print(row0.get("name").unwrap())
     print(row0.get("age").unwrap())
 
     # display returns non-empty string
-    str disp = df.display()
+    String disp = df.display()
     bool disp_ok = disp.byte_len() > 0
     print(f"{disp_ok}")
 
     # ── Test 2: df_from_records ───────────────────────────────
-    Vector[str] headers = Vector[str]()
+    Vector[String] headers = Vector[String]()
     headers.push("x")
     headers.push("y")
 
-    Vector[str] rec1 = Vector[str]()
+    Vector[String] rec1 = Vector[String]()
     rec1.push("10")
     rec1.push("20")
 
-    Vector[str] rec2 = Vector[str]()
+    Vector[String] rec2 = Vector[String]()
     rec2.push("30")
     rec2.push("40")
 
-    Vector[Vector[str]] records = Vector[Vector[str]]()
+    Vector[Vector[String]] records = Vector[Vector[String]]()
     records.push(rec1)
     records.push(rec2)
 
@@ -70,12 +70,12 @@ void main():
     print(f"{r2n}")
     print(f"{r2c}")
 
-    Dict[str, str] row2_0 = df2.row_as_dict(0)
+    Dict[String, String] row2_0 = df2.row_as_dict(0)
     print(row2_0.get("x").unwrap())
     print(row2_0.get("y").unwrap())
 
     # ── Test 3: df_to_csv → df_from_csv roundtrip ────────────
-    str csv_out = df_to_csv(df)
+    String csv_out = df_to_csv(df)
     auto r_csv = df_from_csv(csv_out)
     match r_csv:
         case Ok(df3):

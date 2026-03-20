@@ -46,42 +46,42 @@ void main():
     router.use(logging_middleware)
 
     # 1. Exact GET /hello → 200 + "hello"
-    HttpRequest req1 = HttpRequest("GET", "/hello", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req1 = HttpRequest("GET", "/hello", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp1 = router.dispatch(req1)
     print(f"{resp1.status_code}")
     print(resp1.body)
 
     # 2. POST /data → 200 + "posted"
-    HttpRequest req2 = HttpRequest("POST", "/data", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req2 = HttpRequest("POST", "/data", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp2 = router.dispatch(req2)
     print(f"{resp2.status_code}")
     print(resp2.body)
 
     # 3. Unknown GET path → 404
-    HttpRequest req3 = HttpRequest("GET", "/notfound", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req3 = HttpRequest("GET", "/notfound", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp3 = router.dispatch(req3)
     print(f"{resp3.status_code}")
 
     # 4. Unknown POST path → 404
-    HttpRequest req4 = HttpRequest("POST", "/notfound", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req4 = HttpRequest("POST", "/notfound", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp4 = router.dispatch(req4)
     print(f"{resp4.status_code}")
 
     # 5. Param route GET /users/:id
-    HttpRequest req5 = HttpRequest("GET", "/users/42", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req5 = HttpRequest("GET", "/users/42", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp5 = router.dispatch(req5)
     print(f"{resp5.status_code}")
     print(resp5.body)
 
     # 6. Multi-param GET /posts/:pid/comments/:cid
-    HttpRequest req6 = HttpRequest("GET", "/posts/7/comments/99", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req6 = HttpRequest("GET", "/posts/7/comments/99", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp6 = router.dispatch(req6)
     print(f"{resp6.status_code}")
     print(resp6.body)
 
     # 7. Query string via req.query_params()
-    HttpRequest req7 = HttpRequest("GET", "/hello", "name=hello", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
-    Dict[str, str] qp = req7.query_params()
+    HttpRequest req7 = HttpRequest("GET", "/hello", "name=hello", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
+    Dict[String, String] qp = req7.query_params()
     print(qp["name"])
 
     # 8. Middleware count
@@ -89,7 +89,7 @@ void main():
     print(f"{mw_count}")
 
     # 9. CORS * header via middleware
-    HttpRequest req9 = HttpRequest("GET", "/hello", "", "HTTP/1.1", Dict[str, str](), "", Dict[str, str]())
+    HttpRequest req9 = HttpRequest("GET", "/hello", "", "HTTP/1.1", Dict[String, String](), "", Dict[String, String]())
     HttpServerResponse resp9 = router.dispatch(req9)
     print(resp9.headers["access-control-allow-origin"])
 

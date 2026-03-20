@@ -1,6 +1,6 @@
 enum Outer:
     A(int)
-    B(str)
+    B(String)
 
 String classify(Outer o):
     match o:

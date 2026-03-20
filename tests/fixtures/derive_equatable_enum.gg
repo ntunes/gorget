@@ -1,7 +1,7 @@
 @derive(Equatable)
 enum Color:
     Rgb(int, int, int)
-    Named(str)
+    Named(String)
 
 void main():
     Color a = Color.Rgb(255, 0, 0)

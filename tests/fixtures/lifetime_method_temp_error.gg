@@ -1,5 +1,5 @@
-# Lifetime error: str view from method returning owned String, source moved
-# (After str/String unification, str takes ownership of method return value;
+# Lifetime error: String view from method returning owned String, source moved
+# (After str/String unification, String takes ownership of method return value;
 #  the original TemporaryBorrow error is subsumed by ownership transfer.
 #  This test now verifies use-after-move on a view derived from the owned result.)
 struct Builder:
@@ -15,6 +15,6 @@ void consume(String !s):
 void main():
     Builder b = Builder("hello" + "")
     String temporary = b.build()
-    str v = temporary.as_str()
+    String v = temporary.as_str()
     consume(!temporary)
     print(v)

@@ -24,7 +24,7 @@ void main():
     print(str_truncate("hi", 3, "..."))
 
     # join
-    Vector[str] parts = Vector[str]()
+    Vector[String] parts = Vector[String]()
     parts.push("one")
     parts.push("two")
     parts.push("three")

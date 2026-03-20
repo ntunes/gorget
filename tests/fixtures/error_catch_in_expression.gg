@@ -1,4 +1,4 @@
-int parse(str s) throws str:
+int parse(String s) throws String:
     if s == "":
         throw "empty"
     return 10

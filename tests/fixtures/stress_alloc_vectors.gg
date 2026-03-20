@@ -29,10 +29,10 @@ void main():
         # v drops here with a large buffer
         i = i + 1
 
-    # --- Section 3: Vector[str] with owned string elements ---
+    # --- Section 3: Vector[String] with owned string elements ---
     i = 0
     while i < 200:
-        Vector[str] v = Vector[str]()
+        Vector[String] v = Vector[String]()
         int j = 0
         while j < 20:
             v.push(f"elem-{i}-{j}")

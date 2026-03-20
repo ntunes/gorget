@@ -1,4 +1,4 @@
-str classify(int n) throws str:
+String classify(int n) throws String:
     if n < 0:
         throw "negative"
     if n == 0:

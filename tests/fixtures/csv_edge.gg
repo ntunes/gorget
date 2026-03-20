@@ -3,7 +3,7 @@ from std.collections import Vector
 
 void main():
     # ── Error: unterminated quoted field ──
-    Result[Vector[Vector[str]], str] r_err = parse("\"unclosed")
+    Result[Vector[Vector[String]], String] r_err = parse("\"unclosed")
     bool csv_is_err = r_err.is_error()
     print(f"{csv_is_err}")
 
@@ -19,19 +19,19 @@ void main():
     print(f"{nrows}")
 
     # ── Roundtrip: field with embedded delimiter and escaped double-quote ──
-    str tricky = "\"hello, world\",plain\n\"say \"\"hi\"\"\",end"
-    Vector[Vector[str]] rows = parse(tricky).unwrap()
-    str serialized = stringify(rows)
-    Vector[Vector[str]] rows2 = parse(serialized).unwrap()
-    Vector[str] r0 = rows2.get(0).unwrap()
+    String tricky = "\"hello, world\",plain\n\"say \"\"hi\"\"\",end"
+    Vector[Vector[String]] rows = parse(tricky).unwrap()
+    String serialized = stringify(rows)
+    Vector[Vector[String]] rows2 = parse(serialized).unwrap()
+    Vector[String] r0 = rows2.get(0).unwrap()
     print(r0.get(0).unwrap())
     print(r0.get(1).unwrap())
-    Vector[str] r1 = rows2.get(1).unwrap()
+    Vector[String] r1 = rows2.get(1).unwrap()
     print(r1.get(0).unwrap())
     print(r1.get(1).unwrap())
 
     # ── Empty input → Ok with 0 rows ──
-    Vector[Vector[str]] empty_rows = parse("").unwrap()
+    Vector[Vector[String]] empty_rows = parse("").unwrap()
     int empty_len = empty_rows.len()
     print(f"{empty_len}")
 

@@ -1,9 +1,9 @@
-int parse(str s) throws str:
+int parse(String s) throws String:
     throw "fail"
     return 0
 
 int bad():
-    int n = parse("x") rethrow (str e): "wrapped"
+    int n = parse("x") rethrow (String e): "wrapped"
     return n
 
 void main():

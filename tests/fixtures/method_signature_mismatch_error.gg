@@ -1,5 +1,5 @@
 trait Printable:
-    str to_string(self)
+    String to_string(self)
 
 struct Point:
     int x

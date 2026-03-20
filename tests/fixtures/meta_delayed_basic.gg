@@ -1,4 +1,4 @@
-str type_label[T](T val):
+String type_label[T](T val):
     meta if typename(T) == "int":
         return "integer"
     elif typename(T) == "float":
@@ -15,10 +15,10 @@ T double_if_int[T](T val):
         return val
 
 void main():
-    str r1 = type_label[int](42)
-    str r2 = type_label[float](3.14)
-    str r3 = type_label[str]("hello")
-    str r4 = type_label[bool](true)
+    String r1 = type_label[int](42)
+    String r2 = type_label[float](3.14)
+    String r3 = type_label[String]("hello")
+    String r4 = type_label[bool](true)
     print(f"{r1}")
     print(f"{r2}")
     print(f"{r3}")

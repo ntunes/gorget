@@ -1,10 +1,10 @@
-# Lifetime error: str view used after source moved in one branch
+# Lifetime error: String view used after source moved in one branch
 void consume(String !s):
     pass
 
 void main():
     String s = "hello" + ""
-    str v = s.as_str()
+    String v = s.as_str()
     if true:
         consume(!s)
     else:

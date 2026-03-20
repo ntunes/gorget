@@ -11,7 +11,7 @@ HttpServerResponse handle(HttpRequest req):
     return HttpServerResponse.ok("hello")
 
 async void handle_conn(Socket !conn):
-    Result[HttpRequest, str] r = http_server_parse_request(&conn)
+    Result[HttpRequest, String] r = http_server_parse_request(&conn)
     match r:
         case Ok(req):
             http_server_write_response(&conn, handle(req))
@@ -32,16 +32,16 @@ async void serve_n(ServerSocket !srv, int n):
 
 async void client_task(int port, Channel[int] results):
     sleep(0.5).await()
-    Result[Socket, str] cr = socket_connect("127.0.0.1", port)
+    Result[Socket, String] cr = socket_connect("127.0.0.1", port)
     if cr.is_error():
         results.send(0)
         return
     Socket c = cr.unwrap()
     c.write_str("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-    Result[str, str] line_r = c.read_line()
+    Result[String, String] line_r = c.read_line()
     c.close()
     if line_r.is_ok():
-        str line = line_r.unwrap()
+        String line = line_r.unwrap()
         if line.starts_with("HTTP/1.1 200"):
             results.send(1)
             return

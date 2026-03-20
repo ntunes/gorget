@@ -11,7 +11,7 @@ void main():
     print(h.pop().unwrap())
 
     # String heap (lexicographic order)
-    Heap[str] sh = Heap[str].new()
+    Heap[String] sh = Heap[String].new()
     sh.push("cherry")
     sh.push("apple")
     sh.push("banana")

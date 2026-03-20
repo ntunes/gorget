@@ -141,7 +141,7 @@ equip DateTime:
     int diff_seconds(self, DateTime dt_other):
         return self.to_epoch() - dt_other.to_epoch()
 
-    str format(self, str dt_fmt):
+    String format(self, String dt_fmt):
         return format_time(self.to_epoch(), dt_fmt)
 
     String to_string(self):

@@ -3,7 +3,7 @@
 
 from std.conv import int_to_str
 
-static Dict[str, int] scores = Dict[str, int]()
+static Dict[String, int] scores = Dict[String, int]()
 static Vector[int] numbers = Vector[int]()
 
 void main():

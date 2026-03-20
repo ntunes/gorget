@@ -1,11 +1,11 @@
 # Result chaining — multi-step chains and function-returned Results
 
-Result[int, str] safe_divide(int a, int b):
+Result[int, String] safe_divide(int a, int b):
     if b == 0:
         return Error("division by zero")
     return Ok(a / b)
 
-Result[int, str] add_if_positive(int x):
+Result[int, String] add_if_positive(int x):
     if x < 0:
         return Error("negative")
     return Ok(x + 100)
@@ -16,7 +16,7 @@ void main():
     print(f"{r1}")
 
     # 2. Error map then unwrap_or (map is skipped)
-    Result[int, str] e1 = Error("bad")
+    Result[int, String] e1 = Error("bad")
     int r2 = e1.map((int x): x * 2).unwrap_or(0)
     print(f"{r2}")
 
@@ -29,18 +29,18 @@ void main():
     print(f"{r4}")
 
     # 5. map_err on Error transforms the error
-    Result[int, str] e2 = Error("e1")
-    Result[int, str] wrapped = e2.map_err((str s): "wrapped: " + s)
+    Result[int, String] e2 = Error("e1")
+    Result[int, String] wrapped = e2.map_err((String s): "wrapped: " + s)
     print(wrapped.unwrap_error())
 
     # 5b. map_err on Ok passes through
-    Result[int, str] ok_me = Ok(42).map_err((str s): "nope")
+    Result[int, String] ok_me = Ok(42).map_err((String s): "nope")
     print(f"{ok_me.unwrap()}")
 
     # 6. is_ok / is_err
     print(f"{Ok(42).is_ok()}")
     print(f"{Ok(42).is_error()}")
-    Result[int, str] ex = Error("x")
+    Result[int, String] ex = Error("x")
     print(f"{ex.is_ok()}")
     print(f"{ex.is_error()}")
 
@@ -49,7 +49,7 @@ void main():
     print(f"{r7}")
 
     # 7b. Long chain on Error collapses
-    Result[int, str] e7 = Error("nope")
+    Result[int, String] e7 = Error("nope")
     int r7b = e7.map((int x): x * 10).and_then((int x): Ok(x + 7)).unwrap_or(-1)
     print(f"{r7b}")
 
@@ -70,11 +70,11 @@ void main():
     print(f"{r9b}")
 
     # 10. map_err chaining
-    Result[int, str] e10 = Error("raw")
-    str r10 = e10.map_err((str s): "a:" + s).map_err((str s): "b:" + s).unwrap_error()
+    Result[int, String] e10 = Error("raw")
+    String r10 = e10.map_err((String s): "a:" + s).map_err((String s): "b:" + s).unwrap_error()
     print(r10)
 
     # 11. unwrap_or_else with chain
-    Result[int, str] e11 = Error("hello")
-    int r11 = e11.map((int x): x * 2).unwrap_or_else((str e): len(e))
+    Result[int, String] e11 = Error("hello")
+    int r11 = e11.map((int x): x * 2).unwrap_or_else((String e): len(e))
     print(f"{r11}")

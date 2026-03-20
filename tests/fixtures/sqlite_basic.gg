@@ -4,12 +4,12 @@ from std.collections import Vector
 
 @derive(FromRow)
 struct User:
-    str name
+    String name
     int age
 
 void main():
     # Open in-memory database
-    Result[SqliteConn, str] db_r = open(":memory:")
+    Result[SqliteConn, String] db_r = open(":memory:")
     SqliteConn db = db_r.unwrap()
 
     # Create table
@@ -32,7 +32,7 @@ void main():
     db.exec("INSERT INTO users VALUES (?, ?)", p3).unwrap()
 
     # Query raw rows
-    Result[Vector[Row], str] rows_r = db.query_raw("SELECT name, age FROM users ORDER BY name", Vector[Param]())
+    Result[Vector[Row], String] rows_r = db.query_raw("SELECT name, age FROM users ORDER BY name", Vector[Param]())
     Vector[Row] rows = rows_r.unwrap()
     print(rows.len())  # 3
 
@@ -63,7 +63,7 @@ void main():
     print(changes)  # 1 (bob)
 
     # Verify deletion
-    Result[Vector[Row], str] after_r = db.query_raw("SELECT COUNT(*) as cnt FROM users", Vector[Param]())
+    Result[Vector[Row], String] after_r = db.query_raw("SELECT COUNT(*) as cnt FROM users", Vector[Param]())
     Vector[Row] after = after_r.unwrap()
     Row cnt_row = after.get(0).unwrap()
     print(cnt_row.get("cnt"))  # 2

@@ -24,7 +24,7 @@ async void serve_n(ServerSocket !srv, int n):
     TaskGroup group = TaskGroup()
     int i = 0
     while i < n:
-        Result[Socket, str] ar = srv.accept()
+        Result[Socket, String] ar = srv.accept()
         if ar.is_ok():
             Socket client = ar.unwrap()
             group.spawn(spawn http_server_handle_conn_ka(!client, handle, 500))
@@ -32,7 +32,7 @@ async void serve_n(ServerSocket !srv, int n):
     group.join()
     srv.close()
 
-void check(str label, bool ok):
+void check(String label, bool ok):
     if not ok:
         print("FAIL: " + label)
     else:
@@ -48,15 +48,15 @@ async void main():
     String base = "http://127.0.0.1:" + int_to_str(port)
 
     # Build 8192-byte body: 64 repetitions of a 128-char string
-    str chunk = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    str big_body = ""
+    String chunk = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    String big_body = ""
     int ri = 0
     while ri < 64:
         big_body = big_body + chunk
         ri = ri + 1
 
-    Dict[str, str] hdrs = Dict[str, str]()
-    Result[HttpResponse, str] r = post(base + "/upload", big_body, hdrs)
+    Dict[String, String] hdrs = Dict[String, String]()
+    Result[HttpResponse, String] r = post(base + "/upload", big_body, hdrs)
     if r.is_ok():
         HttpResponse resp = r.unwrap()
         check("status", resp.status_code == 200)

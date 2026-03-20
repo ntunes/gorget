@@ -1,16 +1,16 @@
 void main():
-    Result[int, str] ok = Ok(10)
-    Result[int, str] err = Error("fail")
-    Result[int, str] doubled = ok.map((int x): x * 2)
-    Result[int, str] err_mapped = err.map((int x): x * 2)
+    Result[int, String] ok = Ok(10)
+    Result[int, String] err = Error("fail")
+    Result[int, String] doubled = ok.map((int x): x * 2)
+    Result[int, String] err_mapped = err.map((int x): x * 2)
     print(f"{doubled.unwrap()}")
     print(f"{err_mapped.unwrap_or(0)}")
-    Result[int, str] chained = ok.and_then((int x): Ok(x + 1))
+    Result[int, String] chained = ok.and_then((int x): Ok(x + 1))
     print(f"{chained.unwrap()}")
-    # Cross-type map: int -> str
-    Result[str, str] str_ok = ok.map((int x): "yes")
+    # Cross-type map: int -> String
+    Result[String, String] str_ok = ok.map((int x): "yes")
     print(str_ok.unwrap())
-    # Cross-type map_err: str -> int
-    Result[int, int] coded = err.map_err((str e): e.len())
+    # Cross-type map_err: String -> int
+    Result[int, int] coded = err.map_err((String e): e.len())
     if coded is Error(code):
         print(f"{code}")

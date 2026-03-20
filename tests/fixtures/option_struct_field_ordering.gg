@@ -11,7 +11,7 @@ struct Pixel:
     int y
     Option[Color] color
 
-str main():
+String main():
     Color red = Color(255, 0, 0)
     Pixel p1 = Pixel(10, 20, Some(red))
     match p1.color:

@@ -2,7 +2,7 @@ from std.collections import Vector
 from std.os import args
 
 void main():
-    Vector[str] a = args()
+    Vector[String] a = args()
     print(f"{a.len()}")
     print(f"{a[1]}")
     print(f"{a[2]}")

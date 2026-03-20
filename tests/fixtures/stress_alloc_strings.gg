@@ -25,17 +25,17 @@ void main():
     i = 0
     while i < 500:
         String base = f"  Hello World {i}  "
-        str trimmed = base.trim()
+        String trimmed = base.trim()
         String upper = base.to_upper()
         String lower = base.to_lower()
         String replaced = base.replace("World", "Gorget")
         i = i + 1
 
-    # --- Section 4: String.split() returns Vector[str] ---
+    # --- Section 4: String.split() returns Vector[String] ---
     i = 0
     while i < 500:
         String csv = f"a,b,c,d,{i}"
-        Vector[str] parts = csv.split(",")
+        Vector[String] parts = csv.split(",")
         i = i + 1
 
     # --- Section 5: String owned (String type) in a loop ---
@@ -49,7 +49,7 @@ void main():
     # --- Section 6: Strings in Vector, pushed and dropped ---
     i = 0
     while i < 100:
-        Vector[str] v = Vector[str]()
+        Vector[String] v = Vector[String]()
         int j = 0
         while j < 50:
             v.push(f"item-{i}-{j}")

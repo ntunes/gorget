@@ -1,5 +1,5 @@
 trait Drawable:
-    str draw(self)
+    String draw(self)
 
 trait Measurable:
     float measure(self)
@@ -8,7 +8,7 @@ struct Circle:
     float radius
 
 equip Circle with Drawable:
-    str draw(self):
+    String draw(self):
         return "circle"
 
 equip Circle with Measurable:

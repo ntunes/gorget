@@ -1,33 +1,33 @@
 from std.collections import Dict, HashMap
 
 struct Registry:
-    Dict[str, int] items
+    Dict[String, int] items
 
 equip Registry:
-    void add(&self, str key, int val):
+    void add(&self, String key, int val):
         self.items.put(key, val)
 
-    int lookup(self, str key): self.items.get(key).unwrap()
+    int lookup(self, String key): self.items.get(key).unwrap()
 
     int size(self): self.items.len()
 
-    bool has(self, str key): self.items.contains(key)
+    bool has(self, String key): self.items.contains(key)
 
 struct Cache:
-    HashMap[str, int] data
+    HashMap[String, int] data
 
 equip Cache:
-    void set(&self, str key, int val):
+    void set(&self, String key, int val):
         self.data.put(key, val)
 
-    int fetch(self, str key): self.data.get(key).unwrap()
+    int fetch(self, String key): self.data.get(key).unwrap()
 
     int count(self): self.data.len()
 
-    bool has(self, str key): self.data.contains(key)
+    bool has(self, String key): self.data.contains(key)
 
 void main():
-    Registry reg = Registry(Dict[str, int]())
+    Registry reg = Registry(Dict[String, int]())
     reg.add("alice", 30)
     reg.add("bob", 25)
     reg.add("carol", 35)
@@ -41,10 +41,10 @@ void main():
     int sub = reg.items["carol"]
     print(f"{sub}")
 
-    Vector[str] ks = reg.items.keys()
+    Vector[String] ks = reg.items.keys()
     print(f"{ks.len()}")
 
-    Cache cache = Cache(HashMap[str, int]())
+    Cache cache = Cache(HashMap[String, int]())
     cache.set("x", 100)
     cache.set("y", 200)
     print(f"{cache.count()}")

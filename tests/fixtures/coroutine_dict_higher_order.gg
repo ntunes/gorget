@@ -3,29 +3,29 @@ from std.async import sleep
 async int test_dict_ops():
     sleep(1)
 
-    Dict[str, int] d = Dict[str, int]()
+    Dict[String, int] d = Dict[String, int]()
     d["a"] = 10
     d["b"] = 20
     d["c"] = 30
     d["d"] = 5
 
     # fold: sum all values (order independent)
-    int total = d.fold(0, (int acc, str k, int v): acc + v)
+    int total = d.fold(0, (int acc, String k, int v): acc + v)
     print(total)
 
     # filter: keep values > 10
-    Dict[str, int] big = d.filter((str k, int v): v > 10)
+    Dict[String, int] big = d.filter((String k, int v): v > 10)
     print(big.len())
-    int big_sum = big.fold(0, (int acc, str k, int v): acc + v)
+    int big_sum = big.fold(0, (int acc, String k, int v): acc + v)
     print(big_sum)
 
     # fold on empty dict
-    Dict[str, int] empty = Dict[str, int]()
-    int z = empty.fold(99, (int acc, str k, int v): acc + v)
+    Dict[String, int] empty = Dict[String, int]()
+    int z = empty.fold(99, (int acc, String k, int v): acc + v)
     print(z)
 
     # filter where nothing matches
-    Dict[str, int] none_match = d.filter((str k, int v): v > 100)
+    Dict[String, int] none_match = d.filter((String k, int v): v > 100)
     print(none_match.len())
 
     return 0

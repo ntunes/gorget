@@ -6,9 +6,9 @@ Pair[U, T] swap_pair[T, U](Pair[T, U] p):
     return Pair[U, T](p.second, p.first)
 
 void main():
-    Pair[int, str] p = Pair[int, str](1, "hello")
+    Pair[int, String] p = Pair[int, String](1, "hello")
     print(p.first)
     print(p.second)
-    auto swapped = swap_pair[int, str](p)
+    auto swapped = swap_pair[int, String](p)
     print(swapped.first)
     print(swapped.second)

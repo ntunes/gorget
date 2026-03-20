@@ -1,5 +1,5 @@
-meta str SQL = embed_file("embed_content.txt")
-meta str GREETING = embed_file("embed_hello.txt")
+meta String SQL = embed_file("embed_content.txt")
+meta String GREETING = embed_file("embed_hello.txt")
 
 void main():
     print(SQL)

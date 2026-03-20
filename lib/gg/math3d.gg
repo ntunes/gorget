@@ -69,7 +69,7 @@ equip Vec2:
     bool approx_eq(self, Vec2 other):
         return abs_f(self.x - other.x) < EPSILON and abs_f(self.y - other.y) < EPSILON
 
-    str to_string(self):
+    String to_string(self):
         float sx = self.x
         float sy = self.y
         return f"Vec2({sx}, {sy})"
@@ -136,7 +136,7 @@ equip Vec3:
     bool approx_eq(self, Vec3 other):
         return abs_f(self.x - other.x) < EPSILON and abs_f(self.y - other.y) < EPSILON and abs_f(self.z - other.z) < EPSILON
 
-    str to_string(self):
+    String to_string(self):
         float sx = self.x
         float sy = self.y
         float sz = self.z
@@ -176,7 +176,7 @@ equip Vec4:
         float inv = 1.0 / len
         return Vec4(self.x * inv, self.y * inv, self.z * inv, self.w * inv)
 
-    str to_string(self):
+    String to_string(self):
         float sx = self.x
         float sy = self.y
         float sz = self.z
@@ -552,7 +552,7 @@ equip Quat:
     bool approx_eq(self, Quat other):
         return abs_f(self.x - other.x) < EPSILON and abs_f(self.y - other.y) < EPSILON and abs_f(self.z - other.z) < EPSILON and abs_f(self.w - other.w) < EPSILON
 
-    str to_string(self):
+    String to_string(self):
         float sx = self.x
         float sy = self.y
         float sz = self.z
@@ -589,8 +589,8 @@ equip Plane:
             return -1
         return 0
 
-    str to_string(self):
-        str ns = self.normal.to_string()
+    String to_string(self):
+        String ns = self.normal.to_string()
         float sd = self.d
         return f"Plane({ns}, {sd})"
 
@@ -667,9 +667,9 @@ equip AABB:
             self.max_pt.y - self.min_pt.y,
             self.max_pt.z - self.min_pt.z)
 
-    str to_string(self):
-        str smin = self.min_pt.to_string()
-        str smax = self.max_pt.to_string()
+    String to_string(self):
+        String smin = self.min_pt.to_string()
+        String smax = self.max_pt.to_string()
         return f"AABB({smin}, {smax})"
 
 # ── Ray ──────────────────────────────────────────────────────
@@ -740,9 +740,9 @@ equip Ray:
             return tmin
         return tmax
 
-    str to_string(self):
-        str so = self.origin.to_string()
-        str sd = self.direction.to_string()
+    String to_string(self):
+        String so = self.origin.to_string()
+        String sd = self.direction.to_string()
         return f"Ray({so}, {sd})"
 
 # ── Frustum ──────────────────────────────────────────────────

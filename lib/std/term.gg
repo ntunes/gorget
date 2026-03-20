@@ -14,44 +14,44 @@ String term_reset():
 
 # ── Foreground colors ────────────────────────────────────────
 
-String red(str term_text):
+String red(String term_text):
     return "\u{1b}[31m" + term_text + "\u{1b}[0m"
 
-String green(str term_text):
+String green(String term_text):
     return "\u{1b}[32m" + term_text + "\u{1b}[0m"
 
-String yellow(str term_text):
+String yellow(String term_text):
     return "\u{1b}[33m" + term_text + "\u{1b}[0m"
 
-String blue(str term_text):
+String blue(String term_text):
     return "\u{1b}[34m" + term_text + "\u{1b}[0m"
 
-String magenta(str term_text):
+String magenta(String term_text):
     return "\u{1b}[35m" + term_text + "\u{1b}[0m"
 
-String cyan(str term_text):
+String cyan(String term_text):
     return "\u{1b}[36m" + term_text + "\u{1b}[0m"
 
-String white(str term_text):
+String white(String term_text):
     return "\u{1b}[37m" + term_text + "\u{1b}[0m"
 
 # ── Text styles ──────────────────────────────────────────────
 
-String bold(str term_text):
+String bold(String term_text):
     return "\u{1b}[1m" + term_text + "\u{1b}[0m"
 
-String dim(str term_text):
+String dim(String term_text):
     return "\u{1b}[2m" + term_text + "\u{1b}[0m"
 
-String underline(str term_text):
+String underline(String term_text):
     return "\u{1b}[4m" + term_text + "\u{1b}[0m"
 
 # ── ANSI strip ───────────────────────────────────────────────
 # Remove ANSI escape sequences from a string (useful for log files).
 # Handles: ESC [ ... m sequences (the common case).
 
-String strip_ansi(str term_s):
-    str term_out = ""
+String strip_ansi(String term_s):
+    String term_out = ""
     int term_i = 0
     int term_len = term_s.byte_len()
     while term_i < term_len:

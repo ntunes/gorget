@@ -3,6 +3,6 @@ void main():
     int x = some_val.expect("should have a value")
     print(f"{x}")
 
-    Result[int, str] ok_val = Ok(100)
+    Result[int, String] ok_val = Ok(100)
     int y = ok_val.expect("should be ok")
     print(f"{y}")

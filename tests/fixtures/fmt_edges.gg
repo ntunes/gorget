@@ -6,14 +6,14 @@ void main():
     print(str_truncate("hello world", 3, "..."))
 
     # join: empty vector → empty string
-    Vector[str] empty = Vector[str]()
+    Vector[String] empty = Vector[String]()
     print(join(empty, ","))
 
     # str_truncate: text fits within max → unchanged
     print(str_truncate("x", 3, "..."))
 
     # join: two elements, empty separator
-    Vector[str] pair = Vector[str]()
+    Vector[String] pair = Vector[String]()
     pair.push("a")
     pair.push("b")
     print(join(pair, ""))
@@ -30,7 +30,7 @@ void main():
     print(f"{r0}")
 
     # join: single element (no separator applied)
-    Vector[str] single = Vector[str]()
+    Vector[String] single = Vector[String]()
     single.push("only")
     print(join(single, ","))
 

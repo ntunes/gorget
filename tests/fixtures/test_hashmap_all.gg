@@ -3,7 +3,7 @@ from std.collections import HashMap, Vector
 
 void main():
     # ===== Construction =====
-    HashMap[str, int] m = HashMap[str, int]()
+    HashMap[String, int] m = HashMap[String, int]()
     print(f"{m.len()}")
     print(f"{m.is_empty()}")
 
@@ -41,7 +41,7 @@ void main():
     print(f"{m.contains("b")}")
 
     # ===== clear =====
-    HashMap[str, int] m2 = HashMap[str, int]()
+    HashMap[String, int] m2 = HashMap[String, int]()
     m2["x"] = 100
     m2["y"] = 200
     print(f"{m2.len()}")
@@ -53,11 +53,11 @@ void main():
     print(f"{m2.len()}")
 
     # ===== keys (verify count via len) =====
-    HashMap[str, int] m3 = HashMap[str, int]()
+    HashMap[String, int] m3 = HashMap[String, int]()
     m3["x"] = 10
     m3["y"] = 20
     m3["z"] = 30
-    Vector[str] ks = m3.keys()
+    Vector[String] ks = m3.keys()
     print(f"{ks.len()}")
 
     # ===== values (verify sum via fold, order-independent) =====
@@ -67,12 +67,12 @@ void main():
     print(f"{val_sum}")
 
     # ===== fold on map (order-independent sum) =====
-    int total = m3.fold(0, (int acc, str k, int v): acc + v)
+    int total = m3.fold(0, (int acc, String k, int v): acc + v)
     print(f"{total}")
 
     # ===== fold on empty =====
-    HashMap[str, int] empty_m = HashMap[str, int]()
-    int zero = empty_m.fold(0, (int acc, str k, int v): acc + v)
+    HashMap[String, int] empty_m = HashMap[String, int]()
+    int zero = empty_m.fold(0, (int acc, String k, int v): acc + v)
     print(f"{zero}")
 
     # ===== get_or =====
@@ -80,16 +80,16 @@ void main():
     print(f"{m3.get_or("missing", 99)}")
 
     # ===== update =====
-    HashMap[str, int] u1 = HashMap[str, int]()
+    HashMap[String, int] u1 = HashMap[String, int]()
     u1["a"] = 1
     u1["b"] = 2
-    HashMap[str, int] u2 = HashMap[str, int]()
+    HashMap[String, int] u2 = HashMap[String, int]()
     u2["b"] = 20
     u2["c"] = 30
     u1.update(u2)
     print(f"{u1.len()}")
     # Verify all values via fold sum: 1 + 20 + 30 = 51
-    int update_sum = u1.fold(0, (int acc, str k, int v): acc + v)
+    int update_sum = u1.fold(0, (int acc, String k, int v): acc + v)
     print(f"{update_sum}")
     # Verify specific keys
     print(f"{u1.get("a").unwrap()}")
@@ -101,7 +101,7 @@ void main():
     print(f"{empty_m.values().len()}")
 
     # ===== put then remove then re-add =====
-    HashMap[str, int] cycle = HashMap[str, int]()
+    HashMap[String, int] cycle = HashMap[String, int]()
     cycle["k"] = 1
     cycle.remove("k")
     print(f"{cycle.is_empty()}")
@@ -110,7 +110,7 @@ void main():
     print(f"{cycle.len()}")
 
     # ===== Overwrite preserves len =====
-    HashMap[str, int] ow = HashMap[str, int]()
+    HashMap[String, int] ow = HashMap[String, int]()
     ow["x"] = 10
     ow["x"] = 20
     ow["x"] = 30

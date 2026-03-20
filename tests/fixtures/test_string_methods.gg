@@ -3,22 +3,22 @@ from std.collections import Vector
 
 void main():
     # === Split / Join roundtrip ===
-    str csv = "one,two,three"
-    Vector[str] parts = csv.split(",")
+    String csv = "one,two,three"
+    Vector[String] parts = csv.split(",")
     print(f"{parts.len()}")
     String rejoined = ",".join(parts)
     print(rejoined)
 
     # Split on multi-char delimiter
-    str spaced = "a--b--c"
-    Vector[str] sp2 = spaced.split("--")
+    String spaced = "a--b--c"
+    Vector[String] sp2 = spaced.split("--")
     print(f"{sp2.len()}")
     String rej2 = "--".join(sp2)
     print(rej2)
 
     # Split single element (no delimiter present)
-    str nosep = "hello"
-    Vector[str] sp3 = nosep.split(",")
+    String nosep = "hello"
+    Vector[String] sp3 = nosep.split(",")
     print(f"{sp3.len()}")
     print(sp3.get(0).unwrap())
 
@@ -27,11 +27,11 @@ void main():
     print(piped)
 
     # === Replace with multiple occurrences ===
-    str rep = "abcabcabc"
+    String rep = "abcabcabc"
     String replaced = rep.replace("abc", "x")
     print(replaced)
 
-    str dots = "a.b.c.d"
+    String dots = "a.b.c.d"
     String nodots = dots.replace(".", "-")
     print(nodots)
 
@@ -50,8 +50,8 @@ void main():
     print("".repeat(10))
 
     # === String concatenation ===
-    str a = "hello"
-    str b = " world"
+    String a = "hello"
+    String b = " world"
     String c = a + b
     print(c)
 
@@ -71,7 +71,7 @@ void main():
     print(f"{"a" < "aa"}")
 
     # === Empty string edge cases ===
-    str empty = ""
+    String empty = ""
     print(f"{empty.len()}")
     print(f"{empty.is_empty()}")
     print(f"{empty.contains("")}")
@@ -83,30 +83,30 @@ void main():
     print(f"{empty.count("x")}")
 
     # Split empty string
-    Vector[str] emp_parts = empty.split(",")
+    Vector[String] emp_parts = empty.split(",")
     print(f"{emp_parts.len()}")
 
     # === Substring / slicing ===
-    str hw = "hello world"
-    str sub1 = hw.substring(0, 5)
+    String hw = "hello world"
+    String sub1 = hw.substring(0, 5)
     print(sub1)
 
-    str sub2 = hw.substring(6, 11)
+    String sub2 = hw.substring(6, 11)
     print(sub2)
 
     # Single character index
-    str ch = hw[0]
+    String ch = hw[0]
     print(ch)
-    str ch2 = hw[10]
+    String ch2 = hw[10]
     print(ch2)
 
     # byte_slice
-    str bs = hw.byte_slice(0, 5)
+    String bs = hw.byte_slice(0, 5)
     print(bs)
 
     # === String interpolation edge cases ===
     int x = 42
-    str name = "gorget"
+    String name = "gorget"
     print(f"{x}")
     print(f"value={x}")
     print(f"hello {name}!")
@@ -121,16 +121,16 @@ void main():
     print(f"{"hello".to_upper()}")
 
     # === Escape sequences ===
-    str nl = "line1\nline2"
+    String nl = "line1\nline2"
     print(nl)
-    str tab = "col1\tcol2"
+    String tab = "col1\tcol2"
     print(tab)
-    str bs2 = "back\\slash"
+    String bs2 = "back\\slash"
     print(bs2)
 
     # === Multi-word split and rejoin ===
-    str sentence = "the quick brown fox"
-    Vector[str] words = sentence.split(" ")
+    String sentence = "the quick brown fox"
+    Vector[String] words = sentence.split(" ")
     print(f"{words.len()}")
 
     # Join with different separator

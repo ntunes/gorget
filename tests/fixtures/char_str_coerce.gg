@@ -1,5 +1,5 @@
-# Tests for single-char str literals.
-# Single-quoted literals 'A' are now str (same as "A").
+# Tests for single-char String literals.
+# Single-quoted literals 'A' are now String (same as "A").
 #
 # Expected output:
 #   A
@@ -7,14 +7,14 @@
 #   A
 
 void main():
-    # single-char literal assigned to str variable
-    str s = 'A'
+    # single-char literal assigned to String variable
+    String s = 'A'
     print(s)
 
-    # single-char literal compared with double-quoted str
-    str t = 'A'
+    # single-char literal compared with double-quoted String
+    String t = 'A'
     print(t == "A")
 
-    # single-char literal is a str
-    str result = 'A'
+    # single-char literal is a String
+    String result = 'A'
     print(result)

@@ -28,7 +28,7 @@ def main():
         print(x)
 
     # --- Set with strings ---
-    Set[str] words = Set[str]()
+    Set[String] words = Set[String]()
     words.add("banana")
     words.add("apple")
     words.add("cherry")

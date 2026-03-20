@@ -1,7 +1,7 @@
 void main():
-    str s = "Hello123"
+    String s = "Hello123"
 
-    # str methods on string subscript expression
+    # String methods on string subscript expression
     print(f"{s[0].is_alpha()}")
     print(f"{s[4].is_digit()}")
     print(f"{s[5].is_digit()}")
@@ -15,5 +15,5 @@ void main():
     print(f"{s[i].is_alpha()}")
 
     # chained on a local works (baseline)
-    str c = s[0]
+    String c = s[0]
     print(f"{c.is_alpha()}")

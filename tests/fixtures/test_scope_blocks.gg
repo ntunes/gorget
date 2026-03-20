@@ -26,7 +26,7 @@ void main():
         int temp = 42
         print(temp)
     # temp is out of scope; we can declare a fresh one with a different type
-    str temp = "reused"
+    String temp = "reused"
     print(temp)
 
     # 3. For-loop variable scoping
@@ -56,7 +56,7 @@ void main():
     # 7. Variable with different type in named scope
     int count = 10
     retype:
-        str label = "ten"
+        String label = "ten"
         print(label)
     print(count)
 

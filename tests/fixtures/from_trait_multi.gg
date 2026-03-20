@@ -8,7 +8,7 @@ equip UserId with From[int]:
         return UserId(n)
 
 struct Label:
-    str text
+    String text
 
 equip UserId with From[Label]:
     UserId from(Label lbl):

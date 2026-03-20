@@ -1,17 +1,17 @@
 # Error handling patterns with throws, auto-propagation, catch, rethrow
 
-int safe_divide(int a, int b) throws str:
+int safe_divide(int a, int b) throws String:
     if b == 0:
         throw "divide by zero"
     return a / b
 
-int chain_ops(int x) throws str:
+int chain_ops(int x) throws String:
     int r1 = safe_divide(x, 2)
     int r2 = safe_divide(r1, 3)
     return r2
 
-int rethrow_with_context(int a, int b) throws str:
-    int val = safe_divide(a, b) rethrow (str e): f"calc failed: {e}"
+int rethrow_with_context(int a, int b) throws String:
+    int val = safe_divide(a, b) rethrow (String e): f"calc failed: {e}"
     return val
 
 void main():
@@ -79,14 +79,14 @@ void main():
             print(e)
 
     # Result capture — success gives Ok, error gives Error
-    Result[int, str] r8 = safe_divide(10, 5)
+    Result[int, String] r8 = safe_divide(10, 5)
     match r8:
         case Ok(v):
             print(f"{v}")
         case Error(e):
             print(e)
 
-    Result[int, str] r9 = safe_divide(10, 0)
+    Result[int, String] r9 = safe_divide(10, 0)
     match r9:
         case Ok(v):
             print(f"{v}")

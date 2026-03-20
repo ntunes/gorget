@@ -1,5 +1,5 @@
 void main():
-    str s = "hello"
+    String s = "hello"
     print(s)
     cstr c = c"world"
     print(c)

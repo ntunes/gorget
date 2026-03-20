@@ -4,9 +4,9 @@ meta bool HAS_THING = feature("thing")
 meta bool IS_DEBUG = debug()
 
 meta if feature("enabled"):
-    meta str MSG = "feature enabled"
+    meta String MSG = "feature enabled"
 else:
-    meta str MSG = "feature disabled"
+    meta String MSG = "feature disabled"
 
 void main():
     print(BITS)

@@ -17,14 +17,14 @@ from std.bytes import bytes_to_str, bytes_concat
 
 struct HttpResponse:
     int status_code
-    str body_text
-    Dict[str, str] headers
+    String body_text
+    Dict[String, String] headers
 
 # ── URL parsing ──────────────────────────────────────────────
 
 # Returns (host, port, path, use_tls) where use_tls is false for http:// URLs.
-(str, int, str, bool) parse_url(str url):
-    str http_rest = url
+(String, int, String, bool) parse_url(String url):
+    String http_rest = url
     int http_port = 443
     bool http_use_tls = true
 
@@ -37,8 +37,8 @@ struct HttpResponse:
 
     # Split host from path at the first "/"
     Option[int] http_sl = http_rest.index_of("/")
-    str http_hp = http_rest
-    str http_path = "/"
+    String http_hp = http_rest
+    String http_path = "/"
     if http_sl.is_some():
         int http_sl_v = http_sl.unwrap()
         http_hp = http_rest.byte_slice(0, http_sl_v)
@@ -46,11 +46,11 @@ struct HttpResponse:
 
     # Split host:port
     Option[int] http_cp = http_hp.index_of(":")
-    str http_host = http_hp
+    String http_host = http_hp
     if http_cp.is_some():
         int http_cp_v = http_cp.unwrap()
         http_host = http_hp.byte_slice(0, http_cp_v)
-        str http_ps = http_hp.byte_slice(http_cp_v + 1, http_hp.byte_len())
+        String http_ps = http_hp.byte_slice(http_cp_v + 1, http_hp.byte_len())
         Option[int] http_port_parsed = int.parse(http_ps)
         if http_port_parsed is Some(http_pv):
             http_port = http_pv
@@ -59,7 +59,7 @@ struct HttpResponse:
 
 # ── Hex parsing (for chunked transfer encoding) ─────────────
 
-private int parse_hex(str http_hex):
+private int parse_hex(String http_hex):
     int http_val = 0
     int http_hi = 0
     while http_hi < http_hex.byte_len():
@@ -79,17 +79,17 @@ private int parse_hex(str http_hex):
 
 # ── Body readers ─────────────────────────────────────────────
 
-private str read_body_fixed(TlsSocket &http_conn, int http_clen):
+private String read_body_fixed(TlsSocket &http_conn, int http_clen):
     if http_clen <= 0:
         return ""
     Vector[uint8] http_raw = http_conn.read_exact(http_clen)
     return bytes_to_str(http_raw).unwrap()
 
-private str read_body_chunked(TlsSocket &http_conn):
+private String read_body_chunked(TlsSocket &http_conn):
     Vector[uint8] http_buf = Vector[uint8]()
     bool http_reading = true
     while http_reading:
-        str http_size_line = http_conn.read_line().unwrap()
+        String http_size_line = http_conn.read_line().unwrap()
         # Strip any chunk extensions after ";"
         Option[int] http_semi = http_size_line.index_of(";")
         if http_semi.is_some():
@@ -104,12 +104,12 @@ private str read_body_chunked(TlsSocket &http_conn):
             # Consume trailing \r\n after chunk data
             http_conn.read_line().unwrap()
     # Consume optional trailers until empty line
-    str http_trailer = http_conn.read_line().unwrap()
+    String http_trailer = http_conn.read_line().unwrap()
     while http_trailer != "":
         http_trailer = http_conn.read_line().unwrap()
     return bytes_to_str(http_buf).unwrap()
 
-private str read_body_close(TlsSocket &http_conn):
+private String read_body_close(TlsSocket &http_conn):
     Vector[uint8] http_buf = Vector[uint8]()
     bool http_reading = true
     while http_reading:
@@ -122,17 +122,17 @@ private str read_body_close(TlsSocket &http_conn):
 
 # ── Plain-TCP body readers (mirrors TLS versions above) ──────
 
-private str read_body_fixed_plain(Socket &http_conn, int http_clen):
+private String read_body_fixed_plain(Socket &http_conn, int http_clen):
     if http_clen <= 0:
         return ""
     Vector[uint8] http_raw = http_conn.read_exact(http_clen)
     return bytes_to_str(http_raw).unwrap()
 
-private str read_body_chunked_plain(Socket &http_conn):
+private String read_body_chunked_plain(Socket &http_conn):
     Vector[uint8] http_buf = Vector[uint8]()
     bool http_reading = true
     while http_reading:
-        str http_size_line = http_conn.read_line().unwrap()
+        String http_size_line = http_conn.read_line().unwrap()
         Option[int] http_semi = http_size_line.index_of(";")
         if http_semi.is_some():
             http_size_line = http_size_line.byte_slice(0, http_semi.unwrap())
@@ -144,12 +144,12 @@ private str read_body_chunked_plain(Socket &http_conn):
             Vector[uint8] http_chunk = http_conn.read_exact(http_chunk_sz)
             http_buf = bytes_concat(http_buf, http_chunk)
             http_conn.read_line().unwrap()
-    str http_trailer = http_conn.read_line().unwrap()
+    String http_trailer = http_conn.read_line().unwrap()
     while http_trailer != "":
         http_trailer = http_conn.read_line().unwrap()
     return bytes_to_str(http_buf).unwrap()
 
-private str read_body_close_plain(Socket &http_conn):
+private String read_body_close_plain(Socket &http_conn):
     Vector[uint8] http_buf = Vector[uint8]()
     bool http_reading = true
     while http_reading:
@@ -162,11 +162,11 @@ private str read_body_close_plain(Socket &http_conn):
 
 # ── Single-shot request (no redirect following) ───────────
 
-Result[HttpResponse, str] http_single(str http_method, str http_url, str http_body, Dict[str, str] http_hdrs):
+Result[HttpResponse, String] http_single(String http_method, String http_url, String http_body, Dict[String, String] http_hdrs):
     auto http_parsed = parse_url(http_url)
-    str http_host = http_parsed._0
+    String http_host = http_parsed._0
     int http_port = http_parsed._1
-    str http_path = http_parsed._2
+    String http_path = http_parsed._2
     bool http_use_tls = http_parsed._3
 
     # Build request (same for TLS and plain)
@@ -177,12 +177,12 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
         http_req = http_req + "Content-Length: " + int_to_str(http_body.byte_len()) + "\r\n"
 
     # User-supplied headers — copy parameter into local for codegen type resolution
-    Dict[str, str] http_local_hdrs = http_hdrs
-    Vector[str] http_hk = http_local_hdrs.keys()
+    Dict[String, String] http_local_hdrs = http_hdrs
+    Vector[String] http_hk = http_local_hdrs.keys()
     int http_hi = 0
     while http_hi < http_hk.len():
-        str http_key = http_hk.get(http_hi).unwrap()
-        str http_hval = http_local_hdrs[http_key]
+        String http_key = http_hk.get(http_hi).unwrap()
+        String http_hval = http_local_hdrs[http_key]
         http_req = http_req + http_key + ": " + http_hval + "\r\n"
         http_hi = http_hi + 1
 
@@ -197,14 +197,14 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
 
         http_tls_conn.write_str(http_req)
 
-        str http_tls_sl = http_tls_conn.read_line()
+        String http_tls_sl = http_tls_conn.read_line()
         Option[int] http_tls_sp1 = http_tls_sl.index_of(" ")
         int http_tls_code = 0
         if http_tls_sp1.is_some():
-            str http_tls_after = http_tls_sl.byte_slice(http_tls_sp1.unwrap() + 1, http_tls_sl.byte_len())
+            String http_tls_after = http_tls_sl.byte_slice(http_tls_sp1.unwrap() + 1, http_tls_sl.byte_len())
             Option[int] http_tls_sp2 = http_tls_after.index_of(" ")
             if http_tls_sp2.is_some():
-                str http_tls_cs = http_tls_after.byte_slice(0, http_tls_sp2.unwrap())
+                String http_tls_cs = http_tls_after.byte_slice(0, http_tls_sp2.unwrap())
                 Option[int] http_tls_co = int.parse(http_tls_cs)
                 if http_tls_co is Some(http_tls_cv):
                     http_tls_code = http_tls_cv
@@ -213,10 +213,10 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
                 if http_tls_co2 is Some(http_tls_cv2):
                     http_tls_code = http_tls_cv2
 
-        Dict[str, str] http_tls_hdrs = Dict[str, str]()
+        Dict[String, String] http_tls_hdrs = Dict[String, String]()
         bool http_tls_ih = true
         while http_tls_ih:
-            str http_tls_hl = http_tls_conn.read_line()
+            String http_tls_hl = http_tls_conn.read_line()
             if http_tls_hl == "":
                 http_tls_ih = false
             else:
@@ -224,17 +224,17 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
                 if http_tls_colon.is_some():
                     int http_tls_cv3 = http_tls_colon.unwrap()
                     String http_tls_hn = http_tls_hl.byte_slice(0, http_tls_cv3).trim().to_lower()
-                    str http_tls_hv = http_tls_hl.byte_slice(http_tls_cv3 + 1, http_tls_hl.byte_len()).trim()
+                    String http_tls_hv = http_tls_hl.byte_slice(http_tls_cv3 + 1, http_tls_hl.byte_len()).trim()
                     http_tls_hdrs.put(http_tls_hn, http_tls_hv)
 
-        str http_tls_body = ""
+        String http_tls_body = ""
         if http_tls_hdrs.contains("transfer-encoding"):
-            str http_tls_te = http_tls_hdrs["transfer-encoding"]
+            String http_tls_te = http_tls_hdrs["transfer-encoding"]
             if http_tls_te.to_lower().contains("chunked"):
                 http_tls_body = read_body_chunked(&http_tls_conn)
         if http_tls_body == "":
             if http_tls_hdrs.contains("content-length"):
-                str http_tls_cls = http_tls_hdrs["content-length"]
+                String http_tls_cls = http_tls_hdrs["content-length"]
                 Option[int] http_tls_clo = int.parse(http_tls_cls)
                 if http_tls_clo is Some(http_tls_cl):
                     http_tls_body = read_body_fixed(&http_tls_conn, http_tls_cl)
@@ -252,14 +252,14 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
 
         http_plain_conn.write_str(http_req)
 
-        str http_plain_sl = http_plain_conn.read_line()
+        String http_plain_sl = http_plain_conn.read_line()
         Option[int] http_plain_sp1 = http_plain_sl.index_of(" ")
         int http_plain_code = 0
         if http_plain_sp1.is_some():
-            str http_plain_after = http_plain_sl.byte_slice(http_plain_sp1.unwrap() + 1, http_plain_sl.byte_len())
+            String http_plain_after = http_plain_sl.byte_slice(http_plain_sp1.unwrap() + 1, http_plain_sl.byte_len())
             Option[int] http_plain_sp2 = http_plain_after.index_of(" ")
             if http_plain_sp2.is_some():
-                str http_plain_cs = http_plain_after.byte_slice(0, http_plain_sp2.unwrap())
+                String http_plain_cs = http_plain_after.byte_slice(0, http_plain_sp2.unwrap())
                 Option[int] http_plain_co = int.parse(http_plain_cs)
                 if http_plain_co is Some(http_plain_cv):
                     http_plain_code = http_plain_cv
@@ -268,10 +268,10 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
                 if http_plain_co2 is Some(http_plain_cv2):
                     http_plain_code = http_plain_cv2
 
-        Dict[str, str] http_plain_hdrs = Dict[str, str]()
+        Dict[String, String] http_plain_hdrs = Dict[String, String]()
         bool http_plain_ih = true
         while http_plain_ih:
-            str http_plain_hl = http_plain_conn.read_line()
+            String http_plain_hl = http_plain_conn.read_line()
             if http_plain_hl == "":
                 http_plain_ih = false
             else:
@@ -279,17 +279,17 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
                 if http_plain_colon.is_some():
                     int http_plain_cv3 = http_plain_colon.unwrap()
                     String http_plain_hn = http_plain_hl.byte_slice(0, http_plain_cv3).trim().to_lower()
-                    str http_plain_hv = http_plain_hl.byte_slice(http_plain_cv3 + 1, http_plain_hl.byte_len()).trim()
+                    String http_plain_hv = http_plain_hl.byte_slice(http_plain_cv3 + 1, http_plain_hl.byte_len()).trim()
                     http_plain_hdrs.put(http_plain_hn, http_plain_hv)
 
-        str http_plain_body = ""
+        String http_plain_body = ""
         if http_plain_hdrs.contains("transfer-encoding"):
-            str http_plain_te = http_plain_hdrs["transfer-encoding"]
+            String http_plain_te = http_plain_hdrs["transfer-encoding"]
             if http_plain_te.to_lower().contains("chunked"):
                 http_plain_body = read_body_chunked_plain(&http_plain_conn)
         if http_plain_body == "":
             if http_plain_hdrs.contains("content-length"):
-                str http_plain_cls = http_plain_hdrs["content-length"]
+                String http_plain_cls = http_plain_hdrs["content-length"]
                 Option[int] http_plain_clo = int.parse(http_plain_cls)
                 if http_plain_clo is Some(http_plain_cl):
                     http_plain_body = read_body_fixed_plain(&http_plain_conn, http_plain_cl)
@@ -309,10 +309,10 @@ Result[HttpResponse, str] http_single(str http_method, str http_url, str http_bo
 #   307, 308      → preserve original method and body
 #   Max 10 hops, then return error.
 
-Result[HttpResponse, str] request(str http_method, str http_url, str http_body, Dict[str, str] http_hdrs):
-    str http_cur_url = http_url
-    str http_cur_method = http_method
-    str http_cur_body = http_body
+Result[HttpResponse, String] request(String http_method, String http_url, String http_body, Dict[String, String] http_hdrs):
+    String http_cur_url = http_url
+    String http_cur_method = http_method
+    String http_cur_body = http_body
     int http_redirects = 0
 
     loop:
@@ -330,19 +330,19 @@ Result[HttpResponse, str] request(str http_method, str http_url, str http_body, 
             return Error("too many redirects")
 
         # Must have a Location header
-        Dict[str, str] http_redir_hdrs = http_resp.headers
+        Dict[String, String] http_redir_hdrs = http_resp.headers
         if not http_redir_hdrs.contains("location"):
             return Ok(http_resp)
 
-        str http_location = http_redir_hdrs["location"]
+        String http_location = http_redir_hdrs["location"]
 
         # Handle relative redirects (path-only)
         if http_location.starts_with("/"):
             auto http_orig = parse_url(http_cur_url)
-            str http_scheme = "https://"
+            String http_scheme = "https://"
             if not http_orig._3:
                 http_scheme = "http://"
-            str http_redir_host = http_orig._0
+            String http_redir_host = http_orig._0
             int http_redir_port = http_orig._1
             if (http_orig._3 and http_redir_port != 443) or (not http_orig._3 and http_redir_port != 80):
                 http_redir_host = http_redir_host + ":" + int_to_str(http_redir_port)
@@ -358,17 +358,17 @@ Result[HttpResponse, str] request(str http_method, str http_url, str http_body, 
 
 # ── Convenience functions ────────────────────────────────────
 
-Result[HttpResponse, str] get(str http_url, Dict[str, str] http_hdrs = Dict[str, str]()):
+Result[HttpResponse, String] get(String http_url, Dict[String, String] http_hdrs = Dict[String, String]()):
     return request("GET", http_url, "", http_hdrs)
 
-Result[HttpResponse, str] post(str http_url, str http_body = "", Dict[str, str] http_hdrs = Dict[str, str]()):
+Result[HttpResponse, String] post(String http_url, String http_body = "", Dict[String, String] http_hdrs = Dict[String, String]()):
     return request("POST", http_url, http_body, http_hdrs)
 
-Result[HttpResponse, str] put(str http_url, str http_body = "", Dict[str, str] http_hdrs = Dict[str, str]()):
+Result[HttpResponse, String] put(String http_url, String http_body = "", Dict[String, String] http_hdrs = Dict[String, String]()):
     return request("PUT", http_url, http_body, http_hdrs)
 
-Result[HttpResponse, str] delete(str http_url, Dict[str, str] http_hdrs = Dict[str, str]()):
+Result[HttpResponse, String] delete(String http_url, Dict[String, String] http_hdrs = Dict[String, String]()):
     return request("DELETE", http_url, "", http_hdrs)
 
-Result[HttpResponse, str] patch(str http_url, str http_body = "", Dict[str, str] http_hdrs = Dict[str, str]()):
+Result[HttpResponse, String] patch(String http_url, String http_body = "", Dict[String, String] http_hdrs = Dict[String, String]()):
     return request("PATCH", http_url, http_body, http_hdrs)

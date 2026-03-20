@@ -30,16 +30,16 @@ void main():
     print(repeat("x", -1) == "")
 
     # ── join: empty vector ──
-    Vector[str] empty = Vector[str]()
+    Vector[String] empty = Vector[String]()
     print(join(empty, ","))
 
     # ── join: single element (no separator) ──
-    Vector[str] single = Vector[str]()
+    Vector[String] single = Vector[String]()
     single.push("only")
     print(join(single, ","))
 
     # ── join: empty separator ──
-    Vector[str] parts = Vector[str]()
+    Vector[String] parts = Vector[String]()
     parts.push("a")
     parts.push("b")
     parts.push("c")

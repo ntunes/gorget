@@ -1,19 +1,19 @@
 from std.collections import Box
 
 trait Describer:
-    str describe(self)
+    String describe(self)
     int count(self)
     float ratio(self)
     bool active(self)
 
 struct Widget:
-    str name
+    String name
     int n
     float r
     bool on
 
 equip Widget with Describer:
-    str describe(self):
+    String describe(self):
         return self.name
 
     int count(self):

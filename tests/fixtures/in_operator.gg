@@ -36,7 +36,7 @@ void main():
         print("false")
 
     # String
-    str text = "hello world"
+    String text = "hello world"
     if "world" in text:
         print("true")
     if "xyz" in text:

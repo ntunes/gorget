@@ -2,7 +2,7 @@ struct Dims:
     int w
     int h
 
-str classify(Dims d):
+String classify(Dims d):
     if d.w == d.h:
         return "square"
     else:
@@ -10,7 +10,7 @@ str classify(Dims d):
 
 void main():
     Dims d = Dims(10, 10)
-    str shape = classify(d)
+    String shape = classify(d)
     print(shape)
     print(d.w)
     Dims d2 = Dims(3, 5)

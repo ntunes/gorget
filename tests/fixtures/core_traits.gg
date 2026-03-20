@@ -7,7 +7,7 @@ equip Point with Equatable:
         return self.x == other.x and self.y == other.y
 
 equip Point with Displayable:
-    str display(self):
+    String display(self):
         return "Point"
 
 void main():

@@ -3,7 +3,7 @@ struct Point:
     int y
 
 struct Player:
-    str name
+    String name
     int health
     bool alive
 
@@ -17,7 +17,7 @@ String to_debug[T](T val):
             int v = field_value(val, fname)
             out = out + f"{fname}={v}"
         elif ftype == "String":
-            str v = field_value(val, fname)
+            String v = field_value(val, fname)
             out = out + f"{fname}={v}"
         elif ftype == "bool":
             bool v = field_value(val, fname)

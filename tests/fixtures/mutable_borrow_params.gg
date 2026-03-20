@@ -1,6 +1,6 @@
 struct Counter:
     int value
-    str name
+    String name
 
 void increment(Counter &c, int amount):
     c.value = c.value + amount

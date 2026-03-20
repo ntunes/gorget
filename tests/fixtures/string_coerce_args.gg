@@ -1,11 +1,11 @@
 void main():
     # Test GorgetString→Str coercion in method arguments
-    # str + str yields String (GorgetString), which must be coerced to Str
+    # String + String yields String (GorgetString), which must be coerced to Str
     # when passed as an argument to gorget_str_* functions
 
-    str base = "hello world"
-    str a = "wo"
-    str b = "rld"
+    String base = "hello world"
+    String a = "wo"
+    String b = "rld"
     # a + b → String (GorgetString) — must be coerced to Str for contains/starts_with/ends_with
     String needle = a + b
 

@@ -25,13 +25,13 @@ equip Wrapper[T] with Labeled:
 void main():
     # Direct trait method calls with multiple instantiations
     Container[int] c1 = Container[int](100)
-    Container[str] c2 = Container[str]("hello")
+    Container[String] c2 = Container[String]("hello")
     print(c1.code())
     print(c2.code())
 
     # Default method on generic type
     Wrapper[int] w1 = Wrapper[int](10)
-    Wrapper[str] w2 = Wrapper[str]("world")
+    Wrapper[String] w2 = Wrapper[String]("world")
     print(w1.label())
     print(w1.full_label())
     print(w2.label())

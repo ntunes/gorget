@@ -13,7 +13,7 @@ void main():
     print(empty[0])
 
     # Build up and iterate
-    Vector[str] names = Vector[str]()
+    Vector[String] names = Vector[String]()
     names.push("a")
     names.push("b")
     names.push("c")

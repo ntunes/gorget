@@ -12,7 +12,7 @@ from std.conv import chr, codepoint_to_str
 int enc_byte_val(byte enc_ch):
     return enc_ch as int
 
-str enc_hex_digit(int enc_n):
+String enc_hex_digit(int enc_n):
     if enc_n < 10:
         return chr(48 + enc_n)
     return chr(55 + enc_n)
@@ -53,7 +53,7 @@ bool enc_is_url_unreserved(byte enc_ch):
 
 # ── URL encoding (RFC 3986) ───────────────────────────────────
 
-String url_encode(str enc_input):
+String url_encode(String enc_input):
     String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
@@ -66,7 +66,7 @@ String url_encode(str enc_input):
         enc_i = enc_i + 1
     return enc_out
 
-Result[String, str] url_decode(str enc_input):
+Result[String, String] url_decode(String enc_input):
     String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
@@ -86,7 +86,7 @@ Result[String, str] url_decode(str enc_input):
             enc_i = enc_i + 1
     return Ok(enc_out)
 
-String form_encode(str enc_input):
+String form_encode(String enc_input):
     String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
@@ -101,7 +101,7 @@ String form_encode(str enc_input):
         enc_i = enc_i + 1
     return enc_out
 
-Result[String, str] form_decode(str enc_input):
+Result[String, String] form_decode(String enc_input):
     String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
@@ -126,7 +126,7 @@ Result[String, str] form_decode(str enc_input):
 
 # ── HTML entity escaping ─────────────────────────────────────
 
-String html_escape(str enc_input):
+String html_escape(String enc_input):
     String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
@@ -147,7 +147,7 @@ String html_escape(str enc_input):
         enc_i = enc_i + 1
     return enc_out
 
-str enc_decode_entity(str enc_name):
+String enc_decode_entity(String enc_name):
     # Numeric references: &#DDD; or &#xHH;
     if enc_name.byte_len() > 1 and enc_name.byte_at(0) == b'#':
         if enc_name.byte_at(1) == b'x' or enc_name.byte_at(1) == b'X':
@@ -223,7 +223,7 @@ str enc_decode_entity(str enc_name):
         return codepoint_to_str(247)
     return ""
 
-String html_unescape(str enc_input):
+String html_unescape(String enc_input):
     String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
@@ -243,7 +243,7 @@ String html_unescape(str enc_input):
                 while enc_j < enc_k:
                     enc_entity = enc_entity + enc_input.byte_slice(enc_j, enc_j + 1)
                     enc_j = enc_j + 1
-                str enc_decoded = enc_decode_entity(enc_entity)
+                String enc_decoded = enc_decode_entity(enc_entity)
                 if enc_decoded.len() > 0:
                     enc_out = enc_out + enc_decoded
                     enc_i = enc_k + 1
@@ -260,7 +260,7 @@ String html_unescape(str enc_input):
 
 # ── UTF-8 utilities ──────────────────────────────────────────
 
-int utf8_len(str enc_s):
+int utf8_len(String enc_s):
     int enc_count = 0
     int enc_i = 0
     int enc_slen = enc_s.byte_len()
@@ -272,7 +272,7 @@ int utf8_len(str enc_s):
         enc_i = enc_i + 1
     return enc_count
 
-Vector[int] utf8_codepoints(str enc_s):
+Vector[int] utf8_codepoints(String enc_s):
     Vector[int] enc_cps = Vector[int]()
     int enc_i = 0
     int enc_slen = enc_s.byte_len()
@@ -301,7 +301,7 @@ Vector[int] utf8_codepoints(str enc_s):
             enc_i = enc_i + 4
     return enc_cps
 
-bool utf8_is_valid(str enc_s):
+bool utf8_is_valid(String enc_s):
     int enc_i = 0
     int enc_slen = enc_s.byte_len()
     while enc_i < enc_slen:
@@ -342,7 +342,7 @@ bool utf8_is_valid(str enc_s):
             return false
     return true
 
-int utf8_char_at(str enc_s, int enc_n):
+int utf8_char_at(String enc_s, int enc_n):
     int enc_i = 0
     int enc_count = 0
     int enc_slen = enc_s.byte_len()
@@ -380,7 +380,7 @@ int utf8_char_at(str enc_s, int enc_n):
 
 # ── Latin-1 (ISO 8859-1) ────────────────────────────────────
 
-Result[Vector[uint8], str] latin1_encode(str enc_s):
+Result[Vector[uint8], String] latin1_encode(String enc_s):
     Vector[int] enc_cps = utf8_codepoints(enc_s)
     Vector[uint8] enc_out = Vector[uint8]()
     int enc_i = 0

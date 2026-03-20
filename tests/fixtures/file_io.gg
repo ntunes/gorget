@@ -10,12 +10,12 @@ void main():
     print(exists)
 
     # Read it back
-    str content = read_file("_test_output.txt")
+    String content = read_file("_test_output.txt")
     print(content)
 
     # Append to it
     append_file("_test_output.txt", "\nsecond line")
-    str content2 = read_file("_test_output.txt")
+    String content2 = read_file("_test_output.txt")
     print(content2)
 
     # File struct usage
@@ -23,7 +23,7 @@ void main():
     f.write("from File struct")
     f.close()
 
-    str data = read_file("_test_output2.txt")
+    String data = read_file("_test_output2.txt")
     print(data)
 
     # File with read_all

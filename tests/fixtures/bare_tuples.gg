@@ -5,7 +5,7 @@ int, int get_pair():
     return 10, 20
 
 # Three-element bare tuple return type
-str, int, bool parse_info():
+String, int, bool parse_info():
     return "hello", 42, true
 
 # Single-element return (regression: should not create tuple)

@@ -1,46 +1,46 @@
 from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str
 
 void main():
-    # parse_int — Result[int, str]
-    Result[int, str] pi_res = parse_int("42")
+    # parse_int — Result[int, String]
+    Result[int, String] pi_res = parse_int("42")
     if pi_res is Ok(pi_val):
         print(f"{pi_val}")
 
-    Result[int, str] pi_bad = parse_int("hello")
+    Result[int, String] pi_bad = parse_int("hello")
     if pi_bad is Error(pi_err):
         print("int_err")
 
-    # parse_float — Result[float, str]
-    Result[float, str] pf_res = parse_float("3.14")
+    # parse_float — Result[float, String]
+    Result[float, String] pf_res = parse_float("3.14")
     if pf_res is Ok(pi):
         print(f"{pi}")
 
-    Result[float, str] neg_res = parse_float("-0.5")
+    Result[float, String] neg_res = parse_float("-0.5")
     if neg_res is Ok(neg):
         print(f"{neg}")
 
-    Result[float, str] pf_bad = parse_float("xyz")
+    Result[float, String] pf_bad = parse_float("xyz")
     if pf_bad is Error(pf_err):
         print("float_err")
 
     # int_to_str
-    str s1 = int_to_str(42)
+    String s1 = int_to_str(42)
     print(s1)
-    str s2 = int_to_str(-100)
+    String s2 = int_to_str(-100)
     print(s2)
 
     # float_to_str
-    str s3 = float_to_str(2.5)
+    String s3 = float_to_str(2.5)
     print(s3)
-    str s4 = float_to_str(1000.0)
+    String s4 = float_to_str(1000.0)
     print(s4)
 
     # bool_to_str
     print(bool_to_str(true))
     print(bool_to_str(false))
 
-    # single-char str literal
-    str s5 = 'A'
+    # single-char String literal
+    String s5 = 'A'
     print(s5)
 
     # Parseable trait — int.parse()
@@ -108,5 +108,5 @@ void main():
     bool bd = bool.default()
     print(f"{bd}")
 
-    str sd = str.default()
+    String sd = str.default()
     print(f"str_default:{sd}:")

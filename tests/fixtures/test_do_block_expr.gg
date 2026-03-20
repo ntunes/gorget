@@ -54,8 +54,8 @@ void main():
 
     # 7. Do-block returning a string value
     String msg = do:
-        str greeting = "hello"
-        str name = "world"
+        String greeting = "hello"
+        String name = "world"
         greeting + " " + name
     print(msg)
 

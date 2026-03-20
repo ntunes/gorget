@@ -4,8 +4,8 @@
 # Imported by gg.sqlite and gg.influx.
 #
 # @derive(FromRow) is supported on user structs whose field names match
-# column names. Fields of type str, int, float, and bool are handled;
-# everything else is left as str (the raw column text).
+# column names. Fields of type String, int, float, and bool are handled;
+# everything else is left as String (the raw column text).
 
 from std.collections import Vector, Dict
 from std.conv import parse_int, parse_float
@@ -13,46 +13,46 @@ from std.conv import parse_int, parse_float
 # ── Raw row from a query result ──────────────────────────────
 
 struct Row:
-    Dict[str, str] columns
+    Dict[String, String] columns
 
 equip Row:
-    # Get a column value as str (empty string if column not present).
-    str get(&self, str col):
+    # Get a column value as String (empty string if column not present).
+    String get(&self, String col):
         if self.columns.contains(col):
             return self.columns[col]
         return ""
 
     # Typed accessors used by @derive(FromRow)-generated code.
-    int get_int(&self, str col):
+    int get_int(&self, String col):
         if not self.columns.contains(col):
             return 0
-        Result[int, str] r = parse_int(self.columns[col])
+        Result[int, String] r = parse_int(self.columns[col])
         if r.is_ok():
             return r.unwrap()
         return 0
 
-    float get_float(&self, str col):
+    float get_float(&self, String col):
         if not self.columns.contains(col):
             return 0.0
-        Result[float, str] r = parse_float(self.columns[col])
+        Result[float, String] r = parse_float(self.columns[col])
         if r.is_ok():
             return r.unwrap()
         return 0.0
 
-    bool get_bool(&self, str col):
+    bool get_bool(&self, String col):
         if not self.columns.contains(col):
             return false
-        str v = self.columns[col]
+        String v = self.columns[col]
         return v == "1" or v == "true" or v == "True"
 
-    bool has(&self, str col): self.columns.contains(col)
+    bool has(&self, String col): self.columns.contains(col)
 
 # ── Typed DB column value ─────────────────────────────────────
 
 enum Value:
     IntVal(int)
     FloatVal(float)
-    StrVal(str)
+    StrVal(String)
     BoolVal(bool)
     NullVal
 
@@ -61,7 +61,7 @@ enum Value:
 enum Param:
     IntParam(int)
     FloatParam(float)
-    StrParam(str)
+    StrParam(String)
     BoolParam(bool)
     NullParam
 
@@ -81,9 +81,9 @@ equip Row with FromRow:
 # Implementations: SqliteConn (gg.sqlite), InfluxClient (gg.influx).
 # query_raw returns raw rows; use from_row to convert to typed structs.
 trait Queryable:
-    Result[Vector[Row], str] query_raw(&self, str sql, Vector[Param] params)
-    Result[int, str] exec(&self, str sql, Vector[Param] params)
-    Result[int, str] exec_simple(&self, str sql):
+    Result[Vector[Row], String] query_raw(&self, String sql, Vector[Param] params)
+    Result[int, String] exec(&self, String sql, Vector[Param] params)
+    Result[int, String] exec_simple(&self, String sql):
         return self.exec(sql, Vector[Param]())
 
 # Database connection lifecycle (extends Queryable).

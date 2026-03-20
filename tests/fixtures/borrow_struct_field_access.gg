@@ -1,5 +1,5 @@
 struct Player:
-    str name
+    String name
     int score
     int level
 

@@ -6,11 +6,11 @@ from std.collections import Vector, Dict, Set
 # reassignment, option/result wrapping — all in tight loops.
 
 struct Record:
-    str name
-    Dict[str, int] fields
+    String name
+    Dict[String, int] fields
 
 Record make_record(int id):
-    Dict[str, int] d = Dict[str, int]()
+    Dict[String, int] d = Dict[String, int]()
     d["score"] = id * 10
     d["rank"] = id
     return Record(f"record-{id}", d)
@@ -50,10 +50,10 @@ void main():
             j = j + 1
         i = i + 1
 
-    # --- Section 4: Set[str] with owned string elements ---
+    # --- Section 4: Set[String] with owned string elements ---
     i = 0
     while i < 200:
-        Set[str] s = Set[str]()
+        Set[String] s = Set[String]()
         int j = 0
         while j < 20:
             s.add(f"tag-{j}")
@@ -74,11 +74,11 @@ void main():
         i = i + 1
 
     # --- Section 6: Dict reassignment in loop ---
-    Dict[str, int] d = Dict[str, int]()
+    Dict[String, int] d = Dict[String, int]()
     d["init"] = 0
     i = 0
     while i < 500:
-        Dict[str, int] new_d = Dict[str, int]()
+        Dict[String, int] new_d = Dict[String, int]()
         new_d[f"key-{i}"] = i
         d = !new_d
         i = i + 1
@@ -90,20 +90,20 @@ void main():
         Vector[int] scores = Vector[int]()
         scores.push(90)
         scores.push(85)
-        Dict[str, int] attrs = Dict[str, int]()
+        Dict[String, int] attrs = Dict[String, int]()
         attrs["age"] = 20 + i
         Set[int] tags = Set[int]()
         tags.add(i)
         tags.add(i + 1)
         i = i + 1
 
-    # --- Section 8: Deeply nested — Vector[Dict[str, Vector[int]]] ---
+    # --- Section 8: Deeply nested — Vector[Dict[String, Vector[int]]] ---
     i = 0
     while i < 50:
-        Vector[Dict[str, Vector[int]]] data = Vector[Dict[str, Vector[int]]]()
+        Vector[Dict[String, Vector[int]]] data = Vector[Dict[String, Vector[int]]]()
         int j = 0
         while j < 5:
-            Dict[str, Vector[int]] entry = Dict[str, Vector[int]]()
+            Dict[String, Vector[int]] entry = Dict[String, Vector[int]]()
             Vector[int] vals = Vector[int]()
             vals.push(j)
             vals.push(j + 1)

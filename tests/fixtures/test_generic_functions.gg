@@ -13,16 +13,16 @@ Option[T] find_positive[T](T val, bool keep):
 # Generic struct with equip
 struct Holder[T]:
     T value
-    str label
+    String label
 
 equip Holder[T]:
     T get_value(self):
         return self.value
 
-    str get_label(self):
+    String get_label(self):
         return self.label
 
-    Holder[T] with_label(self, str new_label):
+    Holder[T] with_label(self, String new_label):
         return Holder[T](self.value, new_label)
 
 # Generic function operating on generic struct
@@ -30,18 +30,18 @@ T extract[T](Holder[T] h):
     return h.get_value()
 
 void main():
-    # 1. Generic identity with int, str, float
+    # 1. Generic identity with int, String, float
     int a = identity[int](42)
     print(a)
-    str b = identity[str]("hello")
+    String b = identity[String]("hello")
     print(b)
     float c = identity[float](3.14)
     print(c)
 
     # 2. Generic function with two type params
-    str d = apply_second[int, str](10, "world")
+    String d = apply_second[int, String](10, "world")
     print(d)
-    int e = apply_second[str, int]("ignored", 99)
+    int e = apply_second[String, int]("ignored", 99)
     print(e)
 
     # 3. Generic function with Option return
@@ -62,8 +62,8 @@ void main():
     # 5. Generic function on generic struct
     int val = extract[int](h1)
     print(val)
-    Holder[str] h3 = Holder[str]("data", "info")
-    str sval = extract[str](h3)
+    Holder[String] h3 = Holder[String]("data", "info")
+    String sval = extract[String](h3)
     print(sval)
 
     # 6. Identity with bool

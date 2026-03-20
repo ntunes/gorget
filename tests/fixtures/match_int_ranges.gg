@@ -1,4 +1,4 @@
-str grade(int score):
+String grade(int score):
     match score:
         case 100:
             return "perfect"

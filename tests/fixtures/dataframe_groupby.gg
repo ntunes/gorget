@@ -1,7 +1,7 @@
 from gg.dataframe import DataFrame, Column, col_from_ints, col_from_strs, df_from_columns, df_group_by, df_inner_join, df_concat
 
 void main():
-    Vector[str] names = Vector[str]()
+    Vector[String] names = Vector[String]()
     names.push("Alice")
     names.push("Bob")
     names.push("Alice")
@@ -15,7 +15,7 @@ void main():
     vals.push(40)
     vals.push(50)
 
-    Vector[str] col_names = Vector[str]()
+    Vector[String] col_names = Vector[String]()
     col_names.push("name")
     col_names.push("val")
 
@@ -26,8 +26,8 @@ void main():
     DataFrame df = df_from_columns(col_names, cols)
 
     # groupby + sum
-    str name_col = "name"
-    str val_col = "val"
+    String name_col = "name"
+    String val_col = "val"
     DataFrame agg = df_group_by(df, name_col).agg(val_col, "sum")
     print(f"{agg.nrows()}")
 
@@ -36,7 +36,7 @@ void main():
     print(f"{df2.nrows()}")
 
     # inner join
-    Vector[str] right_names = Vector[str]()
+    Vector[String] right_names = Vector[String]()
     right_names.push("Alice")
     right_names.push("Bob")
 
@@ -44,7 +44,7 @@ void main():
     ranks.push(1)
     ranks.push(2)
 
-    Vector[str] right_cols_names = Vector[str]()
+    Vector[String] right_cols_names = Vector[String]()
     right_cols_names.push("name")
     right_cols_names.push("rank")
 

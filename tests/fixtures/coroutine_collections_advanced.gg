@@ -5,13 +5,13 @@ from std.async import sleep
 async int test_dict_methods():
     sleep(1)
 
-    Dict[str, int] d = Dict[str, int]()
+    Dict[String, int] d = Dict[String, int]()
     d["a"] = 10
     d["b"] = 20
     d["c"] = 30
 
     # --- keys/values/items ---
-    Vector[str] keys = d.keys()
+    Vector[String] keys = d.keys()
     print(keys.len())
     Vector[int] vals = d.values()
     int vsum = vals.fold(0, (int a, int x): a + x)
@@ -24,7 +24,7 @@ async int test_dict_methods():
     print(go2)
 
     # --- update ---
-    Dict[str, int] other = Dict[str, int]()
+    Dict[String, int] other = Dict[String, int]()
     other["c"] = 100
     other["d"] = 40
     d.update(other)

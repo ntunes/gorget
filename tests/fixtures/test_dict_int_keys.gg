@@ -1,6 +1,6 @@
 void main():
     # Dict with int keys
-    Dict[int, str] d = Dict[int, str]()
+    Dict[int, String] d = Dict[int, String]()
     d[1] = "one"
     d[2] = "two"
     d[3] = "three"
@@ -12,9 +12,9 @@ void main():
     print(d.contains(99)) # false
 
     # get returns Option
-    Option[str] got = d.get(1)
+    Option[String] got = d.get(1)
     print(got.unwrap())   # one
-    Option[str] missing = d.get(99)
+    Option[String] missing = d.get(99)
     print(missing.is_none())  # true
 
     # remove
@@ -23,9 +23,9 @@ void main():
     print(d.len())        # 2
 
     # get_or
-    str v1 = d.get_or(1, "default")
+    String v1 = d.get_or(1, "default")
     print(v1)             # one
-    str v2 = d.get_or(99, "default")
+    String v2 = d.get_or(99, "default")
     print(v2)             # default
 
     # fold — sum keys (order independent)

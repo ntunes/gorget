@@ -1,4 +1,4 @@
-Callable[void()] make_printer(str v):
+Callable[void()] make_printer(String v):
     return (): print(v)
 
 void consume(String !s):
@@ -6,7 +6,7 @@ void consume(String !s):
 
 void main():
     String s = "hello" + ""
-    str v = s.as_str()
+    String v = s.as_str()
     auto f = make_printer(v)
     consume(!s)
     f()

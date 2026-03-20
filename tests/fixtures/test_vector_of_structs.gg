@@ -13,11 +13,11 @@ equip Point:
         return Point(self.x + dx, self.y + dy)
 
 struct Person:
-    str name
+    String name
     int age
 
 equip Person:
-    str greeting(self):
+    String greeting(self):
         return "Hi, " + self.name
 
 void main():

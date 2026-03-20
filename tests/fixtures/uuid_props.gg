@@ -7,7 +7,7 @@ void main():
     print(f"{v}")
 
     # equals(): same UUID via parse(to_string()) roundtrip → true
-    str s = u.to_string()
+    String s = u.to_string()
     UUID u2 = UUID.parse(s).unwrap()
     bool same = u.equals(u2)
     print(f"{same}")

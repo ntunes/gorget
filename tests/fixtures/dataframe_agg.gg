@@ -13,13 +13,13 @@ void main():
     scores.push(3.0)
     scores.push(4.0)
 
-    Vector[str] names = Vector[str]()
+    Vector[String] names = Vector[String]()
     names.push("Alice")
     names.push("Bob")
     names.push("Alice")
     names.push("Bob")
 
-    Vector[str] col_names = Vector[str]()
+    Vector[String] col_names = Vector[String]()
     col_names.push("name")
     col_names.push("age")
     col_names.push("score")
@@ -32,9 +32,9 @@ void main():
     DataFrame df = df_from_columns(col_names, cols)
 
     # sum / mean / min / max / count
-    str age_col = "age"
-    str score_col = "score"
-    str name_col = "name"
+    String age_col = "age"
+    String score_col = "score"
+    String name_col = "name"
     print(f"{df.df_sum(age_col)}")
     print(f"{df.df_mean(age_col)}")
     print(f"{df.df_min(age_col)}")

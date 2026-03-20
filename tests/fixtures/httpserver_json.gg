@@ -8,7 +8,7 @@
 #   5. Wire: POST JSON body → server echoes via of_json → 200, body parses back.
 #
 # Note: JSON object literals like {"key":val} conflict with Gorget string
-# interpolation, so all JSON values are built via Dict[str, Json] + json_stringify.
+# interpolation, so all JSON values are built via Dict[String, Json] + json_stringify.
 #
 # Expected output:
 #   ok\nok\nok\nok\nok
@@ -20,7 +20,7 @@ from std.collections import Dict, Vector
 from std.time import sleep
 from std.signal import signal_ignore, SIGPIPE
 
-void check(str label, bool ok):
+void check(String label, bool ok):
     if not ok:
         print("FAIL: " + label)
     else:
@@ -29,11 +29,11 @@ void check(str label, bool ok):
 void test_direct():
     # 1. Valid JSON body → parse correctly.
     # Build body via json_stringify to avoid {..} interpolation conflict.
-    Dict[str, Json] body1_map = Dict[str, Json]()
+    Dict[String, Json] body1_map = Dict[String, Json]()
     body1_map.put("name", Str("Alice"))
     body1_map.put("age", Int(30))
-    HttpRequest req1 = HttpRequest("POST", "/", "", "HTTP/1.1", Dict[str, str](), json_stringify(Obj(body1_map)).str(), Dict[str, str]())
-    Result[Json, str] r1 = req1.json()
+    HttpRequest req1 = HttpRequest("POST", "/", "", "HTTP/1.1", Dict[String, String](), json_stringify(Obj(body1_map)).str(), Dict[String, String]())
+    Result[Json, String] r1 = req1.json()
     bool t1 = false
     if r1.is_ok():
         Json j1 = r1.unwrap()
@@ -43,25 +43,25 @@ void test_direct():
     check("json_parse_valid", t1)
 
     # 2. Invalid JSON → Err
-    HttpRequest req2 = HttpRequest("POST", "/", "", "HTTP/1.1", Dict[str, str](), "not json", Dict[str, str]())
-    Result[Json, str] r2 = req2.json()
+    HttpRequest req2 = HttpRequest("POST", "/", "", "HTTP/1.1", Dict[String, String](), "not json", Dict[String, String]())
+    Result[Json, String] r2 = req2.json()
     check("json_parse_err", r2.is_error())
 
     # 3. of_json sets Content-Type: application/json
-    Dict[str, Json] obj3 = Dict[str, Json]()
+    Dict[String, Json] obj3 = Dict[String, Json]()
     obj3.put("status", Str("ok"))
     HttpServerResponse resp3 = HttpServerResponse.of_json(Obj(obj3))
     check("of_json_ctype", resp3.content_type == "application/json")
 
     # 4. of_json body round-trips through json_parse
-    Result[Json, str] r4 = json_parse(resp3.body)
+    Result[Json, String] r4 = json_parse(resp3.body)
     bool t4 = false
     if r4.is_ok():
         t4 = r4.unwrap().get("status").as_str() == "ok"
     check("of_json_roundtrip", t4)
 
 HttpServerResponse echo_json(HttpRequest req):
-    Result[Json, str] parsed = req.json()
+    Result[Json, String] parsed = req.json()
     if parsed.is_ok():
         return HttpServerResponse.of_json(parsed.unwrap())
     return HttpServerResponse.bad_request("bad json")
@@ -79,18 +79,18 @@ async void main():
     Task[void] srv5 = spawn run_echo_server(port5)
     sleep(0.5).await()
 
-    Dict[str, Json] post_map = Dict[str, Json]()
+    Dict[String, Json] post_map = Dict[String, Json]()
     post_map.put("x", Int(42))
-    str post_body = json_stringify(Obj(post_map)).str()
+    String post_body = json_stringify(Obj(post_map)).str()
 
-    Dict[str, str] post_hdrs = Dict[str, str]()
+    Dict[String, String] post_hdrs = Dict[String, String]()
     post_hdrs.put("content-type", "application/json")
-    Result[HttpResponse, str] r5 = post("http://127.0.0.1:18098/", post_body, post_hdrs)
+    Result[HttpResponse, String] r5 = post("http://127.0.0.1:18098/", post_body, post_hdrs)
     bool t5 = false
     if r5.is_ok():
         HttpResponse resp5 = r5.unwrap()
         if resp5.status_code == 200:
-            Result[Json, str] body5 = json_parse(resp5.body_text)
+            Result[Json, String] body5 = json_parse(resp5.body_text)
             if body5.is_ok():
                 t5 = body5.unwrap().get("x").as_int() == 42
     check("wire_echo_json", t5)

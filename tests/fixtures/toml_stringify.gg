@@ -2,11 +2,11 @@ from gg.toml import TomlValue, parse, stringify, stringify_value
 
 void main():
     # ── Test 1: Simple key-value roundtrip ─────────────────
-    str toml1 = "name = \"Alice\"\ncount = 42\nflag = true"
+    String toml1 = "name = \"Alice\"\ncount = 42\nflag = true"
     auto r1 = parse(toml1)
     match r1:
         case Ok(doc1):
-            str ser1 = stringify(doc1)
+            String ser1 = stringify(doc1)
             auto r1b = parse(ser1)
             match r1b:
                 case Ok(doc1b):
@@ -21,11 +21,11 @@ void main():
             print("error")
 
     # ── Test 2: Nested table roundtrip ───────────────────────
-    str toml2 = "[server]\nhost = \"localhost\"\nport = 8080"
+    String toml2 = "[server]\nhost = \"localhost\"\nport = 8080"
     auto r2 = parse(toml2)
     match r2:
         case Ok(doc2):
-            str ser2 = stringify(doc2)
+            String ser2 = stringify(doc2)
             auto r2b = parse(ser2)
             match r2b:
                 case Ok(doc2b):
@@ -38,11 +38,11 @@ void main():
             print("error")
 
     # ── Test 3: Array-of-tables roundtrip ────────────────────
-    str toml3 = "[[items]]\nname = \"first\"\n\n[[items]]\nname = \"second\""
+    String toml3 = "[[items]]\nname = \"first\"\n\n[[items]]\nname = \"second\""
     auto r3 = parse(toml3)
     match r3:
         case Ok(doc3):
-            str ser3 = stringify(doc3)
+            String ser3 = stringify(doc3)
             auto r3b = parse(ser3)
             match r3b:
                 case Ok(doc3b):
@@ -66,7 +66,7 @@ void main():
     print(f"{is_flt}")
 
     # ── Test 5: keys() on a table ────────────────────────────
-    str toml5 = "a = 1\nb = 2\nc = 3"
+    String toml5 = "a = 1\nb = 2\nc = 3"
     auto r5 = parse(toml5)
     match r5:
         case Ok(doc5):
@@ -77,7 +77,7 @@ void main():
             print("error")
 
     # ── Test 6: is_array() on array value ────────────────────
-    str toml6 = "items = [1, 2, 3]"
+    String toml6 = "items = [1, 2, 3]"
     auto r6 = parse(toml6)
     match r6:
         case Ok(doc6):
@@ -89,7 +89,7 @@ void main():
             print("error")
 
     # ── Test 7: is_datetime() and as_str() ───────────────────
-    str toml7 = "event = 2024-01-15T09:30:00Z"
+    String toml7 = "event = 2024-01-15T09:30:00Z"
     auto r7 = parse(toml7)
     match r7:
         case Ok(doc7):
