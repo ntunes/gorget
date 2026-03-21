@@ -11,8 +11,6 @@
 
 - **Self-host parser: 794/797 matched, 3 mismatched, 0 crashed** — Remaining 3: null byte in chars.gg (1), str/String source alias in dataframe_nulls.gg (1), float literal precision in fstring_format.gg (1). All unfixable at self-host level. [updated: 2026-03-21]
 
-- **Self-host resolver: 795/797 matched, 2 mismatched, 0 crashed** — Remaining 2: trait DEF ordering (two_traits_basic.gg, unsatisfied_trait_bound_error.gg). [updated: 2026-03-21]
-
 ## Medium
 
 - **Closure return type inference incomplete in semantic layer** — `infer_closure_return_type` in GIR lowering now walks block bodies for `return` statements (2026-03-21), but the semantic type checker's `check_block` only returns the tail expression type, not the type from explicit `return` statements inside closures. Multi-line closures with `return <value>` get type-checked as void and fail with "type mismatch: expected void, found int". Fix: propagate `current_return_type` for closure bodies in `typecheck.rs` and unify return expression types against it. [added: 2026-03-21]
@@ -107,9 +105,9 @@
 
 - **Self-hosting parser: 794/797 (99.6%) on LIR backend** — Exceeds GIR backend (595/596). 3 remaining: null byte, str alias, float precision — all unfixable at self-host level. [updated: 2026-03-21]
 
-- **Self-hosting resolver: 795/797 (99.7%) on LIR backend** — Exceeds GIR backend (592/592). 2 remaining: trait DEF ordering. [updated: 2026-03-21]
+- **Self-hosting resolver: 797/797 (100%) on LIR backend** — COMPLETE. [updated: 2026-03-21]
 
-- **Self-hosting type checker: 786/797 (98.6%) on LIR backend** — Exceeds GIR backend (595/595). 11 remaining: Ref/& tracking (4), type var numbering (3), Ordinal derive (1), closure param inference (2), Gorget-more-correct (1). [updated: 2026-03-21]
+- **Self-hosting type checker: 791/797 (99.2%) on LIR backend** — Exceeds GIR backend (595/595). 6 remaining: type var numbering (3), closure param inference (2), Gorget-more-correct (1). [updated: 2026-03-21]
 
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]
