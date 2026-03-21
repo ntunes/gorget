@@ -1,0 +1,10 @@
+void consume(Vector[int] !v):
+    pass
+
+void read(Vector[int] v):
+    pass
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    consume(!v)
+    read(v)

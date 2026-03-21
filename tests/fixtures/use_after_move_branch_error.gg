@@ -1,0 +1,9 @@
+void consume(String !s):
+    pass
+
+void main():
+    String s = "hello"
+    bool flag = true
+    if flag:
+        consume(!s)
+    print(f"{s}")

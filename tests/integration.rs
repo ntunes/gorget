@@ -14761,3 +14761,50 @@ Mr. Charlie Doe
 Prof. Dana White",
     );
 }
+
+// ── Batch 2: Negative tests ──────────────────────────────────────────
+
+#[test]
+fn meta_assert_failure_error() {
+    check_gg_fails("meta_assert_failure_error.gg", "one is not two");
+}
+
+#[test]
+fn move_borrowed_error() {
+    check_gg_fails("move_borrowed_error.gg", "use of moved value");
+}
+
+#[test]
+fn exhaustive_enum_error() {
+    check_gg_fails("exhaustive_enum_error.gg", "non-exhaustive match");
+}
+
+#[test]
+fn mutable_borrow_immutable_error() {
+    check_gg_fails("mutable_borrow_immutable_error.gg", "ownership mismatch");
+}
+
+#[test]
+fn use_after_move_branch_error() {
+    check_gg_fails("use_after_move_branch_error.gg", "use of moved value");
+}
+
+#[test]
+fn move_in_while_error() {
+    check_gg_fails("move_in_while_error.gg", "cannot move");
+}
+
+#[test]
+fn borrow_after_move_error() {
+    check_gg_fails("borrow_after_move_error.gg", "use of moved value");
+}
+
+#[test]
+fn double_mutable_borrow_error() {
+    check_gg_fails("double_mutable_borrow_error.gg", "borrow conflict");
+}
+
+#[test]
+fn missing_method_equip_error() {
+    check_gg_fails("missing_method_equip_error.gg", "is missing method");
+}

@@ -1,0 +1,14 @@
+trait Greetable:
+    String greet(self)
+    String farewell(self)
+
+struct Person:
+    String name
+
+equip Person with Greetable:
+    String greet(self):
+        return f"Hello, {self.name}"
+
+void main():
+    Person p = Person("Alice")
+    print(p.greet())

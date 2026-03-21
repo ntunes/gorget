@@ -1,0 +1,11 @@
+void consume(String !s):
+    pass
+
+void borrow(String s):
+    pass
+
+void main():
+    String s = "hello"
+    borrow(s)
+    consume(!s)
+    borrow(s)

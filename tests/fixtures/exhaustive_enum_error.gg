@@ -1,0 +1,12 @@
+enum Shape:
+    Circle(float)
+    Square(float)
+    Triangle(float, float)
+
+void main():
+    Shape s = Shape.Circle(1.0)
+    match s:
+        case Shape.Circle(r):
+            print(f"{r}")
+        case Shape.Square(side):
+            print(f"{side}")
