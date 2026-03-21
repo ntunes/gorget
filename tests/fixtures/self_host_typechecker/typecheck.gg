@@ -538,10 +538,42 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
 
         case EMethodCall(obj, method_name, args, targs):
             walk_expr_closures(*obj, scope_id, &scopes, &types, ctx)
+            # Infer receiver element type for collection higher-order methods
+            int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+            int elem_type = extract_element_type(obj_type, scopes, types)
             int ai = 0
             while ai < args.len():
                 SpannedExpr arg = args.get(ai).unwrap()
-                walk_expr_closures(arg, scope_id, &scopes, &types, ctx)
+                int expected = -1
+                if elem_type >= 0:
+                    if (method_name == "filter" or method_name == "any" or method_name == "all" or method_name == "each") and ai == 0:
+                        # (T) -> bool
+                        Vector[int] ptypes = Vector[int]()
+                        ptypes.push(elem_type)
+                        Vector[int] owns = Vector[int]()
+                        owns.push(0)
+                        expected = types.add_type(RTFunction(ptypes, owns, types.bool_id))
+                    elif method_name == "map" and ai == 0:
+                        # (T) -> ?
+                        Vector[int] ptypes = Vector[int]()
+                        ptypes.push(elem_type)
+                        Vector[int] owns = Vector[int]()
+                        owns.push(0)
+                        expected = types.add_type(RTFunction(ptypes, owns, -1))
+                    elif (method_name == "fold" or method_name == "reduce") and ai == 1:
+                        # (U, T) -> U
+                        int init_type = infer_expr_type(args.get(0).unwrap(), scopes, &types, ctx)
+                        Vector[int] ptypes = Vector[int]()
+                        ptypes.push(init_type)
+                        ptypes.push(elem_type)
+                        Vector[int] owns = Vector[int]()
+                        owns.push(0)
+                        owns.push(0)
+                        expected = types.add_type(RTFunction(ptypes, owns, init_type))
+                if expected >= 0:
+                    walk_expr_closures_with_type(arg, expected, scope_id, &scopes, &types, ctx)
+                else:
+                    walk_expr_closures(arg, scope_id, &scopes, &types, ctx)
                 ai = ai + 1
 
         case EBinaryOp(left, op, right):
