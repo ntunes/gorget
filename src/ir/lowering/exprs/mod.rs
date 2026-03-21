@@ -2258,8 +2258,11 @@ pub fn should_unregister_string_args(
         use super::context::ParamABI;
         return abis.iter().any(|abi| *abi == ParamABI::ByMutPtr);
     }
-    // Unknown callee (runtime/extern): conservatively unregister
-    true
+    // Unknown callee (runtime/extern): void-returning + not in fn_param_abis.
+    // Safe: C runtime functions take Str by value (no mutable refs in Gorget sense),
+    // and void return means no str view escapes via the result. Gorget-defined
+    // functions with ByMutPtr params are always registered in fn_param_abis.
+    false
 }
 
 /// Unregister GorgetString temps used as call/struct arguments.
