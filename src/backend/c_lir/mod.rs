@@ -3242,7 +3242,11 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
             write!(out, "{} = \"{}\";", v(*dst), escaped).unwrap();
         }
         Inst::ParamRef { dst, index, .. } => {
-            write!(out, "{} = __p{};", v(*dst), index).unwrap();
+            if func.const_params.get(*index as usize) == Some(&true) {
+                write!(out, "{} = (void*)__p{};", v(*dst), index).unwrap();
+            } else {
+                write!(out, "{} = __p{};", v(*dst), index).unwrap();
+            }
         }
 
         // Arithmetic

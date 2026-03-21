@@ -5009,7 +5009,7 @@ fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> usize {
             }
             // User-defined struct — look up in LIR struct definitions.
             if let Some(sd) = structs.iter().find(|s| s.name == type_name) {
-                return c_sizeof_struct_from_fields(&sd.fields, structs);
+                return c_sizeof_struct_def(sd, structs);
             }
             // Pointer/opaque types default to 8
             8
@@ -5017,21 +5017,65 @@ fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> usize {
     }
 }
 
-/// Compute the size of a struct from its LIR field definitions.
-fn c_sizeof_struct_from_fields(fields: &[(String, LirType)], structs: &[StructDef]) -> usize {
-    let mut total = 0usize;
-    for (_name, ty) in fields {
-        let field_sz = c_sizeof_lir_type(ty, structs);
-        let align = std::cmp::min(field_sz, 8);
-        if align > 0 {
-            total = (total + align - 1) / align * align;
+/// Compute the size of a struct from its LIR StructDef.
+/// For enum structs (`is_enum == true`), uses union layout:
+///   sizeof = align8(tag) + max(variant_size), aligned to 8
+/// For regular structs, sums fields sequentially with alignment.
+fn c_sizeof_struct_def(sd: &StructDef, structs: &[StructDef]) -> usize {
+    if sd.is_enum && sd.fields.len() > 1 {
+        // Union layout: tag (field 0) + union of variant groups.
+        // tag is always I32 = 4 bytes, padded to 8 for union alignment.
+        let tag_size = 8usize;
+
+        // Group remaining fields by variant prefix (split on last '_').
+        let mut max_variant_size = 0usize;
+        let mut current_prefix = String::new();
+        let mut current_variant_size = 0usize;
+
+        for (name, ty) in &sd.fields[1..] {
+            let prefix = name.rsplitn(2, '_').nth(1).unwrap_or(name).to_string();
+            if prefix != current_prefix {
+                // Finish previous variant group.
+                if !current_prefix.is_empty() {
+                    let aligned = (current_variant_size + 7) / 8 * 8;
+                    max_variant_size = std::cmp::max(max_variant_size, aligned);
+                }
+                current_prefix = prefix;
+                current_variant_size = 0;
+            }
+            let field_sz = c_sizeof_lir_type(ty, structs);
+            let align = std::cmp::min(field_sz, 8);
+            if align > 0 {
+                current_variant_size = (current_variant_size + align - 1) / align * align;
+            }
+            current_variant_size += field_sz;
         }
-        total += field_sz;
+        // Finish last variant group.
+        if !current_prefix.is_empty() {
+            let aligned = (current_variant_size + 7) / 8 * 8;
+            max_variant_size = std::cmp::max(max_variant_size, aligned);
+        }
+
+        let total = tag_size + max_variant_size;
+        // Align total to 8 bytes.
+        (total + 7) / 8 * 8
+    } else {
+        // Regular struct: sum fields sequentially.
+        let mut total = 0usize;
+        let mut max_align = 1usize;
+        for (_name, ty) in &sd.fields {
+            let field_sz = c_sizeof_lir_type(ty, structs);
+            let align = std::cmp::min(field_sz, 8).max(1);
+            max_align = std::cmp::max(max_align, align);
+            total = (total + align - 1) / align * align;
+            total += field_sz;
+        }
+        // Align total to the struct's max field alignment.
+        if max_align > 0 {
+            total = (total + max_align - 1) / max_align * max_align;
+        }
+        total
     }
-    // Align total to 8 bytes.
-    let align = 8;
-    total = (total + align - 1) / align * align;
-    total
 }
 
 /// Compute sizeof for an LirType.
@@ -5062,7 +5106,7 @@ fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
                 if let Some(sz) = runtime_size {
                     return sz;
                 }
-                c_sizeof_struct_from_fields(&sd.fields, structs)
+                c_sizeof_struct_def(sd, structs)
             } else {
                 8
             }

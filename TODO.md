@@ -4,7 +4,7 @@
 
 - **C backend: missing drop insertion for Move-type locals (Vector, Str)**: Phase 3b (T & Ptr payloads) eliminates double-free for borrowing reads (`get`/`first`/`last`) on resource-type elements. **Remaining:** Register collection TypeDefs with `CopySemantics::Resource` + `DropStrategy::Trivial` so collection locals are dropped at scope exit (Phase 6). Also: consuming methods (`pop`/`remove`) still clone resource payloads — need GIR to emit proper drops for consumed elements. [added: 2026-03-14, updated: 2026-03-21]
 
-- **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 4 C warnings remaining (2 `gorget_int_to_str` Ptr→int cast from slot type inference issue, 2 memset overflow from struct size mismatch). Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-16]
+- **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
 - **LIR backend: remaining clone-on-read for Dict resource-type values**: Phase 3b eliminates clones for Vector borrowing reads on resource-type elements. Dict.get() still clones resource-type values (GorgetArray/GorgetMap/GorgetString) because Dict Ref was deferred. Extend Phase 3b to Dict: register `Option__Ref_V` for Dict.get() when V is resource-type. [added: 2026-03-17, updated: 2026-03-21]
 
@@ -190,7 +190,7 @@
 
 ## Low
 
-- **Gorget Arena: deformVertexes CPU vertex modification** — Phase 11 parsing and evaluation functions are complete (DeformType enum, `deformVertexes wave/bulge/move/autosprite/autosprite2` parsing, `eval_deform_wave()`/`eval_deform_move()`). However, actual CPU-side vertex buffer modification is deferred — requires dynamic vertex buffer architecture for re-uploading modified vertices each frame for affected faces. Currently BSP vertices are uploaded once to GPU at load time. [added: 2026-03-15]
+- **Gorget Arena: deformVertexes AutoSprite/AutoSprite2** — DeformWave, DeformBulge, DeformMove are implemented (CPU vertex modification via glBufferSubData). AutoSprite/AutoSprite2 remain — they require camera-facing billboard orientation logic per vertex quad. [added: 2026-03-21]
 
 - **Named/labeled arguments at call sites**: Allow `=` syntax for labeling arguments: `str.slice(from=2, to=5)`, `transfer(buf=!owned)`, `process(data=&vec)`. Pure sugar — desugars to positional args by matching label to parameter name. Sigils (`&`/`!`) go on the value side only (mandatory, as with positional calls); labels are bare names. Labeled args freely mixable with positional: `connect("localhost", port=8080)`. Parser needs: `IDENT '=' Expr` as an argument form; semantic check maps labels to positions and rejects duplicates/unknowns. [added: 2026-03-11]
 
