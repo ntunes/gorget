@@ -2316,6 +2316,9 @@ fn gen_gl_module() -> Module {
 
     // ── Framebuffer/Renderbuffer already in Tier 2 above ─────
 
+    // ── GL 3.2+ functions (not available on macOS GL headers) ──
+    #[cfg(not(target_os = "macos"))]
+    {
     // ── Sampler Objects (GL 3.3+) ───────────────────────────
     items.push(fn_item(extern_fn("gl_gen_sampler", &[], ty_int(), "gorget_gl_gen_sampler")));
     items.push(fn_item(extern_fn("gl_delete_sampler", &[("sampler", ty_int())], ty_void(), "gorget_gl_delete_sampler")));
@@ -2335,7 +2338,6 @@ fn gen_gl_module() -> Module {
     // ── Immutable Texture Storage (GL 4.2+) ─────────────────
     items.push(fn_item(extern_fn("gl_tex_storage_2d", &[("target", ty_int()), ("levels", ty_int()), ("format", ty_int()), ("width", ty_int()), ("height", ty_int())], ty_void(), "gorget_gl_tex_storage_2d")));
     items.push(fn_item(extern_fn("gl_tex_storage_3d", &[("target", ty_int()), ("levels", ty_int()), ("format", ty_int()), ("width", ty_int()), ("height", ty_int()), ("depth", ty_int())], ty_void(), "gorget_gl_tex_storage_3d")));
-    // gl_tex_sub_image_2d already in Tier 2 above
 
     // ── Buffer Storage (GL 4.4+) ─────────────────────────────
     items.push(fn_item(extern_fn("gl_buffer_storage", &[("target", ty_int()), ("size", ty_int()), ("data", ty_vector_uint8()), ("flags", ty_int())], ty_void(), "gorget_gl_buffer_storage")));
@@ -2357,7 +2359,6 @@ fn gen_gl_module() -> Module {
     items.push(fn_item(extern_fn("gl_begin_transform_feedback", &[("mode", ty_int())], ty_void(), "gorget_gl_begin_transform_feedback")));
     items.push(fn_item(extern_fn("gl_end_transform_feedback", &[], ty_void(), "gorget_gl_end_transform_feedback")));
     items.push(fn_item(extern_fn("gl_transform_feedback_varyings", &[("program", ty_int()), ("count", ty_int()), ("varyings", ty_str()), ("mode", ty_int())], ty_void(), "gorget_gl_transform_feedback_varyings")));
-    // gl_bind_buffer_base and gl_bind_buffer_range already in Tier 2 above
 
     // ── Clip Control (GL 4.5+) ──────────────────────────────
     items.push(fn_item(extern_fn("gl_clip_control", &[("origin", ty_int()), ("depth", ty_int())], ty_void(), "gorget_gl_clip_control")));
@@ -2369,16 +2370,14 @@ fn gen_gl_module() -> Module {
     // ── Copy Image (GL 4.3+) ────────────────────────────────
     items.push(fn_item(extern_fn("gl_copy_image_sub_data", &[("src", ty_int()), ("src_target", ty_int()), ("src_level", ty_int()), ("src_x", ty_int()), ("src_y", ty_int()), ("src_z", ty_int()), ("dst", ty_int()), ("dst_target", ty_int()), ("dst_level", ty_int()), ("dst_x", ty_int()), ("dst_y", ty_int()), ("dst_z", ty_int()), ("width", ty_int()), ("height", ty_int()), ("depth", ty_int())], ty_void(), "gorget_gl_copy_image_sub_data")));
 
-    // gl_read_pixels already in Tier 2 above
-
     // ── Texture Multisample (GL 3.2+) ───────────────────────
     items.push(fn_item(extern_fn("gl_tex_image_2d_multisample", &[("target", ty_int()), ("samples", ty_int()), ("format", ty_int()), ("width", ty_int()), ("height", ty_int()), ("fixed_locations", ty_int())], ty_void(), "gorget_gl_tex_image_2d_multisample")));
-
     // ── Sync Objects (GL 3.2+) ──────────────────────────────
     items.push(fn_item(extern_fn("gl_fence_sync", &[], ty_int(), "gorget_gl_fence_sync")));
     items.push(fn_item(extern_fn("gl_delete_sync", &[("sync", ty_int())], ty_void(), "gorget_gl_delete_sync")));
     items.push(fn_item(extern_fn("gl_client_wait_sync", &[("sync", ty_int()), ("flags", ty_int()), ("timeout_ns", ty_int())], ty_int(), "gorget_gl_client_wait_sync")));
     items.push(fn_item(extern_fn("gl_wait_sync", &[("sync", ty_int())], ty_void(), "gorget_gl_wait_sync")));
+    } // end #[cfg(not(target_os = "macos"))]
 
     // ── Pixel Store (GL 1.0+) ───────────────────────────────
     items.push(fn_item(extern_fn("gl_pixel_store_i", &[("pname", ty_int()), ("param", ty_int())], ty_void(), "gorget_gl_pixel_store_i")));

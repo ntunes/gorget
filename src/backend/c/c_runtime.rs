@@ -10205,6 +10205,9 @@ static inline void gorget_gl_draw_buffers(int64_t count, const GorgetArray* bufs
 // (FBO/renderbuffer already defined in Tier 1-2 above)
 // ══════════════════════════════════════════════════════════════
 
+// ── GL 3.2+ functions (not available on macOS) ──────────────
+#ifndef __APPLE__
+
 // ── Sampler Objects (GL 3.3+) ───────────────────────────────
 
 static inline int64_t gorget_gl_gen_sampler(void) {
@@ -10366,6 +10369,8 @@ static inline int64_t gorget_gl_client_wait_sync(int64_t sync, int64_t flags, in
 static inline void gorget_gl_wait_sync(int64_t sync) {
     glWaitSync((GLsync)(uintptr_t)sync, 0, GL_TIMEOUT_IGNORED);
 }
+
+#endif // !__APPLE__
 
 // ── Pixel Store (GL 1.0+) ──────────────────────────────────
 
