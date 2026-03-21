@@ -4990,6 +4990,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         _ => None,
                     }
                 };
+                // Deep-clone placeholder: when Phase 6 collection drops are enabled,
+                // struct payloads with resource fields need field-level cloning here.
+                // Currently disabled — collection locals are not dropped at scope exit.
                 let deep_clone_ops: Option<Vec<String>> = None;
                 if payload_is_ptr {
                     // Option[T &]: store pointer directly (borrowed, not dereferenced)
@@ -5544,11 +5547,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     "GorgetString" => Some("gorget_string_clone"),
                     _ => None,
                 };
-                // Note: we deliberately do NOT deep-clone resource fields within
-                // structs loaded from collections.  The GIR drop elaborator treats
-                // these as borrows (no Drop emitted), so cloning here leaks because
-                // the clone is never freed.  Shallow copy + no free matches the GIR
-                // backend's behaviour.
+                // Deep-clone placeholder: when Phase 6 collection drops are enabled,
+                // struct element reads need field-level cloning here.
+                // Currently disabled — collection locals are not dropped at scope exit.
                 let deep_clone_ops: Option<Vec<String>> = None;
                 if let Some(cfn) = clone_fn {
                     // Emit: dst = clone_fn((Type*)call(args));  — extra ) needed after args
@@ -7910,6 +7911,71 @@ fn struct_contains_resources(sid: crate::lir::StructId, module: &crate::lir::Lir
         }
     }
     false
+}
+
+/// Generate deep-clone operations for resource-type fields within a struct.
+#[allow(dead_code)]
+/// Returns `Some(Vec<String>)` if the struct contains resource fields that need
+/// individual cloning to prevent double-free on shallow copy. Each string is a
+/// C statement like `{dst}.field = gorget_array_clone(&{dst}.field);`.
+///
+/// `dst_expr` is the C expression for the destination (e.g., `__v83.Some_0` or `__s5`).
+fn deep_clone_resource_fields(
+    sid: crate::lir::StructId,
+    dst_expr: &str,
+    module: &crate::lir::LirModule,
+) -> Option<Vec<String>> {
+    let sdef = module.structs.get(sid.0 as usize)?;
+    // Skip direct resource types — they use gorget_array_clone etc. directly
+    if matches!(sdef.name.as_str(),
+        "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetString" | "GorgetClosure"
+    ) {
+        return None;
+    }
+    // Skip enums — variants are stored in a union, can't clone all fields at once.
+    // Enum element deep-clone requires match-on-tag which is handled separately.
+    if sdef.is_enum {
+        return None;
+    }
+    let mut ops = Vec::new();
+    for (fname, fty) in &sdef.fields {
+        if let LirType::Struct(fsid) = fty {
+            if let Some(fdef) = module.structs.get(fsid.0 as usize) {
+                // Skip enum fields — variant payloads can't all be cloned at once
+                if fdef.is_enum { continue; }
+                let clone_fn = match fdef.name.as_str() {
+                    "GorgetArray" => Some("gorget_array_clone"),
+                    "GorgetMap" => Some("gorget_map_clone"),
+                    "GorgetSet" => Some("gorget_set_clone"),
+                    "GorgetString" => Some("gorget_string_clone"),
+                    _ => None,
+                };
+                if let Some(cfn) = clone_fn {
+                    ops.push(format!("{dst_expr}.{fname} = {cfn}(&{dst_expr}.{fname});"));
+                } else {
+                    // Recurse one level: check if this nested struct has resource fields
+                    for (ffname, ffty) in &fdef.fields {
+                        if let LirType::Struct(ffsid) = ffty {
+                            if let Some(ffdef) = module.structs.get(ffsid.0 as usize) {
+                                if ffdef.is_enum { continue; }
+                                let inner_clone = match ffdef.name.as_str() {
+                                    "GorretArray" => Some("gorget_array_clone"),
+                                    "GorgetMap" => Some("gorget_map_clone"),
+                                    "GorgetSet" => Some("gorget_set_clone"),
+                                    "GorgetString" => Some("gorget_string_clone"),
+                                    _ => None,
+                                };
+                                if let Some(icfn) = inner_clone {
+                                    ops.push(format!("{dst_expr}.{fname}.{ffname} = {icfn}(&{dst_expr}.{fname}.{ffname});"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if ops.is_empty() { None } else { Some(ops) }
 }
 
 /// Returns true if the given extern function takes a `const char*` (raw C string)

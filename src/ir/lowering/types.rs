@@ -550,12 +550,14 @@ pub(super) fn register_collection_alias(
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
     mapper.named_types.insert(mangled_name.to_string(), type_id);
 
-    // Register TypeDefs for Box types (Resource semantics + free).
-    // Collection types (Vector, Dict, Set) are intentionally left WITHOUT TypeDefs:
-    // giving them Resource semantics requires deep-clone on element extraction (get/pop/remove),
-    // which is not yet implemented. Without deep clone, `auto x = v.get(0).unwrap()` creates
-    // a shallow copy sharing the same data pointer, causing double-free when both x and v are dropped.
-    // See TODO.md for the collection Resource semantics roadmap.
+    // Collection types (Vector, Dict, Set) are left WITHOUT TypeDefs for now.
+    // Phase 6 (scope-exit drops) requires deep-cloning resource fields within struct
+    // elements when they're read from collections. Without deep clone on ALL extraction
+    // paths (option unwrap, gorget_array_get, for-loop iteration, indexing), shallow
+    // copies share heap buffers with the originals → double-free on scope exit.
+    // Infrastructure is in place: deep_clone_resource_fields(), is_collection_type(),
+    // infer_drop_strategy() fallback. Blocked on: unified deep-clone at Load instruction
+    // level for struct types containing resource fields.
     if base_name == "Box" {
         let inner_type = mapper.map_ast_type(&_type_args[0].node);
         let type_def = TypeDef {

@@ -2820,7 +2820,9 @@ impl<'a> FuncLowering<'a> {
             let strat = if let Some(type_def) = self.gir_types.get_type_def(name) {
                 type_def.metadata.drop_strategy.clone()
             } else {
-                DropStrategy::None
+                // Fallback: infer drop strategy from name for collection types
+                // that may be registered without a TypeDef (e.g., cross-module imports).
+                self.infer_drop_strategy(name)
             };
             (Some(name.clone()), strat)
         } else {

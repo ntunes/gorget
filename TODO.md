@@ -7,7 +7,7 @@
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
 
-- **LIR backend: remaining clone-on-read for Dict resource-type values**: Phase 3b eliminates clones for Vector borrowing reads on resource-type elements. Dict.get() still clones resource-type values (GorgetArray/GorgetMap/GorgetString) because Dict Ref was deferred. Extend Phase 3b to Dict: register `Option__Ref_V` for Dict.get() when V is resource-type. [added: 2026-03-17, updated: 2026-03-21]
+- **LIR backend: remaining clone-on-read for Dict resource-type values**: Phase 3b eliminates clones for Vector borrowing reads on resource-type elements. Dict.get() still clones resource-type values (GorgetArray/GorgetMap/GorgetString). **Dict Ref attempted and reverted (2026-03-21):** Extending Phase 3b to Dict via `Option__Ref_V` breaks the common write-back pattern (`get → modify → set`): `gorget_map_put` receives a Ptr (8 bytes) where it expects a full struct (32+ bytes) → buffer overread. Fix requires either: (a) deref Ptr back to value before set/put calls, (b) detect and skip Ref for Dict values that are written back, or (c) a fundamentally different approach. [added: 2026-03-17, updated: 2026-03-21]
 
 - **Self-host parser: 794/797 matched, 3 mismatched, 0 crashed** — Remaining 3: null byte in chars.gg (1), str/String source alias in dataframe_nulls.gg (1), float literal precision in fstring_format.gg (1). All unfixable at self-host level. [updated: 2026-03-21]
 
@@ -22,7 +22,7 @@
 
 - **Replace auto-borrow with explicit reference semantics** — **Phase 1 done (2026-03-20):** `const_params` field added to `LirFunction`; LIR lowering populates it from `GirType::Ptr` (bare borrow); C backend emits `const void*` for const params in both forward declarations and definitions. 843/844 integration tests pass (bench_basic pre-existing). **Phase 2 (const value propagation):** Track constness through intermediate values so the C compiler catches mutations through copies of const params. Not yet started. **Phase 3 blocked on collection reference semantics** (see below). [added: 2026-03-13, updated: 2026-03-20]
 
-- **Collection Resource semantics: Phase 6 (Resource CopySemantics + drops)** — Phase 3b complete (2026-03-21): Ptr payloads for Vector borrowing reads, 844/844 tests pass. **Phase 6 remaining:** Register collection TypeDefs with `CopySemantics::Resource` + `DropStrategy::Trivial` so collection locals are freed at scope exit. Consuming methods (`pop`/`remove`) need proper drop for extracted elements. Dict Ref (Ptr payloads for Dict.get) deferred — requires auditing dataframe stdlib patterns. [added: 2026-03-15, updated: 2026-03-21]
+- **Collection Resource semantics: Phase 6 (Resource CopySemantics + drops)** — Phase 3b complete (2026-03-21): Ptr payloads for Vector borrowing reads, 844/844 tests pass. **Phase 6 attempted and reverted (2026-03-21):** Registering collection TypeDefs with `CopySemantics::Resource` + `DropStrategy::Trivial` caused 42+ test failures from double-free: collection element reads (get/first/last, for-loop iteration, indexing) create shallow copies sharing heap buffers with originals; scope-exit drops free both → crash. **Blocker:** deep-clone resource fields in struct elements at ALL extraction points (option unwrap, gorget_array_get, Load instruction deref, for-loop iteration). Infrastructure added: `deep_clone_resource_fields()` helper in c_lir, `is_collection_type()` on TypeRegistry, `infer_drop_strategy()` fallback in LIR lower_drop. Dict Ref deferred — write-back pattern (`get → modify → set`) passes Ptr where gorget_map_put expects full struct. [added: 2026-03-15, updated: 2026-03-21]
 
 - **`meta is_pure(fn_name)` builtin** — Purity inference is now computed in Pass 5b½ (before borrow check, after resolve/typecheck) but `meta` evaluation happens earlier (Pass 0). Chicken-and-egg problem. Options: (1) move meta evaluation after borrow checking for `is_pure` only, (2) two-phase meta where purity queries are deferred, (3) expose purity only at IR/codegen level (current state). [added: 2026-03-14, updated: 2026-03-14]
 
@@ -40,7 +40,6 @@
 
 
 
-- **Variable shadowing in nested scopes aliases storage**: Reusing the same variable name in an inner named scope compiles but the C backend appears to alias the storage, so the outer variable's value gets overwritten after the inner scope exits. [added: 2026-03-11]
 
 
 - **C backend: `compute_type_overrides` should use TypeIds, not string manipulation**: The type override system in `src/backend/c/mod.rs` infers C types for GIR locals by string-matching formatted type names — stripping `*` suffixes, matching `"const "` prefixes, looking up struct fields by string name. This is fragile (e.g., the `dst.projections` bug where writing a float to a struct field through a borrow corrupted the borrow's type override to `"double"`). Refactor to track `TypeId`s from the GIR type registry throughout, only formatting to C strings at declaration time. [added: 2026-03-14]

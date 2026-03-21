@@ -382,6 +382,22 @@ impl TypeRegistry {
         }
     }
 
+    /// Check if a type is a direct collection type (Vector, Dict, Set, etc.).
+    /// Unlike `is_resource_type`, this does NOT include user structs with resource fields
+    /// or types with custom Drop. Used for Ptr payload eligibility in collection reads —
+    /// only direct collections can be borrowed as Ptr references.
+    pub fn is_collection_type(&self, type_id: TypeId) -> bool {
+        if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
+        if let Some(GirType::Named(name)) = self.get(type_id) {
+            name.starts_with("Vector__") || name.starts_with("Dict__")
+                || name.starts_with("HashMap__") || name.starts_with("Set__")
+                || name.starts_with("HashSet__") || name == "GorgetArray"
+                || name == "GorgetMap" || name == "GorgetSet"
+        } else {
+            false
+        }
+    }
+
     /// Check if a named type is a resource type (owns heap allocations).
     /// Checks collection prefixes, TypeDef metadata, and struct fields transitively.
     fn is_resource_name(&self, name: &str) -> bool {
