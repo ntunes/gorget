@@ -17,10 +17,10 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 | Design Targets | Explicitly Avoid |
 |---|---|
 | Ownership enforced at compile time — no runtime GC pauses | Garbage collector (incompatible with real-time and bare-metal targets) |
-| Move semantics with an explicit operator (`!`) — transfers visible at call sites | Implicit heap allocation hidden from the programmer |
+| Move semantics with an explicit operator (`!`) — transfers visible at call sites | Hidden heap allocation with no way to control or redirect it |
 | Borrow checking without lifetime annotations in API signatures | Rust-style lifetime annotations leaking into public APIs |
 | Scope-guarded references with generation tokens as a safety fallback | Null pointers as a default value for any type |
-| Explicit allocator interface — every allocation visible at the call site | Use-after-free and double-free reachable from safe code |
+| Scoped allocator control — `with Arena() as pool:` redirects all allocations in a block; `alloc=` on constructors for one-shot control; provenance inference eliminates unnecessary copies | Use-after-free and double-free reachable from safe code |
 | Stale-condition warnings when shared data crosses suspension points | Silent memory corruption from undefined behavior |
 | Distinct newtype / semantic types (UserId ≠ int at compile time) | C-style pointer arithmetic accessible without explicit opt-in |
 
@@ -93,7 +93,7 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 | Design Targets | Explicitly Avoid |
 |---|---|
 | C as the compilation target — portable, zero new backend dependency | JVM / managed runtime requirement — kills the bare-metal story |
-| C ABI compatibility — generated symbols follow C calling conventions | Hidden runtime dependencies — hello world must not silently link a 150kB runtime |
+| C ABI compatibility — generated symbols follow C calling conventions | Hidden runtime dependencies — hello world should not link unused runtime sections |
 | Explicit `unsafe` blocks — auditable regions where safety guarantees are suspended | Name mangling without an escape hatch — FFI must produce predictable C names |
 | | Incompatible calling conventions without explicit annotation |
 | WASM target — browser and edge compute deployment path | Requiring manual translation layers to call existing C libraries |
@@ -110,7 +110,7 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 | SQLite with zero external dependencies | Stdlib functions that silently return wrong results on edge cases |
 | DateTime with explicit timezone handling | Deprecated functions that cannot be removed due to backwards-compat promises |
 | Cryptographic primitives (hash, random) — not a third-party concern | Leaking C implementation details through the stdlib API surface |
-| Arena / explicit allocator in stdlib — not just malloc-under-the-hood | Stdlib that only works with the default allocator |
+| Six composable allocators in stdlib (Arena, Pool, TLSF, Tracking, FixedBuffer, Fallback) with `with`/`alloc=` integration and compile-time escape analysis | Stdlib that only works with the default allocator |
 
 ### Learnability & Ergonomics
 
@@ -1409,6 +1409,33 @@ Point p = Point(1.0, 2.0)
 # Heap allocation (Box — single owner, fixed size on stack)
 Box[Point] heap_point = Box.new(Point(1.0, 2.0))
 ```
+
+#### Allocation Philosophy
+
+Gorget is a Python-like language: string concatenation, f-strings, `upper()`, `replace()`, and collection construction all allocate without ceremony. This is a deliberate trade-off — ergonomic code on the default path, explicit control when you need it.
+
+**What allocates implicitly:** `+` on strings, f-strings, `upper()`, `replace()`, `split()`, `Vector()`, `Dict()`, format conversions. The provenance inference pass eliminates unnecessary copies at compile time (e.g., turning an owned string into a non-owning view when safe), but this optimization is invisible to the programmer.
+
+**How to take control:** All allocations go through `__gorget_current_alloc`, a thread-local allocator pointer. Two mechanisms redirect it:
+
+```gorget
+from std.alloc import Arena
+
+# Scoped allocator — ALL allocations in this block use the arena,
+# including string operations, f-strings, collection resizes, etc.
+with Arena(4096) as pool:
+    Vector[int] v = Vector[int]()
+    String s = name.upper()        # arena-allocated
+    String msg = f"hello {name}"   # arena-allocated
+    # pool.bytes_used() shows total arena consumption
+
+# One-shot allocator — only this constructor uses the arena
+Vector[int] v = Vector[int](alloc=pool)
+```
+
+The compiler enforces safety: escape analysis prevents arena-scoped data from outliving its allocator (compile-time error, not a runtime crash).
+
+Six composable allocators are in `std.alloc`: Arena (bump), PoolAllocator (fixed-size blocks), TlsfAllocator (general-purpose O(1)), TrackingAllocator (instrumentation wrapper), FixedBufferAllocator (stack bump), and FallbackAllocator (primary + secondary combinator). See language reference §15.3.
 
 ### 9.2 Shared Ownership
 

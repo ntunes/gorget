@@ -16,6 +16,8 @@
 
 - **Closure return type inference incomplete in semantic layer** — `infer_closure_return_type` in GIR lowering now walks block bodies for `return` statements (2026-03-21), but the semantic type checker's `check_block` only returns the tail expression type, not the type from explicit `return` statements inside closures. Multi-line closures with `return <value>` get type-checked as void and fail with "type mismatch: expected void, found int". Fix: propagate `current_return_type` for closure bodies in `typecheck.rs` and unify return expression types against it. [added: 2026-03-21]
 
+- **`@[no_alloc]` function annotation** — Compiler error if a function body contains any allocating operation (string concatenation, collection construction, f-strings, etc.). Useful for hot loops and real-time code paths where implicit allocation must be prevented. Requires cataloguing which AST expressions/calls allocate. Could also support `@[no_alloc]` on blocks for finer granularity. [added: 2026-03-21]
+
 - **Spawn captures don't check stale shared-derived** — A closure spawned after an await can capture a variable derived from a shared binding that is now stale. `check_spawn_closure_captures` checks `has_borrowed_origin` but doesn't intersect captured DefIds against `stale_shared_derived`. The spawned task silently uses pre-await data. Fix: in check_spawn_closure_captures, check if captured def_id is in stale_shared_derived and warn/error. [added: 2026-03-18]
 
 
