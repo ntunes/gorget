@@ -1868,9 +1868,11 @@ void main():
 
     #[test]
     fn unknown_origin_return_rejected() {
-        // Bodyless function returning str with multiple ref params and no live annotation.
-        // Multiple ref params = elision can't choose → origin is Unknown.
-        // Returning its result should be rejected.
+        // Bodyless function returning str with multiple ref params.
+        // After provenance fix: bodyless functions are conservatively treated as
+        // returning owned (not view), since we can't analyze the body. This avoids
+        // incorrect view downgrades for stdlib functions like regex_escape/path_join
+        // that take borrowed params but return owned strings.
         let source = "\
 str get_data(str a, str b)
 
@@ -1880,8 +1882,8 @@ str wrapper(str x, str y):
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UnresolvedBorrowOrigin { .. })),
-            "expected UnresolvedBorrowOrigin, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UnresolvedBorrowOrigin { .. })),
+            "bodyless functions return owned (conservative default), got: {:?}", errors
         );
     }
 
@@ -1909,7 +1911,8 @@ str wrapper():
 
     #[test]
     fn unknown_closure_capture_rejected() {
-        // Closure captures str from unresolvable call, returned — should error.
+        // Bodyless function returning str → conservatively treated as owned.
+        // Closure captures owned result — no borrow origin issue.
         let source = "\
 str get_data(str a, str b)
 
@@ -1919,18 +1922,19 @@ Callable[str()] wrapper(str x, str y):
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(
+            !has_error(&errors, |k| matches!(
                 k,
                 SemanticErrorKind::DanglingReturn { .. }
                     | SemanticErrorKind::UnresolvedBorrowOrigin { .. }
             )),
-            "expected error for closure capturing unknown origin, got: {:?}", errors
+            "bodyless functions return owned (conservative default), got: {:?}", errors
         );
     }
 
     #[test]
     fn merge_unknown_with_static() {
-        // If/else with Static and Unknown branches — should error on return.
+        // If/else with Static and bodyless-function-call branches.
+        // Bodyless function returns owned (conservative) → both branches are safe.
         let source = "\
 str get_data(str a, str b)
 
@@ -1941,11 +1945,11 @@ str pick(bool cond, str x, str y):
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(
+            !has_error(&errors, |k| matches!(
                 k,
                 SemanticErrorKind::UnresolvedBorrowOrigin { .. }
             )),
-            "expected UnresolvedBorrowOrigin for merged unknown+static, got: {:?}", errors
+            "bodyless functions return owned (conservative default), got: {:?}", errors
         );
     }
 

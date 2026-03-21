@@ -39,7 +39,7 @@ enum StringProvenance {
 const VIEW_METHODS: &[&str] = &[
     "trim", "strip", "lstrip", "rstrip",
     "removeprefix", "removesuffix",
-    "byte_slice", "substring", "char_at", "as_str", "str",
+    "byte_slice", "substring", "char_at", "as_str", "slice",
 ];
 
 /// Run provenance inference on all functions in the module.
@@ -718,13 +718,11 @@ impl<'a> ProvenanceCtx<'a> {
                         self.classify_return_expr(expr.as_ref()) == StringProvenance::View
                     }
                     FunctionBody::Declaration | FunctionBody::Extern(_) => {
-                        // No body to analyze. View methods (trim, char_at, etc.) and
-                        // functions with bare-borrow string params stay as view.
+                        // No body to analyze. Only known view-returning methods get downgraded.
+                        // Do NOT downgrade based on bare-borrow params — many stdlib functions
+                        // (regex_escape, path_join, replace_all, etc.) take borrowed strings
+                        // but return owned strings.
                         VIEW_METHODS.contains(&func.name.node.as_str())
-                            || func.params.iter().any(|p| {
-                                self.is_string_ast_type(&p.node.type_.node)
-                                    && p.node.ownership == Ownership::Borrow
-                            })
                     }
                 };
 
@@ -848,7 +846,14 @@ impl<'a> ProvenanceCtx<'a> {
             Stmt::While { body, .. } | Stmt::Loop { body, .. } | Stmt::For { body, .. } => {
                 for s in &body.stmts { self.check_assignments(&s.node, vars); }
             }
-            Stmt::Match { else_arm, .. } => {
+            Stmt::Match { arms, else_arm, .. } => {
+                for arm in arms {
+                    if let MatchItem::Arm(a) = arm {
+                        if let Expr::Block(block) = &a.body.node {
+                            for s in &block.stmts { self.check_assignments(&s.node, vars); }
+                        }
+                    }
+                }
                 if let Some(else_block) = else_arm {
                     for s in &else_block.stmts { self.check_assignments(&s.node, vars); }
                 }
@@ -914,6 +919,9 @@ impl<'a> ProvenanceCtx<'a> {
                 for arm in arms {
                     if let MatchItem::Arm(a) = arm {
                         self.downgrade_pattern_bindings(&a.pattern);
+                        if let Expr::Block(block) = &a.body.node {
+                            self.infer_block(block);
+                        }
                     }
                 }
                 if let Some(else_block) = else_arm {
