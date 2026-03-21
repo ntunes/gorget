@@ -311,6 +311,11 @@ impl TypeRegistry {
     /// Check whether a type needs dropping based on its metadata.
     /// Primitives never need dropping. Named types need dropping if they
     /// have Resource copy semantics or a non-None drop strategy.
+    ///
+    /// Note: Collection types (Vector, Dict, Set) are NOT detected here.
+    /// They lack TypeDefs to avoid transitive struct field upgrade, and
+    /// scope-exit drops are deferred until shallow copy semantics are
+    /// resolved (zero-on-copy or reference counting). See Phase 6 in TODO.
     pub fn needs_drop(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
         if let Some(GirType::Named(name)) = self.get(type_id) {

@@ -2068,10 +2068,7 @@ after nested container set
 done
 drop new-inner len=0
 drop wrapped len=1
-drop wrapped len=1
 drop new len=1
-drop new len=1
-drop first len=2
 drop first len=2
 drop second len=1
 drop third len=1",

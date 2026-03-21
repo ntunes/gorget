@@ -387,33 +387,11 @@ pub(super) fn lower_method_call(
                         builder.move_zero(place.clone());
                         ctx.drops.mark_moved(place.local);
                     }
-                    // T & reference: when the unwrapped value is Ptr(T), check
-                    // if the pointee is a collection type (keep as Ptr — access
-                    // through pointer) or not (deref to copy the value out).
-                    if let Some(GirType::Ptr(pointee)) = ctx.type_registry.get(inner_type) {
-                        let pointee = *pointee;
-                        let is_collection = match ctx.type_registry.get(pointee) {
-                            Some(GirType::Named(n)) => n.starts_with("Vector__")
-                                || n.starts_with("Dict__") || n.starts_with("HashMap__")
-                                || n.starts_with("Set__") || n.starts_with("HashSet__")
-                                || n == "GorgetArray" || n == "GorgetMap" || n == "GorgetSet",
-                            _ => false,
-                        };
-                        if !is_collection {
-                            // Non-collection (primitive, String, user struct):
-                            // deref the pointer to get the value.
-                            let deref_place = Place {
-                                local: dst,
-                                projections: vec![Projection::Deref],
-                            };
-                            let val_local = builder.add_local(pointee, None);
-                            builder.assign(Place::local(val_local), Operand::Copy(deref_place));
-                            return FunctionBuilder::copy(val_local);
-                        }
-                        // Collection: keep as Ptr(T). The var decl lowering will
-                        // propagate the Ptr type to the named local. All subsequent
-                        // field/method access uses pointee_type() + Deref naturally.
-                    }
+                    // T & reference: keep as Ptr for ALL types — the variable
+                    // borrows from the collection. No copy, no clone, no
+                    // double-free risk. The var decl lowering will propagate the
+                    // Ptr type to the named local via collection_ref_locals.
+                    // Field/method access uses pointee_type() + Deref naturally.
                     return FunctionBuilder::copy(dst);
                 }
             }

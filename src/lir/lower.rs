@@ -3348,16 +3348,13 @@ impl<'a> FuncLowering<'a> {
         let local_gir_type = self.gir_func.locals[place.local.0 as usize].type_id;
         let mut addr = self.lir_func.next_value();
 
-        // T & references (Ptr-typed locals from collection reads): the slot
-        // contains a pointer to the referenced struct. Emit SlotLoad to get
-        // the pointer value — the pointer IS the address of the struct.
-        // This works for all subsequent operations: field access, method calls,
-        // index access, assignment — because addr is the struct address.
-        // T & reference locals from collection borrowing reads: the slot
-        // contains a pointer to the referenced struct. Emit SlotLoad to get
-        // the pointer value (which IS the struct address).
+        // Collection ref locals (Ptr-typed from borrowing reads):
+        // - With Deref projection: use SlotAddr — the Deref loads the pointer
+        // - Without Deref: use SlotLoad — directly provides the pointer value
+        //   (needed for borrows, method calls, indexing on the Ptr variable)
         let is_ref_local = self.gir_func.collection_ref_locals.contains(&place.local);
-        if is_ref_local {
+        let has_deref = place.projections.first() == Some(&Projection::Deref);
+        if is_ref_local && !has_deref {
             self.lir_func
                 .block_mut(bb)
                 .insts
@@ -3370,8 +3367,8 @@ impl<'a> FuncLowering<'a> {
         }
 
         // Track the current GIR type through each projection step.
-        // For Ptr locals, resolve through the pointer to the pointee type.
-        let mut current_gir_type = if is_ref_local {
+        // For Ptr ref locals without Deref, resolve to the pointee type.
+        let mut current_gir_type = if is_ref_local && !has_deref {
             match self.gir_types.get(local_gir_type) {
                 Some(GirType::Ptr(inner)) => *inner,
                 _ => local_gir_type,

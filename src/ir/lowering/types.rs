@@ -550,14 +550,13 @@ pub(super) fn register_collection_alias(
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
     mapper.named_types.insert(mangled_name.to_string(), type_id);
 
-    // Collection types (Vector, Dict, Set) are left WITHOUT TypeDefs for now.
-    // Phase 6 (scope-exit drops) requires deep-cloning resource fields within struct
-    // elements when they're read from collections. Without deep clone on ALL extraction
-    // paths (option unwrap, gorget_array_get, for-loop iteration, indexing), shallow
-    // copies share heap buffers with the originals → double-free on scope exit.
-    // Infrastructure is in place: deep_clone_resource_fields(), is_collection_type(),
-    // infer_drop_strategy() fallback. Blocked on: unified deep-clone at Load instruction
-    // level for struct types containing resource fields.
+    // Collection types are registered WITHOUT TypeDefs. Drops are handled by:
+    //   - needs_drop() → name-based detection for direct collection locals
+    //   - infer_drop_strategy() → name-based fallback in LIR lowering
+    // NOT registering TypeDefs prevents the struct field scan from detecting
+    // collection fields as "droppable", which would transitively upgrade structs
+    // (like CliParser, HttpServer) to Recursive drop. Those structs often return
+    // shallow copies of their collection fields → double-free if both are dropped.
     if base_name == "Box" {
         let inner_type = mapper.map_ast_type(&_type_args[0].node);
         let type_def = TypeDef {
