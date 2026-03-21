@@ -1912,7 +1912,7 @@ void main():
     fn forward_return_type_fixup() {
         // Simulate cross-module ordering: function referencing a type defined later
         let source = "\
-Point origin() = Point(0, 0)
+Point origin(): Point(0, 0)
 struct Point:
     int x
     int y

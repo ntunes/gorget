@@ -363,7 +363,7 @@ void main():
     #[test]
     fn return_str_literal_ok() {
         let source = "\
-str f() = \"hello\"
+str f(): \"hello\"
 ";
         let errors = check(source);
         assert!(
@@ -375,7 +375,7 @@ str f() = \"hello\"
     #[test]
     fn return_str_from_param_ok() {
         let source = "\
-str f(str s) = s
+str f(str s): s
 ";
         let errors = check(source);
         assert!(
@@ -424,7 +424,7 @@ void main():
     #[test]
     fn cross_function_borrow_ok() {
         let source = "\
-str id(str s) = s
+str id(str s): s
 
 void main():
     print(id(\"hi\"))
@@ -439,9 +439,9 @@ void main():
     #[test]
     fn cross_function_chain() {
         let source = "\
-str f(str s) = s
+str f(str s): s
 
-str g(str s) = f(s)
+str g(str s): f(s)
 
 void main():
     print(g(\"hello\"))
@@ -456,7 +456,7 @@ void main():
     #[test]
     fn cross_function_dangling() {
         let source = "\
-str id(str s) = s
+str id(str s): s
 
 void consume(String !s):
     pass
@@ -478,7 +478,7 @@ void main():
     #[test]
     fn live_param_explicit() {
         let source = "\
-str first(live str a, str b) = a
+str first(live str a, str b): a
 ";
         let errors = check(source);
         assert!(
@@ -1071,7 +1071,7 @@ void main():
     fn no_temporary_borrow_str_from_str_call() {
         // str v = get_str() where get_str returns str → no error (returns ref type)
         let source = "\
-str get_str() = \"hello\"
+str get_str(): \"hello\"
 
 void main():
     str v = get_str()
@@ -3328,7 +3328,7 @@ void process(Point p, int v):
     fn pure_call_in_with_block_no_warning() {
         // A pure function call inside a `with` block should NOT trigger a warning
         let source = "\
-int double(int x) = x * 2
+int double(int x): x * 2
 
 async void worker(int &counter):
     counter = counter + 1
@@ -3511,7 +3511,7 @@ void main():
         // Variables used in f-string complex expressions (e.g., f"{obj.method()}")
         // should be marked as used even though the interpolation text is "obj.method()".
         let source = "\
-Vector[int] get_items() = [1, 2, 3]
+Vector[int] get_items(): [1, 2, 3]
 
 void main():
     Vector[int] items = get_items()
@@ -3582,7 +3582,7 @@ void main():
     #[test]
     fn unchecked_unwrap_warns() {
         let source = "\
-Option[int] find_value() = Some(42)
+Option[int] find_value(): Some(42)
 
 void main():
     Option[int] x = find_value()
@@ -3602,7 +3602,7 @@ void main():
     #[test]
     fn checked_via_is_some_no_warn() {
         let source = "\
-Option[int] find_value() = Some(42)
+Option[int] find_value(): Some(42)
 
 void main():
     Option[int] x = find_value()
@@ -3623,7 +3623,7 @@ void main():
     #[test]
     fn checked_via_match_no_warn() {
         let source = "\
-Option[int] find_value() = Some(42)
+Option[int] find_value(): Some(42)
 
 void main():
     Option[int] x = find_value()
@@ -3648,7 +3648,7 @@ void main():
     #[test]
     fn unwrap_or_no_warn() {
         let source = "\
-Option[int] find_value() = Some(42)
+Option[int] find_value(): Some(42)
 
 void main():
     Option[int] x = find_value()
@@ -3668,7 +3668,7 @@ void main():
     #[test]
     fn reassignment_resets_to_unchecked() {
         let source = "\
-Option[int] find_value() = Some(42)
+Option[int] find_value(): Some(42)
 
 void main():
     Option[int] x = find_value()
@@ -3711,7 +3711,7 @@ void main():
     #[test]
     fn result_is_ok_no_warn() {
         let source = "\
-Result[int, str] parse_num() = Ok(42)
+Result[int, str] parse_num(): Ok(42)
 
 void main():
     Result[int, str] r = parse_num()
@@ -3734,7 +3734,7 @@ void main():
         // Only checked in one branch — after merge, should remain checked
         // (since calling is_some at all proves awareness)
         let source = "\
-Option[int] find_value() = Some(42)
+Option[int] find_value(): Some(42)
 
 void main():
     Option[int] x = find_value()
@@ -4105,7 +4105,7 @@ void main():
         // Note: this test uses a from-import of a function that's defined in the source
         // but never called. Since `helper` is defined, the resolver will find it.
         let _source = "\
-int helper() = 42
+int helper(): 42
 
 void main():
     pass

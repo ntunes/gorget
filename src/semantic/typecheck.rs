@@ -4238,7 +4238,7 @@ void main():
     #[test]
     fn trait_bound_no_where_clause_no_regression() {
         let source = "\
-T identity[T](T x) = x
+T identity[T](T x): x
 
 void main():
     int y = identity[int](42)

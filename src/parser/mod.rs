@@ -5,7 +5,7 @@ pub mod stmt;
 pub mod types;
 pub mod visitor;
 
-use crate::errors::{ParseError, ParseWarning, ParseWarningKind};
+use crate::errors::{ParseError, ParseWarning};
 use crate::lexer::token::{Keyword, Token};
 use crate::lexer::Lexer;
 use crate::span::{Span, Spanned};
@@ -1624,15 +1624,6 @@ impl Parser {
             } else {
                 return Err(self.error_unexpected("string literal for extern symbol"));
             }
-        } else if self.match_token(&Token::Eq) {
-            // DEPRECATED: = expr syntax — emit warning, parse normally
-            self.warnings.push(ParseWarning {
-                kind: ParseWarningKind::DeprecatedExpressionBodyEquals,
-                span: self.previous_span(),
-            });
-            let expr = self.parse_expr()?;
-            self.consume_newline();
-            FunctionBody::Expression(Box::new(expr))
         } else if self.match_token(&Token::Colon) {
             if self.check(&Token::Newline) {
                 let start = self.previous_span();

@@ -1010,9 +1010,7 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         writeln!(out).unwrap();
     }
 
-    // Test runner main (when test_fns is non-empty or is_test_module).
-    // NOTE: bench runner main requires LIR bench function lowering (not yet implemented).
-    // bench_fns metadata is present but the bench function bodies are not lowered to LIR.
+    // Bench runner main — bench function bodies are lowered to LIR as __bench_N functions.
     if !module.bench_fns.is_empty() && module.functions.iter().any(|f| f.name.starts_with("__bench_")) {
         emit_bench_runner_main(&mut out, module);
     } else if !module.test_fns.is_empty() || module.is_test_module {

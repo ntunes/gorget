@@ -2,21 +2,15 @@
 
 ## High
 
-- **DEPRECATION(0.1.4): remove `=` expression-body support before 0.2.0** — Parser currently accepts both `int f(int x): x * 2` (new) and `int f(int x) = x * 2` (deprecated, emits warning). Remove the `=` branch in `src/parser/mod.rs` before 0.2.0 release. [added: 2026-03-16]
-
 - **C backend: missing drop insertion for Move-type locals (Vector, Str)**: Phase 3b (T & Ptr payloads) eliminates double-free for borrowing reads (`get`/`first`/`last`) on resource-type elements. **Remaining:** Register collection TypeDefs with `CopySemantics::Resource` + `DropStrategy::Trivial` so collection locals are dropped at scope exit (Phase 6). Also: consuming methods (`pop`/`remove`) still clone resource payloads — need GIR to emit proper drops for consumed elements. [added: 2026-03-14, updated: 2026-03-21]
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 4 C warnings remaining (2 `gorget_int_to_str` Ptr→int cast from slot type inference issue, 2 memset overflow from struct size mismatch). Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-16]
 
 - **LIR backend: remaining clone-on-read for Dict resource-type values**: Phase 3b eliminates clones for Vector borrowing reads on resource-type elements. Dict.get() still clones resource-type values (GorgetArray/GorgetMap/GorgetString) because Dict Ref was deferred. Extend Phase 3b to Dict: register `Option__Ref_V` for Dict.get() when V is resource-type. [added: 2026-03-17, updated: 2026-03-21]
 
-- **LIR backend: bench function lowering not implemented** — `bench "..." :` items are lowered to GIR and metadata propagated to LIR, but the bench function BODIES are not lowered to LIR functions. The bench runner main references `__bench_0`/`__bench_1` etc. which don't exist. Tests: `bench_basic`. [added: 2026-03-20]
+- **Self-host parser: 9 trait-related fixtures crash (segfault)** — Self-host parser binary segfaults when parsing traits with 2+ methods. Union enum layout (2026-03-21) reduced Stmt from 39KB to ~1.3KB but did not fix this crash. Likely ownership issue when `FunctionDef` with `Vector[Stmt] body` is pushed into the methods Vector. Affected: bench_basic, equip_multiple_traits, generic_trait_equip, print_trait_object, test_traits_equip, trait_defaults, trait_inherit_defaults, traits, via_delegation. Inline `self_host_parser` test passes. [updated: 2026-03-21]
 
-- **Self-host parser: 2+ trait methods crash** — Parsing a trait with 2+ methods (bodyless or bodied) causes segfault in the self-host parser binary. Pre-existing LIR bug. Root cause: likely ownership issue when `FunctionDef` with `Vector[Stmt] body` is pushed into the methods Vector. Affects 9 parser comparison + 8 type checker comparison fixtures (all trait-related). The `self_host_parser` inline test passes (doesn't parse traits). [added: 2026-03-21]
-
-- **Self-host resolver: 746/797 fixtures crash silently** — Union enum layout (2026-03-21) fixed the 39KB Stmt → ~1.3KB. Resolver comparison test now runs to completion instead of aborting, but 746 fixtures still crash (no stderr). Likely deep recursion on Stmt/Expr types or another large-struct issue. Scores: matched 35, mismatched 16, crashed 746. Type comparison: 524/797 (500 exact + 24 superset). [updated: 2026-03-21]
-
-- **LIR backend: generic_nested_collections double-free** — `Dict[str, Vector[int]]` test double-frees array values: arrays are moved out via `gorget_map_get` into local variables and freed, then the map element-drop loop frees the same array slots again. Pre-existing bug (present before string unification). Needs element-drop loop to skip moved-out values. [added: 2026-03-18]
+- **Self-host resolver: 746/797 fixtures crash silently** — Union enum layout (2026-03-21) fixed the 39KB Stmt → ~1.3KB. Resolver comparison test now runs to completion instead of aborting, but 746 fixtures still crash (no stderr). Likely deep recursion on Stmt/Expr types or another large-struct issue. Scores: matched 35, mismatched 16, crashed 746. Type comparison: 532/797 (508 exact + 24 superset), 257 mismatched, 8 crashed. [updated: 2026-03-21]
 
 ## Medium
 
