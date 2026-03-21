@@ -8,9 +8,9 @@
 
 - **LIR backend: remaining clone-on-read for Dict resource-type values**: Phase 3b eliminates clones for Vector borrowing reads on resource-type elements. Dict.get() still clones resource-type values (GorgetArray/GorgetMap/GorgetString) because Dict Ref was deferred. Extend Phase 3b to Dict: register `Option__Ref_V` for Dict.get() when V is resource-type. [added: 2026-03-17, updated: 2026-03-21]
 
-- **Self-host parser: 9 trait-related fixtures crash (segfault)** — Self-host parser binary segfaults when parsing traits with 2+ methods. Union enum layout (2026-03-21) reduced Stmt from 39KB to ~1.3KB but did not fix this crash. Likely ownership issue when `FunctionDef` with `Vector[Stmt] body` is pushed into the methods Vector. Affected: bench_basic, equip_multiple_traits, generic_trait_equip, print_trait_object, test_traits_equip, trait_defaults, trait_inherit_defaults, traits, via_delegation. Inline `self_host_parser` test passes. [updated: 2026-03-21]
+- **Self-host parser: 553/797 matched, 244 mismatched, 0 crashed** — Parser crash fixed by sizeof union layout fix (2026-03-21). Remaining 244 mismatches are diagnostic/format differences, not crashes. [updated: 2026-03-21]
 
-- **Self-host resolver: 746/797 fixtures crash silently** — Union enum layout (2026-03-21) fixed the 39KB Stmt → ~1.3KB. Resolver comparison test now runs to completion instead of aborting, but 746 fixtures still crash (no stderr). Likely deep recursion on Stmt/Expr types or another large-struct issue. Scores: matched 35, mismatched 16, crashed 746. Type comparison: 532/797 (508 exact + 24 superset), 257 mismatched, 8 crashed. [updated: 2026-03-21]
+- **Self-host resolver: 565/797 matched, 232 mismatched, 0 crashed** — Dict for-loop scalar key crash fixed (2026-03-21): InlineC dst slot marked address-taken to preserve type info through SSA. Remaining 232 mismatches need investigation. [updated: 2026-03-21]
 
 ## Medium
 
@@ -104,11 +104,11 @@
 
 - **Async/await — `await` on vector-indexed tasks with multiple spawn functions**: Type-based await dispatch now works when exactly one function produces tasks of a given type. When multiple functions produce the same `Task__T` type (e.g., two functions both returning `int`), the type-based fallback can't disambiguate. Fix: embed a function dispatch pointer in the `Task__T` struct or use a tag field. [updated: 2026-03-07]
 
-- **Self-hosting parser: 595/596 (99.8%)**: Only `chars.gg` remains — null byte `\0` truncates C stdout (unfixable without length-prefixed strings). [updated: 2026-03-10]
+- **Self-hosting parser: 553/797 (69%) on LIR backend** — Was 595/596 on GIR backend. 0 crashes, 244 mismatches (diagnostic/format differences). `chars.gg` null byte issue remains. [updated: 2026-03-21]
 
-- **Self-hosting resolver: 592/592 (100%) — COMPLETE.** [updated: 2026-03-10]
+- **Self-hosting resolver: 565/797 (71%) on LIR backend** — Was 592/592 on GIR backend. 0 crashes, 232 mismatches need investigation. [updated: 2026-03-21]
 
-- **Self-hosting type checker: 595/595 (100%) — COMPLETE.** Phases 1-18. [updated: 2026-03-10]
+- **Self-hosting type checker: 538/797 (67%) on LIR backend** — Was 595/595 on GIR backend. 0 crashes (514 exact + 24 superset), 259 mismatches. [updated: 2026-03-21]
 
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]

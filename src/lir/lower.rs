@@ -2091,6 +2091,17 @@ impl<'a> FuncLowering<'a> {
                     let dst_part = code[..eq_pos].trim().trim_start_matches('_');
                     if let Ok(local_idx) = dst_part.parse::<u32>() {
                         let slot = self.local_to_slot[local_idx as usize];
+                        // Mark destination slot as address-taken so SSA won't
+                        // promote it.  The C backend's type inference relies on
+                        // the InlineC→SlotStore pattern to determine the value's
+                        // type; SSA promotion removes the SlotStore and the type
+                        // defaults to void*, which breaks collection push/put
+                        // for scalar Dict keys.
+                        let addr_dummy = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                            dst: addr_dummy,
+                            slot,
+                        });
                         let val = self.lir_func.next_value();
                         // Emit InlineC with a dst, then store to slot.
                         self.lir_func.block_mut(bb).insts.push(Inst::InlineC {
