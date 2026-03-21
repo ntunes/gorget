@@ -1571,18 +1571,6 @@ impl Parser {
         } else {
             first_type
         };
-        // Check for ownership suffix on return type (e.g. `String &get(...)` or `String !pop(...)`)
-        let return_type = if self.check(&Token::Ampersand) {
-            let start = return_type.span;
-            self.advance();
-            Spanned::new(Type::Ref(Box::new(return_type)), start.merge(self.previous_span()))
-        } else if self.check(&Token::Bang) {
-            let start = return_type.span;
-            self.advance();
-            Spanned::new(Type::Owned(Box::new(return_type)), start.merge(self.previous_span()))
-        } else {
-            return_type
-        };
         // Use expect_name() to allow keywords as function/method names
         // (e.g., `from` in `equip Celsius with From[float]`).
         let name = self.expect_name()?;
