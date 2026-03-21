@@ -192,6 +192,8 @@
 
 - **Gorget Arena: deformVertexes AutoSprite/AutoSprite2** — DeformWave, DeformBulge, DeformMove are implemented (CPU vertex modification via glBufferSubData). AutoSprite/AutoSprite2 remain — they require camera-facing billboard orientation logic per vertex quad. [added: 2026-03-21]
 
+- **Multi-file loader: direct synthetic module imports crash on macOS** — Importing `gg.gl` functions directly into `backend.gg` (`from gg.gl import gl_bind_buffer`) produces a binary that crashes on macOS (reads wrong value for GL function args). Workaround: route through `gpu_backend.gg` which already imports `gg.gl` successfully. Likely a scoping/symbol resolution issue in the multi-file synthetic module loader. [added: 2026-03-21]
+
 - **Named/labeled arguments at call sites**: Allow `=` syntax for labeling arguments: `str.slice(from=2, to=5)`, `transfer(buf=!owned)`, `process(data=&vec)`. Pure sugar — desugars to positional args by matching label to parameter name. Sigils (`&`/`!`) go on the value side only (mandatory, as with positional calls); labels are bare names. Labeled args freely mixable with positional: `connect("localhost", port=8080)`. Parser needs: `IDENT '=' Expr` as an argument form; semantic check maps labels to positions and rejects duplicates/unknowns. [added: 2026-03-11]
 
 - **GIR Phase 6 — LLVM backend**: Implement `src/backend/llvm/` to emit LLVM IR (text or bitcode) from GIR. Use `llc` or Rust `inkwell`/`llvm-sys` crate for compilation. Construct SSA via alloca+mem2reg pattern. Emit debug info from GIR source locations. Wire as `gg build --backend=llvm`. Removes C compiler dependency for native compilation. [added: 2026-03-05]
