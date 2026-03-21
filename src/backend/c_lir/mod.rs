@@ -5422,14 +5422,14 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 || matches!(ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "Str"))
             });
 
-            // printf(var) with a single non-literal arg triggers -Wformat-security
-            // on macOS clang. Rewrite to printf("%s", var).
-            let printf_needs_fmt_guard = is_printf && emit_args.len() == 1
-                && !str_lit_vals.get(emit_args[0].0 as usize).copied().unwrap_or(false);
+            // printf(var) with a single arg triggers -Wformat-security on macOS
+            // clang even if the arg is a string literal variable. Always rewrite
+            // single-arg printf to printf("%s", var).
+            let printf_needs_fmt_guard = is_printf && emit_args.len() == 1;
 
             write!(out, "{}(", emit_name).unwrap();
             if printf_needs_fmt_guard {
-                write!(out, "\"%s\", ").unwrap();
+                write!(out, "\"%s\", (const char*)").unwrap();
             }
             if is_stderr_print {
                 write!(out, "stderr").unwrap();

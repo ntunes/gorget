@@ -10421,6 +10421,8 @@ static inline int64_t gorget_gl_get_query_result_i64(int64_t id) {
     return (int64_t)result;
 }
 
+#endif // !__APPLE__
+
 // ── Typed State Getters ─────────────────────────────────────
 
 static inline double gorget_gl_get_float(int64_t pname) {

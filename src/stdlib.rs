@@ -2379,6 +2379,15 @@ fn gen_gl_module() -> Module {
     items.push(fn_item(extern_fn("gl_wait_sync", &[("sync", ty_int())], ty_void(), "gorget_gl_wait_sync")));
     } // end #[cfg(not(target_os = "macos"))]
 
+    // ── Program Binary (GL 4.1+) ────────────────────────────
+    items.push(fn_item(extern_fn("gl_get_program_binary", &[("program", ty_int()), ("data", ty_vector_uint8())], ty_int(), "gorget_gl_get_program_binary")));
+    items.push(fn_item(extern_fn("gl_program_binary", &[("program", ty_int()), ("format", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_gl_program_binary")));
+
+    // ── Timer Queries (GL 3.3+) ─────────────────────────────
+    items.push(fn_item(extern_fn("gl_query_counter", &[("id", ty_int()), ("target", ty_int())], ty_void(), "gorget_gl_query_counter")));
+    items.push(fn_item(extern_fn("gl_get_query_result_i64", &[("id", ty_int())], ty_int(), "gorget_gl_get_query_result_i64")));
+    } // end #[cfg(not(target_os = "macos"))]
+
     // ── Pixel Store (GL 1.0+) ───────────────────────────────
     items.push(fn_item(extern_fn("gl_pixel_store_i", &[("pname", ty_int()), ("param", ty_int())], ty_void(), "gorget_gl_pixel_store_i")));
 
@@ -2388,14 +2397,6 @@ fn gen_gl_module() -> Module {
 
     // ── Texture Download ────────────────────────────────────
     items.push(fn_item(extern_fn("gl_get_tex_image", &[("target", ty_int()), ("level", ty_int()), ("format", ty_int()), ("type_", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_gl_get_tex_image")));
-
-    // ── Program Binary (GL 4.1+) ────────────────────────────
-    items.push(fn_item(extern_fn("gl_get_program_binary", &[("program", ty_int()), ("data", ty_vector_uint8())], ty_int(), "gorget_gl_get_program_binary")));
-    items.push(fn_item(extern_fn("gl_program_binary", &[("program", ty_int()), ("format", ty_int()), ("data", ty_vector_uint8())], ty_void(), "gorget_gl_program_binary")));
-
-    // ── Timer Queries (GL 3.3+) ─────────────────────────────
-    items.push(fn_item(extern_fn("gl_query_counter", &[("id", ty_int()), ("target", ty_int())], ty_void(), "gorget_gl_query_counter")));
-    items.push(fn_item(extern_fn("gl_get_query_result_i64", &[("id", ty_int())], ty_int(), "gorget_gl_get_query_result_i64")));
 
     // ── Typed State Getters ─────────────────────────────────
     items.push(fn_item(extern_fn("gl_get_float", &[("pname", ty_int())], ty_float(), "gorget_gl_get_float")));
