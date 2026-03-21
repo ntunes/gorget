@@ -606,6 +606,9 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
             out.push_str(crate::backend::c::c_runtime::HOT_RELOAD_RUNTIME);
         }
 
+        // Suppress "value never read" warnings on idempotent emit-once flags.
+        let _ = (emitted_array, emitted_map);
+
         // LIR-specific helper functions not emitted by the old C backend preamble.
         writeln!(out, "// ── LIR helpers ──").unwrap();
         if has(&|n| n == "gorget_char_chr") {
