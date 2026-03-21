@@ -489,7 +489,8 @@ impl<'a> LoweringContext<'a> {
                     let sid = self.module.add_struct(StructDef {
                         name: def.name.clone(),
                         fields: vec![("_0".into(), LirType::Ptr)],
-                    });
+            is_enum: false,
+                                  });
                     self.struct_reg.register(&def.name, sid);
                     continue;
                 }
@@ -504,7 +505,8 @@ impl<'a> LoweringContext<'a> {
                 let sid = self.module.add_struct(StructDef {
                     name: def.name.clone(),
                     fields,
-                });
+            is_enum: false,
+                              });
                 self.struct_reg.register(&def.name, sid);
                 continue;
             }
@@ -514,7 +516,8 @@ impl<'a> LoweringContext<'a> {
                     let sid = self.module.add_struct(StructDef {
                         name: def.name.clone(),
                         fields: vec![],
-                    });
+            is_enum: false,
+                                  });
                     self.struct_reg.register(&def.name, sid);
                     deferred.push((sid, idx));
                 }
@@ -553,7 +556,14 @@ impl<'a> LoweringContext<'a> {
                 }
                 _ => vec![],
             };
+            // Only use union layout for large enums (> 4 fields). Small enums like
+            // Option (2 fields: tag + Some_0) and Result (3 fields: tag + Ok_0 + Error_0)
+            // use flat layout because the C backend accesses their fields directly
+            // in many places (__option_unwrap, collection wrapping, etc.).
+            let is_large_enum = matches!(&def.kind, gir_types::TypeDefKind::Enum(_))
+                && fields.len() > 4;
             self.module.structs[sid.0 as usize].fields = fields;
+            self.module.structs[sid.0 as usize].is_enum = is_large_enum;
         }
     }
 
@@ -630,7 +640,8 @@ impl<'a> LoweringContext<'a> {
                         let sid = self.module.add_struct(StructDef {
                             name: name.clone(),
                             fields,
-                        });
+            is_enum: false,
+                                      });
                         self.struct_reg.register(name, sid);
                     }
                     gir_types::TypeDefKind::Enum(edef) => {
@@ -651,7 +662,8 @@ impl<'a> LoweringContext<'a> {
                         let sid = self.module.add_struct(StructDef {
                             name: name.clone(),
                             fields,
-                        });
+            is_enum: false,
+                                      });
                         self.struct_reg.register(name, sid);
                     }
                     gir_types::TypeDefKind::Alias(_) => {}
@@ -664,7 +676,8 @@ impl<'a> LoweringContext<'a> {
                 let sid = self.module.add_struct(StructDef {
                     name: name.clone(),
                     fields,
-                });
+            is_enum: false,
+                              });
                 self.struct_reg.register(name, sid);
             }
         }

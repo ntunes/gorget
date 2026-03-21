@@ -566,6 +566,47 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         if def.fields.is_empty() {
             // C doesn't allow empty structs — add a dummy byte.
             writeln!(out, "    char __pad;").unwrap();
+        } else if def.is_enum && def.fields.len() > 1 {
+            // Enum type: emit tag + union of variant structs.
+            // Field 0 is always "tag" (I32). Fields 1+ are grouped by
+            // variant prefix (e.g., IFunction_0, IFunction_1 → IFunction group).
+            let (tag_name, tag_ty) = &def.fields[0];
+            let tag_ty_str = c_type_named(tag_ty, &struct_names);
+            writeln!(out, "    {} {};", tag_ty_str, c_field_name(tag_name)).unwrap();
+            // Group remaining fields by variant name prefix
+            let mut variants: Vec<(String, Vec<(&str, &LirType)>)> = Vec::new();
+            for (fname, fty) in &def.fields[1..] {
+                let variant_name = fname.rsplitn(2, '_').nth(1).unwrap_or(fname);
+                if variants.last().map(|(n, _)| n.as_str()) == Some(variant_name) {
+                    variants.last_mut().unwrap().1.push((fname.as_str(), fty));
+                } else {
+                    variants.push((variant_name.to_string(), vec![(fname.as_str(), fty)]));
+                }
+            }
+            writeln!(out, "    union {{").unwrap();
+            for (vname, fields) in &variants {
+                if fields.len() == 1 {
+                    let (fname, fty) = &fields[0];
+                    let ty_str = if matches!(fty, LirType::Void) {
+                        "uint8_t".to_string()
+                    } else {
+                        c_type_named(fty, &struct_names)
+                    };
+                    writeln!(out, "        {} {};  // {}", ty_str, c_field_name(fname), vname).unwrap();
+                } else {
+                    writeln!(out, "        struct {{  // {}", vname).unwrap();
+                    for (fname, fty) in fields {
+                        let ty_str = if matches!(fty, LirType::Void) {
+                            "uint8_t".to_string()
+                        } else {
+                            c_type_named(fty, &struct_names)
+                        };
+                        writeln!(out, "            {} {};", ty_str, c_field_name(fname)).unwrap();
+                    }
+                    writeln!(out, "        }} {};", c_field_name(vname)).unwrap();
+                }
+            }
+            writeln!(out, "    }} data;").unwrap();
         } else {
             for (fname, fty) in &def.fields {
                 if is_vtable {
@@ -3472,14 +3513,43 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
             let sname = sn.get(&struct_id.0).map(|s| s.as_str()).unwrap_or("void");
             if (*field as usize) < struct_def.fields.len() {
                 let field_name = &struct_def.fields[*field as usize].0;
-                write!(
-                    out,
-                    "{} = (void*)&(({} *)({}))->{};",
-                    v(*dst),
-                    sname,
-                    v(*base),
-                    c_field_name(field_name)
-                ).unwrap();
+                if struct_def.is_enum && *field > 0 {
+                    // Enum union layout: access through data.field_name
+                    // For multi-field variants (e.g., IFunction_0, IFunction_1),
+                    // the variant name is a prefix (IFunction) and fields are
+                    // inside the variant's anonymous struct.
+                    let variant_prefix = field_name.rsplitn(2, '_').nth(1).unwrap_or(field_name);
+                    // Check if this variant has multiple fields (needs struct access)
+                    let variant_field_count = struct_def.fields[1..].iter()
+                        .filter(|(n, _)| n.rsplitn(2, '_').nth(1).unwrap_or(n) == variant_prefix)
+                        .count();
+                    if variant_field_count > 1 {
+                        // Multi-field variant: data.VariantName.field_name
+                        write!(
+                            out,
+                            "{} = (void*)&(({} *)({}))->data.{}.{};",
+                            v(*dst), sname, v(*base),
+                            c_field_name(variant_prefix), c_field_name(field_name)
+                        ).unwrap();
+                    } else {
+                        // Single-field variant: data.field_name (no variant struct)
+                        write!(
+                            out,
+                            "{} = (void*)&(({} *)({}))->data.{};",
+                            v(*dst), sname, v(*base), c_field_name(field_name)
+                        ).unwrap();
+                    }
+                } else {
+                    // Regular struct or field 0 (tag): direct access
+                    write!(
+                        out,
+                        "{} = (void*)&(({} *)({}))->{};",
+                        v(*dst),
+                        sname,
+                        v(*base),
+                        c_field_name(field_name)
+                    ).unwrap();
+                }
             } else {
                 // Fallback: field index exceeds struct definition — use byte offset.
                 // This can happen for runtime-opaque structs (e.g., GorgetArray, Dict).
@@ -8287,6 +8357,7 @@ mod tests {
         let sid = module.add_struct(StructDef {
             name: "Point".into(),
             fields: vec![("x".into(), LirType::F64), ("y".into(), LirType::F64)],
+            is_enum: false,
         });
 
         let mut func = LirFunction::new("get_x".into(), vec![LirType::Ptr], LirType::F64);

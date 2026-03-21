@@ -590,6 +590,21 @@ impl LirFunction {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<(String, LirType)>,
+    /// True for enum types — the C backend emits a union of variant structs
+    /// instead of a flat field list. Field 0 is always "tag" (I32), fields 1+
+    /// are grouped by variant name prefix (e.g., IFunction_0, IFunction_1).
+    pub is_enum: bool,
+}
+
+impl StructDef {
+    /// Create a regular (non-enum) struct definition.
+    pub fn new(name: String, fields: Vec<(String, LirType)>) -> Self {
+        Self { name, fields, is_enum: false }
+    }
+    /// Create an enum struct definition (union layout in C).
+    pub fn new_enum(name: String, fields: Vec<(String, LirType)>) -> Self {
+        Self { name, fields, is_enum: true }
+    }
 }
 
 // ── Globals ─────────────────────────────────────────────────────────────────
@@ -935,7 +950,8 @@ mod tests {
                 ("x".into(), LirType::F64),
                 ("y".into(), LirType::F64),
             ],
-        });
+            is_enum: false,
+                      });
 
         let mut func = LirFunction::new("get_x".into(), vec![LirType::Ptr], LirType::F64);
         let bb0 = func.add_block();

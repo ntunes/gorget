@@ -55,7 +55,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("cap".into(), LirType::I64),
                 ("alloc".into(), LirType::Ptr),
             ],
-        },
+            is_enum: false,
+                      },
         // String — owned heap string (unified with Str: same 32-byte layout)
         StructDef {
             name: "GorgetString".into(),
@@ -65,7 +66,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("cap".into(), LirType::I64),
                 ("alloc".into(), LirType::Ptr),
             ],
-        },
+            is_enum: false,
+                      },
         // GorgetArray — dynamic array (Vector[T] backing)
         StructDef {
             name: "GorgetArray".into(),
@@ -75,7 +77,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("cap".into(), LirType::I64),
                 ("elem_size".into(), LirType::I64),
             ],
-        },
+            is_enum: false,
+                      },
         // Closure — function pointer + environment
         StructDef {
             name: "GorgetClosure".into(),
@@ -83,7 +86,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("fn_ptr".into(), LirType::Ptr),
                 ("env".into(), LirType::Ptr),
             ],
-        },
+            is_enum: false,
+                      },
         // Trait object — data pointer + vtable pointer
         StructDef {
             name: "TraitObj".into(),
@@ -91,7 +95,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("data".into(), LirType::Ptr),
                 ("vtable".into(), LirType::Ptr),
             ],
-        },
+            is_enum: false,
+                      },
         // Task handle — task pointer + drop function
         StructDef {
             name: "TaskHandle".into(),
@@ -99,7 +104,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("task_ptr".into(), LirType::Ptr),
                 ("drop_fn".into(), LirType::Ptr),
             ],
-        },
+            is_enum: false,
+                      },
         // GorgetMap — hash map backing Dict[K,V] and HashMap[K,V]
         StructDef {
             name: "GorgetMap".into(),
@@ -118,7 +124,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("hash_fn".into(), LirType::Ptr),
                 ("eq_fn".into(), LirType::Ptr),
             ],
-        },
+            is_enum: false,
+                      },
         // GorgetSet — typedef alias for GorgetMap, backs Set[T] and HashSet[T]
         StructDef {
             name: "GorgetSet".into(),
@@ -137,7 +144,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("hash_fn".into(), LirType::Ptr),
                 ("eq_fn".into(), LirType::Ptr),
             ],
-        },
+            is_enum: false,
+                      },
         // GorgetRange — range iterator
         StructDef {
             name: "GorgetRange".into(),
@@ -146,7 +154,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("end".into(), LirType::I64),
                 ("step".into(), LirType::I64),
             ],
-        },
+            is_enum: false,
+                      },
     ]
 }
 

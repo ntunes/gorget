@@ -362,7 +362,8 @@ mod tests {
         let str_id = module.add_struct(StructDef {
             name: "Str".into(),
             fields: vec![("data".into(), LirType::Ptr), ("len".into(), LirType::I64)],
-        });
+            is_enum: false,
+                      });
 
         module.add_extern(LirExtern {
             name: "puts".into(),

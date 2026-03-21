@@ -290,7 +290,8 @@ mod tests {
         module.add_struct(StructDef {
             name: "Point".into(),
             fields: vec![("x".into(), LirType::F64), ("y".into(), LirType::F64)],
-        });
+            is_enum: false,
+                      });
 
         let mut func = LirFunction::new("main".into(), vec![], LirType::I32);
         let bb = func.add_block();
@@ -414,7 +415,8 @@ mod tests {
         let sid = module.add_struct(StructDef {
             name: "Tiny".into(),
             fields: vec![("x".into(), LirType::I32)],
-        });
+            is_enum: false,
+                      });
 
         let mut func = LirFunction::new("bad".into(), vec![], LirType::Void);
         let bb = func.add_block();
