@@ -1,0 +1,20 @@
+struct Resource:
+    String name
+
+equip Resource with Drop:
+    void drop(!self):
+        String n = self.name
+        print(f"drop {n}")
+
+void main():
+    Resource outer_r = Resource("outer")
+    scope_a:
+        Resource a = Resource("a")
+        scope_b:
+            Resource b = Resource("b")
+            print(f"using {b.name}")
+        # b dropped here
+        print(f"using {a.name}")
+    # a dropped here
+    print(f"using {outer_r.name}")
+# outer_r dropped here

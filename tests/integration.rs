@@ -14648,3 +14648,116 @@ fn closure_mut_method_capture_error() {
 fn closure_struct_escape_error() {
     check_gg_fails("closure_struct_escape_error.gg", "captures local variable");
 }
+
+// ── Batch 1: Sanity tests ─────────────────────────────────────────────
+
+#[test]
+fn pass_statement() {
+    run_gg(
+        "pass_statement.gg",
+        "\
+else branch
+elif branch
+after empty for
+1
+3
+after match pass",
+    );
+}
+
+#[test]
+fn range_operations() {
+    run_gg(
+        "range_operations.gg",
+        "\
+0
+1
+2
+3
+4
+inc:0
+inc:1
+inc:2
+inc:3
+in range
+in inclusive
+neg:-2
+neg:-1
+neg:0
+neg:1
+multiples: 4",
+    );
+}
+
+#[test]
+fn compound_assignment_all() {
+    run_gg(
+        "compound_assignment_all.gg",
+        "\
+15
+12
+48
+8
+2
+240
+255
+0
+0
+0
+-9223372036854775808
+9223372036854775807
+-2
+12.500000
+11.500000
+34.500000
+17.250000",
+    );
+}
+
+#[test]
+fn const_declarations() {
+    run_gg(
+        "const_declarations.gg",
+        "\
+100
+3.141590
+true
+hello
+200
+42
+enabled
+99
+3",
+    );
+}
+
+#[test]
+fn named_scope_drop() {
+    run_gg(
+        "named_scope_drop.gg",
+        "\
+using b
+drop b
+using a
+drop a
+using outer
+drop outer",
+    );
+}
+
+#[test]
+fn default_params_complex() {
+    run_gg(
+        "default_params_complex.gg",
+        "\
+16
+15
+10
+20
+21
+Dr. Alice Smith
+Mr. Bob Jones
+Mr. Charlie Doe
+Prof. Dana White",
+    );
+}

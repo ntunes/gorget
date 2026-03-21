@@ -1,0 +1,37 @@
+const int MAX_SIZE = 100
+const float PI = 3.14159
+const bool ENABLED = true
+const String GREETING = "hello"
+
+int scale(int x):
+    return x * MAX_SIZE
+
+void main():
+    # module-level constants
+    print(f"{MAX_SIZE}")
+    print(f"{PI}")
+    print(f"{ENABLED}")
+    print(f"{GREETING}")
+
+    # constant used in expressions
+    int result = scale(2)
+    print(f"{result}")
+
+    # local const
+    const int LOCAL = 42
+    print(f"{LOCAL}")
+
+    # const in conditions
+    if ENABLED:
+        print("enabled")
+
+    # const auto
+    const auto INFERRED = 99
+    print(f"{INFERRED}")
+
+    # const used in range
+    const int LIMIT = 3
+    int sum = 0
+    for i in 0..LIMIT:
+        sum += i
+    print(f"{sum}")

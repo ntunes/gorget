@@ -1,0 +1,48 @@
+void main():
+    # arithmetic compound assignments
+    int a = 10
+    a += 5
+    print(f"{a}")
+    a -= 3
+    print(f"{a}")
+    a *= 4
+    print(f"{a}")
+    a /= 6
+    print(f"{a}")
+    a %= 3
+    print(f"{a}")
+
+    # bitwise compound assignments
+    int b = 255
+    b &= 0xF0
+    print(f"{b}")
+    b |= 0x0F
+    print(f"{b}")
+    b ^= 0xFF
+    print(f"{b}")
+    b <<= 4
+    print(f"{b}")
+    b >>= 2
+    print(f"{b}")
+
+    # wrapping compound assignments
+    int c = 9223372036854775807
+    c +%= 1
+    print(f"{c}")
+    int d = -9223372036854775807 - 1
+    d -%= 1
+    print(f"{d}")
+    int e = 9223372036854775807
+    e *%= 2
+    print(f"{e}")
+
+    # float compound assignments
+    float f = 10.0
+    f += 2.5
+    print(f"{f}")
+    f -= 1.0
+    print(f"{f}")
+    f *= 3.0
+    print(f"{f}")
+    f /= 2.0
+    print(f"{f}")

@@ -1,0 +1,27 @@
+int compute(int base, int factor = 2, int offset = 0):
+    return base * factor + offset
+
+String format_name(String first, String last = "Doe", String title = "Mr"):
+    return f"{title}. {first} {last}"
+
+void main():
+    # all args explicit
+    print(f"{compute(5, 3, 1)}")
+
+    # use one default
+    print(f"{compute(5, 3)}")
+
+    # use all defaults
+    print(f"{compute(5)}")
+
+    # named arguments
+    print(f"{compute(5, offset=10)}")
+    print(f"{compute(5, factor=4, offset=1)}")
+
+    # string defaults
+    print(format_name("Alice", "Smith", "Dr"))
+    print(format_name("Bob", "Jones"))
+    print(format_name("Charlie"))
+
+    # named arg reordering
+    print(format_name("Dana", title="Prof", last="White"))
