@@ -9,7 +9,7 @@ from types import TypeTable
 from resolve import resolve_module, ResolveContext
 from format_resolve import format_all
 
-void test_resolve(str label, str source):
+void test_resolve(String label, String source):
     Module m = parse_source(source)
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()

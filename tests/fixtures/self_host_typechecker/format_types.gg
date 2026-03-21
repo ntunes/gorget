@@ -12,7 +12,7 @@ from ids import NO_DEF, NO_TYPE
 
 # ── Describe a resolved type as a human-readable string ────
 
-str describe_type(int type_id, ScopeTable scopes, TypeTable types):
+String describe_type(int type_id, ScopeTable scopes, TypeTable types):
     ResolvedType rt = types.get(type_id)
     match rt:
         case RTPrimitive(name):
@@ -33,7 +33,7 @@ str describe_type(int type_id, ScopeTable scopes, TypeTable types):
             result = result + "]"
             return result
         case RTTuple(elems):
-            str result = "("
+            String result = "("
             int i = 0
             while i < elems.len():
                 if i > 0:
@@ -48,7 +48,7 @@ str describe_type(int type_id, ScopeTable scopes, TypeTable types):
         case RTSlice(elem_id):
             return "[" + describe_type(elem_id, scopes, types) + "]"
         case RTFunction(params, ownerships, ret_id):
-            str ret_str = describe_type(ret_id, scopes, types)
+            String ret_str = describe_type(ret_id, scopes, types)
             String result = ret_str + "("
             int i = 0
             while i < params.len():
@@ -81,13 +81,13 @@ str describe_type(int type_id, ScopeTable scopes, TypeTable types):
 
 # ── Format TYPE lines for all defs with assigned types ─────
 
-str format_types(ScopeTable scopes, TypeTable types):
-    Vector[str] lines = Vector[str]()
+String format_types(ScopeTable scopes, TypeTable types):
+    Vector[String] lines = Vector[String]()
     int i = 0
     while i < scopes.def_count():
         DefInfo d = scopes.get_def(i)
         if d.type_id >= 0:
-            str type_str = describe_type(d.type_id, scopes, types)
+            String type_str = describe_type(d.type_id, scopes, types)
             String line = "TYPE " + int_to_str(i) + " " + quote(d.name) + " = " + type_str
             lines.push(line)
         i = i + 1
@@ -95,14 +95,14 @@ str format_types(ScopeTable scopes, TypeTable types):
 
 # ── Helpers ─────────────────────────────────────────────────
 
-str quote(str s):
-    str dq = "\""
+String quote(String s):
+    String dq = "\""
     return dq + s + dq
 
-str join_lines(Vector[str] lines):
+String join_lines(Vector[String] lines):
     if lines.len() == 0:
         return ""
-    str result = lines.get(0).unwrap()
+    String result = lines.get(0).unwrap()
     int i = 1
     while i < lines.len():
         result = result + "\n" + lines.get(i).unwrap()

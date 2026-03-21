@@ -14,7 +14,7 @@ from std.collections import Vector, Dict
 
 # Evaluate a meta const expression to an int value.
 # Returns (value, ok).
-int eval_int(Expr e, Dict[str, int] &int_env):
+int eval_int(Expr e, Dict[String, int] &int_env):
     match e:
         case EIntLiteral(n):
             return n
@@ -49,7 +49,7 @@ int eval_int(Expr e, Dict[str, int] &int_env):
             return 0
 
 # Evaluate a meta const expression to a bool value.
-bool eval_bool(Expr e, Dict[str, bool] &bool_env):
+bool eval_bool(Expr e, Dict[String, bool] &bool_env):
     match e:
         case EBoolLiteral(b):
             return b
@@ -65,7 +65,7 @@ bool eval_bool(Expr e, Dict[str, bool] &bool_env):
 # Extract the canonical type name string from a SpannedType.
 # For primitives, returns the primitive name. For named types without
 # generic args, returns the type name. Returns "" on failure.
-str meta_type_to_name(Type ty):
+String meta_type_to_name(Type ty):
     match ty:
         case TPrimitive(name):
             return name
@@ -80,8 +80,8 @@ str meta_type_to_name(Type ty):
 
 # Evaluate a call to a meta type function like sized_int(8).
 # Returns the resolved type name or "" on failure.
-str eval_type_func_call(str callee, Vector[SpannedExpr] &call_args,
-                        Dict[str, int] &int_env):
+String eval_type_func_call(String callee, Vector[SpannedExpr] &call_args,
+                        Dict[String, int] &int_env):
     # Currently handles well-known type functions
     if callee == "sized_int" and call_args.len() == 1:
         SpannedExpr arg0 = call_args.get(0).unwrap()
@@ -102,21 +102,21 @@ str eval_type_func_call(str callee, Vector[SpannedExpr] &call_args,
 
 void expand_meta_types(Module &m, TypeTable &types):
     # Pass 1: collect meta const values
-    Dict[str, int] int_consts = Dict[str, int]()
-    Dict[str, bool] bool_consts = Dict[str, bool]()
-    Dict[str, str] str_consts = Dict[str, str]()
+    Dict[String, int] int_consts = Dict[String, int]()
+    Dict[String, bool] bool_consts = Dict[String, bool]()
+    Dict[String, String] str_consts = Dict[String, String]()
 
     int i = 0
     while i < m.items.len():
         Item item = m.items.get(i).unwrap()
         match item:
             case IMetaConst(mc_type, mc_name, mc_expr):
-                str type_name = meta_type_to_name(mc_type.ty)
+                String type_name = meta_type_to_name(mc_type.ty)
                 if type_name == "int":
                     int_consts[mc_name] = eval_int(mc_expr.expr, &int_consts)
                 elif type_name == "bool":
                     bool_consts[mc_name] = eval_bool(mc_expr.expr, &bool_consts)
-                elif type_name == "str":
+                elif type_name == "str" or type_name == "String":
                     match mc_expr.expr:
                         case EStringLiteral(s, _):
                             str_consts[mc_name] = s
@@ -137,7 +137,7 @@ void expand_meta_types(Module &m, TypeTable &types):
             case IMetaType(mt_name, mt_rhs):
                 match mt_rhs:
                     case MtrPlain(rhs_type):
-                        str target = meta_type_to_name(rhs_type.ty)
+                        String target = meta_type_to_name(rhs_type.ty)
                         if target != "":
                             types.meta_aliases[mt_name] = target
                     case MtrConditional(then_type, cond_name, else_type):
@@ -145,11 +145,11 @@ void expand_meta_types(Module &m, TypeTable &types):
                         if bool_consts.contains(cond_name):
                             cond_val = bool_consts[cond_name]
                         if cond_val:
-                            str target = meta_type_to_name(then_type.ty)
+                            String target = meta_type_to_name(then_type.ty)
                             if target != "":
                                 types.meta_aliases[mt_name] = target
                         else:
-                            str target = meta_type_to_name(else_type.ty)
+                            String target = meta_type_to_name(else_type.ty)
                             if target != "":
                                 types.meta_aliases[mt_name] = target
                     case MtrCall(callee, call_args):
@@ -172,7 +172,7 @@ void expand_meta_types(Module &m, TypeTable &types):
                                 else:
                                     resolved_args.push(arg)
                             j = j + 1
-                        str result = eval_type_func_call(callee, &resolved_args, &int_consts)
+                        String result = eval_type_func_call(callee, &resolved_args, &int_consts)
                         if result != "":
                             types.meta_aliases[mt_name] = result
                     case MtrUnresolved():

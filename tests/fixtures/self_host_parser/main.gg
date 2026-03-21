@@ -7,9 +7,9 @@ from ast import Module, Item, Stmt, Expr, Type, Pattern, Span, SpannedExpr, Span
 from parser import Parser, parse_source
 from format import format_module
 
-void test_parse(str label, str source):
+void test_parse(String label, String source):
     Module m = parse_source(source)
-    str out = format_module(m)
+    String out = format_module(m)
     print(label)
     print(out)
 

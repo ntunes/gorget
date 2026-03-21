@@ -45,7 +45,7 @@ ElseBranch get_else_at(Vector[ElseBranch] v, int i):
 MatchArm get_arm_at(Vector[MatchArm] v, int i):
     return v.get(i).unwrap()
 
-str get_str_at(Vector[str] v, int i):
+String get_str_at(Vector[String] v, int i):
     return v.get(i).unwrap()
 
 # ── Typed len helpers (codegen workaround for pattern-destructured vectors) ──
@@ -86,18 +86,18 @@ Box[SpannedExpr] unwrap_opt_box_sexpr(Option[Box[SpannedExpr]] opt):
 void res_map_set(ResolveContext &ctx, int key, int val):
     ctx.resolution_map.put(key, val)
 
-void fn_scope_set(ResolveContext &ctx, str name, int scope_id):
+void fn_scope_set(ResolveContext &ctx, String name, int scope_id):
     ctx.function_body_scopes.put(name, scope_id)
 
 # ── Resolve context ─────────────────────────────────────────
 
 struct ResolveContext:
     Dict[int, int] resolution_map
-    Dict[str, int] function_body_scopes
+    Dict[String, int] function_body_scopes
 
 # ── Built-in check ──────────────────────────────────────────
 
-bool is_builtin(str name):
+bool is_builtin(String name):
     if name == "print":
         return true
     if name == "format":
@@ -136,7 +136,7 @@ bool is_builtin(str name):
         return true
     if name == "char":
         return true
-    if name == "str":
+    if name == "str" or name == "String":
         return true
     return false
 
@@ -145,10 +145,10 @@ bool is_builtin(str name):
 # ═══════════════════════════════════════════════════════════
 
 ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &types):
-    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[str, int]())
+    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int]())
 
     # Register built-in core traits
-    Vector[str] trait_names = Vector[str]()
+    Vector[String] trait_names = Vector[String]()
     trait_names.push("Displayable")
     trait_names.push("Equatable")
     trait_names.push("Cloneable")
@@ -175,7 +175,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     trait_names.push("Numeric")
     int ti = 0
     while ti < trait_names.len():
-        str tname = get_str_at(trait_names, ti)
+        String tname = get_str_at(trait_names, ti)
         scopes.define(tname, DkTrait(), Span(0, 0))
         ti = ti + 1
 
@@ -183,7 +183,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     scopes.define("String", DkFunction(), Span(0, 0))
 
     # Register built-in collection types as Import placeholders
-    Vector[str] col_names = Vector[str]()
+    Vector[String] col_names = Vector[String]()
     col_names.push("Vector")
     col_names.push("Dict")
     col_names.push("HashMap")
@@ -200,7 +200,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     col_names.push("TaskGroup")
     int ci = 0
     while ci < col_names.len():
-        str cname = get_str_at(col_names, ci)
+        String cname = get_str_at(col_names, ci)
         scopes.define(cname, DkImport(), Span(0, 0))
         ci = ci + 1
 
@@ -313,7 +313,7 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
 void collect_import(ImportStmt imp, ScopeTable &scopes):
     if imp.names.len() == 0:
         # Simple import (e.g. `import gg.json`) — register last path segment
-        str path = imp.module_path
+        String path = imp.module_path
         int dot_pos = -1
         int pi = 0
         while pi < path.byte_len():
@@ -321,14 +321,14 @@ void collect_import(ImportStmt imp, ScopeTable &scopes):
                 dot_pos = pi
             pi = pi + 1
         if dot_pos >= 0:
-            str last = path.byte_slice(dot_pos + 1, path.byte_len())
+            String last = path.byte_slice(dot_pos + 1, path.byte_len())
             scopes.define(last, DkImport(), Span(0, 0))
         else:
             scopes.define(path, DkImport(), Span(0, 0))
         return
     int i = 0
     while i < imp.names.len():
-        str name = get_str_at(imp.names, i)
+        String name = get_str_at(imp.names, i)
         scopes.define(name, DkImport(), Span(0, 0))
         i = i + 1
 
@@ -377,7 +377,7 @@ void resolve_item_body(Item item, ScopeTable &scopes, TypeTable &types, ResolveC
             while wi < with_exprs.len():
                 SpannedExpr wexpr = with_exprs.get(wi).unwrap()
                 resolve_expr(wexpr, &scopes, &ctx)
-                str wname = with_names.get(wi).unwrap()
+                String wname = with_names.get(wi).unwrap()
                 if wname != "_":
                     scopes.define(wname, DkVariable(), Span(0, 0))
                 wi = wi + 1
@@ -412,7 +412,7 @@ void resolve_function(FunctionDef f, ScopeTable &scopes, TypeTable &types, Resol
     # Define generic type params
     int gi = 0
     while gi < f.type_params.len():
-        str gp = get_str_at(f.type_params, gi)
+        String gp = get_str_at(f.type_params, gi)
         scopes.define(gp, DkGenericParam(), Span(0, 0))
         gi = gi + 1
 
@@ -437,7 +437,7 @@ void resolve_equip_block(EquipBlock eq, ScopeTable &scopes, TypeTable &types, Re
     # Define equip generic params
     int gi = 0
     while gi < eq.type_params.len():
-        str gp = get_str_at(eq.type_params, gi)
+        String gp = get_str_at(eq.type_params, gi)
         scopes.define(gp, DkGenericParam(), Span(0, 0))
         gi = gi + 1
 
@@ -466,11 +466,11 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             int def_id = -1
             # Tuple destructuring: "(a, b, c)" — define each binding individually
             if name.starts_with("(") and name.ends_with(")"):
-                str inner = name.substring(1, name.len() - 1)
-                Vector[str] parts = inner.split(", ")
+                String inner = name.substring(1, name.len() - 1)
+                Vector[String] parts = inner.split(", ")
                 int pi = 0
                 while pi < parts.len():
-                    str part = parts.get(pi).unwrap()
+                    String part = parts.get(pi).unwrap()
                     if part != "_":
                         def_id = scopes.define(part, DkVariable(), Span(0, 0))
                     pi = pi + 1
@@ -872,11 +872,11 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(value, &scopes, &ctx)
             int def_id = -1
             if name.starts_with("(") and name.ends_with(")"):
-                str inner = name.substring(1, name.len() - 1)
-                Vector[str] parts = inner.split(", ")
+                String inner = name.substring(1, name.len() - 1)
+                Vector[String] parts = inner.split(", ")
                 int pi = 0
                 while pi < parts.len():
-                    str part = parts.get(pi).unwrap()
+                    String part = parts.get(pi).unwrap()
                     if part != "_":
                         def_id = scopes.define(part, DkVariable(), Span(0, 0))
                     pi = pi + 1

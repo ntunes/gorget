@@ -39,7 +39,7 @@ int infer_stmt_return_type(Stmt s, ScopeTable scopes, TypeTable &types, ResolveC
 # ── Closure return type inference ──────────────────────────────
 # Infers a closure's return type using param_types map for local bindings.
 
-int infer_closure_expr_type(SpannedExpr sexpr, Dict[str, int] param_types, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
+int infer_closure_expr_type(SpannedExpr sexpr, Dict[String, int] param_types, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
     match sexpr.expr:
         case EIdentifier(name):
             # Check param_types first
@@ -71,7 +71,7 @@ int infer_closure_expr_type(SpannedExpr sexpr, Dict[str, int] param_types, Scope
             return infer_expr_type(sexpr, scopes, &types, ctx)
     return types.void_id
 
-int infer_closure_return_type(Stmt s, Dict[str, int] param_types, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
+int infer_closure_return_type(Stmt s, Dict[String, int] param_types, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
     match s:
         case SExpr(sexpr):
             return infer_closure_expr_type(sexpr, param_types, scopes, &types, ctx)
@@ -342,15 +342,15 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                 if args.len() >= 1:
                     SpannedExpr init_arg = args.get(0).unwrap()
                     return infer_expr_type(init_arg, scopes, &types, ctx)
-            # .parse(str) on primitive type → Option[T] or Result[T, str]
-            # e.g. int.parse("99") → Option[int], float.parse("1.5") → Result[float, str]
+            # .parse(String) on primitive type → Option[T] or Result[T, String]
+            # e.g. int.parse("99") → Option[int], float.parse("1.5") → Result[float, String]
             if method_name == "parse":
                 match (*obj).expr:
                     case EIdentifier(tname):
                         bool is_prim = tname == "int" or tname == "float" or tname == "bool" or tname == "int8" or tname == "int16" or tname == "int32" or tname == "int64" or tname == "uint8" or tname == "uint16" or tname == "uint32" or tname == "uint64"
                         if is_prim:
                             int prim_id = types.primitive_id(tname)
-                            # int.parse → Result[int, str], float.parse → Result[float, str]
+                            # int.parse → Result[int, String], float.parse → Result[float, String]
                             # but for int/float the stdlib uses Option[T]
                             int option_def = scopes.lookup("Option")
                             if option_def >= 0:
@@ -395,7 +395,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         return elem_id
                     else:
                         pass
-                # str indexing → str
+                # String indexing → String
                 match ort:
                     case RTPrimitive(name):
                         if name == "str" or name == "String":
@@ -445,7 +445,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             Vector[int] param_type_ids = Vector[int]()
             Vector[int] param_ownerships = Vector[int]()
             # Build param name → type map for local inference
-            Dict[str, int] param_types = Dict[str, int]()
+            Dict[String, int] param_types = Dict[String, int]()
             int pi = 0
             while pi < params.len():
                 Param p = params.get(pi).unwrap()

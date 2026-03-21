@@ -9,8 +9,8 @@ from std.os import args
 from std.collections import Vector
 
 void main():
-    Vector[str] cmd_args = args()
-    str path = cmd_args.get(1).unwrap()
+    Vector[String] cmd_args = args()
+    String path = cmd_args.get(1).unwrap()
     String source = read_file(path)
     Vector[SpannedToken] tokens = lex_tokenize(source)
     int i = 0

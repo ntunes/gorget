@@ -3,7 +3,7 @@ from std.collections import Vector
 from std.conv import int_to_str, float_to_str
 
 # Helper to describe a token for test output
-str describe_token(Token t):
+String describe_token(Token t):
     match t:
         case TkKeyword(kw):
             return describe_keyword(kw)
@@ -139,7 +139,7 @@ str describe_token(Token t):
             return "error:" + msg
     return "?"
 
-str describe_keyword(Keyword kw):
+String describe_keyword(Keyword kw):
     match kw:
         case KwInt():
             return "kw:int"
@@ -212,8 +212,8 @@ str describe_keyword(Keyword kw):
         else:
             return "kw:other"
 
-str describe_string(StringLiteral slit):
-    str result = "str:"
+String describe_string(StringLiteral slit):
+    String result = "str:"
     int i = 0
     while i < slit.lex_segments.len():
         StringSegment seg = slit.lex_segments.get(i).unwrap()
@@ -225,8 +225,8 @@ str describe_string(StringLiteral slit):
         i = i + 1
     return result
 
-str tokens_to_str(Vector[SpannedToken] tokens):
-    str result = ""
+String tokens_to_str(Vector[SpannedToken] tokens):
+    String result = ""
     int i = 0
     while i < tokens.len():
         SpannedToken st = tokens.get(i).unwrap()
@@ -238,51 +238,51 @@ str tokens_to_str(Vector[SpannedToken] tokens):
 
 void main():
     # Test 1: Simple variable declaration
-    str src1 = "int x = 42\n"
+    String src1 = "int x = 42\n"
     auto toks1 = lex_tokenize(src1)
     print(tokens_to_str(toks1))
 
     # Test 2: Function definition with indentation
-    str src2 = "int add(int a, int b):\n    return a + b\n"
+    String src2 = "int add(int a, int b):\n    return a + b\n"
     auto toks2 = lex_tokenize(src2)
     print(tokens_to_str(toks2))
 
     # Test 3: Operators
-    str src3 = "x == y != z <= w >= v\n"
+    String src3 = "x == y != z <= w >= v\n"
     auto toks3 = lex_tokenize(src3)
     print(tokens_to_str(toks3))
 
     # Test 4: Hex, octal, binary literals
-    str src4 = "0xFF 0o77 0b1010 3.14\n"
+    String src4 = "0xFF 0o77 0b1010 3.14\n"
     auto toks4 = lex_tokenize(src4)
     print(tokens_to_str(toks4))
 
     # Test 5: String with interpolation
-    str src5 = f"print(\"hello \{name\}\")\n"
+    String src5 = f"print(\"hello \{name\}\")\n"
     auto toks5 = lex_tokenize(src5)
     print(tokens_to_str(toks5))
 
     # Test 6: Char literal
-    str src6 = "char c = 'a'\n"
+    String src6 = "char c = 'a'\n"
     auto toks6 = lex_tokenize(src6)
     print(tokens_to_str(toks6))
 
     # Test 7: Comment handling
-    str src7 = "# this is a comment\nx = 1\n"
+    String src7 = "# this is a comment\nx = 1\n"
     auto toks7 = lex_tokenize(src7)
     print(tokens_to_str(toks7))
 
     # Test 8: Bracket depth suppresses newlines
-    str src8 = "f(a,\n  b)\n"
+    String src8 = "f(a,\n  b)\n"
     auto toks8 = lex_tokenize(src8)
     print(tokens_to_str(toks8))
 
     # Test 9: Multi-char operators
-    str src9 = "a += 1\nb -= 2\nc ..= d\n"
+    String src9 = "a += 1\nb -= 2\nc ..= d\n"
     auto toks9 = lex_tokenize(src9)
     print(tokens_to_str(toks9))
 
     # Test 10: Keywords
-    str src10 = "if true and not false:\n    return None\n"
+    String src10 = "if true and not false:\n    return None\n"
     auto toks10 = lex_tokenize(src10)
     print(tokens_to_str(toks10))

@@ -9,7 +9,7 @@ from scope import ScopeTable, DefKind, NO_DEF
 # ── Resolved type variants ──────────────────────────────────
 
 enum ResolvedType:
-    RTPrimitive(str)
+    RTPrimitive(String)
     RTDefined(int)
     RTGeneric(int, Vector[int])
     RTTuple(Vector[int])
@@ -20,7 +20,7 @@ enum ResolvedType:
     RTCallableTrait(int)
     RTMutCallableTrait(int)
     RTConsumeCallableTrait(int)
-    RTBoxedCallable(str, int)
+    RTBoxedCallable(String, int)
     RTVar(int)
     RTError
     RTVoid
@@ -52,10 +52,10 @@ struct TypeTable:
     int error_id
     int never_id
     int self_type_id
-    Dict[str, int] variant_field_types
+    Dict[String, int] variant_field_types
     int last_equip_scope
     int equip_def_index
-    Dict[str, str] meta_aliases
+    Dict[String, String] meta_aliases
     int next_type_var
 
 equip TypeTable:
@@ -73,7 +73,7 @@ equip TypeTable:
         types.push(RTPrimitive("float"))
         # 4: char
         types.push(RTPrimitive("char"))
-        # 5: str
+        # 5: String
         types.push(RTPrimitive("str"))
         # 6: String (owned)
         types.push(RTPrimitive("String"))
@@ -81,7 +81,7 @@ equip TypeTable:
         types.push(RTError())
         # 8: never
         types.push(RTNever())
-        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[str, int](), 0, 0, Dict[str, str](), 1)
+        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1)
 
     int add_type(&self, ResolvedType ty):
         int id = self.types.len()
@@ -106,7 +106,7 @@ equip TypeTable:
     ResolvedType get(self, int id):
         return get_rtype_at(self.types, id)
 
-    int primitive_id(&self, str prim_name):
+    int primitive_id(&self, String prim_name):
         if prim_name == "bool":
             return self.bool_id
         if prim_name == "int":
@@ -228,7 +228,7 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                 return types.error_id
             # Check meta type aliases before giving up
             if types.meta_aliases.contains(name):
-                str alias_target = types.meta_aliases[name]
+                String alias_target = types.meta_aliases[name]
                 # Check if target is a primitive type
                 if alias_target == "int" or alias_target == "float" or alias_target == "bool" or alias_target == "str" or alias_target == "char" or alias_target == "String" or alias_target == "int8" or alias_target == "int16" or alias_target == "int32" or alias_target == "int64" or alias_target == "uint8" or alias_target == "uint16" or alias_target == "uint32" or alias_target == "uint64" or alias_target == "float32" or alias_target == "float64" or alias_target == "cstr":
                     if generic_args.len() == 0:

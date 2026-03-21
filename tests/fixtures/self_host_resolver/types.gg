@@ -9,7 +9,7 @@ from scope import ScopeTable, DefKind, NO_DEF
 # ── Resolved type variants ──────────────────────────────────
 
 enum ResolvedType:
-    RTPrimitive(str)
+    RTPrimitive(String)
     RTDefined(int)
     RTGeneric(int, Vector[int])
     RTTuple(Vector[int])
@@ -66,7 +66,7 @@ equip TypeTable:
         types.push(RTPrimitive("float"))
         # 4: char
         types.push(RTPrimitive("char"))
-        # 5: str
+        # 5: String
         types.push(RTPrimitive("str"))
         # 6: String (owned)
         types.push(RTPrimitive("String"))
@@ -94,7 +94,7 @@ equip TypeTable:
     ResolvedType get(self, int id):
         return get_rtype_at(self.types, id)
 
-    int primitive_id(&self, str prim_name):
+    int primitive_id(&self, String prim_name):
         if prim_name == "bool":
             return self.bool_id
         if prim_name == "int":

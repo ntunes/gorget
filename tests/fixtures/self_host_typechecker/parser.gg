@@ -523,7 +523,7 @@ int keyword_tag(Token tok):
 Stmt decompose_with_stmt(SpannedExpr move full_expr, Vector[Stmt] move body):
     match full_expr.expr:
         case EAs(inner_expr, cast_ty):
-            str name = ""
+            String name = ""
             match (*cast_ty).ty:
                 case TNamed(type_name, _):
                     name = type_name
@@ -537,7 +537,7 @@ Stmt decompose_with_stmt(SpannedExpr move full_expr, Vector[Stmt] move body):
 
 # ── Helper: extract identifier name ─────────────────────────
 
-str token_ident(Token tok):
+String token_ident(Token tok):
     match tok:
         case TkIdentifier(name):
             return name
@@ -558,10 +558,10 @@ float token_float_val(Token tok):
         else:
             return 0.0
 
-str token_string_val(Token tok):
+String token_string_val(Token tok):
     match tok:
         case TkString(slit):
-            str result = ""
+            String result = ""
             int i = 0
             while i < slit.lex_segments.len():
                 StringSegment seg = slit.lex_segments.get(i).unwrap()
@@ -569,8 +569,8 @@ str token_string_val(Token tok):
                     case SegLiteral(s):
                         result = result + s
                     case SegInterpolation(s):
-                        str open_b = r"{"
-                        str close_b = r"}"
+                        String open_b = r"{"
+                        String close_b = r"}"
                         result = result + open_b + s + close_b
                 i = i + 1
             return result
@@ -593,7 +593,7 @@ bool token_has_interpolation(Token tok):
         else:
             return false
 
-str token_char_val(Token tok):
+String token_char_val(Token tok):
     match tok:
         else:
             return ""
@@ -606,7 +606,7 @@ SpannedType stype_vec_get(Vector[SpannedType] v, int i):
 int stype_vec_len(Vector[SpannedType] v):
     return v.len()
 
-str type_to_name(SpannedType st):
+String type_to_name(SpannedType st):
     match st.ty:
         case TPrimitive(name):
             return "" + name
@@ -723,7 +723,7 @@ bool is_type_keyword(int kw):
         return true
     return false
 
-str type_keyword_name(int kw):
+String type_keyword_name(int kw):
     if kw == KW_INT:
         return "int"
     elif kw == KW_INT8:
@@ -766,7 +766,7 @@ str type_keyword_name(int kw):
         return "Self"
     return ""
 
-str non_type_keyword_name(int kw):
+String non_type_keyword_name(int kw):
     if kw == KW_OR:
         return "or"
     elif kw == KW_AND:
@@ -831,7 +831,7 @@ str non_type_keyword_name(int kw):
 
 # ── Operator helpers ─────────────────────────────────────────
 
-str op_str(int tag):
+String op_str(int tag):
     if tag == TOK_PLUS:
         return "+"
     elif tag == TOK_MINUS:
@@ -870,7 +870,7 @@ str op_str(int tag):
         return "??"
     return ""
 
-str compound_op_str(int tag):
+String compound_op_str(int tag):
     if tag == TOK_PLUSEQ:
         return "+="
     elif tag == TOK_MINUSEQ:
@@ -1010,7 +1010,7 @@ int infix_right_bp(int tag):
 
 # ── Expression helpers ───────────────────────────────────────
 
-str expr_ident_name(Expr e):
+String expr_ident_name(Expr e):
     match e:
         case EIdentifier(id_name):
             String result = "" + id_name
@@ -1023,7 +1023,7 @@ str expr_ident_name(Expr e):
 struct Parser:
     Vector[SpannedToken] tokens
     int pos
-    Vector[str] errors
+    Vector[String] errors
     int call_arg_depth
 
 # ── Parser methods ───────────────────────────────────────────
@@ -1061,7 +1061,7 @@ equip Parser:
     int peek_kw(self):
         return keyword_tag(self.peek().lex_token)
 
-    str peek_ident(self):
+    String peek_ident(self):
         return token_ident(self.peek().lex_token)
 
     bool check_tok(self, int tag):
@@ -1082,17 +1082,17 @@ equip Parser:
             return true
         return false
 
-    void expect_tok(&self, int tag, str msg):
+    void expect_tok(&self, int tag, String msg):
         if not self.match_tok(tag):
             self.errors.push(msg)
 
-    void expect_kw(&self, int kw, str msg):
+    void expect_kw(&self, int kw, String msg):
         if not self.match_kw(kw):
             self.errors.push(msg)
 
     # Extract a name from a token that may be an identifier or a keyword used as a name
-    str extract_name(&self, SpannedToken tok):
-        str name = token_ident(tok.lex_token)
+    String extract_name(&self, SpannedToken tok):
+        String name = token_ident(tok.lex_token)
         if name != "":
             return name
         int kt = keyword_tag(tok.lex_token)
@@ -1198,7 +1198,7 @@ equip Parser:
         # Primitive type keywords
         int kw = self.peek_kw()
         if is_type_keyword(kw):
-            str name = type_keyword_name(kw)
+            String name = type_keyword_name(kw)
             self.advance()
             if kw == KW_SELF_UPPER:
                 return self.mk_type(TSelf(), start)
@@ -1218,7 +1218,7 @@ equip Parser:
         # Box[T], Rc[T], Arc[T], Mutex[T], RwLock[T], Weak[T], Cell[T], RefCell[T]
         if self.check_kw(KW_BOX) or self.check_kw(KW_RC) or self.check_kw(KW_ARC) or self.check_kw(KW_WEAK) or self.check_kw(KW_CELL) or self.check_kw(KW_REFCELL) or self.check_kw(KW_MUTEX) or self.check_kw(KW_RWLOCK):
             SpannedToken kw_tok = self.advance()
-            str wrapper_name = token_ident(kw_tok.lex_token)
+            String wrapper_name = token_ident(kw_tok.lex_token)
             if wrapper_name == "":
                 # It's a keyword, reconstruct the name
                 int kt = keyword_tag(kw_tok.lex_token)
@@ -1271,7 +1271,7 @@ equip Parser:
         # Named type (identifier possibly with generic args)
         if self.check_tok(TOK_IDENT):
             SpannedToken name_tok = self.advance()
-            str name = token_ident(name_tok.lex_token)
+            String name = token_ident(name_tok.lex_token)
             if self.check_tok(TOK_LBRACKET):
                 Vector[SpannedType] args = self.parse_type_args()
                 SpannedType named_ty = self.mk_type(TNamed(name, args), start)
@@ -1327,8 +1327,8 @@ equip Parser:
         self.expect_tok(TOK_RBRACKET, "expected ']' after type args")
         return args
 
-    Vector[str] parse_type_params(&self):
-        Vector[str] params = Vector[str]()
+    Vector[String] parse_type_params(&self):
+        Vector[String] params = Vector[String]()
         if self.check_tok(TOK_LBRACKET):
             self.advance()
             while self.check_tok(TOK_IDENT) or self.check_kw(KW_LIVE) or self.check_kw(KW_CONST):
@@ -1399,7 +1399,7 @@ equip Parser:
 
         if self.check_tok(TOK_STRING):
             SpannedToken t = self.advance()
-            str val = token_string_val(t.lex_token)
+            String val = token_string_val(t.lex_token)
             SpannedExpr lit = SpannedExpr(EStringLiteral(val, token_has_interpolation(t.lex_token)), Span(t.lex_start, t.lex_end))
             return self.mk_pat(PLiteral(lit), start)
 
@@ -1442,7 +1442,7 @@ equip Parser:
         if self.check_tok(TOK_DOT):
             self.advance()
             SpannedToken vname_tok = self.advance()
-            str vname = token_ident(vname_tok.lex_token)
+            String vname = token_ident(vname_tok.lex_token)
             if self.check_tok(TOK_LPAREN):
                 self.advance()
                 Vector[SpannedPattern] args = Vector[SpannedPattern]()
@@ -1459,7 +1459,7 @@ equip Parser:
         # But we can also have Some(x), None, Ok(x), Error(x), etc.
         if self.check_tok(TOK_IDENT):
             SpannedToken name_tok = self.advance()
-            str name = token_ident(name_tok.lex_token)
+            String name = token_ident(name_tok.lex_token)
             # Qualified name: Name.Variant(args)
             if self.check_tok(TOK_DOT):
                 self.advance()
@@ -1489,7 +1489,7 @@ equip Parser:
         # Keywords that can be constructors: Some, Ok, Error, None
         if self.check_kw(KW_SOME) or self.check_kw(KW_OK) or self.check_kw(KW_ERROR):
             SpannedToken kw_tok = self.advance()
-            str name = ""
+            String name = ""
             int kt = keyword_tag(kw_tok.lex_token)
             if kt == KW_SOME:
                 name = "Some"
@@ -1540,7 +1540,7 @@ equip Parser:
             if ptag == TOK_LBRACKET:
                 int bp_start = lhs.span.start
                 # If lhs is an identifier, try to parse as generic type args + call
-                str ident_name = expr_ident_name(lhs.expr)
+                String ident_name = expr_ident_name(lhs.expr)
                 if ident_name != "":
                     int saved = self.pos
                     Vector[SpannedType] targs = self.parse_type_args()
@@ -1639,7 +1639,7 @@ equip Parser:
                 if 1 < min_bp:
                     break
                 self.advance()
-                Option[str] err_name = None[str]()
+                Option[String] err_name = None[String]()
                 Option[Box[SpannedType]] err_type = None[Box[SpannedType]]()
                 if self.check_tok(TOK_LPAREN):
                     self.advance()
@@ -1660,7 +1660,7 @@ equip Parser:
                 self.advance()
                 self.expect_tok(TOK_LPAREN, "expected '(' after catch")
                 SpannedToken cn_tok = self.advance()
-                str catch_name = token_ident(cn_tok.lex_token)
+                String catch_name = token_ident(cn_tok.lex_token)
                 self.expect_tok(TOK_RPAREN, "expected ')' in catch")
                 self.expect_tok(TOK_COLON, "expected ':' after catch binding")
                 SpannedExpr catch_val = self.parse_expr_bp(2)
@@ -1702,7 +1702,7 @@ equip Parser:
             if l_bp < min_bp:
                 break
             int r_bp = infix_right_bp(ptag)
-            str op = op_str(ptag)
+            String op = op_str(ptag)
             self.advance()
             SpannedExpr rhs = self.parse_expr_bp(r_bp)
             if ptag == TOK_DOTDOT:
@@ -1715,10 +1715,10 @@ equip Parser:
     SpannedExpr parse_dot_expr(&self, SpannedExpr lhs):
         int start = lhs.span.start
         self.advance()
-        # Handle identifier or keyword-as-method-name (e.g. .str(), .or(), .len())
+        # Handle identifier or keyword-as-method-name (e.g. .String(), .or(), .len())
         if self.check_tok(TOK_IDENT) or self.peek_kw() > 0:
             SpannedToken name_tok = self.advance()
-            str name = token_ident(name_tok.lex_token)
+            String name = token_ident(name_tok.lex_token)
             if name == "":
                 # Keyword token — extract name from keyword tag
                 int kw = keyword_tag(name_tok.lex_token)
@@ -1736,7 +1736,7 @@ equip Parser:
         # Numeric field access for tuples: t.0, t.1
         if self.check_tok(TOK_INT):
             SpannedToken num_tok = self.advance()
-            str field_name = "_"
+            String field_name = "_"
             int val = token_int_val(num_tok.lex_token)
             if val == 0:
                 field_name = "0"
@@ -1873,11 +1873,11 @@ equip Parser:
         if is_typed:
             SpannedType pt = self.parse_type()
             SpannedToken pn = self.advance()
-            str pname = token_ident(pn.lex_token)
+            String pname = token_ident(pn.lex_token)
             return Param(pt, pname, OWN_BORROW)
         # Untyped param — just an identifier, use auto as type
         SpannedToken pn = self.advance()
-        str pname = token_ident(pn.lex_token)
+        String pname = token_ident(pn.lex_token)
         SpannedType auto_type = SpannedType(TInferred(), Span(pn.lex_start, pn.lex_end))
         return Param(auto_type, pname, OWN_BORROW)
 
@@ -1951,7 +1951,7 @@ equip Parser:
         # Type keyword as expression (e.g., int.parse(), SparseSet[int])
         int prefix_kw = self.peek_kw()
         if is_type_keyword(prefix_kw) and prefix_kw != KW_AUTO and prefix_kw != KW_SELF_UPPER and prefix_kw != KW_VOID:
-            str tname = type_keyword_name(prefix_kw)
+            String tname = type_keyword_name(prefix_kw)
             SpannedToken t = self.advance()
             return SpannedExpr(EIdentifier(tname), Span(t.lex_start, t.lex_end))
 
@@ -2032,7 +2032,7 @@ equip Parser:
         if ptag == TOK_DOT:
             self.advance()
             SpannedToken vname_tok = self.advance()
-            str vname = token_ident(vname_tok.lex_token)
+            String vname = token_ident(vname_tok.lex_token)
             Vector[SpannedExpr] ds_args = Vector[SpannedExpr]()
             if self.check_tok(TOK_LPAREN):
                 ds_args = self.parse_call_args()
@@ -2090,7 +2090,7 @@ equip Parser:
                     SpannedExpr comp_expr = elems.get(0).unwrap()
                     self.advance()
                     SpannedToken var_tok = self.advance()
-                    str var_name = token_ident(var_tok.lex_token)
+                    String var_name = token_ident(var_tok.lex_token)
                     self.expect_kw(KW_IN, "expected 'in' in comprehension")
                     SpannedExpr iterable = self.parse_expr()
                     # Skip optional 'if cond' (condition stored as None for now)
@@ -2118,7 +2118,7 @@ equip Parser:
                 if self.check_kw(KW_FOR):
                     self.advance()
                     SpannedToken var_tok = self.advance()
-                    str var_name = token_ident(var_tok.lex_token)
+                    String var_name = token_ident(var_tok.lex_token)
                     self.expect_kw(KW_IN, "expected 'in' in set comprehension")
                     SpannedExpr iterable = self.parse_expr()
                     SpannedExpr cond = SpannedExpr(EIntLiteral(0), Span(0, 0))
@@ -2133,7 +2133,7 @@ equip Parser:
                 if self.check_kw(KW_FOR):
                     self.advance()
                     SpannedToken dvar_tok = self.advance()
-                    str dvar_name = token_ident(dvar_tok.lex_token)
+                    String dvar_name = token_ident(dvar_tok.lex_token)
                     self.expect_kw(KW_IN, "expected 'in' in dict comprehension")
                     SpannedExpr diterable = self.parse_expr()
                     # Skip optional 'if cond'
@@ -2173,7 +2173,7 @@ equip Parser:
         # Some(expr), Ok(expr), Error(expr), Box(expr), String(...), Option(...) — keyword constructors
         if self.check_kw(KW_SOME) or self.check_kw(KW_OK) or self.check_kw(KW_ERROR) or self.check_kw(KW_BOX) or self.check_kw(KW_RC) or self.check_kw(KW_ARC) or self.check_kw(KW_STRING_TYPE) or self.check_kw(KW_OPTION) or self.check_kw(KW_WEAK) or self.check_kw(KW_CELL) or self.check_kw(KW_REFCELL) or self.check_kw(KW_MUTEX) or self.check_kw(KW_RWLOCK):
             SpannedToken kw_tok = self.advance()
-            str ctor_name = ""
+            String ctor_name = ""
             int kt = keyword_tag(kw_tok.lex_token)
             if kt == KW_SOME:
                 ctor_name = "Some"
@@ -2218,7 +2218,7 @@ equip Parser:
         # Identifier (variable, function name, type constructor)
         if ptag == TOK_IDENT:
             SpannedToken name_tok = self.advance()
-            str name = token_ident(name_tok.lex_token)
+            String name = token_ident(name_tok.lex_token)
             return SpannedExpr(EIdentifier(name), Span(name_tok.lex_start, name_tok.lex_end))
 
         # Fallback
@@ -2359,26 +2359,26 @@ equip Parser:
                 self.advance()
                 SpannedExpr ret_ident = SpannedExpr(EIdentifier("__return__"), Span(ret_start, ret_start + 6))
                 SpannedExpr cond = self.parse_expr_with_lhs(ret_ident)
-                Option[str] msg = None
+                Option[String] msg = None
                 if self.match_tok(TOK_COMMA):
                     if self.check_tok(TOK_STRING):
                         SpannedToken mt = self.advance()
-                        Option[str] some_msg = Some(token_string_val(mt.lex_token))
+                        Option[String] some_msg = Some(token_string_val(mt.lex_token))
                         msg = !some_msg
                 return SAssertReturn(cond, msg)
             SpannedExpr cond = self.parse_expr()
-            Option[str] msg = None
+            Option[String] msg = None
             if self.match_tok(TOK_COMMA):
                 if self.check_tok(TOK_STRING):
                     SpannedToken mt = self.advance()
-                    Option[str] some_msg = Some(token_string_val(mt.lex_token))
+                    Option[String] some_msg = Some(token_string_val(mt.lex_token))
                     msg = !some_msg
             return SAssert(cond, msg)
 
         # snapshot "name" expr
         if self.check_kw(KW_SNAPSHOT):
             self.advance()
-            str snap_name = ""
+            String snap_name = ""
             int snap_name_span = 0
             if self.check_tok(TOK_STRING):
                 SpannedToken snap_name_tok = self.advance()
@@ -2441,9 +2441,9 @@ equip Parser:
 
         # Items: struct, enum, trait, equip, import, from, directive, const, type, newtype, extern, test
         if self.check_kw(KW_STRUCT):
-            return SItem(self.parse_struct_item(Vector[str]()))
+            return SItem(self.parse_struct_item(Vector[String]()))
         if self.check_kw(KW_ENUM):
-            return SItem(self.parse_enum_item(Vector[str]()))
+            return SItem(self.parse_enum_item(Vector[String]()))
         if self.check_kw(KW_TRAIT):
             return SItem(self.parse_trait_item())
         if self.check_kw(KW_EQUIP):
@@ -2570,7 +2570,7 @@ equip Parser:
             self.pos = ns_saved
             if is_named_scope:
                 SpannedToken label_tok = self.advance()
-                str label_name = token_ident(label_tok.lex_token)
+                String label_name = token_ident(label_tok.lex_token)
                 self.expect_tok(TOK_COLON, "expected ':'")
                 Vector[Stmt] ns_body = self.parse_block()
                 return SNamedScope(label_name, ns_body)
@@ -2604,7 +2604,7 @@ equip Parser:
         # Check for compound assignment: expr += expr, etc.
         int op_tag = self.peek_tag()
         if is_compound_assign(op_tag):
-            str cop = compound_op_str(op_tag)
+            String cop = compound_op_str(op_tag)
             self.advance()
             SpannedExpr rhs = self.parse_expr()
             return SCompoundAssign(expr, cop, rhs)
@@ -2794,7 +2794,7 @@ equip Parser:
         # A function looks like: Type name(...):  or  Type name(...) = expr
         if not self.skip_type_lookahead():
             return false
-        # Bare tuple return type: `int, str name(...)` — skip comma-separated types
+        # Bare tuple return type: `int, String name(...)` — skip comma-separated types
         while self.check_tok(TOK_COMMA):
             self.advance()
             if not self.skip_type_lookahead():
@@ -2818,7 +2818,7 @@ equip Parser:
             own = OWN_MUTABLE
             self.advance()
         SpannedType ty = self.parse_type()
-        str name = ""
+        String name = ""
         if self.check_tok(TOK_LPAREN):
             # Tuple pattern: Type (a, b, ...) = expr
             self.advance()
@@ -2855,7 +2855,7 @@ equip Parser:
             self.advance()
         SpannedType ty = self.parse_type()
         SpannedToken name_tok = self.advance()
-        str name = token_ident(name_tok.lex_token)
+        String name = token_ident(name_tok.lex_token)
         int name_span = name_tok.lex_start
         self.expect_tok(TOK_EQ, "expected '=' in variable declaration")
         SpannedExpr init = self.parse_expr()
@@ -2869,7 +2869,7 @@ equip Parser:
             self.pos = saved
             SpannedType ty = self.parse_type()
             SpannedToken name_tok = self.advance()
-            str name = token_ident(name_tok.lex_token)
+            String name = token_ident(name_tok.lex_token)
             int name_span = name_tok.lex_start
             self.expect_tok(TOK_EQ, "expected '=' in select recv")
             SpannedExpr recv_expr = self.parse_expr()
@@ -2898,7 +2898,7 @@ equip Parser:
         if self.check_tok(TOK_LPAREN):
             self.advance()
             SpannedToken override_tok = self.advance()
-            str override_name = token_ident(override_tok.lex_token)
+            String override_name = token_ident(override_tok.lex_token)
             if override_name == "rwlock":
                 shared_kind = 2
             elif override_name == "atomic":
@@ -2906,7 +2906,7 @@ equip Parser:
             self.expect_tok(TOK_RPAREN, "expected ')' after shared override")
         SpannedType ty = self.parse_type()
         SpannedToken name_tok = self.advance()
-        str name = token_ident(name_tok.lex_token)
+        String name = token_ident(name_tok.lex_token)
         self.expect_tok(TOK_EQ, "expected '=' in shared variable declaration")
         SpannedExpr init = self.parse_expr()
         return SVarDecl(ty, name, init, OWN_BORROW, shared_kind, name_tok.lex_start)
@@ -2919,7 +2919,7 @@ equip Parser:
 
     FunctionDef parse_function_def(&self):
         SpannedType ret_ty = self.parse_type()
-        # Bare tuple return type: `int, str f()` → `(int, str) f()`
+        # Bare tuple return type: `int, String f()` → `(int, String) f()`
         if self.check_tok(TOK_COMMA):
             Vector[SpannedType] tuple_types = Vector[SpannedType]()
             tuple_types.push(ret_ty)
@@ -2927,14 +2927,14 @@ equip Parser:
                 tuple_types.push(self.parse_type())
             ret_ty = SpannedType(TTuple(tuple_types), Span(0, 0))
         SpannedToken name_tok = self.advance()
-        str name = token_ident(name_tok.lex_token)
+        String name = token_ident(name_tok.lex_token)
         if name == "":
             # Function name is a keyword (e.g., 'from' in trait impl)
             int fn_kw = keyword_tag(name_tok.lex_token)
             name = non_type_keyword_name(fn_kw)
             if name == "":
                 name = type_keyword_name(fn_kw)
-        Vector[str] type_params = Vector[str]()
+        Vector[String] type_params = Vector[String]()
         if self.check_tok(TOK_LBRACKET):
             type_params = self.parse_type_params()
         self.expect_tok(TOK_LPAREN, "expected '(' in function def")
@@ -3036,18 +3036,18 @@ equip Parser:
             own = OWN_MUTABLE
             self.advance()
         SpannedToken name_tok = self.advance()
-        str pname = token_ident(name_tok.lex_token)
+        String pname = token_ident(name_tok.lex_token)
         # Skip optional default value: = expr
         if self.check_tok(TOK_EQ):
             self.advance()
             self.parse_expr()
         return Param(ty, pname, own)
 
-    Item parse_struct_item(&self, Vector[str] derives):
+    Item parse_struct_item(&self, Vector[String] derives):
         self.expect_kw(KW_STRUCT, "expected 'struct'")
         SpannedToken name_tok = self.advance()
-        str name = token_ident(name_tok.lex_token)
-        Vector[str] type_params = Vector[str]()
+        String name = token_ident(name_tok.lex_token)
+        Vector[String] type_params = Vector[String]()
         if self.check_tok(TOK_LBRACKET):
             type_params = self.parse_type_params()
         self.expect_tok(TOK_COLON, "expected ':' after struct name")
@@ -3060,7 +3060,7 @@ equip Parser:
                 break
             SpannedType ftype = self.parse_type()
             SpannedToken fname_tok = self.advance()
-            str fname = token_ident(fname_tok.lex_token)
+            String fname = token_ident(fname_tok.lex_token)
             if fname == "":
                 int fname_kw = keyword_tag(fname_tok.lex_token)
                 fname = non_type_keyword_name(fname_kw)
@@ -3071,11 +3071,11 @@ equip Parser:
         self.match_tok(TOK_DEDENT)
         return IStruct(StructDef(name, fields, type_params, derives))
 
-    Item parse_enum_item(&self, Vector[str] derives):
+    Item parse_enum_item(&self, Vector[String] derives):
         self.expect_kw(KW_ENUM, "expected 'enum'")
         SpannedToken name_tok = self.advance()
-        str name = token_ident(name_tok.lex_token)
-        Vector[str] type_params = Vector[str]()
+        String name = token_ident(name_tok.lex_token)
+        Vector[String] type_params = Vector[String]()
         if self.check_tok(TOK_LBRACKET):
             type_params = self.parse_type_params()
         self.expect_tok(TOK_COLON, "expected ':' after enum name")
@@ -3087,7 +3087,7 @@ equip Parser:
             if self.check_tok(TOK_DEDENT):
                 break
             SpannedToken vname_tok = self.advance()
-            str vname = token_ident(vname_tok.lex_token)
+            String vname = token_ident(vname_tok.lex_token)
             Vector[SpannedType] vfields = Vector[SpannedType]()
             if self.match_tok(TOK_LPAREN):
                 if not self.check_tok(TOK_RPAREN):
@@ -3103,11 +3103,11 @@ equip Parser:
     Item parse_trait_item(&self):
         self.expect_kw(KW_TRAIT, "expected 'trait'")
         SpannedToken name_tok = self.advance()
-        str name = token_ident(name_tok.lex_token)
-        Vector[str] type_params = Vector[str]()
+        String name = token_ident(name_tok.lex_token)
+        Vector[String] type_params = Vector[String]()
         if self.check_tok(TOK_LBRACKET):
             type_params = self.parse_type_params()
-        Vector[str] extends_list = Vector[str]()
+        Vector[String] extends_list = Vector[String]()
         if self.check_kw(KW_EXTENDS):
             self.advance()
             SpannedToken ext_tok = self.advance()
@@ -3135,17 +3135,17 @@ equip Parser:
     Item parse_equip_item(&self):
         self.expect_kw(KW_EQUIP, "expected 'equip'")
         # Parse optional generic params: equip [T] TypeName[T] with Trait:
-        Vector[str] type_params = Vector[str]()
+        Vector[String] type_params = Vector[String]()
         if self.check_tok(TOK_LBRACKET):
             type_params = self.parse_type_params()
         SpannedType target = self.parse_type()
-        Option[str] trait_name = None
+        Option[String] trait_name = None
         if self.check_kw(KW_WITH):
             self.advance()
             # Parse trait name as a type, then convert to string
             SpannedType trait_type = self.parse_type()
-            str tn = type_to_name(trait_type)
-            Option[str] some_tn = Some(tn)
+            String tn = type_to_name(trait_type)
+            Option[String] some_tn = Some(tn)
             trait_name = !some_tn
             # Skip optional 'via field_name' delegation
             if self.check_kw(KW_VIA):
@@ -3179,8 +3179,8 @@ equip Parser:
 
     Item parse_import_item(&self):
         int start = self.peek().lex_start
-        str module_path = ""
-        Vector[str] names = Vector[str]()
+        String module_path = ""
+        Vector[String] names = Vector[String]()
 
         if self.check_kw(KW_FROM):
             self.advance()
@@ -3189,7 +3189,7 @@ equip Parser:
             module_path = token_ident(first.lex_token)
             while self.match_tok(TOK_DOT):
                 SpannedToken next = self.advance()
-                str seg = token_ident(next.lex_token)
+                String seg = token_ident(next.lex_token)
                 if seg == "":
                     seg = non_type_keyword_name(keyword_tag(next.lex_token))
                     if seg == "":
@@ -3198,11 +3198,11 @@ equip Parser:
             self.expect_kw(KW_IMPORT, "expected 'import' after from path")
             # Parse names (identifiers or keywords used as names like Box, Rc, Arc)
             SpannedToken n1 = self.advance()
-            str n1_name = self.extract_name(n1)
+            String n1_name = self.extract_name(n1)
             names.push(n1_name)
             while self.match_tok(TOK_COMMA):
                 SpannedToken n2 = self.advance()
-                str n2_name = self.extract_name(n2)
+                String n2_name = self.extract_name(n2)
                 names.push(n2_name)
         elif self.check_kw(KW_IMPORT):
             self.advance()
@@ -3217,7 +3217,7 @@ equip Parser:
     Item parse_directive_item(&self):
         self.expect_kw(KW_DIRECTIVE, "expected 'directive'")
         SpannedToken name_tok = self.advance()
-        str name = token_ident(name_tok.lex_token)
+        String name = token_ident(name_tok.lex_token)
         # Consume hyphenated parts: immutable-by-default → "immutable-by-default"
         while self.check_tok(TOK_MINUS):
             self.advance()
@@ -3231,13 +3231,13 @@ equip Parser:
             if self.check_tok(TOK_INDENT):
                 self.advance()
             SpannedToken sub_tok = self.advance()
-            str sub_name = token_ident(sub_tok.lex_token)
+            String sub_name = token_ident(sub_tok.lex_token)
             self.expect_tok(TOK_COLON, "expected ':' after setup/teardown")
             Vector[Stmt] body = self.parse_block()
             if sub_name == "setup":
                 return ISuiteSetup(body)
             return ISuiteTeardown(body)
-        str value = ""
+        String value = ""
         if self.match_tok(TOK_EQ):
             # directive name=value
             SpannedToken val_tok = self.advance()
@@ -3256,7 +3256,7 @@ equip Parser:
         self.expect_kw(KW_CONST, "expected 'const'")
         SpannedType ty = self.parse_type()
         SpannedToken name_tok = self.advance()
-        str name = token_ident(name_tok.lex_token)
+        String name = token_ident(name_tok.lex_token)
         self.expect_tok(TOK_EQ, "expected '=' in const declaration")
         SpannedExpr val = self.parse_expr()
         return IConstDecl(ty, name, val)
@@ -3264,8 +3264,8 @@ equip Parser:
     Item parse_type_alias_item(&self):
         self.expect_kw(KW_TYPE, "expected 'type'")
         SpannedToken name_tok = self.advance()
-        str name = token_ident(name_tok.lex_token)
-        Vector[str] type_params = Vector[str]()
+        String name = token_ident(name_tok.lex_token)
+        Vector[String] type_params = Vector[String]()
         if self.match_tok(TOK_LBRACKET):
             SpannedToken tp_tok = self.advance()
             type_params.push(token_ident(tp_tok.lex_token))
@@ -3280,7 +3280,7 @@ equip Parser:
     Item parse_newtype_item(&self):
         self.expect_kw(KW_NEWTYPE, "expected 'newtype'")
         SpannedToken name_tok = self.advance()
-        str name = token_ident(name_tok.lex_token)
+        String name = token_ident(name_tok.lex_token)
         self.expect_tok(TOK_LPAREN, "expected '(' in newtype")
         SpannedType inner = self.parse_type()
         self.expect_tok(TOK_RPAREN, "expected ')' in newtype")
@@ -3323,11 +3323,11 @@ equip Parser:
     Item parse_test_item(&self):
         self.expect_kw(KW_TEST, "expected 'test'")
         SpannedToken name_tok = self.advance()
-        str name = token_string_val(name_tok.lex_token)
+        String name = token_string_val(name_tok.lex_token)
         # Parse optional 'with Expr as name [, Expr as name]*' clause
         # Token-level extraction: scan for `as <ident>` patterns and collect exprs/names
         Vector[SpannedExpr] with_exprs = Vector[SpannedExpr]()
-        Vector[str] with_names = Vector[str]()
+        Vector[String] with_names = Vector[String]()
         if self.check_kw(KW_WITH):
             self.advance()
             # Parse each 'expr as name' binding
@@ -3335,7 +3335,7 @@ equip Parser:
                 SpannedExpr wexpr = self.parse_expr()
                 # parse_expr consumes 'expr as name' as EAs
                 # Extract name by looking at what parse_expr produced
-                str binding_name = "_"
+                String binding_name = "_"
                 match wexpr.expr:
                     case EAs(_, _):
                         # The 'as name' was consumed; extract name from the last token
@@ -3358,7 +3358,7 @@ equip Parser:
     Item parse_bench_item(&self):
         self.expect_kw(KW_BENCH, "expected 'bench'")
         SpannedToken name_tok = self.advance()
-        str name = token_string_val(name_tok.lex_token)
+        String name = token_string_val(name_tok.lex_token)
         self.expect_tok(TOK_COLON, "expected ':' after bench name")
         Vector[Stmt] body = self.parse_block()
         return IBench(name, body)
@@ -3366,7 +3366,7 @@ equip Parser:
     Item parse_suite_item(&self):
         self.expect_kw(KW_SUITE, "expected 'suite'")
         SpannedToken sub_tok = self.advance()
-        str sub_name = token_ident(sub_tok.lex_token)
+        String sub_name = token_ident(sub_tok.lex_token)
         self.expect_tok(TOK_COLON, "expected ':' after suite setup/teardown")
         Vector[Stmt] body = self.parse_block()
         if sub_name == "setup":
@@ -3384,10 +3384,10 @@ equip Parser:
                 break
 
             # Parse @attributes — capture @derive(...) trait names
-            Vector[str] pending_derives = Vector[str]()
+            Vector[String] pending_derives = Vector[String]()
             while self.check_tok(TOK_AT):
                 self.advance()
-                str attr_name = ""
+                String attr_name = ""
                 if self.check_tok(TOK_IDENT):
                     SpannedToken attr_tok = self.advance()
                     attr_name = token_ident(attr_tok.lex_token)
@@ -3464,7 +3464,7 @@ equip Parser:
                 elif self.check_kw(KW_TYPE):
                     self.advance()  # skip 'type'
                     SpannedToken mt_name_tok = self.advance()
-                    str mt_name = token_ident(mt_name_tok.lex_token)
+                    String mt_name = token_ident(mt_name_tok.lex_token)
                     if self.check_tok(TOK_LPAREN):
                         items.push(IMetaTypeFunc(mt_name))
                     elif self.check_tok(TOK_EQ):
@@ -3480,7 +3480,7 @@ equip Parser:
                                 mt_is_call = true
                             self.pos = mt_peek
                         if mt_is_call:
-                            str mt_callee = ""
+                            String mt_callee = ""
                             if self.check_tok(TOK_IDENT):
                                 SpannedToken ct = self.advance()
                                 mt_callee = token_ident(ct.lex_token)
@@ -3499,7 +3499,7 @@ equip Parser:
                             SpannedType mt_rhs = self.parse_type()
                             if self.check_kw(KW_IF):
                                 self.advance()  # skip 'if'
-                                str mt_cond = ""
+                                String mt_cond = ""
                                 if self.check_tok(TOK_IDENT):
                                     SpannedToken cond_tok = self.advance()
                                     mt_cond = token_ident(cond_tok.lex_token)
@@ -3518,7 +3518,7 @@ equip Parser:
                         self.pos = mc_saved
                         SpannedType mc_type = self.parse_type()
                         SpannedToken mc_name_tok = self.advance()
-                        str mc_name = token_ident(mc_name_tok.lex_token)
+                        String mc_name = token_ident(mc_name_tok.lex_token)
                         if mc_name != "" and self.check_tok(TOK_EQ):
                             self.advance()
                             SpannedExpr mc_val = self.parse_expr()
@@ -3557,8 +3557,8 @@ equip Parser:
 
 # ── Public API ───────────────────────────────────────────────
 
-Module parse_source(str source):
+Module parse_source(String source):
     Vector[SpannedToken] tokens = lex_tokenize(source)
-    Parser p = Parser(tokens, 0, Vector[str](), 0)
+    Parser p = Parser(tokens, 0, Vector[String](), 0)
     Module m = p.parse_module()
     return m

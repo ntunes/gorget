@@ -10,17 +10,17 @@ from std.conv import int_to_str
 
 # ── Type formatting ─────────────────────────────────────────
 
-str format_ast_type(SpannedType st):
+String format_ast_type(SpannedType st):
     return format_type_inner(st.ty)
 
-str format_type_inner(Type ty):
+String format_type_inner(Type ty):
     match ty:
         case TPrimitive(name):
             return name
         case TNamed(name, args):
             if args.len() == 0:
                 return name
-            str result = name
+            String result = name
             result = result + "["
             int i = 0
             while i < args.len():
@@ -40,10 +40,10 @@ str format_type_inner(Type ty):
 
 # ── Helpers ─────────────────────────────────────────────────
 
-str generic_suffix(Vector[str] tps):
+String generic_suffix(Vector[String] tps):
     if tps.len() == 0:
         return ""
-    str result = "["
+    String result = "["
     int i = 0
     while i < tps.len():
         if i > 0:
@@ -53,7 +53,7 @@ str generic_suffix(Vector[str] tps):
     result = result + "]"
     return result
 
-str equip_prefix(Vector[str] tps):
+String equip_prefix(Vector[String] tps):
     if tps.len() == 0:
         return ""
     return generic_suffix(tps) + " "
@@ -61,7 +61,7 @@ str equip_prefix(Vector[str] tps):
 # Global counter for unique temp variable names
 int derive_var_counter = 0
 
-str next_var():
+String next_var():
     int v = derive_var_counter
     derive_var_counter = derive_var_counter + 1
     return "__t" + int_to_str(v)
@@ -69,9 +69,9 @@ str next_var():
 # ── Collection type detection ───────────────────────────────
 
 # Collection type detection operates on the string type name.
-# We avoid str.slice() due to C backend GorgetString issues.
+# We avoid String.slice() due to C backend GorgetString issues.
 
-str strip_generic_prefix(str ty, str prefix):
+String strip_generic_prefix(String ty, String prefix):
     # Check if ty starts with prefix + "[" and ends with "]"
     # Returns inner content or ""
     if not ty.starts_with(prefix):
@@ -79,26 +79,26 @@ str strip_generic_prefix(str ty, str prefix):
     int plen = prefix.len()
     if ty.len() < plen + 2:
         return ""
-    str after = ty.char_at(plen)
+    String after = ty.char_at(plen)
     if after != "[":
         return ""
-    str last = ty.char_at(ty.len() - 1)
+    String last = ty.char_at(ty.len() - 1)
     if last != "]":
         return ""
     # Extract between prefix[ and ]
     # Build a new string character by character
-    str result = ""
+    String result = ""
     int i = plen + 1
     while i < ty.len() - 1:
         result = result + ty.char_at(i)
         i = i + 1
     return result
 
-int find_top_comma(str s):
+int find_top_comma(String s):
     int depth = 0
     int i = 0
     while i < s.len():
-        str ch = s.char_at(i)
+        String ch = s.char_at(i)
         if ch == "[":
             depth = depth + 1
         elif ch == "]":
@@ -108,22 +108,22 @@ int find_top_comma(str s):
         i = i + 1
     return -1
 
-str substr_range(str s, int start, int end):
-    str result = ""
+String substr_range(String s, int start, int end):
+    String result = ""
     int i = start
     while i < end:
         result = result + s.char_at(i)
         i = i + 1
     return result
 
-str trim_leading(str s):
+String trim_leading(String s):
     int start = 0
     while start < s.len() and s.char_at(start) == " ":
         start = start + 1
     return substr_range(s, start, s.len())
 
 # Returns "vector", "option", "dict", "hashmap", or ""
-str collection_kind(str ty):
+String collection_kind(String ty):
     if strip_generic_prefix(ty, "Vector") != "":
         return "vector"
     if strip_generic_prefix(ty, "Option") != "":
@@ -134,14 +134,14 @@ str collection_kind(str ty):
         return "hashmap"
     return ""
 
-str collection_elem(str ty):
-    str inner = strip_generic_prefix(ty, "Vector")
+String collection_elem(String ty):
+    String inner = strip_generic_prefix(ty, "Vector")
     if inner != "":
         return inner
     return strip_generic_prefix(ty, "Option")
 
-str collection_key(str ty):
-    str inner = strip_generic_prefix(ty, "Dict")
+String collection_key(String ty):
+    String inner = strip_generic_prefix(ty, "Dict")
     if inner == "":
         inner = strip_generic_prefix(ty, "HashMap")
     if inner == "":
@@ -151,8 +151,8 @@ str collection_key(str ty):
         return ""
     return trim_leading(substr_range(inner, 0, comma))
 
-str collection_val(str ty):
-    str inner = strip_generic_prefix(ty, "Dict")
+String collection_val(String ty):
+    String inner = strip_generic_prefix(ty, "Dict")
     if inner == "":
         inner = strip_generic_prefix(ty, "HashMap")
     if inner == "":
@@ -164,67 +164,67 @@ str collection_val(str ty):
 
 # ── Multi-line serialization codegen ────────────────────────
 
-str field_write_lines(str expr, str type_name, str indent):
-    str kind = collection_kind(type_name)
+String field_write_lines(String expr, String type_name, String indent):
+    String kind = collection_kind(type_name)
     if kind == "vector":
-        str elem_ty = collection_elem(type_name)
-        str idx = next_var()
-        str val = next_var()
+        String elem_ty = collection_elem(type_name)
+        String idx = next_var()
+        String val = next_var()
         String inner = indent + "    "
-        str elem_lines = field_write_lines(val, elem_ty, inner)
+        String elem_lines = field_write_lines(val, elem_ty, inner)
         return indent + "ser.begin_seq(" + expr + ".len())\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + expr + ".len():\n" + inner + "ser.elem(" + idx + ")\n" + inner + elem_ty + " " + val + " = " + expr + ".get(" + idx + ").unwrap()\n" + elem_lines + inner + idx + " = " + idx + " + 1\n" + indent + "ser.end_seq()\n"
     if kind == "option":
-        str inner_ty = collection_elem(type_name)
-        str val = next_var()
+        String inner_ty = collection_elem(type_name)
+        String val = next_var()
         String case_indent = indent + "    "
         String body_indent = indent + "        "
-        str write_lines = field_write_lines(val, inner_ty, body_indent)
+        String write_lines = field_write_lines(val, inner_ty, body_indent)
         return indent + "match " + expr + ":\n" + case_indent + "case Some(" + val + "):\n" + write_lines + case_indent + "case None:\n" + body_indent + "ser.write_null()\n"
     if kind == "dict" or kind == "hashmap":
-        str key_ty = collection_key(type_name)
-        str val_ty = collection_val(type_name)
-        if key_ty == "str":
-            str keys_var = next_var()
-            str idx = next_var()
-            str key_var = next_var()
-            str val_var = next_var()
+        String key_ty = collection_key(type_name)
+        String val_ty = collection_val(type_name)
+        if key_ty == "str" or key_ty == "String":
+            String keys_var = next_var()
+            String idx = next_var()
+            String key_var = next_var()
+            String val_var = next_var()
             String inner = indent + "    "
-            str val_lines = field_write_lines(val_var, val_ty, inner)
-            return indent + "Vector[str] " + keys_var + " = " + expr + ".keys()\n" + indent + "ser.begin_struct(\"\", " + keys_var + ".len())\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + keys_var + ".len():\n" + inner + "str " + key_var + " = " + keys_var + ".get(" + idx + ").unwrap()\n" + inner + "ser.field(" + key_var + ", " + idx + ")\n" + inner + val_ty + " " + val_var + " = " + expr + "[" + key_var + "]\n" + val_lines + inner + idx + " = " + idx + " + 1\n" + indent + "ser.end_struct()\n"
+            String val_lines = field_write_lines(val_var, val_ty, inner)
+            return indent + "Vector[String] " + keys_var + " = " + expr + ".keys()\n" + indent + "ser.begin_struct(\"\", " + keys_var + ".len())\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + keys_var + ".len():\n" + inner + "String " + key_var + " = " + keys_var + ".get(" + idx + ").unwrap()\n" + inner + "ser.field(" + key_var + ", " + idx + ")\n" + inner + val_ty + " " + val_var + " = " + expr + "[" + key_var + "]\n" + val_lines + inner + idx + " = " + idx + " + 1\n" + indent + "ser.end_struct()\n"
     return indent + field_write_call(expr, type_name) + "\n"
 
 # ── Multi-line deserialization codegen ──────────────────────
 
-str field_read_lines(str name, str type_name, str indent):
-    str kind = collection_kind(type_name)
+String field_read_lines(String name, String type_name, String indent):
+    String kind = collection_kind(type_name)
     if kind == "vector":
-        str elem_ty = collection_elem(type_name)
-        str len_var = next_var()
-        str idx = next_var()
-        str elem_var = next_var()
+        String elem_ty = collection_elem(type_name)
+        String len_var = next_var()
+        String idx = next_var()
+        String elem_var = next_var()
         String inner = indent + "    "
-        str elem_lines = field_read_lines(elem_var, elem_ty, inner)
+        String elem_lines = field_read_lines(elem_var, elem_ty, inner)
         return indent + "int " + len_var + " = de.begin_seq()\n" + indent + type_name + " " + name + " = " + type_name + "()\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + len_var + ":\n" + inner + "de.elem(" + idx + ")\n" + elem_lines + inner + name + ".push(" + elem_var + ")\n" + inner + idx + " = " + idx + " + 1\n" + indent + "de.end_seq()\n"
     if kind == "option":
-        str inner_ty = collection_elem(type_name)
-        str val_var = next_var()
+        String inner_ty = collection_elem(type_name)
+        String val_var = next_var()
         String inner = indent + "    "
-        str val_lines = field_read_lines(val_var, inner_ty, inner)
+        String val_lines = field_read_lines(val_var, inner_ty, inner)
         return indent + type_name + " " + name + " = None()\n" + indent + "if not de.is_null():\n" + val_lines + inner + name + " = Some(" + val_var + ")\n"
     if kind == "dict" or kind == "hashmap":
-        str key_ty = collection_key(type_name)
-        str val_ty = collection_val(type_name)
-        if key_ty == "str":
-            str keys_var = next_var()
-            str idx = next_var()
-            str key_var = next_var()
-            str val_var = next_var()
+        String key_ty = collection_key(type_name)
+        String val_ty = collection_val(type_name)
+        if key_ty == "str" or key_ty == "String":
+            String keys_var = next_var()
+            String idx = next_var()
+            String key_var = next_var()
+            String val_var = next_var()
             String inner = indent + "    "
-            str val_lines = field_read_lines(val_var, val_ty, inner)
-            return indent + "de.begin_struct()\n" + indent + "Vector[str] " + keys_var + " = de.keys()\n" + indent + type_name + " " + name + " = " + type_name + "()\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + keys_var + ".len():\n" + inner + "str " + key_var + " = " + keys_var + ".get(" + idx + ").unwrap()\n" + inner + "de.field(" + key_var + ")\n" + val_lines + inner + name + ".put(" + key_var + ", " + val_var + ")\n" + inner + idx + " = " + idx + " + 1\n" + indent + "de.end_struct()\n"
+            String val_lines = field_read_lines(val_var, val_ty, inner)
+            return indent + "de.begin_struct()\n" + indent + "Vector[String] " + keys_var + " = de.keys()\n" + indent + type_name + " " + name + " = " + type_name + "()\n" + indent + "int " + idx + " = 0\n" + indent + "while " + idx + " < " + keys_var + ".len():\n" + inner + "String " + key_var + " = " + keys_var + ".get(" + idx + ").unwrap()\n" + inner + "de.field(" + key_var + ")\n" + val_lines + inner + name + ".put(" + key_var + ", " + val_var + ")\n" + inner + idx + " = " + idx + " + 1\n" + indent + "de.end_struct()\n"
     return indent + field_read_decl(name, type_name) + "\n"
 
-str field_default(str type_name):
+String field_default(String type_name):
     if type_name == "int" or type_name == "int8" or type_name == "int16" or type_name == "int32" or type_name == "int64":
         return "0"
     if type_name == "uint" or type_name == "uint8" or type_name == "uint16" or type_name == "uint32" or type_name == "uint64":
@@ -233,13 +233,13 @@ str field_default(str type_name):
         return "0.0"
     if type_name == "bool":
         return "false"
-    if type_name == "str":
+    if type_name == "str" or type_name == "String":
         return "\"\""
     if type_name == "String":
         return "String()"
     return type_name + ".default()"
 
-str field_write_call(str expr, str type_name):
+String field_write_call(String expr, String type_name):
     if type_name == "int":
         return "ser.write_int(" + expr + ")"
     if type_name == "int8" or type_name == "int16" or type_name == "int32" or type_name == "int64":
@@ -256,7 +256,7 @@ str field_write_call(str expr, str type_name):
         return "ser.write_str(" + expr + ")"
     return expr + ".serialize(ser)"
 
-str field_read_decl(str name, str type_name):
+String field_read_decl(String name, String type_name):
     if type_name == "int":
         return "int " + name + " = de.read_int()"
     if type_name == "float":
@@ -264,10 +264,10 @@ str field_read_decl(str name, str type_name):
     if type_name == "bool":
         return "bool " + name + " = de.read_bool()"
     if type_name == "str" or type_name == "String":
-        return "str " + name + " = de.read_str()"
+        return "String " + name + " = de.read_str()"
     return type_name + " " + name + " = deserialize_" + type_name + "(de)"
 
-void inject_items(str source, Vector[Item] &new_items):
+void inject_items(String source, Vector[Item] &new_items):
     Module parsed = parse_source(source)
     int i = 0
     while i < parsed.items.len():
@@ -283,20 +283,20 @@ void inject_items(str source, Vector[Item] &new_items):
 
 # ── Variant prefix ──────────────────────────────────────────
 
-str variant_prefix(str type_name, Vector[str] type_params):
+String variant_prefix(String type_name, Vector[String] type_params):
     if type_params.len() > 0:
         return ""
     return type_name + "."
 
 # ── Struct derive generators ────────────────────────────────
 
-str gen_struct_equatable(str name, str gs, str gp, Vector[Param] fields):
+String gen_struct_equatable(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with Equatable:\n"
     src = src + "    bool eq(self, " + name + gs + " other):\n"
     if fields.len() == 0:
         src = src + "        return true\n"
     else:
-        str cmp = ""
+        String cmp = ""
         int i = 0
         while i < fields.len():
             Param f = fields.get(i).unwrap()
@@ -307,13 +307,13 @@ str gen_struct_equatable(str name, str gs, str gp, Vector[Param] fields):
         src = src + "        return " + cmp + "\n"
     return src
 
-str gen_struct_displayable(str name, str gs, str gp, Vector[Param] fields):
+String gen_struct_displayable(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with Displayable:\n"
-    src = src + "    str display(self):\n"
+    src = src + "    String display(self):\n"
     if fields.len() == 0:
         src = src + "        return \"" + name + "()\"\n"
     else:
-        str parts = ""
+        String parts = ""
         int i = 0
         while i < fields.len():
             Param f = fields.get(i).unwrap()
@@ -324,10 +324,10 @@ str gen_struct_displayable(str name, str gs, str gp, Vector[Param] fields):
         src = src + "        return f\"" + name + "(" + parts + ")\"\n"
     return src
 
-str gen_struct_cloneable(str name, str gs, str gp, Vector[Param] fields):
+String gen_struct_cloneable(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with Cloneable:\n"
     src = src + "    " + name + gs + " clone(self):\n"
-    str args = ""
+    String args = ""
     int i = 0
     while i < fields.len():
         Param f = fields.get(i).unwrap()
@@ -338,7 +338,7 @@ str gen_struct_cloneable(str name, str gs, str gp, Vector[Param] fields):
     src = src + "        return " + name + gs + "(" + args + ")\n"
     return src
 
-str gen_struct_hashable(str name, str gs, str gp, Vector[Param] fields):
+String gen_struct_hashable(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with Hashable:\n"
     src = src + "    int hash(self):\n"
     if fields.len() == 0:
@@ -357,10 +357,10 @@ str gen_struct_hashable(str name, str gs, str gp, Vector[Param] fields):
         src = src + "        return h\n"
     return src
 
-str gen_struct_default(str name, str gs, str gp, Vector[Param] fields):
+String gen_struct_default(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with Default:\n"
     src = src + "    " + name + gs + " default():\n"
-    str args = ""
+    String args = ""
     int i = 0
     while i < fields.len():
         Param f = fields.get(i).unwrap()
@@ -371,36 +371,36 @@ str gen_struct_default(str name, str gs, str gp, Vector[Param] fields):
     src = src + "        return " + name + gs + "(" + args + ")\n"
     return src
 
-str gen_struct_serializable(str name, str gs, str gp, Vector[Param] fields):
+String gen_struct_serializable(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with Serializable:\n"
     src = src + "    void serialize(self, Box[Serializer] ser):\n"
     src = src + "        ser.begin_struct(\"" + name + "\", " + int_to_str(fields.len()) + ")\n"
     int i = 0
     while i < fields.len():
         Param f = fields.get(i).unwrap()
-        str fname = f.param_name
-        str ftype = format_ast_type(f.param_type)
+        String fname = f.param_name
+        String ftype = format_ast_type(f.param_type)
         src = src + "        ser.field(\"" + fname + "\", " + int_to_str(i) + ")\n"
         src = src + field_write_lines("self." + fname, ftype, "        ")
         i = i + 1
     src = src + "        ser.end_struct()\n"
     return src
 
-str gen_struct_deserializable(str name, str gs, Vector[Param] fields):
-    String src = "Result[" + name + gs + ", str] deserialize_" + name + "(Box[Deserializer] de):\n"
+String gen_struct_deserializable(String name, String gs, Vector[Param] fields):
+    String src = "Result[" + name + gs + ", String] deserialize_" + name + "(Box[Deserializer] de):\n"
     src = src + "    de.begin_struct()\n"
     int i = 0
     while i < fields.len():
         Param f = fields.get(i).unwrap()
-        str fname = f.param_name
-        str ftype = format_ast_type(f.param_type)
+        String fname = f.param_name
+        String ftype = format_ast_type(f.param_type)
         src = src + "    de.field(\"" + fname + "\")\n"
         src = src + field_read_lines(fname, ftype, "    ")
         i = i + 1
     src = src + "    de.end_struct()\n"
     src = src + "    if de.has_error():\n"
     src = src + "        return Error(de.error())\n"
-    str args = ""
+    String args = ""
     int j = 0
     while j < fields.len():
         Param f = fields.get(j).unwrap()
@@ -411,36 +411,36 @@ str gen_struct_deserializable(str name, str gs, Vector[Param] fields):
     src = src + "    return Ok(" + name + gs + "(" + args + "))\n"
     return src
 
-str gen_struct_from(str name, str gs, str gp, Vector[Param] fields):
+String gen_struct_from(String name, String gs, String gp, Vector[Param] fields):
     if fields.len() != 1:
         return ""
     Param f = fields.get(0).unwrap()
-    str ftype = format_ast_type(f.param_type)
+    String ftype = format_ast_type(f.param_type)
     String src = "equip " + gp + name + gs + " with From[" + ftype + "]:\n"
     src = src + "    " + name + gs + " from(" + ftype + " value):\n"
     src = src + "        return " + name + gs + "(value)\n"
     return src
 
-str gen_struct_try_from(str name, str gs, str gp, Vector[Param] fields):
+String gen_struct_try_from(String name, String gs, String gp, Vector[Param] fields):
     if fields.len() != 1:
         return ""
     Param f = fields.get(0).unwrap()
-    str ftype = format_ast_type(f.param_type)
+    String ftype = format_ast_type(f.param_type)
     String src = "equip " + gp + name + gs + " with TryFrom[" + ftype + "]:\n"
-    src = src + "    Result[" + name + gs + ", str] try_from(" + ftype + " value):\n"
+    src = src + "    Result[" + name + gs + ", String] try_from(" + ftype + " value):\n"
     src = src + "        return Ok(" + name + gs + "(value))\n"
     return src
 
-str gen_struct_from_row(str name, str gs, str gp, Vector[Param] fields):
+String gen_struct_from_row(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with FromRow:\n"
     src = src + "    " + name + gs + " from_row(Row row):\n"
     int i = 0
     while i < fields.len():
         Param f = fields.get(i).unwrap()
-        str fname = f.param_name
-        str ftype = format_ast_type(f.param_type)
+        String fname = f.param_name
+        String ftype = format_ast_type(f.param_type)
         if ftype == "str" or ftype == "String":
-            src = src + "        str " + fname + " = row.get(\"" + fname + "\")\n"
+            src = src + "        String " + fname + " = row.get(\"" + fname + "\")\n"
         elif ftype == "int" or ftype == "int8" or ftype == "int16" or ftype == "int32" or ftype == "int64" or ftype == "uint" or ftype == "uint8" or ftype == "uint16" or ftype == "uint32" or ftype == "uint64":
             src = src + "        int " + fname + " = row.get_int(\"" + fname + "\")\n"
         elif ftype == "float" or ftype == "float32" or ftype == "float64":
@@ -448,9 +448,9 @@ str gen_struct_from_row(str name, str gs, str gp, Vector[Param] fields):
         elif ftype == "bool":
             src = src + "        bool " + fname + " = row.get_bool(\"" + fname + "\")\n"
         else:
-            src = src + "        str " + fname + " = row.get(\"" + fname + "\")\n"
+            src = src + "        String " + fname + " = row.get(\"" + fname + "\")\n"
         i = i + 1
-    str args = ""
+    String args = ""
     int j = 0
     while j < fields.len():
         Param f = fields.get(j).unwrap()
@@ -463,7 +463,7 @@ str gen_struct_from_row(str name, str gs, str gp, Vector[Param] fields):
 
 # ── Enum derive generators ──────────────────────────────────
 
-str gen_enum_equatable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
+String gen_enum_equatable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Equatable:\n"
     src = src + "    bool eq(self, " + name + gs + " other):\n"
     src = src + "        match self:\n"
@@ -471,8 +471,8 @@ str gen_enum_equatable(str name, str gs, str gp, Vector[EnumVariant] variants, s
     while vi < variants.len():
         EnumVariant v = variants.get(vi).unwrap()
         int fc = v.fields.len()
-        str self_binds = ""
-        str other_binds = ""
+        String self_binds = ""
+        String other_binds = ""
         int fi = 0
         while fi < fc:
             if fi > 0:
@@ -483,7 +483,7 @@ str gen_enum_equatable(str name, str gs, str gp, Vector[EnumVariant] variants, s
             fi = fi + 1
         String self_pat = pfx + v.name + "(" + self_binds + ")"
         String other_pat = pfx + v.name + "(" + other_binds + ")"
-        str cmp = "true"
+        String cmp = "true"
         if fc > 0:
             cmp = ""
             int ci = 0
@@ -501,15 +501,15 @@ str gen_enum_equatable(str name, str gs, str gp, Vector[EnumVariant] variants, s
         vi = vi + 1
     return src
 
-str gen_enum_displayable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
+String gen_enum_displayable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Displayable:\n"
-    src = src + "    str display(self):\n"
+    src = src + "    String display(self):\n"
     src = src + "        match self:\n"
     int vi = 0
     while vi < variants.len():
         EnumVariant v = variants.get(vi).unwrap()
         int fc = v.fields.len()
-        str binds = ""
+        String binds = ""
         int fi = 0
         while fi < fc:
             if fi > 0:
@@ -521,7 +521,7 @@ str gen_enum_displayable(str name, str gs, str gp, Vector[EnumVariant] variants,
             src = src + "            case " + pat + ":\n"
             src = src + "                return \"" + v.name + "()\"\n"
         else:
-            str parts = ""
+            String parts = ""
             int pi = 0
             while pi < fc:
                 if pi > 0:
@@ -533,7 +533,7 @@ str gen_enum_displayable(str name, str gs, str gp, Vector[EnumVariant] variants,
         vi = vi + 1
     return src
 
-str gen_enum_cloneable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
+String gen_enum_cloneable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Cloneable:\n"
     src = src + "    " + name + gs + " clone(self):\n"
     src = src + "        match self:\n"
@@ -541,7 +541,7 @@ str gen_enum_cloneable(str name, str gs, str gp, Vector[EnumVariant] variants, s
     while vi < variants.len():
         EnumVariant v = variants.get(vi).unwrap()
         int fc = v.fields.len()
-        str binds = ""
+        String binds = ""
         int fi = 0
         while fi < fc:
             if fi > 0:
@@ -554,7 +554,7 @@ str gen_enum_cloneable(str name, str gs, str gp, Vector[EnumVariant] variants, s
         vi = vi + 1
     return src
 
-str gen_enum_hashable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
+String gen_enum_hashable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Hashable:\n"
     src = src + "    int hash(self):\n"
     src = src + "        match self:\n"
@@ -562,7 +562,7 @@ str gen_enum_hashable(str name, str gs, str gp, Vector[EnumVariant] variants, st
     while vi < variants.len():
         EnumVariant v = variants.get(vi).unwrap()
         int fc = v.fields.len()
-        str binds = ""
+        String binds = ""
         int fi = 0
         while fi < fc:
             if fi > 0:
@@ -584,7 +584,7 @@ str gen_enum_hashable(str name, str gs, str gp, Vector[EnumVariant] variants, st
         vi = vi + 1
     return src
 
-str gen_enum_serializable(str name, str gs, str gp, Vector[EnumVariant] variants, str pfx):
+String gen_enum_serializable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Serializable:\n"
     src = src + "    void serialize(self, Box[Serializer] ser):\n"
     src = src + "        match self:\n"
@@ -592,7 +592,7 @@ str gen_enum_serializable(str name, str gs, str gp, Vector[EnumVariant] variants
     while vi < variants.len():
         EnumVariant v = variants.get(vi).unwrap()
         int fc = v.fields.len()
-        str binds = ""
+        String binds = ""
         int fi = 0
         while fi < fc:
             if fi > 0:
@@ -611,7 +611,7 @@ str gen_enum_serializable(str name, str gs, str gp, Vector[EnumVariant] variants
             while si < fc:
                 src = src + "                ser.elem(" + int_to_str(si) + ")\n"
                 SpannedType ft = v.fields.get(si).unwrap()
-                str ftype = format_ast_type(ft)
+                String ftype = format_ast_type(ft)
                 src = src + "                " + field_write_call("a" + int_to_str(si), ftype) + "\n"
                 si = si + 1
             src = src + "                ser.end_seq()\n"
@@ -619,10 +619,10 @@ str gen_enum_serializable(str name, str gs, str gp, Vector[EnumVariant] variants
         vi = vi + 1
     return src
 
-str gen_enum_deserializable(str name, str gs, Vector[EnumVariant] variants, str pfx):
-    String src = "Result[" + name + gs + ", str] deserialize_" + name + "(Box[Deserializer] de):\n"
+String gen_enum_deserializable(String name, String gs, Vector[EnumVariant] variants, String pfx):
+    String src = "Result[" + name + gs + ", String] deserialize_" + name + "(Box[Deserializer] de):\n"
     # Separate unit and data variants
-    Vector[str] unit_names = Vector[str]()
+    Vector[String] unit_names = Vector[String]()
     Vector[EnumVariant] data_variants = Vector[EnumVariant]()
     int vi = 0
     while vi < variants.len():
@@ -634,10 +634,10 @@ str gen_enum_deserializable(str name, str gs, Vector[EnumVariant] variants, str 
         vi = vi + 1
     if unit_names.len() > 0:
         src = src + "    if de.is_string():\n"
-        src = src + "        str de_tag = de.read_str()\n"
+        src = src + "        String de_tag = de.read_str()\n"
         int ui = 0
         while ui < unit_names.len():
-            str uname = unit_names.get(ui).unwrap()
+            String uname = unit_names.get(ui).unwrap()
             if ui == 0:
                 src = src + "        if de_tag == \"" + uname + "\":\n"
             else:
@@ -650,7 +650,7 @@ str gen_enum_deserializable(str name, str gs, Vector[EnumVariant] variants, str 
         int di = 0
         while di < data_variants.len():
             EnumVariant dv = data_variants.get(di).unwrap()
-            str cond = "if"
+            String cond = "if"
             if di > 0:
                 cond = "elif"
             src = src + "    " + cond + " de.has_field(\"" + dv.name + "\"):\n"
@@ -660,7 +660,7 @@ str gen_enum_deserializable(str name, str gs, Vector[EnumVariant] variants, str 
             while dfi < dv.fields.len():
                 src = src + "        de.elem(" + int_to_str(dfi) + ")\n"
                 SpannedType ft = dv.fields.get(dfi).unwrap()
-                str ftype = format_ast_type(ft)
+                String ftype = format_ast_type(ft)
                 String var_name = "a" + int_to_str(dfi)
                 src = src + "        " + field_read_decl(var_name, ftype) + "\n"
                 dfi = dfi + 1
@@ -668,7 +668,7 @@ str gen_enum_deserializable(str name, str gs, Vector[EnumVariant] variants, str 
             src = src + "        de.end_struct()\n"
             src = src + "        if de.has_error():\n"
             src = src + "            return Error(de.error())\n"
-            str dargs = ""
+            String dargs = ""
             int dai = 0
             while dai < dv.fields.len():
                 if dai > 0:
@@ -684,13 +684,13 @@ str gen_enum_deserializable(str name, str gs, Vector[EnumVariant] variants, str 
 # ── Core expansion ──────────────────────────────────────────
 
 void expand_struct_derives(StructDef sd, Vector[Item] &new_items):
-    str name = sd.name
-    str gs = generic_suffix(sd.type_params)
-    str gp = equip_prefix(sd.type_params)
+    String name = sd.name
+    String gs = generic_suffix(sd.type_params)
+    String gp = equip_prefix(sd.type_params)
     int i = 0
     while i < sd.derives.len():
-        str trait_name = sd.derives.get(i).unwrap()
-        str source = ""
+        String trait_name = sd.derives.get(i).unwrap()
+        String source = ""
         if trait_name == "Equatable":
             source = gen_struct_equatable(name, gs, gp, sd.fields)
         elif trait_name == "Displayable":
@@ -716,14 +716,14 @@ void expand_struct_derives(StructDef sd, Vector[Item] &new_items):
         i = i + 1
 
 void expand_enum_derives(EnumDef ed, Vector[Item] &new_items):
-    str name = ed.name
-    str gs = generic_suffix(ed.type_params)
-    str gp = equip_prefix(ed.type_params)
-    str pfx = variant_prefix(name, ed.type_params)
+    String name = ed.name
+    String gs = generic_suffix(ed.type_params)
+    String gp = equip_prefix(ed.type_params)
+    String pfx = variant_prefix(name, ed.type_params)
     int i = 0
     while i < ed.derives.len():
-        str trait_name = ed.derives.get(i).unwrap()
-        str source = ""
+        String trait_name = ed.derives.get(i).unwrap()
+        String source = ""
         if trait_name == "Equatable":
             source = gen_enum_equatable(name, gs, gp, ed.variants, pfx)
         elif trait_name == "Displayable":

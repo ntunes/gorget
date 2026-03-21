@@ -35,8 +35,8 @@ enum StringKind:
     SkNormal  SkRaw  SkMultiLine  SkByte
 
 enum StringSegment:
-    SegLiteral(str)
-    SegInterpolation(str)
+    SegLiteral(String)
+    SegInterpolation(String)
 
 struct StringLiteral:
     StringKind lex_kind
@@ -47,7 +47,7 @@ struct StringLiteral:
 enum Token:
     # Identifiers and keywords
     TkKeyword(Keyword)
-    TkIdentifier(str)
+    TkIdentifier(String)
     # Literals
     TkInt(int)
     TkFloat(float)
@@ -71,9 +71,9 @@ enum Token:
     # Indentation
     TkIndent  TkDedent  TkNewline
     # Special
-    TkDocComment(str)  TkComment(str)
+    TkDocComment(String)  TkComment(String)
     TkEof
-    TkError(str)
+    TkError(String)
 
 # ── Spanned token ─────────────────────────────────────────────
 
@@ -85,18 +85,18 @@ struct SpannedToken:
 # ── Lexer struct ──────────────────────────────────────────────
 
 struct Lexer:
-    str lex_source
+    String lex_source
     int lex_pos
     Vector[int] lex_indent_stack
     int lex_bracket_depth
     Vector[SpannedToken] lex_tokens
     bool lex_finished
     bool lex_need_newline
-    str lex_error
+    String lex_error
 
 # ── Keyword lookup ────────────────────────────────────────────
 
-Option[Keyword] keyword_from_str(str s):
+Option[Keyword] keyword_from_str(String s):
     if s == "int":
         return Some(KwInt())
     elif s == "int8":
@@ -363,7 +363,7 @@ equip Lexer:
 
     # ── Escape sequence parsing ───────────────────────────────
 
-    Option[str] lex_parse_escape(&self):
+    Option[String] lex_parse_escape(&self):
         if self.lex_at_end():
             return None
         byte c = self.lex_peek()
@@ -399,7 +399,7 @@ equip Lexer:
             int hex_start = self.lex_pos
             while self.lex_pos < self.lex_source.byte_len() and self.lex_peek() != b'}':
                 self.lex_advance()
-            str hex_str = self.lex_source.byte_slice(hex_start, self.lex_pos)
+            String hex_str = self.lex_source.byte_slice(hex_start, self.lex_pos)
             if self.lex_pos < self.lex_source.byte_len():
                 self.lex_advance()
             int code = lex_parse_int_radix(hex_str, 16)
@@ -418,7 +418,7 @@ equip Lexer:
                 self.lex_pos = self.lex_pos + 1
             else:
                 break
-        str word = self.lex_source.byte_slice(start, self.lex_pos)
+        String word = self.lex_source.byte_slice(start, self.lex_pos)
         Option[Keyword] kw = keyword_from_str(word)
         match kw:
             case Some(k):
@@ -446,8 +446,8 @@ equip Lexer:
                         self.lex_pos = self.lex_pos + 1
                     else:
                         break
-                str hex_body = self.lex_source.byte_slice(start + 2, self.lex_pos)
-                str clean = str_remove_char(hex_body, b'_')
+                String hex_body = self.lex_source.byte_slice(start + 2, self.lex_pos)
+                String clean = str_remove_char(hex_body, b'_')
                 int val = lex_parse_int_radix(clean, 16)
                 self.lex_emit(TkInt(val), start, self.lex_pos)
                 return
@@ -459,8 +459,8 @@ equip Lexer:
                         self.lex_pos = self.lex_pos + 1
                     else:
                         break
-                str oct_body = self.lex_source.byte_slice(start + 2, self.lex_pos)
-                str clean = str_remove_char(oct_body, b'_')
+                String oct_body = self.lex_source.byte_slice(start + 2, self.lex_pos)
+                String clean = str_remove_char(oct_body, b'_')
                 int val = lex_parse_int_radix(clean, 8)
                 self.lex_emit(TkInt(val), start, self.lex_pos)
                 return
@@ -472,8 +472,8 @@ equip Lexer:
                         self.lex_pos = self.lex_pos + 1
                     else:
                         break
-                str bin_body = self.lex_source.byte_slice(start + 2, self.lex_pos)
-                str clean = str_remove_char(bin_body, b'_')
+                String bin_body = self.lex_source.byte_slice(start + 2, self.lex_pos)
+                String clean = str_remove_char(bin_body, b'_')
                 int val = lex_parse_int_radix(clean, 2)
                 self.lex_emit(TkInt(val), start, self.lex_pos)
                 return
@@ -515,8 +515,8 @@ equip Lexer:
                         break
                     self.lex_pos = self.lex_pos + 1
 
-        str num_str = self.lex_source.byte_slice(start, self.lex_pos)
-        str clean = str_remove_char(num_str, b'_')
+        String num_str = self.lex_source.byte_slice(start, self.lex_pos)
+        String clean = str_remove_char(num_str, b'_')
         if is_float:
             float fval = parse_float(clean).unwrap_or(0.0)
             self.lex_emit(TkFloat(fval), start, self.lex_pos)
@@ -556,7 +556,7 @@ equip Lexer:
             self.lex_pos = self.lex_pos + 2
 
         Vector[StringSegment] segments = Vector[StringSegment]()
-        str current_lit = ""
+        String current_lit = ""
 
         while self.lex_pos < self.lex_source.byte_len():
             # Check for closing quote(s)
@@ -577,7 +577,7 @@ equip Lexer:
             # Escape sequences (not in raw strings)
             if self.lex_peek() == b'\\' and not is_raw:
                 self.lex_advance()
-                Option[str] esc = self.lex_parse_escape()
+                Option[String] esc = self.lex_parse_escape()
                 match esc:
                     case Some(c):
                         current_lit = current_lit + c
@@ -620,7 +620,7 @@ equip Lexer:
                             self.lex_advance()
                     self.lex_advance()
 
-                str expr_text = self.lex_source.byte_slice(expr_start, self.lex_pos)
+                String expr_text = self.lex_source.byte_slice(expr_start, self.lex_pos)
                 segments.push(SegInterpolation(expr_text))
                 if self.lex_pos < self.lex_source.byte_len():
                     self.lex_advance()
@@ -657,11 +657,11 @@ equip Lexer:
         int start = self.lex_pos
         self.lex_advance()  # skip opening '
 
-        str lit = ""
+        String lit = ""
         while not self.lex_at_end() and self.lex_peek() != b'\'' and self.lex_peek() != b'\n':
             if self.lex_peek() == b'\\':
                 self.lex_advance()
-                Option[str] esc = self.lex_parse_escape()
+                Option[String] esc = self.lex_parse_escape()
                 match esc:
                     case Some(c):
                         lit = lit + c
@@ -885,7 +885,7 @@ equip Lexer:
                 self.lex_advance()
             int content_start = self.lex_pos
             self.lex_skip_to_eol()
-            str content = self.lex_source.byte_slice(content_start, self.lex_pos)
+            String content = self.lex_source.byte_slice(content_start, self.lex_pos)
             self.lex_emit(TkDocComment(content), start, self.lex_pos)
             return
 
@@ -894,7 +894,7 @@ equip Lexer:
             self.lex_advance()
         int content_start = self.lex_pos
         self.lex_skip_to_eol()
-        str content = self.lex_source.byte_slice(content_start, self.lex_pos)
+        String content = self.lex_source.byte_slice(content_start, self.lex_pos)
         self.lex_emit(TkComment(content), start, self.lex_pos)
 
     # ── Tokenize one line's content ───────────────────────────
@@ -1023,8 +1023,8 @@ equip Lexer:
 
 # ── Helper functions ──────────────────────────────────────────
 
-str str_remove_char(str s, byte target):
-    str result = ""
+String str_remove_char(String s, byte target):
+    String result = ""
     int i = 0
     while i < s.byte_len():
         byte c = s.byte_at(i)
@@ -1033,7 +1033,7 @@ str str_remove_char(str s, byte target):
         i = i + 1
     return result
 
-int lex_parse_int_radix(str s, int radix):
+int lex_parse_int_radix(String s, int radix):
     int result = 0
     int i = 0
     while i < s.byte_len():
@@ -1051,7 +1051,7 @@ int lex_parse_int_radix(str s, int radix):
 
 # ── Public API ────────────────────────────────────────────────
 
-Vector[SpannedToken] lex_tokenize(str source):
+Vector[SpannedToken] lex_tokenize(String source):
     Vector[int] indent = Vector[int]()
     indent.push(0)
     Lexer l = Lexer(source, 0, indent, 0, Vector[SpannedToken](), false, false, "")

@@ -3,9 +3,9 @@
 from ast import Span
 
 enum SemanticErrorKind:
-    ErrUndefinedName(str)
-    ErrDuplicateDefinition(str, Span)
-    ErrNotAType(str)
+    ErrUndefinedName(String)
+    ErrDuplicateDefinition(String, Span)
+    ErrNotAType(String)
 
 struct SemanticError:
     SemanticErrorKind kind

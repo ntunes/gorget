@@ -20,7 +20,6 @@
 
 ## Medium
 
-- **Unified String type: self-host migration (`str` → `String`)** — 36 self-host .gg files still use `str`. These have extensive internal `"str"` string comparisons for type-name matching that would need updating. Deferred since `str` remains a permanent alias. [updated: 2026-03-20]
 
 - **Spawn captures don't check stale shared-derived** — A closure spawned after an await can capture a variable derived from a shared binding that is now stale. `check_spawn_closure_captures` checks `has_borrowed_origin` but doesn't intersect captured DefIds against `stale_shared_derived`. The spawned task silently uses pre-await data. Fix: in check_spawn_closure_captures, check if captured def_id is in stale_shared_derived and warn/error. [added: 2026-03-18]
 
@@ -66,7 +65,6 @@
 
 - **IR: silent I64_TYPE fallbacks throughout lowering** — ~10 locations default to `I64_TYPE` when type resolution fails, with no diagnostic. Key sites: closure return inference (`closures.rs:597,604,652,665`), local type lookup (`exprs/mod.rs:180`), fn_sigs miss (`calls.rs:786`). Should at minimum `debug_assert!` or log. [added: 2026-03-17]
 
-- **IR: re-enable copy propagation** — Disabled in `transforms/optimize.rs:88` due to Str/GorgetString TypeId aliasing. Significant optimization opportunity blocked. [added: 2026-03-17]
 
 - **IR: shared AST visitor for closure analysis** — `collect_free_vars()` and `detect_mutations()` in `closures.rs:335-482` duplicate ~150 lines of identical tree-walking code. Extract shared visitor trait. [added: 2026-03-17]
 

@@ -14,7 +14,7 @@ from resolve import ResolveContext
 
 # ── DefKind to string ───────────────────────────────────────
 
-str def_kind_str(DefKind kind):
+String def_kind_str(DefKind kind):
     match kind:
         case DkFunction():
             return "Function"
@@ -43,7 +43,7 @@ str def_kind_str(DefKind kind):
 
 # ── ScopeKind to string ────────────────────────────────────
 
-str scope_kind_str(ScopeKind kind):
+String scope_kind_str(ScopeKind kind):
     match kind:
         case SkModule():
             return "Module"
@@ -60,12 +60,12 @@ str scope_kind_str(ScopeKind kind):
 
 # ── Format definitions ──────────────────────────────────────
 
-str format_definitions(ScopeTable scopes):
-    Vector[str] lines = Vector[str]()
+String format_definitions(ScopeTable scopes):
+    Vector[String] lines = Vector[String]()
     int i = 0
     while i < scopes.def_count():
         DefInfo d = scopes.get_def(i)
-        str kind = def_kind_str(d.kind)
+        String kind = def_kind_str(d.kind)
         String line = "DEF " + int_to_str(i) + " " + kind + " " + quote(d.name) + " " + int_to_str(d.span.start) + ":" + int_to_str(d.span.end)
         lines.push(line)
         i = i + 1
@@ -73,13 +73,13 @@ str format_definitions(ScopeTable scopes):
 
 # ── Format scopes ───────────────────────────────────────────
 
-str format_scopes(ScopeTable scopes):
-    Vector[str] lines = Vector[str]()
+String format_scopes(ScopeTable scopes):
+    Vector[String] lines = Vector[String]()
     int i = 0
     while i < scopes.scope_count():
         ScopeKind kind = scopes.scope_kind(i)
         int parent = scopes.scope_parent(i)
-        str kind_str = scope_kind_str(kind)
+        String kind_str = scope_kind_str(kind)
         String line = "SCOPE " + int_to_str(i) + " " + kind_str + " parent:" + int_to_str(parent)
         lines.push(line)
         i = i + 1
@@ -87,8 +87,8 @@ str format_scopes(ScopeTable scopes):
 
 # ── Format resolution map ──────────────────────────────────
 
-str format_resolution_map(Dict[int, int] res_map):
-    Vector[str] lines = Vector[str]()
+String format_resolution_map(Dict[int, int] res_map):
+    Vector[String] lines = Vector[String]()
     Vector[int] keys = Vector[int]()
     for (key, value) in res_map:
         keys.push(key)
@@ -104,11 +104,11 @@ str format_resolution_map(Dict[int, int] res_map):
 
 # ── Format all ──────────────────────────────────────────────
 
-str format_all(ScopeTable scopes, ResolveContext ctx):
-    str defs = format_definitions(scopes)
-    str scope_str = format_scopes(scopes)
-    str res = format_resolution_map(ctx.resolution_map)
-    str result = defs
+String format_all(ScopeTable scopes, ResolveContext ctx):
+    String defs = format_definitions(scopes)
+    String scope_str = format_scopes(scopes)
+    String res = format_resolution_map(ctx.resolution_map)
+    String result = defs
     if scope_str != "":
         result = result + "\n" + scope_str
     if res != "":
@@ -117,14 +117,14 @@ str format_all(ScopeTable scopes, ResolveContext ctx):
 
 # ── Helpers ─────────────────────────────────────────────────
 
-str quote(str s):
-    str dq = "\""
+String quote(String s):
+    String dq = "\""
     return dq + s + dq
 
-str join_lines(Vector[str] lines):
+String join_lines(Vector[String] lines):
     if lines.len() == 0:
         return ""
-    str result = lines.get(0).unwrap()
+    String result = lines.get(0).unwrap()
     int i = 1
     while i < lines.len():
         result = result + "\n" + lines.get(i).unwrap()

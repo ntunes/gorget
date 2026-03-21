@@ -56,7 +56,7 @@ EnumVariant get_variant_at(Vector[EnumVariant] v, int i):
 # Scans all definitions for a matching name (and optionally DkFunction kind).
 # Returns the first match or NO_DEF.
 
-int find_def_by_name(ScopeTable scopes, str name, bool require_function):
+int find_def_by_name(ScopeTable scopes, String name, bool require_function):
     int i = 0
     while i < scopes.def_count():
         DefInfo d = scopes.get_def(i)
@@ -80,11 +80,11 @@ int find_def_by_name(ScopeTable scopes, str name, bool require_function):
 # This helper searches all stored scopes, picks one whose parent chain
 # includes parent_scope.
 
-int find_body_scope(str name, int parent_scope, ScopeTable scopes, ResolveContext ctx):
+int find_body_scope(String name, int parent_scope, ScopeTable scopes, ResolveContext ctx):
     int best = -1
     int i = 0
     while i < ctx.fn_scope_names.len():
-        str sn = ctx.fn_scope_names.get(i).unwrap()
+        String sn = ctx.fn_scope_names.get(i).unwrap()
         if sn == name:
             int sid = ctx.fn_scope_ids.get(i).unwrap()
             # Check direct parent match
@@ -305,13 +305,13 @@ void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_
 
 # ── Resolve variant field types from a scrutinee type ─────
 
-Vector[int] resolve_variant_field_types(int scrutinee_type, str variant_name, ScopeTable scopes, TypeTable types):
+Vector[int] resolve_variant_field_types(int scrutinee_type, String variant_name, ScopeTable scopes, TypeTable types):
     Vector[int] result = Vector[int]()
     if scrutinee_type < 0 or scrutinee_type >= types.types.len():
         return result
 
     # Strip qualified prefix: "Color.Blue" → "Blue"
-    str lookup_name = variant_name
+    String lookup_name = variant_name
     int dot_pos = -1
     int ci = 0
     while ci < variant_name.len():
@@ -319,7 +319,7 @@ Vector[int] resolve_variant_field_types(int scrutinee_type, str variant_name, Sc
             dot_pos = ci
         ci = ci + 1
     if dot_pos >= 0:
-        str after_dot = ""
+        String after_dot = ""
         int di = dot_pos + 1
         while di < variant_name.len():
             after_dot = after_dot + variant_name.char_at(di)
@@ -378,7 +378,7 @@ int extract_element_type(int iterable_type, ScopeTable scopes, TypeTable types):
 
     ResolvedType rt = get_rtype_at(types.types, iterable_type)
 
-    # str iteration → str (character iteration)
+    # String iteration → String (character iteration)
     match rt:
         case RTPrimitive(name):
             if name == "str" or name == "String":
@@ -561,12 +561,12 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
 # After walk_expr_closures assigns types to closure param defs,
 # rebuild the RTFunction type for the auto-variable holding the closure.
 
-void rebuild_closure_var_type(str var_name, Vector[Param] cl_params, Vector[Stmt] cl_body, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
+void rebuild_closure_var_type(String var_name, Vector[Param] cl_params, Vector[Stmt] cl_body, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
     # Find each param def that has a type var assigned (from walk_expr_closures)
     Vector[int] param_type_ids = Vector[int]()
     Vector[int] param_ownerships = Vector[int]()
     Vector[int] param_def_ids = Vector[int]()
-    Dict[str, int] param_types = Dict[str, int]()
+    Dict[String, int] param_types = Dict[String, int]()
     int pi = 0
     while pi < cl_params.len():
         Param p = get_param_at(cl_params, pi)
@@ -595,7 +595,7 @@ void rebuild_closure_var_type(str var_name, Vector[Param] cl_params, Vector[Stmt
     if var_def >= 0:
         scopes.set_def_type(var_def, fn_type)
 
-int find_typevar_def(int scope_id, str name, ScopeTable &scopes, TypeTable &types):
+int find_typevar_def(int scope_id, String name, ScopeTable &scopes, TypeTable &types):
     # Find a def named `name` in the subtree that has a type-var type
     int i = 0
     while i < scopes.def_count():
@@ -1029,7 +1029,7 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
             int wi = 0
             while wi < with_exprs.len() and wi < with_names.len():
                 SpannedExpr wexpr = with_exprs.get(wi).unwrap()
-                str wname = with_names.get(wi).unwrap()
+                String wname = with_names.get(wi).unwrap()
                 # Unwrap EAs — the parser wraps `expr as name` into EAs(expr, name)
                 match wexpr.expr:
                     case EAs(inner, _):

@@ -24,8 +24,8 @@ struct SpannedPattern:
 # ── Types ────────────────────────────────────────────────────
 
 enum Type:
-    TPrimitive(str)
-    TNamed(str, Vector[SpannedType])
+    TPrimitive(String)
+    TNamed(String, Vector[SpannedType])
     TArray(Box[SpannedType], int)
     TSlice(Box[SpannedType])
     TTuple(Vector[SpannedType])
@@ -37,10 +37,10 @@ enum Type:
 
 enum Pattern:
     PWildcard
-    PBinding(str)
+    PBinding(String)
     PLiteral(SpannedExpr)
-    PConstructor(str, Vector[SpannedPattern])
-    PDotShorthand(str, Vector[SpannedPattern])
+    PConstructor(String, Vector[SpannedPattern])
+    PDotShorthand(String, Vector[SpannedPattern])
     PTuple(Vector[SpannedPattern])
     POr(Vector[SpannedPattern])
     PRest
@@ -51,17 +51,17 @@ enum Expr:
     EIntLiteral(int)
     EFloatLiteral(float)
     EBoolLiteral(bool)
-    EStringLiteral(str, bool)
-    ECharLiteral(str)
+    EStringLiteral(String, bool)
+    ECharLiteral(String)
     ENoneLiteral
-    EIdentifier(str)
+    EIdentifier(String)
     ESelfExpr
     EIt
-    EBinaryOp(Box[SpannedExpr], str, Box[SpannedExpr])
-    EUnaryOp(str, Box[SpannedExpr])
+    EBinaryOp(Box[SpannedExpr], String, Box[SpannedExpr])
+    EUnaryOp(String, Box[SpannedExpr])
     ECall(Box[SpannedExpr], Vector[SpannedExpr], Vector[SpannedType])
-    EMethodCall(Box[SpannedExpr], str, Vector[SpannedExpr], Vector[SpannedType])
-    EFieldAccess(Box[SpannedExpr], str)
+    EMethodCall(Box[SpannedExpr], String, Vector[SpannedExpr], Vector[SpannedType])
+    EFieldAccess(Box[SpannedExpr], String)
     EIndex(Box[SpannedExpr], Box[SpannedExpr])
     ERange(Option[Box[SpannedExpr]], Option[Box[SpannedExpr]])
     EIf(Box[SpannedExpr], Vector[Stmt], Vector[ElseBranch])
@@ -71,32 +71,32 @@ enum Expr:
     EArrayLiteral(Vector[SpannedExpr])
     ETupleLiteral(Vector[SpannedExpr])
     EDictLiteral(Vector[SpannedExpr], Vector[SpannedExpr])
-    EStructLiteral(str, Vector[str], Vector[SpannedExpr])
-    EDotShorthand(str, Vector[SpannedExpr])
+    EStructLiteral(String, Vector[String], Vector[SpannedExpr])
+    EDotShorthand(String, Vector[SpannedExpr])
     ETry(Box[SpannedExpr])
     EMove(Box[SpannedExpr])
     EMutableBorrow(Box[SpannedExpr])
     EDeref(Box[SpannedExpr])
     EAs(Box[SpannedExpr], Box[SpannedType])
     EBlock(Vector[Stmt])
-    EListComp(Box[SpannedExpr], str, Box[SpannedExpr], Option[Box[SpannedExpr]])
-    ESetComp(Box[SpannedExpr], str, Box[SpannedExpr], Box[SpannedExpr])
-    EDictComp(Box[SpannedExpr], Box[SpannedExpr], str, Box[SpannedExpr])
+    EListComp(Box[SpannedExpr], String, Box[SpannedExpr], Option[Box[SpannedExpr]])
+    ESetComp(Box[SpannedExpr], String, Box[SpannedExpr], Box[SpannedExpr])
+    EDictComp(Box[SpannedExpr], Box[SpannedExpr], String, Box[SpannedExpr])
     EDefaultOp(Box[SpannedExpr], Box[SpannedExpr])
     EIs(Box[SpannedExpr], bool, Box[SpannedPattern])
     EDo(Vector[Stmt])
     EAwait(Box[SpannedExpr])
     ESpawn(Box[SpannedExpr])
     ESpawnBlocking(Box[SpannedExpr])
-    ERethrow(Box[SpannedExpr], Option[str], Option[Box[SpannedType]], Box[SpannedExpr])
-    ECatch(Box[SpannedExpr], str, Box[SpannedExpr])
+    ERethrow(Box[SpannedExpr], Option[String], Option[Box[SpannedType]], Box[SpannedExpr])
+    ECatch(Box[SpannedExpr], String, Box[SpannedExpr])
 
 # ── Statements ───────────────────────────────────────────────
 
 enum Stmt:
-    SVarDecl(SpannedType, str, SpannedExpr, int, int, int)
+    SVarDecl(SpannedType, String, SpannedExpr, int, int, int)
     SAssign(SpannedExpr, SpannedExpr)
-    SCompoundAssign(SpannedExpr, str, SpannedExpr)
+    SCompoundAssign(SpannedExpr, String, SpannedExpr)
     SExpr(SpannedExpr)
     SReturn(Option[SpannedExpr])
     SThrow(SpannedExpr)
@@ -111,14 +111,14 @@ enum Stmt:
     SLoop(Vector[Stmt])
     SIf(SpannedExpr, Vector[Stmt], Vector[ElseBranch])
     SMatch(SpannedExpr, Vector[MatchArm])
-    SWith(SpannedExpr, str, Vector[Stmt])
-    SAssert(SpannedExpr, Option[str])
-    SAssertReturn(SpannedExpr, Option[str])
-    SNamedScope(str, Vector[Stmt])
+    SWith(SpannedExpr, String, Vector[Stmt])
+    SAssert(SpannedExpr, Option[String])
+    SAssertReturn(SpannedExpr, Option[String])
+    SNamedScope(String, Vector[Stmt])
     SSelect(Vector[SelectArm])
     SOnError(Vector[Stmt])
     SItem(Item)
-    SSnapshot(str, int, SpannedExpr)
+    SSnapshot(String, int, SpannedExpr)
 
 # ── Items ────────────────────────────────────────────────────
 
@@ -129,20 +129,20 @@ enum Item:
     ITrait(TraitDef)
     IEquip(EquipBlock)
     IImport(ImportStmt)
-    IDirective(str, str)
-    ITypeAlias(str, Vector[str], SpannedType)
-    INewtype(str, SpannedType)
-    IConstDecl(SpannedType, str, SpannedExpr)
-    IMetaConst(SpannedType, str, SpannedExpr)
-    IMetaType(str, MetaTypeRhs)
-    IMetaTypeFunc(str)
+    IDirective(String, String)
+    ITypeAlias(String, Vector[String], SpannedType)
+    INewtype(String, SpannedType)
+    IConstDecl(SpannedType, String, SpannedExpr)
+    IMetaConst(SpannedType, String, SpannedExpr)
+    IMetaType(String, MetaTypeRhs)
+    IMetaTypeFunc(String)
     IMetaAssert
     IMetaIf
     IMetaLog
-    IStaticDecl(SpannedType, str, SpannedExpr)
+    IStaticDecl(SpannedType, String, SpannedExpr)
     IExternBlock(Vector[FunctionDef])
-    ITest(str, Vector[SpannedExpr], Vector[str], Vector[Stmt])
-    IBench(str, Vector[Stmt])
+    ITest(String, Vector[SpannedExpr], Vector[String], Vector[Stmt])
+    IBench(String, Vector[Stmt])
     ISuiteSetup(Vector[Stmt])
     ISuiteTeardown(Vector[Stmt])
 
@@ -150,51 +150,51 @@ enum Item:
 
 enum MetaTypeRhs:
     MtrPlain(SpannedType)
-    MtrConditional(SpannedType, str, SpannedType)
-    MtrCall(str, Vector[SpannedExpr])
+    MtrConditional(SpannedType, String, SpannedType)
+    MtrCall(String, Vector[SpannedExpr])
     MtrUnresolved
 
 # ── Supporting structures ────────────────────────────────────
 
 struct Param:
     SpannedType param_type
-    str param_name
+    String param_name
     int ownership
 
 struct FunctionDef:
-    str name
+    String name
     Vector[Param] params
     SpannedType return_type
-    Vector[str] type_params
+    Vector[String] type_params
     Vector[Stmt] body
     bool is_expr_body
 
 struct StructDef:
-    str name
+    String name
     Vector[Param] fields
-    Vector[str] type_params
-    Vector[str] derives
+    Vector[String] type_params
+    Vector[String] derives
 
 struct EnumDef:
-    str name
+    String name
     Vector[EnumVariant] variants
-    Vector[str] type_params
-    Vector[str] derives
+    Vector[String] type_params
+    Vector[String] derives
 
 struct EnumVariant:
-    str name
+    String name
     Vector[SpannedType] fields
 
 struct TraitDef:
-    str name
-    Vector[str] type_params
+    String name
+    Vector[String] type_params
     Vector[FunctionDef] methods
-    Vector[str] parent_traits
+    Vector[String] parent_traits
 
 struct EquipBlock:
     SpannedType target
-    Vector[str] type_params
-    Option[str] trait_name
+    Vector[String] type_params
+    Option[String] trait_name
     Vector[FunctionDef] methods
 
 struct MatchArm:
@@ -207,11 +207,11 @@ struct ElseBranch:
     Vector[Stmt] body
 
 struct ImportStmt:
-    str module_path
-    Vector[str] names
+    String module_path
+    Vector[String] names
 
 enum SelectOp:
-    SORecv(str, int, SpannedExpr)
+    SORecv(String, int, SpannedExpr)
     SOSend(SpannedExpr, SpannedExpr)
 
 struct SelectArm:

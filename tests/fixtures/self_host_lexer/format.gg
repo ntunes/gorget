@@ -1,11 +1,11 @@
 # Canonical token formatting for lexer comparison testing.
-# Exports describe_token_canonical(Token) -> str with identical format
+# Exports describe_token_canonical(Token) -> String with identical format
 # to the Rust-side describe_token_canonical_rust().
 
 from lexer import Token, Keyword, StringLiteral, StringSegment, StringKind
 from std.conv import int_to_str, float_to_str
 
-str escape_char_canonical(str c):
+String escape_char_canonical(String c):
     if c == "\n":
         return "\\n"
     if c == "\r":
@@ -18,16 +18,16 @@ str escape_char_canonical(str c):
         return "\\\\"
     return c
 
-str escape_canonical(str s):
-    str result = ""
+String escape_canonical(String s):
+    String result = ""
     int i = 0
     while i < s.byte_len():
-        str c = s.byte_slice(i, i + 1)
+        String c = s.byte_slice(i, i + 1)
         result = result + escape_char_canonical(c)
         i = i + 1
     return result
 
-str describe_keyword_canonical(Keyword kw):
+String describe_keyword_canonical(Keyword kw):
     match kw:
         case KwInt():
             return "kw:int"
@@ -215,8 +215,8 @@ str describe_keyword_canonical(Keyword kw):
             return "kw:mod"
     return "kw:unknown"
 
-str describe_string_canonical(StringLiteral slit):
-    str prefix = "str:"
+String describe_string_canonical(StringLiteral slit):
+    String prefix = "str:"
     match slit.lex_kind:
         case SkRaw():
             prefix = "rstr:"
@@ -226,7 +226,7 @@ str describe_string_canonical(StringLiteral slit):
             prefix = "bstr:"
         else:
             pass
-    str result = prefix
+    String result = prefix
     int i = 0
     while i < slit.lex_segments.len():
         StringSegment seg = slit.lex_segments.get(i).unwrap()
@@ -238,7 +238,7 @@ str describe_string_canonical(StringLiteral slit):
         i = i + 1
     return result
 
-str describe_token_canonical(Token t):
+String describe_token_canonical(Token t):
     match t:
         case TkKeyword(kw):
             return describe_keyword_canonical(kw)
