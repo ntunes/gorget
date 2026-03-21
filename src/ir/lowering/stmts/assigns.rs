@@ -167,6 +167,20 @@ pub(super) fn lower_field_assign(
 ) {
     use crate::ir::types::TypeDefKind;
 
+    // Try to resolve the full field projection chain without materializing
+    // intermediate struct values. This handles nested field writes like
+    // `gs.current_weapon.ammo = x` by building Place { local: gs, projections: [Deref, Field(5), Field(2)] }
+    // instead of copying the intermediate struct to a temp.
+    if let Some((target_place, field_type)) = try_resolve_field_place(ctx, builder, object, field_name) {
+        let rhs = lower_expr(ctx, builder, value);
+        emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
+        maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
+        maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
+        builder.assign(target_place, rhs);
+        return;
+    }
+
+    // Fallback: lower_expr on object (may copy intermediate structs)
     // For mut_capture_locals (mutable borrow params), use the pointer local directly
     // instead of lower_expr which would copy the deref'd value to a temp
     let obj = if let Expr::Identifier(name) = &object.node {
