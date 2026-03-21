@@ -7,7 +7,7 @@ use crate::parser::ast::{Expr, Pattern};
 use crate::span::Spanned;
 
 use super::super::context::LoweringContext;
-use super::{lower_expr, infer_operand_type_full};
+use super::{lower_expr, infer_operand_type_full, infer_collection_element_type};
 
 /// Lower `[e1, e2, ...]` to `gorget_array_new(sizeof(elem))` + N `gorget_array_push` calls.
 pub(super) fn lower_array_literal(
@@ -236,13 +236,88 @@ pub(super) fn lower_list_comprehension(
         builder.switch_to(exit_bb);
         FunctionBuilder::copy(acc_local)
     } else {
-        // Non-range iterables: emit placeholder
-        builder.nop();
+        // Non-range iterables (e.g. vector variables): iterate by index
+        let iter_op = lower_expr(ctx, builder, iterable);
+        let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
+        let iter_local = builder.add_local(iter_type, None);
+        builder.assign(Place::local(iter_local), iter_op);
+
+        // Get element type from collection
+        let elem_type = infer_collection_element_type(ctx, iter_type);
+
+        // Create accumulator array with correct element size
         let acc_local = builder.call_extern(
             "gorget_array_new",
-            vec![Operand::Constant(Constant::SizeOf(I64_TYPE))],
+            vec![Operand::Constant(Constant::SizeOf(elem_type))],
             array_type,
         );
+
+        // idx = 0
+        let idx = builder.add_local(I64_TYPE, None);
+        builder.assign(Place::local(idx), Operand::Constant(Constant::I64(0)));
+
+        // len = iter.len (field index 1 of GorgetArray)
+        let len = builder.add_local(I64_TYPE, None);
+        let len_place = Place {
+            local: iter_local,
+            projections: vec![Projection::Field(1)],
+        };
+        builder.assign(Place::local(len), Operand::Copy(len_place));
+
+        let header_bb = builder.new_block();
+        let body_bb = builder.new_block();
+        let push_bb = if condition.is_some() { Some(builder.new_block()) } else { None };
+        let incr_bb = builder.new_block();
+        let exit_bb = builder.new_block();
+
+        builder.jump(header_bb);
+
+        // Header: idx < len
+        builder.switch_to(header_bb);
+        let cond = builder.cmp(CmpOp::Lt, I64_TYPE, FunctionBuilder::copy(idx), FunctionBuilder::copy(len));
+        builder.branch(FunctionBuilder::copy(cond), body_bb, exit_bb);
+
+        // Body
+        builder.switch_to(body_bb);
+
+        // Register comprehension variable: elem = iter[idx]
+        let var_name = match &variable.node {
+            Pattern::Binding(name) => name.clone(),
+            _ => "_comp_var".to_string(),
+        };
+        let elem = builder.index_load(Place::local(iter_local), FunctionBuilder::copy(idx), elem_type);
+        ctx.register_local(&var_name, elem, elem_type);
+
+        // Optionally check condition (filter)
+        if let Some(cond_expr) = condition {
+            let filter = lower_expr(ctx, builder, cond_expr);
+            builder.branch(filter, push_bb.unwrap(), incr_bb);
+            builder.switch_to(push_bb.unwrap());
+        }
+
+        // Push element
+        let elem_val = lower_expr(ctx, builder, comp_expr);
+        let pushed_elem_type = infer_operand_type_full(ctx, &elem_val, builder);
+        let el = builder.add_local(pushed_elem_type, None);
+        builder.assign(Place::local(el), elem_val);
+        let el_ref = builder.borrow(Place::local(el), ctx.register_ptr_type(pushed_elem_type));
+        let arr_ref = builder.borrow_mut(Place::local(acc_local), ctx.register_mut_ptr_type(array_type));
+        builder.call_extern(
+            "gorget_array_push",
+            vec![FunctionBuilder::copy(arr_ref), FunctionBuilder::copy(el_ref)],
+            UNIT_TYPE,
+        );
+        builder.jump(incr_bb);
+
+        // Increment
+        builder.switch_to(incr_bb);
+        let one = Operand::Constant(Constant::I64(1));
+        let incremented = builder.bin_op(BinOp::Add, I64_TYPE, FunctionBuilder::copy(idx), one);
+        builder.assign(Place::local(idx), FunctionBuilder::copy(incremented));
+        builder.jump(header_bb);
+
+        // Exit
+        builder.switch_to(exit_bb);
         FunctionBuilder::copy(acc_local)
     }
 }

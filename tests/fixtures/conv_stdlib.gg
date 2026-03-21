@@ -110,3 +110,20 @@ void main():
 
     String sd = str.default()
     print(f"str_default:{sd}:")
+
+    # ── Out-of-range narrow parse ────────────────────────────
+    Option[uint8] u8_over = uint8.parse("256")
+    if u8_over is None:
+        print("u8_256_none")
+
+    Option[int8] i8_over = int8.parse("128")
+    if i8_over is None:
+        print("i8_128_none")
+
+    Option[int8] i8_under = int8.parse("-129")
+    if i8_under is None:
+        print("i8_neg129_none")
+
+    Option[uint16] u16_over = uint16.parse("65536")
+    if u16_over is None:
+        print("u16_65536_none")

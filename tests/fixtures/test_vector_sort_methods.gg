@@ -168,7 +168,6 @@ void main():
     print(vs2[0])
 
     # === 12. Sort with negative numbers ===
-    # NOTE: negatives sort after positives (unsigned compare bug)
     Vector[int] vn = Vector[int]()
     vn.push(-5)
     vn.push(3)

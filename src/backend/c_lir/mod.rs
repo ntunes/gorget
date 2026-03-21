@@ -433,6 +433,7 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         writeln!(out, "#endif").unwrap();
         // Comparison functions for sorted()
         writeln!(out, "static int gorget_generic_compare(const void* a, const void* b) {{ return memcmp(a, b, sizeof(int64_t)); }}").unwrap();
+        writeln!(out, "static int gorget_int_compare(const void* a, const void* b) {{ int64_t va = *(const int64_t*)a, vb = *(const int64_t*)b; return (va > vb) - (va < vb); }}").unwrap();
         writeln!(out, "static int gorget_float_compare(const void* a, const void* b) {{ double da = *(const double*)a, db = *(const double*)b; return (da > db) - (da < db); }}").unwrap();
         writeln!(out, "static int gorget_str_compare(const void* a, const void* b) {{ Str sa = *(const Str*)a, sb = *(const Str*)b; size_t ml = sa.len < sb.len ? sa.len : sb.len; int r = memcmp(sa.data, sb.data, ml); if (r) return r; return (sa.len > sb.len) - (sa.len < sb.len); }}").unwrap();
         writeln!(out, "static inline int64_t int64_t__one(void) {{ return 1; }}").unwrap();
@@ -4511,9 +4512,18 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 else if name.contains("int16") { "int16_t" }
                                 else if name.contains("int32") { "int32_t" }
                                 else { "int64_t" };
+                            let range_check = match cast_type {
+                                "int8_t" => " && __pr.value >= -128 && __pr.value <= 127",
+                                "int16_t" => " && __pr.value >= -32768 && __pr.value <= 32767",
+                                "int32_t" => " && __pr.value >= -2147483648LL && __pr.value <= 2147483647LL",
+                                "uint8_t" => " && __pr.value >= 0 && __pr.value <= 255",
+                                "uint16_t" => " && __pr.value >= 0 && __pr.value <= 65535",
+                                "uint32_t" => " && __pr.value >= 0 && __pr.value <= 4294967295LL",
+                                _ => "", // int64_t / uint64_t: full-width, no check needed
+                            };
                             let cstr_arg = if !args.is_empty() { coerce_arg_to_cstr(args[0]) } else { "NULL".to_string() };
                             write!(out, "{dv} = ({{ const char* __pa = {cstr_arg}; GorgetParseIntResult __pr = gorget_try_parse_int(__pa, strlen(__pa)); \
-                                {opt_c} __opt; if (__pr.ok) {{ __opt.tag = 0; __opt.{payload_fname} = ({cast_type})__pr.value; }} \
+                                {opt_c} __opt; if (__pr.ok{range_check}) {{ __opt.tag = 0; __opt.{payload_fname} = ({cast_type})__pr.value; }} \
                                 else {{ __opt.tag = 1; }} __opt; }});",
                                 dv = v(*d)).unwrap();
                             return;
@@ -7342,6 +7352,7 @@ fn compare_fn_for_elem(elem_c: &str) -> &'static str {
     match elem_c {
         "double" | "float" => "gorget_float_compare",
         "Str" => "gorget_str_compare",
+        "int64_t" => "gorget_int_compare",
         _ => "gorget_generic_compare",
     }
 }

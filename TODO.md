@@ -17,7 +17,6 @@
 
 - **Spawn captures don't check stale shared-derived** — A closure spawned after an await can capture a variable derived from a shared binding that is now stale. `check_spawn_closure_captures` checks `has_borrowed_origin` but doesn't intersect captured DefIds against `stale_shared_derived`. The spawned task silently uses pre-await data. Fix: in check_spawn_closure_captures, check if captured def_id is in stale_shared_derived and warn/error. [added: 2026-03-18]
 
-- **C backend: `uint8.parse("256")` silently wraps** — `parse()` for narrow integer types (int8, uint8, int16, uint16, int32, uint32) casts the int64 result directly to the target type without range validation. `uint8.parse("256")` returns `Some(0)` instead of `None`. Fix: add range check before cast in c/mod.rs parse codegen (~line 10348). [added: 2026-03-18]
 
 - **Replace auto-borrow with explicit reference semantics** — **Phase 1 done (2026-03-20):** `const_params` field added to `LirFunction`; LIR lowering populates it from `GirType::Ptr` (bare borrow); C backend emits `const void*` for const params in both forward declarations and definitions. 843/844 integration tests pass (bench_basic pre-existing). **Phase 2 (const value propagation):** Track constness through intermediate values so the C compiler catches mutations through copies of const params. Not yet started. **Phase 3 blocked on collection reference semantics** (see below). [added: 2026-03-13, updated: 2026-03-20]
 
@@ -30,7 +29,6 @@
 
 - **`shared_stress_yield` flaky deadlock under full test suite**: The fixture runs fine standalone and in isolation but occasionally hangs (infinite CPU loop) when run as part of the full 670+ test suite. Timing-dependent — likely a contention issue in the coroutine runtime's shared counter lock release/reacquire path. Reproduce: `cargo test --test integration -- --test-threads=1` and wait for `shared_stress_yield`. [added: 2026-03-11]
 
-- **Comprehensions over vector variables produce empty results**: `[x * 10 for int x in some_vector]` silently yields an empty vector. Comprehensions only work correctly with range expressions (`0..N`). The comprehension codegen likely doesn't wire up vector iteration properly. [added: 2026-03-11]
 
 - **Multi-line closures with return always typed as void**: `infer_closure_return_type` in `src/ir/lowering/closures.rs:664` hardcodes `Expr::Block(_) => UNIT_TYPE`. Multi-line closures like `(int x): int y = x + 1; return y * 2` fail type checking because the return type is inferred as void instead of int. Only single-expression closures and void (side-effect) closures work. Fix: walk the block's return statements to infer the actual return type. [added: 2026-03-11]
 

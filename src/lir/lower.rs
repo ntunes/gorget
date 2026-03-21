@@ -4808,9 +4808,12 @@ fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
         return Some(format!("gorget_write_guard_{method}"));
     }
     // uint8_t__method → gorget_uint8_method (byte equip methods)
+    // Exclude parse/default — these go through the generic int parse path in the C backend.
     if name.starts_with("uint8_t__") {
         let method = name.strip_prefix("uint8_t__")?;
-        return Some(format!("gorget_uint8_{method}"));
+        if method != "parse" && method != "default" {
+            return Some(format!("gorget_uint8_{method}"));
+        }
     }
     // Bare stdlib helpers → gorget_ prefixed runtime functions.
     // Delegates to the shared map_stdlib_name() in crate::backend.

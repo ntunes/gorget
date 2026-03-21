@@ -54,4 +54,20 @@ void main():
     for v in multiples:
         print(f"{v}")
 
+    # 11. Comprehension over vector variable
+    Vector[int] src = Vector[int]()
+    src.push(10)
+    src.push(20)
+    src.push(30)
+    Vector[int] from_vec = [x * 2 for x in src]
+    print(f"from_vec len: {from_vec.len()}")
+    for v in from_vec:
+        print(f"{v}")
+
+    # 12. Comprehension over vector with filter
+    Vector[int] filtered = [x for x in src if x > 15]
+    print(f"filtered len: {filtered.len()}")
+    for v in filtered:
+        print(f"{v}")
+
     print("done")

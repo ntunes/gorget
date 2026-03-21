@@ -567,6 +567,13 @@ multiples len: 8
 35
 42
 49
+from_vec len: 3
+20
+40
+60
+filtered len: 2
+20
+30
 done",
     );
 }
@@ -3792,7 +3799,11 @@ neg0_ok
 77
 0.000000
 false
-str_default::");
+str_default::
+u8_256_none
+i8_128_none
+i8_neg129_none
+u16_65536_none");
 }
 
 #[test]
@@ -13688,12 +13699,12 @@ alpha
 mango
 zebra
 zebra
-0
-3
-7
 -10
 -5
 -1
+0
+3
+7
 99
 0
 5
