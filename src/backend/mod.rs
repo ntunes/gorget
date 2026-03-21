@@ -458,8 +458,26 @@ pub fn generate_hot_reload_split(
         host.push_str(&full_c[..pos]);
     } else {
         host.push_str(c::c_runtime::RUNTIME_PREAMBLE);
+        host.push_str(c::c_runtime::RUNTIME_STRING);
+        host.push_str(c::c_runtime::RUNTIME_STRING_EXTENDED);
+        host.push_str(c::c_runtime::RUNTIME_STRING_BASE_OPS);
         host.push_str(c::c_runtime::PANIC_NORMAL);
-        host.push_str(c::c_runtime::RUNTIME_CORE);
+        // Include all core sections for hot-reload host fallback
+        host.push_str(c::c_runtime::RUNTIME_CHECKED_ARITH);
+        host.push_str(c::c_runtime::RUNTIME_ARRAY);
+        host.push_str(c::c_runtime::RUNTIME_STRING_ARRAY);
+        host.push_str(c::c_runtime::RUNTIME_MAP);
+        host.push_str(c::c_runtime::RUNTIME_SET);
+        host.push_str(c::c_runtime::RUNTIME_ERROR);
+        host.push_str(c::c_runtime::RUNTIME_FILE);
+        host.push_str(c::c_runtime::RUNTIME_PATH);
+        host.push_str(c::c_runtime::RUNTIME_ARGS);
+        host.push_str(c::c_runtime::RUNTIME_PARSE);
+        host.push_str(c::c_runtime::RUNTIME_TOSTR);
+        host.push_str(c::c_runtime::RUNTIME_ENV);
+        host.push_str(c::c_runtime::RUNTIME_IO);
+        host.push_str(c::c_runtime::RUNTIME_MATH);
+        host.push_str(c::c_runtime::RUNTIME_SORT);
     }
     // HOT_RELOAD_RUNTIME was already emitted in the full code; don't double-emit.
     // Just emit the function-pointer typedefs and main().

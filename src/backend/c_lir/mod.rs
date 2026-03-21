@@ -128,16 +128,6 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
     let mut out = String::with_capacity(if include_runtime { 256 * 1024 } else { 4096 });
 
     if include_runtime {
-        // Include the full Gorget runtime (provides Str, GorgetString, collections, etc.)
-        out.push_str(crate::backend::c::c_runtime::RUNTIME_PREAMBLE);
-        if module.test_fns.is_empty() && module.bench_fns.is_empty() && !module.is_test_module {
-            out.push_str(crate::backend::c::c_runtime::PANIC_NORMAL);
-        } else {
-            out.push_str(crate::backend::c::c_runtime::PANIC_TEST);
-        }
-        out.push_str(crate::backend::c::c_runtime::RUNTIME_CORE);
-        writeln!(out).unwrap();
-
         // Scan ALL call names (externs + function names + CallExtern inside bodies)
         // to determine which optional runtime modules are needed.
         let mut all_call_names: Vec<&str> = module.externs.iter().map(|e| e.name.as_str())
@@ -156,6 +146,215 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
 
         // Also check struct names for monomorphized types that need specific runtimes.
         let _has_struct = |name: &str| module.structs.iter().any(|s| s.name == name);
+
+        // ── Minimal preamble (headers, allocator, scoped alloc stubs) ──
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_PREAMBLE);
+
+        // ── Conditional allocators ──
+        if has(&|n| n.starts_with("gorget_arena_") || n.starts_with("GorgetArena")) {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_ARENA_ALLOC);
+        }
+        if has(&|n| n.starts_with("gorget_tracking_")) {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_TRACKING_ALLOC);
+        }
+        if has(&|n| n.starts_with("gorget_pool_") || n.starts_with("GorgetPool")) {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_POOL_ALLOC);
+        }
+        if has(&|n| n.starts_with("gorget_tlsf_")) {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_TLSF_ALLOC);
+        }
+        if has(&|n| n.starts_with("gorget_fba_") || n.starts_with("gorget_fixed_buffer_")) {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_FIXEDBUF_ALLOC);
+        }
+        if has(&|n| n.starts_with("gorget_fallback_")) {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_FALLBACK_ALLOC);
+        }
+
+        // ── String types and operations ──
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_STRING);
+
+        // Extended string methods (unicode tables, search, split/replace/trim/etc.)
+        if has(&|n| n.starts_with("gorget_str_to_upper") || n.starts_with("gorget_str_to_lower")
+            || n.starts_with("gorget_str_is_alpha") || n.starts_with("gorget_str_is_upper")
+            || n.starts_with("gorget_str_is_lower") || n.starts_with("gorget_str_is_digit")
+            || n.starts_with("gorget_str_is_whitespace")
+            || n.starts_with("gorget_str_contains") || n.starts_with("gorget_str_starts_with")
+            || n.starts_with("gorget_str_ends_with") || n.starts_with("gorget_str_find")
+            || n.starts_with("gorget_memmem")
+            || n.starts_with("gorget_str_trim") || n.starts_with("gorget_str_replace")
+            || n.starts_with("gorget_str_repeat") || n.starts_with("gorget_str_pad")
+            || n.starts_with("gorget_str_strip") || n.starts_with("gorget_str_lstrip")
+            || n.starts_with("gorget_str_rstrip") || n.starts_with("gorget_str_removeprefix")
+            || n.starts_with("gorget_str_removesuffix") || n.starts_with("gorget_str_index_of")
+            || n.starts_with("gorget_str_count") || n.starts_with("gorget_str_center")
+            || n.starts_with("gorget_str_ljust") || n.starts_with("gorget_str_rjust")
+            || n.starts_with("gorget_str_zfill") || n.starts_with("gorget_str_reverse")
+            || n.starts_with("gorget_str_encode_") || n.starts_with("gorget_str_decode_")
+            || n.starts_with("gorget_base64_") || n.starts_with("gorget_json_escape")
+            || n.starts_with("gorget_str_to_json") || n.starts_with("gorget_str_from_json")
+            || n.starts_with("gorget_uint8_is_") || n.starts_with("gorget_uint8_to_")) {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_STRING_EXTENDED);
+        }
+
+        // Base string operations (Str-aware concat, append, cstr conversion)
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_STRING_BASE_OPS);
+
+        // ── Alloc report (test/bench mode only) ──
+        let is_test_or_bench = !module.test_fns.is_empty() || !module.bench_fns.is_empty() || module.is_test_module;
+        if is_test_or_bench {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_ALLOC_REPORT);
+        }
+
+        // ── Panic handler ──
+        if !is_test_or_bench {
+            out.push_str(crate::backend::c::c_runtime::PANIC_NORMAL);
+        } else {
+            out.push_str(crate::backend::c::c_runtime::PANIC_TEST);
+        }
+
+        // ── Conditional core sections (formerly RUNTIME_CORE) ──
+        // Use flags to track what's been emitted and enforce dependencies.
+        let mut emitted_array = false;
+        let mut emitted_map = false;
+
+        // Helper macro to emit RUNTIME_ARRAY if not yet emitted
+        macro_rules! ensure_array {
+            ($out:expr, $flag:expr) => {
+                if !$flag {
+                    $out.push_str(crate::backend::c::c_runtime::RUNTIME_ARRAY);
+                    $flag = true;
+                }
+            };
+        }
+        macro_rules! ensure_map {
+            ($out:expr, $aflag:expr, $mflag:expr) => {
+                ensure_array!($out, $aflag); // MAP depends on ARRAY
+                if !$mflag {
+                    $out.push_str(crate::backend::c::c_runtime::RUNTIME_MAP);
+                    $mflag = true;
+                }
+            };
+        }
+
+        // Checked arithmetic (macros used by integer overflow checks)
+        if has(&|n| n.starts_with("gorget_checked_") || n.starts_with("GORGET_CHECKED_")) {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_CHECKED_ARITH);
+        }
+
+        // Collections: Array
+        if has(&|n| n.starts_with("gorget_array_") || n.starts_with("Vector__")) {
+            ensure_array!(out, emitted_array);
+        }
+
+        // String/Array operations (join, split, iterators — needs RUNTIME_ARRAY)
+        if has(&|n| n.starts_with("gorget_str_join") || n.starts_with("gorget_str_split")
+            || n.starts_with("gorget_str_bytes") || n.starts_with("gorget_str_codepoints")
+            || n.starts_with("gorget_str_chars")) {
+            ensure_array!(out, emitted_array);
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_STRING_ARRAY);
+        }
+
+        // Collections: Map (depends on Array for keys/values/items)
+        if has(&|n| n.starts_with("gorget_map_") || n.starts_with("gorget_dict_")
+            || n.starts_with("Dict__") || n.starts_with("HashMap__")) {
+            ensure_map!(out, emitted_array, emitted_map);
+        }
+
+        // Collections: Set (depends on Map)
+        if has(&|n| n.starts_with("gorget_set_") || n.starts_with("Set__") || n.starts_with("HashSet__")) {
+            ensure_map!(out, emitted_array, emitted_map);
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_SET);
+        }
+
+        // Error handling (test/bench mode or explicit catch/throw)
+        if is_test_or_bench || has(&|n| n.starts_with("gorget_catch") || n.starts_with("gorget_throw")
+            || n.starts_with("gorget_cleanup_")) {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_ERROR);
+        }
+
+        // File I/O (depends on Array for read_file_bytes)
+        if has(&|n| n.starts_with("gorget_file_") || n == "gorget_read_file"
+            || n == "gorget_write_file" || n == "gorget_append_file"
+            || n == "gorget_read_file_bytes"
+            || n == "File__open" || n == "File__create") {  // codegen rewrites to gorget_file_open
+            ensure_array!(out, emitted_array);
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_FILE);
+        }
+
+        // Path functions + readdir (depends on Array for readdir)
+        if has(&|n| n.starts_with("gorget_path_") || n == "gorget_is_file" || n == "gorget_is_dir"
+            || n.starts_with("gorget_mkdir") || n.starts_with("gorget_readdir")
+            || n == "gorget_rename" || n == "gorget_copy_file" || n == "gorget_remove"
+            || n == "gorget_basename" || n == "gorget_dirname" || n == "gorget_file_size"
+            || n == "gorget_file_mtime") {
+            ensure_array!(out, emitted_array);
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_PATH);
+        }
+
+        // CLI args (gorget_args — needs RUNTIME_ARRAY; gorget_init_args is in preamble)
+        if has(&|n| n == "gorget_args") {
+            ensure_array!(out, emitted_array);
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_ARGS);
+        }
+
+        // Parsing (also detects int__parse/float__parse codegen patterns)
+        if has(&|n| n.starts_with("gorget_parse_int") || n.starts_with("gorget_parse_float")
+            || n.starts_with("gorget_try_parse")
+            || (n.ends_with("__parse") && (n.starts_with("int") || n.starts_with("uint")
+                || n == "double__parse" || n == "float__parse" || n == "bool__parse"))) {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_PARSE);
+        }
+
+        // to_str conversions
+        if has(&|n| n.starts_with("gorget_int_to_str") || n.starts_with("gorget_float_to_str")
+            || n.starts_with("gorget_bool_to_str") || n.starts_with("gorget_codepoint_to_utf8")
+            || n.starts_with("gorget_char_to_str") || n.starts_with("gorget_int_to_binary")
+            || n.starts_with("gorget_int_to_hex") || n.starts_with("gorget_int_to_octal")
+            || n.starts_with("gorget_int_to_float") || n.starts_with("gorget_float_to_int")
+            || n == "gorget_char_chr") {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_TOSTR);
+        }
+
+        // Environment
+        if has(&|n| n == "gorget_getenv" || n == "gorget_setenv" || n == "gorget_getcwd"
+            || n == "gorget_platform") {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_ENV);
+        }
+
+        // Interactive I/O, time, datetime, random, line input (depends on Array for dt_decompose)
+        if has(&|n| n.starts_with("gorget_input") || n.starts_with("gorget_rand")
+            || n.starts_with("gorget_seed") || n.starts_with("gorget_sleep_ms")
+            || n == "sleep" || n == "gg_sleep" || n == "sleep_ms"  // codegen rewrites to gorget_sleep_ms
+            || n.starts_with("gorget_time") || n.starts_with("gorget_format_time")
+            || n.starts_with("gorget_parse_time") || n.starts_with("gorget_readline")
+            || n.starts_with("gorget_dt_decompose") || n.starts_with("gorget_getchar")
+            || n.starts_with("gorget_term_") || n == "gorget_is_tty") {
+            ensure_array!(out, emitted_array);
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_IO);
+        }
+
+        // Math
+        if has(&|n| n.starts_with("gorget_sqrt") || n.starts_with("gorget_pow")
+            || n.starts_with("gorget_floor") || n.starts_with("gorget_ceil")
+            || n.starts_with("gorget_round") || n.starts_with("gorget_abs")
+            || n.starts_with("gorget_sin") || n.starts_with("gorget_cos")
+            || n.starts_with("gorget_tan") || n.starts_with("gorget_log")
+            || n.starts_with("gorget_exp") || n.starts_with("gorget_atan2")
+            || n.starts_with("gorget_fmod") || n == "gorget_min" || n == "gorget_max"
+            || n.starts_with("GORGET_PI") || n.starts_with("GORGET_E")
+            || n.starts_with("GORGET_TAU") || n.starts_with("GORGET_INF")
+            || n.starts_with("GORGET_NAN")) {
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_MATH);
+        }
+
+        // Sort comparators (depends on Array)
+        if has(&|n| n.starts_with("__gorget_cmp_") || n.starts_with("gorget_array_sort")
+            || n.starts_with("gorget_array_reverse") || n.starts_with("gorget_array_unique")) {
+            ensure_array!(out, emitted_array);
+            out.push_str(crate::backend::c::c_runtime::RUNTIME_SORT);
+        }
+
+        writeln!(out).unwrap();
 
         // Sync primitives (atomics, barriers, semaphores, etc.)
         let needs_sync = has(&|n| n.starts_with("gorget_atomic_int_") || n.starts_with("gorget_atomic_bool_")) || has(&|n| {
@@ -280,13 +479,15 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
             out.push_str(crate::backend::c::c_runtime::CRYPTO_RUNTIME);
         }
 
-        // Socket
+        // Socket (depends on Array for socket_read/read_exact)
         if has(&|n| n.starts_with("gorget_socket_") || n.starts_with("gorget_tcp_")) {
+            ensure_array!(out, emitted_array);
             out.push_str(crate::backend::c::c_runtime::SOCKET_RUNTIME);
         }
 
-        // Server socket
+        // Server socket (depends on Array)
         if has(&|n| n.starts_with("gorget_server_socket_") || n.starts_with("gorget_listener_")) {
+            ensure_array!(out, emitted_array);
             out.push_str(crate::backend::c::c_runtime::SERVER_SOCKET_RUNTIME);
         }
 
@@ -407,8 +608,12 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
 
         // LIR-specific helper functions not emitted by the old C backend preamble.
         writeln!(out, "// ── LIR helpers ──").unwrap();
-        writeln!(out, "static inline Str gorget_char_chr(int64_t code) {{ return gorget_str_from_cstr(gorget_codepoint_to_utf8(code)); }}").unwrap();
-        writeln!(out, "static inline int64_t gorget_str_ord(Str s) {{ size_t pos = 0; return (int64_t)gorget_utf8_decode(s.data, s.len, &pos); }}").unwrap();
+        if has(&|n| n == "gorget_char_chr") {
+            writeln!(out, "static inline Str gorget_char_chr(int64_t code) {{ return gorget_str_from_cstr(gorget_codepoint_to_utf8(code)); }}").unwrap();
+        }
+        if has(&|n| n == "gorget_str_ord") {
+            writeln!(out, "static inline int64_t gorget_str_ord(Str s) {{ size_t pos = 0; return (int64_t)gorget_utf8_decode(s.data, s.len, &pos); }}").unwrap();
+        }
         // Default value functions for primitive types
         writeln!(out, "static inline Str gorget_str_default(void) {{ return (Str){{NULL, 0, 0, NULL}}; }}").unwrap();
         writeln!(out, "static inline int64_t int64_t__default(void) {{ return 0; }}").unwrap();

@@ -45,28 +45,6 @@ static _Atomic size_t __gorget_array_clone_count = 0;
 static _Atomic size_t __gorget_str_cat_count = 0;
 static _Atomic size_t __gorget_string_free_count = 0;
 static _Atomic size_t __gorget_string_new_count = 0;
-static void __gorget_alloc_report(void) {
-    fprintf(stderr, "\n[alloc-report] allocs=%zu frees=%zu live_bytes=%zu\n",
-        __gorget_alloc_count, __gorget_free_count,
-        __gorget_total_allocated - __gorget_total_freed);
-    fprintf(stderr, "[alloc-report] array: new=%zu clone=%zu free=%zu (net=%zu)\n",
-        __gorget_array_new_count, __gorget_array_clone_count, __gorget_array_free_count,
-        __gorget_array_new_count + __gorget_array_clone_count - __gorget_array_free_count);
-    fprintf(stderr, "[alloc-report] string: new=%zu cat=%zu free=%zu (net=%zu)\n",
-        __gorget_string_new_count, __gorget_str_cat_count, __gorget_string_free_count,
-        __gorget_string_new_count + __gorget_str_cat_count - __gorget_string_free_count);
-    fprintf(stderr, "[alloc-report] size buckets (alloc count by size range):\n");
-    const char* labels[] = {"1-15","16-31","32-47","48-63","64-79","80-95","96-111","112-127",
-                            "128-143","144-159","160-175","176-191","192-207","208-223","224-239","240+"};
-    for (int i = 0; i < 16; i++) {
-        if (__gorget_size_buckets[i] > 0)
-            fprintf(stderr, "  %s bytes: %zu allocs\n", labels[i], __gorget_size_buckets[i]);
-    }
-}
-__attribute__((constructor)) static void __gorget_register_alloc_report(void) {
-    atexit(__gorget_alloc_report);
-}
-
 static void* __gorget_global_alloc_fn(void* ctx, size_t size) {
     (void)ctx;
     __gorget_total_allocated += size;
@@ -74,13 +52,6 @@ static void* __gorget_global_alloc_fn(void* ctx, size_t size) {
     size_t bucket = size / 16;
     if (bucket > 15) bucket = 15;
     __gorget_size_buckets[bucket]++;
-    if (__gorget_alloc_count % 100000 == 0) {
-        fprintf(stderr, "[alloc] count=%zu live=%zuMB total=%zuMB freed=%zuMB size=%zu\n",
-            __gorget_alloc_count,
-            (__gorget_total_allocated - __gorget_total_freed) >> 20,
-            __gorget_total_allocated >> 20,
-            __gorget_total_freed >> 20, size);
-    }
     return malloc(size);
 }
 static void* __gorget_global_realloc_fn(void* ctx, void* ptr, size_t old_size, size_t new_size) {
@@ -146,6 +117,74 @@ static inline void __gorget_pop_allocator(void) {
     }
 }
 
+// ── Hash utilities (FNV-1a) ─────────────────────────────────
+static inline uint64_t __gorget_fnv1a(const void* data, size_t len) {
+    uint64_t hash = 14695981039346656037ULL;
+    const uint8_t* p = (const uint8_t*)data;
+    for (size_t i = 0; i < len; i++) {
+        hash ^= p[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+static inline uint64_t __gorget_hash_str(const char* s) {
+    uint64_t hash = 14695981039346656037ULL;
+    while (*s) { hash ^= (uint8_t)*s++; hash *= 1099511628211ULL; }
+    return hash;
+}
+static inline uint64_t __gorget_hash_str_len(const char* s, size_t len) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (size_t i = 0; i < len; i++) { hash ^= (uint8_t)s[i]; hash *= 1099511628211ULL; }
+    return hash;
+}
+
+// ── Collection struct typedefs (always available for field references) ──
+typedef struct {
+    void* data;
+    size_t len;
+    size_t cap;
+    size_t elem_size;
+    GorgetAllocator* alloc;
+} GorgetArray;
+
+typedef uint64_t (*__gorget_hash_fn)(const void*);
+typedef bool (*__gorget_eq_fn)(const void*, const void*);
+typedef struct {
+    void* keys;
+    void* values;
+    uint8_t* states;
+    size_t count;
+    size_t cap;
+    size_t key_size;
+    size_t val_size;
+    GorgetAllocator* alloc;
+    size_t* order;
+    size_t order_len;
+    size_t tombstones;
+    __gorget_hash_fn hash_fn;
+    __gorget_eq_fn eq_fn;
+} GorgetMap;
+
+typedef GorgetMap GorgetSet;
+
+typedef struct {
+    void* fn_ptr;
+    void* env;
+} GorgetClosure;
+
+// ── CLI init (always needed — main() calls gorget_init_args) ──
+static int gorget_argc = 0;
+static char** gorget_argv = NULL;
+
+static inline void gorget_init_args(int argc, char** argv) {
+    gorget_argc = argc;
+    gorget_argv = argv;
+}
+
+"#;
+
+/// Arena allocator — bump allocator with overflow blocks.
+pub const RUNTIME_ARENA_ALLOC: &str = r#"
 // ── Arena Allocator ──────────────────────────────────────────
 typedef struct GorgetArenaBlock {
     void*  data;
@@ -285,6 +324,10 @@ static void gorget_arena_restore(GorgetArena* arena, GorgetArenaCheckpoint cp) {
     cp.block->used = cp.used;
 }
 
+"#;
+
+/// Tracking allocator — wraps another allocator with statistics.
+pub const RUNTIME_TRACKING_ALLOC: &str = r#"
 // ── Tracking Allocator ───────────────────────────────────────
 typedef struct GorgetTrackingAllocator {
     GorgetAllocator  __alloc;       // vtable (must be first for pointer cast)
@@ -405,6 +448,10 @@ static void gorget_tracking_free(GorgetTrackingAllocator** p) {
     *p = NULL;
 }
 
+"#;
+
+/// Pool allocator — fixed-size block allocation with free-list reuse.
+pub const RUNTIME_POOL_ALLOC: &str = r#"
 // ── Pool Allocator ───────────────────────────────────────────
 typedef struct GorgetPoolOverflow {
     void* ptr;
@@ -561,6 +608,10 @@ static void gorget_pool_free(GorgetPoolAllocator** pp) {
     *pp = NULL;
 }
 
+"#;
+
+/// TLSF allocator — O(1) alloc/free with low fragmentation.
+pub const RUNTIME_TLSF_ALLOC: &str = r#"
 // ── TLSF (Two-Level Segregate Fit) Allocator ─────────────────
 // O(1) worst-case alloc/free with low fragmentation.
 // Algorithm based on the TLSF spec (http://www.gii.upv.es/tlsf/),
@@ -972,6 +1023,10 @@ static void gorget_tlsf_free(GorgetTlsfAllocator** pp) {
     *pp = NULL;
 }
 
+"#;
+
+/// Fixed-buffer allocator — bump allocator over a fixed buffer.
+pub const RUNTIME_FIXEDBUF_ALLOC: &str = r#"
 // ── GorgetFixedBufferAllocator ────────────────────────────────
 // Bump allocator over a fixed buffer.  The buffer is allocated
 // from the parent allocator in one shot at construction time;
@@ -1060,6 +1115,10 @@ static void gorget_fba_free(GorgetFixedBufferAllocator** pp) {
     *pp = NULL;
 }
 
+"#;
+
+/// Fallback allocator — tries primary, falls back to secondary.
+pub const RUNTIME_FALLBACK_ALLOC: &str = r#"
 // ── GorgetFallbackAllocator ───────────────────────────────────
 // Combinator: tries primary first; if primary returns NULL, falls
 // back to secondary.  Individual deallocs are no-ops — intended
@@ -1137,6 +1196,10 @@ static void gorget_fallback_free(GorgetFallbackAllocator** pp) {
     *pp = NULL;
 }
 
+"#;
+
+/// String types, operations, and UTF-8 utilities.
+pub const RUNTIME_STRING: &str = r#"
 // ── Str (unified: view + owned) ──────────────────────────────
 // cap == 0 ⟺ view (non-owning), cap > 0 ⟺ owned
 typedef struct {
@@ -1666,6 +1729,10 @@ static inline int gorget_utf8_encode(int64_t cp, char* out) {
     return 3;
 }
 
+"#;
+
+/// Unicode case mapping tables, upper/lower/alpha/whitespace, search, and string methods.
+pub const RUNTIME_STRING_EXTENDED: &str = r#"
 // ── Unicode case mapping tables ─────────────────────────────
 // Simple 1:1 case mappings for Latin (Basic + Extended-A/B), Greek, Cyrillic.
 // Each range maps [lo..hi] by adding delta to convert.
@@ -2419,6 +2486,10 @@ static inline int64_t gorget_str_count(Str s, Str needle) {
     return count;
 }
 
+"#;
+
+/// Base string operations — concatenation, conversion, cstr interop.
+pub const RUNTIME_STRING_BASE_OPS: &str = r#"
 // ── Str-aware String operations ───────────────────────
 
 // Str-aware concatenation (handles non-null-terminated views).
@@ -2476,6 +2547,31 @@ static inline bool gorget_str_has_null(Str s) {
     return memchr(s.data, '\0', s.len) != NULL;
 }
 
+"#;
+
+/// Alloc-report — atexit allocation summary (test/bench mode only).
+pub const RUNTIME_ALLOC_REPORT: &str = r#"
+static void __gorget_alloc_report(void) {
+    fprintf(stderr, "\n[alloc-report] allocs=%zu frees=%zu live_bytes=%zu\n",
+        __gorget_alloc_count, __gorget_free_count,
+        __gorget_total_allocated - __gorget_total_freed);
+    fprintf(stderr, "[alloc-report] array: new=%zu clone=%zu free=%zu (net=%zu)\n",
+        __gorget_array_new_count, __gorget_array_clone_count, __gorget_array_free_count,
+        __gorget_array_new_count + __gorget_array_clone_count - __gorget_array_free_count);
+    fprintf(stderr, "[alloc-report] string: new=%zu cat=%zu free=%zu (net=%zu)\n",
+        __gorget_string_new_count, __gorget_str_cat_count, __gorget_string_free_count,
+        __gorget_string_new_count + __gorget_str_cat_count - __gorget_string_free_count);
+    fprintf(stderr, "[alloc-report] size buckets (alloc count by size range):\n");
+    const char* labels[] = {"1-15","16-31","32-47","48-63","64-79","80-95","96-111","112-127",
+                            "128-143","144-159","160-175","176-191","192-207","208-223","224-239","240+"};
+    for (int i = 0; i < 16; i++) {
+        if (__gorget_size_buckets[i] > 0)
+            fprintf(stderr, "  %s bytes: %zu allocs\n", labels[i], __gorget_size_buckets[i]);
+    }
+}
+__attribute__((constructor)) static void __gorget_register_alloc_report(void) {
+    atexit(__gorget_alloc_report);
+}
 "#;
 
 /// Normal panic handler — exits the process.
@@ -4443,8 +4539,8 @@ static inline void gorget_task_group_free(gorget_task_group_t** gp) {
 }
 "#;
 
-/// Everything after the panic helper — checked arithmetic, collections, etc.
-pub const RUNTIME_CORE: &str = r#"
+/// Checked arithmetic macros.
+pub const RUNTIME_CHECKED_ARITH: &str = r#"
 // ── Checked Arithmetic ──────────────────────────────────────
 // Inline helpers call __builtin_*_overflow (integer-only).
 // _Generic macros dispatch: integer types → checked, double → plain.
@@ -4498,14 +4594,11 @@ static inline int64_t gorget_checked_mul_i64(int64_t a, int64_t b) {
         long: gorget_checked_mul_i64((t), (v)), \
         default: ((t) * (v))))
 
+"#;
+
+/// GorgetArray — dynamic array (Vector).
+pub const RUNTIME_ARRAY: &str = r#"
 // ── GorgetArray ──────────────────────────────────────────────
-typedef struct {
-    void* data;
-    size_t len;
-    size_t cap;
-    size_t elem_size;
-    GorgetAllocator* alloc;
-} GorgetArray;
 
 static inline GorgetArray gorget_array_new(size_t elem_size) {
     __gorget_array_new_count++;
@@ -4804,6 +4897,10 @@ static inline GorgetArray gorget_str_split(Str s, Str delim) {
 // ── GORGET_ARRAY_AT macro ────────────────────────────────────
 #define GORGET_ARRAY_AT(type, arr, i) (*(type*)gorget_array_get(&(arr), (i)))
 
+"#;
+
+/// String/Array operations — join, split, iterators (needs RUNTIME_ARRAY).
+pub const RUNTIME_STRING_ARRAY: &str = r#"
 // ── String join (needs GorgetArray) ─────────────────────────
 static inline GorgetString gorget_str_join(Str sep, GorgetArray parts) {
     GorgetAllocator* al = __gorget_current_alloc;
@@ -4870,46 +4967,11 @@ static inline GorgetArray gorget_str_chars(Str s) {
     return arr;
 }
 
+"#;
+
+/// GorgetMap — open-addressing hash map.
+pub const RUNTIME_MAP: &str = r#"
 // ── GorgetMap (open-addressing hash map) ─────────────────────
-typedef uint64_t (*__gorget_hash_fn)(const void*);
-typedef bool (*__gorget_eq_fn)(const void*, const void*);
-typedef struct {
-    void* keys;
-    void* values;
-    uint8_t* states;  // 0=empty, 1=occupied, 2=tombstone
-    size_t count;
-    size_t cap;
-    size_t key_size;
-    size_t val_size;
-    GorgetAllocator* alloc;
-    size_t* order;      // insertion-order index array (used by Dict, ignored by HashMap)
-    size_t order_len;
-    size_t tombstones;
-    __gorget_hash_fn hash_fn;  // NULL = default __gorget_fnv1a
-    __gorget_eq_fn eq_fn;      // NULL = default memcmp
-} GorgetMap;
-
-static inline uint64_t __gorget_fnv1a(const void* data, size_t len) {
-    uint64_t hash = 14695981039346656037ULL;
-    const uint8_t* p = (const uint8_t*)data;
-    for (size_t i = 0; i < len; i++) {
-        hash ^= p[i];
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
-
-static inline uint64_t __gorget_hash_str(const char* s) {
-    uint64_t hash = 14695981039346656037ULL;
-    while (*s) { hash ^= (uint8_t)*s++; hash *= 1099511628211ULL; }
-    return hash;
-}
-
-static inline uint64_t __gorget_hash_str_len(const char* s, size_t len) {
-    uint64_t hash = 14695981039346656037ULL;
-    for (size_t i = 0; i < len; i++) { hash ^= (uint8_t)s[i]; hash *= 1099511628211ULL; }
-    return hash;
-}
 
 // Str key hash/eq for GorgetMap — content-based instead of byte-based
 static inline uint64_t __gorget_str_key_hash(const void* key) {
@@ -5259,8 +5321,11 @@ static inline GorgetArray gorget_map_items(const GorgetMap* m) {
     return result;
 }
 
+"#;
+
+/// GorgetSet — thin wrapper over GorgetMap.
+pub const RUNTIME_SET: &str = r#"
 // ── GorgetSet (thin wrapper over GorgetMap) ───────────────────
-typedef GorgetMap GorgetSet;
 
 static inline GorgetSet gorget_set_new(size_t elem_size) {
     return gorget_map_new(elem_size, 0);
@@ -5343,6 +5408,10 @@ static inline GorgetArray gorget_set_to_array(const GorgetSet* s) {
     return gorget_map_keys(s);
 }
 
+"#;
+
+/// Error handling (setjmp/longjmp for test recovery).
+pub const RUNTIME_ERROR: &str = r#"
 // ── Error Handling (setjmp/longjmp) ─────────────────────────
 typedef struct {
     char message[256];
@@ -5371,6 +5440,10 @@ static inline void gorget_throw(const char* msg, int code) {
 #define GORGET_THROW(msg, code) gorget_throw(msg, code)
 #define GORGET_CATCH_ERROR() (__gorget_last_error)
 
+"#;
+
+/// File I/O operations.
+pub const RUNTIME_FILE: &str = r#"
 // ── GorgetFile ──────────────────────────────────────────────
 typedef struct {
     FILE* handle;
@@ -5503,6 +5576,10 @@ static inline bool gorget_is_dir(const char* path) {
     return S_ISDIR(st.st_mode);
 }
 
+"#;
+
+/// Path functions, directory operations, readdir.
+pub const RUNTIME_PATH: &str = r#"
 // ── Path functions ───────────────────────────────────────────
 static inline const char* gorget_path_parent(const char* path) {
     if (path == NULL || path[0] == '\0') { char* r = (char*)GORGET_ALLOC(2); r[0]='.'; r[1]='\0'; return r; }
@@ -5684,15 +5761,11 @@ static inline GorgetArray gorget_readdir(const char* path) {
     return arr;
 }
 
-// ── CLI args ────────────────────────────────────────────────
-static int gorget_argc = 0;
-static char** gorget_argv = NULL;
+"#;
 
-static inline void gorget_init_args(int argc, char** argv) {
-    gorget_argc = argc;
-    gorget_argv = argv;
-}
-
+/// gorget_args() — returns CLI args as GorgetArray (needs RUNTIME_ARRAY).
+pub const RUNTIME_ARGS: &str = r#"
+// ── CLI args (gorget_args) ──────────────────────────────────
 static inline GorgetArray gorget_args(void) {
     GorgetArray arr = gorget_array_new(sizeof(Str));
     for (int i = 0; i < gorget_argc; i++) {
@@ -5702,6 +5775,10 @@ static inline GorgetArray gorget_args(void) {
     return arr;
 }
 
+"#;
+
+/// Parsing functions (parse_int, parse_float, try_parse).
+pub const RUNTIME_PARSE: &str = r#"
 // ── parse_int / parse_float — Result-returning (thread-local error) ──────────
 static __thread const char* __gorget_parse_last_error = NULL;
 static const char* gorget_parse_last_error(void) {
@@ -5782,6 +5859,10 @@ static inline GorgetParseFloatResult gorget_try_parse_float(const char* s, size_
     return (GorgetParseFloatResult){result, true};
 }
 
+"#;
+
+/// Type-to-string conversions (int_to_str, float_to_str, etc.).
+pub const RUNTIME_TOSTR: &str = r#"
 // ── to_str conversions ──────────────────────────────────────
 static inline const char* gorget_int_to_str(int64_t n) {
     char buf[32];
@@ -5849,6 +5930,10 @@ static inline const char* gorget_codepoint_to_utf8(int64_t cp) {
 }
 
 
+"#;
+
+/// Environment access (getenv, setenv, getcwd, platform).
+pub const RUNTIME_ENV: &str = r#"
 // ── getenv / setenv / getcwd / platform ──────────────────────
 static inline const char* gorget_getenv(const char* name) {
     const char* val = getenv(name);
@@ -5882,6 +5967,10 @@ static inline const char* gorget_platform(void) {
 #endif
 }
 
+"#;
+
+/// Interactive I/O, random, time, datetime, line input.
+pub const RUNTIME_IO: &str = r#"
 // ── Interactive I/O ─────────────────────────────────────────
 // Portable splitmix64 PRNG — deterministic across all platforms.
 static uint64_t __gorget_rng_state = 0;
@@ -5982,6 +6071,10 @@ static inline const char* gorget_input(const char* prompt) {
     return gorget_readline();
 }
 
+"#;
+
+/// Math functions and constants.
+pub const RUNTIME_MATH: &str = r#"
 // ── Math functions ───────────────────────────────────────────
 static inline int64_t gorget_abs(int64_t x) { return x < 0 ? -x : x; }
 static inline int64_t gorget_min(int64_t a, int64_t b) { return a < b ? a : b; }
@@ -6012,6 +6105,10 @@ static const double GORGET_TAU = 6.283185307179586;
 #define GORGET_INFINITY INFINITY
 #define GORGET_NAN NAN
 
+"#;
+
+/// Array sort comparators.
+pub const RUNTIME_SORT: &str = r#"
 // ── Array sort comparators ───────────────────────────────────
 static int __gorget_cmp_i64(const void* a, const void* b) {
     int64_t va = *(const int64_t*)a, vb = *(const int64_t*)b;
@@ -6054,12 +6151,6 @@ static inline void gorget_array_reverse(GorgetArray* arr) {
         memcpy(b, tmp, arr->elem_size);
     }
 }
-
-// ── GorgetClosure ────────────────────────────────────────────
-typedef struct {
-    void* fn_ptr;
-    void* env;
-} GorgetClosure;
 
 "#;
 
