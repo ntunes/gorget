@@ -1,0 +1,23 @@
+# Test that method chains don't create borrow conflicts
+void main():
+    Vector[int] v = [5, 3, 1, 4, 2]
+
+    # chain of immutable borrows
+    int first = v[0]
+    int last = v[v.len() - 1]
+    print(f"{first}")
+    print(f"{last}")
+
+    # len used in condition
+    if v.len() > 3:
+        print(f"big: {v.len()}")
+
+    # method results used in expressions
+    String s = "hello world"
+    int slen = s.len()
+    print(f"slen: {slen}")
+
+    bool has = s.contains("world")
+    print(f"has: {has}")
+
+    print("done")

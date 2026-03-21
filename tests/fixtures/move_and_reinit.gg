@@ -1,0 +1,21 @@
+# Test: move value, then reinitialize and use again
+void consume(Vector[int] !v):
+    print(f"consumed {v.len()}")
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    consume(!v)
+
+    # Reinitialize with new value
+    Vector[int] v2 = [4, 5, 6, 7]
+    print(f"reinitialized: {v2.len()}")
+
+    # Can use again
+    consume(!v2)
+
+    # Reinitialize and use in loop
+    for i in 0..3:
+        Vector[int] temp = [i]
+        print(f"temp: {temp[0]}")
+
+    print("done")

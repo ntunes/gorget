@@ -14808,3 +14808,103 @@ fn double_mutable_borrow_error() {
 fn missing_method_equip_error() {
     check_gg_fails("missing_method_equip_error.gg", "is missing method");
 }
+
+// ── Batch 3: Borrow checker tests ────────────────────────────────────
+
+#[test]
+fn borrow_reborrow() {
+    run_gg(
+        "borrow_reborrow.gg",
+        "\
+3
+3
+3
+4
+5
+done",
+    );
+}
+
+#[test]
+fn borrow_disjoint_fields() {
+    run_gg(
+        "borrow_disjoint_fields.gg",
+        "\
+10
+20
+30
+20
+done",
+    );
+}
+
+#[test]
+fn borrow_match_arms() {
+    run_gg(
+        "borrow_match_arms.gg",
+        "\
+first: 1
+after: 3
+nested: 1
+done",
+    );
+}
+
+#[test]
+fn borrow_nested_method_chain() {
+    run_gg(
+        "borrow_nested_method_chain.gg",
+        "\
+5
+2
+big: 5
+slen: 11
+has: true
+done",
+    );
+}
+
+#[test]
+fn borrow_conditional_move() {
+    run_gg(
+        "borrow_conditional_move.gg",
+        "\
+consumed: 3
+v2: 2
+done",
+    );
+}
+
+#[test]
+fn move_and_reinit() {
+    run_gg(
+        "move_and_reinit.gg",
+        "\
+consumed 3
+reinitialized: 4
+consumed 4
+temp: 0
+temp: 1
+temp: 2
+done",
+    );
+}
+
+#[test]
+fn ownership_vector_elements() {
+    run_gg(
+        "ownership_vector_elements.gg",
+        "\
+10
+20
+len: 3
+after push: 3
+popped: 3
+after pop: 2
+100
+200
+300
+still here: 3
+done",
+    );
+}

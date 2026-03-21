@@ -1,0 +1,35 @@
+# Test ownership semantics when working with vector elements
+void main():
+    # reading elements is borrowing
+    Vector[int] nums = [10, 20, 30]
+    int first = nums[0]
+    int second = nums[1]
+    print(f"{first}")
+    print(f"{second}")
+
+    # vector still usable after reads
+    print(f"len: {nums.len()}")
+
+    # push doesn't invalidate previous reads (separate operations)
+    Vector[int] v = [1]
+    v.push(2)
+    v.push(3)
+    print(f"after push: {v.len()}")
+
+    # pop returns owned value
+    Option[int] popped = v.pop()
+    match popped:
+        case Some(val):
+            print(f"popped: {val}")
+        case None:
+            print("empty")
+    print(f"after pop: {v.len()}")
+
+    # iterating borrows
+    Vector[int] items = [100, 200, 300]
+    for item in items:
+        print(f"{item}")
+    # items still usable after for loop
+    print(f"still here: {items.len()}")
+
+    print("done")
