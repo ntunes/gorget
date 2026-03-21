@@ -772,20 +772,44 @@ impl<'a> ProvenanceCtx<'a> {
     /// Collect String-typed VarDecl bindings with their initial provenance.
     fn collect_string_decls(&self, stmt: &Stmt, out: &mut Vec<(DefId, StringProvenance)>) {
         if let Stmt::VarDecl { type_, pattern, value, .. } = stmt {
-            if !self.is_string_ast_type(&type_.node) {
+            let prov = self.classify_expr(value);
+            // For simple string-typed bindings
+            if self.is_string_ast_type(&type_.node) {
+                self.collect_string_pattern(pattern, prov, out);
                 return;
             }
-            let prov = self.classify_expr(value);
-            if let Pattern::Binding(name) = &pattern.node {
+            // For auto/inferred types or tuple types: check each binding's
+            // resolved type_id (set by the type checker) for owned strings.
+            if matches!(type_.node, Type::Inferred | Type::Tuple(_)) {
+                self.collect_string_pattern(pattern, prov, out);
+            }
+        }
+    }
+
+    /// Recursively collect String-typed bindings from a pattern.
+    fn collect_string_pattern(
+        &self,
+        pattern: &Spanned<Pattern>,
+        prov: StringProvenance,
+        out: &mut Vec<(DefId, StringProvenance)>,
+    ) {
+        match &pattern.node {
+            Pattern::Binding(name) => {
                 if let Some(def_id) = self.find_binding_def(name, pattern.span) {
                     let def = self.scopes.get_def(def_id);
                     if let Some(tid) = def.type_id {
                         if self.is_owned_string(tid) {
-                            out.push((def_id, prov));
+                            out.push((def_id, prov.clone()));
                         }
                     }
                 }
             }
+            Pattern::Tuple(pats) | Pattern::Constructor { fields: pats, .. } => {
+                for p in pats {
+                    self.collect_string_pattern(p, prov.clone(), out);
+                }
+            }
+            _ => {}
         }
     }
 

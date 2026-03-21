@@ -332,6 +332,11 @@ fn lower_var_decl(
                 let field_local = builder.field_load(Place::local(tuple_local), i as u32, field_type);
 
                 if let Pattern::Binding(name) = &part.node {
+                    // Apply provenance adjustment: if the type checker downgraded
+                    // this binding from String to str (view), use the view type.
+                    let field_type = ctx.provenance_adjusted_string_type(
+                        field_type, name, part.span,
+                    );
                     ctx.register_local(name, field_local, field_type);
                     ctx.drops.register_local(field_local, field_type, &ctx.type_registry);
                 } else {
