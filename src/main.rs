@@ -732,6 +732,266 @@ fn try_build_ir(
     }
 }
 
+/// Profile the full compilation pipeline, timing each phase.
+/// Outputs structured JSON to stdout.
+fn try_profile(
+    filename: &str,
+    source: &str,
+    dep_paths: HashMap<String, PathBuf>,
+    features: &[String],
+    options: gorget::ir::lowering::LoweringOptions,
+) -> Result<(), String> {
+    use std::time::Instant;
+
+    let total_start = Instant::now();
+    let source_lines = source.lines().count();
+
+    // Phase 1: Parse
+    let t = Instant::now();
+    let mut parser = Parser::new(source);
+    let module = parser.parse_module();
+    let parse_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    if !parser.errors.is_empty() {
+        let reporter = ErrorReporter::new(filename.to_string(), source.to_string());
+        for err in &parser.errors {
+            reporter.report_parse_error(err);
+        }
+        return Err(format!("{} parse error(s) found", parser.errors.len()));
+    }
+
+    // Phase 2: Load imports
+    let t = Instant::now();
+    let (mut module, _file_infos) = load_imports(filename, source, module, dep_paths);
+    let load_imports_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    // Phase 3: Semantic analysis
+    let t = Instant::now();
+    let source_dir = std::path::Path::new(filename).parent().map(|p| p.to_path_buf());
+    let result = gorget::semantic::analyze_with_source_dir(&mut module, features, source_dir, false);
+    let semantic_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    if !result.errors.is_empty() {
+        let reporter = ErrorReporter::new_multi(_file_infos.clone());
+        for err in &result.errors {
+            reporter.report_semantic_error(err);
+        }
+        return Err(format!("{} semantic error(s) found", result.errors.len()));
+    }
+
+    // Phase 4: GIR lowering
+    let t = Instant::now();
+    let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
+    let gir_lower_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let gir_functions = gir_module.functions.len();
+
+    // Phase 5: GIR optimization
+    let t = Instant::now();
+    let gir_opt_stats = gorget::ir::transforms::optimize::optimize_module(&mut gir_module);
+    let gir_optimize_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    // Phase 6: LIR lowering
+    let t = Instant::now();
+    let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
+    let lir_lower_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    // Phase 7: SSA construction
+    let t = Instant::now();
+    for func in &mut lir_module.functions {
+        gorget::lir::ssa::construct_ssa(func);
+    }
+    let lir_ssa_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    // Phase 8: LIR optimization
+    let t = Instant::now();
+    let lir_opt_stats = gorget::lir::optimize::optimize_module(&mut lir_module);
+    let lir_optimize_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let lir_functions = lir_module.functions.len();
+    let lir_instructions: usize = lir_module.functions.iter()
+        .map(|f| f.blocks.iter().map(|b| b.insts.len()).sum::<usize>())
+        .sum();
+
+    // Phase 9: C code generation
+    let t = Instant::now();
+    let backend = gorget::backend::c_lir::CLirBackend;
+    let output = gorget::backend::Backend::generate(&backend, &lir_module);
+    let codegen_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let c_lines = output.code.lines().count();
+
+    let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+    let frontend_ms = parse_ms + load_imports_ms + semantic_ms;
+    let backend_ms = gir_lower_ms + gir_optimize_ms + lir_lower_ms + lir_ssa_ms + lir_optimize_ms + codegen_ms;
+
+    // Peak RSS (Linux)
+    let peak_rss_kb = read_peak_rss_kb();
+
+    // Emit JSON
+    println!("{{");
+    println!("  \"file\": \"{}\",", filename.replace('\\', "\\\\").replace('"', "\\\""));
+    println!("  \"source_lines\": {},", source_lines);
+    println!("  \"compiler\": \"gg {}\",", env!("CARGO_PKG_VERSION"));
+    println!("  \"timestamp\": \"{}\",", timestamp_now());
+    println!("  \"phases\": {{");
+    println!("    \"parse\": {{ \"duration_ms\": {:.3} }},", parse_ms);
+    println!("    \"load_imports\": {{ \"duration_ms\": {:.3} }},", load_imports_ms);
+    println!("    \"semantic\": {{ \"duration_ms\": {:.3} }},", semantic_ms);
+    println!("    \"gir_lower\": {{ \"duration_ms\": {:.3} }},", gir_lower_ms);
+    println!("    \"gir_optimize\": {{ \"duration_ms\": {:.3} }},", gir_optimize_ms);
+    println!("    \"lir_lower\": {{ \"duration_ms\": {:.3} }},", lir_lower_ms);
+    println!("    \"lir_ssa\": {{ \"duration_ms\": {:.3} }},", lir_ssa_ms);
+    println!("    \"lir_optimize\": {{ \"duration_ms\": {:.3} }},", lir_optimize_ms);
+    println!("    \"codegen\": {{ \"duration_ms\": {:.3} }}", codegen_ms);
+    println!("  }},");
+    println!("  \"totals\": {{");
+    println!("    \"total_ms\": {:.3},", total_ms);
+    println!("    \"frontend_ms\": {:.3},", frontend_ms);
+    println!("    \"backend_ms\": {:.3},", backend_ms);
+    if let Some(rss) = peak_rss_kb {
+        println!("    \"peak_rss_kb\": {}", rss);
+    } else {
+        println!("    \"peak_rss_kb\": null");
+    }
+    println!("  }},");
+    println!("  \"stats\": {{");
+    println!("    \"gir_functions\": {},", gir_functions);
+    println!("    \"lir_functions\": {},", lir_functions);
+    println!("    \"lir_instructions\": {},", lir_instructions);
+    println!("    \"c_lines\": {},", c_lines);
+    println!("    \"gir_opt\": {{ \"blocks_eliminated\": {}, \"insts_eliminated\": {}, \"locals_eliminated\": {} }},",
+        gir_opt_stats.blocks_eliminated(), gir_opt_stats.insts_eliminated(), gir_opt_stats.locals_eliminated());
+    println!("    \"lir_opt\": {{ \"dead_functions\": {}, \"dead_globals\": {}, \"dead_instructions\": {}, \"constants_folded\": {}, \"copies_propagated\": {} }}",
+        lir_opt_stats.dead_functions_eliminated, lir_opt_stats.dead_globals_eliminated,
+        lir_opt_stats.dead_instructions_eliminated, lir_opt_stats.constants_folded,
+        lir_opt_stats.copies_propagated);
+    println!("  }}");
+    println!("}}");
+    Ok(())
+}
+
+/// Read peak RSS from /proc/self/status (Linux) or getrusage (macOS).
+fn read_peak_rss_kb() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(status) = fs::read_to_string("/proc/self/status") {
+            for line in status.lines() {
+                if line.starts_with("VmHWM:") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        return parts[1].parse().ok();
+                    }
+                }
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// ISO 8601 timestamp without external dependencies.
+fn timestamp_now() -> String {
+    use std::time::SystemTime;
+    match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(d) => {
+            let secs = d.as_secs();
+            // Simple UTC timestamp: seconds since epoch → readable format
+            let days = secs / 86400;
+            let time_secs = secs % 86400;
+            let hours = time_secs / 3600;
+            let minutes = (time_secs % 3600) / 60;
+            let seconds = time_secs % 60;
+            // Calculate year/month/day from days since epoch (1970-01-01)
+            let (year, month, day) = days_to_ymd(days);
+            format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
+        }
+        Err(_) => "unknown".to_string(),
+    }
+}
+
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    // Civil calendar algorithm
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// Compare two profile JSON files and output a diff.
+fn compare_profiles(baseline_path: &str, current_path: &str) -> Result<(), String> {
+    let baseline_str = fs::read_to_string(baseline_path)
+        .map_err(|e| format!("Error reading {baseline_path}: {e}"))?;
+    let current_str = fs::read_to_string(current_path)
+        .map_err(|e| format!("Error reading {current_path}: {e}"))?;
+
+    let baseline: serde_json::Value = serde_json::from_str(&baseline_str)
+        .map_err(|e| format!("Error parsing {baseline_path}: {e}"))?;
+    let current: serde_json::Value = serde_json::from_str(&current_str)
+        .map_err(|e| format!("Error parsing {current_path}: {e}"))?;
+
+    let phase_names = ["parse", "load_imports", "semantic", "gir_lower", "gir_optimize",
+                       "lir_lower", "lir_ssa", "lir_optimize", "codegen"];
+
+    // Header
+    println!("{:<16} {:>12} {:>12} {:>10} {:>8}", "Phase", "Baseline", "Current", "Delta", "Factor");
+    println!("{}", "-".repeat(62));
+
+    for phase in &phase_names {
+        let b = baseline["phases"][phase]["duration_ms"].as_f64().unwrap_or(0.0);
+        let c = current["phases"][phase]["duration_ms"].as_f64().unwrap_or(0.0);
+        let delta = c - b;
+        let factor = if b > 0.001 { c / b } else { 0.0 };
+        let sign = if delta >= 0.0 { "+" } else { "-" };
+        let flag = if factor > 1.5 { " !!" } else if factor > 1.1 { " !" } else { "" };
+        println!("{:<16} {:>10.3}ms {:>10.3}ms  {}{:.3}ms {:>6.2}x{}",
+            phase, b, c, sign, delta.abs(), factor, flag);
+    }
+
+    println!("{}", "-".repeat(62));
+
+    // Totals
+    let bt = baseline["totals"]["total_ms"].as_f64().unwrap_or(0.0);
+    let ct = current["totals"]["total_ms"].as_f64().unwrap_or(0.0);
+    let dt = ct - bt;
+    let ft = if bt > 0.001 { ct / bt } else { 0.0 };
+    let sign = if dt >= 0.0 { "+" } else { "-" };
+    println!("{:<16} {:>10.3}ms {:>10.3}ms  {}{:.3}ms {:>6.2}x",
+        "TOTAL", bt, ct, sign, dt.abs(), ft);
+
+    // Memory
+    let bm = baseline["totals"]["peak_rss_kb"].as_u64();
+    let cm = current["totals"]["peak_rss_kb"].as_u64();
+    if let (Some(bm), Some(cm)) = (bm, cm) {
+        let dm = cm as i64 - bm as i64;
+        let sign = if dm >= 0 { "+" } else { "" };
+        println!("{:<16} {:>10}KB {:>10}KB  {}{}KB",
+            "Peak RSS", bm, cm, sign, dm.abs());
+    }
+
+    // Stats comparison
+    let stat_keys = ["gir_functions", "lir_functions", "lir_instructions", "c_lines"];
+    println!();
+    println!("{:<20} {:>10} {:>10} {:>10}", "Stat", "Baseline", "Current", "Delta");
+    println!("{}", "-".repeat(54));
+    for key in &stat_keys {
+        let b = baseline["stats"][key].as_u64().unwrap_or(0);
+        let c = current["stats"][key].as_u64().unwrap_or(0);
+        let d = c as i64 - b as i64;
+        let sign = if d >= 0 { "+" } else { "-" };
+        println!("{:<20} {:>10} {:>10}  {}{}", key, b, c, sign, d.unsigned_abs());
+    }
+
+    Ok(())
+}
+
 /// Returns true if a line starts a top-level definition (function, struct, enum, etc.)
 fn is_definition_line(line: &str) -> bool {
     let trimmed = line.trim();
@@ -1179,7 +1439,7 @@ fn main() {
         println!("       gg                         Interactive TUI");
         println!("       gg --version               Print version");
         println!();
-        println!("Compiler commands: lex, parse, check, build, run, sim, fmt, test, report");
+        println!("Compiler commands: lex, parse, check, build, run, sim, fmt, test, report, profile");
         println!("Package commands:  init, new, add, remove");
         println!();
         println!("Build flags:");
@@ -1189,6 +1449,10 @@ fn main() {
         println!("  --emit-gir              Dump GIR (intermediate representation) to stdout instead of compiling");
         println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
         println!("  --emit-c-lir            Dump C code generated from LIR to stdout");
+        println!();
+        println!("Profile:");
+        println!("  gg profile <file.gg>                           Profile compilation phases (JSON to stdout)");
+        println!("  gg profile --compare <base.json> <cur.json>    Compare two profiles");
         return;
     }
 
@@ -1331,7 +1595,7 @@ fn main() {
         eprintln!("       gg <command> <file.gg>     Run a compiler command");
         eprintln!("       gg                         Interactive REPL");
         eprintln!("       gg --version               Print version");
-        eprintln!("Compiler commands: lex, parse, check, build, run, fmt, test, report");
+        eprintln!("Compiler commands: lex, parse, check, build, run, fmt, test, report, profile");
         eprintln!("Package commands:  init, new, add, remove");
         process::exit(1);
     }
@@ -1559,6 +1823,37 @@ fn main() {
                         eprintln!("{e}");
                         process::exit(1);
                     }
+                }
+            }
+        }
+        "profile" => {
+            // `gg profile <file.gg>` — profile compilation phases
+            // `gg profile --compare <baseline.json> <current.json>` — diff two profiles
+            if args.iter().any(|a| a == "--compare") {
+                // Find the two JSON file paths after --compare
+                let json_files: Vec<&String> = args.iter().skip(2)
+                    .filter(|a| !a.starts_with("--") && a.ends_with(".json"))
+                    .collect();
+                if json_files.len() != 2 {
+                    eprintln!("Usage: gg profile --compare <baseline.json> <current.json>");
+                    process::exit(1);
+                }
+                if let Err(e) = compare_profiles(json_files[0], json_files[1]) {
+                    eprintln!("{e}");
+                    process::exit(1);
+                }
+            } else {
+                let dep_paths = resolve_deps_for_file(filename);
+                let lowering_opts = gorget::ir::lowering::LoweringOptions {
+                    strip_asserts,
+                    no_strip_asserts,
+                    overflow_wrap,
+                    overflow_checked,
+                    ..Default::default()
+                };
+                if let Err(e) = try_profile(filename, &source, dep_paths, &features, lowering_opts) {
+                    eprintln!("{e}");
+                    process::exit(1);
                 }
             }
         }
