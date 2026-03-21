@@ -643,6 +643,24 @@ fn lower_return(
                 }
             }
             if !did_clone_return {
+                // T & reference propagation for return values: if the operand
+                // is Ptr(T) (from a collection borrowing read) but the return
+                // local _0 has a non-Ptr type, override _0's type to Ptr(T).
+                if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                    if p.projections.is_empty() {
+                        let src_idx = p.local.0 as usize;
+                        if src_idx < builder.locals.len() {
+                            let src_type = builder.locals[src_idx].type_id;
+                            if let Some(GirType::Ptr(_)) = ctx.type_registry.get(src_type) {
+                                if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+                                    builder.locals[0].type_id = src_type;
+                                    builder.return_type = src_type;
+                                    ctx.collection_ref_locals.insert(LocalId(0));
+                                }
+                            }
+                        }
+                    }
+                }
                 builder.assign(Place::local(LocalId(0)), operand.clone());
             }
             // If the return local is str-typed and the operand is a GorgetString temp,
