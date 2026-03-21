@@ -12,6 +12,8 @@
 
 - **LIR backend: bench function lowering not implemented** — `bench "..." :` items are lowered to GIR and metadata propagated to LIR, but the bench function BODIES are not lowered to LIR functions. The bench runner main references `__bench_0`/`__bench_1` etc. which don't exist. Tests: `bench_basic`. [added: 2026-03-20]
 
+- **Self-host parser: 2+ trait methods crash** — Parsing a trait with 2+ methods (bodyless or bodied) causes segfault in the self-host parser binary. Pre-existing LIR bug. Root cause: likely ownership issue when `FunctionDef` with `Vector[Stmt] body` is pushed into the methods Vector. Affects 9 parser comparison + 8 type checker comparison fixtures (all trait-related). The `self_host_parser` inline test passes (doesn't parse traits). [added: 2026-03-21]
+
 - **Self-host resolver: 746/797 fixtures crash silently** — Union enum layout (2026-03-21) fixed the 39KB Stmt → ~1.3KB. Resolver comparison test now runs to completion instead of aborting, but 746 fixtures still crash (no stderr). Likely deep recursion on Stmt/Expr types or another large-struct issue. Scores: matched 35, mismatched 16, crashed 746. Type comparison: 524/797 (500 exact + 24 superset). [updated: 2026-03-21]
 
 - **LIR backend: generic_nested_collections double-free** — `Dict[str, Vector[int]]` test double-frees array values: arrays are moved out via `gorget_map_get` into local variables and freed, then the map element-drop loop frees the same array slots again. Pre-existing bug (present before string unification). Needs element-drop loop to skip moved-out values. [added: 2026-03-18]
