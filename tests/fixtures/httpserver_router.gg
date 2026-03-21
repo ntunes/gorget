@@ -15,7 +15,7 @@
 # Expected output:
 #   200\nhello\n200\nposted\n404\n404\n200\nuser:42\n200\npost:7:comment:99\nhello\n2\n*\n302\n/new-location
 
-from gg.httpserver import Router, HttpRequest, HttpServerResponse, parse_query_string
+from xtd.httpserver import Router, HttpRequest, HttpServerResponse, parse_query_string
 from std.collections import Dict
 
 HttpServerResponse handle_hello(HttpRequest req):

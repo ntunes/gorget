@@ -1,11 +1,11 @@
 # gg.influx — InfluxDB 2.x client (pure Gorget, no C dependencies)
 #
 # Uses gg.http for HTTP calls and gg.csv for annotated CSV response parsing.
-# Implements the Queryable + DbConnection traits from gg.db.
+# Implements the Queryable + DbConnection traits from xtd.db.
 #
 # Usage:
-#   from gg.influx import influx_connect, InfluxClient
-#   from gg.db import Row, Param, Param.StrParam
+#   from xtd.influx import influx_connect, InfluxClient
+#   from xtd.db import Row, Param, Param.StrParam
 #
 #   Result[InfluxClient, String] c_r = influx_connect(
 #       "http://localhost:8086", "mytoken", "myorg", "mybucket")
@@ -18,9 +18,9 @@
 #   Vector[Row] rows = client.query_raw(
 #       "from(bucket:\"mybucket\") |> range(start: -1h)", Vector[Param]()).unwrap()
 
-from gg.db import Row, Param, Queryable, DbConnection
-from gg.http import request, get, post, HttpResponse
-from gg.csv import parse_table
+from xtd.db import Row, Param, Queryable, DbConnection
+from xtd.http import request, get, post, HttpResponse
+from xtd.csv import parse_table
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
 

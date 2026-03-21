@@ -1,4 +1,4 @@
-from gg.yaml import Yaml, parse, parse_all, stringify_all, pretty
+from xtd.yaml import Yaml, parse, parse_all, stringify_all, pretty
 from std.collections import Vector
 
 void main():

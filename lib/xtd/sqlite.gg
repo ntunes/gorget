@@ -1,11 +1,11 @@
-# gg.sqlite — SQLite database client
+# xtd.sqlite — SQLite database client
 #
 # Zero external dependencies: the SQLite3 amalgamation is compiled inline.
 # No -lsqlite3 linker flag needed.
 #
 # Usage:
-#   from gg.sqlite import open, SqliteConn
-#   from gg.db import Row, Param, Param.IntParam, Param.StrParam
+#   from xtd.sqlite import open, SqliteConn
+#   from xtd.db import Row, Param, Param.IntParam, Param.StrParam
 #
 #   Result[SqliteConn, String] db_r = open("app.db")
 #   SqliteConn db = db_r.unwrap()
@@ -15,7 +15,7 @@
 #   Vector[Row] rows = db.query_raw("SELECT * FROM users", Vector[Param]()).unwrap()
 #   db.close()
 
-from gg.db import Row, Param, Queryable, DbConnection, FromRow
+from xtd.db import Row, Param, Queryable, DbConnection, FromRow
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
 

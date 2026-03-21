@@ -1,4 +1,4 @@
-from gg.tensor import Tensor, tensor_linspace, tensor_sum, scalar_div
+from xtd.tensor import Tensor, tensor_linspace, tensor_sum, scalar_div
 
 void main():
     # linspace(1.0, 4.0, 4) = [1, 2, 3, 4]

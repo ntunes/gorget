@@ -1,8 +1,8 @@
-# gg.sdl — Raw SDL2 Bindings
+# xtd.sdl — Raw SDL2 Bindings
 
 Low-level, 1:1 bindings to SDL2 for window management, 2D rendering, input events, textures, text, and timing.
 
-For a simpler drawing API, see [`gg.gfx`](stdlib-gfx.md).
+For a simpler drawing API, see [`xtd.gfx`](stdlib-gfx.md).
 
 ## Prerequisites
 
@@ -19,8 +19,8 @@ apt install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
 ## Import
 
 ```gorget
-from gg.sdl import sdl_init, sdl_create_window, sdl_create_renderer
-from gg.sdl import SDL_INIT_VIDEO, SDL_QUIT, SDL_KEYDOWN, SDLK_ESCAPE
+from xtd.sdl import sdl_init, sdl_create_window, sdl_create_renderer
+from xtd.sdl import SDL_INIT_VIDEO, SDL_QUIT, SDL_KEYDOWN, SDLK_ESCAPE
 ```
 
 ## Types
@@ -166,10 +166,10 @@ int sdl_get_display_height()
 ## Example
 
 ```gorget
-from gg.sdl import sdl_init, sdl_create_window, sdl_create_renderer
-from gg.sdl import sdl_set_draw_color, sdl_clear, sdl_present, sdl_fill_rect
-from gg.sdl import sdl_poll_event, sdl_delay, sdl_quit
-from gg.sdl import SDL_INIT_VIDEO, SDL_QUIT, SDL_KEYDOWN, SDLK_ESCAPE
+from xtd.sdl import sdl_init, sdl_create_window, sdl_create_renderer
+from xtd.sdl import sdl_set_draw_color, sdl_clear, sdl_present, sdl_fill_rect
+from xtd.sdl import sdl_poll_event, sdl_delay, sdl_quit
+from xtd.sdl import SDL_INIT_VIDEO, SDL_QUIT, SDL_KEYDOWN, SDLK_ESCAPE
 
 void main():
     sdl_init(SDL_INIT_VIDEO)

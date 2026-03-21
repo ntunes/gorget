@@ -1,4 +1,4 @@
-from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_ones, tensor_display, tensor_badd, tensor_bsub, tensor_bmul, tensor_linspace, tensor_broadcast_shape, vec_int_copy
+from xtd.tensor import Tensor, tensor_arange, tensor_zeros, tensor_ones, tensor_display, tensor_badd, tensor_bsub, tensor_bmul, tensor_linspace, tensor_broadcast_shape, vec_int_copy
 
 void main():
     # 1D broadcast: [4] + [1]

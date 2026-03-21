@@ -1,4 +1,4 @@
-from gg.dataframe import DataFrame, Column, df_from_columns, df_left_join, df_right_join, df_outer_join, df_cross_join, df_inner_join, col_from_ints, col_from_strs
+from xtd.dataframe import DataFrame, Column, df_from_columns, df_left_join, df_right_join, df_outer_join, df_cross_join, df_inner_join, col_from_ints, col_from_strs
 
 void main():
     # Left table: employees

@@ -1,4 +1,4 @@
-from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_display, tensor_linspace, tensor_sum, tensor_min, tensor_max, tensor_mean_all, tensor_std_all, tensor_sum_axis, tensor_mean_axis, int_to_float
+from xtd.tensor import Tensor, tensor_arange, tensor_zeros, tensor_display, tensor_linspace, tensor_sum, tensor_min, tensor_max, tensor_mean_all, tensor_std_all, tensor_sum_axis, tensor_mean_axis, int_to_float
 
 void main():
     # 1D int reductions

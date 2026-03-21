@@ -1,4 +1,4 @@
-# gg.ecs — Entity Component System
+# xtd.ecs — Entity Component System
 
 A reusable ECS library providing generational entity ID management and generic
 sparse-set component storage.
@@ -6,7 +6,7 @@ sparse-set component storage.
 ## Import
 
 ```gorget
-from gg.ecs import Entity, EntityPool, SparseSet
+from xtd.ecs import Entity, EntityPool, SparseSet
 ```
 
 ## Entity
@@ -51,7 +51,7 @@ struct EntityPool:
 ### Usage
 
 ```gorget
-from gg.ecs import Entity, EntityPool
+from xtd.ecs import Entity, EntityPool
 
 EntityPool pool = EntityPool.new()
 Entity e1 = pool.create()   # Entity(0:0)
@@ -110,7 +110,7 @@ for e in health:
 ### Construction
 
 ```gorget
-from gg.ecs import Entity, EntityPool, SparseSet
+from xtd.ecs import Entity, EntityPool, SparseSet
 
 SparseSet[Health] health = SparseSet[Health].new()
 ```
@@ -118,7 +118,7 @@ SparseSet[Health] health = SparseSet[Health].new()
 ### Usage
 
 ```gorget
-from gg.ecs import Entity, EntityPool, SparseSet
+from xtd.ecs import Entity, EntityPool, SparseSet
 
 struct Health:
     int hp
@@ -153,7 +153,7 @@ the smaller set and checks membership in the larger, so the cost is
 `O(min(|A|, |B|))`.
 
 ```gorget
-from gg.ecs import Entity, EntityPool, SparseSet, query2
+from xtd.ecs import Entity, EntityPool, SparseSet, query2
 
 Vector[Entity] movers = query2[Position, Velocity](world.positions, world.velocities)
 int i = 0
@@ -170,7 +170,7 @@ while i < movers.len():
 Compose an EntityPool with multiple SparseSet stores to form a game world:
 
 ```gorget
-from gg.ecs import Entity, EntityPool, SparseSet
+from xtd.ecs import Entity, EntityPool, SparseSet
 
 struct World:
     EntityPool entities
@@ -186,4 +186,4 @@ equip World:
 ```
 
 See `examples/ecs/` for a full battle simulation and `examples/breakout/` for
-a graphical game using gg.ecs with gg.gfx.
+a graphical game using xtd.ecs with xtd.gfx.

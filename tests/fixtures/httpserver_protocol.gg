@@ -9,7 +9,7 @@
 # Expected output:
 #   ok\nok\nok\nok
 
-from gg.httpserver import HttpRequest, HttpServerResponse, Router, parse_query_string
+from xtd.httpserver import HttpRequest, HttpServerResponse, Router, parse_query_string
 from std.collections import Dict
 
 void check(String label, bool ok):

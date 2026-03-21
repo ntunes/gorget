@@ -1,4 +1,4 @@
-from gg.regex import regex_compile, Regex, Match
+from xtd.regex import regex_compile, Regex, Match
 from std.collections import Vector
 
 void main():

@@ -11,7 +11,7 @@
 # Expected output:
 #   200\ntext/plain\nbody\ntext/html\napplication/json\n404\n400\n500\ngorget\n42\n302\n/target\nOK\nNot Found\nBad Request\nInternal Server Error\nFound\nUnknown
 
-from gg.httpserver import HttpServerResponse
+from xtd.httpserver import HttpServerResponse
 from std.collections import Dict
 
 void main():

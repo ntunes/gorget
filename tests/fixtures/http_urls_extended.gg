@@ -6,7 +6,7 @@
 #   - Port parse failure (http://host:abc/) — falls back to default (80)
 #   - Empty path (http://host.com) — defaults to "/"
 
-from gg.http import parse_url
+from xtd.http import parse_url
 
 void main():
     # URL with query string — query stays in path

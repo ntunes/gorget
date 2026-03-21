@@ -10,7 +10,7 @@
 # Expected output:
 #   ok\nok\nok\nok\nok
 
-from gg.httpserver import http_serve_file, HttpRequest, HttpServerResponse
+from xtd.httpserver import http_serve_file, HttpRequest, HttpServerResponse
 from std.collections import Dict
 from std.fs import write_file, delete_file, mkdir, rmdir
 

@@ -3,11 +3,11 @@
 # A bouncing ball with a trail, showcasing the high-level graphics API.
 # Run: gg run examples/gfx_demo.gg
 
-from gg.gfx import Canvas, Color, open, close
-from gg.gfx import clear, present, fill_rect
-from gg.gfx import draw_rect, draw_line, fill_circle
-from gg.gfx import delay, width, height
-from gg.sdl import sdl_poll_event, SDL_QUIT, SDL_KEYDOWN, SDLK_ESCAPE
+from xtd.gfx import Canvas, Color, open, close
+from xtd.gfx import clear, present, fill_rect
+from xtd.gfx import draw_rect, draw_line, fill_circle
+from xtd.gfx import delay, width, height
+from xtd.sdl import sdl_poll_event, SDL_QUIT, SDL_KEYDOWN, SDLK_ESCAPE
 
 void main():
     Canvas canvas = open("Gorget GFX Demo", 800, 600).unwrap()

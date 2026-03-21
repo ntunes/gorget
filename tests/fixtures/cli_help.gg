@@ -1,4 +1,4 @@
-from gg.cli import CliParser
+from xtd.cli import CliParser
 
 void main():
     CliParser cli = CliParser.new("myapp", "A test CLI application")

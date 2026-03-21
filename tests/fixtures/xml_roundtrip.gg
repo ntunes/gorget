@@ -1,4 +1,4 @@
-from gg.xml import XmlNode, xml_parse, xml_stringify
+from xtd.xml import XmlNode, xml_parse, xml_stringify
 
 void main():
     # ── Roundtrip: entity encoding in text ──

@@ -12,8 +12,8 @@
 #   5. Custom response header propagated to client
 #   6. URL path parameter via query_string + parse_query_string
 
-from gg.httpserver import HttpRequest, HttpServerResponse, parse_query_string, http_server_handle_conn_ka
-from gg.http import get, post, HttpResponse
+from xtd.httpserver import HttpRequest, HttpServerResponse, parse_query_string, http_server_handle_conn_ka
+from xtd.http import get, post, HttpResponse
 from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.collections import Dict
 from std.conv import int_to_str

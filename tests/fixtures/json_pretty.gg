@@ -1,4 +1,4 @@
-from gg.json import Json, json_parse, json_pretty
+from xtd.json import Json, json_parse, json_pretty
 from std.collections import Dict
 
 void main():

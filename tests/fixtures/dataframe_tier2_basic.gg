@@ -1,4 +1,4 @@
-from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats, col_from_bools, col_ints_null, col_bools_null
+from xtd.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats, col_from_bools, col_ints_null, col_bools_null
 
 void main():
     # Setup: 4-row DataFrame

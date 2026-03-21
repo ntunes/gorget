@@ -1,4 +1,4 @@
-from gg.p2p import Node, P2PEvent, p2p_create_node, p2p_add_peer, p2p_poll, p2p_send
+from xtd.p2p import Node, P2PEvent, p2p_create_node, p2p_add_peer, p2p_poll, p2p_send
 from std.net.udp import UdpAddr
 from std.bytes import bytes_from_str, bytes_to_str
 

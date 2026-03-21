@@ -6,7 +6,7 @@
 #   3. Multiple middlewares compose correctly (each sees the previous hook's output).
 #   4. Middleware with no routes registered still calls dispatch_inner (→ 404).
 
-from gg.httpserver import Router, HttpRequest, HttpServerResponse
+from xtd.httpserver import Router, HttpRequest, HttpServerResponse
 from std.collections import Dict
 
 HttpServerResponse handle_hello(HttpRequest req):

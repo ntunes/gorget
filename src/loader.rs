@@ -233,7 +233,7 @@ impl ModuleLoader {
     /// are the already-read source and parsed AST for the entry file (to avoid re-parsing).
     ///
     /// Returns `(path, logical_path, source, module)` quads for all loaded files, with the
-    /// entry first. `logical_path` is the import path segments (e.g. `["gg", "csv"]`); empty
+    /// entry first. `logical_path` is the import path segments (e.g. `["xtd", "csv"]`); empty
     /// for the entry module.
     pub fn load_all(
         &mut self,

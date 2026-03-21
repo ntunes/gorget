@@ -1,6 +1,6 @@
 from std.os import mem_live
 from std.collections import Vector
-from gg.math3d import Vec2, Vec3
+from xtd.math3d import Vec2, Vec3
 
 # Stress test: struct allocation and deallocation.
 # Tests structs with owned fields, nested structs, structs in collections,

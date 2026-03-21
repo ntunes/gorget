@@ -1,4 +1,4 @@
-from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_display, tensor_add, tensor_sub, tensor_mul, tensor_neg, tensor_linspace, scalar_add, scalar_mul, vec_int_copy
+from xtd.tensor import Tensor, tensor_arange, tensor_zeros, tensor_display, tensor_add, tensor_sub, tensor_mul, tensor_neg, tensor_linspace, scalar_add, scalar_mul, vec_int_copy
 
 void main():
     # int element-wise ops

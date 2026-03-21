@@ -1,4 +1,4 @@
-from gg.tensor import Tensor, tensor_arange, tensor_zeros, tensor_ones, tensor_linspace, tensor_sum, tensor_sub, tensor_div, tensor_neg, scalar_sub, scalar_div, scalar_mul, tensor_clone, tensor_from, tensor_mean_axis, tensor_std_all, tensor_matmul, tensor_le, tensor_ge, tensor_ne, tensor_eq, vec_int_copy, tensor_gt, tensor_lt
+from xtd.tensor import Tensor, tensor_arange, tensor_zeros, tensor_ones, tensor_linspace, tensor_sum, tensor_sub, tensor_div, tensor_neg, scalar_sub, scalar_div, scalar_mul, tensor_clone, tensor_from, tensor_mean_axis, tensor_std_all, tensor_matmul, tensor_le, tensor_ge, tensor_ne, tensor_eq, vec_int_copy, tensor_gt, tensor_lt
 
 void main():
     # -- scalar_div_int: arange(0,6)=[0,1,2,3,4,5] / 2 = [0,0,1,1,2,2], sum=6

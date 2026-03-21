@@ -175,7 +175,7 @@ dot-shorthand.
 To bring all variants of a user-defined enum into bare scope:
 
 ```gorget
-from gg.log import LogLevel.*
+from xtd.log import LogLevel.*
 
 LogLevel level = Info()         # bare access via glob import
 ```

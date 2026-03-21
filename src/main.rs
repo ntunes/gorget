@@ -189,7 +189,7 @@ fn add_thread_flags(_cmd: &mut Command, needs_threads: bool) {
     _cmd.arg("-lpthread");
 }
 
-/// Add PCRE2 linker flags to a cc command (for gg.regex).
+/// Add PCRE2 linker flags to a cc command (for xtd.regex).
 fn add_regex_flags(cmd: &mut Command, needs_regex: bool) {
     if !needs_regex { return; }
     let pkg_ok = Command::new("pkg-config")
@@ -559,11 +559,11 @@ fn try_build_ir(
                 cc_cmd.arg("-fno-omit-frame-pointer");
                 cc_cmd.arg("-g");
             }
-            add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx"), &shared_c_code);
-            add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || concat_source.contains("gg.http"));
-            add_crypto_flags(&mut cc_cmd, concat_source.contains("gg.crypto") || concat_source.contains("gg.p2p"));
-            add_regex_flags(&mut cc_cmd, concat_source.contains("gg.regex"));
-            add_thread_flags(&mut cc_cmd, concat_source.contains("std.async") || concat_source.contains("gg.p2p"));
+            add_sdl_flags(&mut cc_cmd, concat_source.contains("xtd.sdl") || concat_source.contains("xtd.gfx"), &shared_c_code);
+            add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || concat_source.contains("xtd.http"));
+            add_crypto_flags(&mut cc_cmd, concat_source.contains("xtd.crypto") || concat_source.contains("xtd.p2p"));
+            add_regex_flags(&mut cc_cmd, concat_source.contains("xtd.regex"));
+            add_thread_flags(&mut cc_cmd, concat_source.contains("std.async") || concat_source.contains("xtd.p2p"));
             let status = cc_cmd.status();
             return match status {
                 Ok(s) if s.success() => Ok(shared_path.to_path_buf()),
@@ -662,7 +662,7 @@ fn try_build_ir(
 
         let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
         let mut cc_cmd = Command::new(&cc);
-        let needs_metal = concat_source.contains("gg.metal");
+        let needs_metal = concat_source.contains("xtd.metal");
         cc_cmd
             .arg("-std=c11")
             .arg("-Wall")
@@ -708,15 +708,15 @@ fn try_build_ir(
         }
 
         // Library detection — use generated C for precise SDL sub-library detection
-        add_sdl_flags(&mut cc_cmd, concat_source.contains("gg.sdl") || concat_source.contains("gg.gfx") || concat_source.contains("gg.gl") || needs_metal, &c_code);
-        add_gl_flags(&mut cc_cmd, concat_source.contains("gg.gl"));
-        add_audio_flags(&mut cc_cmd, concat_source.contains("gg.audio"));
-        add_compress_flags(&mut cc_cmd, concat_source.contains("gg.compress"));
+        add_sdl_flags(&mut cc_cmd, concat_source.contains("xtd.sdl") || concat_source.contains("xtd.gfx") || concat_source.contains("xtd.gl") || needs_metal, &c_code);
+        add_gl_flags(&mut cc_cmd, concat_source.contains("xtd.gl"));
+        add_audio_flags(&mut cc_cmd, concat_source.contains("xtd.audio"));
+        add_compress_flags(&mut cc_cmd, concat_source.contains("xtd.compress"));
         add_metal_flags(&mut cc_cmd, needs_metal);
-        add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || concat_source.contains("gg.http"));
-        add_crypto_flags(&mut cc_cmd, concat_source.contains("gg.crypto") || concat_source.contains("gg.p2p"));
-        add_regex_flags(&mut cc_cmd, concat_source.contains("gg.regex"));
-        add_thread_flags(&mut cc_cmd, concat_source.contains("std.async") || concat_source.contains("gg.p2p"));
+        add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || concat_source.contains("xtd.http"));
+        add_crypto_flags(&mut cc_cmd, concat_source.contains("xtd.crypto") || concat_source.contains("xtd.p2p"));
+        add_regex_flags(&mut cc_cmd, concat_source.contains("xtd.regex"));
+        add_thread_flags(&mut cc_cmd, concat_source.contains("std.async") || concat_source.contains("xtd.p2p"));
 
         let status = cc_cmd.status();
         return match status {

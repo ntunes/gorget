@@ -12,7 +12,7 @@
 # Expected output:
 #   200\nput\n200\ndeleted\n200\npatched\n200\n\n200\nGET\n404\n404
 
-from gg.httpserver import Router, HttpRequest, HttpServerResponse
+from xtd.httpserver import Router, HttpRequest, HttpServerResponse
 from std.collections import Dict
 
 HttpServerResponse handle_hello(HttpRequest req):

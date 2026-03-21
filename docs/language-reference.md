@@ -727,7 +727,7 @@ Option[int] x = Some(42)      # prelude — bare OK
 **Variant namespacing:** Variants are namespaced under their enum type to prevent name collisions when two enums share variant names. Generic enum variants (e.g., `Maybe[T].Just`) remain bare since they stay in scope.
 
 ```gorget
-from gg.log import LogLevel, Logger
+from xtd.log import LogLevel, Logger
 
 LogLevel lvl = LogLevel.Info
 Result[int, String] err = Error("bad")    # prelude Error — unambiguous
@@ -755,7 +755,7 @@ match c:
 **Glob import:** Use `EnumName.*` to bring a type's variants into bare scope:
 
 ```gorget
-from gg.log import LogLevel.*    # imports LogLevel type + all variants bare
+from xtd.log import LogLevel.*    # imports LogLevel type + all variants bare
 
 LogLevel lvl = Info              # bare nullary variant via glob import
 match lvl:
@@ -855,16 +855,16 @@ dotted_name    = IDENTIFIER { "." IDENTIFIER } ;
 
 ```gorget
 import std.io
-import gg.json
+import xtd.json
 from std.conv import int_to_str, parse_int
-from gg.log import LogLevel, Logger           # import type only (qualified variant access)
-from gg.log import LogLevel.*, Logger         # import type + all variants bare (glob)
+from xtd.log import LogLevel, Logger           # import type only (qualified variant access)
+from xtd.log import LogLevel.*, Logger         # import type + all variants bare (glob)
 ```
 
 **Glob import (`EnumName.*`):** Imports the named type AND brings all its enum variants into bare scope. Useful when working extensively with a single enum. Glob-imported variants shadow prelude variants with the same name.
 
 ```gorget
-from gg.log import LogLevel.*
+from xtd.log import LogLevel.*
 LogLevel lvl = Info()        # bare — from glob import
 LogLevel err = Err()         # bare — from glob import
 ```
@@ -959,7 +959,7 @@ int fast_add(int a, int b): a + b
 - **Structs:** Equatable, Displayable, Cloneable, Hashable, Serializable, Deserializable, Default, From, TryFrom, FromRow
 - **Enums:** Equatable, Displayable, Cloneable, Hashable, Ordinal, Serializable, Deserializable
 
-Note: `From` and `TryFrom` are only derivable for single-field structs (newtypes). `FromRow` generates a `from_row(Row)` method that maps struct field names to database row columns (see `gg.db`).
+Note: `From` and `TryFrom` are only derivable for single-field structs (newtypes). `FromRow` generates a `from_row(Row)` method that maps struct field names to database row columns (see `xtd.db`).
 
 ---
 
@@ -3477,7 +3477,7 @@ void main():
 
 Contrast with `spawn`: async tasks share a thread pool cooperatively; OS threads are independent and preemptive.
 
-**`gg.json`** — JSON parsing and serialization
+**`xtd.json`** — JSON parsing and serialization
 
 | Name | Kind | Description |
 |---|---|---|
@@ -3490,10 +3490,10 @@ Contrast with `spawn`: async tasks share a thread pool cooperatively; OS threads
 | `Deserializer` | trait | Deserialization backend: `read_bool`, `read_int`, `read_float`, `read_str`, `is_null`, `begin_struct`/`end_struct`, `begin_seq`/`end_seq` |
 | `Deserializable` | trait | `void deserialize(&self, Box[Deserializer] de)` — types implement this to be deserialized (derivable via `@derive`) |
 
-**`gg.log`** — Structured leveled logging
+**`xtd.log`** — Structured leveled logging
 
 ```gorget
-from gg.log import LogLevel, Logger, log_info, log_warn
+from xtd.log import LogLevel, Logger, log_info, log_warn
 ```
 
 | Name | Kind | Description |
@@ -3516,7 +3516,7 @@ from gg.log import LogLevel, Logger, log_info, log_warn
 Messages below the logger's minimum level are suppressed. Module-level convenience functions always emit (no filtering).
 
 ```gorget
-from gg.log import LogLevel, Logger
+from xtd.log import LogLevel, Logger
 
 void main():
     Logger log = Logger.new(LogLevel.Info())
@@ -3525,7 +3525,7 @@ void main():
     log.warn("caution")      # [WARN] caution
 ```
 
-**`gg.toml`** — TOML parsing and serialization
+**`xtd.toml`** — TOML parsing and serialization
 
 | Name | Kind | Description |
 |---|---|---|
@@ -3533,7 +3533,7 @@ void main():
 | `parse` | `TomlValue(String)` | Parse a TOML string into a `TomlValue` |
 | `stringify` | `String(TomlValue)` | Serialize a `TomlValue` to a TOML string |
 
-**`gg.xml`** — XML parsing and serialization
+**`xtd.xml`** — XML parsing and serialization
 
 | Name | Kind | Description |
 |---|---|---|
@@ -3583,7 +3583,7 @@ auto dec_url = url_decode("hello%20world")      # Ok("hello world")
 String safe = html_escape("<b>Tom & Jerry</b>")    # "&lt;b&gt;Tom &amp; Jerry&lt;/b&gt;"
 ```
 
-**`gg.csv`** — RFC 4180 CSV parsing and serialization
+**`xtd.csv`** — RFC 4180 CSV parsing and serialization
 
 | Function | Signature | Description |
 |---|---|---|
@@ -3599,7 +3599,7 @@ String safe = html_escape("<b>Tom & Jerry</b>")    # "&lt;b&gt;Tom &amp; Jerry&l
 `CsvTable` methods: `row_count()`, `col_count()`, `headers()`, `row(int)`, `get(int, int)`, `get_named(int, String)`, `has_column(String)`, `column_index(String)`.
 
 ```gorget
-from gg.csv import parse_table, stringify, CsvTable
+from xtd.csv import parse_table, stringify, CsvTable
 from std.collections import Vector
 
 auto result = parse_table("name,age\nAlice,30\nBob,25\n")
@@ -3627,7 +3627,7 @@ match result:
 | `bytes_slice` | `Vector[uint8](Vector[uint8], int, int)` | Slice a byte vector |
 | `random_bytes` | `Vector[uint8](int)` | Generate random bytes |
 
-**`gg.crypto`** — Cryptography
+**`xtd.crypto`** — Cryptography
 
 | Name | Kind | Description |
 |---|---|---|
@@ -3645,12 +3645,12 @@ match result:
 | `crypto_rsa_verify` | `bool(RSAKey, Vector[uint8], Vector[uint8])` | RSA signature verification |
 | `crypto_random_bytes` | `Vector[uint8](int)` | Cryptographically secure random bytes |
 
-**`gg.http`** — HTTP client
+**`xtd.http`** — HTTP client
 
 Supports HTTP and HTTPS (TLS). Follows redirects automatically (up to 5 hops).
 
 ```gorget
-from gg.http import get, post, put, delete, patch, HttpResponse
+from xtd.http import get, post, put, delete, patch, HttpResponse
 
 Result[HttpResponse, String] r = get("https://api.example.com/data")
 if r.is_ok():
@@ -3686,12 +3686,12 @@ Helper:
 
 ---
 
-**`gg.httpserver`** — HTTP/1.1 server
+**`xtd.httpserver`** — HTTP/1.1 server
 
 Provides a `Router`-based request dispatcher, keep-alive connection handling, TLS support, middleware pipeline, and static file serving.
 
 ```gorget
-from gg.httpserver import Router, HttpRequest, HttpServerResponse
+from xtd.httpserver import Router, HttpRequest, HttpServerResponse
 from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.time import sleep
 
@@ -3792,7 +3792,7 @@ router.use((req, resp): resp.with_header("access-control-allow-origin", "*"))
 **TLS server**:
 
 ```gorget
-from gg.httpserver import HttpServer
+from xtd.httpserver import HttpServer
 
 HttpServer srv = HttpServer.new_tls("0.0.0.0", 8443, "/path/cert.pem", "/path/key.pem")
 srv.serve((req): router.dispatch(req)).await()
@@ -3801,7 +3801,7 @@ srv.serve((req): router.dispatch(req)).await()
 **Static file serving**:
 
 ```gorget
-from gg.httpserver import http_serve_file, http_mime_type
+from xtd.httpserver import http_serve_file, http_mime_type
 
 router.get("/static/:file", (req): http_serve_file("./public", req))
 ```
@@ -3818,7 +3818,7 @@ router.get("/static/:file", (req): http_serve_file("./public", req))
 | `Socket` | struct | TCP socket with `read`, `read_exact`, `write`, `write_str`, `read_line` (returns `Result[String, String]`), `set_timeout`, `close` methods |
 | `socket_connect` | `Result[Socket, String](String, int)` | Connect to host:port |
 
-**`gg.gfx`** — Canvas graphics
+**`xtd.gfx`** — Canvas graphics
 
 | Name | Kind | Description |
 |---|---|---|
@@ -3829,7 +3829,7 @@ router.get("/static/:file", (req): http_serve_file("./public", req))
 | `fill_circle` | `void(Canvas, int, int, int, Color)` | Draw filled circle |
 | `draw_circle` | `void(Canvas, int, int, int, Color)` | Draw circle outline |
 
-**`gg.sdl`** — SDL2 bindings
+**`xtd.sdl`** — SDL2 bindings
 
 Low-level SDL2 bindings for window management, rendering, input handling, and audio. Provides opaque structs (`SDLWindow`, `SDLRenderer`, `SDLTexture`, `SDLFont`, `SDLEvent`), 40+ constants (`SDL_INIT_VIDEO`, `SDL_QUIT`, `SDLK_*` key codes, etc.), and functions covering:
 
@@ -3840,14 +3840,14 @@ Low-level SDL2 bindings for window management, rendering, input handling, and au
 - **Input:** `sdl_poll_event`, `sdl_event_type`, `sdl_event_key`, `sdl_event_mouse_x`, `sdl_event_mouse_y`, `sdl_event_mouse_button`
 - **Time:** `sdl_delay`, `sdl_ticks`
 
-**`gg.ecs`** — Entity Component System
+**`xtd.ecs`** — Entity Component System
 
 | Name | Kind | Description |
 |---|---|---|
 | `EntityPool` | struct | Entity ID allocator with `create() → int`, `destroy(int)`, `is_alive(int) → bool` methods |
 | `SparseSet` | struct | Sparse-set storage for component data with `add`, `remove`, `get`, `has`, `len` methods |
 
-**`gg.ssh`** — SSH client
+**`xtd.ssh`** — SSH client
 
 | Name | Kind | Description |
 |---|---|---|
@@ -3857,7 +3857,7 @@ Low-level SDL2 bindings for window management, rendering, input handling, and au
 
 The SSH module implements the SSH-2 protocol including key exchange, encryption, and SFTP operations.
 
-**`gg.regex`** — Regular expressions (PCRE2)
+**`xtd.regex`** — Regular expressions (PCRE2)
 
 | Name | Kind | Description |
 |---|---|---|
@@ -3901,12 +3901,12 @@ The SSH module implements the SSH-2 protocol including key exchange, encryption,
 
 Flags for `regex_compile_with`: `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended), `u` (Unicode), `U` (ungreedy). Requires PCRE2 (`libpcre2-8`).
 
-**`gg.tensor`** — N-dimensional numeric tensors (NumPy-equivalent)
+**`xtd.tensor`** — N-dimensional numeric tensors (NumPy-equivalent)
 
 Gorget's tensor library provides strided N-dimensional arrays with O(1) view operations (reshape, transpose, slice). Tensors use `Shared[Vector[T]]` internally so views share the same backing buffer — mutations through one view are visible through all views sharing the same storage. Call `.contiguous()` for an independent deep copy.
 
 ```gorget
-from gg.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_linspace,
+from xtd.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_linspace,
     tensor_display_int, tensor_matmul_int, tensor_dot_int, tensor_eq_int
 ```
 
@@ -3970,12 +3970,12 @@ from gg.tensor import Tensor, tensor_arange, tensor_zeros_int, tensor_linspace,
 
 ---
 
-**`gg.dataframe`** — Tabular data manipulation (pandas-equivalent)
+**`xtd.dataframe`** — Tabular data manipulation (pandas-equivalent)
 
 DataFrames store heterogeneous typed columns with optional null masking. Columns can be `int`, `float`, `str`, or `bool` type.
 
 ```gorget
-from gg.dataframe import DataFrame, Column, df_from_columns, df_from_csv,
+from xtd.dataframe import DataFrame, Column, df_from_columns, df_from_csv,
     col_from_ints, col_from_strs, col_from_floats, col_from_bools,
     df_group_by, df_inner_join, df_concat
 ```
@@ -4239,9 +4239,9 @@ void main():
 | `FixedBufferAllocator` | Stack/static-buffer bump | Zero-heap hot paths, embedded targets, scratch buffers |
 | `FallbackAllocator` | Combinator | Primary-fast + secondary-safe overflow; composing any two allocators |
 
-**`gg.db`** — Database abstraction layer
+**`xtd.db`** — Database abstraction layer
 
-Shared types and traits used by all database backends (`gg.sqlite`, `gg.influx`, etc.).
+Shared types and traits used by all database backends (`xtd.sqlite`, `xtd.influx`, etc.).
 
 | Type | Kind | Description |
 |---|---|---|
@@ -4254,10 +4254,10 @@ Shared types and traits used by all database backends (`gg.sqlite`, `gg.influx`,
 
 Row methods: `String get(String col)`, `int get_int(String col)`, `float get_float(String col)`, `bool get_bool(String col)`, `bool has(String col)`.
 
-**`gg.sqlite`** — SQLite database client
+**`xtd.sqlite`** — SQLite database client
 
 ```gorget
-from gg.sqlite import SqliteConn, open
+from xtd.sqlite import SqliteConn, open
 ```
 
 | Function | Signature | Description |
@@ -4266,10 +4266,10 @@ from gg.sqlite import SqliteConn, open
 
 `SqliteConn` implements `DbConnection`: `is_connected`, `close`, `query_raw`, `exec`, `exec_simple`.
 
-**`gg.influx`** — InfluxDB 2.x client
+**`xtd.influx`** — InfluxDB 2.x client
 
 ```gorget
-from gg.influx import InfluxClient, influx_connect
+from xtd.influx import InfluxClient, influx_connect
 ```
 
 | Function | Signature | Description |
@@ -4278,10 +4278,10 @@ from gg.influx import InfluxClient, influx_connect
 
 `InfluxClient` implements `DbConnection`. `query_raw` executes Flux queries; `exec` writes line protocol data.
 
-**`gg.uuid`** — UUID v4 generation
+**`xtd.uuid`** — UUID v4 generation
 
 ```gorget
-from gg.uuid import UUID, v4, parse
+from xtd.uuid import UUID, v4, parse
 ```
 
 | Function | Signature | Description |
@@ -4291,10 +4291,10 @@ from gg.uuid import UUID, v4, parse
 
 UUID methods: `String to_string()`, `bool equals(UUID other)`, `int version()`.
 
-**`gg.cli`** — Command-line argument parsing
+**`xtd.cli`** — Command-line argument parsing
 
 ```gorget
-from gg.cli import CliParser
+from xtd.cli import CliParser
 ```
 
 | Method | Signature | Description |
@@ -4309,10 +4309,10 @@ from gg.cli import CliParser
 | `positionals` | `Vector[String]()` | Get positional arguments |
 | `print_help` | `void()` | Print usage |
 
-**`gg.jsonpath`** — JSONPath query and mutation
+**`xtd.jsonpath`** — JSONPath query and mutation
 
 ```gorget
-from gg.jsonpath import get, get_all, exists, count, set, delete
+from xtd.jsonpath import get, get_all, exists, count, set, delete
 ```
 
 | Function | Signature | Description |
@@ -4326,10 +4326,10 @@ from gg.jsonpath import get, get_all, exists, count, set, delete
 
 Path syntax: `name.child`, `[0]`, `[-1]`, `*`, `..key`, `#`, `#(age>30)`, `[0:3]`.
 
-**`gg.p2p`** — Peer-to-peer networking over UDP
+**`xtd.p2p`** — Peer-to-peer networking over UDP
 
 ```gorget
-from gg.p2p import Node, p2p_create_node, p2p_poll
+from xtd.p2p import Node, p2p_create_node, p2p_poll
 ```
 
 Full-featured P2P networking stack with identity (Ed25519), peer discovery (multicast + bootstrap), DHT (distributed hash table), gossip/pub-sub, NAT traversal (hole punching + relay), reliable streams (TCP-like with SACK), encryption, and RPC.

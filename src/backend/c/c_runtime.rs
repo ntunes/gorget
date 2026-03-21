@@ -6205,9 +6205,9 @@ static void __gorget_trace_val_void(FILE* fp) { (void)fp; }
 
 "#;
 
-/// C runtime for gg.sdl — SDL2 graphics bindings.
+/// C runtime for xtd.sdl — SDL2 graphics bindings.
 pub const SDL_RUNTIME: &str = r#"
-// ── gg.sdl runtime ──────────────────────────────────────────
+// ── xtd.sdl runtime ──────────────────────────────────────────
 #include <SDL2/SDL.h>
 #ifdef GORGET_USE_SDL_IMAGE
 #include <SDL2/SDL_image.h>
@@ -6663,11 +6663,11 @@ static inline ExecResult gorget_exec_output(const char* cmd) {
 "#;
 
 
-/// C runtime for gg.http — HTTP requests via libcurl.
+/// C runtime for xtd.http — HTTP requests via libcurl.
 
-// ── gg.crypto runtime ──────────────────────────────────────
+// ── xtd.crypto runtime ──────────────────────────────────────
 pub const CRYPTO_RUNTIME: &str = r#"
-// ── Crypto Wrappers (gg.crypto) ────────────────────────────
+// ── Crypto Wrappers (xtd.crypto) ────────────────────────────
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <openssl/bn.h>
@@ -8083,7 +8083,7 @@ static void gorget_tls_set_timeout(GorgetTlsSocket* sock, int64_t ms) {
 }
 
 // Forward-declare GorgetTlsServerSocket so that programs importing std.net.tls
-// (e.g. via gg.http) can reference TlsServerSocket in type aliases and Result
+// (e.g. via xtd.http) can reference TlsServerSocket in type aliases and Result
 // structs even when TLS_SERVER_RUNTIME is not emitted (no tls_server_bind call).
 typedef struct {
     int fd;
@@ -9609,7 +9609,7 @@ static inline int64_t gorget_signal_send(int64_t pid, int64_t sig) {
 
 // ─── SQLite ──────────────────────────────────────────────────
 // The amalgamation is embedded at compile time via include_str! so programs
-// that use gg.sqlite need no external -lsqlite3 flag.  The gorget wrapper
+// that use xtd.sqlite need no external -lsqlite3 flag.  The gorget wrapper
 // functions come after the amalgamation so they can call sqlite3_* symbols.
 
 /// Full SQLite3 amalgamation source (~8.7 MB of C code).

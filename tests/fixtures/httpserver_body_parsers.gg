@@ -10,7 +10,7 @@
 # Expected output:
 #   ok\nok\nok\nok\nok
 
-from gg.httpserver import HttpRequest, HttpServerResponse, parse_form_body, parse_cookies
+from xtd.httpserver import HttpRequest, HttpServerResponse, parse_form_body, parse_cookies
 from std.collections import Dict
 
 void check(String label, bool ok):

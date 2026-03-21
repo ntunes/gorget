@@ -1,4 +1,4 @@
-from gg.toml import TomlValue, parse, stringify_value
+from xtd.toml import TomlValue, parse, stringify_value
 
 void main():
     # ── Multiline basic strings ──

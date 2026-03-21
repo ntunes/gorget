@@ -17,8 +17,8 @@
 #   1
 #   done
 
-from gg.json import Json, json_parse
-from gg.jsonpath import get, get_all, exists, count, set, delete
+from xtd.json import Json, json_parse
+from xtd.jsonpath import get, get_all, exists, count, set, delete
 from std.conv import int_to_str
 
 void main():

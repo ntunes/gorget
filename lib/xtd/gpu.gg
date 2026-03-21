@@ -8,7 +8,7 @@
 # The GPU types are platform-independent. The implementations are selected
 # at compile time — dead code for the other platform is never emitted.
 
-from gg.math3d import Vec3, Vec4, Mat4
+from xtd.math3d import Vec3, Vec4, Mat4
 
 # ── GPU Handle Types (platform-independent) ─────────────────
 
@@ -78,36 +78,36 @@ int GPU_BLEND_ZERO2 = 5
 # ── Platform Backend Selection ──────────────────────────────
 
 meta if platform() == "macos":
-    from gg.metal import metal_create_device, metal_create_command_queue
-    from gg.metal import metal_create_buffer, metal_create_buffer_with_data
-    from gg.metal import metal_buffer_contents
-    from gg.metal import metal_create_texture_2d, metal_texture_upload
-    from gg.metal import metal_create_library, metal_library_function
-    from gg.metal import metal_create_render_pipeline, metal_create_depth_stencil
-    from gg.metal import metal_begin_frame, metal_create_command_buffer
-    from gg.metal import metal_create_render_encoder
-    from gg.metal import metal_create_render_pass_desc
-    from gg.metal import metal_render_pass_set_color, metal_render_pass_set_depth
-    from gg.metal import metal_encoder_set_pipeline, metal_encoder_set_vertex_buffer
-    from gg.metal import metal_encoder_set_fragment_texture
-    from gg.metal import metal_encoder_set_depth_stencil, metal_encoder_set_cull_mode
-    from gg.metal import metal_encoder_set_viewport, metal_encoder_set_scissor
-    from gg.metal import metal_encoder_draw_primitives, metal_encoder_draw_indexed
-    from gg.metal import metal_encoder_end
-    from gg.metal import metal_command_buffer_present, metal_command_buffer_commit
-    from gg.metal import sdl_metal_create_view, sdl_metal_get_layer
-    from gg.metal import metal_layer_set_device, metal_layer_set_pixel_format
-    from gg.metal import metal_drawable_texture, metal_release
-    from gg.metal import metal_generate_mipmaps
-    from gg.metal import MTL_PIXEL_FORMAT_BGRA8_UNORM, MTL_PIXEL_FORMAT_RGBA8_UNORM
-    from gg.metal import MTL_PIXEL_FORMAT_DEPTH32_FLOAT
-    from gg.metal import MTL_PRIMITIVE_TRIANGLE, MTL_PRIMITIVE_LINE
-    from gg.metal import MTL_PRIMITIVE_POINT, MTL_PRIMITIVE_TRIANGLE_STRIP
-    from gg.metal import MTL_INDEX_UINT16, MTL_INDEX_UINT32
-    from gg.metal import MTL_LOAD_ACTION_CLEAR, MTL_STORE_ACTION_STORE
-    from gg.metal import MTL_LOAD_ACTION_DONT_CARE, MTL_STORE_ACTION_DONT_CARE
-    from gg.metal import MTL_TEXTURE_USAGE_SHADER_READ, MTL_TEXTURE_USAGE_RENDER_TARGET
-    from gg.metal import MTL_STORAGE_MODE_SHARED, MTL_STORAGE_MODE_PRIVATE
+    from xtd.metal import metal_create_device, metal_create_command_queue
+    from xtd.metal import metal_create_buffer, metal_create_buffer_with_data
+    from xtd.metal import metal_buffer_contents
+    from xtd.metal import metal_create_texture_2d, metal_texture_upload
+    from xtd.metal import metal_create_library, metal_library_function
+    from xtd.metal import metal_create_render_pipeline, metal_create_depth_stencil
+    from xtd.metal import metal_begin_frame, metal_create_command_buffer
+    from xtd.metal import metal_create_render_encoder
+    from xtd.metal import metal_create_render_pass_desc
+    from xtd.metal import metal_render_pass_set_color, metal_render_pass_set_depth
+    from xtd.metal import metal_encoder_set_pipeline, metal_encoder_set_vertex_buffer
+    from xtd.metal import metal_encoder_set_fragment_texture
+    from xtd.metal import metal_encoder_set_depth_stencil, metal_encoder_set_cull_mode
+    from xtd.metal import metal_encoder_set_viewport, metal_encoder_set_scissor
+    from xtd.metal import metal_encoder_draw_primitives, metal_encoder_draw_indexed
+    from xtd.metal import metal_encoder_end
+    from xtd.metal import metal_command_buffer_present, metal_command_buffer_commit
+    from xtd.metal import sdl_metal_create_view, sdl_metal_get_layer
+    from xtd.metal import metal_layer_set_device, metal_layer_set_pixel_format
+    from xtd.metal import metal_drawable_texture, metal_release
+    from xtd.metal import metal_generate_mipmaps
+    from xtd.metal import MTL_PIXEL_FORMAT_BGRA8_UNORM, MTL_PIXEL_FORMAT_RGBA8_UNORM
+    from xtd.metal import MTL_PIXEL_FORMAT_DEPTH32_FLOAT
+    from xtd.metal import MTL_PRIMITIVE_TRIANGLE, MTL_PRIMITIVE_LINE
+    from xtd.metal import MTL_PRIMITIVE_POINT, MTL_PRIMITIVE_TRIANGLE_STRIP
+    from xtd.metal import MTL_INDEX_UINT16, MTL_INDEX_UINT32
+    from xtd.metal import MTL_LOAD_ACTION_CLEAR, MTL_STORE_ACTION_STORE
+    from xtd.metal import MTL_LOAD_ACTION_DONT_CARE, MTL_STORE_ACTION_DONT_CARE
+    from xtd.metal import MTL_TEXTURE_USAGE_SHADER_READ, MTL_TEXTURE_USAGE_RENDER_TARGET
+    from xtd.metal import MTL_STORAGE_MODE_SHARED, MTL_STORAGE_MODE_PRIVATE
 
     # ── Metal: Device Init ──────────────────────────────────
 
@@ -214,32 +214,32 @@ meta if platform() == "macos":
             metal_command_buffer_commit(self.cmd_buffer_handle)
 
 else:
-    from gg.gl import gl_create_context, gl_swap_window
-    from gg.gl import gl_gen_buffer, gl_bind_buffer, gl_buffer_data
-    from gg.gl import gl_gen_texture, gl_bind_texture, gl_tex_image_2d
-    from gg.gl import gl_tex_parameter_i, gl_generate_mipmap
-    from gg.gl import gl_create_shader, gl_shader_source, gl_compile_shader
-    from gg.gl import gl_create_program, gl_attach_shader, gl_link_program
-    from gg.gl import gl_use_program
-    from gg.gl import gl_enable, gl_disable, gl_blend_func, gl_depth_func
-    from gg.gl import gl_depth_mask, gl_cull_face, gl_viewport, gl_scissor
-    from gg.gl import gl_clear, gl_clear_color
-    from gg.gl import gl_draw_arrays, gl_draw_elements
-    from gg.gl import gl_vertex_attrib_pointer
-    from gg.gl import gl_enable_vertex_attrib_array
-    from gg.gl import gl_get_uniform_location, gl_uniform_matrix4fv
-    from gg.gl import GL_TEXTURE_2D, GL_RGBA, GL_RGB, GL_UNSIGNED_BYTE
-    from gg.gl import GL_ARRAY_BUFFER, GL_ELEMENT_ARRAY_BUFFER, GL_STATIC_DRAW
-    from gg.gl import GL_TRIANGLES, GL_LINES, GL_POINTS, GL_TRIANGLE_STRIP
-    from gg.gl import GL_TEXTURE_MIN_FILTER, GL_TEXTURE_MAG_FILTER
-    from gg.gl import GL_LINEAR, GL_LINEAR_MIPMAP_LINEAR, GL_REPEAT
-    from gg.gl import GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T
-    from gg.gl import GL_DEPTH_TEST, GL_BLEND, GL_CULL_FACE
-    from gg.gl import GL_FRONT, GL_BACK, GL_LESS
-    from gg.gl import GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA
-    from gg.gl import GL_VERTEX_SHADER, GL_FRAGMENT_SHADER
-    from gg.gl import GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT
-    from gg.gl import GL_FLOAT
+    from xtd.gl import gl_create_context, gl_swap_window
+    from xtd.gl import gl_gen_buffer, gl_bind_buffer, gl_buffer_data
+    from xtd.gl import gl_gen_texture, gl_bind_texture, gl_tex_image_2d
+    from xtd.gl import gl_tex_parameter_i, gl_generate_mipmap
+    from xtd.gl import gl_create_shader, gl_shader_source, gl_compile_shader
+    from xtd.gl import gl_create_program, gl_attach_shader, gl_link_program
+    from xtd.gl import gl_use_program
+    from xtd.gl import gl_enable, gl_disable, gl_blend_func, gl_depth_func
+    from xtd.gl import gl_depth_mask, gl_cull_face, gl_viewport, gl_scissor
+    from xtd.gl import gl_clear, gl_clear_color
+    from xtd.gl import gl_draw_arrays, gl_draw_elements
+    from xtd.gl import gl_vertex_attrib_pointer
+    from xtd.gl import gl_enable_vertex_attrib_array
+    from xtd.gl import gl_get_uniform_location, gl_uniform_matrix4fv
+    from xtd.gl import GL_TEXTURE_2D, GL_RGBA, GL_RGB, GL_UNSIGNED_BYTE
+    from xtd.gl import GL_ARRAY_BUFFER, GL_ELEMENT_ARRAY_BUFFER, GL_STATIC_DRAW
+    from xtd.gl import GL_TRIANGLES, GL_LINES, GL_POINTS, GL_TRIANGLE_STRIP
+    from xtd.gl import GL_TEXTURE_MIN_FILTER, GL_TEXTURE_MAG_FILTER
+    from xtd.gl import GL_LINEAR, GL_LINEAR_MIPMAP_LINEAR, GL_REPEAT
+    from xtd.gl import GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T
+    from xtd.gl import GL_DEPTH_TEST, GL_BLEND, GL_CULL_FACE
+    from xtd.gl import GL_FRONT, GL_BACK, GL_LESS
+    from xtd.gl import GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA
+    from xtd.gl import GL_VERTEX_SHADER, GL_FRAGMENT_SHADER
+    from xtd.gl import GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT
+    from xtd.gl import GL_FLOAT
 
     int GL_FRONT = 1028
     int GL_BACK = 1029

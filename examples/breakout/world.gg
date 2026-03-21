@@ -1,6 +1,6 @@
 from std.collections import Vector
-from gg.ecs import Entity, EntityPool, SparseSet
-from gg.gfx import Canvas, Color, fill_rect
+from xtd.ecs import Entity, EntityPool, SparseSet
+from xtd.gfx import Canvas, Color, fill_rect
 from components import Position, Size, Velocity
 
 struct BreakoutWorld:

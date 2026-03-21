@@ -1,4 +1,4 @@
-from gg.ecs import EntityPool, SparseSet, Entity
+from xtd.ecs import EntityPool, SparseSet, Entity
 
 void main():
     EntityPool pool = EntityPool.new()

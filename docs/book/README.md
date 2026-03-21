@@ -94,7 +94,7 @@ need prior exposure to follow along.
     `with` resources, test filtering, HTML reports.
 
 19. **[The Standard Library](19-stdlib.md)**
-    Tour of `std.*` and `gg.*` modules: I/O, networking, HTTP, JSON, CSV,
+    Tour of `std.*` and `xtd.*` modules: I/O, networking, HTTP, JSON, CSV,
     crypto, regex, tensors, dataframes, process management.
 
 20. **[Interop and Unsafe](20-interop.md)**

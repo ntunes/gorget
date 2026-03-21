@@ -8,8 +8,8 @@
 # Optional:
 #   MODEL  -> override the default model name
 
-from gg.http import post, HttpResponse
-from gg.json import Json, json_parse, json_stringify
+from xtd.http import post, HttpResponse
+from xtd.json import Json, json_parse, json_stringify
 from std.collections import Vector, Dict
 from std.os import getenv
 from std.conv import int_to_str

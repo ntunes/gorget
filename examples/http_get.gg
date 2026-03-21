@@ -1,4 +1,4 @@
-from gg.http import get, HttpResponse
+from xtd.http import get, HttpResponse
 
 void main():
     Result[HttpResponse, str] result = get("https://httpbin.org/get")

@@ -1,4 +1,4 @@
-from gg.toml import parse, TomlValue
+from xtd.toml import parse, TomlValue
 
 void main():
     str raw = "[server]\nhost = \"localhost\"\nport = 8080\n\n[database]\nurl = \"postgres://localhost/mydb\"\npool_size = 5"

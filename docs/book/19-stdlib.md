@@ -1,7 +1,7 @@
 # The Standard Library
 
 Gorget ships with a comprehensive standard library split into two namespaces:
-`std.*` for core utilities and `gg.*` for domain-specific libraries. This chapter
+`std.*` for core utilities and `xtd.*` for domain-specific libraries. This chapter
 is a tour, not a reference — it shows what's available and how to get started.
 
 ---
@@ -157,12 +157,12 @@ Min-heap by default. Elements must implement `Comparable`.
 
 ---
 
-## Domain Libraries: `gg.*`
+## Domain Libraries: `xtd.*`
 
-### HTTP Client (`gg.http`)
+### HTTP Client (`xtd.http`)
 
 ```gorget
-from gg.http import get, post, HttpResponse
+from xtd.http import get, post, HttpResponse
 
 HttpResponse resp = get("https://api.example.com/data")
 print(f"{resp.status_code}")
@@ -173,10 +173,10 @@ HttpResponse resp2 = post("https://api.example.com/submit", body)
 
 Pure Gorget implementation — no C dependencies. Supports TLS.
 
-### HTTP Server (`gg.httpserver`)
+### HTTP Server (`xtd.httpserver`)
 
 ```gorget
-from gg.httpserver import Server, Request, Response
+from xtd.httpserver import Server, Request, Response
 
 async void main():
     Server s = Server()
@@ -188,10 +188,10 @@ async void main():
 Features: routing, middleware, query string parsing, JSON body parsing, static
 files, keep-alive.
 
-### JSON (`gg.json`)
+### JSON (`xtd.json`)
 
 ```gorget
-from gg.json import json_parse, json_stringify, Json
+from xtd.json import json_parse, json_stringify, Json
 
 Json doc = json_parse("{\"name\": \"Alice\", \"age\": 30}")
 String name = doc["name"].as_str()
@@ -215,10 +215,10 @@ String json = serialize(u)
 User u2 = deserialize[User](json)
 ```
 
-### CSV (`gg.csv`)
+### CSV (`xtd.csv`)
 
 ```gorget
-from gg.csv import parse_table
+from xtd.csv import parse_table
 
 Vector[Vector[String]] rows = parse_table(csv_text)
 for row in rows:
@@ -228,46 +228,46 @@ for row in rows:
 ### YAML / TOML / XML
 
 ```gorget
-from gg.yaml import yaml_parse
-from gg.toml import toml_parse
-from gg.xml import xml_parse, xml_query
+from xtd.yaml import yaml_parse
+from xtd.toml import toml_parse
+from xtd.xml import xml_parse, xml_query
 ```
 
 All parsers return structured data that can be queried and traversed.
 
-### Database (`gg.db`, `gg.sqlite`)
+### Database (`xtd.db`, `xtd.sqlite`)
 
 ```gorget
-from gg.sqlite import sqlite_connect
-from gg.db import Row, Param
+from xtd.sqlite import sqlite_connect
+from xtd.db import Row, Param
 
 auto db = sqlite_connect("app.db").unwrap()
 db.exec_simple("CREATE TABLE users (name TEXT, age INTEGER)")
 Vector[Row] rows = db.query_raw("SELECT * FROM users", Vector[Param]()).unwrap()
 ```
 
-### Logging (`gg.log`)
+### Logging (`xtd.log`)
 
 ```gorget
-from gg.log import log_info, log_warn, log_error
+from xtd.log import log_info, log_warn, log_error
 
 log_info("server started on port 8080")
 log_warn("disk usage above 80%")
 log_error(f"connection failed: {reason}")
 ```
 
-### UUID (`gg.uuid`)
+### UUID (`xtd.uuid`)
 
 ```gorget
-from gg.uuid import uuid4
+from xtd.uuid import uuid4
 
 String id = uuid4()    # "550e8400-e29b-41d4-a716-446655440000"
 ```
 
-### SSH (`gg.ssh`)
+### SSH (`xtd.ssh`)
 
 ```gorget
-from gg.ssh import ssh_connect
+from xtd.ssh import ssh_connect
 
 auto client = ssh_connect("host", 22, "user", "key.pem").unwrap()
 auto result = client.exec("ls -la").unwrap()
@@ -286,9 +286,9 @@ The standard library covers:
 | System | `std.os`, `std.process`, `std.time` |
 | Data | `std.collections`, `std.heap`, `std.bytes` |
 | Utilities | `std.conv`, `std.math`, `std.random`, `std.fmt` |
-| Networking | `gg.http`, `gg.httpserver`, `gg.ssh`, `gg.p2p` |
-| Data formats | `gg.json`, `gg.csv`, `gg.yaml`, `gg.toml`, `gg.xml` |
-| Storage | `gg.db`, `gg.sqlite`, `gg.influx` |
-| Applications | `gg.cli`, `gg.uuid`, `gg.log`, `gg.ecs`, `gg.gfx` |
+| Networking | `xtd.http`, `xtd.httpserver`, `xtd.ssh`, `xtd.p2p` |
+| Data formats | `xtd.json`, `xtd.csv`, `xtd.yaml`, `xtd.toml`, `xtd.xml` |
+| Storage | `xtd.db`, `xtd.sqlite`, `xtd.influx` |
+| Applications | `xtd.cli`, `xtd.uuid`, `xtd.log`, `xtd.ecs`, `xtd.gfx` |
 
 Everything is pure Gorget unless noted. No C dependencies for the core modules.

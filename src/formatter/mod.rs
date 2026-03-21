@@ -2221,7 +2221,7 @@ fn import_sort_key(item: &Spanned<Item>) -> String {
 
 /// Returns true if the import path starts with `std` or `gg` (standard library).
 fn is_std_import(path: &str) -> bool {
-    path.starts_with("std.") || path.starts_with("gg.") || path == "std" || path == "gg"
+    path.starts_with("std.") || path.starts_with("xtd.") || path == "std" || path == "xtd"
 }
 
 // ── Expression chain helpers ────────────────────────────────
@@ -2490,9 +2490,9 @@ void main():
     #[test]
     fn test_import_order_sorting() {
         // std imports should come before third-party imports.
-        let input = "import mylib.utils\n\nimport std.io\n\nimport gg.log\n";
+        let input = "import mylib.utils\n\nimport std.io\n\nimport xtd.log\n";
         let output = fmt(input);
-        assert_eq!(output, "import gg.log\n\nimport std.io\n\nimport mylib.utils\n");
+        assert_eq!(output, "import std.io\n\nimport xtd.log\n\nimport mylib.utils\n");
     }
 
     #[test]

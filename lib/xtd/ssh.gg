@@ -15,9 +15,9 @@ from std.net.socket import Socket, socket_connect
 from std.bytes import bytes_from_str, bytes_to_str, bytes_from_hex
 from std.bytes import bytes_write_u32_be, bytes_read_u32_be
 from std.bytes import bytes_concat, bytes_slice, random_bytes
-from gg.crypto import crypto_sha256, crypto_hmac
-from gg.crypto import crypto_aes_ctr_new, CipherContext
-from gg.crypto import crypto_bn_from_bytes, crypto_bn_to_bytes, crypto_bn_mod_exp, BigNum
+from xtd.crypto import crypto_sha256, crypto_hmac
+from xtd.crypto import crypto_aes_ctr_new, CipherContext
+from xtd.crypto import crypto_bn_from_bytes, crypto_bn_to_bytes, crypto_bn_mod_exp, BigNum
 from std.fs import read_file, file_exists
 from std.os import getenv, exit
 from std.path import path_join

@@ -6,7 +6,7 @@
 #   4. MIME type detection for several common extensions.
 #   5. index.html fallback when request path is a directory.
 
-from gg.httpserver import http_serve_file, http_mime_type, HttpRequest, HttpServerResponse
+from xtd.httpserver import http_serve_file, http_mime_type, HttpRequest, HttpServerResponse
 from std.collections import Dict
 from std.fs import write_file, delete_file, mkdir, rmdir
 

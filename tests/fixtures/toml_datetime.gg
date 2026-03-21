@@ -1,4 +1,4 @@
-from gg.toml import parse, TomlValue
+from xtd.toml import parse, TomlValue
 
 void main():
     String src = "ts = 2024-01-15T10:30:00Z\nname = \"test\"\n"

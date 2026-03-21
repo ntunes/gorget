@@ -571,7 +571,7 @@ Dot-shorthand eliminates the redundancy of repeating the type name when the comp
 **Glob import:** When working extensively with one enum, use `EnumName.*` to bring all its variants into bare scope:
 
 ```gorget
-from gg.log import LogLevel.*
+from xtd.log import LogLevel.*
 
 LogLevel lvl = Info()    # bare — from glob import
 match lvl:
@@ -1370,9 +1370,9 @@ import std.collections.HashMap                # import specific type
 from std.fmt import Displayable, format       # from...import
 from math.geometry import Point, Circle       # project-local module
 import std.sync.{Arc, Mutex, RwLock}          # multiple items with {}
-from gg.log import LogLevel, Logger           # import type only (qualified variants)
-from gg.log import LogLevel.*                 # glob: import type + all variants bare
-from gg.log import LogLevel.*, Logger         # glob + other names in same statement
+from xtd.log import LogLevel, Logger           # import type only (qualified variants)
+from xtd.log import LogLevel.*                 # glob: import type + all variants bare
+from xtd.log import LogLevel.*, Logger         # glob + other names in same statement
 ```
 
 **Glob import** (`EnumName.*`) brings a type's enum variants into bare scope, useful when code makes heavy use of one enum. Without the glob, variants require qualified access (`LogLevel.Info()`). With the glob, bare names work (`Info()`). The type itself is always in scope regardless.
@@ -2687,7 +2687,7 @@ void debug_log(String msg):
 
 ## 34. Build System & Package Management (`gg`) in Detail
 
-### gg.toml (Best of Cargo + npm + pyproject.toml)
+### xtd.toml (Best of Cargo + npm + pyproject.toml)
 ```toml
 [package]
 name = "my_project"
@@ -2747,7 +2747,7 @@ warn = ["missing-docs"]
 ### Project Layout
 ```
 my_project/
-  gg.toml                  # manifest
+  xtd.toml                  # manifest
   gg.lock                  # lockfile (auto-generated, committed to git)
   src/
     main.gg                # binary entry point
@@ -2778,7 +2778,7 @@ gg fmt                     # format code
 gg lint                    # run linter
 gg doc                     # generate documentation
 gg publish                 # publish to registry
-gg add http                # add dependency to gg.toml
+gg add http                # add dependency to xtd.toml
 gg update                  # update lockfile
 gg audit                   # scan for vulnerabilities
 ```
@@ -3304,8 +3304,8 @@ trait Iterable          # .iter() — produce an Iterator
 trait From[T]           # .from(T) — infallible type conversion (static method)
 trait TryFrom[T]        # .try_from(T) — fallible type conversion (static method)
 trait Parseable          # .parse(String) — fallible string parsing (static method)
-trait Serializable      # .serialize(ser) — serialization (derivable via @derive, import gg.json)
-trait Deserializable    # .deserialize(de) — deserialization (derivable via @derive, import gg.json)
+trait Serializable      # .serialize(ser) — serialization (derivable via @derive, import xtd.json)
+trait Deserializable    # .deserialize(de) — deserialization (derivable via @derive, import xtd.json)
 trait Debuggable        # *Not yet implemented* — development/debug representation
 trait Copy              # *Not yet implemented* — marker: bitwise copyable (primitives)
 trait Sendable          # *Not yet implemented* — marker: safe to send across threads
@@ -3356,7 +3356,7 @@ async void with_timeout():
 ### 40.5 HTTP (Built-in)
 
 ```gorget
-import gg.http
+import xtd.http
 
 # HTTP client — simple
 async void fetch_example() throws HttpError:
@@ -3392,7 +3392,7 @@ void main():
 ### 40.6 JSON (Built-in)
 
 ```gorget
-import gg.json
+import xtd.json
 
 # Serialize — any type with @derive(Serializable)
 @derive(Serializable, Deserializable)

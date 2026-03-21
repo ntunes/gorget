@@ -11,11 +11,11 @@ reusable pieces. Gorget's module system is file-based and straightforward.
 
 ```gorget
 import std.io
-import gg.json
+import xtd.json
 ```
 
 This makes the module available by its full name: `std.io.readline()`,
-`gg.json.json_parse(s)`.
+`xtd.json.json_parse(s)`.
 
 ### From Import
 
@@ -23,7 +23,7 @@ Pull specific names into scope:
 
 ```gorget
 from std.conv import int_to_str, parse_int
-from gg.log import LogLevel, Logger
+from xtd.log import LogLevel, Logger
 ```
 
 Now you use `int_to_str()` directly instead of `std.conv.int_to_str()`.
@@ -33,7 +33,7 @@ Now you use `int_to_str()` directly instead of `std.conv.int_to_str()`.
 Import all variants of an enum:
 
 ```gorget
-from gg.log import LogLevel.*
+from xtd.log import LogLevel.*
 
 LogLevel level = Info()      # bare variant access
 ```
@@ -114,29 +114,29 @@ Gorget ships with two module namespaces:
 | `std.fmt` | String formatting |
 | `std.term` | Terminal control |
 
-### `gg.*` — Domain Libraries
+### `xtd.*` — Domain Libraries
 
 | Module | Purpose |
 |--------|---------|
-| `gg.http` | HTTP/1.1 client with TLS support |
-| `gg.httpserver` | HTTP server with routing and middleware |
-| `gg.json` | JSON parsing and serialization |
-| `gg.csv` | CSV parsing |
-| `gg.yaml` | YAML parsing |
-| `gg.toml` | TOML parsing |
-| `gg.xml` | XML parsing and querying |
-| `gg.log` | Logging with levels |
-| `gg.db` | Generic database interface |
-| `gg.sqlite` | SQLite binding |
-| `gg.influx` | InfluxDB client |
-| `gg.ssh` | SSH client |
-| `gg.p2p` | Peer-to-peer networking |
-| `gg.uuid` | UUID generation |
-| `gg.cli` | Command-line interface builder |
-| `gg.dataframe` | DataFrame operations |
-| `gg.tensor` | Tensor operations |
-| `gg.ecs` | Entity component system |
-| `gg.gfx` | Graphics rendering |
+| `xtd.http` | HTTP/1.1 client with TLS support |
+| `xtd.httpserver` | HTTP server with routing and middleware |
+| `xtd.json` | JSON parsing and serialization |
+| `xtd.csv` | CSV parsing |
+| `xtd.yaml` | YAML parsing |
+| `xtd.toml` | TOML parsing |
+| `xtd.xml` | XML parsing and querying |
+| `xtd.log` | Logging with levels |
+| `xtd.db` | Generic database interface |
+| `xtd.sqlite` | SQLite binding |
+| `xtd.influx` | InfluxDB client |
+| `xtd.ssh` | SSH client |
+| `xtd.p2p` | Peer-to-peer networking |
+| `xtd.uuid` | UUID generation |
+| `xtd.cli` | Command-line interface builder |
+| `xtd.dataframe` | DataFrame operations |
+| `xtd.tensor` | Tensor operations |
+| `xtd.ecs` | Entity component system |
+| `xtd.gfx` | Graphics rendering |
 
 ### Prelude
 
@@ -190,7 +190,7 @@ gg remove http-client
 |---------|--------|---------|
 | Import module | `import mod` | `import std.fs` |
 | Import names | `from mod import names` | `from std.conv import parse_int` |
-| Glob import | `from mod import Enum.*` | `from gg.log import LogLevel.*` |
+| Glob import | `from mod import Enum.*` | `from xtd.log import LogLevel.*` |
 | Grouped import | `import ns.{a, b}` | `import std.{io, fs}` |
 | Private item | `private` keyword | `private void helper():` |
 | File = module | filename | `config.gg` = `config` module |

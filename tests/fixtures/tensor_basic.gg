@@ -1,4 +1,4 @@
-from gg.tensor import Tensor, tensor_zeros, tensor_ones, tensor_arange, tensor_from, tensor_display, tensor_linspace, vec_int_copy, tensor_compute_strides
+from xtd.tensor import Tensor, tensor_zeros, tensor_ones, tensor_arange, tensor_from, tensor_display, tensor_linspace, vec_int_copy, tensor_compute_strides
 
 void main():
     # 1D int tensor from arange [0..6)

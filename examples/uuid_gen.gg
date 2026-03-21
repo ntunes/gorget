@@ -1,4 +1,4 @@
-from gg.uuid import UUID
+from xtd.uuid import UUID
 
 void main():
     UUID id1 = UUID.v4()

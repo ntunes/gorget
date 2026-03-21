@@ -1,6 +1,6 @@
-from gg.math3d import Vec2, Vec3, Vec4, Mat4, Quat, Plane, AABB, Ray, Frustum
-from gg.math3d import radians, degrees, clamp_f, lerp_f, abs_f
-from gg.math3d import test_plane_aabb
+from xtd.math3d import Vec2, Vec3, Vec4, Mat4, Quat, Plane, AABB, Ray, Frustum
+from xtd.math3d import radians, degrees, clamp_f, lerp_f, abs_f
+from xtd.math3d import test_plane_aabb
 from std.math import PI, sqrt
 
 void main():

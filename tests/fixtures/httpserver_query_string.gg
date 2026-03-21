@@ -12,7 +12,7 @@
 # Expected output:
 #   0\nempty\nvalue\n1\n2\n3\na=b\nempty\nhello\n2
 
-from gg.httpserver import parse_query_string, HttpRequest, HttpServerResponse
+from xtd.httpserver import parse_query_string, HttpRequest, HttpServerResponse
 from std.collections import Dict
 
 void main():

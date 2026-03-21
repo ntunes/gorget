@@ -1,4 +1,4 @@
-from gg.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats
+from xtd.dataframe import DataFrame, Column, df_from_columns, col_from_ints, col_from_strs, col_from_floats
 
 void main():
     Vector[String] names = Vector[String]()

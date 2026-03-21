@@ -2,7 +2,7 @@
 ///
 /// The namespace split:
 /// - `std.*` — lean, stable building blocks: collections, I/O, math, OS, net, …
-/// - `gg.*`  — batteries-included ecosystem: JSON, TOML, XML, YAML, CSV,
+/// - `xtd.*`  — batteries-included ecosystem: JSON, TOML, XML, YAML, CSV,
 ///              crypto, regex, SDL, GFX, ECS, SSH, HTTP, P2P, …
 ///
 /// Both namespaces use one of two module strategies:
@@ -19,13 +19,13 @@
 /// already exist in the runtime — the Gorget source would just be boilerplate
 /// `extern` declarations with no real logic.
 ///
-/// Examples: `std.fs`, `std.os`, `std.conv`, `std.math`, `gg.crypto`,
-/// `std.net.socket`, `gg.sdl`, `gg.regex`.
+/// Examples: `std.fs`, `std.os`, `std.conv`, `std.math`, `xtd.crypto`,
+/// `std.net.socket`, `xtd.sdl`, `xtd.regex`.
 ///
 /// ## File-based modules (`builtin_module_source` returns `Some`)
 ///
 /// The module is written in Gorget as a `.gg` file under `lib/std/` (for `std.*`)
-/// or `lib/gg/` (for `gg.*`). The loader reads the source via `include_str!`,
+/// or `lib/xtd/` (for `xtd.*`). The loader reads the source via `include_str!`,
 /// parses it, recursively resolves its imports, and merges the resulting AST into
 /// the main module. Semantic analysis (name resolution, type checking, borrow
 /// checking) runs on the merged result — the file-based module code is fully
@@ -36,8 +36,8 @@
 /// tested in the language itself. File-based modules can import other built-in
 /// modules and use all language features.
 ///
-/// Examples: `gg.json`, `gg.toml`, `gg.xml`, `gg.yaml`, `gg.csv`,
-/// `std.bytes`, `std.encoding`, `gg.gfx`, `gg.ecs`, `gg.ssh`, `gg.http`.
+/// Examples: `xtd.json`, `xtd.toml`, `xtd.xml`, `xtd.yaml`, `xtd.csv`,
+/// `std.bytes`, `std.encoding`, `xtd.gfx`, `xtd.ecs`, `xtd.ssh`, `xtd.http`.
 ///
 /// ## Adding a new module
 ///
@@ -46,7 +46,7 @@
 /// 3. For synthetic: add a `gen_*_module()` function returning the AST.
 ///    For file-based in `std`: create `lib/std/<name>.gg`, add `None` to
 ///    `generate_builtin_module`, add `include_str!` to `builtin_module_source`.
-///    For file-based in `gg`: create `lib/gg/<name>.gg` instead.
+///    For file-based in `gg`: create `lib/xtd/<name>.gg` instead.
 /// 4. Add unit tests (at minimum: is_builtin, generate returns correct variant,
 ///    source exists/parses for file-based modules).
 ///
@@ -55,7 +55,7 @@
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
-/// Check if an import path refers to a built-in module (`std.*` or `gg.*`).
+/// Check if an import path refers to a built-in module (`std.*` or `xtd.*`).
 pub fn is_builtin_module(segments: &[String]) -> bool {
     match segments.first().map(|s| s.as_str()) {
         Some("std") => match segments.len() {
@@ -67,7 +67,7 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
             3 => segments[1] == "net" && matches!(segments[2].as_str(), "socket" | "tls" | "udp"),
             _ => false,
         },
-        Some("gg") => segments.len() == 2 && matches!(segments[1].as_str(),
+        Some("xtd") => segments.len() == 2 && matches!(segments[1].as_str(),
             "json" | "toml" | "xml" | "yaml" | "csv" | "crypto" | "regex"
             | "sdl" | "gfx" | "ecs" | "ssh" | "http" | "httpserver" | "p2p"
             | "uuid" | "log" | "cli" | "tensor" | "dataframe"
@@ -112,7 +112,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
             3 if segments[1] == "net" && segments[2] == "udp" => Some(gen_udp_socket_module()),
             _ => None,
         },
-        Some("gg") if segments.len() == 2 => match segments[1].as_str() {
+        Some("xtd") if segments.len() == 2 => match segments[1].as_str() {
             "sdl" => Some(gen_sdl_module()),
             "crypto" => Some(gen_crypto_module()),
             "regex" => Some(gen_regex_module()),
@@ -949,7 +949,7 @@ fn gen_sdl_module() -> Module {
 
 // ─── File-based built-in modules ────────────────────────────
 
-/// Get embedded source for file-based built-in modules (`std.*` or `gg.*`).
+/// Get embedded source for file-based built-in modules (`std.*` or `xtd.*`).
 /// These are real `.gg` files compiled into the binary, parsed and loaded
 /// by the module loader (including recursive import resolution).
 pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
@@ -963,29 +963,29 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("datetime") => Some(include_str!("../lib/std/datetime.gg")),
             _ => None,
         },
-        Some("gg") => match segments.get(1).map(|s| s.as_str()) {
-            Some("gfx") => Some(include_str!("../lib/gg/gfx.gg")),
-            Some("ecs") => Some(include_str!("../lib/gg/ecs.gg")),
-            Some("ssh") => Some(include_str!("../lib/gg/ssh.gg")),
-            Some("http") => Some(include_str!("../lib/gg/http.gg")),
-            Some("httpserver") => Some(include_str!("../lib/gg/httpserver.gg")),
-            Some("json") => Some(include_str!("../lib/gg/json.gg")),
-            Some("toml") => Some(include_str!("../lib/gg/toml.gg")),
-            Some("xml") => Some(include_str!("../lib/gg/xml.gg")),
-            Some("yaml") => Some(include_str!("../lib/gg/yaml.gg")),
-            Some("csv") => Some(include_str!("../lib/gg/csv.gg")),
-            Some("p2p") => Some(include_str!("../lib/gg/p2p.gg")),
-            Some("uuid") => Some(include_str!("../lib/gg/uuid.gg")),
-            Some("log") => Some(include_str!("../lib/gg/log.gg")),
-            Some("cli") => Some(include_str!("../lib/gg/cli.gg")),
-            Some("tensor") => Some(include_str!("../lib/gg/tensor.gg")),
-            Some("dataframe") => Some(include_str!("../lib/gg/dataframe.gg")),
-            Some("db") => Some(include_str!("../lib/gg/db.gg")),
-            Some("sqlite") => Some(include_str!("../lib/gg/sqlite.gg")),
-            Some("influx") => Some(include_str!("../lib/gg/influx.gg")),
-            Some("jsonpath") => Some(include_str!("../lib/gg/jsonpath.gg")),
-            Some("math3d") => Some(include_str!("../lib/gg/math3d.gg")),
-            Some("gpu") => Some(include_str!("../lib/gg/gpu.gg")),
+        Some("xtd") => match segments.get(1).map(|s| s.as_str()) {
+            Some("gfx") => Some(include_str!("../lib/xtd/gfx.gg")),
+            Some("ecs") => Some(include_str!("../lib/xtd/ecs.gg")),
+            Some("ssh") => Some(include_str!("../lib/xtd/ssh.gg")),
+            Some("http") => Some(include_str!("../lib/xtd/http.gg")),
+            Some("httpserver") => Some(include_str!("../lib/xtd/httpserver.gg")),
+            Some("json") => Some(include_str!("../lib/xtd/json.gg")),
+            Some("toml") => Some(include_str!("../lib/xtd/toml.gg")),
+            Some("xml") => Some(include_str!("../lib/xtd/xml.gg")),
+            Some("yaml") => Some(include_str!("../lib/xtd/yaml.gg")),
+            Some("csv") => Some(include_str!("../lib/xtd/csv.gg")),
+            Some("p2p") => Some(include_str!("../lib/xtd/p2p.gg")),
+            Some("uuid") => Some(include_str!("../lib/xtd/uuid.gg")),
+            Some("log") => Some(include_str!("../lib/xtd/log.gg")),
+            Some("cli") => Some(include_str!("../lib/xtd/cli.gg")),
+            Some("tensor") => Some(include_str!("../lib/xtd/tensor.gg")),
+            Some("dataframe") => Some(include_str!("../lib/xtd/dataframe.gg")),
+            Some("db") => Some(include_str!("../lib/xtd/db.gg")),
+            Some("sqlite") => Some(include_str!("../lib/xtd/sqlite.gg")),
+            Some("influx") => Some(include_str!("../lib/xtd/influx.gg")),
+            Some("jsonpath") => Some(include_str!("../lib/xtd/jsonpath.gg")),
+            Some("math3d") => Some(include_str!("../lib/xtd/math3d.gg")),
+            Some("gpu") => Some(include_str!("../lib/xtd/gpu.gg")),
             _ => None,
         },
         _ => None,
@@ -1114,7 +1114,7 @@ fn opaque_struct(name: &str) -> Spanned<Item> {
     }))
 }
 
-// ─── gg.crypto ──────────────────────────────────────────────
+// ─── xtd.crypto ──────────────────────────────────────────────
 
 fn gen_crypto_module() -> Module {
     let ty_cipher = || Type::Named {
@@ -1425,7 +1425,7 @@ fn gen_tls_socket_module() -> Module {
     }
 }
 
-// ─── gg.regex ───────────────────────────────────────────────
+// ─── xtd.regex ───────────────────────────────────────────────
 
 fn gen_regex_module() -> Module {
     let ty_regex = || Type::Named {
@@ -1829,7 +1829,7 @@ fn equip_block(type_name: &str, methods: Vec<FunctionDef>) -> Spanned<Item> {
     }))
 }
 
-// ─── gg.gl — OpenGL 2.1 Bindings ──────────────────────────────
+// ─── xtd.gl — OpenGL 2.1 Bindings ──────────────────────────────
 
 fn gen_gl_module() -> Module {
     let mut items: Vec<Spanned<Item>> = Vec::new();
@@ -2554,7 +2554,7 @@ fn gen_gl_module() -> Module {
     }
 }
 
-// ─── gg.image — Image Loading (stb_image) ─────────────────────
+// ─── xtd.image — Image Loading (stb_image) ─────────────────────
 
 fn gen_image_module() -> Module {
     // Image struct with user-visible fields
@@ -2727,7 +2727,7 @@ fn gen_compress_module() -> Module {
     }
 }
 
-// ─── gg.metal — Apple Metal GPU API ────────────────────────────
+// ─── xtd.metal — Apple Metal GPU API ────────────────────────────
 
 fn gen_metal_module() -> Module {
     let mut items: Vec<Spanned<Item>> = Vec::new();
@@ -3310,27 +3310,27 @@ mod tests {
         assert!(is_builtin_module(&["std".into(), "alloc".into()]));
         assert!(is_builtin_module(&["std".into(), "net".into(), "tls".into()]));
         // gg.* battery modules
-        assert!(is_builtin_module(&["gg".into(), "sdl".into()]));
-        assert!(is_builtin_module(&["gg".into(), "ecs".into()]));
-        assert!(is_builtin_module(&["gg".into(), "json".into()]));
-        assert!(is_builtin_module(&["gg".into(), "yaml".into()]));
-        assert!(is_builtin_module(&["gg".into(), "http".into()]));
-        assert!(is_builtin_module(&["gg".into(), "regex".into()]));
-        assert!(is_builtin_module(&["gg".into(), "crypto".into()]));
-        assert!(is_builtin_module(&["gg".into(), "toml".into()]));
-        assert!(is_builtin_module(&["gg".into(), "xml".into()]));
-        assert!(is_builtin_module(&["gg".into(), "csv".into()]));
-        assert!(is_builtin_module(&["gg".into(), "gfx".into()]));
-        assert!(is_builtin_module(&["gg".into(), "ssh".into()]));
-        assert!(is_builtin_module(&["gg".into(), "p2p".into()]));
-        assert!(is_builtin_module(&["gg".into(), "db".into()]));
-        assert!(is_builtin_module(&["gg".into(), "sqlite".into()]));
-        assert!(is_builtin_module(&["gg".into(), "influx".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "sdl".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "ecs".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "json".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "yaml".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "http".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "regex".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "crypto".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "toml".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "xml".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "csv".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "gfx".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "ssh".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "p2p".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "db".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "sqlite".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "influx".into()]));
         // old std.* battery paths are NOT valid anymore
         assert!(!is_builtin_module(&["std".into(), "sdl".into()]));
         assert!(!is_builtin_module(&["std".into(), "json".into()]));
         assert!(!is_builtin_module(&["std".into(), "crypto".into()]));
-        assert!(!is_builtin_module(&["gg".into(), "http".into(), "client".into()]));
+        assert!(!is_builtin_module(&["xtd".into(), "http".into(), "client".into()]));
         assert!(!is_builtin_module(&["std".into(), "test".into(), "process".into()]));
         assert!(!is_builtin_module(&["std".into(), "foo".into()]));
         assert!(!is_builtin_module(&["foo".into(), "fs".into()]));
@@ -3451,18 +3451,18 @@ mod tests {
 
     #[test]
     fn is_builtin_gfx() {
-        assert!(is_builtin_module(&["gg".into(), "gfx".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "gfx".into()]));
     }
 
     #[test]
     fn generate_gfx_returns_none() {
-        // gg.gfx is file-based, not synthetic — generate returns None
-        assert!(generate_builtin_module(&["gg".into(), "gfx".into()]).is_none());
+        // xtd.gfx is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["xtd".into(), "gfx".into()]).is_none());
     }
 
     #[test]
     fn gfx_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "gfx".into()]);
+        let source = builtin_module_source(&["xtd".into(), "gfx".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct Canvas"));
@@ -3474,7 +3474,7 @@ mod tests {
 
     #[test]
     fn gfx_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "gfx".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "gfx".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "gfx.gg parse errors: {:?}", parser.errors);
@@ -3499,18 +3499,18 @@ mod tests {
 
     #[test]
     fn is_builtin_ecs() {
-        assert!(is_builtin_module(&["gg".into(), "ecs".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "ecs".into()]));
     }
 
     #[test]
     fn generate_ecs_returns_none() {
-        // gg.ecs is file-based, not synthetic — generate returns None
-        assert!(generate_builtin_module(&["gg".into(), "ecs".into()]).is_none());
+        // xtd.ecs is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["xtd".into(), "ecs".into()]).is_none());
     }
 
     #[test]
     fn ecs_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "ecs".into()]);
+        let source = builtin_module_source(&["xtd".into(), "ecs".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct EntityPool"));
@@ -3521,7 +3521,7 @@ mod tests {
 
     #[test]
     fn ecs_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "ecs".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "ecs".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "ecs.gg parse errors: {:?}", parser.errors);
@@ -3545,12 +3545,12 @@ mod tests {
 
     #[test]
     fn is_builtin_sdl() {
-        assert!(is_builtin_module(&["gg".into(), "sdl".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "sdl".into()]));
     }
 
     #[test]
     fn generate_sdl() {
-        let m = generate_builtin_module(&["gg".into(), "sdl".into()]).unwrap();
+        let m = generate_builtin_module(&["xtd".into(), "sdl".into()]).unwrap();
 
         // Collect item names by type
         let mut struct_names = vec![];
@@ -3602,18 +3602,18 @@ mod tests {
 
     #[test]
     fn is_builtin_ssh() {
-        assert!(is_builtin_module(&["gg".into(), "ssh".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "ssh".into()]));
     }
 
     #[test]
     fn generate_ssh_returns_none() {
-        // gg.ssh is file-based, not synthetic — generate returns None
-        assert!(generate_builtin_module(&["gg".into(), "ssh".into()]).is_none());
+        // xtd.ssh is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["xtd".into(), "ssh".into()]).is_none());
     }
 
     #[test]
     fn ssh_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "ssh".into()]);
+        let source = builtin_module_source(&["xtd".into(), "ssh".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct Session"));
@@ -3624,7 +3624,7 @@ mod tests {
 
     #[test]
     fn ssh_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "ssh".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "ssh".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "ssh.gg parse errors: {:?}", parser.errors);
@@ -3651,12 +3651,12 @@ mod tests {
 
     #[test]
     fn is_builtin_crypto() {
-        assert!(is_builtin_module(&["gg".into(), "crypto".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "crypto".into()]));
     }
 
     #[test]
     fn generate_crypto() {
-        let m = generate_builtin_module(&["gg".into(), "crypto".into()]).unwrap();
+        let m = generate_builtin_module(&["xtd".into(), "crypto".into()]).unwrap();
         let mut struct_names = vec![];
         let mut fn_names = vec![];
         for item in &m.items {
@@ -3820,18 +3820,18 @@ mod tests {
 
     #[test]
     fn is_builtin_json() {
-        assert!(is_builtin_module(&["gg".into(), "json".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "json".into()]));
     }
 
     #[test]
     fn generate_json_returns_none() {
-        // gg.json is file-based, not synthetic — generate returns None
-        assert!(generate_builtin_module(&["gg".into(), "json".into()]).is_none());
+        // xtd.json is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["xtd".into(), "json".into()]).is_none());
     }
 
     #[test]
     fn json_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "json".into()]);
+        let source = builtin_module_source(&["xtd".into(), "json".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("enum Json"));
@@ -3843,7 +3843,7 @@ mod tests {
 
     #[test]
     fn json_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "json".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "json".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "json.gg parse errors: {:?}", parser.errors);
@@ -3875,17 +3875,17 @@ mod tests {
 
     #[test]
     fn is_builtin_toml() {
-        assert!(is_builtin_module(&["gg".into(), "toml".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "toml".into()]));
     }
 
     #[test]
     fn generate_toml_returns_none() {
-        assert!(generate_builtin_module(&["gg".into(), "toml".into()]).is_none());
+        assert!(generate_builtin_module(&["xtd".into(), "toml".into()]).is_none());
     }
 
     #[test]
     fn toml_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "toml".into()]);
+        let source = builtin_module_source(&["xtd".into(), "toml".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("enum TomlValue"));
@@ -3898,7 +3898,7 @@ mod tests {
 
     #[test]
     fn toml_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "toml".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "toml".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "toml.gg parse errors: {:?}", parser.errors);
@@ -3926,18 +3926,18 @@ mod tests {
 
     #[test]
     fn is_builtin_xml() {
-        assert!(is_builtin_module(&["gg".into(), "xml".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "xml".into()]));
     }
 
     #[test]
     fn generate_xml_returns_none() {
-        // gg.xml is file-based, not synthetic — generate returns None
-        assert!(generate_builtin_module(&["gg".into(), "xml".into()]).is_none());
+        // xtd.xml is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["xtd".into(), "xml".into()]).is_none());
     }
 
     #[test]
     fn xml_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "xml".into()]);
+        let source = builtin_module_source(&["xtd".into(), "xml".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("enum XmlNode"));
@@ -3949,7 +3949,7 @@ mod tests {
 
     #[test]
     fn xml_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "xml".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "xml".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "xml.gg parse errors: {:?}", parser.errors);
@@ -3977,18 +3977,18 @@ mod tests {
 
     #[test]
     fn is_builtin_yaml() {
-        assert!(is_builtin_module(&["gg".into(), "yaml".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "yaml".into()]));
     }
 
     #[test]
     fn generate_yaml_returns_none() {
-        // gg.yaml is file-based, not synthetic — generate returns None
-        assert!(generate_builtin_module(&["gg".into(), "yaml".into()]).is_none());
+        // xtd.yaml is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["xtd".into(), "yaml".into()]).is_none());
     }
 
     #[test]
     fn yaml_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "yaml".into()]);
+        let source = builtin_module_source(&["xtd".into(), "yaml".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("enum Yaml"));
@@ -4001,7 +4001,7 @@ mod tests {
 
     #[test]
     fn yaml_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "yaml".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "yaml".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "yaml.gg parse errors: {:?}", parser.errors);
@@ -4087,10 +4087,10 @@ mod tests {
 
     #[test]
     fn http_is_file_based_module() {
-        // gg.http is file-based, so generate_builtin_module returns None
-        assert!(generate_builtin_module(&["gg".into(), "http".into()]).is_none());
+        // xtd.http is file-based, so generate_builtin_module returns None
+        assert!(generate_builtin_module(&["xtd".into(), "http".into()]).is_none());
         // but builtin_module_source returns the source
-        assert!(builtin_module_source(&["gg".into(), "http".into()]).is_some());
+        assert!(builtin_module_source(&["xtd".into(), "http".into()]).is_some());
     }
 
     #[test]
@@ -4134,7 +4134,7 @@ mod tests {
 
     #[test]
     fn cipher_methods_are_extern() {
-        let m = generate_builtin_module(&["gg".into(), "crypto".into()]).unwrap();
+        let m = generate_builtin_module(&["xtd".into(), "crypto".into()]).unwrap();
         for item in &m.items {
             if let Item::Equip(eq) = &item.node {
                 if let Type::Named { name, .. } = &eq.type_.node {
@@ -4184,7 +4184,7 @@ mod tests {
 
     #[test]
     fn crypto_free_functions_are_extern() {
-        let m = generate_builtin_module(&["gg".into(), "crypto".into()]).unwrap();
+        let m = generate_builtin_module(&["xtd".into(), "crypto".into()]).unwrap();
         let extern_expected = [
             "crypto_sha256",
             "crypto_sha1",
@@ -4217,22 +4217,22 @@ mod tests {
         }
     }
 
-    // ─── gg.csv ───────────────────────────────────────────────────
+    // ─── xtd.csv ───────────────────────────────────────────────────
 
     #[test]
     fn is_builtin_csv() {
-        assert!(is_builtin_module(&["gg".into(), "csv".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "csv".into()]));
     }
 
     #[test]
     fn generate_csv_returns_none() {
-        // gg.csv is file-based, not synthetic — generate returns None
-        assert!(generate_builtin_module(&["gg".into(), "csv".into()]).is_none());
+        // xtd.csv is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["xtd".into(), "csv".into()]).is_none());
     }
 
     #[test]
     fn csv_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "csv".into()]);
+        let source = builtin_module_source(&["xtd".into(), "csv".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct CsvParser"));
@@ -4245,7 +4245,7 @@ mod tests {
 
     #[test]
     fn csv_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "csv".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "csv".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "csv.gg parse errors: {:?}", parser.errors);
@@ -4271,21 +4271,21 @@ mod tests {
         assert!(equip_count >= 2, "expected at least 2 equip blocks, got {equip_count}");
     }
 
-    // ─── gg.tensor ────────────────────────────────────────────
+    // ─── xtd.tensor ────────────────────────────────────────────
 
     #[test]
     fn is_builtin_tensor() {
-        assert!(is_builtin_module(&["gg".into(), "tensor".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "tensor".into()]));
     }
 
     #[test]
     fn generate_tensor_returns_none() {
-        assert!(generate_builtin_module(&["gg".into(), "tensor".into()]).is_none());
+        assert!(generate_builtin_module(&["xtd".into(), "tensor".into()]).is_none());
     }
 
     #[test]
     fn tensor_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "tensor".into()]);
+        let source = builtin_module_source(&["xtd".into(), "tensor".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct Tensor"));
@@ -4298,27 +4298,27 @@ mod tests {
 
     #[test]
     fn tensor_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "tensor".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "tensor".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let _module = parser.parse_module();
         assert!(parser.errors.is_empty(), "tensor.gg parse errors: {:?}", parser.errors);
     }
 
-    // ─── gg.dataframe ─────────────────────────────────────────
+    // ─── xtd.dataframe ─────────────────────────────────────────
 
     #[test]
     fn is_builtin_dataframe() {
-        assert!(is_builtin_module(&["gg".into(), "dataframe".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "dataframe".into()]));
     }
 
     #[test]
     fn generate_dataframe_returns_none() {
-        assert!(generate_builtin_module(&["gg".into(), "dataframe".into()]).is_none());
+        assert!(generate_builtin_module(&["xtd".into(), "dataframe".into()]).is_none());
     }
 
     #[test]
     fn dataframe_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "dataframe".into()]);
+        let source = builtin_module_source(&["xtd".into(), "dataframe".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct DataFrame"));
@@ -4328,27 +4328,27 @@ mod tests {
 
     #[test]
     fn dataframe_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "dataframe".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "dataframe".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let _module = parser.parse_module();
         assert!(parser.errors.is_empty(), "dataframe.gg parse errors: {:?}", parser.errors);
     }
 
-    // ─── gg.uuid ──────────────────────────────────────────────
+    // ─── xtd.uuid ──────────────────────────────────────────────
 
     #[test]
     fn is_builtin_uuid() {
-        assert!(is_builtin_module(&["gg".into(), "uuid".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "uuid".into()]));
     }
 
     #[test]
     fn generate_uuid_returns_none() {
-        assert!(generate_builtin_module(&["gg".into(), "uuid".into()]).is_none());
+        assert!(generate_builtin_module(&["xtd".into(), "uuid".into()]).is_none());
     }
 
     #[test]
     fn uuid_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "uuid".into()]);
+        let source = builtin_module_source(&["xtd".into(), "uuid".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct UUID"));
@@ -4358,7 +4358,7 @@ mod tests {
 
     #[test]
     fn uuid_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "uuid".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "uuid".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "uuid.gg parse errors: {:?}", parser.errors);
@@ -4374,21 +4374,21 @@ mod tests {
         assert!(fn_names.contains(&"hex_val".to_string()));
     }
 
-    // ─── gg.log ───────────────────────────────────────────────
+    // ─── xtd.log ───────────────────────────────────────────────
 
     #[test]
     fn is_builtin_log() {
-        assert!(is_builtin_module(&["gg".into(), "log".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "log".into()]));
     }
 
     #[test]
     fn generate_log_returns_none() {
-        assert!(generate_builtin_module(&["gg".into(), "log".into()]).is_none());
+        assert!(generate_builtin_module(&["xtd".into(), "log".into()]).is_none());
     }
 
     #[test]
     fn log_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "log".into()]);
+        let source = builtin_module_source(&["xtd".into(), "log".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct Logger"));
@@ -4398,7 +4398,7 @@ mod tests {
 
     #[test]
     fn log_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "log".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "log".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "log.gg parse errors: {:?}", parser.errors);
@@ -4462,21 +4462,21 @@ mod tests {
         assert!(fn_names.contains(&"strip_ansi".to_string()));
     }
 
-    // ─── gg.cli ───────────────────────────────────────────────
+    // ─── xtd.cli ───────────────────────────────────────────────
 
     #[test]
     fn is_builtin_cli() {
-        assert!(is_builtin_module(&["gg".into(), "cli".into()]));
+        assert!(is_builtin_module(&["xtd".into(), "cli".into()]));
     }
 
     #[test]
     fn generate_cli_returns_none() {
-        assert!(generate_builtin_module(&["gg".into(), "cli".into()]).is_none());
+        assert!(generate_builtin_module(&["xtd".into(), "cli".into()]).is_none());
     }
 
     #[test]
     fn cli_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "cli".into()]);
+        let source = builtin_module_source(&["xtd".into(), "cli".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct CliParser"));
@@ -4488,7 +4488,7 @@ mod tests {
 
     #[test]
     fn cli_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "cli".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "cli".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "cli.gg parse errors: {:?}", parser.errors);
@@ -4578,11 +4578,11 @@ mod tests {
         assert!(fn_names.contains(&"dt_days_from_epoch".to_string()));
     }
 
-    // ─── gg.db / gg.sqlite / gg.influx ──────────────────────
+    // ─── xtd.db / xtd.sqlite / xtd.influx ──────────────────────
 
     #[test]
     fn db_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "db".into()]);
+        let source = builtin_module_source(&["xtd".into(), "db".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct Row"));
@@ -4594,7 +4594,7 @@ mod tests {
 
     #[test]
     fn db_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "db".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "db".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "db.gg parse errors: {:?}", parser.errors);
@@ -4607,7 +4607,7 @@ mod tests {
 
     #[test]
     fn sqlite_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "sqlite".into()]);
+        let source = builtin_module_source(&["xtd".into(), "sqlite".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct SqliteConn"));
@@ -4617,7 +4617,7 @@ mod tests {
 
     #[test]
     fn sqlite_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "sqlite".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "sqlite".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "sqlite.gg parse errors: {:?}", parser.errors);
@@ -4630,7 +4630,7 @@ mod tests {
 
     #[test]
     fn influx_module_source_exists() {
-        let source = builtin_module_source(&["gg".into(), "influx".into()]);
+        let source = builtin_module_source(&["xtd".into(), "influx".into()]);
         assert!(source.is_some());
         let src = source.unwrap();
         assert!(src.contains("struct InfluxClient"));
@@ -4640,7 +4640,7 @@ mod tests {
 
     #[test]
     fn influx_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "influx".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "influx".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "influx.gg parse errors: {:?}", parser.errors);
@@ -4653,7 +4653,7 @@ mod tests {
 
     #[test]
     fn jsonpath_source_parses() {
-        let source = builtin_module_source(&["gg".into(), "jsonpath".into()]).unwrap();
+        let source = builtin_module_source(&["xtd".into(), "jsonpath".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let module = parser.parse_module();
         assert!(parser.errors.is_empty(), "jsonpath.gg parse errors: {:?}", parser.errors);

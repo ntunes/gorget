@@ -11,8 +11,8 @@
 # Expected output:
 #   ok\nok\nok
 
-from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka, http_server_handle_conn_ka_limited
-from gg.http import get, HttpResponse
+from xtd.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka, http_server_handle_conn_ka_limited
+from xtd.http import get, HttpResponse
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
 from std.bytes import bytes_to_str
 from std.conv import int_to_str

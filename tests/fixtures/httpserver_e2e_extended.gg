@@ -9,8 +9,8 @@
 # Expected output:
 #   ok\nok\nok\nok\nok\nok
 
-from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
-from gg.http import get, put, delete, post, HttpResponse
+from xtd.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
+from xtd.http import get, put, delete, post, HttpResponse
 from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.collections import Dict
 from std.conv import int_to_str

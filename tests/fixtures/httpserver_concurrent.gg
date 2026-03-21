@@ -1,7 +1,7 @@
 # Tests that serve() handles multiple concurrent connections.
 # A server accepts exactly 2 connections concurrently using TaskGroup.
 # Both clients send requests simultaneously; both must get 200 responses.
-from gg.httpserver import HttpServerResponse, HttpRequest, http_server_parse_request, http_server_write_response
+from xtd.httpserver import HttpServerResponse, HttpRequest, http_server_parse_request, http_server_write_response
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
 from std.channel import Channel
 from std.time import sleep

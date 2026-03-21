@@ -1,8 +1,8 @@
 # Tests HTTP keep-alive: send two requests on the same TCP connection.
 # First request has "Connection: keep-alive" → server keeps connection open.
 # Second request has "Connection: close" → server closes after responding.
-from gg.httpserver import HttpServerResponse, HttpRequest
-from gg.httpserver import http_server_parse_request, http_server_write_response_ka
+from xtd.httpserver import HttpServerResponse, HttpRequest
+from xtd.httpserver import http_server_parse_request, http_server_write_response_ka
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
 from std.signal import signal_ignore, SIGPIPE
 from std.time import sleep

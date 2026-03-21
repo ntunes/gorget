@@ -11,7 +11,7 @@
 # Expected output:
 #   405\n404\n404\n404\npost:7\nbase-mw1-mw2-mw3
 
-from gg.httpserver import Router, HttpRequest, HttpServerResponse
+from xtd.httpserver import Router, HttpRequest, HttpServerResponse
 from std.collections import Dict
 
 HttpServerResponse handle_hello(HttpRequest req):

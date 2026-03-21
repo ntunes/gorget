@@ -1,4 +1,4 @@
-from gg.log import Logger, LogLevel
+from xtd.log import Logger, LogLevel
 
 void main():
     # Qualified variant construction: user-defined enums require qualified access

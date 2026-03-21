@@ -6,7 +6,7 @@
 #   2. HttpServer.new_tls() constructs without error.
 #   3. The use_tls field is accessible and correct.
 
-from gg.httpserver import HttpServer, HttpRequest, HttpServerResponse
+from xtd.httpserver import HttpServer, HttpRequest, HttpServerResponse
 from std.net.tls import TlsSocket, TlsServerSocket, tls_server_bind
 
 HttpServerResponse handle(HttpRequest req):

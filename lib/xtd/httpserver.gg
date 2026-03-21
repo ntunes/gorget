@@ -1,8 +1,8 @@
-# gg.httpserver — HTTP/1.1 server (V2: concurrent connections, keep-alive)
+# xtd.httpserver — HTTP/1.1 server (V2: concurrent connections, keep-alive)
 #
 # Quick start:
 #
-#   from gg.httpserver import HttpServer, HttpRequest, HttpServerResponse
+#   from xtd.httpserver import HttpServer, HttpRequest, HttpServerResponse
 #
 #   HttpServerResponse handle(HttpRequest req):
 #       if req.method == "GET" and req.path == "/hello":
@@ -22,8 +22,8 @@ from std.bytes import bytes_to_str, bytes_concat, bytes_from_str, bytes_to_hex
 from std.fs import read_file, file_exists, is_dir
 from std.path import path_join, path_extension
 from std.encoding import url_decode, form_decode
-from gg.crypto import crypto_sha1
-from gg.json import Json, json_parse, json_stringify
+from xtd.crypto import crypto_sha1
+from xtd.json import Json, json_parse, json_stringify
 
 # ── Request and response types ────────────────────────────────
 

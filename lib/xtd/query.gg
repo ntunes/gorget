@@ -30,7 +30,7 @@
 #   query_set(&doc, "users.0.name", Str("Alice"))
 #   query_delete(&doc, "users.2")
 
-from gg.json import Json, json_parse, json_stringify
+from xtd.json import Json, json_parse, json_stringify
 from std.collections import Vector, Dict
 from std.conv import parse_int, parse_float, int_to_str
 

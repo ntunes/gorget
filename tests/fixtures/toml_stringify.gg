@@ -1,4 +1,4 @@
-from gg.toml import TomlValue, parse, stringify, stringify_value
+from xtd.toml import TomlValue, parse, stringify, stringify_value
 
 void main():
     # ── Test 1: Simple key-value roundtrip ─────────────────

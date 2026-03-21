@@ -1,7 +1,7 @@
 from std.bytes import bytes_from_str, bytes_to_hex, bytes_from_hex
-from gg.crypto import crypto_sha256, crypto_sha1, crypto_hmac
-from gg.crypto import crypto_aes_ctr_new, CipherContext
-from gg.crypto import crypto_random_bytes
+from xtd.crypto import crypto_sha256, crypto_sha1, crypto_hmac
+from xtd.crypto import crypto_aes_ctr_new, CipherContext
+from xtd.crypto import crypto_random_bytes
 
 void main():
     # SHA-256 known-answer test: SHA256("hello") = 2cf24dba...

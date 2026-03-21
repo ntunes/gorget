@@ -8,7 +8,7 @@
 # Expected output:
 #   ok\nok
 
-from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
+from xtd.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
 from std.bytes import bytes_to_str
 from std.conv import int_to_str

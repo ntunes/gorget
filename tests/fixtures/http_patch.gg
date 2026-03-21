@@ -3,8 +3,8 @@
 # Expected output:
 #   ok\nok
 
-from gg.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
-from gg.http import patch, HttpResponse
+from xtd.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
+from xtd.http import patch, HttpResponse
 from std.net.socket import ServerSocket, Socket, server_socket_bind
 from std.collections import Dict
 from std.conv import int_to_str

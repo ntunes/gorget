@@ -13,9 +13,9 @@
 # Expected output:
 #   ok\nok\nok\nok\nok
 
-from gg.httpserver import HttpRequest, HttpServerResponse, HttpServer
-from gg.json import Json, json_parse, json_stringify
-from gg.http import post, HttpResponse
+from xtd.httpserver import HttpRequest, HttpServerResponse, HttpServer
+from xtd.json import Json, json_parse, json_stringify
+from xtd.http import post, HttpResponse
 from std.collections import Dict, Vector
 from std.time import sleep
 from std.signal import signal_ignore, SIGPIPE

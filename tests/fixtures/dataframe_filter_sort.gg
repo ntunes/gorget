@@ -1,4 +1,4 @@
-from gg.dataframe import DataFrame, Column, df_from_columns, df_concat, col_from_ints, col_from_strs
+from xtd.dataframe import DataFrame, Column, df_from_columns, df_concat, col_from_ints, col_from_strs
 from std.collections import Vector
 
 void main():

@@ -312,7 +312,7 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
 
 void collect_import(ImportStmt imp, ScopeTable &scopes):
     if imp.names.len() == 0:
-        # Simple import (e.g. `import gg.json`) — register last path segment
+        # Simple import (e.g. `import xtd.json`) — register last path segment
         String path = imp.module_path
         int dot_pos = -1
         int pi = 0

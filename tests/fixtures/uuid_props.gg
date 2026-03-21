@@ -1,4 +1,4 @@
-from gg.uuid import UUID
+from xtd.uuid import UUID
 
 void main():
     # version(): v4 UUID always returns 4

@@ -1,4 +1,4 @@
-from gg.log import Logger, LogLevel, log_info, log_warn, log_error, log_debug
+from xtd.log import Logger, LogLevel, log_info, log_warn, log_error, log_debug
 
 void main():
     # Module-level convenience functions

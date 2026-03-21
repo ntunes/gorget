@@ -1,4 +1,4 @@
-from gg.cli import CliParser
+from xtd.cli import CliParser
 from std.collections import Vector
 
 void main():

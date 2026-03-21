@@ -1,5 +1,5 @@
-from gg.sqlite import open, SqliteConn
-from gg.db import Row, Param
+from xtd.sqlite import open, SqliteConn
+from xtd.db import Row, Param
 from std.collections import Vector
 
 @derive(FromRow)

@@ -1,4 +1,4 @@
-from gg.yaml import Yaml, parse, parse_all, stringify, stringify_all, pretty, pretty_all
+from xtd.yaml import Yaml, parse, parse_all, stringify, stringify_all, pretty, pretty_all
 from std.collections import Vector, Dict
 
 void main():

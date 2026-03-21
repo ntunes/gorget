@@ -1,4 +1,4 @@
-from gg.csv import parse, parse_table, stringify, CsvTable
+from xtd.csv import parse, parse_table, stringify, CsvTable
 from std.collections import Vector
 
 void main():

@@ -1,5 +1,5 @@
 from std.collections import Vector
-from gg.ecs import Entity, EntityPool, SparseSet
+from xtd.ecs import Entity, EntityPool, SparseSet
 
 struct Health:
     int hp

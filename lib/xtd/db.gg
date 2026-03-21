@@ -1,7 +1,7 @@
-# gg.db — Shared database foundation
+# xtd.db — Shared database foundation
 #
 # Provides Row, Value, Param, FromRow, Queryable, and DbConnection.
-# Imported by gg.sqlite and gg.influx.
+# Imported by xtd.sqlite and gg.influx.
 #
 # @derive(FromRow) is supported on user structs whose field names match
 # column names. Fields of type String, int, float, and bool are handled;
@@ -78,7 +78,7 @@ equip Row with FromRow:
 
 # The core query interface.
 #
-# Implementations: SqliteConn (gg.sqlite), InfluxClient (gg.influx).
+# Implementations: SqliteConn (xtd.sqlite), InfluxClient (gg.influx).
 # query_raw returns raw rows; use from_row to convert to typed structs.
 trait Queryable:
     Result[Vector[Row], String] query_raw(&self, String sql, Vector[Param] params)

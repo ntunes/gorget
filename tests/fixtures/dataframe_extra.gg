@@ -1,4 +1,4 @@
-from gg.dataframe import DataFrame, df_from_records
+from xtd.dataframe import DataFrame, df_from_records
 from std.collections import Vector, Dict
 
 void main():

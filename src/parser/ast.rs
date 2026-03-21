@@ -62,7 +62,7 @@ pub enum Item {
     /// A file-based module's items, wrapped during merge to preserve module identity.
     /// Created by the loader when merging multi-file programs.
     Module {
-        /// Logical import path, e.g. `["gg", "csv"]`.
+        /// Logical import path, e.g. `["xtd", "csv"]`.
         path: Vec<String>,
         items: Vec<Spanned<Item>>,
     },
@@ -294,7 +294,7 @@ pub enum ImportStmt {
         span: Span,
     },
     /// `from std.fmt import Displayable, format`
-    /// Also supports glob: `from gg.log import LogLevel.*`
+    /// Also supports glob: `from xtd.log import LogLevel.*`
     /// Glob names are in `glob_types`; they import the type + all its variants bare.
     From {
         path: Vec<Spanned<String>>,

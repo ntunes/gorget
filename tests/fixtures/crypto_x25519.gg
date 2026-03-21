@@ -1,5 +1,5 @@
-from gg.crypto import crypto_x25519_keygen, crypto_x25519_shared_secret
-from gg.crypto import crypto_hkdf_sha256, crypto_aes_gcm_encrypt, crypto_aes_gcm_decrypt
+from xtd.crypto import crypto_x25519_keygen, crypto_x25519_shared_secret
+from xtd.crypto import crypto_hkdf_sha256, crypto_aes_gcm_encrypt, crypto_aes_gcm_decrypt
 from std.bytes import bytes_to_hex, bytes_from_str, bytes_to_str
 from std.collections import Vector
 

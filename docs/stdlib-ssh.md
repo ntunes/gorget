@@ -1,19 +1,19 @@
-# gg.ssh — SSH Client
+# xtd.ssh — SSH Client
 
 An SSH2 client implemented in pure Gorget on top of `std.net.socket` and
-`gg.crypto`. Connect to remote servers, run commands, and collect output —
+`xtd.crypto`. Connect to remote servers, run commands, and collect output —
 with automatic `~/.ssh/config` resolution.
 
 ## Import
 
 ```gorget
-from gg.ssh import connect, Session, CommandResult
+from xtd.ssh import connect, Session, CommandResult
 ```
 
 ## Quick Start
 
 ```gorget
-from gg.ssh import connect, Session, CommandResult
+from xtd.ssh import connect, Session, CommandResult
 
 void main():
     Result[Session, String] res = connect("myserver", 22, "deploy", "s3cret")
@@ -201,14 +201,14 @@ The client identifies itself as `SSH-2.0-Gorget_1.0`.
 
 ## Dependencies
 
-`gg.ssh` is built on three lower-level stdlib modules:
+`xtd.ssh` is built on three lower-level stdlib modules:
 
 - **`std.bytes`** — Byte buffer helpers (hex encoding, big-endian I/O,
   concat/slice)
 - **`std.net.socket`** — POSIX TCP sockets (connect, read, write)
-- **`gg.crypto`** — OpenSSL wrappers (SHA-256, HMAC, AES-CTR, BigNum, RSA)
+- **`xtd.crypto`** — OpenSSL wrappers (SHA-256, HMAC, AES-CTR, BigNum, RSA)
 
-Programs using `gg.ssh` require OpenSSL (`libcrypto`) at link time. The
+Programs using `xtd.ssh` require OpenSSL (`libcrypto`) at link time. The
 compiler auto-detects OpenSSL via `pkg-config` with a Homebrew fallback on
 macOS.
 

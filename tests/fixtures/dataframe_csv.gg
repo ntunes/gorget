@@ -1,4 +1,4 @@
-from gg.dataframe import DataFrame, Column, df_from_csv, df_to_csv
+from xtd.dataframe import DataFrame, Column, df_from_csv, df_to_csv
 
 void main():
     String csv_text = "name,age,score\nAlice,25,8.5\nBob,30,9.0\nCharlie,35,7.5"

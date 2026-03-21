@@ -1,4 +1,4 @@
-from gg.dataframe import DataFrame, Column, df_from_columns, df_from_records, df_to_csv, df_from_csv, col_from_ints, col_from_strs
+from xtd.dataframe import DataFrame, Column, df_from_columns, df_from_records, df_to_csv, df_from_csv, col_from_ints, col_from_strs
 from std.collections import Vector, Dict
 
 void main():

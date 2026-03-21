@@ -1,4 +1,4 @@
-from gg.http import parse_url
+from xtd.http import parse_url
 
 void main():
     # ── https with default port (443) ──
