@@ -16,7 +16,7 @@ from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
 from scope import DkVariable, DkConst, DkStatic
 from types import TypeTable, ResolvedType, get_stype_at, get_rtype_at, get_int_at
 from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
-from types import RTTuple, RTArray, RTSlice, RTError, RTNever
+from types import RTTuple, RTArray, RTSlice, RTError, RTNever, RTRef
 from types import ast_type_to_resolved
 from resolve import ResolveContext
 
@@ -268,18 +268,20 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             DefInfo d = scopes.get_def(def_id)
                             if d.name == "Vector" or d.name == "Set" or d.name == "HashSet":
                                 if type_args.len() >= 1:
-                                    # Returns Option[T]
+                                    # Returns Option[T &]
                                     int option_def = scopes.lookup("Option")
                                     if option_def >= 0:
+                                        int ref_tid = types.add_type(RTRef(get_int_at(type_args, 0)))
                                         Vector[int] opt_args = Vector[int]()
-                                        opt_args.push(get_int_at(type_args, 0))
+                                        opt_args.push(ref_tid)
                                         return types.add_type(RTGeneric(option_def, opt_args))
                             if d.name == "Dict" or d.name == "HashMap":
                                 if type_args.len() >= 2:
                                     int option_def = scopes.lookup("Option")
                                     if option_def >= 0:
+                                        int ref_tid = types.add_type(RTRef(get_int_at(type_args, 1)))
                                         Vector[int] opt_args = Vector[int]()
-                                        opt_args.push(get_int_at(type_args, 1))
+                                        opt_args.push(ref_tid)
                                         return types.add_type(RTGeneric(option_def, opt_args))
                         else:
                             pass

@@ -80,6 +80,8 @@ String describe_type(int type_id, ScopeTable scopes, TypeTable types):
             return "void"
         case RTNever():
             return "never"
+        case RTRef(inner_id):
+            return describe_type(inner_id, scopes, types) + " &"
 
 # ── Format TYPE lines for all defs with assigned types ─────
 

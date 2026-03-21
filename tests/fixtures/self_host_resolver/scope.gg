@@ -142,7 +142,7 @@ equip ScopeTable:
                 allow_replace = true
             if existing_is_import and existing_is_dummy:
                 allow_replace = true
-            if existing_is_trait and existing_is_dummy and not new_is_trait:
+            if existing_is_trait and existing_is_dummy:
                 allow_replace = true
 
             if allow_replace:

@@ -681,6 +681,27 @@ String gen_enum_deserializable(String name, String gs, Vector[EnumVariant] varia
     src = src + "    return Error(\"unknown variant\")\n"
     return src
 
+String gen_enum_ordinal(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
+    String src = "equip " + gp + name + gs + " with Ordinal:\n"
+    src = src + "    int ordinal(self):\n"
+    src = src + "        match self:\n"
+    int vi = 0
+    while vi < variants.len():
+        EnumVariant v = variants.get(vi).unwrap()
+        int fc = v.fields.len()
+        String binds = ""
+        int fi = 0
+        while fi < fc:
+            if fi > 0:
+                binds = binds + ", "
+            binds = binds + "a" + int_to_str(fi)
+            fi = fi + 1
+        String pat = pfx + v.name + "(" + binds + ")"
+        src = src + "            case " + pat + ":\n"
+        src = src + "                return " + int_to_str(vi) + "\n"
+        vi = vi + 1
+    return src
+
 # ── Core expansion ──────────────────────────────────────────
 
 void expand_struct_derives(StructDef sd, Vector[Item] &new_items):
@@ -736,6 +757,8 @@ void expand_enum_derives(EnumDef ed, Vector[Item] &new_items):
             source = gen_enum_serializable(name, gs, gp, ed.variants, pfx)
         elif trait_name == "Deserializable":
             source = gen_enum_deserializable(name, gs, ed.variants, pfx)
+        elif trait_name == "Ordinal":
+            source = gen_enum_ordinal(name, gs, gp, ed.variants, pfx)
         if source != "":
             inject_items(source, &new_items)
         i = i + 1

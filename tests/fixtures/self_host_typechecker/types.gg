@@ -25,6 +25,7 @@ enum ResolvedType:
     RTError
     RTVoid
     RTNever
+    RTRef(int)
 
 # ── Typed accessors ─────────────────────────────────────────
 
