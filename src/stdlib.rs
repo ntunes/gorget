@@ -2377,7 +2377,6 @@ fn gen_gl_module() -> Module {
     items.push(fn_item(extern_fn("gl_delete_sync", &[("sync", ty_int())], ty_void(), "gorget_gl_delete_sync")));
     items.push(fn_item(extern_fn("gl_client_wait_sync", &[("sync", ty_int()), ("flags", ty_int()), ("timeout_ns", ty_int())], ty_int(), "gorget_gl_client_wait_sync")));
     items.push(fn_item(extern_fn("gl_wait_sync", &[("sync", ty_int())], ty_void(), "gorget_gl_wait_sync")));
-    } // end #[cfg(not(target_os = "macos"))]
 
     // ── Program Binary (GL 4.1+) ────────────────────────────
     items.push(fn_item(extern_fn("gl_get_program_binary", &[("program", ty_int()), ("data", ty_vector_uint8())], ty_int(), "gorget_gl_get_program_binary")));
