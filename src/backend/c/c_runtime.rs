@@ -10395,6 +10395,7 @@ static inline void gorget_gl_get_tex_image(int64_t target, int64_t level, int64_
     glGetTexImage((GLenum)target, (GLint)level, (GLenum)format, (GLenum)type, data->data);
 }
 
+#ifndef __APPLE__
 // ── Program Binary (GL 4.1+) ────────────────────────────────
 
 static inline int64_t gorget_gl_get_program_binary(int64_t program, GorgetArray* data) {
