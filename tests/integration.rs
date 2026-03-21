@@ -1508,7 +1508,7 @@ enum Color: Red; Green; Blue(int);
 === import ===
 from std.collections import Vector
 === expr_body ===
-int double(int x): (x * 2)
+int double(int x) = (x * 2)
 === vardecl ===
 void f(): int x = 42;
 === if_else ===
@@ -7122,9 +7122,13 @@ fn flatten_string_literal(slit: &StringLiteral) -> String {
     for seg in &slit.segments {
         match seg {
             StringSegment::Literal(text) => result.push_str(text),
-            StringSegment::Interpolation(expr, _) => {
+            StringSegment::Interpolation(expr, spec) => {
                 result.push('{');
                 result.push_str(expr);
+                if let Some(s) = spec {
+                    result.push(':');
+                    result.push_str(s);
+                }
                 result.push('}');
             }
         }

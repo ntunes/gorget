@@ -1975,6 +1975,12 @@ equip Parser:
             SpannedExpr operand = self.parse_expr_bp(60)
             return SpannedExpr(EUnaryOp("-", Box(operand)), Span(start, operand.span.end))
 
+        # Bitwise NOT
+        if ptag == TOK_TILDE:
+            self.advance()
+            SpannedExpr operand = self.parse_expr_bp(60)
+            return SpannedExpr(EUnaryOp("~", Box(operand)), Span(start, operand.span.end))
+
         # Unary not
         if self.check_kw(KW_NOT):
             self.advance()
@@ -2093,13 +2099,14 @@ equip Parser:
                     String var_name = token_ident(var_tok.lex_token)
                     self.expect_kw(KW_IN, "expected 'in' in comprehension")
                     SpannedExpr iterable = self.parse_expr()
-                    # Skip optional 'if cond' (condition stored as None for now)
+                    # Optional 'if cond' filter
+                    Option[Box[SpannedExpr]] cond = None
                     if self.check_kw(KW_IF):
                         self.advance()
-                        self.parse_expr()
+                        SpannedExpr cond_expr = self.parse_expr()
+                        cond = Some(Box(cond_expr))
                     self.expect_tok(TOK_RBRACKET, "expected ']' after comprehension")
-                    Option[Box[SpannedExpr]] no_cond = None
-                    return SpannedExpr(EListComp(Box(comp_expr), var_name, Box(iterable), no_cond), Span(start, self.peek().lex_start))
+                    return SpannedExpr(EListComp(Box(comp_expr), var_name, Box(iterable), cond), Span(start, self.peek().lex_start))
                 while self.match_tok(TOK_COMMA):
                     if self.check_tok(TOK_RBRACKET):
                         break
@@ -2620,17 +2627,30 @@ equip Parser:
         self.expect_tok(TOK_COLON, "expected ':' after if condition")
         Vector[Stmt] body = self.parse_block()
         Vector[ElseBranch] branches = Vector[ElseBranch]()
-        while self.check_kw(KW_ELIF):
-            self.advance()
-            SpannedExpr elif_cond = self.parse_expr()
-            self.expect_tok(TOK_COLON, "expected ':' after elif condition")
-            Vector[Stmt] elif_body = self.parse_block()
-            branches.push(ElseBranch(Some(elif_cond), elif_body))
-        if self.check_kw(KW_ELSE):
-            self.advance()
-            self.expect_tok(TOK_COLON, "expected ':' after else")
-            Vector[Stmt] else_body = self.parse_block()
-            branches.push(ElseBranch(None, else_body))
+        bool done = false
+        while not done:
+            if self.check_kw(KW_ELIF):
+                self.advance()
+                SpannedExpr elif_cond = self.parse_expr()
+                self.expect_tok(TOK_COLON, "expected ':' after elif condition")
+                Vector[Stmt] elif_body = self.parse_block()
+                branches.push(ElseBranch(Some(elif_cond), elif_body))
+            elif self.check_kw(KW_ELSE):
+                self.advance()
+                if self.check_kw(KW_IF):
+                    # else if → treat as elif
+                    self.advance()
+                    SpannedExpr elif_cond = self.parse_expr()
+                    self.expect_tok(TOK_COLON, "expected ':' after elif condition")
+                    Vector[Stmt] elif_body = self.parse_block()
+                    branches.push(ElseBranch(Some(elif_cond), elif_body))
+                else:
+                    self.expect_tok(TOK_COLON, "expected ':' after else")
+                    Vector[Stmt] else_body = self.parse_block()
+                    branches.push(ElseBranch(None, else_body))
+                    done = true
+            else:
+                done = true
         return SIf(cond, body, branches)
 
     # ── For statement ────────────────────────────────────────

@@ -16,6 +16,8 @@ String describe_type(int type_id, ScopeTable scopes, TypeTable types):
     ResolvedType rt = types.get(type_id)
     match rt:
         case RTPrimitive(name):
+            if name == "str":
+                return "String"
             return name
         case RTDefined(def_id):
             DefInfo d = scopes.get_def(def_id)
