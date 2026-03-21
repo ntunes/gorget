@@ -1,7 +1,11 @@
 .DS_Store
 /target
+# Generated C files and compiled binaries from `gg build`
+tests/fixtures/*.c
+tests/fixtures/*_error
+tests/fixtures/*_asan
+tests/fixtures/*_dbg
 tests/fixtures/test_traced
-tests/fixtures/test_traced.c
 tests/fixtures/test_traced.trace.jsonl
 tests/fixtures/test_traced.report.html
 tests/fixtures/self_host_*/main
