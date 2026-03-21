@@ -8,9 +8,9 @@
 
 - **LIR backend: remaining clone-on-read for Dict resource-type values**: Phase 3b eliminates clones for Vector borrowing reads on resource-type elements. Dict.get() still clones resource-type values (GorgetArray/GorgetMap/GorgetString) because Dict Ref was deferred. Extend Phase 3b to Dict: register `Option__Ref_V` for Dict.get() when V is resource-type. [added: 2026-03-17, updated: 2026-03-21]
 
-- **Self-host parser: 553/797 matched, 244 mismatched, 0 crashed** — Parser crash fixed by sizeof union layout fix (2026-03-21). Remaining 244 mismatches are diagnostic/format differences, not crashes. [updated: 2026-03-21]
+- **Self-host parser: 779/797 matched, 18 mismatched, 0 crashed** — Comment-skip fix resolved 226 mismatches. Remaining 18: expression-body `=` vs `:` formatting (10), bitwise NOT parsing (1), comprehension filter conditions (1), elif formatting (1), f-string specifiers (1), null byte (1), str/String (1), 2 misc. All are self-host parser/formatter limitations, not LIR bugs. [updated: 2026-03-21]
 
-- **Self-host resolver: 565/797 matched, 232 mismatched, 0 crashed** — Dict for-loop scalar key crash fixed (2026-03-21): InlineC dst slot marked address-taken to preserve type info through SSA. Remaining 232 mismatches need investigation. [updated: 2026-03-21]
+- **Self-host resolver: 794/797 matched, 3 mismatched, 0 crashed** — Comment-skip fix resolved 229 mismatches. Remaining 3: comprehension RES entry (1), trait DEF ordering (2). [updated: 2026-03-21]
 
 ## Medium
 
@@ -104,11 +104,11 @@
 
 - **Async/await — `await` on vector-indexed tasks with multiple spawn functions**: Type-based await dispatch now works when exactly one function produces tasks of a given type. When multiple functions produce the same `Task__T` type (e.g., two functions both returning `int`), the type-based fallback can't disambiguate. Fix: embed a function dispatch pointer in the `Task__T` struct or use a tag field. [updated: 2026-03-07]
 
-- **Self-hosting parser: 553/797 (69%) on LIR backend** — Was 595/596 on GIR backend. 0 crashes, 244 mismatches (diagnostic/format differences). `chars.gg` null byte issue remains. [updated: 2026-03-21]
+- **Self-hosting parser: 779/797 (97.7%) on LIR backend** — Was 595/596 on GIR backend. 18 remaining mismatches are parser/formatter limitations (expression-body `=` vs `:`, bitwise NOT, comprehension filters, elif, f-string specifiers). [updated: 2026-03-21]
 
-- **Self-hosting resolver: 565/797 (71%) on LIR backend** — Was 592/592 on GIR backend. 0 crashes, 232 mismatches need investigation. [updated: 2026-03-21]
+- **Self-hosting resolver: 794/797 (99.6%) on LIR backend** — Was 592/592 on GIR backend. 3 remaining: comprehension RES entry (1), trait DEF ordering (2). [updated: 2026-03-21]
 
-- **Self-hosting type checker: 538/797 (67%) on LIR backend** — Was 595/595 on GIR backend. 0 crashes (514 exact + 24 superset), 259 mismatches. [updated: 2026-03-21]
+- **Self-hosting type checker: 775/797 (97.2%) on LIR backend** — Was 595/595 on GIR backend. 0 crashes. 22 mismatches: missing bindings for closures/do-blocks/match arms (~20), borrow `&` tracking (2). str→String normalization applied. [updated: 2026-03-21]
 
 
 - **`Into[T]` conversion trait**: Counterpart to `From[T]` requiring explicit type args (`value.into[Celsius]()`) or return-type inference. Adds complexity (equipping primitives, potential blanket impl pattern). [added: 2026-02-17]

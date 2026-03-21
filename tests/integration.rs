@@ -10186,7 +10186,11 @@ fn describe_type_canonical(
     use gorget::semantic::types::ResolvedType;
 
     match types.get(type_id) {
-        ResolvedType::Primitive(_) => types.display(type_id),
+        ResolvedType::Primitive(_) => {
+            let s = types.display(type_id);
+            // Normalize str→String to match self-host checker output
+            if s == "str" { "String".to_string() } else { s }
+        }
         ResolvedType::Defined(def_id) => scopes.get_def(*def_id).name.clone(),
         ResolvedType::Generic(def_id, args) => {
             let name = scopes.get_def(*def_id).name.clone();

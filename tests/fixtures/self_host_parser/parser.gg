@@ -2967,6 +2967,8 @@ equip Parser:
             return FunctionDef(name, params, ret_ty, type_params, body, false)
 
         self.expect_tok(TOK_COLON, "expected ':' after function signature")
+        # Skip any comment tokens between : and the newline/indent
+        self.skip_comments()
         # Colon + same-line content = expression body
         if not self.check_tok(TOK_NEWLINE):
             SpannedExpr body_expr = self.parse_expr()
