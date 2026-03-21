@@ -662,6 +662,9 @@ fn multiline_closures() {
 0
 60
 3
+106
+7
+3
 done");
 }
 
@@ -14240,7 +14243,7 @@ fn recursion_fibonacci() {
 fn shadowing_nested() {
     run_gg(
         "shadowing_nested.gg",
-        "1\n2\n2",
+        "1\n2\n1",
     );
 }
 

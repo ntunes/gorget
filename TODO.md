@@ -14,6 +14,7 @@
 
 ## Medium
 
+- **Closure return type inference incomplete in semantic layer** — `infer_closure_return_type` in GIR lowering now walks block bodies for `return` statements (2026-03-21), but the semantic type checker's `check_block` only returns the tail expression type, not the type from explicit `return` statements inside closures. Multi-line closures with `return <value>` get type-checked as void and fail with "type mismatch: expected void, found int". Fix: propagate `current_return_type` for closure bodies in `typecheck.rs` and unify return expression types against it. [added: 2026-03-21]
 
 - **Spawn captures don't check stale shared-derived** — A closure spawned after an await can capture a variable derived from a shared binding that is now stale. `check_spawn_closure_captures` checks `has_borrowed_origin` but doesn't intersect captured DefIds against `stale_shared_derived`. The spawned task silently uses pre-await data. Fix: in check_spawn_closure_captures, check if captured def_id is in stale_shared_derived and warn/error. [added: 2026-03-18]
 
@@ -37,7 +38,6 @@
 
 
 
-- **Vector[int] sort treats negatives as unsigned**: `sort()` on `[-5, 3, -10, 0, 7, -1]` produces `[0, 3, 7, -10, -5, -1]` instead of `[-10, -5, -1, 0, 3, 7]`. The int comparator `__gorget_cmp_i64` looks correct (signed compare), so the issue may be in how the vector stores or casts int elements to the comparator. Documented in `test_vector_sort_methods.gg`. [added: 2026-03-11]
 
 - **Variable shadowing in nested scopes aliases storage**: Reusing the same variable name in an inner named scope compiles but the C backend appears to alias the storage, so the outer variable's value gets overwritten after the inner scope exits. [added: 2026-03-11]
 

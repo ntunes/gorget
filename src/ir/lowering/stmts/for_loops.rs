@@ -9,7 +9,7 @@ use crate::span::Spanned;
 use super::super::context::LoweringContext;
 use super::super::drops::DropScopeKind;
 use super::super::exprs::{lower_expr, infer_operand_type_full};
-use super::{lower_block, emit_pattern_bindings};
+use super::{lower_block, lower_block_scoped, emit_pattern_bindings};
 
 /// Lower a for loop over a range (`for i in start..end`).
 pub(super) fn lower_for(
@@ -150,6 +150,7 @@ fn lower_for_string(
 
     // Body
     builder.switch_to(body_bb);
+    let saved_str = ctx.save_locals();
     ctx.push_loop(header_bb, break_exit_bb);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
@@ -179,12 +180,13 @@ fn lower_for_string(
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
+    ctx.restore_locals(saved_str);
     builder.jump(header_bb);
 
     // Else block
     if let Some(else_body) = else_arm {
         builder.switch_to(else_exit_bb.unwrap());
-        lower_block(ctx, builder, else_body);
+        lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
         builder.switch_to(break_exit_bb);
         builder.jump(exit_bb);
@@ -243,6 +245,7 @@ fn lower_for_array(
 
     // Body
     builder.switch_to(body_bb);
+    let saved_arr = ctx.save_locals();
     ctx.push_loop(incr_bb, break_exit_bb);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
@@ -260,6 +263,7 @@ fn lower_for_array(
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
+    ctx.restore_locals(saved_arr);
 
     // Increment idx
     builder.jump(incr_bb);
@@ -271,7 +275,7 @@ fn lower_for_array(
     // Else block
     if let Some(else_body) = else_arm {
         builder.switch_to(else_exit_bb.unwrap());
-        lower_block(ctx, builder, else_body);
+        lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
         builder.switch_to(break_exit_bb);
         builder.jump(exit_bb);
@@ -335,6 +339,7 @@ fn lower_for_enumerate(
 
     // Body
     builder.switch_to(body_bb);
+    let saved_enum = ctx.save_locals();
     ctx.push_loop(incr_bb, break_exit_bb);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
@@ -356,6 +361,7 @@ fn lower_for_enumerate(
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
+    ctx.restore_locals(saved_enum);
 
     // Increment idx
     builder.jump(incr_bb);
@@ -367,7 +373,7 @@ fn lower_for_enumerate(
     // Else block
     if let Some(else_body) = else_arm {
         builder.switch_to(else_exit_bb.unwrap());
-        lower_block(ctx, builder, else_body);
+        lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
         builder.switch_to(break_exit_bb);
         builder.jump(exit_bb);
@@ -431,6 +437,7 @@ fn lower_for_dict(
 
     // Body
     builder.switch_to(body_bb);
+    let saved_dict = ctx.save_locals();
     ctx.push_loop(incr_bb, break_exit_bb);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
@@ -478,6 +485,7 @@ fn lower_for_dict(
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
+    ctx.restore_locals(saved_dict);
 
     builder.jump(incr_bb);
     builder.switch_to(incr_bb);
@@ -488,7 +496,7 @@ fn lower_for_dict(
     // Else block
     if let Some(else_body) = else_arm {
         builder.switch_to(else_exit_bb.unwrap());
-        lower_block(ctx, builder, else_body);
+        lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
         builder.switch_to(break_exit_bb);
         builder.jump(exit_bb);
@@ -550,6 +558,7 @@ fn lower_for_set(
     builder.branch(FunctionBuilder::copy(cond), body_bb, natural_exit);
 
     builder.switch_to(body_bb);
+    let saved_set = ctx.save_locals();
     ctx.push_loop(incr_bb, break_exit_bb);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
@@ -596,6 +605,7 @@ fn lower_for_set(
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
+    ctx.restore_locals(saved_set);
 
     builder.jump(incr_bb);
     builder.switch_to(incr_bb);
@@ -605,7 +615,7 @@ fn lower_for_set(
 
     if let Some(else_body) = else_arm {
         builder.switch_to(else_exit_bb.unwrap());
-        lower_block(ctx, builder, else_body);
+        lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
         builder.switch_to(break_exit_bb);
         builder.jump(exit_bb);
@@ -732,6 +742,7 @@ fn lower_for_iterable(
 
     // Body: extract value from Some variant
     builder.switch_to(body_bb);
+    let saved_iter = ctx.save_locals();
     ctx.push_loop(header_bb, break_exit_bb);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
@@ -753,12 +764,13 @@ fn lower_for_iterable(
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
+    ctx.restore_locals(saved_iter);
     builder.jump(header_bb);
 
     // Else block
     if let Some(else_body) = else_arm {
         builder.switch_to(else_exit_bb.unwrap());
-        lower_block(ctx, builder, else_body);
+        lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
         builder.switch_to(break_exit_bb);
         builder.jump(exit_bb);
@@ -834,6 +846,7 @@ fn lower_for_range(
     // Create loop variable — type inferred from the start expression.
     // For literal bounds (e.g. `0..n`) this gives I64_TYPE; for typed variables
     // (e.g. `start..end` where start: uint8) it preserves the narrower type.
+    let saved_range = ctx.save_locals();
     let start_val = lower_expr(ctx, builder, start);
     let loop_type = infer_operand_type_full(ctx, &start_val, builder);
     let loop_var = builder.add_local(loop_type, Some(var_name));
@@ -886,10 +899,12 @@ fn lower_for_range(
     builder.assign(Place::local(loop_var), FunctionBuilder::copy(incremented));
     builder.jump(header_bb);
 
+    ctx.restore_locals(saved_range);
+
     // Else block: executed when loop completes naturally (no break)
     if let Some(else_body) = else_arm {
         builder.switch_to(else_exit_bb.unwrap());
-        lower_block(ctx, builder, else_body);
+        lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
 
         // Break exit goes directly to exit (skipping else)

@@ -582,6 +582,61 @@ fn detect_mutations_in_expr(
     }
 }
 
+/// Walk block statements looking for an explicit `return expr`, recursing into
+/// if/match/while/for/loop bodies. Returns the inferred type of the first return found.
+fn find_return_type_in_block(ctx: &LoweringContext, stmts: &[Spanned<Stmt>]) -> Option<TypeId> {
+    for stmt in stmts {
+        match &stmt.node {
+            Stmt::Return(Some(expr)) => {
+                return Some(infer_closure_return_type(ctx, expr));
+            }
+            Stmt::If { then_body, elif_branches, else_body, .. } => {
+                if let Some(t) = find_return_type_in_block(ctx, &then_body.stmts) {
+                    return Some(t);
+                }
+                for (_, elif_body) in elif_branches {
+                    if let Some(t) = find_return_type_in_block(ctx, &elif_body.stmts) {
+                        return Some(t);
+                    }
+                }
+                if let Some(eb) = else_body {
+                    if let Some(t) = find_return_type_in_block(ctx, &eb.stmts) {
+                        return Some(t);
+                    }
+                }
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for item in arms {
+                    if let ast::MatchItem::Arm(arm) = item {
+                        if let Expr::Block(block) = &arm.body.node {
+                            if let Some(t) = find_return_type_in_block(ctx, &block.stmts) {
+                                return Some(t);
+                            }
+                        }
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    if let Some(t) = find_return_type_in_block(ctx, &eb.stmts) {
+                        return Some(t);
+                    }
+                }
+            }
+            Stmt::While { body, .. } | Stmt::Loop { body, .. } => {
+                if let Some(t) = find_return_type_in_block(ctx, &body.stmts) {
+                    return Some(t);
+                }
+            }
+            Stmt::For { body, .. } => {
+                if let Some(t) = find_return_type_in_block(ctx, &body.stmts) {
+                    return Some(t);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Infer the return type of a closure body (simplified).
 fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> TypeId {
     match &body.node {
@@ -661,7 +716,19 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
             }
             I64_TYPE
         }
-        Expr::Block(_) => UNIT_TYPE, // Block bodies are void by default
+        Expr::Block(block) => {
+            // Walk block statements for explicit `return expr`
+            if let Some(ret_type) = find_return_type_in_block(ctx, &block.stmts) {
+                return ret_type;
+            }
+            // Last statement as implicit return (tail expression)
+            if let Some(last) = block.stmts.last() {
+                if let Stmt::Expr(expr) = &last.node {
+                    return infer_closure_return_type(ctx, expr);
+                }
+            }
+            UNIT_TYPE
+        }
         _ => I64_TYPE,
     }
 }

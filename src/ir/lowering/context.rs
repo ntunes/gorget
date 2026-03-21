@@ -353,6 +353,11 @@ impl<'a> LoweringContext<'a> {
         self.move_override_params.clear();
     }
 
+    /// Clone the locals map for save/restore around nested scopes (if, while, for, match, etc.).
+    pub fn save_locals(&self) -> FxHashMap<String, (LocalId, TypeId)> {
+        self.locals.clone()
+    }
+
     /// Take the locals map, leaving it empty. Used for save/restore during async variant generation.
     pub fn take_locals(&mut self) -> FxHashMap<String, (LocalId, TypeId)> {
         std::mem::take(&mut self.locals)

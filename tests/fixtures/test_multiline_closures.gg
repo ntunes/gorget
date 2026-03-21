@@ -92,4 +92,23 @@ void main():
     print(f"{total8}")  # 60
     print(f"{count8}")  # 3
 
+    # 9. Multi-line void closure with nested for loop
+    int total9 = 0
+    auto sum_range = (int limit):
+        for i in 0..limit:
+            total9 += i
+        total9 += 100
+    sum_range(4)
+    print(f"{total9}")  # 106 (0+1+2+3+100)
+
+    # 10. Multi-line void closure with two captures
+    int x10 = 0
+    int y10 = 0
+    auto swap_set = (int a, int b):
+        x10 = b
+        y10 = a
+    swap_set(3, 7)
+    print(f"{x10}")  # 7
+    print(f"{y10}")  # 3
+
     print("done")

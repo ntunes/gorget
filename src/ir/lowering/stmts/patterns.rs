@@ -46,6 +46,7 @@ pub(super) fn lower_match_stmt(
             builder.branch(cond, guard_bb, next_test_bb);
 
             builder.switch_to(guard_bb);
+            let saved_arm = ctx.save_locals();
             ctx.drops.push_scope(DropScopeKind::Block);
             emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
             let guard_cond = lower_expr(ctx, builder, arm.guard.as_ref().unwrap());
@@ -60,11 +61,13 @@ pub(super) fn lower_match_stmt(
                 ctx.drops.pop_scope(builder, &ctx.type_registry);
                 builder.jump(merge_bb);
             }
+            ctx.restore_locals(saved_arm);
         } else {
             builder.branch(cond, arm_body_bb, next_test_bb);
 
             // Arm body
             builder.switch_to(arm_body_bb);
+            let saved_arm = ctx.save_locals();
             ctx.drops.push_scope(DropScopeKind::Block);
             emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
             lower_expr(ctx, builder, &arm.body);
@@ -75,6 +78,7 @@ pub(super) fn lower_match_stmt(
                 ctx.drops.pop_scope(builder, &ctx.type_registry);
                 builder.jump(merge_bb);
             }
+            ctx.restore_locals(saved_arm);
         }
 
         builder.switch_to(next_test_bb);
@@ -82,6 +86,7 @@ pub(super) fn lower_match_stmt(
 
     // Else arm
     if let Some(else_body) = else_arm {
+        let saved_else = ctx.save_locals();
         ctx.drops.push_scope(DropScopeKind::Block);
         lower_block(ctx, builder, else_body);
         if builder.is_terminated() {
@@ -90,6 +95,7 @@ pub(super) fn lower_match_stmt(
             ctx.drops.pop_scope(builder, &ctx.type_registry);
             builder.jump(merge_bb);
         }
+        ctx.restore_locals(saved_else);
     }
 
     builder.switch_to(merge_bb);
