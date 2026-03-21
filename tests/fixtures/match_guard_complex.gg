@@ -1,0 +1,31 @@
+int classify(int x):
+    match x:
+        case n if n < 0:
+            return -1
+        case 0:
+            return 0
+        case n if n > 0 and n <= 10:
+            return 1
+        case n if n > 10 and n <= 100:
+            return 2
+        else:
+            return 3
+
+bool is_even(int x):
+    return x % 2 == 0
+
+void main():
+    print(f"{classify(-5)}")
+    print(f"{classify(0)}")
+    print(f"{classify(7)}")
+    print(f"{classify(50)}")
+    print(f"{classify(999)}")
+
+    # guards with function calls
+    Vector[int] nums = [1, 2, 3, 4, 5, 6]
+    for n in nums:
+        match n:
+            case x if is_even(x):
+                print(f"even: {x}")
+            case x:
+                print(f"odd: {x}")

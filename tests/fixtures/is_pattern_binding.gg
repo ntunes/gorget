@@ -1,0 +1,43 @@
+enum Shape:
+    Circle(float)
+    Rect(float, float)
+
+void main():
+    Option[int] x = Some(42)
+    Option[int] y = None
+
+    # is with Some binding
+    if x is Some(val):
+        print(f"got: {val}")
+    else:
+        print("none")
+
+    if y is Some(val):
+        print(f"got: {val}")
+    else:
+        print("is none")
+
+    # chained elif with is
+    Option[int] a = Some(10)
+    Option[int] b = None
+    Option[int] c = Some(30)
+
+    if a is Some(v):
+        print(f"a: {v}")
+    elif b is Some(v):
+        print(f"b: {v}")
+    elif c is Some(v):
+        print(f"c: {v}")
+    else:
+        print("all none")
+
+    # is with enum variants
+    Shape s = Shape.Circle(5.0)
+    if s is Shape.Circle(r):
+        print(f"radius: {r}")
+
+    Shape r = Shape.Rect(3.0, 4.0)
+    if r is Shape.Circle(radius):
+        print("circle")
+    elif r is Shape.Rect(w, h):
+        print(f"rect: {w} x {h}")

@@ -1,0 +1,16 @@
+void classify(String s):
+    match s:
+        case "hello":
+            print("greeting")
+        case "bye":
+            print("farewell")
+        case "":
+            print("empty")
+        else:
+            print(f"other: {s}")
+
+void main():
+    classify("hello")
+    classify("bye")
+    classify("")
+    classify("world")

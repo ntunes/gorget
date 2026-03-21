@@ -1,0 +1,18 @@
+String describe(bool b):
+    match b:
+        case true:
+            return "yes"
+        case false:
+            return "no"
+
+void main():
+    print(describe(true))
+    print(describe(false))
+
+    # boolean in if-like match
+    int x = 15
+    match x > 10:
+        case true:
+            print("big")
+        case false:
+            print("small")

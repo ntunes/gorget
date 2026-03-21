@@ -14908,3 +14908,72 @@ still here: 3
 done",
     );
 }
+
+// ── Batch 4: Pattern matching tests ──────────────────────────────────
+
+#[test]
+fn match_nested_enum() {
+    run_gg(
+        "match_nested_enum.gg",
+        "\
+some red
+no color
+ok: 42
+err: oops",
+    );
+}
+
+#[test]
+fn match_string_literal() {
+    run_gg(
+        "match_string_literal.gg",
+        "\
+greeting
+farewell
+empty
+other: world",
+    );
+}
+
+#[test]
+fn match_guard_complex() {
+    run_gg(
+        "match_guard_complex.gg",
+        "\
+-1
+0
+1
+2
+3
+odd: 1
+even: 2
+odd: 3
+even: 4
+odd: 5
+even: 6",
+    );
+}
+
+#[test]
+fn is_pattern_binding() {
+    run_gg(
+        "is_pattern_binding.gg",
+        "\
+got: 42
+is none
+a: 10
+radius: 5.000000
+rect: 3.000000 x 4.000000",
+    );
+}
+
+#[test]
+fn match_boolean_exhaustive() {
+    run_gg(
+        "match_boolean_exhaustive.gg",
+        "\
+yes
+no
+big",
+    );
+}
