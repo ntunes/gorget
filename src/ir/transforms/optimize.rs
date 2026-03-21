@@ -85,7 +85,7 @@ fn optimize_function_once(func: &mut Function) {
     // creating new propagation opportunities.
     propagate_constants(func);
     constant_fold(func);
-    // propagate_copies(func);  // disabled: TypeId aliasing causes Str/GorgetString mismatches
+    propagate_copies(func);
     simplify_algebraic(func);
     simplify_cmp(func);
     eliminate_common_subexpressions(func);
@@ -227,6 +227,15 @@ fn propagate_copies(func: &mut Function) {
                     let w = dst.local.0;
                     copies.remove(&w);
                     copies.retain(|_, src| src.local.0 != w);
+                }
+                // Drop/MoveZero destroy the local's value — invalidate any copy
+                // whose source is this local (use-after-free if substituted).
+                Instruction::Drop { place }
+                | Instruction::DropIfAlive { place }
+                | Instruction::MoveZero { place } => {
+                    let destroyed = place.local.0;
+                    copies.remove(&destroyed);
+                    copies.retain(|_, src| src.local.0 != destroyed);
                 }
                 _ => {
                     if let Some(written) = instruction_dst(inst) {
@@ -3496,5 +3505,128 @@ mod tests {
         ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
         eliminate_self_assigns(&mut f);
         assert!(matches!(&f.blocks[0].instructions[0], Instruction::Assign { .. }));
+    }
+
+    // ── Copy Propagation Tests ───────────────────────────────────
+
+    #[test]
+    fn copy_prop_basic() {
+        // _1 = Const(42), _2 = Copy(_1), _3 = BinOp(Add, Copy(_2), Const(1))
+        // After propagation: _3's lhs should be Copy(_1)
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(42)),
+            },
+            Instruction::Assign {
+                dst: Place::local(LocalId(2)),
+                value: Operand::Copy(Place::local(LocalId(1))),
+            },
+            Instruction::BinOp {
+                dst: LocalId(3), op: BinOp::Add, type_id: I64_TYPE,
+                lhs: Operand::Copy(Place::local(LocalId(2))),
+                rhs: Operand::Constant(Constant::I64(1)),
+            },
+        ], ret_local(3))],
+        vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![]);
+        propagate_copies(&mut f);
+        // _3's lhs should now reference _1 instead of _2
+        if let Instruction::BinOp { lhs, .. } = &f.blocks[0].instructions[2] {
+            assert!(matches!(lhs, Operand::Copy(p) if p.local == LocalId(1)),
+                "expected Copy(_1), got {:?}", lhs);
+        } else {
+            panic!("expected BinOp");
+        }
+    }
+
+    #[test]
+    fn copy_prop_invalidated_by_move_zero() {
+        // _2 = Copy(_1), MoveZero(_1), use(_2) — should NOT substitute _2→_1
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(99)),
+            },
+            Instruction::Assign {
+                dst: Place::local(LocalId(2)),
+                value: Operand::Copy(Place::local(LocalId(1))),
+            },
+            Instruction::MoveZero { place: Place::local(LocalId(1)) },
+            Instruction::BinOp {
+                dst: LocalId(3), op: BinOp::Add, type_id: I64_TYPE,
+                lhs: Operand::Copy(Place::local(LocalId(2))),
+                rhs: Operand::Constant(Constant::I64(1)),
+            },
+        ], ret_local(3))],
+        vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![]);
+        propagate_copies(&mut f);
+        // _3's lhs should still be Copy(_2), NOT Copy(_1) — _1 was zeroed
+        if let Instruction::BinOp { lhs, .. } = &f.blocks[0].instructions[3] {
+            assert!(matches!(lhs, Operand::Copy(p) if p.local == LocalId(2)),
+                "MoveZero should invalidate copy: expected Copy(_2), got {:?}", lhs);
+        } else {
+            panic!("expected BinOp");
+        }
+    }
+
+    #[test]
+    fn copy_prop_invalidated_by_drop() {
+        // _2 = Copy(_1), Drop(_1), use(_2) — should NOT substitute _2→_1
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(99)),
+            },
+            Instruction::Assign {
+                dst: Place::local(LocalId(2)),
+                value: Operand::Copy(Place::local(LocalId(1))),
+            },
+            Instruction::Drop { place: Place::local(LocalId(1)) },
+            Instruction::BinOp {
+                dst: LocalId(3), op: BinOp::Add, type_id: I64_TYPE,
+                lhs: Operand::Copy(Place::local(LocalId(2))),
+                rhs: Operand::Constant(Constant::I64(1)),
+            },
+        ], ret_local(3))],
+        vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![]);
+        propagate_copies(&mut f);
+        // _3's lhs should still be Copy(_2)
+        if let Instruction::BinOp { lhs, .. } = &f.blocks[0].instructions[3] {
+            assert!(matches!(lhs, Operand::Copy(p) if p.local == LocalId(2)),
+                "Drop should invalidate copy: expected Copy(_2), got {:?}", lhs);
+        } else {
+            panic!("expected BinOp");
+        }
+    }
+
+    #[test]
+    fn copy_prop_type_guard() {
+        // _1: TypeId(10), _2: TypeId(11) = Copy(_1) — different types, should NOT track
+        let ty_a = TypeId(10);
+        let ty_b = TypeId(11);
+        let mut f = make_func(vec![bb(vec![
+            Instruction::Assign {
+                dst: Place::local(LocalId(1)),
+                value: Operand::Constant(Constant::I64(42)),
+            },
+            Instruction::Assign {
+                dst: Place::local(LocalId(2)),
+                value: Operand::Copy(Place::local(LocalId(1))),
+            },
+            Instruction::BinOp {
+                dst: LocalId(3), op: BinOp::Add, type_id: I64_TYPE,
+                lhs: Operand::Copy(Place::local(LocalId(2))),
+                rhs: Operand::Constant(Constant::I64(1)),
+            },
+        ], ret_local(3))],
+        vec![local(I64_TYPE), local(ty_a), local(ty_b), local(I64_TYPE)], vec![]);
+        propagate_copies(&mut f);
+        // _3's lhs should still be Copy(_2) — cross-type copy not propagated
+        if let Instruction::BinOp { lhs, .. } = &f.blocks[0].instructions[2] {
+            assert!(matches!(lhs, Operand::Copy(p) if p.local == LocalId(2)),
+                "cross-type copy should not propagate: expected Copy(_2), got {:?}", lhs);
+        } else {
+            panic!("expected BinOp");
+        }
     }
 }

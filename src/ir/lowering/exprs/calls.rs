@@ -786,6 +786,9 @@ pub(super) fn lower_call(
             I64_TYPE // fallback
         };
 
+        // Save callee name for ABI lookup before effective_name is moved
+        let sig_name = effective_name.clone();
+
         // Resolve extern bindings: use the C symbol name instead of the Gorget name
         let call_name = if let Some(c_symbol) = ctx.extern_bindings.get(effective_name.as_str()) {
             c_symbol.clone()
@@ -793,9 +796,12 @@ pub(super) fn lower_call(
             effective_name
         };
 
-        // Unregister GorgetString temps used as call arguments — they may be
-        // coerced to Str views that the callee stores in structs, outliving the scope.
-        super::unregister_gorget_string_args(ctx, builder, &lowered_args);
+        // Unregister GorgetString temps when the callee might store str views.
+        // For void-returning calls with no mutable-ref params, keep temps in
+        // drop tracking — the str view dies on the callee's stack.
+        if super::should_unregister_string_args(ctx, &sig_name, ret_type) {
+            super::unregister_gorget_string_args(ctx, builder, &lowered_args);
+        }
 
         let result = if ret_type == UNIT_TYPE {
             builder.call_void(&call_name, lowered_args);

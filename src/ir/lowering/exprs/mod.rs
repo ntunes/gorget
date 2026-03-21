@@ -2240,6 +2240,28 @@ pub fn register_owned_string_for_drop(
     ctx.drops.register_local(dst, owned_string_type, &ctx.type_registry);
 }
 
+/// Check whether GorgetString temps should be unregistered (leaked) for a call.
+/// Returns false (safe to keep in drop tracking) when the callee is void-returning
+/// with no mutable-reference params — the str view cannot escape the call frame.
+pub fn should_unregister_string_args(
+    ctx: &LoweringContext,
+    callee_name: &str,
+    ret_type: crate::ir::types::TypeId,
+) -> bool {
+    use crate::ir::types::UNIT_TYPE;
+    // Non-void return: str view might escape via return value
+    if ret_type != UNIT_TYPE {
+        return true;
+    }
+    // Check for ByMutPtr params — str view could escape through mutable ref
+    if let Some(abis) = ctx.fn_param_abis.get(callee_name) {
+        use super::context::ParamABI;
+        return abis.iter().any(|abi| *abi == ParamABI::ByMutPtr);
+    }
+    // Unknown callee (runtime/extern): conservatively unregister
+    true
+}
+
 /// Unregister GorgetString temps used as call/struct arguments.
 /// When a GorgetString temp is passed to a function that takes `str`, the function
 /// may store the str view in a struct that outlives the current scope. Freeing the
