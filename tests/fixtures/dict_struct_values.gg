@@ -1,0 +1,27 @@
+# Dict with struct values
+@derive(Displayable)
+struct Person:
+    String name
+    int age
+
+void main():
+    Dict[String, int] scores = {"alice": 95, "bob": 87, "carol": 92}
+
+    print(f"size: {scores.len()}")
+    print(f"alice: {scores["alice"]}")
+    print(f"bob: {scores["bob"]}")
+
+    # update
+    scores["alice"] = 100
+    print(f"alice updated: {scores["alice"]}")
+
+    # remove
+    scores.remove("bob")
+    print(f"after remove: {scores.len()}")
+
+    # contains
+    bool has_carol = scores.contains("carol")
+    print(f"has carol: {has_carol}")
+
+    bool has_bob = scores.contains("bob")
+    print(f"has bob: {has_bob}")

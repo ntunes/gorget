@@ -15101,3 +15101,83 @@ total: 90
 errors: 2",
     );
 }
+
+// ── Batch 7: Collections & meta ──────────────────────────────────────
+
+#[test]
+fn vector_of_vectors() {
+    run_gg(
+        "vector_of_vectors.gg",
+        "\
+rows: 3
+row sum: 6
+row sum: 15
+row sum: 24",
+    );
+}
+
+#[test]
+fn dict_struct_values() {
+    run_gg(
+        "dict_struct_values.gg",
+        "\
+size: 3
+alice: 95
+bob: 87
+alice updated: 100
+after remove: 2
+has carol: true
+has bob: false",
+    );
+}
+
+#[test]
+fn collection_empty_edge() {
+    run_gg(
+        "collection_empty_edge.gg",
+        "\
+empty len: 0
+is_empty: true
+pop empty: none
+dict len: 0
+dict empty: true
+contains x: false
+after push: 1
+after insert: 1",
+    );
+}
+
+#[test]
+fn meta_platform_guard() {
+    run_gg(
+        "meta_platform_guard.gg",
+        "running on linux",
+    );
+}
+
+#[test]
+fn meta_implements_guard() {
+    run_gg(
+        "meta_implements_guard.gg",
+        "\
+Point is Equatable
+Point is Displayable
+Plain is not Equatable",
+    );
+}
+
+#[test]
+fn iterator_lazy_chain() {
+    run_gg(
+        "iterator_lazy_chain.gg",
+        "\
+doubled len: 10
+doubled[0]: 2
+doubled[9]: 20
+sum: 55
+sum doubled: 110
+11
+21
+31",
+    );
+}

@@ -1,0 +1,10 @@
+# Nested vector ownership and operations
+void main():
+    Vector[Vector[int]] matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+
+    print(f"rows: {matrix.len()}")
+    for row in matrix:
+        int sum = 0
+        for val in row:
+            sum += val
+        print(f"row sum: {sum}")

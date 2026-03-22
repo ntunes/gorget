@@ -1,0 +1,23 @@
+# Method chaining on vectors
+void main():
+    Vector[int] nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+    # map chain
+    Vector[int] doubled = nums.map((int x): x * 2)
+    print(f"doubled len: {doubled.len()}")
+    print(f"doubled[0]: {doubled[0]}")
+    print(f"doubled[9]: {doubled[9]}")
+
+    # fold
+    int sum = nums.fold(0, (int acc, int x): acc + x)
+    print(f"sum: {sum}")
+
+    # map then fold
+    int sum_doubled = nums.map((int x): x * 2).fold(0, (int acc, int x): acc + x)
+    print(f"sum doubled: {sum_doubled}")
+
+    # small vector operations
+    Vector[int] small = [10, 20, 30]
+    Vector[int] mapped = small.map((int x): x + 1)
+    for n in mapped:
+        print(f"{n}")

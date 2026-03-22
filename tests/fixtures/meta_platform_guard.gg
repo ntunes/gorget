@@ -1,0 +1,8 @@
+# meta if platform() conditional compilation
+void main():
+    meta if platform() == "linux":
+        print("running on linux")
+    elif platform() == "macos":
+        print("running on macos")
+    else:
+        print("running on other")

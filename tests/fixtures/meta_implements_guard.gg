@@ -1,0 +1,26 @@
+# meta implements() check
+@derive(Equatable, Displayable)
+struct Point:
+    int x
+    int y
+
+struct Plain:
+    int value
+
+void main():
+    # These are compile-time checks used in generic bodies
+    # Here we just verify the feature works with meta if
+    meta if implements(Point, "Equatable"):
+        print("Point is Equatable")
+    else:
+        print("Point is not Equatable")
+
+    meta if implements(Point, "Displayable"):
+        print("Point is Displayable")
+    else:
+        print("Point is not Displayable")
+
+    meta if implements(Plain, "Equatable"):
+        print("Plain is Equatable")
+    else:
+        print("Plain is not Equatable")

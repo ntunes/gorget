@@ -1,0 +1,25 @@
+# Operations on empty collections
+void main():
+    # empty vector
+    Vector[int] v = []
+    print(f"empty len: {v.len()}")
+    print(f"is_empty: {v.is_empty()}")
+
+    Option[int] popped = v.pop()
+    match popped:
+        case Some(val):
+            print(f"popped: {val}")
+        case None:
+            print("pop empty: none")
+
+    # empty dict
+    Dict[String, int] d = {}
+    print(f"dict len: {d.len()}")
+    print(f"dict empty: {d.is_empty()}")
+    print(f"contains x: {d.contains("x")}")
+
+    # operations on empty then add
+    v.push(42)
+    print(f"after push: {v.len()}")
+    d["key"] = 99
+    print(f"after insert: {d.len()}")
