@@ -513,7 +513,7 @@ equip TomlParser:
         TomlSection updated = TomlSection(cur.sec_path, sd, cur.sec_is_aot)
         self.sections.set(self.current_sec, updated)
 
-    void start_section(&self, Vector[String] hdr_path, bool is_aot):
+    void start_section(&self, Vector[String] !hdr_path, bool is_aot):
         Dict[String, TomlValue] new_data = Dict[String, TomlValue]()
         TomlSection new_sec = TomlSection(hdr_path, new_data, is_aot)
         self.sections.push(new_sec)
@@ -570,7 +570,7 @@ equip TomlParser:
                 self.fail("expected ']]' in array-of-tables header")
                 return
             self.pos = self.pos + 1
-        self.start_section(hdr_key, is_array_table)
+        self.start_section(!hdr_key, is_array_table)
         self.skip_to_newline()
 
 # ── Helper free functions ───────────────────────────────────

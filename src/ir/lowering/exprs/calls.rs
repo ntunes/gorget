@@ -819,8 +819,10 @@ pub(super) fn lower_call(
         }
 
         // Unregister collection locals passed by value: the callee may store
-        // a shallow copy sharing the same data pointer. Unregistering prevents
-        // scope-exit drop from freeing shared data (callee's copy handles cleanup).
+        // a shallow copy sharing the same data pointer. The borrow checker
+        // catches struct constructor and return cases; this covers remaining
+        // paths (method calls on struct fields, etc.) until full move
+        // semantics enforcement is complete.
         for arg in resolved_args.iter() {
             if !matches!(arg.node.ownership, Ownership::Borrow) { continue; }
             if let Expr::Identifier(name) = &arg.node.value.node {

@@ -233,13 +233,21 @@ impl<'a> BorrowChecker<'a> {
                                 if let Expr::Identifier(_) = &arg.node.value.node {
                                     if let Some(&var_def_id) = self.resolution_map.get(&arg.node.value.span.start) {
                                         let def = self.scopes.get_def(var_def_id);
-                                        if def.kind == DefKind::Variable && !def.is_param {
-                                            if let Some(type_id) = def.type_id {
+                                        if def.kind == DefKind::Variable {
+                                            // Borrowed resource params cannot be stored in constructors.
+                                            if def.is_param {
+                                                if let Some((param_name, kind)) = self.check_non_owned_param_move(&arg.node.value) {
+                                                    self.error(
+                                                        SemanticErrorKind::MutationOfBareParam {
+                                                            name: param_name,
+                                                            detail: format!("cannot store {kind} parameter in a constructor — use `!` to transfer ownership"),
+                                                        },
+                                                        arg.span,
+                                                    );
+                                                    continue;
+                                                }
+                                            } else if let Some(type_id) = def.type_id {
                                                 if !is_copy_type(type_id, self.types, self.scopes) {
-                                                    // Skip implicit move check only when
-                                                    // we are in a return expression — return
-                                                    // exits the function so the move happens
-                                                    // at most once even inside a loop.
                                                     let skip_implicit_move = self.loop_depth > 0
                                                         && !self.loop_local_defs.last()
                                                             .map_or(false, |s| s.contains(&var_def_id))
@@ -818,8 +826,22 @@ impl<'a> BorrowChecker<'a> {
                     if let Expr::Identifier(_) = &arg.node {
                         if let Some(&var_def_id) = self.resolution_map.get(&arg.span.start) {
                             let def = self.scopes.get_def(var_def_id);
-                            if def.kind == DefKind::Variable && !def.is_param {
-                                if let Some(type_id) = def.type_id {
+                            if def.kind == DefKind::Variable {
+                                // Borrowed resource params cannot be stored in structs.
+                                // The caller owns the data; storing creates a shallow copy
+                                // with shared heap pointers → use-after-free.
+                                if def.is_param {
+                                    if let Some((param_name, kind)) = self.check_non_owned_param_move(arg) {
+                                        self.error(
+                                            SemanticErrorKind::MutationOfBareParam {
+                                                name: param_name,
+                                                detail: format!("cannot store {kind} parameter in a struct — use `!` to transfer ownership"),
+                                            },
+                                            arg.span,
+                                        );
+                                        continue;
+                                    }
+                                } else if let Some(type_id) = def.type_id {
                                     if !is_copy_type(type_id, self.types, self.scopes) {
                                         let skip_implicit_move = self.loop_depth > 0
                                             && !self.loop_local_defs.last()

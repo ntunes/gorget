@@ -4119,3 +4119,96 @@ void main():
         };
         assert!(warning.to_string().contains("unused import `helper`"));
     }
+
+    // ── Borrowed param storage restriction tests ──
+
+    #[test]
+    fn bare_resource_param_stored_in_struct_rejected() {
+        let source = "\
+struct Wrapper:
+    Vector[int] data
+
+void store(Vector[int] v):
+    Wrapper w = Wrapper(v)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, detail } if name == "v" && detail.contains("cannot store"))),
+            "expected MutationOfBareParam for storing bare param in struct, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn move_resource_param_stored_in_struct_allowed() {
+        let source = "\
+struct Wrapper:
+    Vector[int] data
+
+void store(Vector[int] !v):
+    Wrapper w = Wrapper(v)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
+            "unexpected MutationOfBareParam for !param stored in struct: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn bare_resource_param_returned_rejected() {
+        let source = "\
+Vector[int] identity(Vector[int] v):
+    return v
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, detail } if name == "v" && detail.contains("cannot return"))),
+            "expected MutationOfBareParam for returning bare param, got: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn copy_param_stored_in_struct_allowed() {
+        let source = "\
+struct Pair:
+    int a
+    int b
+
+Pair make(int x, int y):
+    return Pair(x, y)
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
+            "unexpected MutationOfBareParam for Copy-type param in struct: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn bare_resource_param_read_only_allowed() {
+        let source = "\
+int length(Vector[int] v):
+    return v.len()
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
+            "unexpected MutationOfBareParam for read-only access: {:?}", errors
+        );
+    }
+
+    #[test]
+    fn mut_borrow_resource_param_stored_in_struct_rejected() {
+        let source = "\
+struct Wrapper:
+    Vector[int] data
+
+void store(Vector[int] &v):
+    Wrapper w = Wrapper(v)
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, detail } if name == "v" && detail.contains("cannot store"))),
+            "expected MutationOfBareParam for &param stored in struct, got: {:?}", errors
+        );
+    }

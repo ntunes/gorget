@@ -70,11 +70,11 @@ enum Param:
 # Any type constructible from a database row.
 # Use @derive(FromRow) on structs whose field names match column names.
 trait FromRow:
-    Self from_row(Row row)
+    Self from_row(Row !row)
 
 # Row trivially satisfies FromRow (identity).
 equip Row with FromRow:
-    Row from_row(Row row): row
+    Row from_row(Row !row): row
 
 # The core query interface.
 #

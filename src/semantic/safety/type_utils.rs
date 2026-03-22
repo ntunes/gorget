@@ -48,8 +48,13 @@ pub(super) fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTab
             matches!(scopes.get_def(*def_id).name.as_str(), "Channel" | "Shared" | "Weak" | "Mutex")
         }
         ResolvedType::Defined(def_id) => {
+            let def = scopes.get_def(*def_id);
+            // Enums are Copy — they're ordinals or tagged unions of value data
+            if def.kind == crate::semantic::scope::DefKind::Enum {
+                return true;
+            }
             // Arena/TrackingAllocator/PoolAllocator/TlsfAllocator/FixedBufferAllocator/FallbackAllocator are Copy — they're pointers
-            matches!(scopes.get_def(*def_id).name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator" | "FixedBufferAllocator" | "FallbackAllocator")
+            matches!(def.name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator" | "FixedBufferAllocator" | "FallbackAllocator")
         }
         // Type & is Copy — it's a pointer/reference
         ResolvedType::Ref(_) => true,

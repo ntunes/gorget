@@ -1518,14 +1518,14 @@ equip Parser:
     SpannedExpr parse_expr(&self):
         return self.parse_expr_bp(0)
 
-    SpannedExpr parse_expr_with_lhs(&self, SpannedExpr lhs):
+    SpannedExpr parse_expr_with_lhs(&self, SpannedExpr !lhs):
         return self.parse_expr_bp_with_lhs(0, lhs)
 
     SpannedExpr parse_expr_bp(&self, int min_bp):
         SpannedExpr lhs = self.parse_prefix()
         return self.parse_expr_bp_with_lhs(min_bp, lhs)
 
-    SpannedExpr parse_expr_bp_with_lhs(&self, int min_bp, SpannedExpr lhs):
+    SpannedExpr parse_expr_bp_with_lhs(&self, int min_bp, SpannedExpr !lhs):
 
         while not self.at_end():
             # Postfix: field access, method call, index, function call, ?, as
@@ -1712,7 +1712,7 @@ equip Parser:
 
         return lhs
 
-    SpannedExpr parse_dot_expr(&self, SpannedExpr lhs):
+    SpannedExpr parse_dot_expr(&self, SpannedExpr !lhs):
         int start = lhs.span.start
         self.advance()
         # Handle identifier or keyword-as-method-name (e.g. .String(), .or(), .len())
@@ -3065,7 +3065,7 @@ equip Parser:
             self.parse_expr()
         return Param(ty, pname, own)
 
-    Item parse_struct_item(&self, Vector[String] derives):
+    Item parse_struct_item(&self, Vector[String] !derives):
         self.expect_kw(KW_STRUCT, "expected 'struct'")
         SpannedToken name_tok = self.advance()
         String name = token_ident(name_tok.lex_token)
@@ -3093,7 +3093,7 @@ equip Parser:
         self.match_tok(TOK_DEDENT)
         return IStruct(StructDef(name, fields, type_params, derives))
 
-    Item parse_enum_item(&self, Vector[String] derives):
+    Item parse_enum_item(&self, Vector[String] !derives):
         self.expect_kw(KW_ENUM, "expected 'enum'")
         SpannedToken name_tok = self.advance()
         String name = token_ident(name_tok.lex_token)

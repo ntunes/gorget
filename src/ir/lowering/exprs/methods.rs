@@ -1554,9 +1554,7 @@ pub(super) fn lower_method_call(
             ctx.drops.mark_moved(place.local);
         }
 
-        // Unregister collection locals passed by value: the callee may store
-        // a shallow copy sharing the same data pointer. Unregistering prevents
-        // scope-exit drop from freeing shared data (callee's copy handles cleanup).
+        // Unregister collection locals passed by value (same as calls.rs).
         for arg in args.iter() {
             if !matches!(arg.node.ownership, Ownership::Borrow) { continue; }
             if let Expr::Identifier(name) = &arg.node.value.node {

@@ -33,7 +33,7 @@ HttpServerResponse handle_post_comment(HttpRequest req):
 HttpServerResponse cors_middleware(HttpRequest req, HttpServerResponse resp):
     return resp.with_header("access-control-allow-origin", "*")
 
-HttpServerResponse logging_middleware(HttpRequest req, HttpServerResponse resp):
+HttpServerResponse logging_middleware(HttpRequest req, HttpServerResponse !resp):
     return resp
 
 void main():

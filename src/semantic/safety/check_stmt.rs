@@ -667,6 +667,20 @@ impl<'a> BorrowChecker<'a> {
                     }
                     } // imported_module_depth == 0
 
+                    // Borrowed resource params cannot be returned — shallow copy
+                    // shares the caller's heap data, freed at caller scope exit.
+                    if let Expr::Identifier(_) = &expr.node {
+                        if let Some((param_name, kind)) = self.check_non_owned_param_move(expr) {
+                            self.error(
+                                SemanticErrorKind::MutationOfBareParam {
+                                    name: param_name,
+                                    detail: format!("cannot return {kind} parameter — use `!` to transfer ownership"),
+                                },
+                                expr.span,
+                            );
+                        }
+                    }
+
                     // Check if returning a closure (or a struct/array containing one)
                     // that captures local variables — use-after-free.
                     self.check_return_for_escaping_closures(expr);
@@ -1387,6 +1401,21 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
                 } // imported_module_depth == 0
+
+                // Borrowed resource params cannot be returned — shallow copy
+                // shares the caller's heap data, freed at caller scope exit.
+                if let Expr::Identifier(_) = &expr.node {
+                    if let Some((param_name, kind)) = self.check_non_owned_param_move(expr) {
+                        self.error(
+                            SemanticErrorKind::MutationOfBareParam {
+                                name: param_name,
+                                detail: format!("cannot return {kind} parameter — use `!` to transfer ownership"),
+                            },
+                            expr.span,
+                        );
+                    }
+                }
+
                 self.check_expr(expr);
                 // Also check closure escape for expression-body functions.
                 self.check_return_for_escaping_closures(expr);

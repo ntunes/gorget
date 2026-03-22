@@ -323,6 +323,29 @@ The distinction is about **what the type owns**, not how large it is. A `Point` 
 
 Bare Resource params are `const` — the C compiler enforces immutability. The `&` sigil grants mutation, `!` transfers ownership.
 
+**Storing borrowed parameters:**
+
+Borrowed parameters (bare and `&`) cannot be stored in any structure that outlives the callee's frame. This prevents shallow-copy bugs where the stored value shares the caller's heap allocations:
+
+```gorget
+struct Wrapper:
+    Vector[int] data
+
+# ERROR: cannot store immutable parameter in a struct
+Wrapper bad(Vector[int] v):
+    return Wrapper(v)
+
+# OK: move parameter transfers ownership
+Wrapper good(Vector[int] !v):
+    return Wrapper(!v)
+
+# OK: read-only access is fine
+int first(Vector[int] v):
+    return v.get(0).unwrap()
+```
+
+This rule ensures that resource-type values always have exactly one owner. If you need to store a parameter, return it, or pass it to a constructor, declare it with `!` to transfer ownership.
+
 **Trivial types** pass by value regardless of sigils (except `&` on primitives, which creates a mutable pointer for out-params).
 
 ### 3.3 Ownership (Move Semantics)

@@ -679,7 +679,7 @@ struct Ray:
     Vec3 direction
 
 equip Ray:
-    Ray new(Vec3 origin, Vec3 direction):
+    Ray new(Vec3 !origin, Vec3 direction):
         return Ray(origin, direction.normalize())
 
     Vec3 point_at(self, float t):

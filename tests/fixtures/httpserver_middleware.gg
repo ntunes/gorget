@@ -22,7 +22,7 @@ HttpServerResponse append_suffix(HttpRequest req, HttpServerResponse resp):
 
 # Middleware that counts requests (side-effects via a mutable upvalue not testable without
 # shared state, so just checks the request method instead).
-HttpServerResponse method_middleware(HttpRequest req, HttpServerResponse resp):
+HttpServerResponse method_middleware(HttpRequest req, HttpServerResponse !resp):
     if req.method == "GET":
         return resp.with_header("x-method", "get")
     return resp

@@ -45,13 +45,13 @@ struct Logger:
     String log_prefix
 
 equip Logger:
-    Logger new(LogLevel log_level):
+    Logger new(LogLevel !log_level):
         return Logger(log_level, false, "")
 
-    Logger with_prefix(LogLevel log_level, String log_pfx):
+    Logger with_prefix(LogLevel !log_level, String log_pfx):
         return Logger(log_level, false, log_pfx)
 
-    Logger with_timestamps(LogLevel log_level):
+    Logger with_timestamps(LogLevel !log_level):
         return Logger(log_level, true, "")
 
     void set_level(&self, LogLevel log_l):

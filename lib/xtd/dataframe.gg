@@ -1150,7 +1150,7 @@ GroupBy df_group_by(DataFrame df, String col):
             new_group.push(i)
             groups.set(key, new_group)
         i = i + 1
-    return GroupBy(df, col, groups)
+    return GroupBy(df_copy(df), col, groups)
 
 equip GroupBy:
     # Aggregate a target column by op (sum/mean/count/min/max)
@@ -2134,7 +2134,12 @@ MultiGroupBy df_group_by_multi(DataFrame df, Vector[String] cols):
             new_group.push(i)
             groups.set(key, new_group)
         i = i + 1
-    return MultiGroupBy(df, cols, groups)
+    Vector[String] cols_copy = Vector[String]()
+    int ci = 0
+    while ci < cols.len():
+        cols_copy.push(cols.get(ci).unwrap())
+        ci = ci + 1
+    return MultiGroupBy(df_copy(df), cols_copy, groups)
 
 equip MultiGroupBy:
     DataFrame agg(self, String target_col, String op):
@@ -2631,7 +2636,7 @@ Result[DataFrame, String] df_cast(DataFrame df, String col_name, String target_t
         return Error("df_cast: column '" + col_name + "' not found")
     String src_type = df.get_column(col_name).dtype_name()
     if src_type == target_type:
-        return Ok(df)
+        return Ok(df_copy(df))
     if not (target_type == "int" or target_type == "float" or target_type == "str" or target_type == "bool"):
         return Error("df_cast: unsupported cast from '" + src_type + "' to '" + target_type + "'")
     # Each match arm has a single direct return at its top level (workaround for a

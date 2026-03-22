@@ -415,7 +415,7 @@ equip YamlParser:
                     self.consume_newline()
                 Yaml yaml_val = self.parse_block_value(yaml_map_indent + 1)
                 if yaml_key == "<<":
-                    yaml_map = merge_into(yaml_map, yaml_val)
+                    merge_into(&yaml_map, yaml_val)
                 else:
                     yaml_map.put(yaml_key, yaml_val)
             elif self.yaml_input.char_at(self.yaml_pos) == '#':
@@ -425,14 +425,14 @@ equip YamlParser:
                     self.consume_newline()
                 Yaml yaml_val = self.parse_block_value(yaml_map_indent + 1)
                 if yaml_key == "<<":
-                    yaml_map = merge_into(yaml_map, yaml_val)
+                    merge_into(&yaml_map, yaml_val)
                 else:
                     yaml_map.put(yaml_key, yaml_val)
             else:
                 # Inline value
                 Yaml yaml_val = self.parse_inline_value(yaml_map_indent)
                 if yaml_key == "<<":
-                    yaml_map = merge_into(yaml_map, yaml_val)
+                    merge_into(&yaml_map, yaml_val)
                 else:
                     yaml_map.put(yaml_key, yaml_val)
         return Map(yaml_map)
@@ -600,7 +600,7 @@ equip YamlParser:
             if self.failed():
                 return Null()
             if yaml_fkey == "<<":
-                yaml_fmap = merge_into(yaml_fmap, yaml_fval)
+                merge_into(&yaml_fmap, yaml_fval)
             else:
                 yaml_fmap.put(yaml_fkey, yaml_fval)
             self.skip_flow_ws()
@@ -1046,7 +1046,7 @@ equip YamlParser:
 
 # ── Merge key helper ─────────────────────────────────────────
 
-private Dict[String, Yaml] merge_into(Dict[String, Yaml] yaml_target, Yaml yaml_source):
+private void merge_into(Dict[String, Yaml] &yaml_target, Yaml yaml_source):
     match yaml_source:
         case Map(yaml_merge_map):
             Vector[String] yaml_mkeys = yaml_merge_map.keys()
@@ -1074,7 +1074,6 @@ private Dict[String, Yaml] merge_into(Dict[String, Yaml] yaml_target, Yaml yaml_
                 yaml_mi = yaml_mi + 1
         else:
             pass
-    return yaml_target
 
 # ── Scalar resolution ────────────────────────────────────────
 
