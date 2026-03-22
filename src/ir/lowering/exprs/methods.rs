@@ -1547,6 +1547,7 @@ pub(super) fn lower_method_call(
             if ret_type == ctx.type_mapper.owned_string_type {
                 super::register_owned_string_for_drop(ctx, dst);
             }
+            // Collection method return values: same blocker as calls.rs.
             FunctionBuilder::copy(dst)
         };
 

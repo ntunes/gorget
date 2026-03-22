@@ -836,12 +836,11 @@ pub(super) fn lower_call(
             if ret_type == ctx.type_mapper.owned_string_type {
                 super::register_owned_string_for_drop(ctx, dst);
             }
-            // Collection return values (Vector, Dict, Set) should be registered
-            // for drop, but this is blocked by shallow-copy semantics: extracting
-            // a value from Result/Option does a memcpy, creating shared heap pointers.
-            // Registering the temp for drop would free data still referenced by
-            // the extracted value. Requires move-based extraction (MoveZero on
-            // source field after extract) to be safe. See TODO.md.
+            // Collection return values: drop registration blocked by scope-aware
+            // ownership transfer — temps in inner scopes (loop bodies) get freed
+            // before their data escapes via memcpy to outer-scope variables.
+            // Requires scope-aware drop registration or guaranteed move-zero at
+            // every memcpy site. See TODO.md.
             FunctionBuilder::copy(dst)
         };
 

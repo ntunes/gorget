@@ -158,6 +158,13 @@ impl DropElaborator {
         }
     }
 
+    /// Check whether a local is registered for drop in any scope.
+    pub fn is_registered(&self, local: LocalId) -> bool {
+        self.scopes.iter().rev().any(|scope| {
+            scope.entries.iter().any(|e| e.local == local)
+        })
+    }
+
     /// Check whether a local has been marked as "maybe moved".
     pub fn is_moved(&self, local: LocalId) -> bool {
         for scope in self.scopes.iter().rev() {

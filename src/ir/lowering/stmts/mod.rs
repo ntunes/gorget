@@ -331,11 +331,18 @@ fn lower_var_decl(
                     }
                     // Collection move-zero: zero source temp after assigning to collection variable.
                     // Mirrors the GorgetString move-zero pattern above.
-                    if place.local != local_id {
+                    // Also handles any drop-registered temp being assigned to a variable.
+                    if place.local != local_id
+                        && !ctx.drops.is_moved(place.local)
+                    {
                         let rhs_type = builder.locals[place.local.0 as usize].type_id;
                         if ctx.type_registry.is_collection_type(rhs_type)
                             && ctx.type_registry.is_collection_type(actual_var_type)
                         {
+                            builder.move_zero(Place::local(place.local));
+                            ctx.drops.mark_moved(place.local);
+                        } else if ctx.drops.is_registered(place.local) {
+                            // General: any drop-registered temp assigned to a variable
                             builder.move_zero(Place::local(place.local));
                             ctx.drops.mark_moved(place.local);
                         }
@@ -359,6 +366,13 @@ fn lower_var_decl(
             for (i, part) in parts.iter().enumerate() {
                 let field_type = super::exprs::resolve_tuple_field_type(ctx, tuple_type, i);
                 let field_local = builder.field_load(Place::local(tuple_local), i as u32, field_type);
+                // Move semantics: zero source field after extracting resource-type value
+                if ctx.type_registry.is_resource_type(field_type) {
+                    builder.move_zero(Place {
+                        local: tuple_local,
+                        projections: vec![Projection::Field(i as u32)],
+                    });
+                }
 
                 if let Pattern::Binding(name) = &part.node {
                     // Apply provenance adjustment: if the type checker downgraded

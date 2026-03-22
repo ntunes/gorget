@@ -413,12 +413,38 @@ pub fn emit_pattern_bindings(
                 // Recurse on sub-pattern
                 emit_pattern_bindings(ctx, builder, field_pat, dst, field_type);
             }
+            // Move semantics: zero the scrutinee after extracting all variant fields.
+            // Prevents double-free when both extracted values and the scrutinee are dropped.
+            // Match arms are exclusive — only one arm executes, so zeroing is safe.
+            let has_resource_field = fields.iter().enumerate().any(|(i, _)| {
+                if let Some(type_def) = ctx.type_registry.get_type_def(&enum_name) {
+                    if let TypeDefKind::Enum(ref e) = type_def.kind {
+                        if let Some(v) = e.variants.iter().find(|v| v.name == variant_name) {
+                            if let Some(f) = v.fields.get(i) {
+                                return ctx.type_registry.is_resource_type(f.type_id);
+                            }
+                        }
+                    }
+                }
+                false
+            });
+            if has_resource_field {
+                builder.move_zero(Place::local(scrut_local));
+                ctx.drops.mark_moved(scrut_local);
+            }
         }
 
         Pattern::Tuple(elems) => {
             for (i, elem_pat) in elems.iter().enumerate() {
                 let elem_type = super::super::exprs::resolve_tuple_field_type(ctx, scrut_type, i);
                 let dst = builder.field_load(Place::local(scrut_local), i as u32, elem_type);
+                // Move semantics: zero source field after extracting resource-type value
+                if ctx.type_registry.is_resource_type(elem_type) {
+                    builder.move_zero(Place {
+                        local: scrut_local,
+                        projections: vec![Projection::Field(i as u32)],
+                    });
+                }
                 emit_pattern_bindings(ctx, builder, elem_pat, dst, elem_type);
             }
         }
