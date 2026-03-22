@@ -1397,10 +1397,9 @@ pub(super) fn lower_method_call(
             }
         }
         // For Dict/HashMap.get(), auto-register Option[V] so get returns Option.
-        // Note: Dict Ref (Option__Ref_V) is NOT used here because Dict values are commonly
-        // mutated and written back (get → modify → set pattern). Returning a Ptr would cause
-        // gorget_map_put to read past the pointer-sized slot. Vector Ref works because
-        // Vector elements are read-only after get().
+        // Dict.get() uses value payload (not Ptr) because the GIR→LIR struct pipeline
+        // doesn't yet propagate Ptr payload types to the C backend's Option wrapping.
+        // dict[key] (IndexLoad) already returns Ptr for resource values via a separate path.
         if method_name == "get"
             && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__"))
         {
