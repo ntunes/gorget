@@ -976,8 +976,17 @@ pub(super) fn lower_interp_segment(
 ) {
     // 1. Try simple variable lookup first
     if let Some((local_id, type_id)) = ctx.lookup_local(var_name) {
-        // If this is a &/! param (MutPtr), deref to get the value
-        if let Some(&value_type) = ctx.mut_capture_locals.get(&local_id) {
+        // If this is a pointer param, deref to get the value for formatting.
+        // Covers &/! params (mut_capture_locals) and borrowed resource params (ref_locals).
+        let ptr_value_type = ctx.mut_capture_locals.get(&local_id).copied()
+            .or_else(|| {
+                if ctx.ref_locals.contains(&local_id) {
+                    ctx.pointee_type(builder.locals[local_id.0 as usize].type_id)
+                } else {
+                    None
+                }
+            });
+        if let Some(value_type) = ptr_value_type {
             let deref_place = Place {
                 local: local_id,
                 projections: vec![Projection::Deref],
