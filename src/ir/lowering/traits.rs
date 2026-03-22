@@ -94,8 +94,41 @@ pub fn register_trait_types(
                     }
 
                     let method_name = &method_def.name.node;
-                    let return_type =
-                        ctx.type_mapper.map_ast_type(&method_def.return_type.node);
+                    let return_type = if method_def.throws.is_some() {
+                        // `int parse(self, String input) throws String` → Result[int, String]
+                        let ok_type = ctx.type_mapper.map_ast_type_mut(&method_def.return_type.node, &mut ctx.type_registry);
+                        let err_type = ctx.type_mapper.map_ast_type_mut(&method_def.throws.as_ref().unwrap().node, &mut ctx.type_registry);
+                        let ok_c = crate::ir::lowering::types::mangle_type_for_name(&method_def.return_type.node);
+                        let err_c = crate::ir::lowering::types::mangle_type_for_name(&method_def.throws.as_ref().unwrap().node);
+                        let result_name = format!("Result__{ok_c}__{err_c}");
+                        if let Some(&id) = ctx.type_mapper.named_types.get(&result_name) {
+                            id
+                        } else {
+                            use crate::ir::types::*;
+                            let type_def = TypeDef {
+                                name: result_name.clone(),
+                                kind: TypeDefKind::Enum(EnumDef {
+                                    variants: vec![
+                                        EnumVariant {
+                                            name: "Ok".to_string(),
+                                            fields: vec![StructField { name: "_0".to_string(), type_id: ok_type }],
+                                        },
+                                        EnumVariant {
+                                            name: "Error".to_string(),
+                                            fields: vec![StructField { name: "_0".to_string(), type_id: err_type }],
+                                        },
+                                    ],
+                                }),
+                                metadata: TypeMetadata::default(),
+                            };
+                            ctx.type_registry.add_type_def(type_def);
+                            let type_id = ctx.type_registry.insert(GirType::Named(result_name.clone()));
+                            ctx.type_mapper.register_named(result_name, type_id);
+                            type_id
+                        }
+                    } else {
+                        ctx.type_mapper.map_ast_type(&method_def.return_type.node)
+                    };
 
                     // Determine self mutability
                     let self_is_mutable = method_def
@@ -718,6 +751,13 @@ fn lower_trait_method_body(
             pidx += 1;
         }
     }
+
+    // Track throws context for Result wrapping in return/throw statements
+    ctx.current_throws_result_type = if method_def.throws.is_some() {
+        Some(return_type)
+    } else {
+        None
+    };
 
     // Lower the body
     match &method_def.body {

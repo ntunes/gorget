@@ -15336,3 +15336,19 @@ fn closure_in_spawn() {
 total: 50",
     );
 }
+
+#[test]
+fn trait_method_throws() {
+    run_gg(
+        "trait_method_throws.gg",
+        "\
+142
+error: invalid format
+-1
+2
+error: empty input
+-1
+error: too long: max 3
+-1",
+    );
+}

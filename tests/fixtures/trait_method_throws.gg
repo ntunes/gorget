@@ -1,0 +1,49 @@
+# Trait methods with throws signature
+trait Parser:
+    int parse(self, String input) throws String
+
+struct IntParser:
+    int base
+
+equip IntParser with Parser:
+    int parse(self, String input) throws String:
+        if input == "bad":
+            throw "invalid format"
+        return self.base + 42
+
+struct StrictParser:
+    int limit
+
+equip StrictParser with Parser:
+    int parse(self, String input) throws String:
+        if input == "":
+            throw "empty input"
+        if input.len() > self.limit:
+            throw f"too long: max {self.limit}"
+        return input.len()
+
+void main():
+    IntParser ip = IntParser(100)
+
+    int a = ip.parse("ok") catch (e): -1
+    print(f"{a}")
+
+    int b = ip.parse("bad") catch (e):
+        print(f"error: {e}")
+        -1
+    print(f"{b}")
+
+    StrictParser sp = StrictParser(3)
+
+    int c = sp.parse("hi") catch (e): -1
+    print(f"{c}")
+
+    int d = sp.parse("") catch (e):
+        print(f"error: {e}")
+        -1
+    print(f"{d}")
+
+    int f = sp.parse("toolong") catch (e):
+        print(f"error: {e}")
+        -1
+    print(f"{f}")

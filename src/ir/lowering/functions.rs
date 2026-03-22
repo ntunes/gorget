@@ -220,7 +220,41 @@ pub fn lower_equip_method(
     let method_name = &method.name.node;
     let mangled_name = format!("{type_name}__{method_name}");
 
-    let return_type = ctx.type_mapper.map_ast_type(&method.return_type.node);
+    let return_type = if method.throws.is_some() {
+        // `int parse(self, String input) throws String` → Result[int, String]
+        let ok_type = ctx.type_mapper.map_ast_type_mut(&method.return_type.node, &mut ctx.type_registry);
+        let err_type = ctx.type_mapper.map_ast_type_mut(&method.throws.as_ref().unwrap().node, &mut ctx.type_registry);
+        let ok_c = crate::ir::lowering::types::mangle_type_for_name(&method.return_type.node);
+        let err_c = crate::ir::lowering::types::mangle_type_for_name(&method.throws.as_ref().unwrap().node);
+        let result_name = format!("Result__{ok_c}__{err_c}");
+        if let Some(&id) = ctx.type_mapper.named_types.get(&result_name) {
+            id
+        } else {
+            use crate::ir::types::*;
+            let type_def = TypeDef {
+                name: result_name.clone(),
+                kind: TypeDefKind::Enum(EnumDef {
+                    variants: vec![
+                        EnumVariant {
+                            name: "Ok".to_string(),
+                            fields: vec![StructField { name: "_0".to_string(), type_id: ok_type }],
+                        },
+                        EnumVariant {
+                            name: "Error".to_string(),
+                            fields: vec![StructField { name: "_0".to_string(), type_id: err_type }],
+                        },
+                    ],
+                }),
+                metadata: TypeMetadata::default(),
+            };
+            ctx.type_registry.add_type_def(type_def);
+            let type_id = ctx.type_registry.insert(GirType::Named(result_name.clone()));
+            ctx.type_mapper.register_named(result_name, type_id);
+            type_id
+        }
+    } else {
+        ctx.type_mapper.map_ast_type(&method.return_type.node)
+    };
 
     // Check if method has a self parameter (static methods don't)
     let has_self = method.params.first()
@@ -253,7 +287,7 @@ pub fn lower_equip_method(
         params.push((gir_type, Some(p.node.name.node.as_str())));
     }
 
-    let mut builder = FunctionBuilder::new(mangled_name, return_type, &params);
+    let mut builder = FunctionBuilder::new(mangled_name.clone(), return_type, &params);
 
     // Clear and register locals
     ctx.clear_locals();
@@ -306,6 +340,24 @@ pub fn lower_equip_method(
             ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
             pidx += 1;
         }
+    }
+
+    // Track throws context for Result wrapping in return/throw statements
+    ctx.current_throws_result_type = if method.throws.is_some() {
+        Some(return_type)
+    } else {
+        None
+    };
+
+    // Register equip method signature in fn_sigs so callers see the Result return type
+    if !ctx.fn_sigs.contains_key(&mangled_name) {
+        let base_param_types: Vec<TypeId> = method
+            .params
+            .iter()
+            .filter(|p| p.node.name.node != "self")
+            .map(|p| ctx.type_mapper.map_ast_type(&p.node.type_.node))
+            .collect();
+        ctx.fn_sigs.insert(mangled_name.clone(), (base_param_types, return_type));
     }
 
     // Lower the body
