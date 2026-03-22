@@ -8,3 +8,13 @@ void main():
         for val in row:
             sum += val
         print(f"row sum: {sum}")
+
+    # Index access after iteration — elements cloned, not moved
+    Vector[int] first = matrix[0]
+    print(f"first len: {first.len()}")
+    print(f"first[0]: {first[0]}")
+    print(f"first[2]: {first[2]}")
+
+    # Multiple reads from same index
+    Vector[int] again = matrix[0]
+    print(f"again len: {again.len()}")

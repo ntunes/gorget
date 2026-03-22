@@ -1642,17 +1642,7 @@ impl<'a> FuncLowering<'a> {
                             elem_ty = LirType::Struct(sid);
                         }
                     }
-                    let result = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
-                        dst: result,
-                        ty: elem_ty.clone(),
-                        ptr: ptr_val,
-                    });
-                    self.store_to_local(*dst, result, bb);
-
-                    // IndexLoad is a move — zero the array/dict slot to prevent
-                    // double-free when the collection is dropped.
-                    // Check if element type needs dropping (resource/move semantics).
+                    // Determine element type name for clone/drop decisions.
                     let elem_type_name = base_type_name
                         .strip_prefix("Vector__")
                         .or_else(|| base_type_name.strip_prefix("Deque__"))
@@ -1664,24 +1654,54 @@ impl<'a> FuncLowering<'a> {
                             Some(&rest[idx + 2..])
                         })
                         .unwrap_or("");
-                    let elem_needs_zero = match self.infer_drop_strategy(elem_type_name) {
-                        crate::ir::types::DropStrategy::None => false,
-                        _ => true,
-                    };
-                    if elem_needs_zero {
-                        let byte_size = c_sizeof_lir_type(&elem_ty, &self.module_structs) as i64;
-                        if byte_size > 0 {
-                            let zero = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                                dst: zero, ty: LirType::I32, value: 0,
-                            });
-                            let sz = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                                dst: sz, ty: LirType::I64, value: byte_size,
-                            });
-                            self.lir_func.block_mut(bb).insts.push(Inst::Memset {
-                                ptr: ptr_val, byte: zero, size: sz,
-                            });
+
+                    // For collection/string elements (Vector, Dict, Set, Str), clone
+                    // instead of move+zero so the parent collection retains the original.
+                    // Other resource types (Task, user structs) are still moved+zeroed
+                    // since they may be intentionally consumed (e.g., task.await()).
+                    let clone_fn = clone_fn_for_collection_element(elem_type_name);
+
+                    if let Some(clone_fn_name) = clone_fn {
+                        // Clone: call gorget_*_clone(elem_ptr) → new deep copy
+                        let ret_ty = elem_ty.clone();
+                        self.ensure_extern(clone_fn_name, &[LirType::Ptr], &ret_ty);
+                        let result = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: Some(result),
+                            name: clone_fn_name.to_string(),
+                            args: vec![ptr_val],
+                        });
+                        self.store_to_local(*dst, result, bb);
+                    } else {
+                        // Non-collection element: Load value + zero slot for move semantics
+                        let result = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                            dst: result,
+                            ty: elem_ty.clone(),
+                            ptr: ptr_val,
+                        });
+                        self.store_to_local(*dst, result, bb);
+
+                        // Zero the slot to prevent double-free (move semantics)
+                        let elem_needs_zero = match self.infer_drop_strategy(elem_type_name) {
+                            crate::ir::types::DropStrategy::None => false,
+                            _ => true,
+                        };
+                        if elem_needs_zero {
+                            let byte_size = c_sizeof_lir_type(&elem_ty, &self.module_structs) as i64;
+                            if byte_size > 0 {
+                                let zero = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                                    dst: zero, ty: LirType::I32, value: 0,
+                                });
+                                let sz = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                                    dst: sz, ty: LirType::I64, value: byte_size,
+                                });
+                                self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+                                    ptr: ptr_val, byte: zero, size: sz,
+                                });
+                            }
                         }
                     }
                 } else {
@@ -4643,6 +4663,36 @@ fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<(Vec<LirType>, 
             Some((vec![], LirType::Void))
         }
         _ => None,
+    }
+}
+
+/// Returns the clone function name for a collection element type that is
+/// itself a collection or string. These types support deep cloning via
+/// runtime functions and should be cloned on IndexLoad rather than moved,
+/// so the collection retains the original element.
+///
+/// Other resource types (Task, user structs, etc.) are still moved+zeroed
+/// since they may not support cloning or may be intentionally consumed.
+fn clone_fn_for_collection_element(elem_type_name: &str) -> Option<&'static str> {
+    if elem_type_name.starts_with("Vector__")
+        || elem_type_name.starts_with("Deque__")
+        || elem_type_name == "GorgetArray"
+    {
+        Some("gorget_array_clone")
+    } else if elem_type_name.starts_with("Dict__")
+        || elem_type_name.starts_with("HashMap__")
+        || elem_type_name == "GorgetMap"
+    {
+        Some("gorget_map_clone")
+    } else if elem_type_name.starts_with("Set__")
+        || elem_type_name.starts_with("HashSet__")
+        || elem_type_name == "GorgetSet"
+    {
+        Some("gorget_set_clone")
+    } else if elem_type_name == "Str" || elem_type_name == "GorgetString" {
+        Some("gorget_string_clone")
+    } else {
+        None
     }
 }
 

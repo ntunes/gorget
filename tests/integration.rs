@@ -15172,7 +15172,11 @@ fn vector_of_vectors() {
 rows: 3
 row sum: 6
 row sum: 15
-row sum: 24",
+row sum: 24
+first len: 3
+first[0]: 1
+first[2]: 3
+again len: 3",
     );
 }
 
