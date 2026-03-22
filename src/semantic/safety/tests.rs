@@ -4212,3 +4212,19 @@ void store(Vector[int] &v):
             "expected MutationOfBareParam for &param stored in struct, got: {:?}", errors
         );
     }
+
+    #[test]
+    fn bare_resource_param_stored_in_field_rejected() {
+        let source = "\
+struct Container:
+    Vector[int] items
+
+void store(Container &c, Vector[int] v):
+    c.items = v
+";
+        let errors = check(source);
+        assert!(
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, detail } if name == "v" && detail.contains("cannot store"))),
+            "expected MutationOfBareParam for bare param stored in field, got: {:?}", errors
+        );
+    }

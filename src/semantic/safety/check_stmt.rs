@@ -347,6 +347,24 @@ impl<'a> BorrowChecker<'a> {
                 }
                 self.check_expr(value);
 
+                // Borrowed resource params cannot be stored in struct fields.
+                // The field would hold a shallow copy sharing the caller's heap data.
+                // Only check bare identifiers — field access (b.value) reads a single
+                // field which may be a Copy type, not the whole resource param.
+                if matches!(&target.node, Expr::FieldAccess { .. } | Expr::Index { .. }) {
+                    if let Expr::Identifier(_) = &value.node {
+                        if let Some((param_name, kind)) = self.check_non_owned_param_move(value) {
+                            self.error(
+                                SemanticErrorKind::MutationOfBareParam {
+                                    name: param_name,
+                                    detail: format!("cannot store {kind} parameter in a field — use `!` to transfer ownership"),
+                                },
+                                value.span,
+                            );
+                        }
+                    }
+                }
+
                 // Check: if value is a bare identifier of non-Copy type, needs `!`
                 // Skip for view-string targets (creating a view from owned is a borrow).
                 let target_is_view_str = if let Expr::Identifier(_) = &target.node {

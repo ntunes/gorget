@@ -2977,6 +2977,14 @@ fn borrow_param_variant_error() {
 }
 
 #[test]
+fn borrow_param_field_assign_error() {
+    check_gg_fails(
+        "borrow_param_field_assign_error.gg",
+        "cannot store immutable parameter in a field",
+    );
+}
+
+#[test]
 fn mutable_borrow_params() {
     run_gg(
         "mutable_borrow_params.gg",

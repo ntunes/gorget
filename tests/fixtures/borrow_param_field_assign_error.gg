@@ -1,0 +1,12 @@
+from std.collections import Vector
+
+struct Container:
+    Vector[int] items
+
+void store_field(Container &c, Vector[int] v):
+    c.items = v
+
+void main():
+    Container c = Container(Vector[int]())
+    Vector[int] data = [1, 2, 3]
+    store_field(&c, data)
