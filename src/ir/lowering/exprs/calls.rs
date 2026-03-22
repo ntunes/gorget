@@ -836,11 +836,12 @@ pub(super) fn lower_call(
             if ret_type == ctx.type_mapper.owned_string_type {
                 super::register_owned_string_for_drop(ctx, dst);
             }
-            // TODO: collection return values (Vector, Dict, Set) should also be
-            // registered for drop, but only when NOT assigned to a named variable.
-            // Currently blocked on ownership-transfer tracking: if the result is
-            // assigned (`auto x = foo()`), the temp must be unregistered and x
-            // becomes the owner. Without this, registering causes double-free.
+            // Collection return values (Vector, Dict, Set) should be registered
+            // for drop, but this is blocked by shallow-copy semantics: extracting
+            // a value from Result/Option does a memcpy, creating shared heap pointers.
+            // Registering the temp for drop would free data still referenced by
+            // the extracted value. Requires move-based extraction (MoveZero on
+            // source field after extract) to be safe. See TODO.md.
             FunctionBuilder::copy(dst)
         };
 
