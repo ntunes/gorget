@@ -770,15 +770,17 @@ pub(super) fn lower_call(
             })
             .collect();
 
-        // Collect Move-ownership Move-type arg locals for post-call MoveZero
-        let move_zero_locals: Vec<Place> = resolved_args.iter().zip(&lowered_args)
-            .filter_map(|(arg, op)| {
+        // Collect Move-ownership Move-type arg locals for post-call MoveZero.
+        // Resolve the original source local from the arg expression (not the
+        // lowered MutPtr, which is_resource_type_local doesn't recognize).
+        let move_zero_locals: Vec<Place> = resolved_args.iter()
+            .filter_map(|arg| {
                 if !matches!(arg.node.ownership, Ownership::Move) { return None; }
-                if let Operand::Copy(place) | Operand::Move(place) = op {
-                    if place.projections.is_empty()
-                        && is_resource_type_local(place.local, builder, &ctx.type_registry)
-                    {
-                        return Some(place.clone());
+                if let Expr::Identifier(name) = &arg.node.value.node {
+                    if let Some((local_id, _)) = ctx.lookup_local(name) {
+                        if is_resource_type_local(local_id, builder, &ctx.type_registry) {
+                            return Some(Place::local(local_id));
+                        }
                     }
                 }
                 None

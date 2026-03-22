@@ -2985,6 +2985,31 @@ fn borrow_param_field_assign_error() {
 }
 
 #[test]
+fn borrow_param_mut_store_error() {
+    check_gg_fails(
+        "borrow_param_mut_store_error.gg",
+        "cannot store mutably borrowed parameter",
+    );
+}
+
+#[test]
+fn borrow_param_positive() {
+    run_gg(
+        "borrow_param_positive.gg",
+        "\
+60
+10
+60
+4
+4
+hello
+3
+2
+done",
+    );
+}
+
+#[test]
 fn mutable_borrow_params() {
     run_gg(
         "mutable_borrow_params.gg",
