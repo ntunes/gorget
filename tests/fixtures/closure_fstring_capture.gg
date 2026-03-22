@@ -1,0 +1,18 @@
+# Closures that capture variables used in f-string interpolation
+void main():
+    String prefix = "hello"
+    auto greet = (String name): f"{prefix} {name}"
+    print(greet("world"))
+    print(greet("gorget"))
+
+    int factor = 10
+    auto describe = (int x): f"{x} * {factor} = {x * factor}"
+    print(describe(3))
+    print(describe(7))
+
+    # Capture used in map with f-string
+    String label = "item"
+    Vector[int] nums = [1, 2, 3]
+    Vector[String] labels = nums.map((int n): f"{label} {n}")
+    for s in labels:
+        print(s)

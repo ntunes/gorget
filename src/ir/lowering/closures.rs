@@ -423,6 +423,29 @@ impl FreeVarCollector<'_> {
                 if let Some(s) = start { self.visit_expr(&s.node); }
                 if let Some(e) = end { self.visit_expr(&e.node); }
             }
+            Expr::StringLiteral(lit) => {
+                // Visit interpolated variable references in f-strings
+                for seg in &lit.segments {
+                    if let crate::lexer::token::StringSegment::Interpolation(var_name, _) = seg {
+                        // The interpolation text may be a simple identifier or a complex
+                        // expression. For simple identifiers, check directly. For complex
+                        // expressions (e.g., "x + 1", "obj.field"), extract leading identifier.
+                        let ident = var_name.split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .next()
+                            .unwrap_or("");
+                        if !ident.is_empty()
+                            && !self.param_names.contains(ident)
+                            && !self.local_names.contains(ident)
+                            && !self.seen.contains(ident)
+                        {
+                            if let Some((local_id, type_id)) = self.ctx.lookup_local(ident) {
+                                self.seen.insert(ident.to_string());
+                                self.found.push((ident.to_string(), type_id, local_id));
+                            }
+                        }
+                    }
+                }
+            }
             Expr::Closure { body, .. } => {
                 // Don't descend into nested closures — they have their own captures
                 let _ = body;

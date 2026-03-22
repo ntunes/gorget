@@ -15133,6 +15133,21 @@ done",
     );
 }
 
+#[test]
+fn closure_fstring_capture() {
+    run_gg(
+        "closure_fstring_capture.gg",
+        "\
+hello world
+hello gorget
+3 * 10 = 30
+7 * 10 = 70
+item 1
+item 2
+item 3",
+    );
+}
+
 // ── Batch 6: Concurrency & error handling ────────────────────────────
 
 #[test]
