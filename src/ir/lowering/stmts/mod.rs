@@ -232,7 +232,7 @@ fn lower_var_decl(
             // Auto-propagate: if operand is Result-typed but the declared type is not Result,
             // unwrap it (propagating errors) so the binding gets the Ok value.
             // NOTE: must run before restoring expected_type so the guard sees gir_type.
-            let operand = maybe_auto_propagate(ctx, builder, operand);
+            let mut operand = maybe_auto_propagate(ctx, builder, operand);
             ctx.expected_type = prev_expected;
             // If this was a Spawn expression, register the task local → spawned fn mapping
             if let Some(fn_name) = ctx.spawn.pending_fn.take() {
@@ -275,18 +275,25 @@ fn lower_var_decl(
                     ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
                 }
             }
-            // T & reference propagation: if the RHS operand is Ptr(T) (from a
-            // collection borrowing read) but the local has a non-Ptr type (from
-            // explicit annotation), override the local's type to Ptr(T).
-            // This ensures: no drop emitted, field/method access uses pointee_type().
+            // Ptr(T) → T auto-clone: if the operand is Ptr(T) (from an index read
+            // or borrowed param) and the declared type is T (explicit annotation),
+            // auto-clone to produce an owned value. If the type is inferred (auto),
+            // the Ptr propagation in needs_reinfer already keeps it as Ptr(T).
             if !needs_reinfer {
                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
-                if let Some(GirType::Ptr(_)) = ctx.type_registry.get(inferred) {
+                if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(inferred).cloned() {
                     if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
-                        builder.locals[local_id.0 as usize].type_id = inferred;
-                        ctx.register_local(name, local_id, inferred);
-                        ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
-                        ctx.ref_locals.insert(local_id);
+                        // Explicit T declaration, operand is Ptr(T) → auto-clone
+                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                            let cloned = builder.call(&clone_fn, vec![operand.clone()], inner);
+                            operand = FunctionBuilder::copy(cloned);
+                        } else {
+                            // No clone function — fall back to Ptr propagation
+                            builder.locals[local_id.0 as usize].type_id = inferred;
+                            ctx.register_local(name, local_id, inferred);
+                            ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
+                            ctx.ref_locals.insert(local_id);
+                        }
                     }
                 }
             }

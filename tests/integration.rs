@@ -2993,6 +2993,19 @@ fn borrow_param_mut_store_error() {
 }
 
 #[test]
+fn index_ref_auto_clone() {
+    run_gg(
+        "index_ref_auto_clone.gg",
+        "\
+21
+3
+4
+3
+done",
+    );
+}
+
+#[test]
 fn borrow_param_positive() {
     run_gg(
         "borrow_param_positive.gg",

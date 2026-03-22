@@ -2239,7 +2239,17 @@ pub(super) fn lower_index_access(
             // Try to infer element type from collection type name
             infer_collection_element_type(ctx, base_type)
         };
-        let dst = builder.index_load(place.clone(), idx, elem_type);
+        // Resource-type elements: return Ptr(T) reference into collection.
+        // Auto-clone at use site when T is expected (VarDecl, return, move call).
+        // Exception: Task elements are consumed on await, not borrowed.
+        let is_task = matches!(ctx.type_registry.get(elem_type),
+            Some(GirType::Named(n)) if n.starts_with("Task__"));
+        let result_type = if !is_task && ctx.type_registry.is_resource_type(elem_type) {
+            ctx.type_registry.insert(GirType::Ptr(elem_type))
+        } else {
+            elem_type
+        };
+        let dst = builder.index_load(place.clone(), idx, result_type);
         return FunctionBuilder::copy(dst);
     }
 

@@ -1624,7 +1624,13 @@ impl<'a> FuncLowering<'a> {
                         args: vec![base_val, idx],
                     });
                     // gorget_array_get / gorget_map_get return void* pointing to the element.
-                    // Dereference it to get the actual element value.
+                    // If dst is Ptr(T), return the raw pointer (borrowed reference).
+                    let dst_gir_type = self.gir_func.locals[dst.0 as usize].type_id;
+                    if matches!(self.gir_types.get(dst_gir_type), Some(GirType::Ptr(_))) {
+                        self.store_to_local(*dst, ptr_val, bb);
+                        return;
+                    }
+                    // Otherwise dereference to get the actual element value.
                     let dst_slot = self.local_to_slot[dst.0 as usize];
                     let mut elem_ty = self.lir_func.slots[dst_slot.0 as usize].ty.clone();
                     // Closures are 16 bytes (GorgetClosure) but may be typed as I64 in LIR.

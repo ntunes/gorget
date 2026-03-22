@@ -555,6 +555,27 @@ impl<'a> LoweringContext<'a> {
         self.is_ref_param(base_type, ownership) || self.is_mut_ref_param(base_type, ownership)
     }
 
+    /// Return the clone function name for a Ptr(T) → T conversion (auto-clone).
+    /// Maps resource type names to their runtime clone functions.
+    pub fn clone_fn_for_ptr(&self, inner_type: TypeId) -> Option<String> {
+        use crate::ir::types::GirType;
+        if let Some(GirType::Named(name)) = self.type_registry.get(inner_type) {
+            if name.starts_with("Vector__") || name.starts_with("Deque__") || name == "GorgetArray" {
+                return Some("gorget_array_clone".to_string());
+            }
+            if name.starts_with("Dict__") || name.starts_with("HashMap__") || name == "GorgetMap" {
+                return Some("gorget_map_clone".to_string());
+            }
+            if name.starts_with("Set__") || name.starts_with("HashSet__") || name == "GorgetSet" {
+                return Some("gorget_set_clone".to_string());
+            }
+            if name == "GorgetString" {
+                return Some("gorget_string_clone".to_string());
+            }
+        }
+        None
+    }
+
     /// If the given local came from a resource-type field load, emit MoveZero for the
     /// source field to prevent double-free. Call this whenever a field_load temp is
     /// consumed (via assignment, function call, push, etc.).
