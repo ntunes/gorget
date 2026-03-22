@@ -29,3 +29,31 @@ void main():
                 print(f"even: {x}")
             case x:
                 print(f"odd: {x}")
+
+    # guards on enum variant patterns — binding must be visible in body
+    Option[int] a = Some(42)
+    match a:
+        case Some(v) if v > 10:
+            print(f"big: {v}")
+        case Some(v):
+            print(f"small: {v}")
+        case None:
+            print("none")
+
+    Option[int] b = Some(3)
+    match b:
+        case Some(v) if v > 10:
+            print(f"big: {v}")
+        case Some(v):
+            print(f"small: {v}")
+        case None:
+            print("none")
+
+    Option[int] c = None
+    match c:
+        case Some(v) if v > 10:
+            print(f"big: {v}")
+        case Some(v):
+            print(f"small: {v}")
+        case None:
+            print("none")

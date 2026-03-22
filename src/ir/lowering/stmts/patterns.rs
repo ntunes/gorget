@@ -53,6 +53,9 @@ pub(super) fn lower_match_stmt(
             builder.branch(guard_cond, arm_body_bb, next_test_bb);
 
             builder.switch_to(arm_body_bb);
+            // Re-emit bindings in the body block — the guard block's SSA values
+            // aren't visible here (different basic block).
+            emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
             lower_expr(ctx, builder, &arm.body);
             if builder.is_terminated() {
                 // Return/break/continue already emitted early-exit drops — don't double-drop.
