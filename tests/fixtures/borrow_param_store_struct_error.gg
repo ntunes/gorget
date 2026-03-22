@@ -1,0 +1,11 @@
+from std.collections import Vector
+
+struct Wrapper:
+    Vector[int] data
+
+Wrapper wrap(Vector[int] v):
+    return Wrapper(v)
+
+void main():
+    Vector[int] items = [1, 2, 3]
+    Wrapper w = wrap(items)

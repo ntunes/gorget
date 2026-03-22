@@ -1,0 +1,8 @@
+from std.collections import Vector
+
+Vector[int] identity(Vector[int] v):
+    return v
+
+void main():
+    Vector[int] items = [1, 2, 3]
+    Vector[int] copy = identity(items)

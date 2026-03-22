@@ -2953,6 +2953,30 @@ fn const_assign_error() {
 }
 
 #[test]
+fn borrow_param_store_struct_error() {
+    check_gg_fails(
+        "borrow_param_store_struct_error.gg",
+        "cannot store immutable parameter in a struct",
+    );
+}
+
+#[test]
+fn borrow_param_return_error() {
+    check_gg_fails(
+        "borrow_param_return_error.gg",
+        "cannot return immutable parameter",
+    );
+}
+
+#[test]
+fn borrow_param_variant_error() {
+    check_gg_fails(
+        "borrow_param_variant_error.gg",
+        "cannot store immutable parameter in a constructor",
+    );
+}
+
+#[test]
 fn mutable_borrow_params() {
     run_gg(
         "mutable_borrow_params.gg",
