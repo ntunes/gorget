@@ -108,6 +108,26 @@ for x in v:
     print(f"{x}")      # iterate
 ```
 
+### Index Access and Ownership
+
+`v[i]` borrows the element — it doesn't remove it from the vector. For simple types like `int` or `bool`, the value is just copied. For resource types like `Vector` or `String`, assigning the result to a variable auto-clones:
+
+```gorget
+Vector[Vector[int]] matrix = [[1, 2, 3], [4, 5, 6]]
+Vector[int] row = matrix[0]    # auto-clones — matrix still has both rows
+print(f"{row.len()}")          # 3
+print(f"{matrix.len()}")       # still 2
+```
+
+To move an element out (no clone), use a consuming method:
+
+```gorget
+Vector[int] first = matrix.remove(0)   # removes row 0, shifts row 1 down
+print(f"{matrix.len()}")               # now 1
+```
+
+Other consuming methods: `pop()` removes the last element, `insert(i, !val)` inserts at a position.
+
 ### Membership
 
 ```gorget

@@ -2222,6 +2222,32 @@ The guideline: if a caller can reasonably trigger the failure case through norma
 
 Convenience wrappers that provide inline fallbacks (`get_or`, `get_or_put`, `unwrap_or`) return `T` directly — the caller has already decided what to do on absence.
 
+#### Index Access Ownership
+
+Subscript read (`v[i]`) returns a **mutable borrow** (`&T`) of the element in place. The element is not moved out of the collection and not copied — the caller gets a reference to the original. This is the same model as Rust's `Index`/`IndexMut` traits.
+
+What happens next depends on how the borrow is used:
+
+| Usage | Semantics | Example |
+|-------|-----------|---------|
+| Read through the reference | Zero-cost borrow | `print(v[0])` |
+| Assign to an owned variable | Auto-clone | `Vector[int] row = matrix[0]` |
+| Call a mutating method | Mutate in place | `matrix[0].push(4)` |
+| Pass to a function taking `&` | Pass the borrow | `process(&matrix[0])` |
+
+**Auto-clone on assignment:** When a `&T` is assigned to an owned `T` variable and `T` is a resource type (Vector, Dict, Set, String), the compiler inserts an implicit `.clone()`. This preserves Python-like ergonomics — users don't need to write `.clone()` explicitly for common patterns like `Vector[int] row = matrix[0]`. The cost (a deep copy) is real but hidden for readability. Use `v.remove(i)` or `v.pop()` to take ownership without cloning.
+
+**Consuming element access:** To move an element out of a collection (transferring ownership), use a consuming method instead of subscript:
+
+```gorget
+Vector[int] row = matrix.remove(0)   # removes and returns — no clone
+Option[int] last = v.pop()           # removes last — no clone
+```
+
+**Subscript write** (`v[i] = val`) drops the existing element and moves `!val` into the slot. `v.insert(i, !val)` shifts elements right and moves `!val` in.
+
+**Design rationale:** This follows Rust's principle that indexing borrows, explicit methods consume. Gorget adds auto-clone on the borrow-to-owned boundary to avoid requiring `.clone()` at every read site — a deliberate trade-off of explicitness for ergonomics, consistent with Gorget's "Python-like surface, Rust-like safety" philosophy.
+
 ---
 
 ## 25. The `with` Statement (Scoped Resource Management)

@@ -1529,11 +1529,32 @@ pair.0
 index_expr = expr "[" expr "]" ;
 ```
 
-Accesses an element by index.
+Accesses an element by index. Subscript read returns a **mutable borrow** of the element — the element stays in the collection.
 
 ```gorget
-arr[0]
-map["key"]
+arr[0]              # borrows element at index 0
+map["key"]          # borrows value for "key"
+```
+
+For resource types (Vector, Dict, Set, String), assigning the result to an owned variable auto-clones:
+
+```gorget
+Vector[Vector[int]] matrix = [[1, 2], [3, 4]]
+Vector[int] row = matrix[0]       # auto-clones — matrix keeps original
+matrix[0].push(5)                 # mutates in place — no clone
+```
+
+To take ownership (move out without cloning), use consuming methods:
+
+```gorget
+Vector[int] row = matrix.remove(0)   # removes element, returns owned
+Option[int] last = v.pop()           # removes last, returns owned
+```
+
+Subscript write drops the old element and moves the new value in:
+
+```gorget
+v[0] = new_value    # drops old v[0], moves !new_value into slot
 ```
 
 ### 7.10 Range Expressions
