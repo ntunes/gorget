@@ -286,7 +286,7 @@ fn lower_var_decl(
                         builder.locals[local_id.0 as usize].type_id = inferred;
                         ctx.register_local(name, local_id, inferred);
                         ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
-                        ctx.collection_ref_locals.insert(local_id);
+                        ctx.ref_locals.insert(local_id);
                     }
                 }
             }
@@ -295,7 +295,7 @@ fn lower_var_decl(
                 let actual = builder.locals[local_id.0 as usize].type_id;
                 if let Some(GirType::Ptr(_)) = ctx.type_registry.get(actual) {
                     if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
-                        ctx.collection_ref_locals.insert(local_id);
+                        ctx.ref_locals.insert(local_id);
                     }
                 }
             }
@@ -682,7 +682,7 @@ fn lower_return(
                                 if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
                                     builder.locals[0].type_id = src_type;
                                     builder.return_type = src_type;
-                                    ctx.collection_ref_locals.insert(LocalId(0));
+                                    ctx.ref_locals.insert(LocalId(0));
                                 }
                             }
                         }

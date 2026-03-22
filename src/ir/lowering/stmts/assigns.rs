@@ -384,6 +384,7 @@ pub(super) fn lower_index_assign(
     // Use the resolved field type if we resolved through a field access,
     // since infer_operand_type_full doesn't walk projections.
     let obj_type = resolved_field_type.unwrap_or_else(|| infer_operand_type_full(ctx, &obj, builder));
+    let obj_type = ctx.pointee_type(obj_type).unwrap_or(obj_type);
     let type_name = ctx.type_name_for_id(obj_type).unwrap_or("").to_string();
     let is_vector = type_name.starts_with("Vector__") || type_name == "GorgetArray";
     let is_dict = type_name.starts_with("Dict__") || type_name.starts_with("HashMap__")
@@ -762,6 +763,7 @@ pub(super) fn lower_compound_assign(
 
         let idx_raw = lower_expr(ctx, builder, index);
         let obj_type = resolved_field_type.unwrap_or_else(|| infer_operand_type_full(ctx, &obj, builder));
+        let obj_type = ctx.pointee_type(obj_type).unwrap_or(obj_type);
         let type_name = ctx.type_name_for_id(obj_type).unwrap_or("").to_string();
         let is_vector = type_name.starts_with("Vector__") || type_name == "GorgetArray";
         let is_dict = type_name.starts_with("Dict__") || type_name.starts_with("HashMap__")

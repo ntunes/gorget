@@ -1120,7 +1120,7 @@ fn lower_static_trait_method(
         ctx.register_local(&p.node.name.node, LocalId(param_idx), *gir_type);
         let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
         if ctx.is_ref_param(base_type, p.node.ownership) {
-            ctx.ref_locals.insert(LocalId(param_idx), base_type);
+            ctx.ref_locals.insert(LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }

@@ -97,10 +97,10 @@ fn lower_expr_inner(
                         SharedLocalKind::RwLock => emit_rwlock_read_get(ctx, builder, hidden_local, inner_type),
                     };
                 }
-                // If this is a ref/mut-ref param (pointer), deref to get the value
-                if let Some(&value_type) = ctx.ref_locals.get(&local_id)
-                    .or_else(|| ctx.mut_capture_locals.get(&local_id))
-                {
+                // If this is a &/! param (MutPtr), deref to get the value.
+                // ref_locals (bare-borrow Ptr params) are NOT auto-deref'd —
+                // they stay as Ptr throughout the callee body.
+                if let Some(&value_type) = ctx.mut_capture_locals.get(&local_id) {
                     let deref_place = Place {
                         local: local_id,
                         projections: vec![Projection::Deref],
@@ -197,7 +197,7 @@ fn lower_expr_inner(
             // Skip the auto-deref that Identifier normally does — just forward the pointer.
             if let Expr::Identifier(name) = &inner.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name) {
-                    if ctx.ref_locals.contains_key(&local_id)
+                    if ctx.ref_locals.contains(&local_id)
                         || ctx.mut_capture_locals.contains_key(&local_id)
                     {
                         return FunctionBuilder::copy(local_id);

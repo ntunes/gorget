@@ -208,7 +208,7 @@ pub struct Function {
     pub inner_shared_spawns: Vec<InnerSharedSpawn>,
     /// Locals that are T & references from collection borrowing reads.
     /// The LIR lowering uses SlotLoad instead of SlotAddr for these.
-    pub collection_ref_locals: rustc_hash::FxHashSet<LocalId>,
+    pub ref_locals: rustc_hash::FxHashSet<LocalId>,
 }
 
 /// Metadata for an inner spawn call inside a function that may need rewriting
@@ -321,7 +321,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            collection_ref_locals: rustc_hash::FxHashSet::default(),
+            ref_locals: rustc_hash::FxHashSet::default(),
         });
         assert_eq!(module.functions.len(), 1);
         let f = module.find_function("main").unwrap();

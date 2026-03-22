@@ -74,7 +74,7 @@ pub fn lower_function(
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.register_local(&p.node.name.node, local_id, gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
-            ctx.ref_locals.insert(local_id, base_type);
+            ctx.ref_locals.insert(local_id);
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             ctx.mut_capture_locals.insert(local_id, base_type);
         }
@@ -198,7 +198,7 @@ pub fn lower_function(
     let mut func = builder.build();
     func.display_name = Some(name.to_string());
     func.def_span = Some(func_span);
-    func.collection_ref_locals = ctx.collection_ref_locals.clone();
+    func.ref_locals = ctx.ref_locals.clone();
     module.functions.push(func);
 }
 
@@ -269,7 +269,7 @@ pub fn lower_equip_method(
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
-            ctx.ref_locals.insert(LocalId(param_idx), base_type);
+            ctx.ref_locals.insert(LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }
@@ -357,7 +357,7 @@ pub fn lower_equip_method(
 
     let mut func = builder.build();
     func.display_name = Some(format!("{type_name}.{method_name}"));
-    func.collection_ref_locals = ctx.collection_ref_locals.clone();
+    func.ref_locals = ctx.ref_locals.clone();
     module.functions.push(func);
 }
 
@@ -514,7 +514,7 @@ pub fn lower_generic_function(
         let gir_type = ctx.resolve_param_type(base_type, ownership);
         ctx.register_local(&p.node.name.node, local_id, gir_type);
         if ctx.is_ref_param(base_type, ownership) {
-            ctx.ref_locals.insert(local_id, base_type);
+            ctx.ref_locals.insert(local_id);
         } else if ctx.is_mut_ref_param(base_type, ownership) {
             ctx.mut_capture_locals.insert(local_id, base_type);
         }
@@ -728,7 +728,7 @@ pub fn lower_generic_equip_methods_with_defaults(
             let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
             ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
             if ctx.is_ref_param(base_type, p.node.ownership) {
-                ctx.ref_locals.insert(LocalId(param_idx), base_type);
+                ctx.ref_locals.insert(LocalId(param_idx));
             } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
                 ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
             }

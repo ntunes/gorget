@@ -3352,7 +3352,7 @@ impl<'a> FuncLowering<'a> {
         // - With Deref projection: use SlotAddr — the Deref loads the pointer
         // - Without Deref: use SlotLoad — directly provides the pointer value
         //   (needed for borrows, method calls, indexing on the Ptr variable)
-        let is_ref_local = self.gir_func.collection_ref_locals.contains(&place.local);
+        let is_ref_local = self.gir_func.ref_locals.contains(&place.local);
         let has_deref = place.projections.first() == Some(&Projection::Deref);
         if is_ref_local && !has_deref {
             self.lir_func
@@ -5318,7 +5318,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            collection_ref_locals: rustc_hash::FxHashSet::default(),
+            ref_locals: rustc_hash::FxHashSet::default(),
         };
         module.functions.push(func);
         module
@@ -5393,7 +5393,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            collection_ref_locals: rustc_hash::FxHashSet::default(),
+            ref_locals: rustc_hash::FxHashSet::default(),
         };
         module.functions.push(func);
 
@@ -5426,7 +5426,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            collection_ref_locals: rustc_hash::FxHashSet::default(),
+            ref_locals: rustc_hash::FxHashSet::default(),
         });
         module.functions.push(Function {
             name: "caller".into(),
@@ -5451,7 +5451,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            collection_ref_locals: rustc_hash::FxHashSet::default(),
+            ref_locals: rustc_hash::FxHashSet::default(),
         });
 
         let lir = lower_module(&module);
@@ -5497,7 +5497,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            collection_ref_locals: rustc_hash::FxHashSet::default(),
+            ref_locals: rustc_hash::FxHashSet::default(),
         });
 
         let lir = lower_module(&module);
@@ -5546,7 +5546,7 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            collection_ref_locals: rustc_hash::FxHashSet::default(),
+            ref_locals: rustc_hash::FxHashSet::default(),
         });
 
         let lir = lower_module(&module);

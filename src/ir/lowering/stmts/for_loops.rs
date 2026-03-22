@@ -48,6 +48,25 @@ pub(super) fn lower_for(
     let iter_op = lower_expr(ctx, builder, iterable);
     let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
 
+    // If the iterable is a Ptr (borrowed resource param), deref to get the value
+    // for iteration. The iter_local is not drop-registered (read-only view), so
+    // the shallow copy is safe — the caller still owns the heap data.
+    let (iter_op, iter_type) = if let Some(inner) = ctx.pointee_type(iter_type) {
+        if let Operand::Copy(ref p) | Operand::Move(ref p) = iter_op {
+            let deref_place = Place {
+                local: p.local,
+                projections: vec![Projection::Deref],
+            };
+            let tmp = builder.add_local(inner, None);
+            builder.assign(Place::local(tmp), Operand::Copy(deref_place));
+            (Operand::Copy(Place::local(tmp)), inner)
+        } else {
+            (iter_op, iter_type)
+        }
+    } else {
+        (iter_op, iter_type)
+    };
+
     // Extract the binding name (or use a temp for pattern destructuring)
     let var_name = if let Pattern::Binding(name) = &pattern.node {
         name.clone()
@@ -63,6 +82,7 @@ pub(super) fn lower_for(
             let local_idx = p.local.0 as usize;
             if local_idx < builder.locals.len() {
                 let tid = builder.locals[local_idx].type_id;
+                let tid = ctx.pointee_type(tid).unwrap_or(tid);
                 if let Some(GirType::Named(name)) = ctx.type_registry.get(tid) {
                     if name.starts_with("GorgetArray") || name.starts_with("Vector__") {
                         Some("array")

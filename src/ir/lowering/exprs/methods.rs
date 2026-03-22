@@ -211,7 +211,7 @@ pub(super) fn lower_method_call(
     // Auto-deref would copy the struct, and mutations to the copy wouldn't propagate back.
     let borrow_param_local = if let Expr::Identifier(name) = &receiver.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
-            if ctx.ref_locals.contains_key(&local_id)
+            if ctx.ref_locals.contains(&local_id)
                 || ctx.mut_capture_locals.contains_key(&local_id)
             {
                 Some(local_id)
@@ -390,7 +390,7 @@ pub(super) fn lower_method_call(
                     // T & reference: keep as Ptr for ALL types — the variable
                     // borrows from the collection. No copy, no clone, no
                     // double-free risk. The var decl lowering will propagate the
-                    // Ptr type to the named local via collection_ref_locals.
+                    // Ptr type to the named local via ref_locals.
                     // Field/method access uses pointee_type() + Deref naturally.
                     return FunctionBuilder::copy(dst);
                 }
@@ -1554,19 +1554,6 @@ pub(super) fn lower_method_call(
             ctx.drops.mark_moved(place.local);
         }
 
-        // Unregister collection locals passed by value (same as calls.rs).
-        for arg in args.iter() {
-            if !matches!(arg.node.ownership, Ownership::Borrow) { continue; }
-            if let Expr::Identifier(name) = &arg.node.value.node {
-                if let Some((local_id, _)) = ctx.lookup_local(name) {
-                    let local_type = builder.locals[local_id.0 as usize].type_id;
-                    if ctx.type_registry.is_collection_type(local_type) {
-                        ctx.drops.unregister(local_id);
-                    }
-                }
-            }
-        }
-
         // Zero source fields for resource-type args that came from field loads.
         // This handles e.g. items.push(h.data) where the C backend zeros the temp
         // but not the source field h.data — the struct's scope-end drop would
@@ -2262,6 +2249,7 @@ pub(super) fn lower_index_access(
 /// Infer the element type of a collection from its TypeId.
 /// Returns the element TypeId, or I64_TYPE if unknown.
 pub(in crate::ir::lowering) fn infer_collection_element_type(ctx: &mut LoweringContext, collection_type: TypeId) -> TypeId {
+    let collection_type = ctx.pointee_type(collection_type).unwrap_or(collection_type);
     if let Some(GirType::Named(name)) = ctx.type_registry.get(collection_type).cloned() {
         // Vector__T → look up T as a type
         if let Some(elem_name) = name.strip_prefix("Vector__") {

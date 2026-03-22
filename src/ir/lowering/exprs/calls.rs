@@ -62,7 +62,7 @@ pub(super) fn lower_call_arg(
                         Some(GirType::MutPtr(_)) | Some(GirType::Ptr(_))
                     )
                 };
-                if ctx.ref_locals.contains_key(&local_id)
+                if ctx.ref_locals.contains(&local_id)
                     || ctx.mut_capture_locals.contains_key(&local_id)
                     || is_already_ptr
                 {
@@ -108,6 +108,11 @@ pub(super) fn lower_call_arg(
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 if place.projections.is_empty() {
                     let local_type = builder.locals[place.local.0 as usize].type_id;
+                    // Already a Ptr (borrowed resource param) — forward directly,
+                    // don't wrap in another Ptr layer.
+                    if matches!(ctx.type_registry.get(local_type), Some(GirType::Ptr(_))) {
+                        return FunctionBuilder::copy(place.local);
+                    }
                     if use_mut_ptr {
                         let ptr_type = ctx.register_mut_ptr_type(local_type);
                         let dst = builder.add_local(ptr_type, None);
@@ -818,23 +823,6 @@ pub(super) fn lower_call(
             ctx.drops.mark_moved(place.local);
         }
 
-        // Unregister collection locals passed by value: the callee may store
-        // a shallow copy sharing the same data pointer. The borrow checker
-        // catches struct constructor and return cases; this covers remaining
-        // paths (method calls on struct fields, etc.) until full move
-        // semantics enforcement is complete.
-        for arg in resolved_args.iter() {
-            if !matches!(arg.node.ownership, Ownership::Borrow) { continue; }
-            if let Expr::Identifier(name) = &arg.node.value.node {
-                if let Some((local_id, _)) = ctx.lookup_local(name) {
-                    let local_type = builder.locals[local_id.0 as usize].type_id;
-                    if ctx.type_registry.is_collection_type(local_type) {
-                        ctx.drops.unregister(local_id);
-                    }
-                }
-            }
-        }
-
         result
     } else if let Expr::Closure { params, body, is_move, .. } = &callee.node {
         // IIFE: ((int x): x * x)(5) — inline closure called immediately
@@ -988,10 +976,8 @@ pub(super) fn lower_interp_segment(
 ) {
     // 1. Try simple variable lookup first
     if let Some((local_id, type_id)) = ctx.lookup_local(var_name) {
-        // If this is a ref/mut-ref pointer param, deref to get the value
-        if let Some(&value_type) = ctx.ref_locals.get(&local_id)
-            .or_else(|| ctx.mut_capture_locals.get(&local_id))
-        {
+        // If this is a &/! param (MutPtr), deref to get the value
+        if let Some(&value_type) = ctx.mut_capture_locals.get(&local_id) {
             let deref_place = Place {
                 local: local_id,
                 projections: vec![Projection::Deref],
