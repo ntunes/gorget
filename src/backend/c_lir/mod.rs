@@ -4974,13 +4974,14 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 // store the pointer directly instead of dereferencing. The reference
                 // borrows from the collection; no clone or drop needed.
                 let payload_is_ptr = matches!(payload_ty, Some(LirType::Ptr));
-                // For resource-type payloads, clone to avoid double-free when both
-                // the collection and the extracted element are dropped. This leaks
-                // the clone (GIR doesn't drop collection-read results), but is safe.
-                // Phase 6 (Collection Resource Semantics) will replace this with
-                // proper borrow tracking + Ptr payloads to eliminate the leak.
-                let clone_fn = if payload_is_ptr {
-                    None // Option[T &] with Ptr payload — borrowed, no clone needed
+                // For resource-type payloads from borrowing reads (get/first/last),
+                // clone to avoid double-free. For consuming methods (pop/remove),
+                // the element is already removed from the collection — no clone needed.
+                let is_consuming = matches!(call_name,
+                    "gorget_array_safe_pop" | "gorget_array_remove_opt"
+                    | "gorget_map_remove" | "gorget_set_remove");
+                let clone_fn = if payload_is_ptr || is_consuming {
+                    None // Ptr payload (borrowed) or consuming method (moved out)
                 } else {
                     match payload_c.as_str() {
                         "GorgetArray" => Some("gorget_array_clone"),
