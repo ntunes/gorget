@@ -348,6 +348,48 @@ This rule ensures that resource-type values always have exactly one owner. If yo
 
 **Trivial types** pass by value regardless of sigils (except `&` on primitives, which creates a mutable pointer for out-params).
 
+**Collection element access returns references:**
+
+Indexing a collection (`v[i]`, `dict[key]`) returns a reference to the element in-place, not a copy. This is the same mechanism as borrowed parameters — the value stays as a pointer internally, and methods/field access resolve through it at zero cost:
+
+```gorget
+Vector[Vector[int]] matrix = [[1, 2], [3, 4]]
+
+# auto → reference (Ptr), zero cost — no clone
+auto row = matrix[0]
+print(row.len())         # reads through pointer
+
+# Method call directly on index — no intermediate copy
+print(matrix[1].len())
+
+# for-loop over referenced element — iterates through pointer
+for x in matrix[0]:
+    print(x)
+```
+
+**Auto-clone on type context:**
+
+When a reference (`Ptr(T)`) is used where an owned value (`T`) is expected, the compiler automatically inserts a clone. The type annotation is the signal — `auto` gives the fast path (reference), explicit type gives an owned copy:
+
+```gorget
+# auto → reference, zero cost
+auto row_ref = matrix[0]
+
+# Explicit type → auto-clone, produces independent owned copy
+Vector[int] row_copy = matrix[0]
+row_copy.push(5)          # modifying the copy
+print(matrix[0].len())    # original unchanged — 2, not 3
+
+# Move (!) of a reference → auto-clone for ownership transfer
+consume(!row_ref)
+
+# Return from function with T return type → auto-clone
+Vector[int] get_first(Vector[Vector[int]] m):
+    return m[0]            # auto-clones for owned return
+```
+
+This follows the same principle as Result auto-propagation: the compiler does the right thing based on type context. No `.clone()` calls, no special sigils — the type annotation communicates intent.
+
 ### 3.3 Ownership (Move Semantics)
 
 For Resource types (String, Vector, etc.), assignment with `!` moves:
