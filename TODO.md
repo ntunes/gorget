@@ -11,7 +11,7 @@
 
 - **Self-host parser: 794/797 matched, 3 mismatched, 0 crashed** — Remaining 3: null byte in chars.gg (1), str/String source alias in dataframe_nulls.gg (1), float literal precision in fstring_format.gg (1). All unfixable at self-host level. [updated: 2026-03-21]
 
-- **Nested pattern matching codegen bug**: Nested enum patterns (e.g., `Outer.Wrap(Inner.B(n))`) match the wrong variant — the discriminant check is missing for the inner enum, so `Inner.B(99)` matches as `Inner.A(0)`. Similarly `Some(None)` matches as `Some(Some(0))`. Also: `char` type is broken at backend level — `char as int` gives garbage values, and char comparison with `==`/`!=` generates `gorget_str_eq` calls. [added: 2026-03-21]
+- **`char` type backend bugs**: `char as int` gives garbage values, and char comparison with `==`/`!=` generates `gorget_str_eq` calls. [added: 2026-03-21]
 
 ## Medium
 

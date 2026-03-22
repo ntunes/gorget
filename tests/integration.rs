@@ -14974,7 +14974,10 @@ fn match_nested_enum() {
         "match_nested_enum.gg",
         "\
 some red
+some green
 no color
+circle r=5
+rect 3x4
 ok: 42
 err: oops",
     );

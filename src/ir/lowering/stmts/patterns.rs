@@ -153,31 +153,117 @@ pub fn lower_pattern_condition(
             FunctionBuilder::const_bool(true)
         }
 
-        Pattern::Constructor { path, .. } => {
+        Pattern::Constructor { path, fields } => {
             let variant_name = if let Some(last) = path.last() {
                 last.node.clone()
             } else {
                 return FunctionBuilder::const_bool(true);
             };
-            // Qualified path (Color.Red): use first segment as enum name
+            // Qualified path (Color.Red): use first segment as enum name.
+            // Bare variant (Some, None, Ok, Error): prefer scrutinee type name
+            // to avoid ambiguity when multiple monomorphizations exist.
             let (enum_name, variant_name) = if path.len() >= 2 {
                 (path[0].node.clone(), variant_name)
             } else {
-                // Bare variant: look up via enum_variants (prelude: Ok, Error, Some, None)
-                match ctx.resolve_enum_variant(&variant_name) {
-                    Some((en, vn)) => (en, vn),
+                let en = ctx.type_registry.type_name(scrut_type)
+                    .or_else(|| {
+                        if let Some(GirType::Ptr(inner) | GirType::MutPtr(inner)) = ctx.type_registry.get(scrut_type).cloned() {
+                            ctx.type_registry.type_name(inner)
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| ctx.resolve_enum_variant(&variant_name).map(|(en, _)| en));
+                match en {
+                    Some(en) => (en, variant_name),
                     None => return FunctionBuilder::const_bool(true),
                 }
             };
             let tag = builder.tag_of(FunctionBuilder::copy(scrut_local));
             if let Some(variant_tag) = ctx.resolve_variant_tag(&enum_name, &variant_name) {
-                let cmp = builder.cmp(
+                let tag_cmp = builder.cmp(
                     CmpOp::Eq,
                     I32_TYPE,
                     FunctionBuilder::copy(tag),
                     Operand::Constant(Constant::I32(variant_tag as i32)),
                 );
-                return FunctionBuilder::copy(cmp);
+
+                // Check whether any sub-pattern needs a nested condition check (e.g.,
+                // Outer.Wrap(Inner.A(n)) must also check Inner's discriminant).
+                let has_nested = fields.iter().any(|fp|
+                    !matches!(fp.node, Pattern::Binding(_) | Pattern::Wildcard | Pattern::Rest)
+                );
+
+                if !has_nested {
+                    return FunctionBuilder::copy(tag_cmp);
+                }
+
+                // Short-circuit: only check inner patterns when the outer tag matches.
+                // This avoids extracting fields from the wrong variant.
+                let result_id = builder.add_local(BOOL_TYPE, None);
+                let inner_bb = builder.new_block();
+                let merge_bb = builder.new_block();
+                let false_bb = builder.new_block();
+
+                builder.branch(FunctionBuilder::copy(tag_cmp), inner_bb, false_bb);
+
+                // false_bb: outer tag didn't match → result = false
+                builder.switch_to(false_bb);
+                builder.assign(Place::local(result_id), FunctionBuilder::const_bool(false));
+                builder.jump(merge_bb);
+
+                // inner_bb: outer tag matched → check nested sub-patterns
+                builder.switch_to(inner_bb);
+                let mut inner_result: Option<LocalId> = None;
+                for (i, field_pat) in fields.iter().enumerate() {
+                    if matches!(field_pat.node, Pattern::Binding(_) | Pattern::Wildcard | Pattern::Rest) {
+                        continue;
+                    }
+                    let field_type = ctx.type_registry.get_type_def(&enum_name)
+                        .and_then(|td| {
+                            if let TypeDefKind::Enum(ref e) = td.kind {
+                                e.variants.iter()
+                                    .find(|v| v.name == variant_name)
+                                    .and_then(|v| v.fields.get(i))
+                                    .map(|f| f.type_id)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(I64_TYPE);
+
+                    let field_local = builder.enum_field_load(
+                        Place::local(scrut_local),
+                        variant_name.clone(),
+                        i as u32,
+                        field_type,
+                    );
+                    let sub_cond = lower_pattern_condition(
+                        ctx, builder, field_pat, field_local, field_type,
+                    );
+                    inner_result = Some(match inner_result {
+                        None => {
+                            let tmp = builder.add_local(BOOL_TYPE, None);
+                            builder.assign(Place::local(tmp), sub_cond);
+                            tmp
+                        }
+                        Some(prev) => builder.bin_op(
+                            BinOp::BitAnd,
+                            BOOL_TYPE,
+                            FunctionBuilder::copy(prev),
+                            sub_cond,
+                        ),
+                    });
+                }
+                let final_inner = inner_result.map_or_else(
+                    || FunctionBuilder::const_bool(true),
+                    FunctionBuilder::copy,
+                );
+                builder.assign(Place::local(result_id), final_inner);
+                builder.jump(merge_bb);
+
+                builder.switch_to(merge_bb);
+                return FunctionBuilder::copy(result_id);
             }
             FunctionBuilder::const_bool(true)
         }
