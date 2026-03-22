@@ -1,0 +1,30 @@
+# Set with insert, contains, remove, dedup
+void main():
+    Set[int] nums = Set[int]()
+    nums.insert(1)
+    nums.insert(2)
+    nums.insert(3)
+    nums.insert(4)
+    nums.insert(5)
+    print(f"size: {nums.len()}")
+
+    # duplicate rejected
+    nums.insert(3)
+    print(f"after dup: {nums.len()}")
+
+    # contains
+    print(f"has 3: {nums.contains(3)}")
+    print(f"has 9: {nums.contains(9)}")
+
+    # remove
+    nums.remove(2)
+    print(f"after remove: {nums.len()}")
+
+    # string set
+    Set[String] words = Set[String]()
+    words.insert("hello")
+    words.insert("world")
+    words.insert("hello")
+    print(f"words: {words.len()}")
+    print(f"has hello: {words.contains("hello")}")
+    print(f"has bye: {words.contains("bye")}")

@@ -18,8 +18,16 @@ void main():
     print(f"dict empty: {d.is_empty()}")
     print(f"contains x: {d.contains("x")}")
 
+    # empty set
+    Set[int] s = Set[int]()
+    print(f"set len: {s.len()}")
+    print(f"set empty: {s.is_empty()}")
+    print(f"set has 1: {s.contains(1)}")
+
     # operations on empty then add
     v.push(42)
     print(f"after push: {v.len()}")
     d["key"] = 99
     print(f"after insert: {d.len()}")
+    s.insert(7)
+    print(f"after set insert: {s.len()}")

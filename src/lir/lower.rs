@@ -4793,6 +4793,7 @@ fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
             | "is_subset" | "is_superset"
             | "union" | "intersection" | "difference" | "symmetric_difference" => return None,
             "has" => return Some("gorget_set_contains".into()),
+            "insert" => return Some("gorget_set_add".into()),
             // Set.new() needs gorget_ordered_set_new (ordered); HashSet uses unordered.
             "new" if name.starts_with("Set__") => return Some("gorget_ordered_set_new".into()),
             "new_str" if name.starts_with("Set__") => return Some("gorget_ordered_set_new_str".into()),

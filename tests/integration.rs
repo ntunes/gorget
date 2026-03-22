@@ -15206,8 +15206,28 @@ pop empty: none
 dict len: 0
 dict empty: true
 contains x: false
+set len: 0
+set empty: true
+set has 1: false
 after push: 1
-after insert: 1",
+after insert: 1
+after set insert: 1",
+    );
+}
+
+#[test]
+fn set_insert_contains() {
+    run_gg(
+        "set_insert_contains.gg",
+        "\
+size: 5
+after dup: 5
+has 3: true
+has 9: false
+after remove: 4
+words: 2
+has hello: true
+has bye: false",
     );
 }
 
