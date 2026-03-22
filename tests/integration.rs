@@ -15181,3 +15181,96 @@ sum doubled: 110
 31",
     );
 }
+
+// ── Batch 8: Smart pointers, strings, cross-feature ──────────────────
+
+#[test]
+fn string_empty_ops() {
+    run_gg(
+        "string_empty_ops.gg",
+        "\
+len: 0
+empty: true
+contains: false
+starts: false
+ends: false
+trimmed len: 0
+parts: 1
+concat: hello
+concat2: world
+done",
+    );
+}
+
+#[test]
+fn fstring_nested_braces() {
+    run_gg(
+        "fstring_nested_braces.gg",
+        "\
+42
+{literal braces}
+50
+len=5
+msg: hello world
+10 + 20 = 30
+flag: true",
+    );
+}
+
+#[test]
+fn string_large_concat() {
+    run_gg(
+        "string_large_concat.gg",
+        "\
+len: 50
+msg: (0)(1)(2)(3)(4)
+c: hello
+d: hello",
+    );
+}
+
+#[test]
+fn enum_with_collections() {
+    run_gg(
+        "enum_with_collections.gg",
+        "\
+numbers: 3
+text: hello
+empty",
+    );
+}
+
+#[test]
+fn struct_builder_pattern() {
+    run_gg(
+        "struct_builder_pattern.gg",
+        "\
+800x600 'untitled' fs=false
+1920x1080 'game' fs=true
+800x600 'editor' fs=false",
+    );
+}
+
+#[test]
+fn match_in_async() {
+    run_gg(
+        "match_in_async.gg",
+        "\
+running
+paused
+stopped
+some: 42",
+    );
+}
+
+#[test]
+fn closure_in_spawn() {
+    run_gg(
+        "closure_in_spawn.gg",
+        "\
+9
+16
+25
+total: 50",
+    );
+}

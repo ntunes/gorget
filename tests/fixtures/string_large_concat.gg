@@ -1,0 +1,22 @@
+# Build a string incrementally — no crashes
+void main():
+    String result = ""
+    for i in 0..50:
+        result = result + "x"
+    print(f"len: {result.len()}")
+
+    # concat with different strings
+    String msg = ""
+    for i in 0..5:
+        msg = msg + f"({i})"
+    print(f"msg: {msg}")
+
+    # empty + non-empty
+    String a = ""
+    String b = "hello"
+    String c = a + b
+    print(f"c: {c}")
+
+    # non-empty + empty
+    String d = b + a
+    print(f"d: {d}")

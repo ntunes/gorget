@@ -1,0 +1,31 @@
+# All string methods on empty string — should not crash
+void main():
+    String s = ""
+
+    print(f"len: {s.len()}")
+    print(f"empty: {s.is_empty()}")
+
+    # contains on empty
+    bool has = s.contains("x")
+    print(f"contains: {has}")
+
+    # starts_with / ends_with
+    print(f"starts: {s.starts_with("a")}")
+    print(f"ends: {s.ends_with("z")}")
+
+    # trim
+    String trimmed = s.trim()
+    print(f"trimmed len: {trimmed.len()}")
+
+    # split
+    Vector[String] parts = s.split(",")
+    print(f"parts: {parts.len()}")
+
+    # concatenation with empty
+    String result = s + "hello"
+    print(f"concat: {result}")
+
+    String result2 = "world" + s
+    print(f"concat2: {result2}")
+
+    print("done")

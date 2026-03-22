@@ -1,0 +1,18 @@
+# Closures used in spawn context
+async int compute(int x):
+    return x * x
+
+async void main():
+    # spawn async functions and collect results
+    auto t1 = spawn compute(3)
+    auto t2 = spawn compute(4)
+    auto t3 = spawn compute(5)
+
+    int r1 = t1.await()
+    int r2 = t2.await()
+    int r3 = t3.await()
+
+    print(f"{r1}")
+    print(f"{r2}")
+    print(f"{r3}")
+    print(f"total: {r1 + r2 + r3}")

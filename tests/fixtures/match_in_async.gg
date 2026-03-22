@@ -1,0 +1,31 @@
+# Pattern matching inside async functions
+enum Status:
+    Active
+    Paused
+    Stopped
+
+async String check_status(Status s):
+    match s:
+        case Status.Active():
+            return "running"
+        case Status.Paused():
+            return "paused"
+        case Status.Stopped():
+            return "stopped"
+
+async void main():
+    String s1 = check_status(Status.Active()).await()
+    String s2 = check_status(Status.Paused()).await()
+    String s3 = check_status(Status.Stopped()).await()
+
+    print(s1)
+    print(s2)
+    print(s3)
+
+    # Option matching in async
+    Option[int] x = Some(42)
+    match x:
+        case Some(v):
+            print(f"some: {v}")
+        case None:
+            print("none")
