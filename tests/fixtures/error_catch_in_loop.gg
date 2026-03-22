@@ -1,0 +1,18 @@
+int parse(int x) throws String:
+    if x < 0:
+        throw f"negative: {x}"
+    return x * 10
+
+void main():
+    Vector[int] inputs = [1, -2, 3, -4, 5]
+    int total = 0
+    int errors = 0
+
+    for x in inputs:
+        int result = parse(x) catch (e):
+            errors += 1
+            0
+        total += result
+
+    print(f"total: {total}")
+    print(f"errors: {errors}")

@@ -15054,3 +15054,50 @@ fn closure_capture_mutation() {
 done",
     );
 }
+
+// ── Batch 6: Concurrency & error handling ────────────────────────────
+
+#[test]
+fn spawn_return_result() {
+    run_gg(
+        "spawn_return_result.gg",
+        "\
+25
+49
+sum: 74",
+    );
+}
+
+#[test]
+fn error_nested_catch() {
+    run_gg(
+        "error_nested_catch.gg",
+        "\
+10
+-1
+-1
+99
+42",
+    );
+}
+
+#[test]
+fn error_rethrow_type_transform() {
+    run_gg(
+        "error_rethrow_type_transform.gg",
+        "\
+ok: 84
+err: parse failed: invalid number
+err: parse failed: empty input",
+    );
+}
+
+#[test]
+fn error_catch_in_loop() {
+    run_gg(
+        "error_catch_in_loop.gg",
+        "\
+total: 90
+errors: 2",
+    );
+}

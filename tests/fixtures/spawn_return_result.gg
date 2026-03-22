@@ -1,0 +1,14 @@
+async int compute(int x):
+    return x * x
+
+async void main():
+    # spawn and await result
+    auto t1 = spawn compute(5)
+    auto t2 = spawn compute(7)
+
+    int r1 = t1.await()
+    int r2 = t2.await()
+
+    print(f"{r1}")
+    print(f"{r2}")
+    print(f"sum: {r1 + r2}")

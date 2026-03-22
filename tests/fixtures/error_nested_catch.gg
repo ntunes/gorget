@@ -1,0 +1,25 @@
+int risky(int x) throws String:
+    if x < 0:
+        throw "negative"
+    if x == 0:
+        throw "zero"
+    return x * 2
+
+void main():
+    # basic catch
+    int a = risky(5) catch (e): -1
+    print(f"{a}")
+
+    int b = risky(-3) catch (e): -1
+    print(f"{b}")
+
+    int c = risky(0) catch (e): -1
+    print(f"{c}")
+
+    # catch with expression using error
+    int d = risky(-1) catch (e): 99
+    print(f"{d}")
+
+    # catch chain: first fails, fallback also fails, final default
+    int e = risky(-1) catch (err): risky(0) catch (err2): 42
+    print(f"{e}")
