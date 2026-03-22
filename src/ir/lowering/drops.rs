@@ -158,6 +158,18 @@ impl DropElaborator {
         }
     }
 
+    /// Check whether a local has been marked as "maybe moved".
+    pub fn is_moved(&self, local: LocalId) -> bool {
+        for scope in self.scopes.iter().rev() {
+            for entry in &scope.entries {
+                if entry.local == local {
+                    return entry.maybe_moved;
+                }
+            }
+        }
+        false
+    }
+
     /// Mark a local as "maybe moved" — future drops will use DropIfAlive.
     pub fn mark_moved(&mut self, local: LocalId) {
         for scope in self.scopes.iter_mut().rev() {

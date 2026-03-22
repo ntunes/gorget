@@ -55,15 +55,17 @@ pub(super) fn lower_assign(
                     }
                 }
                 let type_id = _type_id;
-                // Check if old value needs dropping.
-                // NOTE: Collection types are excluded — the RHS may modify the target
-                // in-place through the pointer (e.g., dict = merge_into(dict, x)),
-                // making the drop-before-reassign a use-after-free. Scope-exit drop handles cleanup.
+                // Check if old value needs dropping before reassignment.
+                // For collection types (no TypeDef), only drop if the local is
+                // confirmed sole owner (was move-zero'd at VarDecl). Shallow copies
+                // from struct field reads share data and must not be freed here.
                 let needs_drop = {
                     use crate::ir::types::GirType;
                     if let Some(GirType::Named(type_name)) = ctx.type_registry.get(type_id) {
                         let type_name = type_name.clone();
-                        if let Some(type_def) = ctx.type_registry.get_type_def(&type_name) {
+                        if ctx.type_registry.is_collection_type_name(&type_name) {
+                            ctx.drops.is_moved(local_id)
+                        } else if let Some(type_def) = ctx.type_registry.get_type_def(&type_name) {
                             type_def.metadata.drop_strategy != DropStrategy::None
                         } else { false }
                     } else { false }
