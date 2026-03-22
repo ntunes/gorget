@@ -831,6 +831,11 @@ pub(super) fn lower_call(
             Operand::Constant(Constant::Unit)
         } else {
             let dst = builder.call(&call_name, lowered_args, ret_type);
+            // Register owned string results for drop at scope exit.
+            // Without this, GorgetString temps from function calls leak.
+            if ret_type == ctx.type_mapper.owned_string_type {
+                super::register_owned_string_for_drop(ctx, dst);
+            }
             FunctionBuilder::copy(dst)
         };
 

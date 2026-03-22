@@ -166,6 +166,9 @@ pub(super) fn lower_method_call(
                     return Operand::Constant(Constant::Unit);
                 }
                 let dst = builder.call(effective_name, lowered_args, ret_type);
+                if ret_type == ctx.type_mapper.owned_string_type {
+                    super::register_owned_string_for_drop(ctx, dst);
+                }
                 return FunctionBuilder::copy(dst);
             }
         }
