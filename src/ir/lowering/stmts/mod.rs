@@ -620,7 +620,7 @@ fn lower_return(
         // Auto-propagate: if returning a Result value from a throws function,
         // unwrap so the Ok-wrapping below works on the inner value.
         // NOTE: must run before restoring expected_type so the guard sees ret_type.
-        let operand = if !is_explicit_result_variant {
+        let mut operand = if !is_explicit_result_variant {
             maybe_auto_propagate(ctx, builder, operand)
         } else {
             operand
@@ -677,19 +677,24 @@ fn lower_return(
                 }
             }
             if !did_clone_return {
-                // T & reference propagation for return values: if the operand
-                // is Ptr(T) (from a collection borrowing read) but the return
-                // local _0 has a non-Ptr type, override _0's type to Ptr(T).
+                // Ptr(T) → T auto-clone for return values: if the operand
+                // is Ptr(T) but the return type is T, auto-clone.
                 if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                     if p.projections.is_empty() {
                         let src_idx = p.local.0 as usize;
                         if src_idx < builder.locals.len() {
                             let src_type = builder.locals[src_idx].type_id;
-                            if let Some(GirType::Ptr(_)) = ctx.type_registry.get(src_type) {
+                            if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
                                 if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                                    builder.locals[0].type_id = src_type;
-                                    builder.return_type = src_type;
-                                    ctx.ref_locals.insert(LocalId(0));
+                                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                                        let cloned = builder.call(&clone_fn, vec![operand.clone()], inner);
+                                        operand = FunctionBuilder::copy(cloned);
+                                    } else {
+                                        // No clone fn — fall back to Ptr propagation
+                                        builder.locals[0].type_id = src_type;
+                                        builder.return_type = src_type;
+                                        ctx.ref_locals.insert(LocalId(0));
+                                    }
                                 }
                             }
                         }

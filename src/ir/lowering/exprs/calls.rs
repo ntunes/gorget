@@ -147,6 +147,22 @@ pub(super) fn lower_call_arg(
             Operand::Constant(Constant::Unit) // unreachable: callee_passes_by_ptr implies callee_param_type.is_some()
         }
         Ownership::Move if callee_is_move_param => {
+            // If the operand is Ptr(T) (borrowed ref), auto-clone to create
+            // an owned value before moving to the callee.
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
+                if place.projections.is_empty() {
+                    let local_type = builder.locals[place.local.0 as usize].type_id;
+                    if let Some(inner) = ctx.pointee_type(local_type) {
+                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(place.local)], inner);
+                            let ptr_type = ctx.register_mut_ptr_type(inner);
+                            let dst = builder.add_local(ptr_type, None);
+                            builder.emit_borrow_mut(dst, Place::local(cloned));
+                            return FunctionBuilder::copy(dst);
+                        }
+                    }
+                }
+            }
             // Move of a Move-type value: callee expects MutPtr. Emit borrow_mut.
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 if place.projections.is_empty() {

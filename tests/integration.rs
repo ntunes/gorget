@@ -3001,6 +3001,8 @@ fn index_ref_auto_clone() {
 3
 4
 3
+3
+3
 done",
     );
 }

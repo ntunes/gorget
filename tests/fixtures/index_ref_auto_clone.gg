@@ -36,4 +36,17 @@ void main():
     # Original unchanged (clone, not shared)
     print(matrix[1].len())
 
+    # Return auto-clone: function returns T, operand is Ptr(T)
+    print(get_first(matrix).len())
+
+    # Move call auto-clone: !(ptr_expr) clones for ownership transfer
+    auto ref_row = matrix[0]
+    consume_vec(!ref_row)
+
     print("done")
+
+Vector[int] get_first(Vector[Vector[int]] m):
+    return m[0]
+
+void consume_vec(Vector[int] !v):
+    print(v.len())
