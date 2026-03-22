@@ -15097,9 +15097,9 @@ fn closure_partial_application() {
 }
 
 #[test]
-fn closure_capture_mutation() {
+fn closure_capture_patterns() {
     run_gg(
-        "closure_capture_mutation.gg",
+        "closure_capture_patterns.gg",
         "\
 15
 30
@@ -15232,10 +15232,8 @@ doubled len: 10
 doubled[0]: 2
 doubled[9]: 20
 sum: 55
-sum doubled: 110
-11
-21
-31",
+evens: 5
+even sum x10: 300",
     );
 }
 

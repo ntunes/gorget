@@ -2,7 +2,7 @@
 void main():
     Vector[int] nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
-    # map chain
+    # map
     Vector[int] doubled = nums.map((int x): x * 2)
     print(f"doubled len: {doubled.len()}")
     print(f"doubled[0]: {doubled[0]}")
@@ -12,12 +12,10 @@ void main():
     int sum = nums.fold(0, (int acc, int x): acc + x)
     print(f"sum: {sum}")
 
-    # map then fold
-    int sum_doubled = nums.map((int x): x * 2).fold(0, (int acc, int x): acc + x)
-    print(f"sum doubled: {sum_doubled}")
+    # filter
+    Vector[int] evens = nums.filter((int x): x % 2 == 0)
+    print(f"evens: {evens.len()}")
 
-    # small vector operations
-    Vector[int] small = [10, 20, 30]
-    Vector[int] mapped = small.map((int x): x + 1)
-    for n in mapped:
-        print(f"{n}")
+    # filter then map then fold
+    int even_sum = nums.filter((int x): x % 2 == 0).map((int x): x * 10).fold(0, (int acc, int x): acc + x)
+    print(f"even sum x10: {even_sum}")
