@@ -14977,3 +14977,80 @@ no
 big",
     );
 }
+
+// ── Batch 5: Generics, traits, closures ──────────────────────────────
+
+#[test]
+fn trait_default_override() {
+    run_gg(
+        "trait_default_override.gg",
+        "\
+bug
+a bug
+10
+feature
+feature: dark mode
+0",
+    );
+}
+
+#[test]
+fn generic_pair_methods() {
+    run_gg(
+        "generic_pair_methods.gg",
+        "\
+10
+20
+hello
+world
+true
+false",
+    );
+}
+
+#[test]
+fn closure_compose() {
+    run_gg(
+        "closure_compose.gg",
+        "\
+12
+11
+2
+4
+6
+8
+10
+20
+40",
+    );
+}
+
+#[test]
+fn closure_partial_application() {
+    run_gg(
+        "closure_partial_application.gg",
+        "\
+8
+12
+11
+12
+21
+21",
+    );
+}
+
+#[test]
+fn closure_capture_mutation() {
+    run_gg(
+        "closure_capture_mutation.gg",
+        "\
+15
+30
+3
+6
+9
+12
+110
+done",
+    );
+}

@@ -1,0 +1,21 @@
+# Closures with various capture patterns
+void main():
+    # closure capturing immutable int (copy)
+    int base = 10
+    auto add_base = (int x): x + base
+    print(f"{add_base(5)}")
+    print(f"{add_base(20)}")
+
+    # closure used with map
+    int factor = 3
+    Vector[int] nums = [1, 2, 3, 4]
+    Vector[int] scaled = nums.map((int x): x * factor)
+    for n in scaled:
+        print(f"{n}")
+
+    # nested closure call
+    auto outer = (int x): x + 100
+    auto use_outer = (int x): outer(x * 2)
+    print(f"{use_outer(5)}")
+
+    print("done")

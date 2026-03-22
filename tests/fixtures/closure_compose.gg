@@ -1,0 +1,23 @@
+# Function composition patterns with closures
+void main():
+    auto double = (int x): x * 2
+    auto add_one = (int x): x + 1
+
+    # manual composition
+    int result1 = double(add_one(5))
+    print(f"{result1}")
+
+    int result2 = add_one(double(5))
+    print(f"{result2}")
+
+    # chained with map
+    Vector[int] nums = [1, 2, 3, 4, 5]
+    Vector[int] doubled = nums.map((int x): x * 2)
+    for n in doubled:
+        print(f"{n}")
+
+    # filter then map
+    Vector[int] evens = nums.filter((int x): x % 2 == 0)
+    Vector[int] scaled = evens.map((int x): x * 10)
+    for n in scaled:
+        print(f"{n}")

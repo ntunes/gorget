@@ -1,0 +1,38 @@
+trait Describable:
+    String kind(self)
+    String describe(self):
+        return f"a {self.kind()}"
+    int priority(self):
+        return 0
+
+struct Bug:
+    String severity
+
+struct Feature:
+    String title
+
+equip Bug with Describable:
+    String kind(self):
+        return "bug"
+    # override priority, keep default describe
+    int priority(self):
+        return 10
+
+equip Feature with Describable:
+    String kind(self):
+        return "feature"
+    # override describe, keep default priority
+    String describe(self):
+        return f"feature: {self.title}"
+
+void main():
+    Bug b = Bug("critical")
+    Feature f = Feature("dark mode")
+
+    print(b.kind())
+    print(b.describe())
+    print(f"{b.priority()}")
+
+    print(f.kind())
+    print(f.describe())
+    print(f"{f.priority()}")
