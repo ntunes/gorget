@@ -1554,6 +1554,21 @@ pub(super) fn lower_method_call(
             ctx.drops.mark_moved(place.local);
         }
 
+        // Unregister collection locals passed by value: the callee may store
+        // a shallow copy sharing the same data pointer. Unregistering prevents
+        // scope-exit drop from freeing shared data (callee's copy handles cleanup).
+        for arg in args.iter() {
+            if !matches!(arg.node.ownership, Ownership::Borrow) { continue; }
+            if let Expr::Identifier(name) = &arg.node.value.node {
+                if let Some((local_id, _)) = ctx.lookup_local(name) {
+                    let local_type = builder.locals[local_id.0 as usize].type_id;
+                    if ctx.type_registry.is_collection_type(local_type) {
+                        ctx.drops.unregister(local_id);
+                    }
+                }
+            }
+        }
+
         // Zero source fields for resource-type args that came from field loads.
         // This handles e.g. items.push(h.data) where the C backend zeros the temp
         // but not the source field h.data — the struct's scope-end drop would

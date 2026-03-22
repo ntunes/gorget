@@ -55,7 +55,10 @@ pub(super) fn lower_assign(
                     }
                 }
                 let type_id = _type_id;
-                // Check if old value needs dropping
+                // Check if old value needs dropping.
+                // NOTE: Collection types are excluded — the RHS may modify the target
+                // in-place through the pointer (e.g., dict = merge_into(dict, x)),
+                // making the drop-before-reassign a use-after-free. Scope-exit drop handles cleanup.
                 let needs_drop = {
                     use crate::ir::types::GirType;
                     if let Some(GirType::Named(type_name)) = ctx.type_registry.get(type_id) {
@@ -109,6 +112,17 @@ pub(super) fn lower_assign(
                                 ctx.drops.unregister(place.local);
                             }
                         }
+                        // Collection move-zero: zero source temp after re-assignment.
+                        // Mirrors the GorgetString move-zero pattern above.
+                        if place.local != local_id {
+                            let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                            if ctx.type_registry.is_collection_type(rhs_type)
+                                && ctx.type_registry.is_collection_type(type_id)
+                            {
+                                builder.move_zero(Place::local(place.local));
+                                ctx.drops.mark_moved(place.local);
+                            }
+                        }
                     }
                 }
             } else if ctx.global_names.contains(name.as_str()) {
@@ -139,15 +153,12 @@ fn emit_field_drop_if_needed(
     use crate::ir::types::GirType;
     // Check if the field type has a drop strategy
     let needs_drop = if let Some(GirType::Named(type_name)) = ctx.type_registry.get(field_type) {
-        if let Some(type_def) = ctx.type_registry.get_type_def(type_name) {
+        if ctx.type_registry.is_collection_type_name(type_name) {
+            true
+        } else if let Some(type_def) = ctx.type_registry.get_type_def(type_name) {
             type_def.metadata.drop_strategy != DropStrategy::None
         } else {
-            // Collections (GorgetArray, GorgetDict, etc.) are always droppable
-            type_name.starts_with("GorgetArray")
-                || type_name.starts_with("GorgetDict")
-                || type_name.starts_with("GorgetMap")
-                || type_name.starts_with("GorgetSet")
-                || type_name.starts_with("GorgetString")
+            type_name == "GorgetString"
         }
     } else {
         false

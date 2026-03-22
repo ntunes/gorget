@@ -5211,6 +5211,7 @@ static inline void gorget_map_clear(GorgetMap* m) {
 }
 
 static inline void gorget_map_free(GorgetMap* m) {
+    if (!m->alloc) return;  // zeroed struct — already freed or never initialized
     GorgetAllocator* a = m->alloc;
     if (m->keys) a->dealloc(a->ctx, m->keys, m->cap * m->key_size);
     if (m->values) a->dealloc(a->ctx, m->values, m->cap * m->val_size);

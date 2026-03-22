@@ -311,20 +311,30 @@ impl TypeRegistry {
     /// Check whether a type needs dropping based on its metadata.
     /// Primitives never need dropping. Named types need dropping if they
     /// have Resource copy semantics or a non-None drop strategy.
-    ///
-    /// Note: Collection types (Vector, Dict, Set) are NOT detected here.
-    /// They lack TypeDefs to avoid transitive struct field upgrade, and
-    /// scope-exit drops are deferred until shallow copy semantics are
-    /// resolved (zero-on-copy or reference counting). See Phase 6 in TODO.
+    /// Collection types (Vector, Dict, Set) are detected by name prefix
+    /// without TypeDefs to avoid transitive struct field upgrade.
     pub fn needs_drop(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
         if let Some(GirType::Named(name)) = self.get(type_id) {
+            // Collection types (no TypeDef, by design — avoids transitive struct upgrade)
+            if self.is_collection_type_name(name) {
+                return true;
+            }
             if let Some(type_def) = self.get_type_def(name) {
                 return type_def.metadata.copy_semantics == CopySemantics::Resource
                     || type_def.metadata.drop_strategy != DropStrategy::None;
             }
         }
         false
+    }
+
+    /// Check if a type name is a collection type (Vector, Dict, Set, etc.).
+    /// Name-based check used by `needs_drop()` to avoid TypeDef registration.
+    pub fn is_collection_type_name(&self, name: &str) -> bool {
+        name.starts_with("Vector__") || name.starts_with("Dict__")
+            || name.starts_with("HashMap__") || name.starts_with("Set__")
+            || name.starts_with("HashSet__") || name.starts_with("Deque__")
+            || name == "GorgetArray" || name == "GorgetMap" || name == "GorgetSet"
     }
 
     /// Check whether a Copy-semantics type needs dropping when passed as a parameter.

@@ -322,6 +322,17 @@ fn lower_var_decl(
                             ctx.drops.unregister(place.local);
                         }
                     }
+                    // Collection move-zero: zero source temp after assigning to collection variable.
+                    // Mirrors the GorgetString move-zero pattern above.
+                    if place.local != local_id {
+                        let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                        if ctx.type_registry.is_collection_type(rhs_type)
+                            && ctx.type_registry.is_collection_type(actual_var_type)
+                        {
+                            builder.move_zero(Place::local(place.local));
+                            ctx.drops.mark_moved(place.local);
+                        }
+                    }
                 }
             }
             // Emit MoveZero for resource-type field loads to prevent double-free
@@ -700,6 +711,19 @@ fn lower_return(
                     if place.projections.is_empty() {
                         let rhs_type = builder.locals[place.local.0 as usize].type_id;
                         if rhs_type == ctx.type_mapper.owned_string_type {
+                            builder.move_zero(Place::local(place.local));
+                            ctx.drops.mark_moved(place.local);
+                        }
+                    }
+                }
+            }
+            // Collection return move-zero: zero source to prevent function-scope double-free.
+            // Mirrors the GorgetString return pattern above.
+            if ctx.type_registry.is_collection_type(ret_type) {
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                    if place.projections.is_empty() {
+                        let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                        if ctx.type_registry.is_collection_type(rhs_type) {
                             builder.move_zero(Place::local(place.local));
                             ctx.drops.mark_moved(place.local);
                         }

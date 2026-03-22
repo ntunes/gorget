@@ -3185,8 +3185,8 @@ impl<'a> FuncLowering<'a> {
                     Some(GirType::Named(n)) => Some(n.clone()),
                     _ => None,
                 };
-                let drop_fn = field_type_name.as_ref().and_then(|n| {
-                    self.gir_types.get_type_def(n).map(|td| td.metadata.drop_strategy.clone())
+                let drop_fn = field_type_name.as_ref().map(|n| {
+                    self.infer_drop_strategy(n)
                 }).unwrap_or(DropStrategy::None);
                 let fn_name = match &drop_fn {
                     DropStrategy::Trivial(f) | DropStrategy::Custom(f) => Some(f.clone()),
@@ -3228,8 +3228,8 @@ impl<'a> FuncLowering<'a> {
                             Some(GirType::Named(n)) => Some(n.clone()),
                             _ => None,
                         };
-                        let field_drop = field_type_name.as_ref().and_then(|n| {
-                            self.gir_types.get_type_def(n).map(|td| td.metadata.drop_strategy.clone())
+                        let field_drop = field_type_name.as_ref().map(|n| {
+                            self.infer_drop_strategy(n)
                         }).unwrap_or(DropStrategy::None);
                         let drop_fn = match &field_drop {
                             DropStrategy::Trivial(fn_name) | DropStrategy::Custom(fn_name) => Some(fn_name.clone()),
