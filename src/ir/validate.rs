@@ -289,7 +289,7 @@ fn check_instruction_locals(
     errors: &mut Vec<ValidationError>,
 ) {
     match inst {
-        Instruction::Assign { dst, value } => {
+        Instruction::Assign { dst, value, .. } => {
             check_place_locals(dst, max, ctx, errors);
             check_operand_locals(value, max, ctx, errors);
         }
@@ -711,7 +711,7 @@ fn collect_read_locals_for_validate(inst: &Instruction) -> Vec<u32> {
     };
 
     match inst {
-        Instruction::Assign { dst, value } => {
+        Instruction::Assign { dst, value, .. } => {
             if !dst.projections.is_empty() {
                 push_place(&mut reads, dst);
             }

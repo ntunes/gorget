@@ -124,7 +124,7 @@ fn propagate_constants(func: &mut Function) {
 
             // Then: track/invalidate based on this instruction's writes
             match inst {
-                Instruction::Assign { dst, value } if dst.projections.is_empty() => {
+                Instruction::Assign { dst, value, .. } if dst.projections.is_empty() => {
                     if let Operand::Constant(c) = value {
                         // Only propagate simple scalar constants — strings, function
                         // refs, and other complex values have ABI implications that
@@ -190,7 +190,7 @@ fn propagate_copies(func: &mut Function) {
 
             // Then: track/invalidate based on this instruction's writes
             match inst {
-                Instruction::Assign { dst, value } if dst.projections.is_empty() => {
+                Instruction::Assign { dst, value, .. } if dst.projections.is_empty() => {
                     // Writing to dst invalidates any copy whose source is dst
                     let written = dst.local.0;
                     copies.retain(|_, src| src.local.0 != written);
@@ -459,8 +459,7 @@ fn fold_binop(dst: LocalId, op: BinOp, lhs: &Operand, rhs: &Operand) -> Option<I
         (Constant::Bool(a), Constant::Bool(b)) => fold_binop_bool(*a, op, *b)?,
         _ => return None,
     };
-    Some(Instruction::Assign {
-        dst: Place::local(dst),
+    Some(Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(dst),
         value: Operand::Constant(result),
     })
 }
@@ -578,8 +577,7 @@ fn fold_unop(dst: LocalId, op: UnOp, operand: &Operand) -> Option<Instruction> {
         (UnOp::BitNot, Constant::U8(a)) => Constant::U8(!a),
         _ => return None,
     };
-    Some(Instruction::Assign {
-        dst: Place::local(dst),
+    Some(Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(dst),
         value: Operand::Constant(result),
     })
 }
@@ -608,8 +606,7 @@ fn fold_cmp(dst: LocalId, op: CmpOp, lhs: &Operand, rhs: &Operand) -> Option<Ins
         (Constant::Str(a), Constant::Str(b)) => cmp_ord(a.cmp(b), op),
         _ => return None,
     };
-    Some(Instruction::Assign {
-        dst: Place::local(dst),
+    Some(Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(dst),
         value: Operand::Constant(Constant::Bool(result)),
     })
 }
@@ -752,8 +749,7 @@ fn fold_cast(dst: LocalId, target: TypeId, value: &Operand) -> Option<Instructio
         },
         _ => return None, // non-primitive target type
     };
-    Some(Instruction::Assign {
-        dst: Place::local(dst),
+    Some(Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(dst),
         value: Operand::Constant(result),
     })
 }
@@ -766,7 +762,7 @@ fn eliminate_self_assigns(func: &mut Function) {
     for bb in &mut func.blocks {
         for inst in &mut bb.instructions {
             let is_self = matches!(inst,
-                Instruction::Assign { dst, value: Operand::Copy(src) }
+                Instruction::Assign { dst, value: Operand::Copy(src), .. }
                     if dst.projections.is_empty()
                     && src.projections.is_empty()
                     && dst.local == src.local
@@ -804,8 +800,7 @@ fn simplify_algebraic(func: &mut Function) {
                         if place.projections.is_empty() {
                             if let Some((inner_op, inner_operand)) = local_defs.get(&place.local.0) {
                                 if inner_op == op {
-                                    Some(Instruction::Assign {
-                                        dst: Place::local(*dst),
+                                    Some(Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(*dst),
                                         value: inner_operand.clone(),
                                     })
                                 } else {
@@ -829,7 +824,7 @@ fn simplify_algebraic(func: &mut Function) {
             }
             if let Some(new_inst) = simplified {
                 // Clear tracking for this dst since it's now an Assign, not UnOp
-                if let Instruction::Assign { dst: place, .. } = &new_inst {
+                if let Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: place, .. } = &new_inst {
                     local_defs.remove(&place.local.0);
                 }
                 *inst = new_inst;
@@ -862,8 +857,7 @@ fn simplify_cmp(func: &mut Function) {
                                 CmpOp::Eq | CmpOp::Le | CmpOp::Ge => true,
                                 CmpOp::Ne | CmpOp::Lt | CmpOp::Gt => false,
                             };
-                            Some(Instruction::Assign {
-                                dst: Place::local(*dst),
+                            Some(Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(*dst),
                                 value: Operand::Constant(Constant::Bool(result)),
                             })
                         } else {
@@ -900,8 +894,7 @@ fn simplify_bool_cmp(dst: LocalId, op: CmpOp, type_id: TypeId, lhs: &Operand, rh
     // eq+true or ne+false → identity; eq+false or ne+true → negate
     let is_identity = (op == CmpOp::Eq && bool_val) || (op == CmpOp::Ne && !bool_val);
     if is_identity {
-        Some(Instruction::Assign {
-            dst: Place::local(dst),
+        Some(Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(dst),
             value: other.clone(),
         })
     } else {
@@ -915,7 +908,7 @@ fn simplify_bool_cmp(dst: LocalId, op: CmpOp, type_id: TypeId, lhs: &Operand, rh
 fn simplify_binop(dst: LocalId, op: BinOp, type_id: TypeId, lhs: &Operand, rhs: &Operand) -> Option<Instruction> {
     use crate::ir::types::*;
     let assign_op = |op: Operand| -> Instruction {
-        Instruction::Assign { dst: Place::local(dst), value: op }
+        Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(dst), value: op }
     };
     let typed_zero = || -> Operand {
         Operand::Constant(match type_id {
@@ -1066,8 +1059,7 @@ fn eliminate_common_subexpressions(func: &mut Function) {
                 if let Some(&prev_dst) = known.get(&key) {
                     // Replace with Copy of previous result
                     let dst = cse_dst(inst).unwrap();
-                    *inst = Instruction::Assign {
-                        dst: Place::local(dst),
+                    *inst = Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(dst),
                         value: Operand::Copy(Place::local(prev_dst)),
                     };
                     continue;
@@ -1423,7 +1415,7 @@ fn eliminate_dead_stores(func: &mut Function) {
 
             // Then: check if this instruction WRITES a simple local
             match inst {
-                Instruction::Assign { dst, value } if dst.projections.is_empty() => {
+                Instruction::Assign { dst, value, .. } if dst.projections.is_empty() => {
                     // Only remove stores of constants or copies (no side effects)
                     let is_pure = matches!(value, Operand::Constant(_) | Operand::Copy(_));
                     if is_pure {
@@ -1500,7 +1492,7 @@ fn collect_read_locals(inst: &Instruction) -> Vec<u32> {
     let mut reads = Vec::new();
 
     match inst {
-        Instruction::Assign { dst, value } => {
+        Instruction::Assign { dst, value, .. } => {
             if !dst.projections.is_empty() {
                 push_place_reads(&mut reads, dst);
             }
@@ -1939,7 +1931,7 @@ fn mark_instruction_locals(inst: &Instruction, referenced: &mut [bool]) {
 
     match inst {
         Instruction::Nop => {}
-        Instruction::Assign { dst, value } => {
+        Instruction::Assign { dst, value, .. } => {
             mark_place(dst, referenced);
             mark_operand(value, referenced);
         }
@@ -2082,7 +2074,7 @@ fn remap_instruction_locals(inst: &mut Instruction, remap: &[u32]) {
 
     match inst {
         Instruction::Nop => {}
-        Instruction::Assign { dst, value } => {
+        Instruction::Assign { dst, value, .. } => {
             remap_place(dst, remap);
             remap_operand(value, remap);
         }
@@ -2528,7 +2520,7 @@ mod tests {
     #[test]
     fn elide_drop_after_move_zero() {
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign { dst: Place::local(LocalId(1)), value: Operand::Constant(Constant::I64(42)) },
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)), value: Operand::Constant(Constant::I64(42)) },
             Instruction::MoveZero { place: Place::local(LocalId(1)) },
             Instruction::DropIfAlive { place: Place::local(LocalId(1)) },
         ], ret_i64(0))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
@@ -2540,7 +2532,7 @@ mod tests {
     fn no_elide_drop_after_reassign() {
         let mut f = make_func(vec![bb(vec![
             Instruction::MoveZero { place: Place::local(LocalId(1)) },
-            Instruction::Assign { dst: Place::local(LocalId(1)), value: Operand::Constant(Constant::I64(99)) },
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)), value: Operand::Constant(Constant::I64(99)) },
             Instruction::DropIfAlive { place: Place::local(LocalId(1)) },
         ], ret_i64(0))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
         elide_dead_drops(&mut f);
@@ -2613,8 +2605,7 @@ mod tests {
         // bb1 has instructions — should NOT be threaded
         let mut f = make_func(vec![
             bb(vec![], Terminator::Jump(BlockId(1))),
-            bb(vec![Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            bb(vec![Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(5)),
             }], Terminator::Jump(BlockId(2))),
             bb(vec![], ret_local(1)),
@@ -2657,8 +2648,7 @@ mod tests {
         // bb1: return _1
         // → merged into: bb0: assign _1=42, return _1
         let mut f = make_func(vec![
-            bb(vec![Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            bb(vec![Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(42)),
             }], Terminator::Jump(BlockId(1))),
             bb(vec![], ret_local(1)),
@@ -2674,8 +2664,7 @@ mod tests {
         // bb0: Jump(bb1), bb1: assign _1=10, Jump(bb2), bb2: return _1
         let mut f = make_func(vec![
             bb(vec![], Terminator::Jump(BlockId(1))),
-            bb(vec![Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            bb(vec![Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(10)),
             }], Terminator::Jump(BlockId(2))),
             bb(vec![], ret_local(1)),
@@ -2711,8 +2700,7 @@ mod tests {
         // → after propagation: _2 = BinOp(Add, 10, 10)
         // → after folding: _2 = 20
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(10)),
             },
             Instruction::BinOp {
@@ -2743,12 +2731,10 @@ mod tests {
         // _1 = 10; _1 = Copy(_2); _3 = BinOp(Add, Copy(_1), 1)
         // → _1's constant should NOT propagate into the BinOp
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(10)),
             },
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Copy(Place::local(LocalId(2))),
             },
             Instruction::BinOp {
@@ -2772,8 +2758,7 @@ mod tests {
         // _1 = true; br _1, bb1, bb2 → br const true, bb1, bb2
         let mut f = make_func(vec![
             bb(vec![
-                Instruction::Assign {
-                    dst: Place::local(LocalId(1)),
+                Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                     value: Operand::Constant(Constant::Bool(true)),
                 },
             ], Terminator::Branch {
@@ -2795,8 +2780,7 @@ mod tests {
     fn propagate_constant_into_return_terminator() {
         // _1 = 42; return _1 → return const 42
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(42)),
             },
         ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
@@ -2813,12 +2797,10 @@ mod tests {
     fn elide_dead_store_overwritten() {
         // _1 = 42; _1 = 99; return _1 → first assign removed
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(42)),
             },
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(99)),
             },
         ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
@@ -2834,16 +2816,13 @@ mod tests {
     fn no_elide_store_read_between() {
         // _1 = 42; _2 = Copy(_1); _1 = 99 → keep both assigns
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(42)),
             },
-            Instruction::Assign {
-                dst: Place::local(LocalId(2)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(2)),
                 value: Operand::Copy(Place::local(LocalId(1))),
             },
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(99)),
             },
         ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![]);
@@ -2855,8 +2834,7 @@ mod tests {
     fn no_elide_store_read_by_terminator() {
         // _1 = 42; return _1 → keep (read by terminator)
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(42)),
             },
         ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
@@ -3205,8 +3183,7 @@ mod tests {
                 lhs: Operand::Copy(Place::local(LocalId(1))),
                 rhs: Operand::Constant(Constant::I64(10)),
             },
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(99)),
             },
             Instruction::BinOp {
@@ -3473,8 +3450,7 @@ mod tests {
     #[test]
     fn self_assign_eliminated() {
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Copy(Place::local(LocalId(1))),
             },
         ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
@@ -3485,8 +3461,7 @@ mod tests {
     #[test]
     fn non_self_assign_preserved() {
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Copy(Place::local(LocalId(2))),
             },
         ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE), local(I64_TYPE)], vec![]);
@@ -3498,8 +3473,7 @@ mod tests {
     fn self_assign_with_projection_preserved() {
         // _1.0 = Copy(_1) is NOT a self-assign (different place)
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::field(LocalId(1), 0),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::field(LocalId(1), 0),
                 value: Operand::Copy(Place::local(LocalId(1))),
             },
         ], ret_local(1))], vec![local(I64_TYPE), local(I64_TYPE)], vec![]);
@@ -3514,12 +3488,10 @@ mod tests {
         // _1 = Const(42), _2 = Copy(_1), _3 = BinOp(Add, Copy(_2), Const(1))
         // After propagation: _3's lhs should be Copy(_1)
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(42)),
             },
-            Instruction::Assign {
-                dst: Place::local(LocalId(2)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(2)),
                 value: Operand::Copy(Place::local(LocalId(1))),
             },
             Instruction::BinOp {
@@ -3543,12 +3515,10 @@ mod tests {
     fn copy_prop_invalidated_by_move_zero() {
         // _2 = Copy(_1), MoveZero(_1), use(_2) — should NOT substitute _2→_1
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(99)),
             },
-            Instruction::Assign {
-                dst: Place::local(LocalId(2)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(2)),
                 value: Operand::Copy(Place::local(LocalId(1))),
             },
             Instruction::MoveZero { place: Place::local(LocalId(1)) },
@@ -3573,12 +3543,10 @@ mod tests {
     fn copy_prop_invalidated_by_drop() {
         // _2 = Copy(_1), Drop(_1), use(_2) — should NOT substitute _2→_1
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(99)),
             },
-            Instruction::Assign {
-                dst: Place::local(LocalId(2)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(2)),
                 value: Operand::Copy(Place::local(LocalId(1))),
             },
             Instruction::Drop { place: Place::local(LocalId(1)) },
@@ -3605,12 +3573,10 @@ mod tests {
         let ty_a = TypeId(10);
         let ty_b = TypeId(11);
         let mut f = make_func(vec![bb(vec![
-            Instruction::Assign {
-                dst: Place::local(LocalId(1)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                 value: Operand::Constant(Constant::I64(42)),
             },
-            Instruction::Assign {
-                dst: Place::local(LocalId(2)),
+            Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(2)),
                 value: Operand::Copy(Place::local(LocalId(1))),
             },
             Instruction::BinOp {

@@ -800,7 +800,7 @@ impl<'m> Interpreter<'m> {
         match inst {
             Instruction::Nop => {}
 
-            Instruction::Assign { dst, value } => {
+            Instruction::Assign { dst, value, .. } => {
                 // P4c: check that operand locals are initialized before reading them.
                 if self.ub_checks {
                     if let Operand::Copy(place) | Operand::Move(place) = value {

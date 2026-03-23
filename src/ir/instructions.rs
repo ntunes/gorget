@@ -74,11 +74,28 @@ pub enum Constant {
     GlobalRefPtr(String),
 }
 
+/// How an assignment transfers ownership.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AssignMode {
+    /// Bitwise copy — trivial types (int, bool, float, simple structs).
+    Copy,
+    /// Transfer ownership — source is consumed (zeroed after copy).
+    /// Used for temp→variable assignments where the temp is no longer needed.
+    Move,
+    /// Deep clone — creates an independent copy of resource-type data.
+    /// Used for variable→variable assignments where both must remain valid.
+    Clone,
+    /// Borrow as Ptr — source stays alive, destination is a reference.
+    /// Used when a Ptr(T) value is assigned without dereferencing.
+    Borrow,
+}
+
 /// Instructions that don't transfer control flow.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     // -- Memory --
     Assign {
+        mode: AssignMode,
         dst: Place,
         value: Operand,
     },
@@ -341,8 +358,7 @@ mod tests {
     #[test]
     fn instruction_variants() {
         // One of each major category — just verify they construct without panic.
-        let _assign = Instruction::Assign {
-            dst: Place::local(LocalId(1)),
+        let _assign = Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
             value: Operand::Constant(Constant::I64(10)),
         };
         let _binop = Instruction::BinOp {

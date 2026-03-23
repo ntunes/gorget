@@ -192,7 +192,11 @@ impl FunctionBuilder {
     // ---- Instruction emitters ----
 
     pub fn assign(&mut self, dst: Place, value: Operand) {
-        self.emit(Instruction::Assign { dst, value });
+        self.emit(Instruction::Assign { mode: AssignMode::Copy, dst, value });
+    }
+
+    pub fn assign_mode(&mut self, mode: AssignMode, dst: Place, value: Operand) {
+        self.emit(Instruction::Assign { mode, dst, value });
     }
 
     pub fn global_assign(&mut self, name: String, value: Operand) {

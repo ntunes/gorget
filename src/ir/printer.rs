@@ -224,7 +224,7 @@ fn print_block(out: &mut String, index: usize, block: &BasicBlock, reg: &TypeReg
 
 fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
     match inst {
-        Instruction::Assign { dst, value } => {
+        Instruction::Assign { dst, value, .. } => {
             write!(out, "{} = {}", format_place(dst), format_operand(value, reg)).unwrap();
         }
         Instruction::FieldLoad { dst, base, field } => {

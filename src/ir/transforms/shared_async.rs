@@ -251,8 +251,7 @@ pub fn inject_shared_token_management(
             } else {
                 Place::local(facade)
             };
-            Some(Instruction::Assign {
-                dst: Place::local(binding),
+            Some(Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(binding),
                 value: Operand::Copy(source_place),
             })
         })
@@ -548,7 +547,7 @@ fn remap_operand(op: &mut Operand, map: &FxHashMap<LocalId, LocalId>) {
 
 fn remap_instruction(instr: &mut Instruction, map: &FxHashMap<LocalId, LocalId>) {
     match instr {
-        Instruction::Assign { dst, value } => {
+        Instruction::Assign { dst, value, .. } => {
             remap_place(dst, map);
             remap_operand(value, map);
         }
@@ -743,8 +742,7 @@ mod tests {
                 BasicBlock {
                     instructions: vec![
                         // Some work using counter (_1)
-                        Instruction::Assign {
-                            dst: Place::local(LocalId(5)),
+                        Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(5)),
                             value: Operand::Copy(Place::local(LocalId(2))),
                         },
                         // Await call

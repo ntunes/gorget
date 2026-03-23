@@ -962,7 +962,7 @@ impl<'a> FuncLowering<'a> {
 
     fn lower_instruction(&mut self, inst: &Instruction, bb: BlockId) {
         match inst {
-            Instruction::Assign { dst, value } => {
+            Instruction::Assign { dst, value, .. } => {
                 // Special-case: Constant::Null assigned to an enum-typed local.
                 // Null represents a fieldless variant (e.g. None, Error).  Instead of
                 // emitting NullPtr (which becomes memset(0) ⇒ tag=0 = wrong variant),
@@ -5443,8 +5443,7 @@ mod tests {
             ],
             blocks: vec![BasicBlock {
                 instructions: vec![
-                    Instruction::Assign {
-                        dst: Place::local(LocalId(1)),
+                    Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                         value: Operand::Constant(Constant::I32(42)),
                     },
                     Instruction::BinOp {
@@ -5503,8 +5502,7 @@ mod tests {
             ],
             blocks: vec![
                 BasicBlock {
-                    instructions: vec![Instruction::Assign {
-                        dst: Place::local(LocalId(1)),
+                    instructions: vec![Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                         value: Operand::Constant(Constant::Bool(true)),
                     }],
                     terminator: Some(Terminator::Branch {
@@ -5516,8 +5514,7 @@ mod tests {
                     terminator_span: None,
                 },
                 BasicBlock {
-                    instructions: vec![Instruction::Assign {
-                        dst: Place::local(LocalId(2)),
+                    instructions: vec![Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(2)),
                         value: Operand::Constant(Constant::I64(10)),
                     }],
                     terminator: Some(Terminator::Return(Operand::Copy(Place::local(LocalId(2))))),
@@ -5525,8 +5522,7 @@ mod tests {
                     terminator_span: None,
                 },
                 BasicBlock {
-                    instructions: vec![Instruction::Assign {
-                        dst: Place::local(LocalId(2)),
+                    instructions: vec![Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(2)),
                         value: Operand::Constant(Constant::I64(20)),
                     }],
                     terminator: Some(Terminator::Return(Operand::Copy(Place::local(LocalId(2))))),
@@ -5679,8 +5675,7 @@ mod tests {
                 Local { type_id: I32_TYPE, name_hint: None },
             ],
             blocks: vec![BasicBlock {
-                instructions: vec![Instruction::Assign {
-                    dst: Place::local(LocalId(1)),
+                instructions: vec![Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),
                     value: Operand::Constant(Constant::I32(99)),
                 }],
                 terminator: Some(Terminator::Return(Operand::Constant(Constant::I32(0)))),
