@@ -1129,7 +1129,7 @@ impl<'m> Interpreter<'m> {
                 locals[i] = field_val;
             }
 
-            Instruction::Call { dst, func, args } => {
+            Instruction::Call { dst, func, args, .. } => {
                 // gorget_bytes_write_* pass array by value in GIR but mutate in-place (like C GorgetArray*).
                 // Make the first arg local heap-backed and pass a MutPtr so mutation propagates.
                 if func.starts_with("gorget_bytes_write_") {

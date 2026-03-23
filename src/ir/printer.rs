@@ -426,7 +426,7 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
             )
             .unwrap();
         }
-        Instruction::Call { dst, func, args } => {
+        Instruction::Call { dst, func, args, .. } => {
             if let Some(d) = dst {
                 write!(out, "_{} = ", d.0).unwrap();
             }

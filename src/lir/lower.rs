@@ -1189,7 +1189,7 @@ impl<'a> FuncLowering<'a> {
             }
 
             // -- Calls --
-            Instruction::Call { dst, func, args } => {
+            Instruction::Call { dst, func, args, .. } => {
                 if let Some(fid) = self.func_index.get(func) {
                     let lir_args: Vec<ValueId> =
                         args.iter().map(|a| self.lower_operand(a, bb)).collect();
@@ -5581,6 +5581,7 @@ mod tests {
                     dst: Some(LocalId(1)),
                     func: "callee".into(),
                     args: vec![Operand::Constant(Constant::I64(5))],
+                    arg_owners: vec![],
                 }],
                 terminator: Some(Terminator::Return(Operand::Copy(Place::local(LocalId(1))))),
                 span_map: vec![None],

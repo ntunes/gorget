@@ -274,6 +274,7 @@ impl FunctionBuilder {
             dst: Some(dst),
             func,
             args,
+            arg_owners: vec![],
         })
     }
 
@@ -282,6 +283,7 @@ impl FunctionBuilder {
             dst: None,
             func: func.into(),
             args,
+            arg_owners: vec![],
         });
     }
 
