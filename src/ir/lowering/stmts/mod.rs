@@ -348,18 +348,17 @@ fn lower_var_decl(
 
             builder.assign_mode(assign_mode, Place::local(local_id), operand.clone());
 
-            // Execute mode-specific post-assign actions.
-            // These will move to the LIR once it reads AssignMode.
-            if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
-                if place.projections.is_empty() && place.local != local_id {
-                    match assign_mode {
-                        AssignMode::Move => {
-                            if !ctx.drops.is_moved(place.local) {
-                                builder.move_zero(Place::local(place.local));
-                                ctx.drops.mark_moved(place.local);
-                            }
-                        }
-                        _ => {}
+            // Mark source as moved + emit GIR-level move-zero.
+            // The LIR also reads AssignMode::Move for zeroing, but the GIR
+            // move-zero is still needed for the drop elaborator's DropIfAlive.
+            if assign_mode == AssignMode::Move {
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                    if place.projections.is_empty()
+                        && place.local != local_id
+                        && !ctx.drops.is_moved(place.local)
+                    {
+                        builder.move_zero(Place::local(place.local));
+                        ctx.drops.mark_moved(place.local);
                     }
                 }
             }

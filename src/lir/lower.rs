@@ -981,29 +981,11 @@ impl<'a> FuncLowering<'a> {
                 let val = self.lower_operand(value, bb);
                 self.store_to_place(dst, val, bb);
 
-                // AssignMode::Move — zero the source after copy to transfer ownership.
-                // This replaces the scattered move-zero logic in the GIR lowering.
-                if matches!(mode, AssignMode::Move) {
-                    if let Operand::Copy(src_place) | Operand::Move(src_place) = value {
-                        if src_place.projections.is_empty() {
-                            let src_addr = self.lower_place_addr(src_place, bb);
-                            let byte_size = self.compute_place_byte_size(src_place) as i64;
-                            if byte_size > 0 {
-                                let zero = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                                    dst: zero, ty: LirType::I32, value: 0,
-                                });
-                                let sz = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                                    dst: sz, ty: LirType::I64, value: byte_size,
-                                });
-                                self.lir_func.block_mut(bb).insts.push(Inst::Memset {
-                                    ptr: src_addr, byte: zero, size: sz,
-                                });
-                            }
-                        }
-                    }
-                }
+                // AssignMode::Move — source zeroing is handled by the GIR's explicit
+                // MoveZero instruction (emitted after the Assign). The LIR reads the mode
+                // for future optimizations but doesn't duplicate the zeroing.
+                // TODO: once all MoveZero sites are migrated to AssignMode, the LIR
+                // can handle zeroing here and the GIR MoveZero can be removed.
             }
 
             Instruction::BinOp {

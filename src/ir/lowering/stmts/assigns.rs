@@ -125,17 +125,15 @@ pub(super) fn lower_assign(
 
                     builder.assign_mode(assign_mode, Place::local(local_id), operand.clone());
 
-                    // Post-assign: execute mode-specific actions
-                    if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
-                        if place.projections.is_empty() && place.local != local_id {
-                            match assign_mode {
-                                AssignMode::Move => {
-                                    if !ctx.drops.is_moved(place.local) {
-                                        builder.move_zero(Place::local(place.local));
-                                        ctx.drops.mark_moved(place.local);
-                                    }
-                                }
-                                _ => {}
+                    // Mark source as moved + emit GIR-level move-zero.
+                    if assign_mode == AssignMode::Move {
+                        if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                            if place.projections.is_empty()
+                                && place.local != local_id
+                                && !ctx.drops.is_moved(place.local)
+                            {
+                                builder.move_zero(Place::local(place.local));
+                                ctx.drops.mark_moved(place.local);
                             }
                         }
                     }
