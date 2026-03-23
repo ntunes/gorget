@@ -204,7 +204,11 @@ impl FunctionBuilder {
     }
 
     pub fn field_load(&mut self, base: Place, field: u32, type_id: TypeId) -> LocalId {
-        self.emit_with_temp(type_id, |dst| Instruction::FieldLoad { dst, base, field })
+        self.emit_with_temp(type_id, |dst| Instruction::FieldLoad { mode: FieldLoadMode::Copy, dst, base, field })
+    }
+
+    pub fn field_load_mode(&mut self, mode: FieldLoadMode, base: Place, field: u32, type_id: TypeId) -> LocalId {
+        self.emit_with_temp(type_id, |dst| Instruction::FieldLoad { mode, dst, base, field })
     }
 
     pub fn index_load(&mut self, base: Place, index: Operand, type_id: TypeId) -> LocalId {

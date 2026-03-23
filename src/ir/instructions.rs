@@ -90,6 +90,16 @@ pub enum AssignMode {
     Borrow,
 }
 
+/// How a field load handles ownership of the extracted value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FieldLoadMode {
+    /// Bitwise copy — trivial field type (int, bool, simple struct).
+    Copy,
+    /// Consuming extraction — copy value + zero source field.
+    /// Used for tuple/enum destructuring of resource-type fields.
+    MoveZeroSource,
+}
+
 /// Instructions that don't transfer control flow.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
@@ -105,6 +115,7 @@ pub enum Instruction {
         value: Operand,
     },
     FieldLoad {
+        mode: FieldLoadMode,
         dst: LocalId,
         base: Place,
         field: u32,

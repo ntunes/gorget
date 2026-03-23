@@ -1499,6 +1499,7 @@ impl<'a> FuncLowering<'a> {
                 dst,
                 base,
                 field,
+                ..
             } => {
                 let mut base_val = self.lower_place_addr(base, bb);
                 // Use effective type after base projections (e.g., Deref→Field chain).

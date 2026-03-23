@@ -378,14 +378,12 @@ fn lower_var_decl(
             // Extract each field and bind it to the corresponding pattern variable
             for (i, part) in parts.iter().enumerate() {
                 let field_type = super::exprs::resolve_tuple_field_type(ctx, tuple_type, i);
-                let field_local = builder.field_load(Place::local(tuple_local), i as u32, field_type);
-                // Move semantics: zero source field after extracting resource-type value
-                if ctx.type_registry.is_resource_type(field_type) {
-                    builder.move_zero(Place {
-                        local: tuple_local,
-                        projections: vec![Projection::Field(i as u32)],
-                    });
-                }
+                let mode = if ctx.type_registry.is_resource_type(field_type) {
+                    FieldLoadMode::MoveZeroSource
+                } else {
+                    FieldLoadMode::Copy
+                };
+                let field_local = builder.field_load_mode(mode, Place::local(tuple_local), i as u32, field_type);
 
                 if let Pattern::Binding(name) = &part.node {
                     // Apply provenance adjustment: if the type checker downgraded

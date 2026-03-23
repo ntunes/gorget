@@ -227,7 +227,7 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
         Instruction::Assign { dst, value, .. } => {
             write!(out, "{} = {}", format_place(dst), format_operand(value, reg)).unwrap();
         }
-        Instruction::FieldLoad { dst, base, field } => {
+        Instruction::FieldLoad { dst, base, field, .. } => {
             write!(out, "_{} = field_load {}, {}", dst.0, format_place(base), field).unwrap();
         }
         Instruction::IndexLoad { dst, base, index } => {

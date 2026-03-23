@@ -437,14 +437,12 @@ pub fn emit_pattern_bindings(
         Pattern::Tuple(elems) => {
             for (i, elem_pat) in elems.iter().enumerate() {
                 let elem_type = super::super::exprs::resolve_tuple_field_type(ctx, scrut_type, i);
-                let dst = builder.field_load(Place::local(scrut_local), i as u32, elem_type);
-                // Move semantics: zero source field after extracting resource-type value
-                if ctx.type_registry.is_resource_type(elem_type) {
-                    builder.move_zero(Place {
-                        local: scrut_local,
-                        projections: vec![Projection::Field(i as u32)],
-                    });
-                }
+                let mode = if ctx.type_registry.is_resource_type(elem_type) {
+                    FieldLoadMode::MoveZeroSource
+                } else {
+                    FieldLoadMode::Copy
+                };
+                let dst = builder.field_load_mode(mode, Place::local(scrut_local), i as u32, elem_type);
                 emit_pattern_bindings(ctx, builder, elem_pat, dst, elem_type);
             }
         }

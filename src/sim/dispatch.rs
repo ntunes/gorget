@@ -817,7 +817,7 @@ impl<'m> Interpreter<'m> {
                 // Dst marking handled by mark_instruction_dst at the end of execute_instruction.
             }
 
-            Instruction::FieldLoad { dst, base, field } => {
+            Instruction::FieldLoad { dst, base, field, .. } => {
                 let base_val = self.read_place(locals, base)?;
                 // Auto-deref if base is a pointer (C's -> operator: ptr->field).
                 // The GIR lowering emits FieldLoad with Place::local(env) when the
