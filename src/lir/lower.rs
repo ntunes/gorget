@@ -11,7 +11,7 @@
 
 use crate::ir;
 use crate::ir::instructions::{
-    AssignMode, BinOp as GirBinOp, CmpOp as GirCmpOp, Constant, Instruction, Operand, Place,
+    BinOp as GirBinOp, CmpOp as GirCmpOp, Constant, Instruction, Operand, Place,
     Projection, Terminator, UnOp as GirUnOp,
 };
 use crate::ir::types::{
@@ -962,7 +962,7 @@ impl<'a> FuncLowering<'a> {
 
     fn lower_instruction(&mut self, inst: &Instruction, bb: BlockId) {
         match inst {
-            Instruction::Assign { mode, dst, value, .. } => {
+            Instruction::Assign { mode: _mode, dst, value, .. } => {
                 // Special-case: Constant::Null assigned to an enum-typed local.
                 if let Operand::Constant(Constant::Null) = value {
                     if let Some(()) = self.try_materialize_null_for_assign(dst, bb) {

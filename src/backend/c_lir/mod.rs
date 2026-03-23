@@ -3855,7 +3855,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
         }
         Inst::CallExtern { dst, name, args, .. } => {
             let original_name = if let Inst::CallExtern { original_name, .. } = inst { original_name } else { &None };
-            let emit_args = args;
+            let _emit_args = args;
             // ── __gorget_closure_call_N[__FUNC] — escaped closure dispatch via GorgetClosure ──
             if name.starts_with("__gorget_closure_call_") {
                 let id_str = &name["__gorget_closure_call_".len()..];
