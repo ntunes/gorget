@@ -3360,8 +3360,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     // NullPtr → aggregate slot: zero out (e.g. None variant of Option).
                     write!(out, "memset(&{}, 0, sizeof({}));", s(*slot), ty_name).unwrap();
                 } else if val_is_ptr && (slot_is_str || slot_is_gs) {
-                    // Pointer to Str/GorgetString: use gorget_string_clone to deep-copy owned strings.
-                    // This prevents double-free when both source and destination are freed independently.
+                    // Pointer to Str/GorgetString: clone to prevent double-free.
                     write!(out, "{} = gorget_string_clone((const GorgetString*){});", s(*slot), v(*value)).unwrap();
                 } else if val_is_ptr {
                     // Value is a pointer to source data — use memcpy.
@@ -3376,10 +3375,10 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         // Both are Str views: shallow struct copy, no clone needed (cap=0, non-owning).
                         write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
                     } else if (slot_is_str && val_is_gs) || (slot_is_gs && val_is_str) {
-                        // Unified cross-type (Str↔GorgetString): clone to ensure owned copy
+                        // Cross-type (Str↔GorgetString): clone + free source to transfer ownership.
                         write!(out, "{} = gorget_string_clone((const GorgetString*)&{}); gorget_string_free((GorgetString*)&{});", s(*slot), v(*value), v(*value)).unwrap();
                     } else if (slot_is_str || slot_is_gs) && matches!(val_ty, Some(LirType::Struct(_))) {
-                        // GorgetString→GorgetString: clone to prevent double-free
+                        // GorgetString/Str → same: clone + free source to prevent double-free.
                         write!(out, "{} = gorget_string_clone((const GorgetString*)&{}); gorget_string_free((GorgetString*)&{});", s(*slot), v(*value), v(*value)).unwrap();
                     } else if !matches!(val_ty, Some(LirType::Struct(_)) | None) {
                         // Scalar → single-field struct coercion (newtype wrapping).
