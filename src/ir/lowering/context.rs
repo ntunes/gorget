@@ -174,6 +174,10 @@ pub struct LoweringContext<'a> {
     /// they stay as Ptr(T) throughout the callee body. The LIR backend uses
     /// SlotLoad instead of SlotAddr for these locals. Not registered for drop.
     pub ref_locals: FxHashSet<LocalId>,
+    /// LocalIds that are named variables (vs anonymous temps from expressions).
+    /// Used to distinguish variable-to-variable assignment (needs clone) from
+    /// temp-to-variable (needs move-zero).
+    pub named_locals: FxHashSet<LocalId>,
     /// Extern binding: Gorget name → C symbol name (e.g., "llabs_wrapper" → "llabs").
     pub extern_bindings: FxHashMap<String, String>,
     /// Default parameter values: fn_name → Vec<(param_index, default_expr)>.
@@ -253,6 +257,7 @@ impl<'a> LoweringContext<'a> {
             overflow_wrap: false,
             mut_capture_locals: FxHashMap::default(),
             ref_locals: FxHashSet::default(),
+            named_locals: FxHashSet::default(),
             extern_bindings: FxHashMap::default(),
             fn_defaults: FxHashMap::default(),
             fn_param_names: FxHashMap::default(),
@@ -330,6 +335,12 @@ impl<'a> LoweringContext<'a> {
     /// Register a variable in the current function scope.
     pub fn register_local(&mut self, name: &str, local_id: LocalId, type_id: TypeId) {
         self.locals.insert(name.to_string(), (local_id, type_id));
+        self.named_locals.insert(local_id);
+    }
+
+    /// Check if a local is a named variable (vs an anonymous temp).
+    pub fn is_named_local(&self, local: LocalId) -> bool {
+        self.named_locals.contains(&local)
     }
 
     /// Look up a variable by name.
@@ -342,6 +353,7 @@ impl<'a> LoweringContext<'a> {
         self.locals.clear();
         self.mut_capture_locals.clear();
         self.ref_locals.clear();
+        self.named_locals.clear();
         self.spawn.result_locals.clear();
         self.spawn.pending_fn = None;
         self.shared.locals.clear();
@@ -569,9 +581,9 @@ impl<'a> LoweringContext<'a> {
             if name.starts_with("Set__") || name.starts_with("HashSet__") || name == "GorgetSet" {
                 return Some("gorget_set_clone".to_string());
             }
-            if name == "GorgetString" {
-                return Some("gorget_string_clone".to_string());
-            }
+            // GorgetString excluded: has its own provenance-based ownership tracking
+            // (str/String VarDecl move-zero + unregister). Auto-cloning GorgetStrings
+            // breaks the .str() method chain (clone gets freed while str view is alive).
         }
         None
     }

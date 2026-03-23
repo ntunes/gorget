@@ -76,7 +76,7 @@ pub(super) fn lower_assign(
                 let operand = lower_expr(ctx, builder, value);
                 // Auto-propagate: if RHS is Result-typed but target is not, unwrap
                 // NOTE: must run before restoring expected_type so the guard sees type_id.
-                let operand = maybe_auto_propagate(ctx, builder, operand);
+                let mut operand = maybe_auto_propagate(ctx, builder, operand);
                 ctx.expected_type = prev_expected;
                 // P2.6: Drop old value AFTER computing new value, BEFORE assigning
                 if needs_drop {
@@ -91,6 +91,21 @@ pub(super) fn lower_assign(
                     builder.assign(deref_place, operand.clone());
                     super::maybe_emit_field_move_zero(ctx, builder, &operand);
                 } else {
+                    // Deep clone: variable-to-variable reassignment of resource types.
+                    if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                        if place.projections.is_empty() && place.local != local_id {
+                            let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                            if ctx.is_named_local(place.local) {
+                                if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
+                                    let ptr_type = ctx.register_ptr_type(rhs_type);
+                                    let ptr_local = builder.add_local(ptr_type, None);
+                                    builder.emit_borrow(ptr_local, place.clone());
+                                    let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
+                                    operand = FunctionBuilder::copy(cloned);
+                                }
+                            }
+                        }
+                    }
                     builder.assign(Place::local(local_id), operand.clone());
                     super::maybe_emit_field_move_zero(ctx, builder, &operand);
                 }
@@ -284,7 +299,19 @@ pub(super) fn lower_field_assign(
                     emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
                     maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
                     maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
-                    builder.assign(target_place, rhs);
+                    builder.assign(target_place.clone(), rhs.clone());
+                    // Move-zero drop-registered temps after field assignment
+                    // to prevent scope-exit double-free.
+                    if let Operand::Copy(ref p) | Operand::Move(ref p) = rhs {
+                        if p.projections.is_empty()
+                            && !ctx.drops.is_moved(p.local)
+                            && ctx.drops.is_registered(p.local)
+                        {
+                            builder.move_zero(Place::local(p.local));
+                            ctx.drops.mark_moved(p.local);
+                        }
+                    }
+                    super::maybe_emit_field_move_zero(ctx, builder, &rhs);
                     return;
                 }
                 // Fallback: look up from TypeDef
@@ -304,7 +331,18 @@ pub(super) fn lower_field_assign(
                     emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
                     maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
                     maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
-                    builder.assign(target_place, rhs);
+                    builder.assign(target_place.clone(), rhs.clone());
+                    // Move-zero drop-registered temps after field assignment
+                    if let Operand::Copy(ref p) | Operand::Move(ref p) = rhs {
+                        if p.projections.is_empty()
+                            && !ctx.drops.is_moved(p.local)
+                            && ctx.drops.is_registered(p.local)
+                        {
+                            builder.move_zero(Place::local(p.local));
+                            ctx.drops.mark_moved(p.local);
+                        }
+                    }
+                    super::maybe_emit_field_move_zero(ctx, builder, &rhs);
                     return;
                 }
             }

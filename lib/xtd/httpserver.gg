@@ -48,8 +48,8 @@ equip HttpServerResponse:
     HttpServerResponse json(String body): HttpServerResponse(200, body, "application/json", Dict[String, String]())
     # Build a 200 application/json response by serializing a Json value.
     HttpServerResponse of_json(Json val):
-        String body = json_stringify(val).str()
-        return HttpServerResponse(200, body, "application/json", Dict[String, String]())
+        String body = json_stringify(val)
+        return HttpServerResponse(200, !body, "application/json", Dict[String, String]())
     HttpServerResponse not_found(): HttpServerResponse(404, "Not Found", "text/plain", Dict[String, String]())
     HttpServerResponse bad_request(String msg): HttpServerResponse(400, msg, "text/plain", Dict[String, String]())
     HttpServerResponse internal_error(String msg): HttpServerResponse(500, msg, "text/plain", Dict[String, String]())

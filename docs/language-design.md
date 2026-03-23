@@ -405,7 +405,38 @@ int a = 5
 int b = a                # just copies, both valid (no ! needed)
 ```
 
-### 3.4 The Borrow Rules (same as Rust)
+### 3.4 Assignment Semantics
+
+Assignment creates ownership. For resource types, bare assignment deep-clones:
+
+| Assignment | Meaning | Cost |
+|-----------|---------|------|
+| `a = b` | Deep clone — a and b are independent | Heap allocation |
+| `a = &b` | Mutable reference — a aliases b | Zero cost |
+| `a = !b` | Move — a takes ownership, b consumed | Zero cost |
+
+```gorget
+Vector[int] a = [1, 2, 3]
+Vector[int] b = a        # deep clone — modifying b doesn't affect a
+b.push(4)
+print(a.len())           # 3 (unchanged)
+print(b.len())           # 4
+
+Vector[int] c = !a       # move — a is consumed, c owns the data
+# print(a.len())         # COMPILE ERROR: a was moved
+```
+
+Trivial types (int, float, bool, simple structs) are copied by value — no heap allocation.
+
+**Optimization:** When the source is a temporary (function return value), the compiler uses move-zero instead of clone — transferring ownership at zero cost:
+
+```gorget
+Vector[int] v = make_vec()  # move from temp, not clone — zero cost
+```
+
+This is consistent with function parameter semantics: bare params create temporary read-only access (pointer), bare assignment creates persistent ownership (clone). Both leave the source unaffected.
+
+### 3.5 The Borrow Rules (same as Rust)
 
 At any given time, for a given piece of data, you can have **either**:
 - Any number of immutable borrows (`String s`), OR
@@ -413,7 +444,7 @@ At any given time, for a given piece of data, you can have **either**:
 
 Never both simultaneously. Enforced at compile time. This prevents data races and aliasing bugs.
 
-### 3.5 Lifetimes
+### 3.6 Lifetimes
 
 **The compiler infers lifetimes from function bodies automatically.** Most programmers never write lifetime annotations.
 
@@ -477,7 +508,7 @@ String merge(live Merger m) where left outlives right:
 
 ---
 
-### 3.6 Comparison with Rust Lifetimes
+### 3.7 Comparison with Rust Lifetimes
 
 Gorget's lifetime system covers the same safety guarantees as Rust's but differs in how annotations are inferred. This section is aimed at Rust-experienced users.
 
@@ -514,7 +545,7 @@ fn longer<'a>(x: &'a str, y: &'a str) -> &'a str {
 
 ---
 
-### 3.7 Purity Inference
+### 3.8 Purity Inference
 
 The compiler automatically infers whether a function has side effects — with **zero annotations**. This is computed during borrow checking (Pass 5) alongside lifetime and ownership analysis, since the same whole-body walk that tracks borrows can also observe reads, writes, and calls.
 

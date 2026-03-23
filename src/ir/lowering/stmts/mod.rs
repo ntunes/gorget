@@ -306,6 +306,22 @@ fn lower_var_decl(
                     }
                 }
             }
+            // Deep clone: variable-to-variable assignment of resource types.
+            // Temps (from function calls) are handled by move-zero (ownership transfer).
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                if place.projections.is_empty() && place.local != local_id {
+                    let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                    if ctx.is_named_local(place.local) {
+                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
+                            let ptr_type = ctx.register_ptr_type(rhs_type);
+                            let ptr_local = builder.add_local(ptr_type, None);
+                            builder.emit_borrow(ptr_local, place.clone());
+                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
+                            operand = FunctionBuilder::copy(cloned);
+                        }
+                    }
+                }
+            }
             builder.assign(Place::local(local_id), operand.clone());
             // Track GorgetString temps assigned to Str or String variables.
             // Use the ACTUAL variable type (after reinference) not the original gir_type.

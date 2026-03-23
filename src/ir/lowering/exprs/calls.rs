@@ -836,11 +836,10 @@ pub(super) fn lower_call(
             if ret_type == ctx.type_mapper.owned_string_type {
                 super::register_owned_string_for_drop(ctx, dst);
             }
-            // Collection return values: drop registration blocked by scope-aware
-            // ownership transfer — temps in inner scopes (loop bodies) get freed
-            // before their data escapes via memcpy to outer-scope variables.
-            // Requires scope-aware drop registration or guaranteed move-zero at
-            // every memcpy site. See TODO.md.
+            // Collection temp drop registration: blocked by p2p test failures (8 tests).
+            // Deep-clone + field move-zero infrastructure in place, but some cross-module
+            // function call temps don't get move-zeroed on VarDecl (possible fn_sigs type
+            // mismatch for imported module functions).
             FunctionBuilder::copy(dst)
         };
 

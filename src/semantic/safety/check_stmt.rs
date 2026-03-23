@@ -5,6 +5,7 @@ use crate::span::Spanned;
 
 use crate::semantic::errors::{ArenaEscapeKind, SemanticErrorKind};
 use crate::semantic::ids::DefId;
+use crate::semantic::types::ResolvedType;
 use crate::semantic::scope::DefKind;
 use crate::semantic::types::{self as types};
 
@@ -1173,7 +1174,13 @@ impl<'a> BorrowChecker<'a> {
                         if type_id == self.types.owned_string_id {
                             return;
                         }
-                        if !is_copy_type(type_id, self.types, self.scopes) {
+                        // Collection types (Vector, Dict, Set) are auto-cloned on assignment —
+                        // no `!` needed. Other non-Copy types (user structs) still require `!`.
+                        let is_collection = matches!(self.types.get(type_id), ResolvedType::Generic(def_id, _) if {
+                            let name = self.scopes.get_def(*def_id).name.as_str();
+                            matches!(name, "Vector" | "Dict" | "Set" | "HashMap" | "HashSet" | "Deque")
+                        });
+                        if !is_collection && !is_copy_type(type_id, self.types, self.scopes) {
                             self.error(
                                 SemanticErrorKind::MoveWithoutOperator {
                                     name: def.name.clone(),

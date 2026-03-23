@@ -2993,6 +2993,20 @@ fn borrow_param_mut_store_error() {
 }
 
 #[test]
+fn assignment_clone() {
+    run_gg(
+        "assignment_clone.gg",
+        "\
+3
+4
+3
+3
+2
+done",
+    );
+}
+
+#[test]
 fn index_ref_auto_clone() {
     run_gg(
         "index_ref_auto_clone.gg",
