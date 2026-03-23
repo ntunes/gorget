@@ -2835,11 +2835,43 @@ impl<'a> FuncLowering<'a> {
     }
 
     /// Elaborate a GIR Drop/DropIfAlive into LIR call sequences.
+    /// Walk GIR-level projections to resolve the TypeId at the end of a Place.
+    /// For `bot.nav.path` (Place { local: bot, projections: [Deref, Field(nav), Field(path)] }),
+    /// returns the TypeId of the `path` field, not the type of `bot`.
+    fn resolve_gir_place_type(&self, place: &Place) -> GirTypeId {
+        let mut current = self.gir_func.locals[place.local.0 as usize].type_id;
+        for proj in &place.projections {
+            match proj {
+                Projection::Field(idx) => {
+                    if let Some(GirType::Named(name)) = self.gir_types.get(current) {
+                        if let Some(def) = self.gir_types.get_type_def(&name) {
+                            if let gir_types::TypeDefKind::Struct(sdef) = &def.kind {
+                                if let Some(f) = sdef.fields.get(*idx as usize) {
+                                    current = f.type_id;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    return current; // can't resolve further
+                }
+                Projection::Deref => {
+                    current = self.resolve_deref_gir_type_id(current);
+                }
+                _ => {}
+            }
+        }
+        current
+    }
+
     fn lower_drop(&mut self, place: &Place, bb: BlockId) {
         use crate::ir::types::DropStrategy;
 
         let local_idx = place.local.0 as usize;
-        let type_id = self.gir_func.locals[local_idx].type_id;
+
+        // Resolve the actual type at the end of the projection chain.
+        // For `bot.nav.path` this gives GorgetArray, not Ptr(BotState).
+        let type_id = self.resolve_gir_place_type(place);
 
         // Look up the type name and drop strategy from the type registry.
         let (type_name, strategy) = if let Some(GirType::Named(name)) = self.gir_types.get(type_id) {
