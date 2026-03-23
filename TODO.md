@@ -2,7 +2,7 @@
 
 ## High
 
-- **C backend: collection drop — remaining gaps**: Phase 6 core + borrow checker restriction done (2026-03-22). Borrow checker rejects storing borrowed resource params in struct constructors, variant constructors, and return statements. **Remaining:** (1) collections passed by value to functions still unregistered from drop — borrow checker doesn't yet cover method-call paths (e.g., `self.items = param` via field assignment, not struct constructor); (2) drop-before-reassign for collections still reverted (in-place mutation through pointer); (3) consuming methods (`pop`/`remove`) still clone resource payloads. Full fix requires extending borrow checker to field assignments and method calls with borrowed resource params. [added: 2026-03-14, updated: 2026-03-22]
+- **C backend: collection drop — remaining gaps**: Phase 6 core + borrow checker restriction done (2026-03-22). Collection call temps now registered for drop (2026-03-23); field assignment drop-before-reassign works through nested projections. **Remaining:** (1) named collection variables passed by value to functions that store the buffer — no deep-clone on pass, shared buffer means callee and caller alias the same data; (2) consuming methods (`pop`/`remove`) still clone resource payloads; (3) method call temps not yet covered (only static/free function call temps registered). [added: 2026-03-14, updated: 2026-03-23]
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
