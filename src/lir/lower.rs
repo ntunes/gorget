@@ -1016,11 +1016,13 @@ impl<'a> FuncLowering<'a> {
                         dst: Some(result),
                         name: "gorget_array_clone".to_string(),
                         args: vec![l],
+                        original_name: None,
                     });
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None,
                         name: "gorget_array_extend".to_string(),
                         args: vec![result, r],
+                        original_name: None,
                     });
                     self.store_to_local(*dst, result, bb);
                 } else {
@@ -1121,6 +1123,7 @@ impl<'a> FuncLowering<'a> {
                             dst: Some(cstr_result),
                             name: "gorget_str_from_cstr".to_string(),
                             args: vec![val],
+                            original_name: None,
                         });
                         self.ensure_extern("gorget_str_from_cstr", &[LirType::Ptr], &str_ty);
                         self.store_to_local(*dst, cstr_result, bb);
@@ -1141,6 +1144,7 @@ impl<'a> FuncLowering<'a> {
                         dst: Some(cstr_result),
                         name: conv_fn.to_string(),
                         args: vec![val],
+                        original_name: None,
                     });
                     self.ensure_extern(conv_fn, &[if is_float { LirType::F64 } else if is_bool { LirType::Bool } else { LirType::I64 }], &LirType::Ptr);
                     // The result is a const char* (Ptr) — the SlotStore Ptr→Str path in c_lir
@@ -1592,6 +1596,7 @@ impl<'a> FuncLowering<'a> {
                         dst: Some(result),
                         name: fn_name.to_string(),
                         args: vec![base_val, start, end],
+                        original_name: None,
                     });
                     self.store_to_local(*dst, result, bb);
                 } else if is_str {
@@ -1608,6 +1613,7 @@ impl<'a> FuncLowering<'a> {
                         dst: Some(result),
                         name: "gorget_str_index".to_string(),
                         args: vec![base_val, idx],
+                        original_name: None,
                     });
                     self.store_to_local(*dst, result, bb);
                 } else if is_array || is_dict {
@@ -1622,6 +1628,7 @@ impl<'a> FuncLowering<'a> {
                         dst: Some(ptr_val),
                         name: fn_name.to_string(),
                         args: vec![base_val, idx],
+                        original_name: None,
                     });
                     // gorget_array_get / gorget_map_get return void* pointing to the element.
                     // If dst is Ptr(T), return the raw pointer (borrowed reference).
@@ -1676,6 +1683,7 @@ impl<'a> FuncLowering<'a> {
                             dst: Some(result),
                             name: clone_fn_name.to_string(),
                             args: vec![ptr_val],
+                            original_name: None,
                         });
                         self.store_to_local(*dst, result, bb);
                     } else {
@@ -2041,6 +2049,7 @@ impl<'a> FuncLowering<'a> {
                     dst: Some(result),
                     name: "__gorget_alloc".into(),
                     args: vec![alloc],
+                    original_name: None,
                 });
                 self.store_to_local(*dst, result, bb);
             }
@@ -2058,6 +2067,7 @@ impl<'a> FuncLowering<'a> {
                     dst: Some(result),
                     name: "__gorget_alloc_array".into(),
                     args: vec![cnt, alloc],
+                    original_name: None,
                 });
                 self.store_to_local(*dst, result, bb);
             }
@@ -2069,6 +2079,7 @@ impl<'a> FuncLowering<'a> {
                     dst: None,
                     name: "__gorget_dealloc".into(),
                     args: vec![p, a],
+                    original_name: None,
                 });
             }
 
@@ -2078,6 +2089,7 @@ impl<'a> FuncLowering<'a> {
                     dst: Some(result),
                     name: format!("__gorget_tls_{name}"),
                     args: vec![],
+                    original_name: None,
                 });
                 self.store_to_local(*dst, result, bb);
             }
@@ -2088,6 +2100,7 @@ impl<'a> FuncLowering<'a> {
                     dst: None,
                     name: "__gorget_push_allocator".into(),
                     args: vec![alloc],
+                    original_name: None,
                 });
             }
 
@@ -2096,6 +2109,7 @@ impl<'a> FuncLowering<'a> {
                     dst: None,
                     name: "__gorget_pop_allocator".into(),
                     args: vec![],
+                    original_name: None,
                 });
             }
 
@@ -2247,6 +2261,7 @@ impl<'a> FuncLowering<'a> {
                         dst: result,
                         name: func.clone(),
                         args: lir_args,
+                        original_name: None,
                     });
                 }
 
@@ -2572,6 +2587,7 @@ impl<'a> FuncLowering<'a> {
                     dst: None,
                     name: to_name,
                     args: lir_args,
+                    original_name: None,
                 });
                 return;
             }
@@ -2617,6 +2633,7 @@ impl<'a> FuncLowering<'a> {
                         dst: Some(old_ptr),
                         name: "gorget_array_get".to_string(),
                         args: vec![arr_ptr, idx],
+                        original_name: None,
                     });
                     self.emit_drop_at_ptr(old_ptr, elem_type, bb);
                 }
@@ -2629,6 +2646,7 @@ impl<'a> FuncLowering<'a> {
             dst: result,
             name: actual_emit_name,
             args: lir_args,
+            original_name: Some(original_name.to_string()),
         });
         if let (Some(d), Some(r)) = (*dst, result) {
             self.store_to_local(d, r, bb);
@@ -2946,6 +2964,7 @@ impl<'a> FuncLowering<'a> {
                             dst: None,
                             name: "free".to_string(),
                             args: vec![data_val],
+                            original_name: None,
                         });
                     } else {
                         // Fallback: just free the whole value
@@ -2957,6 +2976,7 @@ impl<'a> FuncLowering<'a> {
                             dst: None,
                             name: "free".to_string(),
                             args: vec![val],
+                            original_name: None,
                         });
                     }
                 } else {
@@ -2988,6 +3008,7 @@ impl<'a> FuncLowering<'a> {
                             } else {
                                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                                     dst: None, name: drop_fn, args: vec![box_val],
+                                    original_name: None,
                                 });
                             }
                         }
@@ -3001,6 +3022,7 @@ impl<'a> FuncLowering<'a> {
                         dst: None,
                         name: "free".to_string(),
                         args: vec![val],
+                        original_name: None,
                     });
                 }
             }
@@ -3049,6 +3071,7 @@ impl<'a> FuncLowering<'a> {
                                 dst: None,
                                 name: tag,
                                 args: vec![addr],
+                                original_name: None,
                             });
                         } else {
                             let elem_drop_fn = match &elem_drop {
@@ -3074,6 +3097,7 @@ impl<'a> FuncLowering<'a> {
                                     dst: None,
                                     name: tag,
                                     args: vec![addr],
+                                    original_name: None,
                                 });
                             }
                         }
@@ -3087,6 +3111,7 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None, name: fn_name.clone(), args: vec![addr],
+                        original_name: None,
                     });
                 }
             }
@@ -3100,6 +3125,7 @@ impl<'a> FuncLowering<'a> {
                     dst: None,
                     name: format!("__gorget_drop_if_alive_open__{byte_size}"),
                     args: vec![addr],
+                    original_name: None,
                 });
                 // Re-compute addr after the guard since we emitted new instructions.
                 let addr2 = self.lower_place_addr(place, bb);
@@ -3110,6 +3136,7 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None, name: fn_name.clone(), args: vec![addr2],
+                        original_name: None,
                     });
                 }
                 self.lower_field_drops(place, &type_name, bb);
@@ -3117,6 +3144,7 @@ impl<'a> FuncLowering<'a> {
                     dst: None,
                     name: "__gorget_drop_if_alive_close".to_string(),
                     args: vec![],
+                    original_name: None,
                 });
             }
             DropStrategy::Recursive => {
@@ -3127,12 +3155,14 @@ impl<'a> FuncLowering<'a> {
                     dst: None,
                     name: format!("__gorget_drop_if_alive_open__{byte_size}"),
                     args: vec![addr],
+                    original_name: None,
                 });
                 self.lower_field_drops(place, &type_name, bb);
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: None,
                     name: "__gorget_drop_if_alive_close".to_string(),
                     args: vec![],
+                    original_name: None,
                 });
             }
         }
@@ -3169,6 +3199,7 @@ impl<'a> FuncLowering<'a> {
                 });
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: None, name: "free".to_string(), args: vec![val],
+                    original_name: None,
                 });
             }
             DropStrategy::Trivial(ref fn_name) => {
@@ -3192,6 +3223,7 @@ impl<'a> FuncLowering<'a> {
                             };
                             self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                                 dst: None, name: tag, args: vec![ptr],
+                                original_name: None,
                             });
                         } else {
                             use crate::ir::types::DropStrategy as DS;
@@ -3215,6 +3247,7 @@ impl<'a> FuncLowering<'a> {
                                 };
                                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                                     dst: None, name: tag, args: vec![ptr],
+                                    original_name: None,
                                 });
                             }
                         }
@@ -3227,6 +3260,7 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None, name: fn_name.clone(), args: vec![ptr],
+                        original_name: None,
                     });
                 }
             }
@@ -3238,6 +3272,7 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None, name: fn_name.clone(), args: vec![ptr],
+                        original_name: None,
                     });
                 }
                 // Also drop fields recursively.
@@ -3286,6 +3321,7 @@ impl<'a> FuncLowering<'a> {
                     } else {
                         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                             dst: None, name: drop_fn, args: vec![field_ptr],
+                            original_name: None,
                         });
                     }
                 }
@@ -3331,6 +3367,7 @@ impl<'a> FuncLowering<'a> {
                             } else {
                                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                                     dst: None, name: drop_fn_name, args: vec![field_ptr],
+                                    original_name: None,
                                 });
                             }
                         }
@@ -5094,15 +5131,15 @@ fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> usize {
         _ => {
             // Runtime collection structs: GorgetArray = {data, len, cap, elem_size, alloc} = 40 bytes
             if type_name.starts_with("Vector__") || type_name == "GorgetArray" {
-                return 40;
+                return 48;
             }
             // GorgetMap = 13 fields × 8 = 104 bytes (keys, values, states, count, cap, key_size, val_size, alloc, order, order_len, tombstones, hash_fn, eq_fn)
             if type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") || type_name == "GorgetMap" {
-                return 104;
+                return 112;
             }
             // GorgetSet aliases GorgetMap (same struct)
             if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") || type_name == "GorgetSet" {
-                return 104;
+                return 112;
             }
             // GorgetString = {data, len, cap, alloc} = 32 bytes
             if type_name == "GorgetString" || type_name == "String" {
@@ -5212,9 +5249,9 @@ fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
                 // authoritative hardcoded size rather than counting LIR fields.
                 let runtime_size = match sd.name.as_str() {
                     // GorgetArray: {data, len, cap, elem_size, alloc} = 5 × 8 = 40
-                    "GorgetArray" => Some(40usize),
+                    "GorgetArray" => Some(48usize),
                     // GorgetMap / GorgetSet: 13 fields × 8 = 104
-                    "GorgetMap" | "GorgetSet" => Some(104usize),
+                    "GorgetMap" | "GorgetSet" => Some(112usize),
                     // GorgetString: {data, len, cap, alloc} = 4 × 8 = 32
                     "GorgetString" => Some(32usize),
                     // Str: {data, len, cap, alloc} = 4 × 8 = 32

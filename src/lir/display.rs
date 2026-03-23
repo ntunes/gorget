@@ -229,7 +229,7 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
             write_value_list(f, args)?;
             write!(f, ")")
         }
-        Inst::CallExtern { dst, name, args } => {
+        Inst::CallExtern { dst, name, args, .. } => {
             if let Some(d) = dst {
                 write!(f, "{d} = ")?;
             }

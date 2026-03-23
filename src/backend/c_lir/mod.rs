@@ -2859,7 +2859,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     for block in &func.blocks {
         let insts = &block.insts;
         for (idx, inst) in insts.iter().enumerate() {
-            if let Inst::CallExtern { dst: Some(d), name, args: call_args } = inst {
+            if let Inst::CallExtern { dst: Some(d), name, args: call_args, .. } = inst {
                 if let Some((_type_prefix, "map")) = parse_option_result_combinator(name) {
                     if call_args.len() > 1 {
                         let closure_struct = ptr_pointee.get(call_args[1].0 as usize)
@@ -3853,7 +3853,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
             }
             write!(out, ");").unwrap();
         }
-        Inst::CallExtern { dst, name, args } => {
+        Inst::CallExtern { dst, name, args, .. } => {
+            let original_name = if let Inst::CallExtern { original_name, .. } = inst { original_name } else { &None };
+            let emit_args = args;
             // ── __gorget_closure_call_N[__FUNC] — escaped closure dispatch via GorgetClosure ──
             if name.starts_with("__gorget_closure_call_") {
                 let id_str = &name["__gorget_closure_call_".len()..];
@@ -5938,6 +5940,39 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 }
             }
 
+            // Set elem_drop/val_drop on collection constructors.
+            // Uses original_name to determine element type from the monomorphized name.
+            if let Some(orig) = original_name.as_ref() {
+                if let Some(d) = dst {
+                    let dv = format!("__v{}", d.0);
+                    // Vector/Array constructor: set elem_drop
+                    if (name.starts_with("gorget_array_new") || name == "gorget_array_with_capacity")
+                        && (orig.starts_with("Vector__") || orig.starts_with("Deque__"))
+                    {
+                        let elem_type = orig.strip_prefix("Vector__")
+                            .or_else(|| orig.strip_prefix("Deque__"))
+                            .unwrap_or("");
+                        if let Some(drop_fn) = elem_drop_fn_for_c_type(elem_type) {
+                            write!(out, " {dv}.elem_drop = (__gorget_drop_fn){drop_fn};").unwrap();
+                        }
+                    }
+                    // Dict/HashMap constructor: set val_drop
+                    if (name.starts_with("gorget_dict_new") || name.starts_with("gorget_map_new"))
+                        && (orig.starts_with("Dict__") || orig.starts_with("HashMap__"))
+                    {
+                        let prefix = if orig.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
+                        if let Some(rest) = orig.strip_prefix(prefix) {
+                            if let Some(pos) = rest.find("__") {
+                                let val_type = &rest[pos + 2..];
+                                if let Some(drop_fn) = elem_drop_fn_for_c_type(val_type) {
+                                    write!(out, " {dv}.val_drop = (__gorget_drop_fn){drop_fn};").unwrap();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Post-push zeroing: after gorget_array_push / gorget_map_put / gorget_set_add / gorget_heap_push,
             // if the element argument points to a collection-type value (GorgetArray, GorgetMap, GorgetSet,
             // GorgetString, GorgetClosure), zero the source to prevent double-free from shallow-copy aliasing.
@@ -7404,6 +7439,21 @@ fn is_collection_type_constructor(last_part: &str) -> bool {
 /// Emit a collection constructor call.
 /// Vector__int64_t(cap) → gorget_array_with_capacity(sizeof(int64_t), cap)
 /// Vector__int64_t() → gorget_array_new(sizeof(int64_t))
+/// Return the C drop function name for a resource-type element, or None for trivial types.
+fn elem_drop_fn_for_c_type(c_type: &str) -> Option<&'static str> {
+    if c_type.starts_with("GorgetArray") || c_type.starts_with("Vector__") {
+        Some("gorget_array_free")
+    } else if c_type.starts_with("GorgetMap") || c_type.starts_with("Dict__") || c_type.starts_with("HashMap__") {
+        Some("gorget_map_free")
+    } else if c_type.starts_with("GorgetSet") || c_type.starts_with("Set__") || c_type.starts_with("HashSet__") {
+        Some("gorget_set_free")
+    } else if c_type == "GorgetString" {
+        Some("gorget_string_free")
+    } else {
+        None
+    }
+}
+
 fn emit_collection_constructor(
     out: &mut String,
     name: &str,
@@ -7428,6 +7478,12 @@ fn emit_collection_constructor(
         } else {
             write!(out, "gorget_array_with_capacity(sizeof({elem_type}), {});", v(args[0])).unwrap();
         }
+        // Set elem_drop for resource-type elements
+        if let Some(drop_fn) = elem_drop_fn_for_c_type(elem_type) {
+            if let Some(d) = dst {
+                write!(out, " {}.elem_drop = (__gorget_drop_fn){drop_fn};", v(*d)).unwrap();
+            }
+        }
     } else if name.starts_with("Set__") || name.starts_with("HashSet__") {
         let elem_type = name.strip_prefix("Set__")
             .or_else(|| name.strip_prefix("HashSet__"))
@@ -7451,6 +7507,12 @@ fn emit_collection_constructor(
         };
         let fn_name = if name.starts_with("Dict__") { "gorget_dict_new" } else { "gorget_map_new" };
         write!(out, "{fn_name}(sizeof({key_type}), sizeof({val_type}));").unwrap();
+        // Set val_drop for resource-type values
+        if let Some(drop_fn) = elem_drop_fn_for_c_type(val_type) {
+            if let Some(d) = dst {
+                write!(out, " {}.val_drop = (__gorget_drop_fn){drop_fn};", v(*d)).unwrap();
+            }
+        }
     } else {
         // Fallback — shouldn't happen
         write!(out, "/* unknown constructor: {name} */ {{0}};").unwrap();

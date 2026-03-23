@@ -139,12 +139,14 @@ static inline uint64_t __gorget_hash_str_len(const char* s, size_t len) {
 }
 
 // ── Collection struct typedefs (always available for field references) ──
+typedef void (*__gorget_drop_fn)(void*);
 typedef struct {
     void* data;
     size_t len;
     size_t cap;
     size_t elem_size;
     GorgetAllocator* alloc;
+    __gorget_drop_fn elem_drop;  // drop function for resource-type elements (NULL if trivial)
 } GorgetArray;
 
 typedef uint64_t (*__gorget_hash_fn)(const void*);
@@ -163,6 +165,7 @@ typedef struct {
     size_t tombstones;
     __gorget_hash_fn hash_fn;
     __gorget_eq_fn eq_fn;
+    __gorget_drop_fn val_drop;  // drop function for resource-type values (NULL if trivial)
 } GorgetMap;
 
 typedef GorgetMap GorgetSet;
@@ -4602,7 +4605,13 @@ pub const RUNTIME_ARRAY: &str = r#"
 
 static inline GorgetArray gorget_array_new(size_t elem_size) {
     __gorget_array_new_count++;
-    return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc};
+    return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc, NULL};
+}
+
+// Array constructor with element drop function for resource-type elements.
+static inline GorgetArray gorget_array_new_drop(size_t elem_size, __gorget_drop_fn drop) {
+    __gorget_array_new_count++;
+    return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc, drop};
 }
 
 static inline void gorget_array_push(GorgetArray* arr, const void* elem) {
@@ -4639,6 +4648,10 @@ static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* 
     if (index >= arr->len) {
         fprintf(stderr, "gorget: panic: index out of bounds: index %zu, length %zu\n", index, arr->len);
         exit(1);
+    }
+    // Drop old element before overwriting (prevents resource leak)
+    if (arr->elem_drop) {
+        arr->elem_drop((char*)arr->data + index * arr->elem_size);
     }
     memcpy((char*)arr->data + index * arr->elem_size, elem, arr->elem_size);
 }
@@ -4724,6 +4737,9 @@ static inline void gorget_array_clear(GorgetArray* arr) {
 
 static inline void gorget_array_free(GorgetArray* arr) {
     __gorget_array_free_count++;
+    // Note: element drops on collection destruction are handled by the LIR's
+    // elem_drop_recipes / lower_field_drops. elem_drop here is used ONLY by
+    // gorget_array_set (overwrite) to free the old element before replacing it.
     if (arr->data) arr->alloc->dealloc(arr->alloc->ctx, arr->data, arr->cap * arr->elem_size);
     arr->data = NULL;
     arr->len = 0;
@@ -4837,6 +4853,7 @@ static inline void gorget_array_extend(GorgetArray* dst, const GorgetArray* src)
 static inline GorgetArray gorget_array_clone(const GorgetArray* src) {
     __gorget_array_clone_count++;
     GorgetArray dst = gorget_array_new(src->elem_size);
+    dst.elem_drop = src->elem_drop;
     if (src->len > 0) {
         gorget_array_reserve(&dst, src->len);
         memcpy(dst.data, src->data, src->len * src->elem_size);
@@ -5055,7 +5072,7 @@ static inline void __gorget_map_grow(GorgetMap* m) {
 }
 
 static inline GorgetMap gorget_map_new(size_t key_size, size_t val_size) {
-    return (GorgetMap){NULL, NULL, NULL, 0, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL};
+    return (GorgetMap){NULL, NULL, NULL, 0, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL, NULL};
 }
 
 // Ordered Dict: pre-allocates order array so put() tracks insertion order
@@ -5076,6 +5093,7 @@ static inline GorgetMap gorget_dict_new(size_t key_size, size_t val_size) {
     m.tombstones = 0;
     m.hash_fn = NULL;
     m.eq_fn = NULL;
+    m.val_drop = NULL;
     return m;
 }
 
@@ -5116,6 +5134,10 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
             }
             if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
                 if (m->val_size > 0 && value != NULL) {
+                    // Drop old value before overwriting (prevents resource leak)
+                    if (m->val_drop) {
+                        m->val_drop((char*)m->values + idx * m->val_size);
+                    }
                     memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
                 }
                 return;
@@ -5147,6 +5169,10 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         }
         if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
             if (m->val_size > 0 && value != NULL) {
+                // Drop old value before overwriting (prevents resource leak)
+                if (m->val_drop) {
+                    m->val_drop((char*)m->values + idx * m->val_size);
+                }
                 memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
             }
             return;
@@ -5212,6 +5238,8 @@ static inline void gorget_map_clear(GorgetMap* m) {
 
 static inline void gorget_map_free(GorgetMap* m) {
     if (!m->alloc) return;  // zeroed struct — already freed or never initialized
+    // Note: element drops on collection destruction are handled by the LIR.
+    // val_drop here is used ONLY by gorget_map_put (overwrite) to free old values.
     GorgetAllocator* a = m->alloc;
     if (m->keys) a->dealloc(a->ctx, m->keys, m->cap * m->key_size);
     if (m->values) a->dealloc(a->ctx, m->values, m->cap * m->val_size);
@@ -5237,6 +5265,7 @@ static inline GorgetMap gorget_map_clone(const GorgetMap* src) {
     dst.val_size = src->val_size;
     dst.hash_fn = src->hash_fn;
     dst.eq_fn = src->eq_fn;
+    dst.val_drop = src->val_drop;
     dst.alloc = a;
     if (src->cap > 0) {
         dst.keys = a->alloc(a->ctx, src->cap * src->key_size);
