@@ -306,62 +306,60 @@ fn lower_var_decl(
                     }
                 }
             }
-            // Deep clone: variable-to-variable assignment of resource types.
-            // Temps (from function calls) are handled by move-zero (ownership transfer).
+            // Determine assignment mode and emit with explicit ownership semantics.
+            use crate::ir::instructions::AssignMode;
+            let actual_var_type = builder.locals[local_id.0 as usize].type_id;
+            let mut assign_mode = AssignMode::Copy; // default for trivial types
+
             if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                 if place.projections.is_empty() && place.local != local_id {
                     let rhs_type = builder.locals[place.local.0 as usize].type_id;
-                    if ctx.is_named_local(place.local) {
+
+                    // GorgetString → str view: unregister (intentional leak for view safety)
+                    if rhs_type == ctx.type_mapper.owned_string_type
+                        && actual_var_type == ctx.type_mapper.str_type
+                    {
+                        ctx.drops.unregister(place.local);
+                        assign_mode = AssignMode::Borrow;
+                    }
+                    // Named resource variable → deep clone (independent copy)
+                    else if ctx.is_named_local(place.local) {
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
                             let ptr_type = ctx.register_ptr_type(rhs_type);
                             let ptr_local = builder.add_local(ptr_type, None);
                             builder.emit_borrow(ptr_local, place.clone());
                             let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
                             operand = FunctionBuilder::copy(cloned);
+                            assign_mode = AssignMode::Move; // clone result is a temp
                         }
+                    }
+                    // Drop-registered temp → move (transfer ownership)
+                    else if ctx.drops.is_registered(place.local) {
+                        assign_mode = AssignMode::Move;
+                    }
+                    // GorgetString temp → owned string variable: move
+                    else if rhs_type == ctx.type_mapper.owned_string_type
+                        && actual_var_type == ctx.type_mapper.owned_string_type
+                    {
+                        assign_mode = AssignMode::Move;
                     }
                 }
             }
-            builder.assign(Place::local(local_id), operand.clone());
-            // Track GorgetString temps assigned to Str or String variables.
-            // Use the ACTUAL variable type (after reinference) not the original gir_type.
-            let actual_var_type = builder.locals[local_id.0 as usize].type_id;
+
+            builder.assign_mode(assign_mode, Place::local(local_id), operand.clone());
+
+            // Execute mode-specific post-assign actions.
+            // These will move to the LIR once it reads AssignMode.
             if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
-                if place.projections.is_empty() {
-                    let rhs_type = builder.locals[place.local.0 as usize].type_id;
-                    if rhs_type == ctx.type_mapper.owned_string_type
-                        && place.local != local_id
-                    {
-                        if actual_var_type == ctx.type_mapper.owned_string_type {
-                            // String variable consuming a GorgetString temp: mark temp as moved
-                            // to prevent double-free (VarDecl already registers the variable for drop)
-                            builder.move_zero(Place::local(place.local));
-                            ctx.drops.mark_moved(place.local);
-                        } else if actual_var_type == ctx.type_mapper.str_type {
-                            // Str variable taking a view of a GorgetString temp: completely
-                            // unregister the temp from drop tracking. The str view may escape
-                            // the scope, and freeing the GorgetString would invalidate the view.
-                            // The GorgetString will leak — same as pre-drop-registration behavior.
-                            ctx.drops.unregister(place.local);
+                if place.projections.is_empty() && place.local != local_id {
+                    match assign_mode {
+                        AssignMode::Move => {
+                            if !ctx.drops.is_moved(place.local) {
+                                builder.move_zero(Place::local(place.local));
+                                ctx.drops.mark_moved(place.local);
+                            }
                         }
-                    }
-                    // Collection move-zero: zero source temp after assigning to collection variable.
-                    // Mirrors the GorgetString move-zero pattern above.
-                    // Also handles any drop-registered temp being assigned to a variable.
-                    if place.local != local_id
-                        && !ctx.drops.is_moved(place.local)
-                    {
-                        let rhs_type = builder.locals[place.local.0 as usize].type_id;
-                        if ctx.type_registry.is_collection_type(rhs_type)
-                            && ctx.type_registry.is_collection_type(actual_var_type)
-                        {
-                            builder.move_zero(Place::local(place.local));
-                            ctx.drops.mark_moved(place.local);
-                        } else if ctx.drops.is_registered(place.local) {
-                            // General: any drop-registered temp assigned to a variable
-                            builder.move_zero(Place::local(place.local));
-                            ctx.drops.mark_moved(place.local);
-                        }
+                        _ => {}
                     }
                 }
             }
