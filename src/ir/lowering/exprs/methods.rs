@@ -166,10 +166,9 @@ pub(super) fn lower_method_call(
                     return Operand::Constant(Constant::Unit);
                 }
                 let dst = builder.call(effective_name, lowered_args, ret_type);
-                if ret_type == ctx.type_mapper.owned_string_type {
-                    super::register_owned_string_for_drop(ctx, dst);
-                }
-                if ctx.type_registry.is_collection_type(ret_type) {
+                if ctx.type_registry.is_collection_type(ret_type)
+                    || ret_type == ctx.type_mapper.owned_string_type
+                {
                     ctx.drops.register_local(dst, ret_type, &ctx.type_registry);
                 }
                 return FunctionBuilder::copy(dst);
@@ -1545,11 +1544,9 @@ pub(super) fn lower_method_call(
             Operand::Constant(Constant::Unit)
         } else {
             let dst = builder.call(call_name, call_args, ret_type);
-            // Register GorgetString temps from allocating string methods for drop
-            if ret_type == ctx.type_mapper.owned_string_type {
-                super::register_owned_string_for_drop(ctx, dst);
-            }
-            if ctx.type_registry.is_collection_type(ret_type) {
+            if ctx.type_registry.is_collection_type(ret_type)
+                || ret_type == ctx.type_mapper.owned_string_type
+            {
                 ctx.drops.register_local(dst, ret_type, &ctx.type_registry);
             }
             FunctionBuilder::copy(dst)

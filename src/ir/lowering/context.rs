@@ -343,6 +343,20 @@ impl<'a> LoweringContext<'a> {
         self.named_locals.contains(&local)
     }
 
+    /// Create a local AND register it for drop if its type needs dropping.
+    /// Use this instead of `builder.add_local()` for temps that might be resource types.
+    /// The `needs_drop()` check inside `register_local` automatically skips primitives
+    /// and Ptr types — zero overhead for trivial types.
+    pub fn add_local_tracked(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        type_id: crate::ir::types::TypeId,
+    ) -> crate::ir::types::LocalId {
+        let local = builder.add_local(type_id, None);
+        self.drops.register_local(local, type_id, &self.type_registry);
+        local
+    }
+
     /// Look up a variable by name.
     pub fn lookup_local(&self, name: &str) -> Option<(LocalId, TypeId)> {
         self.locals.get(name).copied()

@@ -2216,7 +2216,8 @@ fn lower_string_interpolation(
     let mut all_args = vec![Operand::Constant(Constant::Str(format_str))];
     all_args.extend(args);
     let dst = builder.call_extern("gorget_string_format", all_args, owned_string_type);
-    register_owned_string_for_drop(ctx, dst);
+    // Register for drop — needs_drop() handles type filtering.
+    ctx.drops.register_local(dst, owned_string_type, &ctx.type_registry);
     FunctionBuilder::copy(dst)
 }
 
