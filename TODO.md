@@ -13,6 +13,8 @@
 
 - **LIR backend: remaining clone-on-read for Dict resource-type values**: Phase 3b eliminates clones for Vector borrowing reads on resource-type elements. Dict.get() still clones resource-type values (GorgetArray/GorgetMap/GorgetString). **Dict Ref attempted and reverted (2026-03-21):** Extending Phase 3b to Dict via `Option__Ref_V` breaks the common write-back pattern (`get → modify → set`): `gorget_map_put` receives a Ptr (8 bytes) where it expects a full struct (32+ bytes) → buffer overread. Fix requires either: (a) deref Ptr back to value before set/put calls, (b) detect and skip Ref for Dict values that are written back, or (c) a fundamentally different approach. Subsumed by IndexLoad reference semantics above. [added: 2026-03-17, updated: 2026-03-22]
 
+- **Trait-bounded generic functions don't monomorphize**: `void print_sum[Summable T](T val)` compiles but the monomorphized instance (e.g., `print_sum__Pair`) is never emitted — linker error "undefined reference to `print_sum`". The generic collector doesn't instantiate trait-bounded generics. Negative test (`unsatisfied_trait_bound_error.gg`) works (rejects invalid bounds), but no positive test exists for calling trait-bounded generic functions. Core language feature gap. [added: 2026-03-23]
+
 - **Self-host parser: 794/797 matched, 3 mismatched, 0 crashed** — Remaining 3: null byte in chars.gg (1), str/String source alias in dataframe_nulls.gg (1), float literal precision in fstring_format.gg (1). All unfixable at self-host level. [updated: 2026-03-21]
 
 - **`char` type backend bugs**: `char as int` gives garbage values, and char comparison with `==`/`!=` generates `gorget_str_eq` calls. [added: 2026-03-21]
