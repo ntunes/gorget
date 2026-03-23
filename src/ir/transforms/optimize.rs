@@ -297,6 +297,7 @@ fn substitute_copies(inst: &mut Instruction, copies: &std::collections::HashMap<
         Instruction::HeapAllocArray { count, allocator, .. } => {
             replace(count); replace(allocator);
         }
+                Instruction::LoadRef { .. } | Instruction::StoreRef { .. } => {}
         Instruction::Dealloc { ptr, allocator } => {
             replace(ptr); replace(allocator);
         }
@@ -384,6 +385,7 @@ fn substitute_operands(inst: &mut Instruction, known: &std::collections::HashMap
             sub(count);
             sub(allocator);
         }
+                Instruction::LoadRef { .. } | Instruction::StoreRef { .. } => {}
         Instruction::Dealloc { ptr, allocator } => {
             sub(ptr);
             sub(allocator);
@@ -1539,6 +1541,7 @@ fn collect_read_locals(inst: &Instruction) -> Vec<u32> {
             push_operand_reads(&mut reads, count);
             push_operand_reads(&mut reads, allocator);
         }
+                Instruction::LoadRef { .. } | Instruction::StoreRef { .. } => {}
         Instruction::Dealloc { ptr, allocator } => {
             push_operand_reads(&mut reads, ptr);
             push_operand_reads(&mut reads, allocator);
@@ -2007,6 +2010,7 @@ fn mark_instruction_locals(inst: &Instruction, referenced: &mut [bool]) {
             mark_operand(count, referenced);
             mark_operand(allocator, referenced);
         }
+                Instruction::LoadRef { .. } | Instruction::StoreRef { .. } => {}
         Instruction::Dealloc { ptr, allocator } => {
             mark_operand(ptr, referenced);
             mark_operand(allocator, referenced);
@@ -2150,6 +2154,7 @@ fn remap_instruction_locals(inst: &mut Instruction, remap: &[u32]) {
             remap_operand(count, remap);
             remap_operand(allocator, remap);
         }
+                Instruction::LoadRef { .. } | Instruction::StoreRef { .. } => {}
         Instruction::Dealloc { ptr, allocator } => {
             remap_operand(ptr, remap);
             remap_operand(allocator, remap);
@@ -2272,6 +2277,7 @@ fn collect_func_refs_from_instruction(inst: &Instruction, called: &mut HashSet<S
             collect_func_refs_from_operand(count, called);
             collect_func_refs_from_operand(allocator, called);
         }
+                Instruction::LoadRef { .. } | Instruction::StoreRef { .. } => {}
         Instruction::Dealloc { ptr, allocator } => {
             collect_func_refs_from_operand(ptr, called);
             collect_func_refs_from_operand(allocator, called);

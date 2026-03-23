@@ -270,6 +270,12 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
             )
             .unwrap();
         }
+        Instruction::LoadRef { dst, src } => {
+            writeln!(out, "    _{} = LoadRef {}", dst.0, format_place(src)).unwrap();
+        }
+        Instruction::StoreRef { dst, value } => {
+            writeln!(out, "    StoreRef {} = {}", format_place(dst), format_operand(value, reg)).unwrap();
+        }
         Instruction::Dealloc { ptr, allocator } => {
             write!(
                 out,

@@ -215,6 +215,14 @@ impl FunctionBuilder {
         self.emit_with_temp(type_id, |dst| Instruction::IndexLoad { dst, base, index })
     }
 
+    pub fn load_ref(&mut self, src: Place, type_id: TypeId) -> LocalId {
+        self.emit_with_temp(type_id, |dst| Instruction::LoadRef { dst, src })
+    }
+
+    pub fn store_ref(&mut self, dst: Place, value: Operand) {
+        self.emit(Instruction::StoreRef { dst, value });
+    }
+
     pub fn bin_op(&mut self, op: BinOp, type_id: TypeId, lhs: Operand, rhs: Operand) -> LocalId {
         self.emit_with_temp(type_id, |dst| Instruction::BinOp {
             dst,

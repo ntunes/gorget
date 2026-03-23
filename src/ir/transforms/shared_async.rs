@@ -578,6 +578,7 @@ fn remap_instruction(instr: &mut Instruction, map: &FxHashMap<LocalId, LocalId>)
             remap_operand(count, map);
             remap_operand(allocator, map);
         }
+                Instruction::LoadRef { .. } | Instruction::StoreRef { .. } => {}
         Instruction::Dealloc { ptr, allocator } => {
             remap_operand(ptr, map);
             remap_operand(allocator, map);

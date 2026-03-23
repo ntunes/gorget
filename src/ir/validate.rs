@@ -316,6 +316,7 @@ fn check_instruction_locals(
             check_operand_locals(count, max, ctx, errors);
             check_operand_locals(allocator, max, ctx, errors);
         }
+                Instruction::LoadRef { .. } | Instruction::StoreRef { .. } => {}
         Instruction::Dealloc { ptr, allocator } => {
             check_operand_locals(ptr, max, ctx, errors);
             check_operand_locals(allocator, max, ctx, errors);
@@ -762,6 +763,7 @@ fn collect_read_locals_for_validate(inst: &Instruction) -> Vec<u32> {
             push_op(&mut reads, count);
             push_op(&mut reads, allocator);
         }
+                Instruction::LoadRef { .. } | Instruction::StoreRef { .. } => {}
         Instruction::Dealloc { ptr, allocator } => {
             push_op(&mut reads, ptr);
             push_op(&mut reads, allocator);

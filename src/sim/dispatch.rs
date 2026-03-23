@@ -1340,6 +1340,7 @@ impl<'m> Interpreter<'m> {
                 locals[i] = Value::MutPtr(addr);
             }
 
+            Instruction::LoadRef { .. } | Instruction::StoreRef { .. } => { /* TODO: sim interpreter */ }
             Instruction::Dealloc { ptr, allocator: _ } => {
                 // P4b: mark the allocation as dead; detect double-free.
                 let ptr_val = self.eval_operand(locals, ptr)?;

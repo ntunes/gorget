@@ -2034,6 +2034,39 @@ impl<'a> FuncLowering<'a> {
                 self.store_to_local(*dst, addr, bb);
             }
 
+            // -- Ref load/store (explicit Ptr dereference) --
+            Instruction::LoadRef { dst, src } => {
+                // Load through Ptr: deref src to get value, store in dst.
+                // Same as FieldLoad with Deref projection, but explicit.
+                let src_addr = self.lower_place_addr(src, bb);
+                let src_type = self.effective_place_type(src);
+                let pointee = self.resolve_deref_gir_type_id(src_type);
+                let field_ty = map_gir_type_with_structs(&pointee, self.gir_types, Some(self.struct_reg));
+                let deref_val = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    dst: deref_val,
+                    ptr: src_addr,
+                    ty: field_ty,
+                });
+                self.store_to_local(*dst, deref_val, bb);
+            }
+            Instruction::StoreRef { dst, value } => {
+                // Store through Ptr: write value to the address held by dst.
+                let val = self.lower_operand(value, bb);
+                let dst_addr = self.lower_place_addr(dst, bb);
+                // Deref the Ptr to get the target address
+                let target = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    dst: target,
+                    ptr: dst_addr,
+                    ty: LirType::Ptr,
+                });
+                self.lir_func.block_mut(bb).insts.push(Inst::Store {
+                    ptr: target,
+                    value: val,
+                });
+            }
+
             // -- Allocator --
             Instruction::HeapAlloc {
                 dst,

@@ -137,6 +137,21 @@ pub enum Instruction {
         index: Operand,
     },
 
+    /// Load a value by dereferencing a Ptr-typed local.
+    /// Replaces the implicit auto-deref in `mut_capture_locals` handling.
+    /// The source local holds a Ptr(T); the result is the T value.
+    LoadRef {
+        dst: LocalId,
+        src: Place,
+    },
+
+    /// Store a value through a Ptr-typed local (write-back).
+    /// Replaces the implicit Deref-projection write in mutable captures.
+    StoreRef {
+        dst: Place,
+        value: Operand,
+    },
+
     HeapAlloc {
         dst: LocalId,
         type_id: TypeId,
