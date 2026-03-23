@@ -204,7 +204,19 @@ pub(super) fn lower_field_assign(
         emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
         maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
         maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
-        builder.assign(target_place, rhs);
+        builder.assign(target_place, rhs.clone());
+        // Move-zero drop-registered temps after field assignment
+        // to prevent scope-exit double-free.
+        if let Operand::Copy(ref p) | Operand::Move(ref p) = rhs {
+            if p.projections.is_empty()
+                && !ctx.drops.is_moved(p.local)
+                && ctx.drops.is_registered(p.local)
+            {
+                builder.move_zero(Place::local(p.local));
+                ctx.drops.mark_moved(p.local);
+            }
+        }
+        super::maybe_emit_field_move_zero(ctx, builder, &rhs);
         return;
     }
 

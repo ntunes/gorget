@@ -169,7 +169,9 @@ pub(super) fn lower_method_call(
                 if ret_type == ctx.type_mapper.owned_string_type {
                     super::register_owned_string_for_drop(ctx, dst);
                 }
-                // TODO: register collection return values for drop (see calls.rs)
+                if ctx.type_registry.is_collection_type(ret_type) {
+                    ctx.drops.register_local(dst, ret_type, &ctx.type_registry);
+                }
                 return FunctionBuilder::copy(dst);
             }
         }

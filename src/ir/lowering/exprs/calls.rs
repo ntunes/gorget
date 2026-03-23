@@ -826,6 +826,29 @@ pub(super) fn lower_call(
             super::unregister_gorget_string_args(ctx, builder, &lowered_args);
         }
 
+        // Collect drop-registered collection TEMPS (not named variables) passed
+        // as args. These need move-zero after the call to prevent double-free:
+        // the callee received a shallow copy of the buffer, so the caller must
+        // relinquish ownership of the anonymous temp.
+        // Named variables (e.g., `len(nums)`) must NOT be zeroed — caller still owns them.
+        let collection_arg_locals: Vec<LocalId> = lowered_args.iter()
+            .filter_map(|op| {
+                if let Operand::Copy(place) | Operand::Move(place) = op {
+                    if place.projections.is_empty()
+                        && !ctx.is_named_local(place.local)
+                        && ctx.drops.is_registered(place.local)
+                        && !ctx.drops.is_moved(place.local)
+                    {
+                        let ty = builder.locals[place.local.0 as usize].type_id;
+                        if ctx.type_registry.is_collection_type(ty) {
+                            return Some(place.local);
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+
         let result = if ret_type == UNIT_TYPE {
             builder.call_void(&call_name, lowered_args);
             Operand::Constant(Constant::Unit)
@@ -836,10 +859,13 @@ pub(super) fn lower_call(
             if ret_type == ctx.type_mapper.owned_string_type {
                 super::register_owned_string_for_drop(ctx, dst);
             }
-            // Collection temp drop registration: blocked by p2p test failures (8 tests).
-            // Deep-clone + field move-zero infrastructure in place, but some cross-module
-            // function call temps don't get move-zeroed on VarDecl (possible fn_sigs type
-            // mismatch for imported module functions).
+            // Register collection return values for drop at scope exit.
+            // Without this, GorgetArray/GorgetMap/GorgetSet temps leak when
+            // the result is discarded or passed as an argument without assignment.
+            // VarDecl move-zeroes these temps when assigning to a named variable.
+            if ctx.type_registry.is_collection_type(ret_type) {
+                ctx.drops.register_local(dst, ret_type, &ctx.type_registry);
+            }
             FunctionBuilder::copy(dst)
         };
 
@@ -848,6 +874,13 @@ pub(super) fn lower_call(
             builder.move_zero(place.clone());
             ctx.emit_field_origin_zero(builder, place.local);
             ctx.drops.mark_moved(place.local);
+        }
+
+        // MoveZero collection temps passed as args — callee received a
+        // shallow copy, so the caller relinquishes the original.
+        for local in &collection_arg_locals {
+            builder.move_zero(Place::local(*local));
+            ctx.drops.mark_moved(*local);
         }
 
         result
