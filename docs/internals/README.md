@@ -7,6 +7,7 @@ Contributor-facing documentation for the Gorget compiler implementation.
 | Document | Covers | Key Files |
 |----------|--------|-----------|
 | [Safety Checker](safety-checker.md) | Ownership, lifetimes, concurrency checks (Pass 5) | `src/semantic/safety/` |
+| [Ownership IR](ownership-ir.md) | GIR ownership semantics: AssignMode, FieldLoadMode, ArgOwnership | `src/ir/instructions.rs`, `src/ir/lowering/` |
 | [LIR Design](lir-design.md) | SSA-based low-level IR, optimization, backend trait | `src/lir/`, `src/backend/c_lir/` |
 | [Shared Keyword](shared-keyword-design.md) | `shared` keyword, token semantics, CFA | `src/semantic/safety/helpers.rs` |
 
