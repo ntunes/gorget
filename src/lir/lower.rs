@@ -2843,17 +2843,37 @@ impl<'a> FuncLowering<'a> {
         for proj in &place.projections {
             match proj {
                 Projection::Field(idx) => {
+                    let mut resolved = false;
                     if let Some(GirType::Named(name)) = self.gir_types.get(current) {
                         if let Some(def) = self.gir_types.get_type_def(&name) {
-                            if let gir_types::TypeDefKind::Struct(sdef) = &def.kind {
-                                if let Some(f) = sdef.fields.get(*idx as usize) {
-                                    current = f.type_id;
-                                    continue;
+                            match &def.kind {
+                                gir_types::TypeDefKind::Struct(sdef) => {
+                                    if let Some(f) = sdef.fields.get(*idx as usize) {
+                                        current = f.type_id;
+                                        resolved = true;
+                                    }
                                 }
+                                gir_types::TypeDefKind::Enum(edef) => {
+                                    // Enum fields are flattened: tag(0), Variant0_0(1), ...
+                                    let mut field_offset = 1u32;
+                                    'outer: for variant in &edef.variants {
+                                        for f in &variant.fields {
+                                            if field_offset == *idx {
+                                                current = f.type_id;
+                                                resolved = true;
+                                                break 'outer;
+                                            }
+                                            field_offset += 1;
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
-                    return current; // can't resolve further
+                    if !resolved {
+                        return current; // can't resolve further
+                    }
                 }
                 Projection::Deref => {
                     current = self.resolve_deref_gir_type_id(current);
