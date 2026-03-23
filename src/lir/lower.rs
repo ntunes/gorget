@@ -11,8 +11,8 @@
 
 use crate::ir;
 use crate::ir::instructions::{
-    BinOp as GirBinOp, CmpOp as GirCmpOp, Constant, Instruction, Operand, Place, Projection,
-    Terminator, UnOp as GirUnOp,
+    AssignMode, BinOp as GirBinOp, CmpOp as GirCmpOp, Constant, Instruction, Operand, Place,
+    Projection, Terminator, UnOp as GirUnOp,
 };
 use crate::ir::types::{
     self as gir_types, GirType, TypeId as GirTypeId, TypeRegistry,
@@ -962,33 +962,48 @@ impl<'a> FuncLowering<'a> {
 
     fn lower_instruction(&mut self, inst: &Instruction, bb: BlockId) {
         match inst {
-            Instruction::Assign { dst, value, .. } => {
+            Instruction::Assign { mode, dst, value, .. } => {
                 // Special-case: Constant::Null assigned to an enum-typed local.
-                // Null represents a fieldless variant (e.g. None, Error).  Instead of
-                // emitting NullPtr (which becomes memset(0) ⇒ tag=0 = wrong variant),
-                // emit proper enum init with the correct tag ordinal.
                 if let Operand::Constant(Constant::Null) = value {
-                    // Try to materialize a proper enum null variant (tag set, payload zeroed)
-                    // instead of emitting raw NullPtr which would become memcpy-from-NULL.
                     if let Some(()) = self.try_materialize_null_for_assign(dst, bb) {
                         return;
                     }
                 }
                 // Special-case: Option/Result source → non-Option/Result dest.
-                // The GIR C backend implicitly extracts the payload field (e.g.
-                // `_21 = _23.data.Some._0`). We must do the same: emit an
-                // EnumFieldLoad-style extraction instead of a raw copy.
                 if let Some(val) = self.try_enum_payload_extract(dst, value, bb) {
                     self.store_to_place(dst, val, bb);
                     return;
                 }
                 // Special-case: Box[Trait] ← Box[Concrete] trait object construction.
-                // The GIR C backend wraps this as (TraitObj){.data = src, .vtable = &vtable}.
                 if self.try_trait_object_construct(dst, value, bb) {
                     return;
                 }
                 let val = self.lower_operand(value, bb);
                 self.store_to_place(dst, val, bb);
+
+                // AssignMode::Move — zero the source after copy to transfer ownership.
+                // This replaces the scattered move-zero logic in the GIR lowering.
+                if matches!(mode, AssignMode::Move) {
+                    if let Operand::Copy(src_place) | Operand::Move(src_place) = value {
+                        if src_place.projections.is_empty() {
+                            let src_addr = self.lower_place_addr(src_place, bb);
+                            let byte_size = self.compute_place_byte_size(src_place) as i64;
+                            if byte_size > 0 {
+                                let zero = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                                    dst: zero, ty: LirType::I32, value: 0,
+                                });
+                                let sz = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                                    dst: sz, ty: LirType::I64, value: byte_size,
+                                });
+                                self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+                                    ptr: src_addr, byte: zero, size: sz,
+                                });
+                            }
+                        }
+                    }
+                }
             }
 
             Instruction::BinOp {
