@@ -91,56 +91,55 @@ pub(super) fn lower_assign(
                     builder.assign(deref_place, operand.clone());
                     super::maybe_emit_field_move_zero(ctx, builder, &operand);
                 } else {
-                    // Deep clone: variable-to-variable reassignment of resource types.
+                    // Determine assignment mode (same decision tree as VarDecl).
+                    use crate::ir::instructions::AssignMode;
+                    let mut assign_mode = AssignMode::Copy;
+
                     if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                         if place.projections.is_empty() && place.local != local_id {
                             let rhs_type = builder.locals[place.local.0 as usize].type_id;
-                            if ctx.is_named_local(place.local) {
+
+                            if rhs_type == ctx.type_mapper.owned_string_type
+                                && type_id == ctx.type_mapper.str_type
+                            {
+                                ctx.drops.unregister(place.local);
+                                assign_mode = AssignMode::Borrow;
+                            } else if ctx.is_named_local(place.local) {
                                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
                                     let ptr_type = ctx.register_ptr_type(rhs_type);
                                     let ptr_local = builder.add_local(ptr_type, None);
                                     builder.emit_borrow(ptr_local, place.clone());
                                     let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
                                     operand = FunctionBuilder::copy(cloned);
+                                    assign_mode = AssignMode::Move;
                                 }
-                            }
-                        }
-                    }
-                    builder.assign(Place::local(local_id), operand.clone());
-                    super::maybe_emit_field_move_zero(ctx, builder, &operand);
-                }
-                // Track GorgetString temps in assignments
-                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
-                    if place.projections.is_empty() {
-                        let rhs_type = builder.locals[place.local.0 as usize].type_id;
-                        if rhs_type == ctx.type_mapper.owned_string_type
-                            && place.local != local_id
-                        {
-                            if type_id == ctx.type_mapper.owned_string_type {
-                                // String variable consuming a GorgetString temp: mark temp as moved
-                                // to prevent double-free (variable is already registered for drop)
-                                builder.move_zero(Place::local(place.local));
-                                ctx.drops.mark_moved(place.local);
-                            } else if type_id == ctx.type_mapper.str_type {
-                                // Str variable taking a view of a GorgetString temp: completely
-                                // unregister the temp from drop tracking. The str view may escape
-                                // the scope, and freeing the GorgetString would invalidate the view.
-                                // The GorgetString will leak — same as pre-drop-registration behavior.
-                                ctx.drops.unregister(place.local);
-                            }
-                        }
-                        // Collection move-zero: zero source temp after re-assignment.
-                        // Mirrors the GorgetString move-zero pattern above.
-                        if place.local != local_id {
-                            let rhs_type = builder.locals[place.local.0 as usize].type_id;
-                            if ctx.type_registry.is_collection_type(rhs_type)
-                                && ctx.type_registry.is_collection_type(type_id)
+                            } else if ctx.drops.is_registered(place.local) {
+                                assign_mode = AssignMode::Move;
+                            } else if rhs_type == ctx.type_mapper.owned_string_type
+                                && type_id == ctx.type_mapper.owned_string_type
                             {
-                                builder.move_zero(Place::local(place.local));
-                                ctx.drops.mark_moved(place.local);
+                                assign_mode = AssignMode::Move;
                             }
                         }
                     }
+
+                    builder.assign_mode(assign_mode, Place::local(local_id), operand.clone());
+
+                    // Post-assign: execute mode-specific actions
+                    if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                        if place.projections.is_empty() && place.local != local_id {
+                            match assign_mode {
+                                AssignMode::Move => {
+                                    if !ctx.drops.is_moved(place.local) {
+                                        builder.move_zero(Place::local(place.local));
+                                        ctx.drops.mark_moved(place.local);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    super::maybe_emit_field_move_zero(ctx, builder, &operand);
                 }
             } else if ctx.global_names.contains(name.as_str()) {
                 // Module-level static variable — emit GlobalAssign
