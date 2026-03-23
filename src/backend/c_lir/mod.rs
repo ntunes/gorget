@@ -3377,10 +3377,10 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
                     } else if (slot_is_str && val_is_gs) || (slot_is_gs && val_is_str) {
                         // Unified cross-type (Str↔GorgetString): clone to ensure owned copy
-                        write!(out, "{} = gorget_string_clone((const GorgetString*)&{});", s(*slot), v(*value)).unwrap();
+                        write!(out, "{} = gorget_string_clone((const GorgetString*)&{}); gorget_string_free((GorgetString*)&{});", s(*slot), v(*value), v(*value)).unwrap();
                     } else if (slot_is_str || slot_is_gs) && matches!(val_ty, Some(LirType::Struct(_))) {
                         // GorgetString→GorgetString: clone to prevent double-free
-                        write!(out, "{} = gorget_string_clone((const GorgetString*)&{});", s(*slot), v(*value)).unwrap();
+                        write!(out, "{} = gorget_string_clone((const GorgetString*)&{}); gorget_string_free((GorgetString*)&{});", s(*slot), v(*value), v(*value)).unwrap();
                     } else if !matches!(val_ty, Some(LirType::Struct(_)) | None) {
                         // Scalar → single-field struct coercion (newtype wrapping).
                         if let LirType::Struct(sid) = slot_ty {
