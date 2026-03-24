@@ -5519,6 +5519,7 @@ c-a-f-\u{e9}-",
 }
 
 #[test]
+#[serial(hot_reload_basic_gg)]
 fn hot_reload_basic() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures/hot_reload_basic.gg");
@@ -5575,6 +5576,7 @@ fn hot_reload_basic() {
 }
 
 #[test]
+#[serial(hot_reload_basic_gg)]
 fn hot_reload_basic_lir() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures/hot_reload_basic.gg");
