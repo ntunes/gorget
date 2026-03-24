@@ -329,10 +329,12 @@ impl TypeRegistry {
     }
 
     /// Drop check for anonymous call result temps.
-    /// Returns true for types with concrete drop functions (Trivial/Custom)
-    /// or collection types. Excludes Recursive because some types (DataFrame
-    /// Column) share internal data through shallow copies — MoveZero on the
-    /// temp would corrupt the shared data.
+    /// Includes Trivial/Custom drop and collection types.
+    /// Excludes Recursive — deep clone infrastructure exists for IndexLoad and
+    /// Option unwrap, but arbitrary function calls returning Recursive structs
+    /// (like DataFrame.tail()) may return shallow copies sharing internal data.
+    /// Including Recursive requires ALL return paths to produce independently-owned
+    /// copies, which needs library-level changes.
     pub fn needs_drop_for_temp(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
         if let Some(GirType::Named(name)) = self.get(type_id) {

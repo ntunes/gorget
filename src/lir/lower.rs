@@ -1756,18 +1756,38 @@ impl<'a> FuncLowering<'a> {
                         });
                         self.store_to_local(*dst, result, bb);
                     } else {
-                        // Non-collection element: Load value + zero slot for move semantics
-                        let result = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
-                            dst: result,
-                            ty: elem_ty.clone(),
-                            ptr: ptr_val,
-                        });
-                        self.store_to_local(*dst, result, bb);
+                        let elem_drop = self.infer_drop_strategy(elem_type_name);
+                        if matches!(elem_drop, crate::ir::types::DropStrategy::Recursive) {
+                            // Recursive-drop struct: deep-clone via {Type}__clone(ptr)
+                            // to produce an independently-owned copy. The collection
+                            // retains its original element.
+                            let clone_fn = format!("{elem_type_name}__clone");
+                            let ret_ty = elem_ty.clone();
+                            self.ensure_extern(&clone_fn, &[LirType::Ptr], &ret_ty);
+                            let result = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                dst: Some(result),
+                                name: clone_fn,
+                                args: vec![ptr_val],
+                                original_name: None,
+                            });
+                            self.store_to_local(*dst, result, bb);
+                        } else {
+                            // Other non-collection element: Load + move-zero
+                            let result = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                                dst: result,
+                                ty: elem_ty.clone(),
+                                ptr: ptr_val,
+                            });
+                            self.store_to_local(*dst, result, bb);
+                        }
 
-                        // Zero the slot to prevent double-free (move semantics)
-                        let elem_needs_zero = match self.infer_drop_strategy(elem_type_name) {
-                            crate::ir::types::DropStrategy::None => false,
+                        // Zero source slot for non-Recursive move semantics.
+                        // Recursive types don't zero — the clone makes the copy independent.
+                        let elem_needs_zero = match &elem_drop {
+                            crate::ir::types::DropStrategy::None
+                            | crate::ir::types::DropStrategy::Recursive => false,
                             _ => true,
                         };
                         if elem_needs_zero {
