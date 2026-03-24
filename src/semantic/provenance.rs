@@ -464,7 +464,47 @@ impl<'a> ProvenanceCtx<'a> {
                 }
                 StringProvenance::View
             }
+            // Field access in return context: if the root object is a local variable
+            // (not a parameter), the view would dangle — treat as Owned so the IR
+            // auto-clones. Views from parameters are safe (caller keeps them alive).
+            Expr::FieldAccess { object, .. } => {
+                if self.return_expr_borrows_from_local(object) {
+                    StringProvenance::Owned
+                } else {
+                    self.classify_expr(expr)
+                }
+            }
+            // Method call on local in return context: same logic — view from local
+            // would dangle, treat as Owned.
+            Expr::MethodCall { receiver, method, .. } => {
+                // View-returning methods (trim, slice, etc.) on local objects can't escape
+                if VIEW_METHODS.contains(&method.node.as_str())
+                    && self.return_expr_borrows_from_local(receiver)
+                {
+                    StringProvenance::Owned
+                } else {
+                    self.classify_expr(expr)
+                }
+            }
             _ => self.classify_expr(expr),
+        }
+    }
+
+    /// Check if an expression's root borrows from a local variable (not a parameter).
+    fn return_expr_borrows_from_local(&self, expr: &Spanned<Expr>) -> bool {
+        match &expr.node {
+            Expr::Identifier(name) => {
+                if let Some(def_id) = self.find_binding_def(name, expr.span) {
+                    let def = self.scopes.get_def(def_id);
+                    // Parameters have DefKind::Param; locals have DefKind::Variable
+                    matches!(def.kind, crate::semantic::scope::DefKind::Variable)
+                } else {
+                    false
+                }
+            }
+            Expr::FieldAccess { object, .. } => self.return_expr_borrows_from_local(object),
+            Expr::MethodCall { receiver, .. } => self.return_expr_borrows_from_local(receiver),
+            _ => false,
         }
     }
 

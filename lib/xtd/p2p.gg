@@ -946,7 +946,7 @@ String p2p_stream_protocol(Node node, int stream_id):
     while i < node.streams.len():
         ReliableStream s = node.streams.get(i).unwrap()
         if s.stream_id == stream_id:
-            return "" + s.protocol
+            return s.protocol
         i = i + 1
     return ""
 
