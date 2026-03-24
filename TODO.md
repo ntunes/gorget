@@ -2,9 +2,9 @@
 
 ## High
 
-- **C backend: collection drop — remaining gaps**: Struct string ownership, call_tracked, Recursive drop, EnumInit MoveZero, return MoveZero, VarDecl Move for droppable temps, field load cap-zero all DONE (2026-03-24). 904/904 tests pass. **Remaining:** (1) named collection variables passed by value to functions that store the buffer — no deep-clone on pass; (2) consuming methods (`pop`/`remove`) still clone resource payloads; (3) `needs_drop_for_temp` excludes Recursive — call result temps of user struct type aren't tracked (DataFrame shared-data issue). [added: 2026-03-14, updated: 2026-03-24]
+- **Ban AssignMode::Copy for resource types (Phase 1 of explicit-clone roadmap)**: The root cause of all shallow-copy bugs. Blanket default change (Copy→Move) breaks 28 tests because Move zeros sources still in use (for-loop iterables, multi-use variables). **Correct approach**: surgical change at END of VarDecl/reassign decision tree, only for simple-local operands that aren't field loads or constants. Needs case-by-case analysis of each Copy fallthrough. **Clone infrastructure ready**: per-type `__clone` functions generated, IndexLoad deep clone, Option unwrap deep clone. **Roadmap**: Phase 1 (ban Copy + auto-clone warnings) → Phase 2 (fix all warnings with explicit `.clone()`/`!`) → Phase 3 (auto-clone→error). [added: 2026-03-24]
 
-- **String variable leak: `should_unregister_string_args` still active**: The heuristic unregisters GorgetString temps passed to non-void functions → leak. Now less impactful since struct fields own their strings (Recursive drop frees them), but standalone string temps from concat/format passed to functions like `hash()` or `gl_get_uniform_location()` still leak. Fix requires tracking whether callee stores str views vs only reads them. [updated: 2026-03-24]
+- **`should_unregister_string_args` leak**: Less impactful after struct field ownership fix. Standalone string temps from concat/format passed to non-void functions still leak. [updated: 2026-03-24]
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
