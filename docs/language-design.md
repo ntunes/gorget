@@ -388,7 +388,7 @@ Vector[int] get_first(Vector[Vector[int]] m):
     return m[0]            # auto-clones for owned return
 ```
 
-This follows the same principle as Result auto-propagation: the compiler does the right thing based on type context. No `.clone()` calls, no special sigils — the type annotation communicates intent.
+The `auto` keyword gives the fast path (reference/view); an explicit type annotation with `.clone()` gives an owned copy. The `!` sigil gives a zero-cost move.
 
 ### 3.3 Ownership (Move Semantics)
 
@@ -407,34 +407,59 @@ int b = a                # just copies, both valid (no ! needed)
 
 ### 3.4 Assignment Semantics
 
-Assignment creates ownership. For resource types, bare assignment deep-clones:
+For resource types, there are no implicit copies. Every assignment is either a **move** (zero cost, source consumed), an explicit **clone** (new allocation), or a **borrow** (reference):
 
 | Assignment | Meaning | Cost |
 |-----------|---------|------|
-| `a = b` | Deep clone — a and b are independent | Heap allocation |
+| `Vector[int] b = !a` | Move — b takes ownership, a consumed | Zero cost |
+| `Vector[int] b = a.clone()` | Clone — b is an independent deep copy | Heap allocation |
+| `auto b = a` | Borrow — b references a (Ptr) | Zero cost |
+| `Vector[int] b = f()` | Move from temp — b owns the result | Zero cost |
 | `a = &b` | Mutable reference — a aliases b | Zero cost |
-| `a = !b` | Move — a takes ownership, b consumed | Zero cost |
 
 ```gorget
 Vector[int] a = [1, 2, 3]
-Vector[int] b = a        # deep clone — modifying b doesn't affect a
-b.push(4)
-print(a.len())           # 3 (unchanged)
-print(b.len())           # 4
 
-Vector[int] c = !a       # move — a is consumed, c owns the data
-# print(a.len())         # COMPILE ERROR: a was moved
+Vector[int] b = a.clone()  # explicit clone — b is independent
+b.push(4)
+print(a.len())             # 3 (unchanged)
+print(b.len())             # 4
+
+Vector[int] c = !a         # move — a is consumed, c owns the data
+# print(a.len())           # COMPILE ERROR: a was moved
+
+Vector[int] d = make_vec() # move from temp — zero cost
+auto e = d                 # borrow — e references d, no allocation
 ```
 
-Trivial types (int, float, bool, simple structs) are copied by value — no heap allocation.
+Trivial types (int, float, bool, simple structs) are copied by value — no heap allocation, no `.clone()` needed.
 
-**Optimization:** When the source is a temporary (function return value), the compiler uses move-zero instead of clone — transferring ownership at zero cost:
+**Key rule:** Resource types are never implicitly copied. The programmer explicitly chooses move (`!`), clone (`.clone()`), or borrow (`auto`). This makes every allocation visible in the source code.
+
+**`auto` semantics:** `auto` borrows when the compiler can guarantee the source outlives the variable (same scope, LIFO drop ordering). For ephemeral sources (function call results), `auto` moves instead.
+
+### 3.4.1 The `Cloneable` Trait
+
+Types that support deep copying implement the `Cloneable` trait:
 
 ```gorget
-Vector[int] v = make_vec()  # move from temp, not clone — zero cost
+trait Cloneable:
+    Self clone(self)
 ```
 
-This is consistent with function parameter semantics: bare params create temporary read-only access (pointer), bare assignment creates persistent ownership (clone). Both leave the source unaffected.
+Use `@derive(Cloneable)` to auto-generate field-by-field clone for structs:
+
+```gorget
+@derive(Cloneable)
+struct Player:
+    String name
+    Vector[int] scores
+
+Player p1 = Player("Alice", [90, 85, 95])
+Player p2 = p1.clone()    # deep copy — p2.name and p2.scores are independent
+```
+
+Built-in collection types (`Vector`, `Dict`, `Set`, `String`) implement `Cloneable` natively. User structs with resource fields must derive or implement it explicitly. Trivial types don't need `Cloneable` — they're `Copy` by default.
 
 #### Struct Field Access
 
@@ -2358,7 +2383,13 @@ What happens next depends on how the borrow is used:
 | Call a mutating method | Mutate in place | `matrix[0].push(4)` |
 | Pass to a function taking `&` | Pass the borrow | `process(&matrix[0])` |
 
-**Auto-clone on assignment:** When a `&T` is assigned to an owned `T` variable and `T` is a resource type (Vector, Dict, Set, String), the compiler inserts an implicit `.clone()`. This preserves Python-like ergonomics — users don't need to write `.clone()` explicitly for common patterns like `Vector[int] row = matrix[0]`. The cost (a deep copy) is real but hidden for readability. Use `v.remove(i)` or `v.pop()` to take ownership without cloning.
+**Explicit clone required:** Resource types are never implicitly copied. When you need an independent owned copy, call `.clone()` explicitly. This makes every heap allocation visible in the source code:
+
+```gorget
+Vector[int] row = matrix[0].clone()   # explicit clone — allocation visible
+auto row_ref = matrix[0]              # borrow — zero cost reference
+Vector[int] taken = !matrix.remove(0) # move — take ownership, no allocation
+```
 
 **Consuming element access:** To move an element out of a collection (transferring ownership), use a consuming method instead of subscript:
 

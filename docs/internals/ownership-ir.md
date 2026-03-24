@@ -21,16 +21,20 @@ pub enum AssignMode {
 
 | Scenario | Mode | What happens |
 |----------|------|-------------|
-| `int x = y` | Copy | Bitwise copy, both valid |
+| `int x = y` | Copy | Bitwise copy, both valid (trivial types only) |
 | `Vector[int] v = make_vec()` | Move | Temp→variable, temp zeroed |
-| `Vector[int] b = a` | Clone | Deep clone, a and b independent |
+| `Vector[int] b = a.clone()` | Clone | Deep clone via Cloneable trait, a and b independent |
+| `Vector[int] c = !a` | Move | Transfer ownership, a consumed |
+| `auto d = a` | Borrow | Ptr reference, borrows from a |
 | `String s = owned_string.str()` | Borrow | Ptr preserved, source unregistered from drop |
 
+**Key rule:** `Copy` mode is ONLY for trivial types (int, bool, float, simple structs without resource fields). Resource types MUST use Move, Clone, or Borrow. No implicit shallow copies.
+
 **Decision tree** (at emission time):
-1. Source is GorgetString, dest is String (view) → **Borrow** (unregister source)
-2. Source is named variable with clone function → **Clone** (emit clone call, then Move the result)
+1. Source is GorgetString, dest is StringView → **Borrow** (unregister source)
+2. Source is named variable with `.clone()` call → **Clone** (via Cloneable trait)
 3. Source is drop-registered temp → **Move** (transfer ownership)
-4. Source is GorgetString temp, dest is GorgetString → **Move**
+4. Source is unregistered droppable temp → **Move**
 5. Otherwise → **Copy**
 
 ## Field Load Modes (`FieldLoadMode`)
