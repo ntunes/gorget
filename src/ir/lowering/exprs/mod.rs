@@ -1438,13 +1438,14 @@ fn lower_field_access(
                 }
                 // First try the struct_fields cache
                 if let Some((field_idx, field_type)) = ctx.lookup_field(type_name, field_name) {
-                    // Collection fields: return Ptr(T) reference into the struct.
-                    // Prevents shallow copies that share heap data. Auto-clone fires
-                    // when assigned to an explicit-type T variable.
-                    // Strings are excluded: GorgetString header copy is safe as a Str view,
-                    // and Ptr(GorgetString) breaks operators/method calls that expect Str.
+                    // Resource-type fields: return a reference/view instead of a shallow copy.
+                    // - Collections: Ptr(T) — prevents shared heap buffer double-free
+                    // - GorgetString: Str (view) — same layout, non-owning, all consumers handle Str
+                    // Auto-clone fires when assigned to an explicit-type variable.
                     let result_type = if ctx.type_registry.is_collection_type(field_type) {
                         ctx.type_registry.insert(GirType::Ptr(field_type))
+                    } else if field_type == ctx.type_mapper.owned_string_type {
+                        ctx.type_mapper.str_type
                     } else {
                         field_type
                     };
@@ -1458,6 +1459,8 @@ fn lower_field_access(
                             if field.name == field_name {
                                 let result_type = if ctx.type_registry.is_collection_type(field.type_id) {
                                     ctx.type_registry.insert(GirType::Ptr(field.type_id))
+                                } else if field.type_id == ctx.type_mapper.owned_string_type {
+                                    ctx.type_mapper.str_type
                                 } else {
                                     field.type_id
                                 };

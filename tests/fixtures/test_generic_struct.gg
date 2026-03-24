@@ -38,5 +38,6 @@ void main():
     # Option of generic struct
     Option[Pair[int, String]] maybe = Some(Pair[int, String](7, "seven"))
     print(maybe.is_some())
-    print(maybe.unwrap().first)
-    print(maybe.unwrap().second)
+    Pair[int, String] unwrapped = maybe.unwrap()
+    print(unwrapped.first)
+    print(unwrapped.second)

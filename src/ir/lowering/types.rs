@@ -360,17 +360,12 @@ pub fn register_struct_type(
         ensure_generic_field_type_registered(mapper, registry, &f.node.type_.node, generic_templates);
     }
 
-    // Map fields. StringType fields are lowered as str_type (Copy/view) rather
-    // than owned_string_type. At the C level, Str and GorgetString are the same
-    // 32-byte struct; the runtime drop (gorget_string_free) checks cap to decide
-    // whether to free. Using str_type prevents the drop elaboration from inserting
-    // drops for field-loaded strings (which would double-free shared data).
+    // Map fields. String fields keep owned_string_type (GorgetString) so the struct
+    // OWNS its strings and recursive drop frees them. Field LOADS return str_type (Str
+    // view) to prevent shallow-copy double-frees — this is handled in lower_field_access.
     let fields: Vec<StructField> = struct_def.fields.iter()
         .map(|f| {
-            let mut field_type = mapper.map_ast_type(&f.node.type_.node);
-            if field_type == mapper.owned_string_type {
-                field_type = mapper.str_type;
-            }
+            let field_type = mapper.map_ast_type(&f.node.type_.node);
             StructField {
                 name: f.node.name.node.clone(),
                 type_id: field_type,
