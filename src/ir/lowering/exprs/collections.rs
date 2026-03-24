@@ -147,7 +147,7 @@ fn type_id_to_mangle_name(ctx: &LoweringContext, type_id: TypeId) -> String {
     if type_id == F64_TYPE { return "double".to_string(); }
     if type_id == F32_TYPE { return "float".to_string(); }
     if type_id == BOOL_TYPE { return "bool".to_string(); }
-    if type_id == ctx.type_mapper.str_type { return "Str".to_string(); }
+    if type_id == ctx.type_mapper.str_type { return "GorgetStringView".to_string(); }
     if type_id == ctx.type_mapper.owned_string_type { return "GorgetString".to_string(); }
     // Named types
     if let Some(name) = ctx.type_name_for_id(type_id) {

@@ -423,10 +423,13 @@ fn lower_for_dict(
         .map(|s| s.to_string())
         .unwrap_or_default();
     // Parse: Dict__KeyType__ValueType or HashMap__KeyType__ValueType
-    let (key_c_type, val_c_type) = parse_dict_kv_types(&type_name);
-    // Look up the TypeIds for key/value types
-    let key_type = ctx.lookup_type_by_name(&key_c_type).unwrap_or(I64_TYPE);
-    let val_type = ctx.lookup_type_by_name(&val_c_type).unwrap_or(I64_TYPE);
+    let (key_gir_type, val_gir_type) = parse_dict_kv_types(&type_name);
+    // Convert GIR names → C type names for inline C codegen
+    let key_c_type = to_c_type_name(&key_gir_type);
+    let val_c_type = to_c_type_name(&val_gir_type);
+    // Look up the TypeIds for key/value types (use GIR names for type registry)
+    let key_type = ctx.lookup_type_by_name(&key_gir_type).unwrap_or(I64_TYPE);
+    let val_type = ctx.lookup_type_by_name(&val_gir_type).unwrap_or(I64_TYPE);
 
     // oi = 0 (outer iteration index)
     let oi = builder.add_local(I64_TYPE, None);
@@ -544,8 +547,9 @@ fn lower_for_set(
         .map(|s| s.to_string())
         .unwrap_or_default();
     let is_ordered = type_name.starts_with("Set__");
-    let elem_c_type = parse_set_elem_type(&type_name);
-    let elem_type = ctx.lookup_type_by_name(&elem_c_type).unwrap_or(I64_TYPE);
+    let elem_gir_type = parse_set_elem_type(&type_name);
+    let elem_c_type = to_c_type_name(&elem_gir_type);
+    let elem_type = ctx.lookup_type_by_name(&elem_gir_type).unwrap_or(I64_TYPE);
 
     // i = 0  (for ordered: index into order array; for unordered: index into states)
     let i_local = builder.add_local(I64_TYPE, None);
@@ -834,7 +838,7 @@ fn find_kv_split(s: &str) -> Option<usize> {
     // Known primitive suffixes to try splitting on
     let primitives = ["int64_t", "int32_t", "int16_t", "int8_t",
                       "uint64_t", "uint32_t", "uint16_t", "uint8_t",
-                      "double", "float", "bool", "Str", "GorgetString"];
+                      "double", "float", "bool", "GorgetStringView", "GorgetString"];
     for prim in &primitives {
         if s.starts_with(prim) && s[prim.len()..].starts_with("__") {
             return Some(prim.len());
@@ -850,6 +854,15 @@ fn find_kv_split(s: &str) -> Option<usize> {
         i = abs_pos + 2;
     }
     None
+}
+
+/// Map a GIR/mangled type name to its C runtime type name for inline C codegen.
+/// GorgetStringView is an internal name; the C runtime uses "Str".
+fn to_c_type_name(gir_name: &str) -> String {
+    match gir_name {
+        "GorgetStringView" => "Str".to_string(),
+        _ => gir_name.to_string(),
+    }
 }
 
 /// Lower `for var in start..end: body` or `for var in start..=end: body`.

@@ -163,7 +163,7 @@ pub(super) fn lower_method_spawn(
     let ret_c = ctx.type_name_for_id(fn_ret_type)
         .unwrap_or("int64_t")
         .to_string();
-    let ret_c = if ret_c == "GorgetString" { "Str".to_string() } else { ret_c };
+    let ret_c = if ret_c == "GorgetString" { "GorgetStringView".to_string() } else { ret_c };
     let task_name = if fn_ret_type == UNIT_TYPE {
         "Task__void".to_string()
     } else {
@@ -396,7 +396,7 @@ pub(super) fn lower_closure_spawn(
     let ret_c = ctx.type_name_for_id(fn_ret_type)
         .unwrap_or("int64_t")
         .to_string();
-    let ret_c = if ret_c == "GorgetString" { "Str".to_string() } else { ret_c };
+    let ret_c = if ret_c == "GorgetString" { "GorgetStringView".to_string() } else { ret_c };
     let task_name = if fn_ret_type == UNIT_TYPE {
         "Task__void".to_string()
     } else {

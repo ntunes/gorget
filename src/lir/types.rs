@@ -46,11 +46,10 @@ impl Default for StructRegistry {
 /// Well-known struct layouts for Gorget runtime types.
 pub fn builtin_struct_defs() -> Vec<StructDef> {
     vec![
-        // Str — legacy name, kept for stable StructId indexing.
-        // Identical to GorgetString. Will be removed once all internal
-        // references use "GorgetString" exclusively.
+        // GorgetStringView — non-owning string view (cap==0, alloc==NULL).
+        // Identical layout to GorgetString. The C runtime typedef is "Str".
         StructDef {
-            name: "Str".into(),
+            name: "GorgetStringView".into(),
             fields: vec![
                 ("data".into(), LirType::Ptr),
                 ("len".into(), LirType::I64),
@@ -181,19 +180,19 @@ mod tests {
         let mut reg = StructRegistry::new();
         assert!(reg.is_empty());
 
-        assert!(reg.register("Str", StructId(0)).is_none());
-        assert_eq!(reg.lookup("Str"), Some(StructId(0)));
+        assert!(reg.register("GorgetStringView", StructId(0)).is_none());
+        assert_eq!(reg.lookup("GorgetStringView"), Some(StructId(0)));
         assert_eq!(reg.len(), 1);
 
         // Re-registering returns old ID
-        assert_eq!(reg.register("Str", StructId(5)), Some(StructId(0)));
+        assert_eq!(reg.register("GorgetStringView", StructId(5)), Some(StructId(0)));
     }
 
     #[test]
     fn builtin_structs() {
         let defs = builtin_struct_defs();
         assert!(defs.len() >= 9);
-        assert_eq!(defs[0].name, "Str");
+        assert_eq!(defs[0].name, "GorgetStringView");
         assert_eq!(defs[0].fields.len(), 4);
         assert_eq!(defs[1].name, "GorgetString");
         assert_eq!(defs[1].fields.len(), 4);

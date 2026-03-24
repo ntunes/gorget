@@ -360,7 +360,7 @@ mod tests {
         module.source_filename = Some("test.gg".into());
 
         let str_id = module.add_struct(StructDef {
-            name: "Str".into(),
+            name: "GorgetStringView".into(),
             fields: vec![("data".into(), LirType::Ptr), ("len".into(), LirType::I64)],
             is_enum: false,
                       });
@@ -388,7 +388,7 @@ mod tests {
 
         let output = dump_module(&module);
         assert!(output.contains("; source: test.gg"));
-        assert!(output.contains("struct.0 = type Str"));
+        assert!(output.contains("struct.0 = type GorgetStringView"));
         assert!(output.contains("data: ptr"));
         assert!(output.contains("declare i32 @puts(ptr)"));
         assert!(output.contains("fn @main() -> i32"));

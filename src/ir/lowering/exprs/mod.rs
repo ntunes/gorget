@@ -687,12 +687,12 @@ fn lower_expr_inner(
                     }
 
                     // Map return TypeId → C type name → Task__<c_type> name.
-                    // Normalize GorgetString→Str so the task type matches user annotations
-                    // like `Task[str]` which mangle to Task__Str.
+                    // Normalize GorgetString→GorgetStringView so the task type matches user annotations
+                    // like `Task[str]` which mangle to Task__GorgetStringView.
                     let ret_c = ctx.type_name_for_id(fn_ret_type)
                         .unwrap_or("int64_t")
                         .to_string();
-                    let ret_c = if ret_c == "GorgetString" { "Str".to_string() } else { ret_c };
+                    let ret_c = if ret_c == "GorgetString" { "GorgetStringView".to_string() } else { ret_c };
                     let task_name = if fn_ret_type == UNIT_TYPE {
                         "Task__void".to_string()
                     } else {
@@ -850,12 +850,12 @@ fn lower_expr_inner(
                         .map(|(_, r)| *r)
                         .unwrap_or(I64_TYPE);
 
-                    // Normalize GorgetString→Str so the task type matches user annotations
-                    // like `Task[str]` which mangle to Task__Str.
+                    // Normalize GorgetString→GorgetStringView so the task type matches user annotations
+                    // like `Task[str]` which mangle to Task__GorgetStringView.
                     let ret_c = ctx.type_name_for_id(fn_ret_type)
                         .unwrap_or("int64_t")
                         .to_string();
-                    let ret_c = if ret_c == "GorgetString" { "Str".to_string() } else { ret_c };
+                    let ret_c = if ret_c == "GorgetString" { "GorgetStringView".to_string() } else { ret_c };
                     let task_name = if fn_ret_type == UNIT_TYPE {
                         "Task__void".to_string()
                     } else {
@@ -1623,7 +1623,7 @@ pub(super) fn index_expr_to_mangle_fragment(expr: &Expr) -> Option<String> {
             "int" => "int64_t",
             "float" => "double",
             "bool" => "bool",
-            "str" | "String" => "Str",
+            "str" | "String" => "GorgetStringView",
             "char" => "char",
             "byte" | "uint8" => "uint8_t",
             "uint16" => "uint16_t",

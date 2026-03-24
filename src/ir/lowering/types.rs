@@ -17,7 +17,7 @@ pub struct TypeMapper {
 impl TypeMapper {
     pub fn new(registry: &mut TypeRegistry) -> Self {
         // Register Str as a named type matching the runtime's fat pointer struct
-        let str_type = registry.insert(GirType::Named("Str".to_string()));
+        let str_type = registry.insert(GirType::Named("GorgetStringView".to_string()));
         // Register GorgetString with Move semantics + trivial drop (gorget_string_free)
         registry.add_type_def(TypeDef {
             name: "GorgetString".to_string(),
@@ -692,9 +692,9 @@ pub fn mangle_type_for_name(ty: &Type) -> String {
             PrimitiveType::Float | PrimitiveType::Float64 => "double".to_string(),
             PrimitiveType::Float32 => "float".to_string(),
             PrimitiveType::Bool => "bool".to_string(),
-            PrimitiveType::StringView => "Str".to_string(),
+            PrimitiveType::StringView => "GorgetStringView".to_string(),
             PrimitiveType::CStr => "cstr".to_string(),
-            PrimitiveType::StringType => "Str".to_string(),
+            PrimitiveType::StringType => "GorgetStringView".to_string(),
             PrimitiveType::Void => "void".to_string(),
         },
         Type::Named { name, generic_args } => {
@@ -806,7 +806,7 @@ mod tests {
         // str maps to a Named("Str") type (matches the runtime fat pointer struct)
         let str_id = mapper.map_primitive(&PrimitiveType::StringView);
         assert_eq!(str_id, mapper.str_type);
-        assert!(matches!(reg.get(str_id), Some(GirType::Named(name)) if name == "Str"));
+        assert!(matches!(reg.get(str_id), Some(GirType::Named(name)) if name == "GorgetStringView"));
     }
 
     #[test]
@@ -912,7 +912,7 @@ mod tests {
                 spanned(Type::Primitive(PrimitiveType::StringView)),
             ],
         );
-        assert_eq!(name, "Result__Str__Str");
+        assert_eq!(name, "Result__GorgetStringView__GorgetStringView");
     }
 
     #[test]
