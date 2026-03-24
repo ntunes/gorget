@@ -1209,6 +1209,7 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
     // another struct — the parent's field drop calls {Name}__drop.
     emit_recursive_struct_drops(&mut out, module, &struct_names);
     emit_recursive_struct_clones(&mut out, module, &struct_names);
+    emit_recursive_enum_clones(&mut out, module, &struct_names);
 
     // Function definitions
     writeln!(out, "// ── Function Definitions ──").unwrap();
@@ -6500,6 +6501,78 @@ fn emit_recursive_struct_clones(out: &mut String, module: &LirModule, sn: &HashM
             };
             writeln!(out, "    dst.{field_name} = {clone_fn}(&dst.{field_name});").unwrap();
         }
+        writeln!(out, "    return dst;").unwrap();
+        writeln!(out, "}}").unwrap();
+        writeln!(out).unwrap();
+    }
+}
+
+/// Emit per-type clone functions for ENUM types with Recursive drop.
+/// Uses tag-based dispatch to clone the active variant's resource fields.
+fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, sn: &HashMap<u32, String>) {
+    for (idx, sdef) in module.structs.iter().enumerate() {
+        let type_name = &sdef.name;
+
+        let variant_info = match module.recursive_drop_enums.get(type_name.as_str()) {
+            Some(info) => info,
+            None => continue,
+        };
+
+        // Skip if a user-defined clone already exists
+        let clone_fn_name = format!("{type_name}__clone");
+        if module.functions.iter().any(|f| f.name == clone_fn_name) {
+            continue;
+        }
+
+        let c_name = sn.get(&(idx as u32)).cloned().unwrap_or_else(|| type_name.clone());
+
+        // Map drop function → clone function
+        fn drop_to_clone(drop_fn: &str) -> String {
+            match drop_fn {
+                "gorget_string_free" => "gorget_string_clone".into(),
+                "gorget_array_free" => "gorget_array_clone".into(),
+                "gorget_map_free" => "gorget_map_clone".into(),
+                "gorget_set_free" => "gorget_set_clone".into(),
+                other if other.ends_with("__drop") => {
+                    let base = &other[..other.len() - 6];
+                    format!("{base}__clone")
+                }
+                _ => String::new(),
+            }
+        }
+
+        writeln!(out, "{c_name} {clone_fn_name}(void* __p) {{").unwrap();
+        writeln!(out, "    {c_name} dst = *({c_name}*)__p;").unwrap();
+        writeln!(out, "    switch (dst.tag) {{").unwrap();
+
+        // Group variant_info by variant index
+        let mut by_variant: std::collections::HashMap<u32, Vec<(&str, &str)>> = std::collections::HashMap::new();
+        for (vi, field_name, drop_fn) in variant_info {
+            by_variant.entry(*vi).or_default().push((field_name, drop_fn));
+        }
+
+        let mut indices: Vec<u32> = by_variant.keys().copied().collect();
+        indices.sort();
+        for vi in indices {
+            let fields = &by_variant[&vi];
+            write!(out, "        case {vi}: ").unwrap();
+            for (field_name, drop_fn) in fields {
+                let clone_fn = drop_to_clone(drop_fn);
+                if !clone_fn.is_empty() {
+                    // For large enums (union layout): access via data.FieldName
+                    // For small enums (flat layout): access via FieldName directly
+                    let access = if sdef.is_enum {
+                        format!("data.{field_name}")
+                    } else {
+                        field_name.to_string()
+                    };
+                    write!(out, "dst.{access} = {clone_fn}(&dst.{access}); ").unwrap();
+                }
+            }
+            writeln!(out, "break;").unwrap();
+        }
+
+        writeln!(out, "    }}").unwrap();
         writeln!(out, "    return dst;").unwrap();
         writeln!(out, "}}").unwrap();
         writeln!(out).unwrap();

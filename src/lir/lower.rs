@@ -306,6 +306,44 @@ impl<'a> LoweringContext<'a> {
                 self.module.recursive_drop_structs.insert(name.clone(), field_drops);
             }
         }
+
+        // Second pass: collect enum variant→drop info for tag-based clone dispatch.
+        for (name, strategy, kind) in &type_defs {
+            if !matches!(strategy, DropStrategy::Recursive) {
+                continue;
+            }
+            let edef = match kind {
+                TypeDefKind::Enum(e) => e,
+                _ => continue,
+            };
+            let mut variant_drops: Vec<(u32, String, String)> = Vec::new();
+            // LIR enum fields use global indexing: tag is field 0, then all variant
+            // fields are numbered sequentially across variants.
+            let mut global_field_idx = 0u32; // starts at 0 (after tag which is handled separately)
+            for (vi, variant) in edef.variants.iter().enumerate() {
+                for (fi, field) in variant.fields.iter().enumerate() {
+                    let lir_field_idx = global_field_idx + fi as u32;
+                    let field_type_name = match self.gir.type_registry.get(field.type_id) {
+                        Some(GirType::Named(n)) => n.clone(),
+                        _ => continue,
+                    };
+                    let field_drop = self.infer_drop_strategy(&field_type_name);
+                    let drop_fn = match &field_drop {
+                        DropStrategy::Trivial(fn_name) => fn_name.clone(),
+                        DropStrategy::Custom(fn_name) => fn_name.clone(),
+                        DropStrategy::Recursive => format!("{field_type_name}__drop"),
+                        DropStrategy::None => continue,
+                    };
+                    // LIR union field name: {VariantName}_{global_index}
+                    let field_name = format!("{}_{lir_field_idx}", variant.name);
+                    variant_drops.push((vi as u32, field_name, drop_fn));
+                }
+                global_field_idx += variant.fields.len() as u32;
+            }
+            if !variant_drops.is_empty() {
+                self.module.recursive_drop_enums.insert(name.clone(), variant_drops);
+            }
+        }
     }
 
     /// Compute drop recipes for all types that need compound element drops.
