@@ -938,6 +938,7 @@ impl<'a> FuncLowering<'a> {
                     self.lir_func.block_mut(entry_bb).insts.push(Inst::SlotStore {
                         slot,
                         value: param_val,
+                        is_move: false,
                     });
                 }
             }
@@ -962,7 +963,7 @@ impl<'a> FuncLowering<'a> {
 
     fn lower_instruction(&mut self, inst: &Instruction, bb: BlockId) {
         match inst {
-            Instruction::Assign { mode: _mode, dst, value, .. } => {
+            Instruction::Assign { mode, dst, value, .. } => {
                 // Special-case: Constant::Null assigned to an enum-typed local.
                 if let Operand::Constant(Constant::Null) = value {
                     if let Some(()) = self.try_materialize_null_for_assign(dst, bb) {
@@ -978,14 +979,18 @@ impl<'a> FuncLowering<'a> {
                 if self.try_trait_object_construct(dst, value, bb) {
                     return;
                 }
+                let is_move = matches!(mode, ir::instructions::AssignMode::Move);
                 let val = self.lower_operand(value, bb);
-                self.store_to_place(dst, val, bb);
-
-                // AssignMode::Move — source zeroing is handled by the GIR's explicit
-                // MoveZero instruction (emitted after the Assign). The LIR reads the mode
-                // for future optimizations but doesn't duplicate the zeroing.
-                // TODO: once all MoveZero sites are migrated to AssignMode, the LIR
-                // can handle zeroing here and the GIR MoveZero can be removed.
+                if is_move && dst.projections.is_empty() {
+                    // Move: emit SlotStore with is_move flag so C backend can use
+                    // memcpy instead of clone for resource types (strings, etc.).
+                    let slot = self.local_to_slot[dst.local.0 as usize];
+                    self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                        slot, value: val, is_move: true,
+                    });
+                } else {
+                    self.store_to_place(dst, val, bb);
+                }
             }
 
             Instruction::BinOp {
@@ -2203,6 +2208,7 @@ impl<'a> FuncLowering<'a> {
                         self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
                             slot,
                             value: val,
+                            is_move: false,
                         });
                         true
                     } else {
@@ -3749,7 +3755,7 @@ impl<'a> FuncLowering<'a> {
         self.lir_func
             .block_mut(bb)
             .insts
-            .push(Inst::SlotStore { slot, value });
+            .push(Inst::SlotStore { slot, value, is_move: false });
     }
 
     fn store_to_place(&mut self, place: &Place, value: ValueId, bb: BlockId) {

@@ -142,7 +142,7 @@ fn write_function(
 fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
     match inst {
         // Slot access
-        Inst::SlotStore { slot, value } => write!(f, "slot_store {slot}, {value}"),
+        Inst::SlotStore { slot, value, .. } => write!(f, "slot_store {slot}, {value}"),
         Inst::SlotLoad { dst, slot, ty } => write!(f, "{dst}: {ty} = slot_load {slot}"),
         Inst::SlotAddr { dst, slot } => write!(f, "{dst}: ptr = slot_addr {slot}"),
 

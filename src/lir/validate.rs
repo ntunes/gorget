@@ -382,6 +382,7 @@ mod tests {
         func.block_mut(bb).insts.push(Inst::SlotStore {
             slot: SlotId(5), // no slots exist
             value: ValueId(0),
+            is_move: false,
         });
         func.block_mut(bb).terminator = Term::RetVoid;
         module.add_function(func);

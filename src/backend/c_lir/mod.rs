@@ -2680,7 +2680,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                 // Propagate pointee types through SlotStore→SlotLoad chains.
                 // When a Ptr-typed slot stores a value with known pointee, propagate
                 // to subsequent loads from that slot.
-                Inst::SlotStore { slot, value } => {
+                Inst::SlotStore { slot, value, .. } => {
                     if let Some(pt) = ptr_pointee.get(value.0 as usize).and_then(|p| p.clone()) {
                         if matches!(func.slots[slot.0 as usize].ty, LirType::Ptr) {
                             slot_pointee[slot.0 as usize] = Some(pt);
@@ -2705,7 +2705,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         for (i, inst) in insts.iter().enumerate() {
             if let Inst::InlineC { dst: Some(d), .. } = inst {
                 if val_types.get(d.0 as usize) == Some(&None) {
-                    if let Some(Inst::SlotStore { slot, value }) = insts.get(i + 1) {
+                    if let Some(Inst::SlotStore { slot, value, .. }) = insts.get(i + 1) {
                         if *value == *d {
                             let slot_ty = func.slots[slot.0 as usize].ty.clone();
                             if !matches!(slot_ty, LirType::Ptr | LirType::Void) {
@@ -2751,7 +2751,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         let insts = &block.insts;
         for (i, inst) in insts.iter().enumerate() {
             if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
-                if let Some(Inst::SlotStore { slot, value }) = insts.get(i + 1) {
+                if let Some(Inst::SlotStore { slot, value, .. }) = insts.get(i + 1) {
                     if *value == *d {
                         let slot_ty = func.slots[slot.0 as usize].ty.clone();
                         if !matches!(slot_ty, LirType::Ptr | LirType::Void) {
@@ -2815,7 +2815,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                                 break;
                             }
                             // Check SlotStore — the slot type reveals the inner type.
-                            Inst::SlotStore { value, slot } if *value == *d => {
+                            Inst::SlotStore { value, slot, .. } if *value == *d => {
                                 let slot_ty = &func.slots[slot.0 as usize].ty;
                                 if !matches!(slot_ty, LirType::Ptr) {
                                     inferred = Some(slot_ty.clone());
@@ -2876,7 +2876,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                                     let target_ty = LirType::Struct(StructId(target_sid as u32));
                                     val_types[d.0 as usize] = Some(target_ty.clone());
                                     // Also fix the slot that receives this value.
-                                    if let Some(Inst::SlotStore { slot, value }) = insts.get(idx + 1) {
+                                    if let Some(Inst::SlotStore { slot, value, .. }) = insts.get(idx + 1) {
                                         if *value == *d {
                                             slot_overrides.insert(slot.0, target_ty);
                                         }
@@ -2908,7 +2908,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                 }
                 Inst::BitNot { ty, operand, .. } => Some((ty.clone(), vec![*operand])),
                 // SlotStore: infer from the slot's declared type.
-                Inst::SlotStore { slot, value } => {
+                Inst::SlotStore { slot, value, .. } => {
                     let sty = slot_overrides.get(&slot.0).unwrap_or(&func.slots[slot.0 as usize].ty).clone();
                     if !matches!(sty, LirType::Ptr | LirType::Void) {
                         Some((sty, vec![*value]))
@@ -3034,7 +3034,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                 if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
                     if view_eligible(name) {
                         // Check if the next instruction stores this val to a Str-typed slot.
-                        if let Some(Inst::SlotStore { slot, value }) = insts.get(i + 1) {
+                        if let Some(Inst::SlotStore { slot, value, .. }) = insts.get(i + 1) {
                             if *value == *d {
                                 let slot_ty = &func.slots[slot.0 as usize].ty;
                                 let is_str = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
@@ -3229,7 +3229,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
 
     match inst {
         // Slot access
-        Inst::SlotStore { slot, value } => {
+        Inst::SlotStore { slot, value, is_move } => {
             // Skip store to slot 0 (return slot) in void-returning functions.
             // LIR declares slot 0 as void* but unit values are int32_t — skip to avoid type mismatch.
             if slot.0 == 0 && matches!(func.return_type, LirType::Void) {
@@ -3360,8 +3360,14 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     // NullPtr → aggregate slot: zero out (e.g. None variant of Option).
                     write!(out, "memset(&{}, 0, sizeof({}));", s(*slot), ty_name).unwrap();
                 } else if val_is_ptr && (slot_is_str || slot_is_gs) {
-                    // Pointer to Str/GorgetString: clone to prevent double-free.
-                    write!(out, "{} = gorget_string_clone((const GorgetString*){});", s(*slot), v(*value)).unwrap();
+                    if *is_move {
+                        // Move: transfer ownership via memcpy. The GIR MoveZero
+                        // instruction will zero the source, preventing double-free.
+                        write!(out, "memcpy(&{}, {}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
+                    } else {
+                        // Copy: clone to prevent double-free (source stays alive).
+                        write!(out, "{} = gorget_string_clone((const GorgetString*){});", s(*slot), v(*value)).unwrap();
+                    }
                 } else if val_is_ptr {
                     // Value is a pointer to source data — use memcpy.
                     write!(out, "memcpy(&{}, {}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();

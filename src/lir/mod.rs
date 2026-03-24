@@ -198,7 +198,9 @@ impl fmt::Display for CmpOp {
 pub enum Inst {
     // ── Slot Access (pre-SSA, lowered by SSA construction) ──────────
     /// Store a value into a stack slot.
-    SlotStore { slot: SlotId, value: ValueId },
+    /// `is_move`: when true, the source is being moved (ownership transfer) —
+    /// the C backend can use memcpy instead of clone for resource types.
+    SlotStore { slot: SlotId, value: ValueId, is_move: bool },
     /// Load a value from a stack slot.
     SlotLoad { dst: ValueId, slot: SlotId, ty: LirType },
     /// Get the address of a stack slot (for aggregates).
@@ -929,6 +931,7 @@ mod tests {
         func.block_mut(bb0).insts.push(Inst::SlotStore {
             slot,
             value: v0,
+            is_move: false,
         });
         func.block_mut(bb0).insts.push(Inst::SlotLoad {
             dst: v1,
@@ -1007,6 +1010,7 @@ mod tests {
         let store = Inst::SlotStore {
             slot: SlotId(0),
             value: v0,
+            is_move: false,
         };
         assert_eq!(store.dst(), None);
         assert_eq!(store.uses(), vec![v0]);

@@ -121,7 +121,7 @@ impl<'a> SsaBuilder<'a> {
 
         for inst in &insts {
             match inst {
-                Inst::SlotStore { slot, value } if self.promotable.contains(slot) => {
+                Inst::SlotStore { slot, value, .. } if self.promotable.contains(slot) => {
                     // Resolve through substitution chain so current_def always
                     // holds the canonical (non-eliminated) value.
                     let resolved = self.resolve_value(*value);
@@ -584,7 +584,7 @@ mod tests {
                 ty: LirType::I64,
                 value: 42,
             },
-            Inst::SlotStore { slot: s0, value: v0 },
+            Inst::SlotStore { slot: s0, value: v0, is_move: false },
             Inst::SlotLoad {
                 dst: v1,
                 slot: s0,
@@ -646,7 +646,7 @@ mod tests {
 
         func.block_mut(bb0).insts = vec![
             Inst::BoolConst { dst: v0, value: true },
-            Inst::SlotStore { slot: s1, value: v0 },
+            Inst::SlotStore { slot: s1, value: v0, is_move: false },
             Inst::SlotLoad {
                 dst: v1,
                 slot: s1,
@@ -667,7 +667,7 @@ mod tests {
                 ty: LirType::I64,
                 value: 10,
             },
-            Inst::SlotStore { slot: s0, value: v2 },
+            Inst::SlotStore { slot: s0, value: v2, is_move: false },
         ];
         func.block_mut(bb1).terminator = Term::Jump(bb3, vec![]);
 
@@ -677,7 +677,7 @@ mod tests {
                 ty: LirType::I64,
                 value: 20,
             },
-            Inst::SlotStore { slot: s0, value: v3 },
+            Inst::SlotStore { slot: s0, value: v3, is_move: false },
         ];
         func.block_mut(bb2).terminator = Term::Jump(bb3, vec![]);
 
@@ -739,7 +739,7 @@ mod tests {
                 ty: LirType::I64,
                 value: 42,
             },
-            Inst::SlotStore { slot: s0, value: v0 },
+            Inst::SlotStore { slot: s0, value: v0, is_move: false },
             Inst::SlotAddr { dst: v1, slot: s0 }, // takes address!
         ];
         func.block_mut(bb0).terminator = Term::Ret(v0);
