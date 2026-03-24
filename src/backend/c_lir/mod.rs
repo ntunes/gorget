@@ -3374,12 +3374,15 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     if slot_is_str && val_is_str {
                         // Both are Str views: shallow struct copy, no clone needed (cap=0, non-owning).
                         write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
-                    } else if (slot_is_str && val_is_gs) || (slot_is_gs && val_is_str) {
-                        // Cross-type (Str↔GorgetString): clone + free source to transfer ownership.
-                        write!(out, "{} = gorget_string_clone((const GorgetString*)&{}); gorget_string_free((GorgetString*)&{});", s(*slot), v(*value), v(*value)).unwrap();
-                    } else if (slot_is_str || slot_is_gs) && matches!(val_ty, Some(LirType::Struct(_))) {
-                        // GorgetString/Str → same: clone + free source to prevent double-free.
-                        write!(out, "{} = gorget_string_clone((const GorgetString*)&{}); gorget_string_free((GorgetString*)&{});", s(*slot), v(*value), v(*value)).unwrap();
+                    } else if (slot_is_str && val_is_gs) || (slot_is_gs && val_is_str)
+                        || ((slot_is_str || slot_is_gs) && matches!(val_ty, Some(LirType::Struct(_))))
+                    {
+                        // Str/GorgetString by-value → string slot: direct struct assign.
+                        // The source is a C local/temporary (function return, ParamRef);
+                        // transferring ownership via memcpy is correct — the source won't
+                        // be double-freed (C locals have no destructors, and GIR MoveZero
+                        // handles source zeroing when needed).
+                        write!(out, "memcpy(&{}, &{}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
                     } else if !matches!(val_ty, Some(LirType::Struct(_)) | None) {
                         // Scalar → single-field struct coercion (newtype wrapping).
                         if let LirType::Struct(sid) = slot_ty {
