@@ -584,7 +584,18 @@ fn try_build_ir(
             let guest_lib_file = format!("{guest_lib_name}{dylib_ext}");
             let recompile_cmd = format!(
                 "{} build --shared {} -o {}",
-                std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gg")).display(),
+                std::env::current_exe()
+                    .map(|p| {
+                        // On Linux, /proc/self/exe can return "path (deleted)" when
+                        // the binary was replaced. Strip the suffix to get the real path.
+                        let s = p.display().to_string();
+                        if let Some(stripped) = s.strip_suffix(" (deleted)") {
+                            PathBuf::from(stripped)
+                        } else {
+                            p
+                        }
+                    })
+                    .unwrap_or_else(|_| PathBuf::from("gg")).display(),
                 abs_filename.display(),
                 dir.join(&guest_lib_file).display(),
             );

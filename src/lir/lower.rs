@@ -1523,14 +1523,20 @@ impl<'a> FuncLowering<'a> {
                     struct_id,
                     field: *field,
                 });
-                let result = self.lir_func.next_value();
-                let field_ty = self.resolve_field_type(effective_type, *field);
-                self.lir_func.block_mut(bb).insts.push(Inst::Load {
-                    dst: result,
-                    ptr: fptr,
-                    ty: field_ty,
-                });
-                self.store_to_local(*dst, result, bb);
+                // If destination is Ptr(T), return field address as pointer reference.
+                let dst_gir_type = self.gir_func.locals[dst.0 as usize].type_id;
+                if matches!(self.gir_types.get(dst_gir_type), Some(GirType::Ptr(_))) {
+                    self.store_to_local(*dst, fptr, bb);
+                } else {
+                    let result = self.lir_func.next_value();
+                    let field_ty = self.resolve_field_type(effective_type, *field);
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: result,
+                        ptr: fptr,
+                        ty: field_ty,
+                    });
+                    self.store_to_local(*dst, result, bb);
+                }
             }
 
             Instruction::IndexLoad { dst, base, index } => {
@@ -1617,7 +1623,22 @@ impl<'a> FuncLowering<'a> {
                 } else if is_array || is_dict {
                     // Vector[int] → gorget_array_get(&arr, idx)
                     // Dict[key] → gorget_map_get(&map, &key)
-                    let base_val = self.lower_place_addr(base, bb);
+                    let mut base_val = self.lower_place_addr(base, bb);
+                    // If base is Ptr-typed (field load ref) but NOT a ref_local (borrowed param),
+                    // deref to get the actual collection pointer. ref_locals already get SlotLoad
+                    // in lower_place_addr, so base_val is the pointer value — no extra deref needed.
+                    let base_gir = self.gir_func.locals[base.local.0 as usize].type_id;
+                    let is_ref_local = self.gir_func.ref_locals.contains(&base.local);
+                    if matches!(self.gir_types.get(base_gir), Some(GirType::Ptr(_)))
+                        && base.projections.is_empty()
+                        && !is_ref_local
+                    {
+                        let deref = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                            dst: deref, ptr: base_val, ty: LirType::Ptr,
+                        });
+                        base_val = deref;
+                    }
                     let idx = self.lower_operand(index, bb);
                     let fn_name = if is_dict { "gorget_map_get" } else { "gorget_array_get" };
                     self.ensure_extern(fn_name, &[LirType::Ptr, LirType::I64], &LirType::Ptr);

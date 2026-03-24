@@ -616,14 +616,7 @@ pub(super) fn lower_compound_assign(
             // String concatenation via += → gorget_str_cat (returns GorgetString)
             if is_string && matches!(op, ast::BinaryOp::Add) {
                 let owned_type = ctx.type_mapper.owned_string_type;
-                let tmp = builder.call_extern(
-                    "gorget_str_cat",
-                    vec![cur_val, rhs],
-                    owned_type,
-                );
-                // Register the GorgetString temp for drop. When assigned to a String variable,
-                // the temp is marked moved by VarDecl handling, preventing double-free.
-                crate::ir::lowering::exprs::register_owned_string_for_drop(ctx, tmp);
+                let tmp = ctx.call_extern_tracked(builder, "gorget_str_cat", vec![cur_val, rhs], owned_type);
                 let dst = if is_mut_capture {
                     Place { local: local_id, projections: vec![Projection::Deref] }
                 } else {

@@ -1,5 +1,6 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::ir::instructions::Operand;
 use crate::ir::types::*;
 use crate::parser::ast::{Expr, Ownership, PrimitiveType, Type};
 use crate::semantic::AnalysisResult;
@@ -354,6 +355,41 @@ impl<'a> LoweringContext<'a> {
     ) -> crate::ir::types::LocalId {
         let local = builder.add_local(type_id, None);
         self.drops.register_local(local, type_id, &self.type_registry);
+        local
+    }
+
+    /// Call a function and auto-register the result for drop if it has a concrete
+    /// drop function (Trivial/Custom) or is a collection type. Uses the narrow
+    /// `needs_drop_for_temp` check to avoid registering user structs with Recursive
+    /// drop strategy — those would be double-freed when the temp is consumed by an
+    /// assign but not marked as moved.
+    pub fn call_tracked(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        func: impl Into<String>,
+        args: Vec<Operand>,
+        return_type: crate::ir::types::TypeId,
+    ) -> crate::ir::types::LocalId {
+        let local = builder.call(func, args, return_type);
+        if self.type_registry.needs_drop_for_temp(return_type) {
+            self.drops.register_local(local, return_type, &self.type_registry);
+        }
+        local
+    }
+
+    /// Call an extern function and auto-register the result for drop.
+    /// Same narrow check as `call_tracked`.
+    pub fn call_extern_tracked(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        func: impl Into<String>,
+        args: Vec<Operand>,
+        return_type: crate::ir::types::TypeId,
+    ) -> crate::ir::types::LocalId {
+        let local = builder.call_extern(func, args, return_type);
+        if self.type_registry.needs_drop_for_temp(return_type) {
+            self.drops.register_local(local, return_type, &self.type_registry);
+        }
         local
     }
 

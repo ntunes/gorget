@@ -155,8 +155,7 @@ pub(super) fn lower_binary_op(
         // String concatenation: use gorget_str_cat (returns GorgetString, not Str)
         AstOp::Add if is_string => {
             let owned_type = ctx.type_mapper.owned_string_type;
-            let dst = builder.call_extern("gorget_str_cat", vec![lhs, rhs], owned_type);
-            super::register_owned_string_for_drop(ctx, dst);
+            let dst = ctx.call_extern_tracked(builder, "gorget_str_cat", vec![lhs, rhs], owned_type);
             FunctionBuilder::copy(dst)
         }
 

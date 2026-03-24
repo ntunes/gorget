@@ -853,17 +853,7 @@ pub(super) fn lower_call(
             builder.call_void(&call_name, lowered_args);
             Operand::Constant(Constant::Unit)
         } else {
-            let dst = builder.call(&call_name, lowered_args, ret_type);
-            // Register collection and string call results for drop at scope exit.
-            // Universal registration (needs_drop) causes dataframe double-frees
-            // because user struct temps with Resource semantics get move-zeroed
-            // before their fields are fully consumed. Restrict to types with
-            // known drop functions (collections + GorgetString).
-            if ctx.type_registry.is_collection_type(ret_type)
-                || ret_type == ctx.type_mapper.owned_string_type
-            {
-                ctx.drops.register_local(dst, ret_type, &ctx.type_registry);
-            }
+            let dst = ctx.call_tracked(builder, &call_name, lowered_args, ret_type);
             FunctionBuilder::copy(dst)
         };
 

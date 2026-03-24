@@ -1436,35 +1436,32 @@ fn lower_field_access(
                 if type_name == "GorgetString" && field_name == "data" {
                     return obj;
                 }
-                // Track field loads for move-zeroing on owned locals AND mutable borrows.
-                // Skip only const (immutable) pointer access where we can't zero the source.
-                let is_owned_or_mut = match ctx.type_registry.get(local_type_id) {
-                    Some(GirType::Ptr(_)) => false,  // const borrow — read-only
-                    _ => true,  // owned, MutPtr, or non-pointer
-                };
                 // First try the struct_fields cache
                 if let Some((field_idx, field_type)) = ctx.lookup_field(type_name, field_name) {
-                    let dst = builder.field_load(base_place.clone(), field_idx, field_type);
-                    // Track resource-type field loads for move-zeroing
-                    if is_owned_or_mut && ctx.type_registry.is_resource_type(field_type) {
-                        let mut field_place = base_place;
-                        field_place.projections.push(Projection::Field(field_idx));
-                        ctx.field_load_origins.insert(dst, (field_place, field_type));
-                    }
+                    // Collection fields: return Ptr(T) reference into the struct.
+                    // Prevents shallow copies that share heap data. Auto-clone fires
+                    // when assigned to an explicit-type T variable.
+                    // Strings are excluded: GorgetString header copy is safe as a Str view,
+                    // and Ptr(GorgetString) breaks operators/method calls that expect Str.
+                    let result_type = if ctx.type_registry.is_collection_type(field_type) {
+                        ctx.type_registry.insert(GirType::Ptr(field_type))
+                    } else {
+                        field_type
+                    };
+                    let dst = builder.field_load(base_place.clone(), field_idx, result_type);
                     return FunctionBuilder::copy(dst);
                 }
-                // Fallback: read directly from TypeDef (handles dynamically-registered
-                // types like tuples that may not be in the struct_fields cache)
+                // Fallback: read directly from TypeDef
                 if let Some(type_def) = ctx.type_registry.get_type_def(type_name) {
                     if let TypeDefKind::Struct(ref s) = type_def.kind {
                         for (i, field) in s.fields.iter().enumerate() {
                             if field.name == field_name {
-                                let dst = builder.field_load(base_place.clone(), i as u32, field.type_id);
-                                if is_owned_or_mut && ctx.type_registry.is_resource_type(field.type_id) {
-                                    let mut field_place = base_place;
-                                    field_place.projections.push(Projection::Field(i as u32));
-                                    ctx.field_load_origins.insert(dst, (field_place, field.type_id));
-                                }
+                                let result_type = if ctx.type_registry.is_collection_type(field.type_id) {
+                                    ctx.type_registry.insert(GirType::Ptr(field.type_id))
+                                } else {
+                                    field.type_id
+                                };
+                                let dst = builder.field_load(base_place.clone(), i as u32, result_type);
                                 return FunctionBuilder::copy(dst);
                             }
                         }

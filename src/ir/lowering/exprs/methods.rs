@@ -165,12 +165,7 @@ pub(super) fn lower_method_call(
                     builder.call_void(effective_name, lowered_args);
                     return Operand::Constant(Constant::Unit);
                 }
-                let dst = builder.call(effective_name, lowered_args, ret_type);
-                if ctx.type_registry.is_collection_type(ret_type)
-                    || ret_type == ctx.type_mapper.owned_string_type
-                {
-                    ctx.drops.register_local(dst, ret_type, &ctx.type_registry);
-                }
+                let dst = ctx.call_tracked(builder, effective_name, lowered_args, ret_type);
                 return FunctionBuilder::copy(dst);
             }
         }
@@ -1052,7 +1047,6 @@ pub(super) fn lower_method_call(
     if method_name == "len" {
         let recv_type = infer_operand_type_full(ctx, &recv, builder);
         if recv_type == ctx.type_mapper.str_type || recv_type == ctx.type_mapper.owned_string_type {
-            // Str/GorgetString: .len() = codepoint count → call gorget_str_codepoint_count()
             let dst = builder.call_extern(
                 "gorget_str_codepoint_count",
                 vec![recv],
@@ -1061,10 +1055,16 @@ pub(super) fn lower_method_call(
             return FunctionBuilder::copy(dst);
         }
         // GorgetArray: .len is field 1 (element count, no function call needed)
-        if let Some(GirType::Named(name)) = ctx.type_registry.get(recv_type) {
+        // Resolve through Ptr for field-load refs (Ptr(Vector__T) → Vector__T)
+        let resolved_type = ctx.pointee_type(recv_type).unwrap_or(recv_type);
+        let is_ptr_recv = resolved_type != recv_type;
+        if let Some(GirType::Named(name)) = ctx.type_registry.get(resolved_type) {
             if name.starts_with("GorgetArray") || name.starts_with("Vector__") {
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
                     let mut len_place = place.clone();
+                    if is_ptr_recv {
+                        len_place.projections.push(Projection::Deref);
+                    }
                     len_place.projections.push(Projection::Field(1));
                     let tmp = builder.add_local(I64_TYPE, None);
                     builder.assign(Place::local(tmp), Operand::Copy(len_place));
@@ -1543,12 +1543,7 @@ pub(super) fn lower_method_call(
             builder.call_void(call_name, call_args);
             Operand::Constant(Constant::Unit)
         } else {
-            let dst = builder.call(call_name, call_args, ret_type);
-            if ctx.type_registry.is_collection_type(ret_type)
-                || ret_type == ctx.type_mapper.owned_string_type
-            {
-                ctx.drops.register_local(dst, ret_type, &ctx.type_registry);
-            }
+            let dst = ctx.call_tracked(builder, call_name, call_args, ret_type);
             FunctionBuilder::copy(dst)
         };
 
