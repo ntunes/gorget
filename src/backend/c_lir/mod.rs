@@ -6546,9 +6546,9 @@ fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, sn: &HashMap
         writeln!(out, "    switch (dst.tag) {{").unwrap();
 
         // Group variant_info by variant index
-        let mut by_variant: std::collections::HashMap<u32, Vec<(&str, &str)>> = std::collections::HashMap::new();
-        for (vi, field_name, drop_fn) in variant_info {
-            by_variant.entry(*vi).or_default().push((field_name, drop_fn));
+        let mut by_variant: std::collections::HashMap<u32, Vec<(&str, &str, &str)>> = std::collections::HashMap::new();
+        for (vi, vname, field_name, drop_fn) in variant_info {
+            by_variant.entry(*vi).or_default().push((vname, field_name, drop_fn));
         }
 
         let mut indices: Vec<u32> = by_variant.keys().copied().collect();
@@ -6556,14 +6556,22 @@ fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, sn: &HashMap
         for vi in indices {
             let fields = &by_variant[&vi];
             write!(out, "        case {vi}: ").unwrap();
-            for (field_name, drop_fn) in fields {
+            for (variant_name, field_name, drop_fn) in fields {
                 let clone_fn = drop_to_clone(drop_fn);
                 if !clone_fn.is_empty() {
-                    // For large enums (union layout): access via data.FieldName
-                    // For small enums (flat layout): access via FieldName directly
-                    let access = if sdef.is_enum {
+                    // Count how many LIR struct fields belong to this variant
+                    let variant_prefix = format!("{variant_name}_");
+                    let variant_field_count = sdef.fields.iter()
+                        .filter(|(n, _)| n.starts_with(&variant_prefix))
+                        .count();
+                    let access = if sdef.is_enum && variant_field_count > 1 {
+                        // Union layout, multi-field variant: data.{Variant}.{Field}
+                        format!("data.{variant_name}.{field_name}")
+                    } else if sdef.is_enum {
+                        // Union layout, single-field variant: data.{Field}
                         format!("data.{field_name}")
                     } else {
+                        // Flat layout: {Field}
                         field_name.to_string()
                     };
                     write!(out, "dst.{access} = {clone_fn}(&dst.{access}); ").unwrap();

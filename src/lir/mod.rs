@@ -754,9 +754,9 @@ pub struct LirModule {
     /// Populated during LIR lowering for structs that have `Recursive` drop strategy
     /// but no user-defined `{Name}__drop` function.
     pub recursive_drop_structs: HashMap<String, Vec<(String, String)>>,
-    /// Recursive drop enums: type_name → Vec<(variant_index, variant_field_name, drop_fn_name)>.
+    /// Recursive drop enums: type_name → Vec<(variant_index, variant_name, field_name, drop_fn_name)>.
     /// Used for tag-based clone/drop dispatch on enum types with resource variant payloads.
-    pub recursive_drop_enums: HashMap<String, Vec<(u32, String, String)>>,
+    pub recursive_drop_enums: HashMap<String, Vec<(u32, String, String, String)>>,
 }
 
 impl LirModule {

@@ -307,22 +307,22 @@ impl<'a> LoweringContext<'a> {
             }
         }
 
-        // Second pass: collect enum variant→drop info for tag-based clone dispatch.
-        for (name, strategy, kind) in &type_defs {
-            if !matches!(strategy, DropStrategy::Recursive) {
-                continue;
-            }
+        // Second pass: collect enum variant→clone info for tag-based clone dispatch.
+        // Any enum with cloneable variant payloads gets a __clone function,
+        // regardless of the enum's own drop strategy. Clone is about deep copy,
+        // independent from drop semantics.
+        for (name, _strategy, kind) in &type_defs {
             let edef = match kind {
                 TypeDefKind::Enum(e) => e,
                 _ => continue,
             };
-            let mut variant_drops: Vec<(u32, String, String)> = Vec::new();
-            // LIR enum fields use global indexing: tag is field 0, then all variant
-            // fields are numbered sequentially across variants.
-            let mut global_field_idx = 0u32; // starts at 0 (after tag which is handled separately)
+            // Skip Option/Result — they have their own unwrap/clone handling.
+            if name.starts_with("Option__") || name.starts_with("Result__") {
+                continue;
+            }
+            let mut variant_drops: Vec<(u32, String, String, String)> = Vec::new();
             for (vi, variant) in edef.variants.iter().enumerate() {
                 for (fi, field) in variant.fields.iter().enumerate() {
-                    let lir_field_idx = global_field_idx + fi as u32;
                     let field_type_name = match self.gir.type_registry.get(field.type_id) {
                         Some(GirType::Named(n)) => n.clone(),
                         _ => continue,
@@ -334,11 +334,10 @@ impl<'a> LoweringContext<'a> {
                         DropStrategy::Recursive => format!("{field_type_name}__drop"),
                         DropStrategy::None => continue,
                     };
-                    // LIR union field name: {VariantName}_{global_index}
-                    let field_name = format!("{}_{lir_field_idx}", variant.name);
-                    variant_drops.push((vi as u32, field_name, drop_fn));
+                    // LIR field name: {VariantName}_{field_index_within_variant}
+                    let field_name = format!("{}_{fi}", variant.name);
+                    variant_drops.push((vi as u32, variant.name.clone(), field_name, drop_fn));
                 }
-                global_field_idx += variant.fields.len() as u32;
             }
             if !variant_drops.is_empty() {
                 self.module.recursive_drop_enums.insert(name.clone(), variant_drops);

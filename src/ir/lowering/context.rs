@@ -637,14 +637,24 @@ impl<'a> LoweringContext<'a> {
             // Auto-cloning GorgetStrings breaks the .str() method chain.
 
             // User structs with Recursive or Custom drop → generated {Name}__clone.
-            // Recursive: emitted by emit_recursive_struct_clones in C backend.
-            // Custom: same mechanism — deep-clone resource fields (the custom drop
-            // function handles cleanup, so clone just needs field-level independence).
             if let Some(type_def) = self.type_registry.get_type_def(name) {
                 if matches!(type_def.metadata.drop_strategy,
                     DropStrategy::Recursive | DropStrategy::Custom(_))
                 {
                     return Some(format!("{name}__clone"));
+                }
+                // User enums with cloneable variant payloads → generated {Name}__clone.
+                // Clone is generated for any enum whose variants contain resource types,
+                // regardless of the enum's own drop strategy.
+                if let crate::ir::types::TypeDefKind::Enum(ref edef) = type_def.kind {
+                    if !name.starts_with("Option__") && !name.starts_with("Result__") {
+                        let has_cloneable_payload = edef.variants.iter().any(|v| {
+                            v.fields.iter().any(|f| self.type_registry.is_resource_type(f.type_id))
+                        });
+                        if has_cloneable_payload {
+                            return Some(format!("{name}__clone"));
+                        }
+                    }
                 }
             }
         }
