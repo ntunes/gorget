@@ -114,7 +114,7 @@ void describe[T]():
         print("integer type")
     elif T is float:
         print("floating point")
-    elif T is str:
+    elif T is String:
         print("string type")
     else:
         print("other type")
@@ -130,7 +130,7 @@ Available predicates:
 | `T is unsigned` | Unsigned integers |
 | `T is numeric` | Any number |
 | `T is bool` | `bool` |
-| `T is str` | `str` |
+| `T is String` | `String` |
 | `T is char` | `char` |
 | `T is int32` | Exact type match |
 | `T is MyStruct` | Exact type match |

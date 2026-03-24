@@ -101,9 +101,6 @@ representation: string literals and function parameters are lightweight views
 produce owned, heap-allocated strings. You don't need to think about this —
 just use `String` everywhere.
 
-> **Note:** `str` is accepted as a permanent alias for `String` — older code
-> using `str` continues to work unchanged.
-
 ### String Interpolation
 
 Prefix a string with `f` to enable interpolation with `{}`:

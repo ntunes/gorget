@@ -145,7 +145,7 @@ Some types and functions are always available without imports:
 - `Option[T]`, `Some`, `None`
 - `Result[T, E]`, `Ok`, `Error`
 - `Vector[T]`, `Dict[K, V]`
-- `String`, `str`, all primitive types
+- `String`, all primitive types
 
 ---
 

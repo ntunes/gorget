@@ -117,7 +117,7 @@ Structs cover all aggregate types:
 | `int` / `int64` | `I64` |
 | `float` / `float64` | `F64` |
 | `bool` | `Bool` |
-| `str` / `String` | `Struct(Str)` (unified 32-byte; provenance determines view vs owned) |
+| `String` | `Struct(Str)` (unified 32-byte; provenance determines view vs owned) |
 | `cstr` | `Ptr` |
 | `Vector[T]` | `Struct(GorgetArray)` |
 | `Dict[K,V]` | `Struct(GorgetDict_K_V)` |

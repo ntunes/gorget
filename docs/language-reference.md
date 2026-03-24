@@ -73,7 +73,7 @@ Keywords are reserved and cannot be used as identifiers.
 int    int8   int16  int32  int64
 uint   uint8  uint16 uint32 uint64
 float  float32 float64
-bool   char   str    String void   auto
+bool   char   String void   auto
 ```
 
 **Declaration keywords:**
@@ -372,12 +372,11 @@ Both operator and keyword forms are equivalent and may be used interchangeably.
 | `bool`    | 1 byte  | Boolean (`true` or `false`)     |
 | `char`    | 4 bytes | Unicode scalar value            |
 | `String`  | 32 bytes | String (provenance-inferred: view or owned) |
-| `str`     | 32 bytes | Permanent alias for `String`    |
 | `byte`    | 8-bit   | Alias for `uint8`               |
 | `cstr`    | pointer | Null-terminated C string pointer |
 | `void`    | 0       | No value (unit type)            |
 
-All primitive numeric types and `bool` and `char` are **Copy** types — they are implicitly copied on assignment and do not require `!` or `move` to transfer. `String` values are automatically classified by the compiler's provenance inference pass: string literals and function parameters are lightweight views (Copy), while concatenation and f-strings produce owned values (Move). `str` is a permanent alias for `String`. `byte` is a convenience alias for `uint8`. `cstr` is a raw C string pointer (`const char*`) for FFI interop — prefer `String` for normal string handling.
+All primitive numeric types and `bool` and `char` are **Copy** types — they are implicitly copied on assignment and do not require `!` or `move` to transfer. `String` values are automatically classified by the compiler's provenance inference pass: string literals and function parameters are lightweight views (Copy), while concatenation and f-strings produce owned values (Move). `byte` is a convenience alias for `uint8`. `cstr` is a raw C string pointer (`const char*`) for FFI interop — prefer `String` for normal string handling.
 
 ### 4.2 Compound Types
 
@@ -2526,7 +2525,7 @@ String interpolation is available only in **f-strings** (strings prefixed with `
 The interpolated expression must be of a type that is either:
 
 - A primitive type (`int`, `float`, `bool`, `char`)
-- A `String` or `str`
+- A `String`
 
 Using a non-printable type (struct, enum) in interpolation is a compile-time error (**NonPrintableInterpolation**) unless the type implements `Displayable`.
 
@@ -2872,7 +2871,7 @@ equip Hex with Parseable:
 
 #### Measurable
 
-Types that have a length. Equipping `Measurable` enables the `len(x)` free function, which delegates to `x.len()`. Built-in types (`Vector`, `Dict`, `HashMap`, `Set`, `HashSet`, `str`, `String`) have built-in `.len()` methods that work without equipping the trait. User-defined types need `equip T with Measurable` to participate.
+Types that have a length. Equipping `Measurable` enables the `len(x)` free function, which delegates to `x.len()`. Built-in types (`Vector`, `Dict`, `HashMap`, `Set`, `HashSet`, `String`) have built-in `.len()` methods that work without equipping the trait. User-defined types need `equip T with Measurable` to participate.
 
 ```gorget
 struct Buffer:
@@ -2999,7 +2998,7 @@ equip Wrapper with Displayable via inner:
 
 The following methods are available on built-in types without any import.
 
-**`str`** — String methods
+**`String`** — String methods
 
 | Method | Signature | Description |
 |---|---|---|
@@ -3037,7 +3036,7 @@ The following methods are available on built-in types without any import.
 - `to_upper()`/`to_lower()` handle 1:1 simple case mappings for Latin (U+0000–024F), Greek (U+0370–03FF), and Cyrillic (U+0400–04FF). Locale-dependent mappings (e.g., Turkish İ/ı) and one-to-many mappings (e.g., ß→SS) are not yet supported.
 - `trim()`/`strip()`/`lstrip()`/`rstrip()` recognize all 25 Unicode whitespace codepoints (Unicode Zs category + control chars: HT, LF, VT, FF, CR, SP, NBSP, OGHAM, EN/EM spaces, etc.).
 - `index_of()` returns a **codepoint index**, not a byte offset.
-- All search methods (`contains`, `starts_with`, `ends_with`, `index_of`, `count`, `replace`, `split`) are safe on non-null-terminated `str` views (from `byte_slice()`, `s[i..j]`).
+- All search methods (`contains`, `starts_with`, `ends_with`, `index_of`, `count`, `replace`, `split`) are safe on non-null-terminated `String` views (from `byte_slice()`, `s[i..j]`).
 - **Deferred**: grapheme cluster segmentation, Unicode normalization (NFC/NFD), locale-dependent case mappings.
 
 **String indexing, slicing, and iteration** operate at the Unicode codepoint level:
@@ -3049,9 +3048,9 @@ The following methods are available on built-in types without any import.
 | `s[-1]` | `String` | Negative indexing counts from end |
 | `for ch in s:` | yields `String` | Iterates Unicode codepoints (O(n) total, single UTF-8 pass) |
 
-For byte-level access (useful in parsers and codecs), use `char_at(i)` (returns `char`) and `byte_slice(a, b)` (returns `str` byte-range view in O(1)).
+For byte-level access (useful in parsers and codecs), use `char_at(i)` (returns `char`) and `byte_slice(a, b)` (returns `String` byte-range view in O(1)).
 
-**UTF-8 validation at system boundaries.** All `str` and `String` values are guaranteed to contain valid UTF-8. The compiler enforces this at the boundaries where external bytes enter the string world:
+**UTF-8 validation at system boundaries.** All `String` values are guaranteed to contain valid UTF-8. The compiler enforces this at the boundaries where external bytes enter the string world:
 
 | Boundary | Return type | On invalid UTF-8 |
 |---|---|---|
@@ -3062,9 +3061,9 @@ For byte-level access (useful in parsers and codecs), use `char_at(i)` (returns 
 
 String literals are validated at compile time by the lexer. Internal string operations (slicing, concatenation, indexing) preserve UTF-8 validity by construction.
 
-**`String`** — Owned mutable string methods
+**`String`** — Mutation methods
 
-`String` is a heap-allocated, growable string buffer. It supports all `str` methods above (auto-coerced to `str` view) plus these mutation methods:
+In addition to the read-only methods above, `String` supports these mutation methods:
 
 | Method | Signature | Description |
 |---|---|---|
@@ -3075,7 +3074,7 @@ String literals are validated at compile time by the lexer. Internal string oper
 | `push_char(c)` | `char → void` | Append a single character |
 | `push_line(s)` | `String → void` | Append a string followed by a newline |
 | `clear()` | `→ void` | Remove all content (keeps allocated capacity) |
-| `str()` | `→ String` | View as immutable `String` slice |
+| `str()` | `→ String` | Return an immutable view (no allocation) |
 
 `String` also inherits all read-only string methods: `contains()`, `starts_with()`, `split()`, `trim()`, etc.
 
@@ -4700,7 +4699,7 @@ test "fibonacci sequence":
 **Rules:**
 
 - `snapshot` is only valid inside `test` blocks.
-- The expression must be a primitive type (`int`, `float`, `str`, `bool`) or a type that implements `Serializable`.
+- The expression must be a primitive type (`int`, `float`, `String`, `bool`) or a type that implements `Serializable`.
 - Each snapshot is identified by its name string. Names must be unique within a test block.
 
 **CLI commands:**
@@ -4873,7 +4872,7 @@ The `meta` keyword marks declarations evaluated entirely at compile time, before
 
 Syntax: `meta <type> <name> = <expr>`
 
-All meta-compatible types: `int`, `int8`–`int64`, `uint`–`uint64`, `float`, `float32`/`float64`, `bool`, `str`.
+All meta-compatible types: `int`, `int8`–`int64`, `uint`–`uint64`, `float`, `float32`/`float64`, `bool`, `String`.
 
 ```gorget
 meta int   MAX_CONNECTIONS = 1024
@@ -4932,7 +4931,7 @@ String describe[T]():
     meta log "describe called for type:", typename(T)
     meta if typename(T) == "int":
         return "integer"
-    elif typename(T) == "str":
+    elif typename(T) == "String":
         return "string"
     else:
         return "other"
@@ -5025,7 +5024,7 @@ meta type Elem = sized_int(32)   # → int32
 Vector[Elem] data = Vector[Elem]()
 ```
 
-Type function parameters follow normal Gorget param syntax. Only meta-compatible types (`int`, `float`, `bool`, `str`) are supported as parameter types.
+Type function parameters follow normal Gorget param syntax. Only meta-compatible types (`int`, `float`, `bool`, `String`) are supported as parameter types.
 
 ### 19.7 Compile-Time Function Evaluation (M7)
 
@@ -5069,7 +5068,7 @@ meta int NESTED = square(sum_range(3))   # 36
 
 Attempting to exceed either limit is a compile error.
 
-**Types supported as parameters/return values:** `int` (and all int variants), `float` (and variants), `bool`, `str`. Structs, enums, and collections are not supported.
+**Types supported as parameters/return values:** `int` (and all int variants), `float` (and variants), `bool`, `String`. Structs, enums, and collections are not supported.
 
 ### 19.8 Built-In Meta Functions
 
@@ -5082,7 +5081,7 @@ These are always available in meta contexts:
 | `arch_word_bits()` | `int` | Native word size in bits (32 or 64) |
 | `feature(String)` | `bool` | True if `--feature <name>` was passed to `gg build` |
 | `debug()` | `bool` | Shorthand for `feature("debug")` |
-| `sizeof(Type)` | `int` | Size in bytes (primitive types and `str`, `cstr`, `String`) |
+| `sizeof(Type)` | `int` | Size in bytes (primitive types and `String`, `cstr`) |
 | `alignof(Type)` | `int` | Alignment in bytes (primitive types) |
 | `typename(Type)` | `String` | String representation, e.g. `"int"`, `"Vector[int]"` |
 | `embed_file(String)` | `String` | Read a file at compile time, embed its contents as a string |
@@ -5367,7 +5366,7 @@ void main():
 | `T is unsigned` | T is any unsigned integer (uint8..uint64) |
 | `T is numeric` | T is any integer or float |
 | `T is bool` | T is exactly bool |
-| `T is str` | T is exactly str |
+| `T is String` | T is exactly String |
 | `T is char` | T is exactly char |
 | `T is float32` | T is exactly float32 (exact match, not a category) |
 | `T is int8`, `T is uint64`, etc. | T is exactly that type (exact match) |
@@ -5423,7 +5422,7 @@ meta for <name>, <type> in fields(T):
 ```
 
 Each iteration binds `<name>` to the field name string and `<type>` to the canonical Gorget
-type name string (e.g. `"int"`, `"float"`, `"str"`, `"MyStruct"`).
+type name string (e.g. `"int"`, `"float"`, `"String"`, `"MyStruct"`).
 
 **Compared to separate loops:**
 
@@ -5539,7 +5538,7 @@ String to_debug[T](T val):
         meta if ftype == "int":
             int v = field_value(val, fname)
             out = out + "{fname}={v}"
-        elif ftype == "str":
+        elif ftype == "String":
             String v = field_value(val, fname)
             out = out + "{fname}={v}"
         elif ftype == "bool":
@@ -5829,7 +5828,7 @@ per variant, where the inner type is the canonical Gorget name of the single pay
 |---------|--------------------------|
 | `IntCol(TypedColumn[int])` | `["IntCol", "int"]` |
 | `FloatCol(TypedColumn[float])` | `["FloatCol", "float"]` |
-| `StrCol(TypedColumn[String])` | `["StrCol", "str"]` |
+| `StrCol(TypedColumn[String])` | `["StrCol", "String"]` |
 
 For unit variants or multi-field variants, the inner type string is `""`. The primary use case is
 collapsing per-variant dispatch into a single `meta for` block (see §19.24).
@@ -6119,7 +6118,7 @@ String type_name[T]():
     meta match typename(T):
         case "int":   return "integer"
         case "float": return "floating-point"
-        case "str":   return "string"
+        case "String": return "string"
         else:         return "other"
 
 void main():
@@ -6308,7 +6307,7 @@ type = primitive_type | named_type | array_type | slice_type
 primitive_type = "int" | "int8" | "int16" | "int32" | "int64"
                | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
                | "float" | "float32" | "float64"
-               | "bool" | "char" | "byte" | "str" | "String" | "cstr" | "void" ;
+               | "bool" | "char" | "byte" | "String" | "cstr" | "void" ;
 named_type     = IDENTIFIER [ "[" type { "," type } "]" ] ;
 array_type     = type "[" const_expr "]" ;
 slice_type     = type "[" "]" ;

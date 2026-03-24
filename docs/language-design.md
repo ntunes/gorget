@@ -220,7 +220,7 @@ void greet(String name):
 int double(int x): x * 2
 ```
 
-`void` means no return value. `String` is Gorget's unified string type — the compiler infers whether a value is a lightweight view or a heap-allocated owned string. `str` is a permanent alias for `String`.
+`void` means no return value. `String` is Gorget's unified string type — the compiler infers whether a value is a lightweight view or a heap-allocated owned string.
 
 #### Multiple Return Values
 
@@ -456,7 +456,7 @@ Structs **own** their fields. When a struct is dropped, all its resource-type fi
 
 | Field type | Read returns | Cost | Ownership |
 |-----------|-------------|------|-----------|
-| `String` | `str` (view) | Zero — copies 32-byte header | Struct still owns the data |
+| `String` | `String` (view) | Zero — copies 32-byte header | Struct still owns the data |
 | `Vector[T]` | `Ptr(Vector[T])` | Zero — pointer to field | Struct still owns the data |
 | `int`, `bool` | Value copy | Zero — trivial | Independent copy |
 
@@ -465,7 +465,7 @@ The struct retains ownership. The view/reference borrows from the struct and is 
 **Auto-clone on assignment** — same rule as collection element access:
 
 ```gorget
-auto fast = p.name         # str view (zero cost, borrows from p)
+auto fast = p.name         # String view (zero cost, borrows from p)
 String owned = p.name      # auto-clone via gorget_string_clone (independent copy)
 
 auto ref = p.scores        # Ptr reference (zero cost)
@@ -2204,7 +2204,7 @@ Vector[float] row = matrix[0]   # calls matrix.get(0)
 
 ## 23. String Types in Depth
 
-Gorget has a single `String` type. The compiler automatically infers whether a value is a **view** (lightweight, no allocation — backed by a pointer and length into existing data) or **owned** (heap-allocated, growable). Programmers write `String` everywhere and the compiler picks the cheapest representation. `str` is a permanent alias for `String` and can be used interchangeably.
+Gorget has a single `String` type. The compiler automatically infers whether a value is a **view** (lightweight, no allocation — backed by a pointer and length into existing data) or **owned** (heap-allocated, growable). Programmers write `String` everywhere and the compiler picks the cheapest representation.
 
 This is similar to how Swift's `String` unifies owned and borrowed representations behind a single type, but Gorget's provenance inference is fully compile-time — there is no reference-counting or copy-on-write at runtime.
 
@@ -2227,7 +2227,7 @@ String copy = c.name          # auto-clone — independent owned copy
 ```
 
 ```gorget
-# All of these are type String (str is an alias)
+# All of these are type String
 String literal = "hello"               # view into static data — no allocation
 String owned = "hello" + " world"      # owned — concatenation allocates
 

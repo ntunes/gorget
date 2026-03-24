@@ -22,9 +22,6 @@ String literals, function parameters, and for-loop bindings are typically inferr
 as views (zero-cost, no allocation). Concatenation, f-strings, and methods like
 `to_upper()` produce owned strings.
 
-> **Note:** `str` is accepted as a permanent alias for `String`. Older code using
-> `str` continues to work unchanged.
-
 ### Concatenation
 
 ```gorget

@@ -54,7 +54,7 @@ cargo test               # all tests
   `void modify(Message &msg)` ✓ — `void modify(&Message msg)` ✗
   `void consume(Message !msg)` ✓ — `void consume(!Message msg)` ✗
 
-**Always use type-first Gorget syntax** in code, plans, and examples: `int x = 5`, `String greet(String name)`. Note: `str` is a permanent alias for `String` — both are accepted, but prefer `String` in new code and documentation.
+**Always use type-first Gorget syntax** in code, plans, and examples: `int x = 5`, `String greet(String name)`. The only string type is `String` — `str` is not a keyword.
 
 ## Solution Quality
 

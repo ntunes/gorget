@@ -15,7 +15,7 @@ pub enum AssignMode {
     Copy,    // Bitwise copy (trivial types)
     Move,    // Transfer ownership — source zeroed after copy
     Clone,   // Deep clone — both source and dest are independent
-    Borrow,  // Ptr stays as Ptr (str views, borrowed refs)
+    Borrow,  // Ptr stays as Ptr (String views, borrowed refs)
 }
 ```
 
@@ -24,10 +24,10 @@ pub enum AssignMode {
 | `int x = y` | Copy | Bitwise copy, both valid |
 | `Vector[int] v = make_vec()` | Move | Temp→variable, temp zeroed |
 | `Vector[int] b = a` | Clone | Deep clone, a and b independent |
-| `str s = owned_string.str()` | Borrow | Ptr preserved, source unregistered from drop |
+| `String s = owned_string.str()` | Borrow | Ptr preserved, source unregistered from drop |
 
 **Decision tree** (at emission time):
-1. Source is GorgetString, dest is str → **Borrow** (unregister source)
+1. Source is GorgetString, dest is String (view) → **Borrow** (unregister source)
 2. Source is named variable with clone function → **Clone** (emit clone call, then Move the result)
 3. Source is drop-registered temp → **Move** (transfer ownership)
 4. Source is GorgetString temp, dest is GorgetString → **Move**
@@ -156,7 +156,7 @@ When a `Ptr(T)` value (from IndexLoad or borrowed param) is assigned to an expli
 
 ### GorgetString excluded from auto-clone
 
-GorgetStrings have their own provenance-based ownership system (str vs String). Auto-cloning GorgetStrings would break the `.str()` method chain pattern where a str view borrows from the backing GorgetString.
+GorgetStrings have their own provenance-based ownership system (view vs owned). Auto-cloning GorgetStrings would break the `.str()` method chain pattern where a String view borrows from the backing GorgetString.
 
 ### Collection elem_drop on overwrite
 
