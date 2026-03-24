@@ -74,7 +74,7 @@ pub(super) fn lower_for(
         "__for_elem".to_string()
     };
 
-    if iter_type == ctx.type_mapper.str_type || iter_type == ctx.type_mapper.owned_string_type {
+    if iter_type == ctx.type_mapper.string_view_type || iter_type == ctx.type_mapper.owned_string_type {
         lower_for_string(ctx, builder, &var_name, iter_op, body, else_arm);
     } else {
         // Determine collection kind from the named type
@@ -129,10 +129,10 @@ fn lower_for_string(
     body: &Block,
     else_arm: Option<&Block>,
 ) {
-    let str_type = ctx.type_mapper.str_type;
+    let string_view_type = ctx.type_mapper.string_view_type;
 
     // Store the iterable in a local
-    let iter_local = builder.add_local(str_type, None);
+    let iter_local = builder.add_local(string_view_type, None);
     builder.assign(Place::local(iter_local), iter_op);
 
     // byte_pos = 0
@@ -187,9 +187,9 @@ fn lower_for_string(
     let ch_local = builder.call_extern(
         "gorget_str_codepoint_at",
         vec![FunctionBuilder::copy(iter_local), FunctionBuilder::copy(byte_pos)],
-        str_type,
+        string_view_type,
     );
-    ctx.register_local(var_name, ch_local, str_type);
+    ctx.register_local(var_name, ch_local, string_view_type);
 
     // Lower the body
     lower_block(ctx, builder, body);

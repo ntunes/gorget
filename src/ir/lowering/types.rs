@@ -7,7 +7,7 @@ use crate::span::Spanned;
 /// Maps AST types to GIR TypeIds.
 pub struct TypeMapper {
     /// `str` maps to `Ptr(U8)` in GIR (Phase 1 compat) — will be Named("Str") later.
-    pub str_type: TypeId,
+    pub string_view_type: TypeId,
     /// `String` (owned) maps to Named("GorgetString") for string interpolation results.
     pub owned_string_type: TypeId,
     /// Cache of Named type → GIR TypeId.
@@ -17,7 +17,7 @@ pub struct TypeMapper {
 impl TypeMapper {
     pub fn new(registry: &mut TypeRegistry) -> Self {
         // Register Str as a named type matching the runtime's fat pointer struct
-        let str_type = registry.insert(GirType::Named("GorgetStringView".to_string()));
+        let string_view_type = registry.insert(GirType::Named("GorgetStringView".to_string()));
         // Register GorgetString with Move semantics + trivial drop (gorget_string_free)
         registry.add_type_def(TypeDef {
             name: "GorgetString".to_string(),
@@ -31,7 +31,7 @@ impl TypeMapper {
         });
         let owned_string_type = registry.insert(GirType::Named("GorgetString".to_string()));
         Self {
-            str_type,
+            string_view_type,
             owned_string_type,
             named_types: FxHashMap::default(),
         }
@@ -300,7 +300,7 @@ impl TypeMapper {
             PrimitiveType::Float | PrimitiveType::Float64 => F64_TYPE,
             PrimitiveType::Float32 => F32_TYPE,
             PrimitiveType::Bool => BOOL_TYPE,
-            PrimitiveType::StringView | PrimitiveType::CStr => self.str_type,
+            PrimitiveType::StringView | PrimitiveType::CStr => self.string_view_type,
             PrimitiveType::StringType => self.owned_string_type,
             PrimitiveType::Void => UNIT_TYPE,
         }
@@ -316,7 +316,7 @@ impl TypeMapper {
             "%f"
         } else if type_id == BOOL_TYPE {
             "%s"
-        } else if type_id == self.str_type || type_id == self.owned_string_type {
+        } else if type_id == self.string_view_type || type_id == self.owned_string_type {
             "%s"
         } else {
             "%lld" // fallback
@@ -324,8 +324,8 @@ impl TypeMapper {
     }
 
     /// Returns true if this type needs special printf handling (e.g., Str → two args).
-    pub fn is_str_type(&self, type_id: TypeId) -> bool {
-        type_id == self.str_type || type_id == self.owned_string_type
+    pub fn is_string_type(&self, type_id: TypeId) -> bool {
+        type_id == self.string_view_type || type_id == self.owned_string_type
     }
 }
 
@@ -805,7 +805,7 @@ mod tests {
         assert_eq!(mapper.map_primitive(&PrimitiveType::Void), UNIT_TYPE);
         // str maps to a Named("Str") type (matches the runtime fat pointer struct)
         let str_id = mapper.map_primitive(&PrimitiveType::StringView);
-        assert_eq!(str_id, mapper.str_type);
+        assert_eq!(str_id, mapper.string_view_type);
         assert!(matches!(reg.get(str_id), Some(GirType::Named(name)) if name == "GorgetStringView"));
     }
 
@@ -832,7 +832,7 @@ mod tests {
 
         assert_eq!(mapper.format_specifier(I64_TYPE), "%lld");
         assert_eq!(mapper.format_specifier(F64_TYPE), "%f");
-        assert_eq!(mapper.format_specifier(mapper.str_type), "%s");
+        assert_eq!(mapper.format_specifier(mapper.string_view_type), "%s");
         assert_eq!(mapper.format_specifier(BOOL_TYPE), "%s");
         assert_eq!(mapper.format_specifier(U64_TYPE), "%llu");
     }

@@ -100,7 +100,7 @@ pub(super) fn lower_assign(
                             let rhs_type = builder.locals[place.local.0 as usize].type_id;
 
                             if rhs_type == ctx.type_mapper.owned_string_type
-                                && type_id == ctx.type_mapper.str_type
+                                && type_id == ctx.type_mapper.string_view_type
                             {
                                 ctx.drops.unregister(place.local);
                                 assign_mode = AssignMode::Borrow;
@@ -389,7 +389,7 @@ fn maybe_unregister_str_view_temp(
     rhs: &Operand,
     target_type: TypeId,
 ) {
-    if target_type != ctx.type_mapper.str_type {
+    if target_type != ctx.type_mapper.string_view_type {
         return;
     }
     let place = match rhs {
@@ -610,7 +610,7 @@ pub(super) fn lower_compound_assign(
             };
 
             let rhs = lower_expr(ctx, builder, value);
-            let is_string = value_type == ctx.type_mapper.str_type
+            let is_string = value_type == ctx.type_mapper.string_view_type
                 || value_type == ctx.type_mapper.owned_string_type;
 
             // String concatenation via += → gorget_str_cat (returns GorgetString)
@@ -734,7 +734,7 @@ pub(super) fn lower_compound_assign(
             let rhs = lower_expr(ctx, builder, value);
 
             // String concatenation: field += str → gorget_str_cat
-            let is_string = field_type == ctx.type_mapper.str_type
+            let is_string = field_type == ctx.type_mapper.string_view_type
                 || field_type == ctx.type_mapper.owned_string_type;
             if is_string && matches!(op, ast::BinaryOp::Add) {
                 let owned_type = ctx.type_mapper.owned_string_type;
@@ -862,9 +862,9 @@ pub(super) fn lower_compound_assign(
                     pair
                 } else {
                     // Fallback: string indexing or unknown type
-                    let elem_type = if obj_type == ctx.type_mapper.str_type
+                    let elem_type = if obj_type == ctx.type_mapper.string_view_type
                         || obj_type == ctx.type_mapper.owned_string_type {
-                        ctx.type_mapper.str_type
+                        ctx.type_mapper.string_view_type
                     } else {
                         I64_TYPE
                     };
@@ -877,7 +877,7 @@ pub(super) fn lower_compound_assign(
             let rhs = lower_expr(ctx, builder, value);
 
             // Step 3: Compute result
-            let is_string = elem_type == ctx.type_mapper.str_type
+            let is_string = elem_type == ctx.type_mapper.string_view_type
                 || elem_type == ctx.type_mapper.owned_string_type;
 
             let result = if is_string && matches!(op, ast::BinaryOp::Add) {

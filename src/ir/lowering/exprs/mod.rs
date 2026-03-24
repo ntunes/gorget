@@ -1427,7 +1427,7 @@ fn lower_field_access(
                             let result_type = if ctx.type_registry.is_collection_type(field_type) {
                                 ctx.type_registry.insert(GirType::Ptr(field_type))
                             } else if field_type == ctx.type_mapper.owned_string_type {
-                                ctx.type_mapper.str_type
+                                ctx.type_mapper.string_view_type
                             } else {
                                 field_type
                             };
@@ -1441,7 +1441,7 @@ fn lower_field_access(
                                         let result_type = if ctx.type_registry.is_collection_type(field.type_id) {
                                             ctx.type_registry.insert(GirType::Ptr(field.type_id))
                                         } else if field.type_id == ctx.type_mapper.owned_string_type {
-                                            ctx.type_mapper.str_type
+                                            ctx.type_mapper.string_view_type
                                         } else {
                                             field.type_id
                                         };
@@ -1485,7 +1485,7 @@ fn lower_field_access(
                     let result_type = if ctx.type_registry.is_collection_type(field_type) {
                         ctx.type_registry.insert(GirType::Ptr(field_type))
                     } else if field_type == ctx.type_mapper.owned_string_type {
-                        ctx.type_mapper.str_type
+                        ctx.type_mapper.string_view_type
                     } else {
                         field_type
                     };
@@ -1500,7 +1500,7 @@ fn lower_field_access(
                                 let result_type = if ctx.type_registry.is_collection_type(field.type_id) {
                                     ctx.type_registry.insert(GirType::Ptr(field.type_id))
                                 } else if field.type_id == ctx.type_mapper.owned_string_type {
-                                    ctx.type_mapper.str_type
+                                    ctx.type_mapper.string_view_type
                                 } else {
                                     field.type_id
                                 };

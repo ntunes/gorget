@@ -317,7 +317,7 @@ fn lower_var_decl(
 
                     // GorgetString → str view: unregister (intentional leak for view safety)
                     if rhs_type == ctx.type_mapper.owned_string_type
-                        && actual_var_type == ctx.type_mapper.str_type
+                        && actual_var_type == ctx.type_mapper.string_view_type
                     {
                         ctx.drops.unregister(place.local);
                         assign_mode = AssignMode::Borrow;
@@ -675,7 +675,7 @@ fn lower_return(
             }
         } else {
             let ret_type = builder.locals[0].type_id;
-            // If returning a str_type (Copy/view) value through an owned_string_type
+            // If returning a string_view_type (Copy/view) value through an owned_string_type
             // return slot, clone it so the caller gets an independent allocation.
             // Without this, the caller frees a pointer still owned by the source
             // (e.g., an enum field loaded via match destructuring).
@@ -684,7 +684,7 @@ fn lower_return(
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
                         let rhs_type = builder.locals[place.local.0 as usize].type_id;
-                        if rhs_type == ctx.type_mapper.str_type {
+                        if rhs_type == ctx.type_mapper.string_view_type {
                             let clone_result = builder.call(
                                 "gorget_string_from_str",
                                 vec![operand.clone()],
@@ -728,7 +728,7 @@ fn lower_return(
             // If the return local is str-typed and the operand is a GorgetString temp,
             // unregister the temp to prevent use-after-free: the str view in the return
             // local may be accessed after the temp's scope exit frees it.
-            if ret_type == ctx.type_mapper.str_type {
+            if ret_type == ctx.type_mapper.string_view_type {
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
                         let rhs_type = builder.locals[place.local.0 as usize].type_id;
@@ -1131,7 +1131,7 @@ fn emit_assert_comparison(
     _rhs_type: TypeId,
     op: BinaryOp,
 ) -> LocalId {
-    let is_string = lhs_type == ctx.type_mapper.str_type
+    let is_string = lhs_type == ctx.type_mapper.string_view_type
         || lhs_type == ctx.type_mapper.owned_string_type;
 
     // String comparison via runtime functions
@@ -1250,7 +1250,7 @@ fn assert_format_info_rich(
     }
 
     // String types: show the string value via %.*s
-    if type_id == ctx.type_mapper.str_type || type_id == ctx.type_mapper.owned_string_type {
+    if type_id == ctx.type_mapper.string_view_type || type_id == ctx.type_mapper.owned_string_type {
         return ("%.*s".to_string(), format!("(int){c_expr}.len, {c_expr}.data"));
     }
 
@@ -1272,11 +1272,11 @@ fn assert_format_info_rich(
             let self_type = ctx.register_ptr_type(type_id);
             let self_ptr = builder.add_local(self_type, None);
             builder.emit_borrow(self_ptr, Place::local(local));
-            let str_type = ctx.type_mapper.str_type;
+            let string_view_type = ctx.type_mapper.string_view_type;
             let result = builder.call(
                 effective_method,
                 vec![FunctionBuilder::copy(self_ptr)],
-                str_type,
+                string_view_type,
             );
             let result_c = format!("_{}", result.0);
             return ("%.*s".to_string(), format!("(int){result_c}.len, {result_c}.data"));
@@ -1375,7 +1375,7 @@ fn lower_snapshot(
         builder.inline_c(format!(
             "__gorget_snapshot_write_bool(__gorget_current_test, \"{point_name}\", {c_expr});"
         ));
-    } else if val_type == ctx.type_mapper.str_type || val_type == ctx.type_mapper.owned_string_type {
+    } else if val_type == ctx.type_mapper.string_view_type || val_type == ctx.type_mapper.owned_string_type {
         builder.inline_c(format!(
             "__gorget_snapshot_write_str(__gorget_current_test, \"{point_name}\", {c_expr});"
         ));
@@ -1396,11 +1396,11 @@ fn lower_snapshot(
             let self_type = ctx.register_ptr_type(val_type);
             let self_ptr = builder.add_local(self_type, None);
             builder.emit_borrow(self_ptr, Place::local(val_local));
-            let str_type = ctx.type_mapper.str_type;
+            let string_view_type = ctx.type_mapper.string_view_type;
             let result = builder.call(
                 effective_method,
                 vec![FunctionBuilder::copy(self_ptr)],
-                str_type,
+                string_view_type,
             );
             builder.inline_c(format!(
                 "__gorget_snapshot_write_str(__gorget_current_test, \"{point_name}\", _{});",

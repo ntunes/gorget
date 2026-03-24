@@ -29,7 +29,7 @@ pub(super) fn lower_binary_op(
 
     // Determine result type from lhs operand type (use _full to check builder temps too)
     let operand_type = infer_operand_type_full(ctx, &lhs, builder);
-    let is_string = operand_type == ctx.type_mapper.str_type
+    let is_string = operand_type == ctx.type_mapper.string_view_type
         || operand_type == ctx.type_mapper.owned_string_type;
 
     match op {
@@ -64,9 +64,9 @@ pub(super) fn lower_binary_op(
 
             // String equality: use gorget_str_eq instead of pointer comparison
             if is_string && matches!(op, AstOp::Eq | AstOp::Neq) {
-                let str_type = ctx.type_mapper.str_type;
+                let string_view_type = ctx.type_mapper.string_view_type;
                 let dst = builder.call_extern("gorget_str_eq", vec![lhs, rhs], BOOL_TYPE);
-                let _ = str_type;
+                let _ = string_view_type;
                 if op == AstOp::Neq {
                     let neg = builder.un_op(UnOp::Not, BOOL_TYPE, FunctionBuilder::copy(dst));
                     return FunctionBuilder::copy(neg);
@@ -168,7 +168,7 @@ pub(super) fn lower_binary_op(
                 .unwrap_or_default();
             let is_map = rhs_type_name.starts_with("Dict__") || rhs_type_name.starts_with("HashMap__");
             let is_set = rhs_type_name.starts_with("Set__") || rhs_type_name.starts_with("HashSet__");
-            let is_string = rhs_type == ctx.type_mapper.str_type || rhs_type == ctx.type_mapper.owned_string_type;
+            let is_string = rhs_type == ctx.type_mapper.string_view_type || rhs_type == ctx.type_mapper.owned_string_type;
             if is_map || is_set {
                 // Map/Set contains: need pointer to collection and pointer to element
                 let fn_name = if is_map { "gorget_map_contains" } else { "gorget_set_contains" };

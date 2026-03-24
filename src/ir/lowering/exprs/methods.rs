@@ -13,7 +13,7 @@ use super::{lower_expr, lower_call_arg, infer_operand_type_full, register_tuple_
             index_expr_to_mangle_fragment, try_resolve_field_place};
 
 fn gorget_name_for_type_id(ctx: &LoweringContext, type_id: TypeId) -> String {
-    if type_id == ctx.type_mapper.str_type {
+    if type_id == ctx.type_mapper.string_view_type {
         return "str".to_string();
     }
     match type_id {
@@ -1047,7 +1047,7 @@ pub(super) fn lower_method_call(
     // Handle .len() for strings and collections
     if method_name == "len" {
         let recv_type = infer_operand_type_full(ctx, &recv, builder);
-        if recv_type == ctx.type_mapper.str_type || recv_type == ctx.type_mapper.owned_string_type {
+        if recv_type == ctx.type_mapper.string_view_type || recv_type == ctx.type_mapper.owned_string_type {
             let dst = builder.call_extern(
                 "gorget_str_codepoint_count",
                 vec![recv],
@@ -1077,7 +1077,7 @@ pub(super) fn lower_method_call(
     // Handle .byte_len() for strings → direct field access
     if method_name == "byte_len" {
         let recv_type = infer_operand_type_full(ctx, &recv, builder);
-        if recv_type == ctx.type_mapper.str_type || recv_type == ctx.type_mapper.owned_string_type {
+        if recv_type == ctx.type_mapper.string_view_type || recv_type == ctx.type_mapper.owned_string_type {
             if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
                 let mut len_place = place.clone();
                 len_place.projections.push(Projection::Field(1));
@@ -1277,10 +1277,10 @@ pub(super) fn lower_method_call(
             }
         } else if matches!(&recv, Operand::Constant(Constant::Str(_))) {
             // String constant receiver: materialize into a local for borrow
-            let str_type = ctx.type_mapper.str_type;
-            let tmp_local = builder.add_local(str_type, None);
+            let string_view_type = ctx.type_mapper.string_view_type;
+            let tmp_local = builder.add_local(string_view_type, None);
             builder.assign(Place::local(tmp_local), recv);
-            let pt = ctx.register_ptr_type(str_type);
+            let pt = ctx.register_ptr_type(string_view_type);
             let pl = builder.add_local(pt, None);
             builder.emit_borrow(pl, Place::local(tmp_local));
             call_args.push(FunctionBuilder::copy(pl));
@@ -1524,7 +1524,7 @@ pub(super) fn lower_method_call(
         let ret_type = if method_name == "fold" && call_args.len() > 2 {
             match &call_args[1] {
                 Operand::Constant(Constant::F64(_)) => F64_TYPE,
-                Operand::Constant(Constant::Str(_)) => ctx.type_mapper.str_type,
+                Operand::Constant(Constant::Str(_)) => ctx.type_mapper.string_view_type,
                 Operand::Copy(p) | Operand::Move(p) => {
                     let init_type = builder.locals[p.local.0 as usize].type_id;
                     if init_type != I64_TYPE { init_type } else { ret_type }
@@ -1674,7 +1674,7 @@ fn infer_collection_method_return_type(
         // String methods returning Str (view operations)
         "trim" | "strip" | "lstrip" | "rstrip" | "removeprefix" | "removesuffix"
         | "byte_slice" | "substring" | "slice" if is_string => {
-            ctx.type_mapper.str_type
+            ctx.type_mapper.string_view_type
         }
         // String methods returning GorgetString (allocating)
         "to_upper" | "to_lower" | "replace" | "repeat" | "pad_left" | "pad_right"
@@ -1682,7 +1682,7 @@ fn infer_collection_method_return_type(
             ctx.type_mapper.owned_string_type
         }
         // String .str() / .as_str() → Str
-        "str" | "as_str" if is_string => ctx.type_mapper.str_type,
+        "str" | "as_str" if is_string => ctx.type_mapper.string_view_type,
         // String .byte_at(i) → uint8
         "byte_at" if is_string => U8_TYPE,
         // String boolean predicates (all-codepoints)
@@ -2232,10 +2232,10 @@ pub(super) fn lower_index_access(
             }
         }
 
-        let elem_type = if base_type == ctx.type_mapper.str_type
+        let elem_type = if base_type == ctx.type_mapper.string_view_type
             || base_type == ctx.type_mapper.owned_string_type
         {
-            ctx.type_mapper.str_type // indexing a string returns Str
+            ctx.type_mapper.string_view_type // indexing a string returns Str
         } else {
             // Try to infer element type from collection type name
             infer_collection_element_type(ctx, base_type)
@@ -2298,7 +2298,7 @@ fn resolve_type_name_to_id(ctx: &LoweringContext, name: &str) -> TypeId {
         "double" => F64_TYPE,
         "float" => F32_TYPE,
         "bool" => BOOL_TYPE,
-        "GorgetStringView" => ctx.type_mapper.str_type,
+        "GorgetStringView" => ctx.type_mapper.string_view_type,
         "GorgetString" => ctx.type_mapper.owned_string_type,
         _ => {
             // Try named type lookup
@@ -2351,7 +2351,7 @@ pub(super) fn infer_type_name_from_operand_full(
     let effective_tid = ctx.pointee_type(type_id).unwrap_or(type_id);
 
     // Check primitive types
-    if effective_tid == ctx.type_mapper.str_type {
+    if effective_tid == ctx.type_mapper.string_view_type {
         return Some("GorgetStringView".to_string());
     }
     if effective_tid == ctx.type_mapper.owned_string_type {
@@ -2381,7 +2381,7 @@ fn resolve_inner_type(ctx: &mut LoweringContext, inner_name: &str) -> TypeId {
         "uint64_t" => U64_TYPE,
         "int8_t" => I8_TYPE,
         "int16_t" => I16_TYPE,
-        "GorgetStringView" => ctx.type_mapper.str_type,
+        "GorgetStringView" => ctx.type_mapper.string_view_type,
         "GorgetString" => ctx.type_mapper.owned_string_type,
         name => {
             if let Some(id) = ctx.type_mapper.lookup_named(name) {
@@ -2425,7 +2425,7 @@ fn extract_elem_type_id_from_type_name(ctx: &LoweringContext, type_name: &str) -
             "int64_t" => Some(I64_TYPE),
             "double" => Some(F64_TYPE),
             "bool" => Some(BOOL_TYPE),
-            "GorgetStringView" => Some(ctx.type_mapper.str_type),
+            "GorgetStringView" => Some(ctx.type_mapper.string_view_type),
             _ => ctx.lookup_type_by_name(elem)
                 .or_else(|| ctx.type_mapper.lookup_named(elem)),
         }

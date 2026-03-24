@@ -1088,7 +1088,7 @@ fn format_for_printf(
         // If apply_format_spec returns None, fall through to default
     }
 
-    if type_id == ctx.type_mapper.str_type || type_id == ctx.type_mapper.owned_string_type {
+    if type_id == ctx.type_mapper.string_view_type || type_id == ctx.type_mapper.owned_string_type {
         // Str/GorgetString → %.*s with (int)expr.len, expr.data
         ("%.*s".to_string(), vec![operand])
     } else if type_id == BOOL_TYPE {
@@ -1114,8 +1114,8 @@ fn format_for_printf(
             if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                 builder.emit_borrow(self_ptr, place.clone());
             }
-            let str_type = ctx.type_mapper.str_type;
-            let result = builder.call(effective_method, vec![FunctionBuilder::copy(self_ptr)], str_type);
+            let string_view_type = ctx.type_mapper.string_view_type;
+            let result = builder.call(effective_method, vec![FunctionBuilder::copy(self_ptr)], string_view_type);
             ("%.*s".to_string(), vec![FunctionBuilder::copy(result)])
         } else {
             // No display method — fall through to default formatting
@@ -1164,7 +1164,7 @@ fn apply_format_spec(
         || type_id == U64_TYPE;
     let is_any_int = is_signed_int || is_unsigned_int;
     let is_float = type_id == F32_TYPE || type_id == F64_TYPE;
-    let is_str = type_id == ctx.type_mapper.str_type || type_id == ctx.type_mapper.owned_string_type;
+    let is_str = type_id == ctx.type_mapper.string_view_type || type_id == ctx.type_mapper.owned_string_type;
 
     // Parse the spec: [#][0][width][.precision][type_char]
     let bytes = spec.as_bytes();
@@ -1263,12 +1263,12 @@ fn apply_format_spec(
         'b' if is_any_int => {
             // Binary has no printf equivalent — call runtime helper returning const char*
             let op = widen_int(builder, type_id, operand);
-            let str_type = ctx.type_mapper.str_type;
+            let string_view_type = ctx.type_mapper.string_view_type;
             let alt_arg = Operand::Constant(Constant::I64(if alt { 1 } else { 0 }));
             let result = builder.call_extern(
                 "gorget_int_to_binary",
                 vec![op, alt_arg],
-                str_type,
+                string_view_type,
             );
             Some(("%.*s".to_string(), vec![FunctionBuilder::copy(result)]))
         }

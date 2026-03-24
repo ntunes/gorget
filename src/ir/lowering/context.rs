@@ -464,7 +464,7 @@ impl<'a> LoweringContext<'a> {
             let def = self.analysis.scopes.get_def(def_id);
             if let Some(sem_tid) = def.type_id {
                 if sem_tid == self.analysis.types.string_id {
-                    return self.type_mapper.str_type;
+                    return self.type_mapper.string_view_type;
                 }
             }
         }
@@ -488,7 +488,7 @@ impl<'a> LoweringContext<'a> {
             Expr::IntLiteral(_) => I64_TYPE,
             Expr::FloatLiteral(_) => F64_TYPE,
             Expr::BoolLiteral(_) => BOOL_TYPE,
-            Expr::StringLiteral(_) => self.type_mapper.str_type,
+            Expr::StringLiteral(_) => self.type_mapper.string_view_type,
             Expr::BinaryOp { left, op, .. } => {
                 use crate::parser::ast::BinaryOp;
                 match op {
