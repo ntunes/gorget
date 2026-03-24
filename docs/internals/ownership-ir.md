@@ -88,6 +88,54 @@ These replace the `mut_capture_locals` auto-deref pattern where `&` and `!` para
 | `field_load_origins` | Track source field for post-assign zeroing | FieldLoadMode (partially) |
 | `drops` | Track moved/registered locals for scope-exit drops | AssignMode::Move (partially) |
 
+## Struct Field Ownership
+
+Structs **own** their resource-type fields. Field **loads** return non-owning references.
+
+| Field type | Stored as (TypeDef) | Loaded as (FieldLoad result) |
+|-----------|--------------------|-----------------------------|
+| `String` | `GorgetString` (owned) | `Str` (non-owning view) |
+| `Vector[T]` | `Vector__T` (owned) | `Ptr(Vector__T)` (reference) |
+| `Dict[K,V]` | `Dict__K__V` (owned) | `Ptr(Dict__K__V)` (reference) |
+| `int`, `bool` | Trivial | Trivial (copy) |
+
+**Principle**: ownership is a **type-level** concern (what the struct holds). Borrowing is an **operation-level** concern (what a field read returns). This mirrors Rust: a `String` field in a struct is owned, but `&self.name` borrows it as `&str`.
+
+**Why not Str views in the TypeDef?** If struct fields stored `Str` (non-owning), the struct wouldn't own its string data. The strings would point to external GorgetString temps, requiring the caller to keep those alive — leading to the `should_unregister_string_args` leak heuristic. With owned fields, the struct is self-contained and recursive drop frees everything.
+
+**Why not Ptr(GorgetString) for string fields?** Unlike collections, strings have a natural non-owning representation (`Str`) that all consumers already handle (operators, methods, print, format). `Ptr(GorgetString)` would require every string consumer to unwrap the pointer.
+
+Auto-clone fires when a loaded reference/view is assigned to an explicitly-typed owned variable:
+```gorget
+String x = obj.name        # Str→GorgetString auto-clone (gorget_string_clone)
+Vector[int] v = obj.items  # Ptr→Vector auto-clone (gorget_array_clone)
+auto y = obj.name           # Stays as Str view (zero cost)
+auto w = obj.items          # Stays as Ptr reference (zero cost)
+```
+
+## Call Result Drop Registration
+
+Function and method call results are automatically registered for drop via `call_tracked()` / `call_extern_tracked()`. These use the narrow `needs_drop_for_temp()` check:
+
+| Type | Registered? | Reason |
+|------|------------|--------|
+| Collections (Vector, Dict, Set) | Yes | Name-based detection |
+| GorgetString | Yes | `DropStrategy::Trivial` |
+| User structs with Custom drop | Yes | `DropStrategy::Custom` |
+| User structs with Recursive drop | No | Move-zero on consumed temps can conflict with shallow copies |
+| Primitives, Ptr, Str | No | Non-owning or trivial |
+
+The VarDecl path detects registered temps via `is_registered()` → `AssignMode::Move` → `mark_moved()`, preventing double-free at scope exit.
+
+## LIR SlotStore Move Flag
+
+`Inst::SlotStore { slot, value, is_move }` carries a move flag from GIR `AssignMode::Move`. The C backend uses this to choose between:
+
+- `is_move: true` → `memcpy` (transfer ownership, source will be zeroed by MoveZero)
+- `is_move: false` → `gorget_string_clone` (independent copy, source stays alive)
+
+This eliminates unnecessary `clone + free` round-trips for string temporaries.
+
 ## Design Decisions
 
 ### Deep clone on variable-to-variable assignment
@@ -124,8 +172,12 @@ Collection destruction (`gorget_array_free`) does NOT use `elem_drop` — elemen
 | `src/ir/builder.rs` | `assign_mode()`, `field_load_mode()`, `load_ref()`, `store_ref()` |
 | `src/ir/lowering/stmts/mod.rs` | VarDecl mode decision tree |
 | `src/ir/lowering/stmts/assigns.rs` | Reassignment mode decision tree |
-| `src/ir/lowering/context.rs` | Tracking sets, `clone_fn_for_ptr()`, `is_named_local()` |
+| `src/ir/lowering/context.rs` | Tracking sets, `clone_fn_for_ptr()`, `is_named_local()`, `call_tracked()` |
 | `src/ir/lowering/drops.rs` | Drop elaboration, `is_moved()`, `is_registered()` |
-| `src/ir/types.rs` | `needs_drop()`, `is_collection_type()`, `is_resource_type()` |
+| `src/ir/lowering/exprs/mod.rs` | Field load Ptr/Str conversion, `register_owned_string_for_drop()` |
+| `src/ir/lowering/types.rs` | Struct field TypeDef registration (GorgetString ownership) |
+| `src/ir/types.rs` | `needs_drop()`, `needs_drop_for_temp()`, `is_collection_type()` |
+| `src/lir/mod.rs` | `Inst::SlotStore { is_move }` flag |
+| `src/backend/c_lir/mod.rs` | SlotStore clone vs memcpy, block param type inference |
 | `src/lir/lower.rs` | LIR interpretation of AssignMode, FieldLoad, LoadRef/StoreRef |
 | `src/backend/c/c_runtime.rs` | `elem_drop`/`val_drop` on GorgetArray/GorgetMap |
