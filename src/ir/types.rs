@@ -330,10 +330,10 @@ impl TypeRegistry {
 
     /// Drop check for anonymous call result temps.
     /// Includes Trivial/Custom drop and collection types.
-    /// Excludes Recursive — enum deep clone (tag-based variant clone) not yet
-    /// implemented. Collections containing enum elements with resource fields
-    /// would have shallow-copy values after gorget_*_clone.
-    /// Blocked on: enum __clone generation with tag-based dispatch.
+    /// Excludes Recursive — gorget_map_clone/gorget_array_clone don't call
+    /// per-element clone functions. Dict[K, EnumType] values would be
+    /// shallow-copied during collection clone. Blocked on element-level
+    /// clone support in collection runtime functions.
     pub fn needs_drop_for_temp(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
         if let Some(GirType::Named(name)) = self.get(type_id) {
