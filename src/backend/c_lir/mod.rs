@@ -2716,11 +2716,15 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                 }
             }
         }
-        // Infer untyped values from block parameter types at jump/branch targets.
+        // Infer or correct value types from block parameter types at jump/branch targets.
+        // Block param types come from SSA slot types (deterministic). If the forward pass
+        // inferred a different type (e.g., due to value numbering shifts from drop changes),
+        // the block param type is authoritative.
         let infer_from_args = |target: BlockId, args: &[ValueId], val_types: &mut Vec<Option<LirType>>| {
             let target_params = &func.blocks[target.0 as usize].params;
             for (arg, (_, param_ty)) in args.iter().zip(target_params.iter()) {
-                if val_types.get(arg.0 as usize) == Some(&None) {
+                let current = val_types.get(arg.0 as usize).and_then(|t| t.as_ref());
+                if current.is_none() || current != Some(param_ty) {
                     val_types[arg.0 as usize] = Some(param_ty.clone());
                 }
             }
