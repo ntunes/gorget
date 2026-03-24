@@ -909,7 +909,8 @@ fn lower_expr_inner(
                     if let Some(type_def) = ctx.type_registry.get_type_def(&type_name) {
                         if let TypeDefKind::Enum(ref e) = type_def.kind {
                             if e.variants.iter().any(|v| v.name == variant_name) {
-                                let dst = builder.enum_init(&type_name, &variant_name, et, lowered_args);
+                                let dst = builder.enum_init(&type_name, &variant_name, et, lowered_args.clone());
+                                move_zero_resource_args(ctx, builder, &lowered_args);
                                 return FunctionBuilder::copy(dst);
                             }
                         }
@@ -920,7 +921,8 @@ fn lower_expr_inner(
             // 2. Fallback: variant map (for user-defined non-generic enums)
             if let Some((enum_name, vn)) = ctx.resolve_enum_variant(&variant_name) {
                 let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
-                let dst = builder.enum_init(&enum_name, &vn, type_id, lowered_args);
+                let dst = builder.enum_init(&enum_name, &vn, type_id, lowered_args.clone());
+                move_zero_resource_args(ctx, builder, &lowered_args);
                 return FunctionBuilder::copy(dst);
             }
 
@@ -1295,7 +1297,8 @@ fn lower_struct_literal(
             .collect();
 
         let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
-        let dst = builder.enum_init(&enum_name, &variant_name, type_id, field_operands);
+        let dst = builder.enum_init(&enum_name, &variant_name, type_id, field_operands.clone());
+        move_zero_resource_args(ctx, builder, &field_operands);
         return FunctionBuilder::copy(dst);
     }
     // Also check the base name for non-generic enum variants
@@ -1305,7 +1308,8 @@ fn lower_struct_literal(
             .collect();
 
         let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
-        let dst = builder.enum_init(&enum_name, &variant_name, type_id, field_operands);
+        let dst = builder.enum_init(&enum_name, &variant_name, type_id, field_operands.clone());
+        move_zero_resource_args(ctx, builder, &field_operands);
         return FunctionBuilder::copy(dst);
     }
 
@@ -2255,6 +2259,27 @@ fn lower_string_interpolation(
     // Register for drop — needs_drop() handles type filtering.
     ctx.drops.register_local(dst, owned_string_type, &ctx.type_registry);
     FunctionBuilder::copy(dst)
+}
+
+/// MoveZero resource-type operands after they've been consumed by StructInit/EnumInit.
+/// The init instruction creates a shallow copy of each field. Without zeroing the
+/// originals, both the init result AND the original locals would be dropped at scope
+/// exit, double-freeing shared resource data.
+fn move_zero_resource_args(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    args: &[Operand],
+) {
+    for op in args {
+        if let Operand::Copy(place) = op {
+            if place.projections.is_empty() {
+                if is_resource_type_local(place.local, builder, &ctx.type_registry) {
+                    builder.move_zero(place.clone());
+                    ctx.drops.mark_moved(place.local);
+                }
+            }
+        }
+    }
 }
 
 /// Register a GorgetString temp for drop at function scope.
