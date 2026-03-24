@@ -333,13 +333,11 @@ fn lower_var_decl(
                             assign_mode = AssignMode::Move; // clone result is a temp
                         }
                     }
-                    // Drop-registered temp → move (transfer ownership)
-                    else if ctx.drops.is_registered(place.local) {
-                        assign_mode = AssignMode::Move;
-                    }
-                    // GorgetString temp → owned string variable: move
-                    else if rhs_type == ctx.type_mapper.owned_string_type
-                        && actual_var_type == ctx.type_mapper.owned_string_type
+                    // Drop-registered temp OR unregistered droppable temp → move.
+                    // Temps (not named vars) that need drop should be moved to transfer
+                    // ownership, preventing shallow-copy double-free on scope exit.
+                    else if ctx.drops.is_registered(place.local)
+                        || (!ctx.is_named_local(place.local) && ctx.type_registry.needs_drop(rhs_type))
                     {
                         assign_mode = AssignMode::Move;
                     }

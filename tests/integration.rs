@@ -5871,7 +5871,7 @@ fn lifetime_method() {
 fn lifetime_method_error() {
     // Struct string fields are owned (GorgetString). get_name() returns a view
     // borrowing from h. After consume(!h) moves h, v dangles → UseAfterSourceMoved.
-    check_gg_fails("lifetime_method_error.gg", "used after");
+    check_gg_fails("lifetime_method_error.gg", "after source");
 }
 
 #[test]
