@@ -978,11 +978,11 @@ equip Router:
             Callable[Option[HttpServerResponse](HttpRequest)] pre = self.pre_middlewares[pi]
             Option[HttpServerResponse] early = pre(req)
             if early is Some(short_resp):
-                return self.run_post_middlewares(req, short_resp)
+                return self.run_post_middlewares(req, !short_resp)
             pi = pi + 1
         # Normal handler dispatch
         HttpServerResponse resp = self.dispatch_inner(req)
-        return self.run_post_middlewares(req, resp)
+        return self.run_post_middlewares(req, !resp)
 
 # ── Static file serving ───────────────────────────────────────
 

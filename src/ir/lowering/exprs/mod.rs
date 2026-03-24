@@ -1310,9 +1310,29 @@ fn lower_struct_literal(
     }
 
     // Regular struct literal
-    let field_operands: Vec<Operand> = args.iter()
+    let mut field_operands: Vec<Operand> = args.iter()
         .map(|arg| lower_expr(ctx, builder, arg))
         .collect();
+
+    // Auto-clone Ptr(collection) operands used as struct fields.
+    // Field loads return Ptr(T) for collection fields. When passed to StructInit,
+    // the struct needs an owned copy (T), not a pointer. Clone via runtime function.
+    for op in &mut field_operands {
+        if let Operand::Copy(place) | Operand::Move(place) = op {
+            if place.projections.is_empty() {
+                let idx = place.local.0 as usize;
+                if idx < builder.locals.len() {
+                    let local_type = builder.locals[idx].type_id;
+                    if let Some(inner) = ctx.pointee_type(local_type) {
+                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(place.local)], inner);
+                            *op = FunctionBuilder::copy(cloned);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Unregister GorgetString temps used as struct fields — they may be stored
     // as Str views that outlive the current scope.

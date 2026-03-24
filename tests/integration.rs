@@ -5869,9 +5869,9 @@ fn lifetime_method() {
 
 #[test]
 fn lifetime_method_error() {
-    // After str→String unification, struct string fields are Str (Copy views).
-    // Method-call string returns are owned (provenance). No UseAfterSourceMoved.
-    run_gg("lifetime_method_error.gg", "hello");
+    // Struct string fields are owned (GorgetString). get_name() returns a view
+    // borrowing from h. After consume(!h) moves h, v dangles → UseAfterSourceMoved.
+    check_gg_fails("lifetime_method_error.gg", "used after");
 }
 
 #[test]

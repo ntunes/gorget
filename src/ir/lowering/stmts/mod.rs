@@ -740,30 +740,17 @@ fn lower_return(
                     }
                 }
             }
-            // If the return local is owned_string_type and the operand is also
-            // owned_string_type, the source has been moved into the return slot.
-            // Mark it as moved so drop elaboration doesn't free it (double-free).
-            if ret_type == ctx.type_mapper.owned_string_type {
-                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
-                    if place.projections.is_empty() {
-                        let rhs_type = builder.locals[place.local.0 as usize].type_id;
-                        if rhs_type == ctx.type_mapper.owned_string_type {
-                            builder.move_zero(Place::local(place.local));
-                            ctx.drops.mark_moved(place.local);
-                        }
-                    }
-                }
-            }
-            // Collection return move-zero: zero source to prevent function-scope double-free.
-            // Mirrors the GorgetString return pattern above.
-            if ctx.type_registry.is_collection_type(ret_type) {
-                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
-                    if place.projections.is_empty() {
-                        let rhs_type = builder.locals[place.local.0 as usize].type_id;
-                        if ctx.type_registry.is_collection_type(rhs_type) {
-                            builder.move_zero(Place::local(place.local));
-                            ctx.drops.mark_moved(place.local);
-                        }
+            // Move-zero source locals on return to prevent double-free.
+            // The return assigns into slot 0 (shallow copy). Without zeroing the
+            // source, both the source and the return slot share heap data — the
+            // source gets Recursive/Trivial drop at scope exit, and the caller
+            // drops the return value later → double-free.
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                if place.projections.is_empty() && place.local != LocalId(0) {
+                    let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                    if ctx.type_registry.needs_drop(rhs_type) {
+                        builder.move_zero(Place::local(place.local));
+                        ctx.drops.mark_moved(place.local);
                     }
                 }
             }

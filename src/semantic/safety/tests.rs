@@ -1223,10 +1223,11 @@ void main():
     print(v)
 ";
         let errors = check(source);
+        // Struct string fields are owned (GorgetString). `get_name()` returns a view
+        // borrowing from `h`. After `consume(!h)` moves `h`, `v` dangles.
         assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
-            "unexpected UseAfterSourceMoved — with String unification, method-call string \
-             returns are owned and struct string fields are Copy views: {:?}", errors
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "should detect UseAfterSourceMoved — v borrows from h which was moved: {:?}", errors
         );
     }
 

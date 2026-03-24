@@ -152,20 +152,10 @@ fn rewrite_item(
                 }
             }
         }
-        Item::Struct(s) => {
-            for field in &mut s.fields {
-                rewrite_type_to_str(&mut field.node.type_.node);
-            }
-        }
-        Item::Enum(e) => {
-            for variant in &mut e.variants {
-                if let VariantFields::Tuple(types) = &mut variant.node.fields {
-                    for ty in types {
-                        rewrite_type_to_str(&mut ty.node);
-                    }
-                }
-            }
-        }
+        // Struct and enum field types are NOT rewritten to Str — structs must OWN
+        // their string data (GorgetString) so recursive drop can free them. Field
+        // LOADS return Str views at IR lowering time, not at type definition time.
+        Item::Struct(_) | Item::Enum(_) => {}
         Item::Test(t) => {
             rewrite_block_stmts(&mut t.body.stmts, scopes, string_id);
         }
