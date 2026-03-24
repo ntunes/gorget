@@ -436,6 +436,44 @@ Vector[int] v = make_vec()  # move from temp, not clone — zero cost
 
 This is consistent with function parameter semantics: bare params create temporary read-only access (pointer), bare assignment creates persistent ownership (clone). Both leave the source unaffected.
 
+#### Struct Field Access
+
+Reading a struct field **borrows** — it does not copy or move:
+
+```gorget
+struct Player:
+    String name
+    Vector[int] scores
+
+Player p = Player("Alice", [90, 85, 95])
+
+# Field reads return non-owning references (zero cost)
+print(p.name)              # Str view into p's owned string
+print(p.scores.len())      # reads through Ptr to p's vector
+```
+
+Structs **own** their fields. When a struct is dropped, all its resource-type fields are freed. But reading a field produces a lightweight reference — not a deep copy:
+
+| Field type | Read returns | Cost | Ownership |
+|-----------|-------------|------|-----------|
+| `String` | `str` (view) | Zero — copies 32-byte header | Struct still owns the data |
+| `Vector[T]` | `Ptr(Vector[T])` | Zero — pointer to field | Struct still owns the data |
+| `int`, `bool` | Value copy | Zero — trivial | Independent copy |
+
+The struct retains ownership. The view/reference borrows from the struct and is valid as long as the struct is alive.
+
+**Auto-clone on assignment** — same rule as collection element access:
+
+```gorget
+auto fast = p.name         # str view (zero cost, borrows from p)
+String owned = p.name      # auto-clone via gorget_string_clone (independent copy)
+
+auto ref = p.scores        # Ptr reference (zero cost)
+Vector[int] copy = p.scores  # auto-clone via gorget_array_clone (independent)
+```
+
+`auto` gives the fast path (reference/view). An explicit type annotation signals "I want an independent owned copy" — the compiler inserts the clone automatically.
+
 ### 3.5 The Borrow Rules (same as Rust)
 
 At any given time, for a given piece of data, you can have **either**:
@@ -2175,6 +2213,18 @@ This is similar to how Swift's `String` unifies owned and borrowed representatio
 - Concatenation, formatting, and mutation produce owned strings.
 - Passing a string to a function that only reads it keeps the view provenance.
 - The compiler inserts ownership promotion (copy to heap) only when needed — e.g., storing into a collection or returning from a function that outlives the source.
+
+**Struct field ownership:** String fields in structs are **owned** (heap-allocated). The struct is responsible for freeing them. Reading a string field returns a **view** (no allocation, borrows from the struct). Assigning to a `String` variable triggers an auto-clone:
+
+```gorget
+struct Config:
+    String name
+
+Config c = Config("myapp")
+print(c.name)                 # view — zero cost, borrows from c
+String copy = c.name          # auto-clone — independent owned copy
+# When c goes out of scope, c.name is freed automatically
+```
 
 ```gorget
 # All of these are type String (str is an alias)
