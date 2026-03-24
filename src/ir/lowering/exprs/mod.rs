@@ -1418,14 +1418,30 @@ fn lower_field_access(
                     if let Some(inner_type_name) = ctx.type_name_for_id(inner_type) {
                         let inner_type_name = inner_type_name.to_string();
                         if let Some((field_idx, field_type)) = ctx.lookup_field(&inner_type_name, field_name) {
-                            let dst = builder.field_load(deref_place, field_idx, field_type);
+                            // Same resource-type field conversion as the non-Ptr path:
+                            // collections → Ptr(T), GorgetString → Str view.
+                            let result_type = if ctx.type_registry.is_collection_type(field_type) {
+                                ctx.type_registry.insert(GirType::Ptr(field_type))
+                            } else if field_type == ctx.type_mapper.owned_string_type {
+                                ctx.type_mapper.str_type
+                            } else {
+                                field_type
+                            };
+                            let dst = builder.field_load(deref_place, field_idx, result_type);
                             return FunctionBuilder::copy(dst);
                         }
                         if let Some(type_def) = ctx.type_registry.get_type_def(&inner_type_name) {
                             if let TypeDefKind::Struct(ref s) = type_def.kind {
                                 for (i, field) in s.fields.iter().enumerate() {
                                     if field.name == field_name {
-                                        let dst = builder.field_load(deref_place, i as u32, field.type_id);
+                                        let result_type = if ctx.type_registry.is_collection_type(field.type_id) {
+                                            ctx.type_registry.insert(GirType::Ptr(field.type_id))
+                                        } else if field.type_id == ctx.type_mapper.owned_string_type {
+                                            ctx.type_mapper.str_type
+                                        } else {
+                                            field.type_id
+                                        };
+                                        let dst = builder.field_load(deref_place, i as u32, result_type);
                                         return FunctionBuilder::copy(dst);
                                     }
                                 }
