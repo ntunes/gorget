@@ -946,7 +946,7 @@ String p2p_stream_protocol(Node node, int stream_id):
     while i < node.streams.len():
         ReliableStream s = node.streams.get(i).unwrap()
         if s.stream_id == stream_id:
-            return s.protocol
+            return "" + s.protocol
         i = i + 1
     return ""
 
@@ -987,7 +987,6 @@ void p2p_stream_accept(Node &node, int stream_id):
     bool is_enc = s.encrypted
     bool is_auth = s.authenticated
     Vector[uint8] our_pub = bytes_slice(s.local_ephemeral_pub, 0, s.local_ephemeral_pub.len())
-    node.streams.push(!s)
     # Send SYN-ACK with both IDs: (our sid, initiator's remote_sid)
     if is_auth:
         # Authenticated: sign our ephemeral key and include Ed25519 pubkey
@@ -1001,6 +1000,7 @@ void p2p_stream_accept(Node &node, int stream_id):
     else:
         Vector[uint8] payload = p2p_encode_syn_ack_payload(sid, remote_sid, 0, remote_isn + 1)
         p2p_stream_send_raw(&node, peer, 53, payload)
+    node.streams.push(!s)
 
 void p2p_stream_close(Node &node, int stream_id):
     int sidx = p2p_find_stream(&node, stream_id)
@@ -1018,9 +1018,9 @@ void p2p_stream_close(Node &node, int stream_id):
         int final_seq = s.local_seq
         int sid = s.stream_id
         int remote_sid = s.remote_stream_id
-        node.streams.push(!s)
         Vector[uint8] payload = p2p_encode_fin_payload(remote_sid, sid, final_seq)
         p2p_stream_send_raw(&node, peer, 54, payload)
+        node.streams.push(!s)
     else:
         # Unsegmented data remains — defer FIN until send_queue drained
         s.state = 6
@@ -1205,10 +1205,10 @@ P2PEvent p2p_handle_fin(Node &node, String sender_hex, Vector[uint8] payload):
     String peer = s.peer_hex
     int sid = s.stream_id
     int remote_sid = s.remote_stream_id
-    node.streams.push(!s)
     # Send FIN-ACK: swap IDs (our local → receiver, their local → sender)
     Vector[uint8] ack_payload = p2p_encode_fin_ack_payload(remote_sid, sid, final_seq)
     p2p_stream_send_raw(&node, peer, 55, ack_payload)
+    node.streams.push(!s)
     # Return STREAM_CLOSED event
     Vector[uint8] ev_data = p2p_make_u32(receiver_sid)
     return P2PEvent(11, PeerId(Vector[uint8]()), ev_data, "")
@@ -1494,10 +1494,10 @@ void p2p_stream_handle_data(Node &node, String sender_hex, Vector[uint8] payload
     int sid = s.stream_id
     int remote_sid = s.remote_stream_id
     int cum_ack = s.remote_seq_acked
-    node.streams.push(!s)
     # Send ACK with dual IDs (receiver_sid = peer's local ID, sender_sid = our ID)
     Vector[uint8] ack_payload = p2p_encode_ack_payload(remote_sid, sid, cum_ack, recv_window, sacks)
     p2p_stream_send_raw(&node, peer, 51, ack_payload)
+    node.streams.push(!s)
 
 # ── Handle incoming ACK (51) ──────────────────────────────
 
