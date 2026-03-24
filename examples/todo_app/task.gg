@@ -9,12 +9,12 @@ enum Priority:
     Low
 
 struct Task:
-    str title
+    String title
     int priority
     bool done
 
 equip Task with Displayable:
-    str display(self):
+    String display(self):
         if self.done:
             return format(f"[x] {self.title}")
         else:

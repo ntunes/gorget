@@ -522,7 +522,7 @@ impl Parser {
                 | Keyword::Int | Keyword::Int8 | Keyword::Int16 | Keyword::Int32 | Keyword::Int64
                 | Keyword::Uint | Keyword::Uint8 | Keyword::Uint16 | Keyword::Uint32 | Keyword::Uint64
                 | Keyword::Float | Keyword::Float32 | Keyword::Float64
-                | Keyword::Bool | Keyword::Str | Keyword::CStr),
+                | Keyword::Bool | Keyword::CStr),
             ) => {
                 let name = kw.as_name().to_string();
                 self.advance();
@@ -1695,7 +1695,6 @@ impl Parser {
                 | Token::Keyword(Keyword::Float32)
                 | Token::Keyword(Keyword::Float64)
                 | Token::Keyword(Keyword::Bool)
-                | Token::Keyword(Keyword::Str)
                 | Token::Keyword(Keyword::CStr)
                 | Token::Keyword(Keyword::StringType)
                 | Token::Dot

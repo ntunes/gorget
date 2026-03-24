@@ -6,12 +6,12 @@
 from std.collections import Vector
 
 struct Student:
-    str name
+    String name
     int grade
     bool honors
 
 equip Student with Displayable:
-    str display(self):
+    String display(self):
         if self.honors:
             return format(f"{self.name} ({self.grade}*)")
         else:

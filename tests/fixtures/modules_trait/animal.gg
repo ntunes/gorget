@@ -1,9 +1,9 @@
 trait Animal:
-    str speak(self)
+    String speak(self)
 
 struct Dog:
-    str name
+    String name
 
 equip Dog with Animal:
-    str speak(self):
+    String speak(self):
         return "woof"

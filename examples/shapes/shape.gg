@@ -4,4 +4,4 @@
 
 trait Shape:
     int area(self)
-    str name(self)
+    String name(self)

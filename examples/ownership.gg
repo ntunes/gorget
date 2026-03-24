@@ -11,8 +11,8 @@
 # Copy types (int, float, bool, char) are always copied — no annotations needed.
 
 struct Message:
-    str sender
-    str subject
+    String sender
+    String subject
     int priority
 
 # Borrow: read-only access. The caller still owns the message.

@@ -2,20 +2,20 @@ from std.fs import read_file, write_file
 from std.os import args
 from std.collections import Vector
 
-str escape_html(str text):
-    str r = text.replace("&", "&amp;")
+String escape_html(String text):
+    String r = text.replace("&", "&amp;")
     r = r.replace("<", "&lt;")
     r = r.replace(">", "&gt;")
     r = r.replace("\"", "&quot;")
     return r
 
-str render_inline(str text):
-    Vector[str] parts = Vector[str]()
+String render_inline(String text):
+    Vector[String] parts = Vector[String]()
     int i = 0
     int n = text.len()
     int seg_start = 0
     while i < n:
-        str c = text.substring(i, i + 1)
+        String c = text.substring(i, i + 1)
         if c == "`":
             if seg_start < i:
                 parts.push(escape_html(text.substring(seg_start, i)))
@@ -26,7 +26,7 @@ str render_inline(str text):
                 i = i + 1
                 continue
             int close = close_opt.unwrap()
-            str code = text.substring(i + 1, i + 1 + close)
+            String code = text.substring(i + 1, i + 1 + close)
             parts.push("<code>" + escape_html(code) + "</code>")
             i = i + 1 + close + 1
             seg_start = i
@@ -41,7 +41,7 @@ str render_inline(str text):
                 i = i + 2
                 continue
             int close = close_opt.unwrap()
-            str bold = text.substring(i + 2, i + 2 + close)
+            String bold = text.substring(i + 2, i + 2 + close)
             parts.push("<strong>" + render_inline(bold) + "</strong>")
             i = i + 2 + close + 2
             seg_start = i
@@ -56,7 +56,7 @@ str render_inline(str text):
                 i = i + 1
                 continue
             int close = close_opt.unwrap()
-            str em = text.substring(i + 1, i + 1 + close)
+            String em = text.substring(i + 1, i + 1 + close)
             parts.push("<em>" + render_inline(em) + "</em>")
             i = i + 1 + close + 1
             seg_start = i
@@ -72,8 +72,8 @@ str render_inline(str text):
                         int close_paren = close_paren_opt.unwrap()
                         if seg_start < i:
                             parts.push(escape_html(text.substring(seg_start, i)))
-                        str link_text = text.substring(i + 1, abs_cb)
-                        str url = text.substring(abs_cb + 2, abs_cb + 2 + close_paren)
+                        String link_text = text.substring(i + 1, abs_cb)
+                        String url = text.substring(abs_cb + 2, abs_cb + 2 + close_paren)
                         parts.push("<a href=\"" + escape_html(url) + "\">" + render_inline(link_text) + "</a>")
                         i = abs_cb + 2 + close_paren + 1
                         seg_start = i
@@ -83,40 +83,40 @@ str render_inline(str text):
         parts.push(escape_html(text.substring(seg_start, n)))
     return "".join(parts)
 
-bool is_table_separator(str line):
-    str t = line.trim()
+bool is_table_separator(String line):
+    String t = line.trim()
     if not t.starts_with("|"):
         return false
     int j = 0
     while j < t.len():
-        str ch = t.substring(j, j + 1)
+        String ch = t.substring(j, j + 1)
         if ch != "|" and ch != "-" and ch != ":" and ch != " ":
             return false
         j = j + 1
     return t.contains("-")
 
-Vector[str] split_table_cells(str line):
-    str t = line.trim()
+Vector[String] split_table_cells(String line):
+    String t = line.trim()
     if t.starts_with("|"):
         t = t.substring(1, t.len())
     if t.ends_with("|"):
         t = t.substring(0, t.len() - 1)
-    Vector[str] raw = t.split("|")
-    Vector[str] cells = Vector[str]()
+    Vector[String] raw = t.split("|")
+    Vector[String] cells = Vector[String]()
     int j = 0
     while j < raw.len():
-        str cell = raw.get(j).unwrap()
+        String cell = raw.get(j).unwrap()
         cells.push(cell.trim())
         j = j + 1
     return cells
 
-Vector[str] parse_alignments(str sep_line):
-    Vector[str] cells = split_table_cells(sep_line)
-    Vector[str] aligns = Vector[str]()
+Vector[String] parse_alignments(String sep_line):
+    Vector[String] cells = split_table_cells(sep_line)
+    Vector[String] aligns = Vector[String]()
     int j = 0
     while j < cells.len():
-        str c = cells.get(j).unwrap()
-        str ct = c.trim()
+        String c = cells.get(j).unwrap()
+        String ct = c.trim()
         bool left_colon = ct.starts_with(":")
         bool right_colon = ct.ends_with(":")
         if left_colon and right_colon:
@@ -128,73 +128,73 @@ Vector[str] parse_alignments(str sep_line):
         j = j + 1
     return aligns
 
-str table_cell(str tag, str content, str align):
+String table_cell(String tag, String content, String align):
     if align == "left":
         return "<" + tag + ">" + render_inline(content) + "</" + tag + ">"
     return "<" + tag + " style=\"text-align: " + align + "\">" + render_inline(content) + "</" + tag + ">"
 
-(str, int) parse_table(Vector[str] lines, int start):
-    Vector[str] out = Vector[str]()
-    str sep = lines.get(start + 1).unwrap()
-    Vector[str] aligns = parse_alignments(sep)
-    str hdr_line = lines.get(start).unwrap()
-    Vector[str] headers = split_table_cells(hdr_line)
+(str, int) parse_table(Vector[String] lines, int start):
+    Vector[String] out = Vector[String]()
+    String sep = lines.get(start + 1).unwrap()
+    Vector[String] aligns = parse_alignments(sep)
+    String hdr_line = lines.get(start).unwrap()
+    Vector[String] headers = split_table_cells(hdr_line)
     out.push("<table>")
     out.push("<thead><tr>")
     int h = 0
     while h < headers.len():
-        str al = "left"
+        String al = "left"
         if h < aligns.len():
             al = aligns.get(h).unwrap()
-        str hcell = headers.get(h).unwrap()
+        String hcell = headers.get(h).unwrap()
         out.push(table_cell("th", hcell, al))
         h = h + 1
     out.push("</tr></thead>")
     out.push("<tbody>")
     int row = start + 2
     while row < lines.len():
-        str rline = lines.get(row).unwrap()
+        String rline = lines.get(row).unwrap()
         if not rline.contains("|"):
             break
-        Vector[str] cells = split_table_cells(rline)
+        Vector[String] cells = split_table_cells(rline)
         out.push("<tr>")
         int ci = 0
         while ci < cells.len():
-            str al = "left"
+            String al = "left"
             if ci < aligns.len():
                 al = aligns.get(ci).unwrap()
-            str dcell = cells.get(ci).unwrap()
+            String dcell = cells.get(ci).unwrap()
             out.push(table_cell("td", dcell, al))
             ci = ci + 1
         out.push("</tr>")
         row = row + 1
     out.push("</tbody></table>")
-    str html = "\n".join(out)
+    String html = "\n".join(out)
     int consumed = row - start
     return (html, consumed)
 
-str flush_paragraph(Vector[str] para_lines):
+String flush_paragraph(Vector[String] para_lines):
     if para_lines.is_empty():
         return ""
-    str text = " ".join(para_lines)
+    String text = " ".join(para_lines)
     return "<p>" + render_inline(text) + "</p>"
 
-bool is_hr_line(str line):
-    str t = line.trim()
+bool is_hr_line(String line):
+    String t = line.trim()
     if t.len() < 3:
         return false
-    str first = t.substring(0, 1)
+    String first = t.substring(0, 1)
     if first != "-" and first != "*" and first != "_":
         return false
     int j = 0
     while j < t.len():
-        str ch = t.substring(j, j + 1)
+        String ch = t.substring(j, j + 1)
         if ch != first and ch != " ":
             return false
         j = j + 1
     return true
 
-bool is_digit_str(str c):
+bool is_digit_str(String c):
     if c == "0":
         return true
     if c == "1":
@@ -217,18 +217,18 @@ bool is_digit_str(str c):
         return true
     return false
 
-bool all_digits(str s):
+bool all_digits(String s):
     if s.is_empty():
         return false
     int j = 0
     while j < s.len():
-        str ch = s.substring(j, j + 1)
+        String ch = s.substring(j, j + 1)
         if not is_digit_str(ch):
             return false
         j = j + 1
     return true
 
-str level_str(int level):
+String level_str(int level):
     if level == 1:
         return "1"
     if level == 2:
@@ -241,20 +241,20 @@ str level_str(int level):
         return "5"
     return "6"
 
-str convert(str markdown):
-    Vector[str] lines = markdown.split("\n")
-    Vector[str] out = Vector[str]()
-    Vector[str] para_lines = Vector[str]()
+String convert(String markdown):
+    Vector[String] lines = markdown.split("\n")
+    Vector[String] out = Vector[String]()
+    Vector[String] para_lines = Vector[String]()
     bool in_code = false
-    str code_lang = ""
-    Vector[str] code_lines = Vector[str]()
+    String code_lang = ""
+    Vector[String] code_lines = Vector[String]()
     bool in_ul = false
     bool in_ol = false
     int i = 0
     while i < lines.len():
-        str line = lines.get(i).unwrap()
+        String line = lines.get(i).unwrap()
         if in_code:
-            str trimmed = line.trim()
+            String trimmed = line.trim()
             if trimmed.starts_with("```"):
                 if code_lang.is_empty():
                     out.push("<pre><code>" + escape_html("\n".join(code_lines)) + "</code></pre>")
@@ -262,16 +262,16 @@ str convert(str markdown):
                     out.push("<pre><code class=\"language-" + code_lang + "\">" + escape_html("\n".join(code_lines)) + "</code></pre>")
                 in_code = false
                 code_lang = ""
-                code_lines = Vector[str]()
+                code_lines = Vector[String]()
             else:
                 code_lines.push(line)
             i = i + 1
             continue
         if line.starts_with("```"):
-            str p = flush_paragraph(para_lines)
+            String p = flush_paragraph(para_lines)
             if not p.is_empty():
                 out.push(p)
-            para_lines = Vector[str]()
+            para_lines = Vector[String]()
             if in_ul:
                 out.push("</ul>")
                 in_ul = false
@@ -282,12 +282,12 @@ str convert(str markdown):
             code_lang = line.substring(3, line.len()).trim()
             i = i + 1
             continue
-        str trimmed = line.trim()
+        String trimmed = line.trim()
         if trimmed.is_empty():
-            str p = flush_paragraph(para_lines)
+            String p = flush_paragraph(para_lines)
             if not p.is_empty():
                 out.push(p)
-            para_lines = Vector[str]()
+            para_lines = Vector[String]()
             if in_ul:
                 out.push("</ul>")
                 in_ul = false
@@ -297,10 +297,10 @@ str convert(str markdown):
             i = i + 1
             continue
         if is_hr_line(line) and not line.starts_with("|"):
-            str p = flush_paragraph(para_lines)
+            String p = flush_paragraph(para_lines)
             if not p.is_empty():
                 out.push(p)
-            para_lines = Vector[str]()
+            para_lines = Vector[String]()
             if in_ul:
                 out.push("</ul>")
                 in_ul = false
@@ -311,10 +311,10 @@ str convert(str markdown):
             i = i + 1
             continue
         if line.starts_with("#"):
-            str p = flush_paragraph(para_lines)
+            String p = flush_paragraph(para_lines)
             if not p.is_empty():
                 out.push(p)
-            para_lines = Vector[str]()
+            para_lines = Vector[String]()
             if in_ul:
                 out.push("</ul>")
                 in_ul = false
@@ -326,18 +326,18 @@ str convert(str markdown):
                 level = level + 1
             if level > 6:
                 level = 6
-            str heading = line.substring(level, line.len()).trim()
-            str lvl = level_str(level)
+            String heading = line.substring(level, line.len()).trim()
+            String lvl = level_str(level)
             out.push("<h" + lvl + ">" + render_inline(heading) + "</h" + lvl + ">")
             i = i + 1
             continue
         if line.contains("|") and i + 1 < lines.len():
-            str next_line = lines.get(i + 1).unwrap()
+            String next_line = lines.get(i + 1).unwrap()
             if is_table_separator(next_line):
-                str p = flush_paragraph(para_lines)
+                String p = flush_paragraph(para_lines)
                 if not p.is_empty():
                     out.push(p)
-                para_lines = Vector[str]()
+                para_lines = Vector[String]()
                 if in_ul:
                     out.push("</ul>")
                     in_ul = false
@@ -349,54 +349,54 @@ str convert(str markdown):
                 i = i + result._1
                 continue
         if line.starts_with("- "):
-            str p = flush_paragraph(para_lines)
+            String p = flush_paragraph(para_lines)
             if not p.is_empty():
                 out.push(p)
-            para_lines = Vector[str]()
+            para_lines = Vector[String]()
             if in_ol:
                 out.push("</ol>")
                 in_ol = false
             if not in_ul:
                 out.push("<ul>")
                 in_ul = true
-            str item = line.substring(2, line.len())
+            String item = line.substring(2, line.len())
             out.push("<li>" + render_inline(item) + "</li>")
             i = i + 1
             continue
         if line.len() >= 3:
-            str first_ch = line.substring(0, 1)
+            String first_ch = line.substring(0, 1)
             if is_digit_str(first_ch):
                 Option[int] dot_pos_opt = line.index_of(". ")
                 if dot_pos_opt.is_some():
                     int dot_pos = dot_pos_opt.unwrap()
-                    str before_dot = line.substring(0, dot_pos)
+                    String before_dot = line.substring(0, dot_pos)
                     if all_digits(before_dot):
-                        str p = flush_paragraph(para_lines)
+                        String p = flush_paragraph(para_lines)
                         if not p.is_empty():
                             out.push(p)
-                        para_lines = Vector[str]()
+                        para_lines = Vector[String]()
                         if in_ul:
                             out.push("</ul>")
                             in_ul = false
                         if not in_ol:
                             out.push("<ol>")
                             in_ol = true
-                        str item = line.substring(dot_pos + 2, line.len())
+                        String item = line.substring(dot_pos + 2, line.len())
                         out.push("<li>" + render_inline(item) + "</li>")
                         i = i + 1
                         continue
         if line.starts_with("> "):
-            str p = flush_paragraph(para_lines)
+            String p = flush_paragraph(para_lines)
             if not p.is_empty():
                 out.push(p)
-            para_lines = Vector[str]()
+            para_lines = Vector[String]()
             if in_ul:
                 out.push("</ul>")
                 in_ul = false
             if in_ol:
                 out.push("</ol>")
                 in_ol = false
-            str quote_text = line.substring(2, line.len())
+            String quote_text = line.substring(2, line.len())
             out.push("<blockquote><p>" + render_inline(quote_text) + "</p></blockquote>")
             i = i + 1
             continue
@@ -408,7 +408,7 @@ str convert(str markdown):
             in_ol = false
         para_lines.push(line)
         i = i + 1
-    str p = flush_paragraph(para_lines)
+    String p = flush_paragraph(para_lines)
     if not p.is_empty():
         out.push(p)
     if in_ul:
@@ -420,16 +420,16 @@ str convert(str markdown):
     return "\n".join(out)
 
 void main():
-    Vector[str] cli = args()
+    Vector[String] cli = args()
     if cli.len() < 2:
         print("Usage: md2html <input.md> [output.html]")
         print("  Converts Markdown to HTML")
     else:
-        str input_path = cli.get(1).unwrap()
-        str markdown = read_file(input_path)
-        str html = convert(markdown)
+        String input_path = cli.get(1).unwrap()
+        String markdown = read_file(input_path)
+        String html = convert(markdown)
         if cli.len() >= 3:
-            str out_path = cli.get(2).unwrap()
+            String out_path = cli.get(2).unwrap()
             write_file(out_path, html)
             print(f"Wrote {out_path}")
         else:
@@ -458,42 +458,42 @@ test "convert headings":
     assert convert("### Third") == "<h3>Third</h3>"
 
 test "convert paragraph":
-    str result = convert("Hello world")
+    String result = convert("Hello world")
     assert result == "<p>Hello world</p>"
 
 test "convert code block":
-    str md = "```python\nprint(1)\n```"
-    str html = convert(md)
+    String md = "```python\nprint(1)\n```"
+    String html = convert(md)
     assert html.contains("<pre><code class=\"language-python\">")
     assert html.contains("print(1)")
 
 test "convert unordered list":
-    str md = "- one\n- two\n- three"
-    str html = convert(md)
+    String md = "- one\n- two\n- three"
+    String html = convert(md)
     assert html.contains("<ul>")
     assert html.contains("<li>one</li>")
     assert html.contains("</ul>")
 
 test "convert ordered list":
-    str md = "1. first\n2. second"
-    str html = convert(md)
+    String md = "1. first\n2. second"
+    String html = convert(md)
     assert html.contains("<ol>")
     assert html.contains("<li>first</li>")
     assert html.contains("</ol>")
 
 test "convert table":
-    str md = "| A | B |\n|---|---|\n| 1 | 2 |"
-    str html = convert(md)
+    String md = "| A | B |\n|---|---|\n| 1 | 2 |"
+    String html = convert(md)
     assert html.contains("<table>")
     assert html.contains("<th>A</th>")
     assert html.contains("<td>1</td>")
     assert html.contains("</table>")
 
 test "convert horizontal rule":
-    str html = convert("---")
+    String html = convert("---")
     assert html == "<hr>"
 
 test "convert blockquote":
-    str html = convert("> Note this")
+    String html = convert("> Note this")
     assert html.contains("<blockquote>")
     assert html.contains("Note this")

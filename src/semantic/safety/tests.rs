@@ -363,7 +363,7 @@ void main():
     #[test]
     fn return_str_literal_ok() {
         let source = "\
-str f(): \"hello\"
+String f(): \"hello\"
 ";
         let errors = check(source);
         assert!(
@@ -375,7 +375,7 @@ str f(): \"hello\"
     #[test]
     fn return_str_from_param_ok() {
         let source = "\
-str f(str s): s
+String f(String s): s
 ";
         let errors = check(source);
         assert!(
@@ -390,7 +390,7 @@ str f(str s): s
         // makes s owned via provenance. Returning an owned string transfers
         // ownership safely — no DanglingReturn.
         let source = "\
-str f():
+String f():
     String s = \"hi\"
     return s
 ";
@@ -409,7 +409,7 @@ void consume(String !s):
 
 void main():
     String s = \"hi\" + \"\"
-    str v = s
+    String v = s
     consume(!s)
     print(v)
 ";
@@ -424,7 +424,7 @@ void main():
     #[test]
     fn cross_function_borrow_ok() {
         let source = "\
-str id(str s): s
+String id(String s): s
 
 void main():
     print(id(\"hi\"))
@@ -439,9 +439,9 @@ void main():
     #[test]
     fn cross_function_chain() {
         let source = "\
-str f(str s): s
+String f(String s): s
 
-str g(str s): f(s)
+String g(String s): f(s)
 
 void main():
     print(g(\"hello\"))
@@ -456,14 +456,14 @@ void main():
     #[test]
     fn cross_function_dangling() {
         let source = "\
-str id(str s): s
+String id(String s): s
 
 void consume(String !s):
     pass
 
 void main():
     String s = \"hi\" + \"\"
-    str v = id(s)
+    String v = id(s)
     consume(!s)
     print(v)
 ";
@@ -478,7 +478,7 @@ void main():
     #[test]
     fn live_param_explicit() {
         let source = "\
-str first(live str a, str b): a
+String first(live String a, String b): a
 ";
         let errors = check(source);
         assert!(
@@ -492,7 +492,7 @@ str first(live str a, str b): a
         // With str→String unification, returning a local owned string transfers
         // ownership safely — no DanglingReturn.
         let source = "\
-str bad():
+String bad():
     String s = \"hello\"
     return s
 ";
@@ -506,8 +506,8 @@ str bad():
     #[test]
     fn str_from_param_through_local_ok() {
         let source = "\
-str f(str s):
-    str local = s
+String f(String s):
+    String local = s
     return local
 ";
         let errors = check(source);
@@ -522,7 +522,7 @@ str f(str s):
         let source = "\
 void main():
     String s = \"hello\"
-    str v = s
+    String v = s
     v = \"world\"
     String t = !s
     print(v)
@@ -542,10 +542,10 @@ void main():
         // Struct with a str field assigned from param — no error
         let source = "\
 struct View:
-    str name
+    String name
 
 void main():
-    str s = \"hello\"
+    String s = \"hello\"
     View v = View(s)
     print(v.name)
 ";
@@ -566,7 +566,7 @@ void main():
         // View(s) implicitly moves s, then consume(!s) is a double move.
         let source = "\
 struct View:
-    str name
+    String name
 
 void consume(String !s):
     pass
@@ -590,7 +590,7 @@ void main():
         // Struct with str field from string literal → no error (Static origin)
         let source = "\
 struct View:
-    str name
+    String name
 
 void main():
     View v = View(\"hello\")
@@ -636,7 +636,7 @@ void main():
         // consume(!s) is a double move.
         let source = "\
 struct Inner:
-    str name
+    String name
 
 struct Outer:
     Inner inner
@@ -665,7 +665,7 @@ void main():
         // consume(!s) is a double move.
         let source = "\
 struct Tagged:
-    str label
+    String label
     int count
 
 void consume(String !s):
@@ -690,13 +690,13 @@ void main():
     #[test]
     fn named_groups_basic_ok() {
         let source = "\
-str pick(live(a) str x, live(b) str y) where a outlives b:
+String pick(live(a) String x, live(b) String y) where a outlives b:
     return x
 
 void main():
     String s1 = \"hello\"
     String s2 = \"world\"
-    str r = pick(s1, s2)
+    String r = pick(s1, s2)
     print(r)
 ";
         let errors = check(source);
@@ -710,13 +710,13 @@ void main():
     fn named_groups_shorter_moved_ok() {
         // Moving the "shorter" group's source is fine — only "longer" must outlive "shorter"
         let source = "\
-str pick(live(a) str x, live(b) str y) where a outlives b:
+String pick(live(a) String x, live(b) String y) where a outlives b:
     return x
 
 void main():
     String s1 = \"hello\"
     String s2 = \"world\"
-    str r = pick(s1, s2)
+    String r = pick(s1, s2)
     String moved = !s2
     print(r)
 ";
@@ -731,13 +731,13 @@ void main():
     fn named_groups_outlives_violation() {
         // Moving the "longer" group's source while the "shorter" group's source is alive
         let source = "\
-str pick(live(a) str x, live(b) str y) where a outlives b:
+String pick(live(a) String x, live(b) String y) where a outlives b:
     return x
 
 void main():
     String s1 = \"hello\" + \"\"
     String s2 = \"world\" + \"\"
-    str r = pick(s1, s2)
+    String r = pick(s1, s2)
     String moved = !s1
     print(s2)
 ";
@@ -753,12 +753,12 @@ void main():
     fn bare_live_still_works() {
         // Bare `live` (no group name) still works for backwards compat
         let source = "\
-str view(live str s):
+String view(live String s):
     return s
 
 void main():
     String s = \"hello\"
-    str v = view(s)
+    String v = view(s)
     print(v)
 ";
         let errors = check(source);
@@ -781,7 +781,7 @@ void consume(String !s):
 
 void main():
     String s = \"hello\" + \"\"
-    str v = s
+    String v = s
     if true:
         consume(!s)
     else:
@@ -805,7 +805,7 @@ void consume(String !s):
 
 void main():
     String s = \"hello\" + \"\"
-    str v = s
+    String v = s
     if true:
         consume(!s)
     else:
@@ -826,7 +826,7 @@ void main():
         let source = "\
 void main():
     String s = \"hello\"
-    str v = s
+    String v = s
     if true:
         pass
     else:
@@ -853,7 +853,7 @@ void consume(String !s):
 
 void main():
     String s = \"hello\" + \"\"
-    str v = s
+    String v = s
     auto f = (): print(v)
     consume(!s)
     f()
@@ -872,7 +872,7 @@ void main():
         let source = "\
 Callable[void()] bad():
     String local = \"hello\" + \"\"
-    str v = local
+    String v = local
     return (): print(v)
 
 void main():
@@ -889,7 +889,7 @@ void main():
     fn closure_return_captures_param_ok() {
         // Returning a closure that captures a param → no error
         let source = "\
-Callable[void()] ok(str v):
+Callable[void()] ok(String v):
     return (): print(v)
 
 void main():
@@ -907,7 +907,7 @@ void main():
         // Returning a closure that captures a literal str → no error
         let source = "\
 Callable[void()] ok():
-    str v = \"hello\"
+    String v = \"hello\"
     return (): print(v)
 
 void main():
@@ -945,7 +945,7 @@ void main():
         // Closure capturing str from literal → Static origin
         let source = "\
 void main():
-    str v = \"hello\"
+    String v = \"hello\"
     auto f = (): print(v)
     f()
 ";
@@ -1032,7 +1032,7 @@ void main():
         let source = "\
 void main():
     String owner = \"hello\"
-    str v = owner
+    String v = owner
     auto f = (): print(v)
     print(v)
 ";
@@ -1053,11 +1053,11 @@ void main():
         // returns owned → `v` becomes owned → no TemporaryBorrow.
         let source = "\
 String make_string():
-    str name = \"world\"
+    String name = \"world\"
     return f\"hello {name}\"
 
 void main():
-    str v = make_string()
+    String v = make_string()
     print(v)
 ";
         let errors = check(source);
@@ -1071,10 +1071,10 @@ void main():
     fn no_temporary_borrow_str_from_str_call() {
         // str v = get_str() where get_str returns str → no error (returns ref type)
         let source = "\
-str get_str(): \"hello\"
+String get_str(): \"hello\"
 
 void main():
-    str v = get_str()
+    String v = get_str()
     print(v)
 ";
         let errors = check(source);
@@ -1111,7 +1111,7 @@ void consume(String !s):
 
 void main():
     String s = \"hello\" + \"\"
-    str v = s
+    String v = s
     consume(!s)
     int x = 1
     match x:
@@ -1133,7 +1133,7 @@ void main():
         // Scrutinee from literal → no error
         let source = "\
 void main():
-    str v = \"hello\"
+    String v = \"hello\"
     int x = 1
     match x:
         case 1:
@@ -1157,7 +1157,7 @@ void consume(String !s):
 
 void main():
     String s = \"hello\" + \"\"
-    str v = s
+    String v = s
     int x = 1
     match x:
         case 1:
@@ -1182,12 +1182,12 @@ struct Holder:
     String name
 
 equip Holder:
-    str get_name(self):
+    String get_name(self):
         return self.name
 
 void main():
     Holder h = Holder(\"hello\")
-    str v = h.get_name()
+    String v = h.get_name()
     print(v)
 ";
         let errors = check(source);
@@ -1210,7 +1210,7 @@ struct Holder:
     String name
 
 equip Holder:
-    str get_name(self):
+    String get_name(self):
         return self.name
 
 void consume(Holder !h):
@@ -1218,7 +1218,7 @@ void consume(Holder !h):
 
 void main():
     Holder h = Holder(\"hello\")
-    str v = h.get_name()
+    String v = h.get_name()
     consume(!h)
     print(v)
 ";
@@ -1245,7 +1245,7 @@ equip Builder:
 
 void main():
     Builder b = Builder(\"hello\")
-    str v = b.build()
+    String v = b.build()
     print(v)
 ";
         let errors = check(source);
@@ -1264,7 +1264,7 @@ void consume(String !s):
 
 void main():
     String s = \"hello\"
-    str v = s
+    String v = s
     int i = 0
     while i < 3:
         consume(!s)
@@ -1287,7 +1287,7 @@ void main():
         let source = "\
 void main():
     String s = \"hello\"
-    str v = s
+    String v = s
     int i = 0
     while i < 3:
         print(v)
@@ -1314,7 +1314,7 @@ void consume(String !s):
 
 void main():
     String s = \"hello\" + \"\"
-    str v = match 1:
+    String v = match 1:
         case 1: s
         case 2: s
     consume(!s)
@@ -1332,7 +1332,7 @@ void main():
     fn try_expr_origin_propagation() {
         // str v = get_result()? borrows from param → move param source → use v → error
         let source = "\
-str get_view(str s):
+String get_view(String s):
     return s
 
 void consume(String !s):
@@ -1340,7 +1340,7 @@ void consume(String !s):
 
 void main():
     String s = \"hello\" + \"\"
-    str v = get_view(s)
+    String v = get_view(s)
     consume(!s)
     print(v)
 ";
@@ -1358,7 +1358,7 @@ void main():
     fn cross_function_closure_source_moved() {
         // Closure from function call borrows param → source moved → use closure → error
         let source = "\
-Callable[void()] make_printer(str v):
+Callable[void()] make_printer(String v):
     return (): print(v)
 
 void consume(String !s):
@@ -1366,7 +1366,7 @@ void consume(String !s):
 
 void main():
     String s = \"hello\" + \"\"
-    str v = s
+    String v = s
     auto f = make_printer(v)
     consume(!s)
     f()
@@ -1383,12 +1383,12 @@ void main():
     fn cross_function_closure_ok() {
         // Closure from function call — source not moved → no error
         let source = "\
-Callable[void()] make_printer(str v):
+Callable[void()] make_printer(String v):
     return (): print(v)
 
 void main():
     String s = \"hello\"
-    str v = s
+    String v = s
     auto f = make_printer(v)
     f()
 ";
@@ -1408,7 +1408,7 @@ void consume(String !s):
 
 void main():
     String s = \"hello\" + \"\"
-    str v = s
+    String v = s
     auto f = (): print(\"\")
     f = (): print(v)
     consume(!s)
@@ -1429,12 +1429,12 @@ void main():
 void consume(String !s):
     pass
 
-Callable[void()] make_printer(str v):
+Callable[void()] make_printer(String v):
     return (): print(v)
 
 void main():
     String s = \"hello\" + \"\"
-    str v = s
+    String v = s
     auto c = make_printer(v)
     int x = 1
     match x:
@@ -1458,7 +1458,7 @@ void main():
         let source = "\
 void main():
     String s = \"hello\" + \"\"
-    str v = s
+    String v = s
     s = \"world\" + \"\"
     print(v)
 ";
@@ -1477,7 +1477,7 @@ void main():
 void main():
     String s = \"hello\"
     s = \"world\"
-    str v = s
+    String v = s
     print(v)
 ";
         let errors = check(source);
@@ -1493,7 +1493,7 @@ void main():
         let source = "\
 void main():
     String s = \"hello\"
-    str v = s
+    String v = s
     s = \"world\"
     v = s
     print(v)
@@ -1510,8 +1510,8 @@ void main():
         // Copy types (str) don't destroy the old value on reassignment
         let source = "\
 void main():
-    str s = \"hello\"
-    str v = s
+    String s = \"hello\"
+    String v = s
     s = \"world\"
     print(v)
 ";
@@ -1526,13 +1526,13 @@ void main():
     fn reassignment_transitive() {
         // Transitive through a function call: w borrows from v which borrows from s
         let source = "\
-str identity(live str x):
+String identity(live String x):
     return x
 
 void main():
     String s = \"hello\" + \"\"
-    str v = s
-    str w = identity(v)
+    String v = s
+    String w = identity(v)
     s = \"world\" + \"\"
     print(w)
 ";
@@ -1735,16 +1735,16 @@ Outer find(Vector[String] items):
 
     #[test]
     fn return_through_local_two_ref_params() {
-        // `str pick(str a, str b)` with local alias — Pass 5a should trace `result` back to `a`
+        // `str pick(String a, String b)` with local alias — Pass 5a should trace `result` back to `a`
         let source = "\
-str pick(str a, str b):
-    str result = a
+String pick(String a, String b):
+    String result = a
     return result
 
 void main():
-    str x = \"hello\"
-    str y = \"world\"
-    str r = pick(x, y)
+    String x = \"hello\"
+    String y = \"world\"
+    String r = pick(x, y)
     print(r)
 ";
         let errors = check(source);
@@ -1758,16 +1758,16 @@ void main():
     fn return_through_local_use_after_move() {
         // Return goes through local → Pass 5a traces to `a` → moving source invalidates result
         let source = "\
-str id(str x):
+String id(String x):
     return x
 
-str pick(str a, str b):
-    str result = a
+String pick(String a, String b):
+    String result = a
     return result
 
 void main():
     String s = \"hello\" + \"\"
-    str r = pick(s, \"world\")
+    String r = pick(s, \"world\")
     String s2 = !s
     print(r)
 ";
@@ -1782,16 +1782,16 @@ void main():
     fn return_through_local_branch_union() {
         // result assigned from a or b depending on branch — both should flow
         let source = "\
-str pick(str a, str b, bool flag):
-    str result = a
+String pick(String a, String b, bool flag):
+    String result = a
     if flag:
         result = b
     return result
 
 void main():
-    str x = \"hello\"
-    str y = \"world\"
-    str r = pick(x, y, true)
+    String x = \"hello\"
+    String y = \"world\"
+    String r = pick(x, y, true)
     print(r)
 ";
         let errors = check(source);
@@ -1805,14 +1805,14 @@ void main():
     fn return_through_transitive_alias() {
         // `str x = a; str y = x; return y` — transitive chain should resolve
         let source = "\
-str chain(str a, str b):
-    str x = a
-    str y = x
+String chain(String a, String b):
+    String x = a
+    String y = x
     return y
 
 void main():
-    str s = \"hello\"
-    str r = chain(s, \"world\")
+    String s = \"hello\"
+    String r = chain(s, \"world\")
     print(r)
 ";
         let errors = check(source);
@@ -1826,15 +1826,15 @@ void main():
     fn return_through_call() {
         // `return id(a)` where id has return_borrows_from = [0] — trace through call
         let source = "\
-str id(str x):
+String id(String x):
     return x
 
-str wrapper(str a, str b):
+String wrapper(String a, String b):
     return id(a)
 
 void main():
-    str s = \"hello\"
-    str r = wrapper(s, \"world\")
+    String s = \"hello\"
+    String r = wrapper(s, \"world\")
     print(r)
 ";
         let errors = check(source);
@@ -1848,16 +1848,16 @@ void main():
     fn return_local_assigned_from_call() {
         // `str result = id(a); return result` — alias from call result
         let source = "\
-str id(str x):
+String id(String x):
     return x
 
-str wrapper(str a, str b):
-    str result = id(a)
+String wrapper(String a, String b):
+    String result = id(a)
     return result
 
 void main():
-    str s = \"hello\"
-    str r = wrapper(s, \"world\")
+    String s = \"hello\"
+    String r = wrapper(s, \"world\")
     print(r)
 ";
         let errors = check(source);
@@ -1875,10 +1875,10 @@ void main():
         // incorrect view downgrades for stdlib functions like regex_escape/path_join
         // that take borrowed params but return owned strings.
         let source = "\
-str get_data(str a, str b)
+String get_data(String a, String b)
 
-str wrapper(str x, str y):
-    str s = get_data(x, y)
+String wrapper(String x, String y):
+    String s = get_data(x, y)
     return s
 ";
         let errors = check(source);
@@ -1892,11 +1892,11 @@ str wrapper(str x, str y):
     fn static_origin_return_ok() {
         // Function with body returning a string literal — origin is Static.
         let source = "\
-str greet():
+String greet():
     return \"hello\"
 
-str wrapper():
-    str s = greet()
+String wrapper():
+    String s = greet()
     return s
 ";
         let errors = check(source);
@@ -1915,10 +1915,10 @@ str wrapper():
         // Bodyless function returning str → conservatively treated as owned.
         // Closure captures owned result — no borrow origin issue.
         let source = "\
-str get_data(str a, str b)
+String get_data(String a, String b)
 
-Callable[str()] wrapper(str x, str y):
-    str s = get_data(x, y)
+Callable[String()] wrapper(String x, String y):
+    String s = get_data(x, y)
     return (): s
 ";
         let errors = check(source);
@@ -1937,9 +1937,9 @@ Callable[str()] wrapper(str x, str y):
         // If/else with Static and bodyless-function-call branches.
         // Bodyless function returns owned (conservative) → both branches are safe.
         let source = "\
-str get_data(str a, str b)
+String get_data(String a, String b)
 
-str pick(bool cond, str x, str y):
+String pick(bool cond, String x, String y):
     if cond:
         return \"hello\"
     return get_data(x, y)
@@ -1961,7 +1961,7 @@ str pick(bool cond, str x, str y):
         let source = "\
 String make_string()
 
-str wrapper():
+String wrapper():
     return make_string()
 ";
         let errors = check(source);
@@ -1986,7 +1986,7 @@ str wrapper():
 async int do_work():
     return 1
 
-async void process(str name):
+async void process(String name):
     do_work().await()
     print(name)
 ";
@@ -2002,14 +2002,14 @@ async void process(str name):
         // Local str derived from a str param (via function call) is also safe across await:
         // its origin traces back to the param, which stays alive while caller is blocked.
         let source = "\
-str get_slice(str input):
+String get_slice(String input):
     return input
 
 async int do_work():
     return 1
 
-async void process(str data):
-    str s = get_slice(data)
+async void process(String data):
+    String s = get_slice(data)
     do_work().await()
     print(s)
 ";
@@ -2025,7 +2025,7 @@ async void process(str data):
         // str derived from a local variable (not a param) IS still rejected:
         // the local may not be live at the suspension point resume.
         let source = "\
-str get_slice(str input):
+String get_slice(String input):
     return input
 
 async int do_work():
@@ -2033,7 +2033,7 @@ async int do_work():
 
 async void process():
     String owned = String.from(\"hello\")
-    str s = owned.as_str()
+    String s = owned.as_str()
     do_work().await()
     print(s)
 ";
@@ -2071,7 +2071,7 @@ async int do_work():
     return 1
 
 async void greet():
-    str msg = \"hello\"
+    String msg = \"hello\"
     do_work().await()
     print(msg)
 ";
@@ -2089,7 +2089,7 @@ async void greet():
 async int do_work():
     return 1
 
-async void process(str name):
+async void process(String name):
     print(name)
     do_work().await()
 ";
@@ -2107,7 +2107,7 @@ async void process(str name):
 async int do_work():
     return 1
 
-async void process(str name):
+async void process(String name):
     do_work().await()
     name = \"fresh\"
     print(name)
@@ -2126,7 +2126,7 @@ async void process(str name):
 async int do_work():
     return 1
 
-async void process(str name, bool cond):
+async void process(String name, bool cond):
     if cond:
         do_work().await()
     print(name)
@@ -2145,7 +2145,7 @@ async void process(str name, bool cond):
 async int do_work():
     return 1
 
-async void process(str name):
+async void process(String name):
     auto task = spawn do_work()
     print(name)
 ";
@@ -2162,10 +2162,10 @@ async void process(str name):
     fn spawn_with_borrowed_str_rejected() {
         // passing a str param to a spawned task → SpawnWithBorrowedRef
         let source = "\
-async void worker(str name):
+async void worker(String name):
     print(name)
 
-void launch(str name):
+void launch(String name):
     auto t = spawn worker(name)
 ";
         let errors = check(source);
@@ -2179,7 +2179,7 @@ void launch(str name):
     fn spawn_with_static_str_ok() {
         // passing a string literal to a spawned task → OK (Static origin)
         let source = "\
-async void worker(str name):
+async void worker(String name):
     print(name)
 
 void launch():
@@ -2197,13 +2197,13 @@ void launch():
         // A function call returning a str derived from a param → still borrowed.
         // The spawned task may outlive the caller, so this is unsound.
         let source = "\
-str get_slice(str s):
+String get_slice(String s):
     return s
 
-async void worker(str name):
+async void worker(String name):
     print(name)
 
-void launch(str data):
+void launch(String data):
     auto t = spawn worker(get_slice(data))
 ";
         let errors = check(source);
@@ -2294,7 +2294,7 @@ void launch():
     fn spawn_closure_str_capture_rejected() {
         // Closure captures a str parameter (borrowed origin) — rejected
         let source = "\
-void launch(str name):
+void launch(String name):
     auto t = spawn ((): print(name))()
 ";
         let errors = check(source);
@@ -2329,7 +2329,7 @@ void launch():
     fn spawn_closure_var_str_rejected() {
         // Closure variable capturing str parameter — rejected
         let source = "\
-void launch(str name):
+void launch(String name):
     auto c = (): print(name)
     auto t = spawn c()
 ";
@@ -2411,7 +2411,7 @@ void launch():
     fn named_scope_outer_borrow_ok() {
         // variable declared outside the named scope, borrowed inside → fine
         let source = "\
-void process(str data):
+void process(String data):
     workers:
         print(data)
 ";
@@ -2755,7 +2755,7 @@ async void main():
     Task[void] t = spawn worker(&x)
     with x:
         if x > 0:
-            str data = read_file(\"test.txt\")
+            String data = read_file(\"test.txt\")
             print(data)
     t.await()
 ";
@@ -2917,13 +2917,13 @@ async void main():
 
     #[test]
     fn result_str_param_no_dangling_return() {
-        // Result[str, str] param: unwrap() returns str with Param origin — should be safe
+        // Result[String, String] param: unwrap() returns str with Param origin — should be safe
         let source = "\
 enum Result[T, E]:
     Ok(T)
     Error(E)
 
-str unwrap_ok(Result[str, str] r):
+String unwrap_ok(Result[String, String] r):
     match r:
         case Ok(s):
             return s
@@ -2933,19 +2933,19 @@ str unwrap_ok(Result[str, str] r):
         let errors = check(source);
         assert!(
             !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
-            "expected no DanglingReturn for Result[str, str] param, got: {:?}", errors
+            "expected no DanglingReturn for Result[String, String] param, got: {:?}", errors
         );
     }
 
     #[test]
     fn option_str_param_no_dangling_return() {
-        // Option[str] param: unwrap yields str with Param origin — should be safe
+        // Option[String] param: unwrap yields str with Param origin — should be safe
         let source = "\
 enum Option[T]:
     Some(T)
     None
 
-str unwrap_opt(Option[str] o):
+String unwrap_opt(Option[String] o):
     match o:
         case Some(s):
             return s
@@ -2955,7 +2955,7 @@ str unwrap_opt(Option[str] o):
         let errors = check(source);
         assert!(
             !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
-            "expected no DanglingReturn for Option[str] param, got: {:?}", errors
+            "expected no DanglingReturn for Option[String] param, got: {:?}", errors
         );
     }
 
@@ -3363,7 +3363,7 @@ async void main():
     Task[void] t = spawn worker(&x)
     with x:
         if x > 0:
-            str data = read_file(\"test.txt\")
+            String data = read_file(\"test.txt\")
     t.await()
 ";
         let warnings = check_warnings(source);
@@ -3380,7 +3380,7 @@ async void main():
         // A user-defined function with side effects inside a `with` block
         // should trigger a warning (it calls write_file which is HasSideEffects)
         let source = "\
-void save(str data):
+void save(String data):
     write_file(\"out.txt\", data)
 
 async void worker(int &counter):
@@ -3565,7 +3565,7 @@ void process(int x):
         let source = "\
 void main():
     int x = 42
-    str s = f\"{x}\"
+    String s = f\"{x}\"
     print(s)
 ";
         let warnings = check_warnings(source);
@@ -3712,10 +3712,10 @@ void main():
     #[test]
     fn result_is_ok_no_warn() {
         let source = "\
-Result[int, str] parse_num(): Ok(42)
+Result[int, String] parse_num(): Ok(42)
 
 void main():
-    Result[int, str] r = parse_num()
+    Result[int, String] r = parse_num()
     if r.is_ok():
         int v = r.unwrap()
         print(f\"{v}\")

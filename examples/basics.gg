@@ -18,11 +18,11 @@ enum Color:
     # NOT YET: uint8 type not implemented
     # Custom(uint8, uint8, uint8)
 
-# NOT YET: Displayable equip requires `str display(self)` method name,
+# NOT YET: Displayable equip requires `String display(self)` method name,
 # and stdlib import is not available. The built-in Displayable trait
 # is already registered; this will work once we have stdlib imports.
 # equip Point with Displayable:
-#     str display(self):
+#     String display(self):
 #         return "({self.x}, {self.y})"
 
 int add(int a, int b):

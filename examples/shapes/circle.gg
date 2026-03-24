@@ -14,5 +14,5 @@ equip Circle:
 equip Circle with Shape:
     int area(self):
         return 3 * self.radius * self.radius
-    str name(self):
+    String name(self):
         return format(f"circle(r={self.radius})")

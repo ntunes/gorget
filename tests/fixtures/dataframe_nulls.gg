@@ -94,7 +94,7 @@ void main():
     Vector[Column] sc2 = Vector[Column]()
     sc2.push(col_from_strs(sdata))
     DataFrame dfs = df_from_columns(scols, sc2)
-    str(String) identity_fn = (String s): s
+    String(String) identity_fn = (String s): s
     DataFrame dfs2 = dfs.apply_str("name", identity_fn)
     Column nc = dfs2.get_column("name")
     print(f"{nc.value_as_str(0)}")

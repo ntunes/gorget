@@ -14,10 +14,10 @@ struct World:
     SparseSet[Health] health
     SparseSet[Attack] attacks
     SparseSet[int] teams
-    SparseSet[str] names
+    SparseSet[String] names
 
 equip World:
-    Entity add(&self, str name, int hp, int damage, int team):
+    Entity add(&self, String name, int hp, int damage, int team):
         Entity e = self.entities.create()
         self.health.insert(e, Health(hp, hp))
         self.attacks.insert(e, Attack(damage))
@@ -55,7 +55,7 @@ equip World:
             if self.attacks.has(ei) == false:
                 continue
             Attack atk = self.attacks.get(ei)
-            str attacker_name = self.names.get(ei)
+            String attacker_name = self.names.get(ei)
             int attacker_team = self.teams.get(ei)
             # Find target: living enemy with highest HP, tie-break: lowest ID
             int target_id = -1
@@ -81,7 +81,7 @@ equip World:
             Health target_health = self.health.get(target)
             int new_hp = target_health.hp - atk.damage
             self.health.set(target, Health(new_hp, target_health.max_hp))
-            str target_name = self.names.get(target)
+            String target_name = self.names.get(target)
             if new_hp <= 0:
                 print(f"{attacker_name} attacks {target_name} for {atk.damage} damage (defeated)")
             else:
@@ -99,6 +99,6 @@ equip World:
 
     void print_state(self):
         for e in self.health:
-            str name = self.names.get(e)
+            String name = self.names.get(e)
             Health h = self.health.get(e)
             print(f"{name}: {h.hp}/{h.max_hp} HP")

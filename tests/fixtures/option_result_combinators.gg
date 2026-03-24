@@ -49,8 +49,8 @@ void main():
     Result[int, String] err = Error("fail")
 
     # unwrap_or_else
-    print(f"{ok.unwrap_or_else((str e): 0)}")
-    print(f"{err.unwrap_or_else((str e): 99)}")
+    print(f"{ok.unwrap_or_else((String e): 0)}")
+    print(f"{err.unwrap_or_else((String e): 99)}")
 
     # unwrap_error
     print(err.unwrap_error())

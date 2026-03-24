@@ -15,5 +15,5 @@ equip Rect:
 equip Rect with Shape:
     int area(self):
         return self.width * self.height
-    str name(self):
+    String name(self):
         return format(f"rect({self.width}x{self.height})")

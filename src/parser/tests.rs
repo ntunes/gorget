@@ -1101,7 +1101,7 @@ fn test_extern_block_still_works() {
 
 #[test]
 fn test_live_group_named() {
-    let source = "str pick(live(a) str x, live(b) str y) where a outlives b:\n    return x\n";
+    let source = "String pick(live(a) String x, live(b) String y) where a outlives b:\n    return x\n";
     let module = parse(source);
     if let Item::Function(f) = &module.items[0].node {
         assert!(f.params[0].node.is_live);
@@ -1120,7 +1120,7 @@ fn test_live_group_named() {
 
 #[test]
 fn test_live_bare_no_group() {
-    let source = "str view(live str s):\n    return s\n";
+    let source = "String view(live String s):\n    return s\n";
     let module = parse(source);
     if let Item::Function(f) = &module.items[0].node {
         assert!(f.params[0].node.is_live);
@@ -1262,7 +1262,7 @@ else:
 #[test]
 fn test_where_mixed_bounds() {
     // Trait bound is now inline; only `outlives` remains in the where clause
-    let source = "str pick[Displayable T](live(a) T x, live(b) T y) where a outlives b:\n    return x\n";
+    let source = "String pick[Displayable T](live(a) T x, live(b) T y) where a outlives b:\n    return x\n";
     let module = parse(source);
     if let Item::Function(f) = &module.items[0].node {
         // Inline bound on T

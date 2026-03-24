@@ -16,11 +16,11 @@ from std.conv import int_to_str
 from std.io import input, stdin_eof
 
 # Build the JSON messages array from parallel role/content vectors.
-Json build_messages(Vector[str] loop_roles, Vector[str] loop_contents):
+Json build_messages(Vector[String] loop_roles, Vector[String] loop_contents):
     Vector[Json] loop_msgs = Vector[Json]()
     int loop_mi = 0
     while loop_mi < loop_roles.len():
-        Dict[str, Json] loop_msg = Dict[str, Json]()
+        Dict[String, Json] loop_msg = Dict[String, Json]()
         loop_msg.put("role", Str(loop_roles.get(loop_mi).unwrap()))
         loop_msg.put("content", Str(loop_contents.get(loop_mi).unwrap()))
         loop_msgs.push(Obj(loop_msg))
@@ -29,10 +29,10 @@ Json build_messages(Vector[str] loop_roles, Vector[str] loop_contents):
 
 void main():
     # ── Detect provider ──────────────────────────────────────
-    str anthropic_key = getenv("ANTHROPIC_API_KEY")
-    str openai_key = getenv("OPENAI_API_KEY")
-    str openai_base = getenv("OPENAI_BASE_URL")
-    str model_override = getenv("MODEL")
+    String anthropic_key = getenv("ANTHROPIC_API_KEY")
+    String openai_key = getenv("OPENAI_API_KEY")
+    String openai_base = getenv("OPENAI_BASE_URL")
+    String model_override = getenv("MODEL")
 
     bool use_anthropic = anthropic_key != ""
     bool have_provider = use_anthropic or openai_key != ""
@@ -41,9 +41,9 @@ void main():
         print("Set ANTHROPIC_API_KEY or OPENAI_API_KEY to begin.")
     else:
         # ── Configure endpoint and headers ───────────────────
-        str api_url = ""
-        str model = ""
-        Dict[str, str] api_headers = Dict[str, str]()
+        String api_url = ""
+        String model = ""
+        Dict[String, String] api_headers = Dict[String, String]()
 
         if use_anthropic:
             api_url = "https://api.anthropic.com/v1/messages"
@@ -55,32 +55,32 @@ void main():
             api_headers.put("content-type", "application/json")
         else:
             if openai_base != "":
-                str oai_url = openai_base + "/chat/completions"
+                String oai_url = openai_base + "/chat/completions"
                 api_url = oai_url
             else:
                 api_url = "https://api.openai.com/v1/chat/completions"
             model = "gpt-4o"
             if model_override != "":
                 model = model_override
-            str auth_val = "Bearer " + openai_key
+            String auth_val = "Bearer " + openai_key
             api_headers.put("Authorization", auth_val)
             api_headers.put("content-type", "application/json")
 
         # ── Conversation state ───────────────────────────────
-        Vector[str] roles = Vector[str]()
-        Vector[str] contents = Vector[str]()
+        Vector[String] roles = Vector[String]()
+        Vector[String] contents = Vector[String]()
 
         if use_anthropic:
-            str banner = "Connected to Anthropic (" + model + ")"
+            String banner = "Connected to Anthropic (" + model + ")"
             print(banner)
         else:
-            str banner = "Connected to OpenAI-compatible (" + model + ")"
+            String banner = "Connected to OpenAI-compatible (" + model + ")"
             print(banner)
         print("Type 'quit' to exit.\n")
 
         # ── Main loop ────────────────────────────────────────
         loop:
-            str user_input = input("> ")
+            String user_input = input("> ")
             if user_input == "quit" or user_input == "exit" or stdin_eof():
                 break
             if user_input == "":
@@ -90,17 +90,17 @@ void main():
             contents.push(user_input)
 
             # Build request body
-            Dict[str, Json] req_body = Dict[str, Json]()
+            Dict[String, Json] req_body = Dict[String, Json]()
             req_body.put("model", Str(model))
             req_body.put("max_tokens", Int(4096))
             req_body.put("messages", build_messages(roles, contents))
 
-            str body_json = json_stringify(Obj(req_body))
+            String body_json = json_stringify(Obj(req_body))
 
-            Result[HttpResponse, str] resp = post(api_url, body_json, api_headers)
+            Result[HttpResponse, String] resp = post(api_url, body_json, api_headers)
 
             if resp.is_error():
-                str err_msg = "Connection error: " + resp.unwrap_error()
+                String err_msg = "Connection error: " + resp.unwrap_error()
                 print(err_msg)
                 roles.pop()
                 contents.pop()
@@ -109,15 +109,15 @@ void main():
             HttpResponse http_resp = resp.unwrap()
 
             if http_resp.status_code != 200:
-                str err_msg = "API error " + int_to_str(http_resp.status_code) + ": " + http_resp.body_text
+                String err_msg = "API error " + int_to_str(http_resp.status_code) + ": " + http_resp.body_text
                 print(err_msg)
                 roles.pop()
                 contents.pop()
                 continue
 
-            Result[Json, str] parsed = json_parse(http_resp.body_text)
+            Result[Json, String] parsed = json_parse(http_resp.body_text)
             if parsed.is_error():
-                str err_msg = "JSON error: " + parsed.unwrap_error()
+                String err_msg = "JSON error: " + parsed.unwrap_error()
                 print(err_msg)
                 roles.pop()
                 contents.pop()
@@ -126,7 +126,7 @@ void main():
             Json resp_json = parsed.unwrap()
 
             # Extract assistant text (different response shapes)
-            str assistant_text = ""
+            String assistant_text = ""
             if use_anthropic:
                 # Anthropic: { "content": [{ "text": "..." }] }
                 assistant_text = resp_json.get("content").at(0).get("text").as_str()
@@ -134,7 +134,7 @@ void main():
                 # OpenAI: { "choices": [{ "message": { "content": "..." } }] }
                 assistant_text = resp_json.get("choices").at(0).get("message").get("content").as_str()
 
-            str display = "\n" + assistant_text + "\n"
+            String display = "\n" + assistant_text + "\n"
             print(display)
 
             roles.push("assistant")

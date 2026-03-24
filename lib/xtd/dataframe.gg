@@ -1043,7 +1043,7 @@ equip DataFrame:
             else:
                 return self.df_slice(0, self.num_rows)
 
-    DataFrame apply_str(self, String col_name, str(String) f):
+    DataFrame apply_str(self, String col_name, String(String) f):
         Column col = self.columns.get(col_name).unwrap()
         match col:
             case StrCol(c):

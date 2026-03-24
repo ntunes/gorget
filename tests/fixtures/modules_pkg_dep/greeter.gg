@@ -1,2 +1,2 @@
-void hello(str name):
+void hello(String name):
     print(f"hello {name}")

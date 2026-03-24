@@ -8,19 +8,19 @@ void main():
     cli.add_positional("input", "Input file")
 
     # Simulate args: --verbose -o report.txt input.csv
-    Vector[str] argv = Vector[str]()
+    Vector[String] argv = Vector[String]()
     argv.push("--verbose")
     argv.push("-o")
     argv.push("report.txt")
     argv.push("input.csv")
 
-    Result[bool, str] parsed = cli.parse(argv)
+    Result[bool, String] parsed = cli.parse(argv)
     match parsed:
         case Ok(_):
             if cli.has("verbose"):
                 print("Verbose mode enabled")
             print(f"Output: {cli.get("output")}")
-            Vector[str] pos = cli.positionals()
+            Vector[String] pos = cli.positionals()
             if pos.len() > 0:
                 print(f"Input: {pos[0]}")
         case Error(e):

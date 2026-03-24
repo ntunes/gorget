@@ -255,7 +255,7 @@ impl TypeTable {
         match self.get(id) {
             ResolvedType::Primitive(p) => match p {
                 PrimitiveType::StringType => "String".to_string(),
-                PrimitiveType::StringView => "str".to_string(),
+                PrimitiveType::StringView => "String".to_string(),
                 PrimitiveType::CStr => "cstr".to_string(),
                 _ => format!("{p:?}").to_lowercase(),
             },

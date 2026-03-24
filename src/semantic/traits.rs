@@ -1556,7 +1556,7 @@ equip MyStruct with MyTrait:
         // built-in trait (Displayable) → both foreign → orphan error
         let source = "\
 equip int with Displayable:
-    str display(self):
+    String display(self):
         return \"x\"
 ";
         let (_, errors) = analyze(source);

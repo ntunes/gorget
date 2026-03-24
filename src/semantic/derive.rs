@@ -154,13 +154,13 @@ fn primitive_satisfies(type_name: &str, trait_name: &str) -> bool {
             // All primitives satisfy these
             matches!(type_name, "int" | "int8" | "int16" | "int32" | "int64"
                 | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
-                | "float" | "float32" | "float64" | "bool" | "str" | "String")
+                | "float" | "float32" | "float64" | "bool" | "String")
         }
         "Hashable" => {
             // Floats are NOT hashable
             matches!(type_name, "int" | "int8" | "int16" | "int32" | "int64"
                 | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
-                | "bool" | "str" | "String")
+                | "bool" | "String")
         }
         _ => false,
     }
@@ -276,7 +276,7 @@ fn format_type(ty: &crate::parser::ast::Type) -> String {
             PrimitiveType::Float32 => "float32".to_string(),
             PrimitiveType::Float64 => "float64".to_string(),
             PrimitiveType::Bool => "bool".to_string(),
-            PrimitiveType::StringView => "str".to_string(),
+            PrimitiveType::StringView => "String".to_string(),
             PrimitiveType::CStr => "cstr".to_string(),
             PrimitiveType::StringType => "String".to_string(),
             PrimitiveType::Void => "void".to_string(),
@@ -359,7 +359,7 @@ fn generate_struct_displayable(type_name: &str, gs: &str, fields: &[(&str, &str)
     };
 
     format!(
-        "equip {gp}{type_name}{gs} with Displayable:\n    str display(self):\n{body}\n"
+        "equip {gp}{type_name}{gs} with Displayable:\n    String display(self):\n{body}\n"
     )
 }
 
@@ -448,7 +448,7 @@ fn parse_collection_type(ty: &str) -> Option<CollectionKind> {
 }
 
 /// Strip `Name[...]` wrapper, returning the content between brackets.
-/// Handles nested brackets: `Vector[Dict[str, int]]` → `Dict[str, int]`.
+/// Handles nested brackets: `Vector[Dict[String, int]]` → `Dict[String, int]`.
 fn strip_generic<'a>(ty: &'a str, name: &str) -> Option<&'a str> {
     let rest = ty.strip_prefix(name)?;
     let rest = rest.strip_prefix('[')?;
@@ -528,11 +528,11 @@ fn field_write_lines(expr: &str, type_name: &str, indent: &str) -> String {
             let inner = format!("{indent}    ");
             let val_lines = field_write_lines(&val_var, val_ty, &inner);
             format!(
-                "{indent}Vector[str] {keys_var} = {expr}.keys()\n\
+                "{indent}Vector[String] {keys_var} = {expr}.keys()\n\
                  {indent}ser.begin_struct(\"\", {keys_var}.len())\n\
                  {indent}int {idx} = 0\n\
                  {indent}while {idx} < {keys_var}.len():\n\
-                 {inner}str {key_var} = {keys_var}.get({idx}).unwrap()\n\
+                 {inner}String {key_var} = {keys_var}.get({idx}).unwrap()\n\
                  {inner}ser.field({key_var}, {idx})\n\
                  {inner}{val_ty} {val_var} = {expr}[{key_var}]\n\
                  {val_lines}\
@@ -594,11 +594,11 @@ fn field_read_lines(name: &str, type_name: &str, indent: &str) -> String {
             let val_lines = field_read_lines(&val_var, val_ty, &inner);
             format!(
                 "{indent}de.begin_struct()\n\
-                 {indent}Vector[str] {keys_var} = de.keys()\n\
+                 {indent}Vector[String] {keys_var} = de.keys()\n\
                  {indent}{type_name} {name} = {type_name}()\n\
                  {indent}int {idx} = 0\n\
                  {indent}while {idx} < {keys_var}.len():\n\
-                 {inner}str {key_var} = {keys_var}.get({idx}).unwrap()\n\
+                 {inner}String {key_var} = {keys_var}.get({idx}).unwrap()\n\
                  {inner}de.field({key_var})\n\
                  {val_lines}\
                  {inner}{name}.put({key_var}, {val_var})\n\
@@ -624,7 +624,7 @@ fn field_write_call(expr: &str, type_name: &str) -> String {
         "float" => format!("ser.write_float({expr})"),
         "float32" | "float64" => format!("ser.write_float({expr} as float)"),
         "bool" => format!("ser.write_bool({expr})"),
-        "str" | "String" => format!("ser.write_str({expr})"),
+        "String" => format!("ser.write_str({expr})"),
         _ => format!("{expr}.serialize(ser)"),
     }
 }
@@ -646,7 +646,6 @@ fn field_default_value(type_name: &str) -> String {
         | "uint64" => "0".to_string(),
         "float" | "float32" | "float64" => "0.0".to_string(),
         "bool" => "false".to_string(),
-        "str" => "\"\"".to_string(),
         "String" => "String()".to_string(),
         other => format!("{other}.default()"),
     }
@@ -668,7 +667,7 @@ fn generate_struct_try_from(type_name: &str, gs: &str, fields: &[(&str, &str)]) 
     let gp = equip_generic_prefix(gs);
     format!(
         "equip {gp}{type_name}{gs} with TryFrom[{field_type}]:\n    \
-         Result[{type_name}{gs}, str] try_from({field_type} value):\n        \
+         Result[{type_name}{gs}, String] try_from({field_type} value):\n        \
          return Ok({type_name}{gs}(value))\n"
     )
 }
@@ -677,15 +676,15 @@ fn generate_struct_try_from(type_name: &str, gs: &str, fields: &[(&str, &str)]) 
 ///
 /// Maps column names to field names using `Row.get()`, `Row.get_int()`,
 /// `Row.get_float()`, `Row.get_bool()`. The trait method signature is
-/// `Self from_row(Row row)`. Only str, int, float, bool fields are handled
-/// natively; all other field types receive the raw column text (str).
+/// `Self from_row(Row row)`. Only String, int, float, bool fields are handled
+/// natively; all other field types receive the raw column text (String).
 fn generate_struct_from_row(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
     let gp = equip_generic_prefix(gs);
     let mut body = String::new();
     for (name, ty) in fields {
         match *ty {
-            "str" | "String" => {
-                body.push_str(&format!("        str {name} = row.get(\"{name}\")\n"));
+            "String" => {
+                body.push_str(&format!("        String {name} = row.get(\"{name}\")\n"));
             }
             "int" | "int8" | "int16" | "int32" | "int64"
             | "uint" | "uint8" | "uint16" | "uint32" | "uint64" => {
@@ -699,7 +698,7 @@ fn generate_struct_from_row(type_name: &str, gs: &str, fields: &[(&str, &str)]) 
             }
             _ => {
                 // Fall back to raw string for unknown types
-                body.push_str(&format!("        str {name} = row.get(\"{name}\")\n"));
+                body.push_str(&format!("        String {name} = row.get(\"{name}\")\n"));
             }
         }
     }
@@ -731,7 +730,7 @@ fn generate_struct_deserializable(type_name: &str, gs: &str, fields: &[(&str, &s
     ));
 
     format!(
-        "Result[{type_name}{gs}, str] deserialize_{type_name}(Box[Deserializer] de):\n{body}"
+        "Result[{type_name}{gs}, String] deserialize_{type_name}(Box[Deserializer] de):\n{body}"
     )
 }
 
@@ -752,7 +751,7 @@ fn field_read_decl(name: &str, type_name: &str) -> String {
             )
         }
         "bool" => format!("bool {name} = de.read_bool()"),
-        "str" | "String" => format!("str {name} = de.read_str()"),
+        "String" => format!("String {name} = de.read_str()"),
         _ => format!("{type_name} {name} = deserialize_{type_name}(de)"),
     }
 }
@@ -785,7 +784,7 @@ fn generate_enum_deserializable(type_name: &str, gs: &str, e: &EnumDef) -> Strin
     // Handle unit variants via is_string() check
     if !unit_variants.is_empty() {
         body.push_str("    if de.is_string():\n");
-        body.push_str("        str de_tag = de.read_str()\n");
+        body.push_str("        String de_tag = de.read_str()\n");
         for (i, vname) in unit_variants.iter().enumerate() {
             if i == 0 {
                 body.push_str(&format!("        if de_tag == \"{vname}\":\n"));
@@ -827,7 +826,7 @@ fn generate_enum_deserializable(type_name: &str, gs: &str, e: &EnumDef) -> Strin
     body.push_str("    return Error(\"unknown variant\")\n");
 
     format!(
-        "Result[{type_name}{gs}, str] deserialize_{type_name}(Box[Deserializer] de):\n{body}"
+        "Result[{type_name}{gs}, String] deserialize_{type_name}(Box[Deserializer] de):\n{body}"
     )
 }
 
@@ -984,7 +983,7 @@ fn generate_enum_displayable(type_name: &str, gs: &str, e: &EnumDef) -> String {
 
     format!(
         "equip {gp}{type_name}{gs} with Displayable:\n\
-         \x20   str display(self):\n\
+         \x20   String display(self):\n\
          \x20       match self:\n\
          {arms}"
     )
@@ -1461,7 +1460,7 @@ void main():
 
     #[test]
     fn test_struct_serializable() {
-        let src = generate_struct_serializable("User", "", &[("name", "str"), ("age", "int")]);
+        let src = generate_struct_serializable("User", "", &[("name", "String"), ("age", "int")]);
         assert!(src.contains("equip User with Serializable"));
         assert!(src.contains("void serialize(self, Box[Serializer] ser)"));
         assert!(src.contains("ser.begin_struct(\"User\", 2)"));
@@ -1477,7 +1476,7 @@ void main():
         let src = generate_struct_serializable(
             "Point",
             "",
-            &[("x", "float"), ("y", "float"), ("label", "str")],
+            &[("x", "float"), ("y", "float"), ("label", "String")],
         );
         let mut parser = Parser::new(&src);
         let module = parser.parse_module();
@@ -1494,7 +1493,6 @@ void main():
         assert_eq!(field_write_call("self.x", "int"), "ser.write_int(self.x)");
         assert_eq!(field_write_call("self.x", "float"), "ser.write_float(self.x)");
         assert_eq!(field_write_call("self.x", "bool"), "ser.write_bool(self.x)");
-        assert_eq!(field_write_call("self.x", "str"), "ser.write_str(self.x)");
         assert_eq!(field_write_call("self.x", "String"), "ser.write_str(self.x)");
         assert_eq!(field_write_call("self.x", "int8"), "ser.write_int(self.x as int)");
         assert_eq!(field_write_call("self.x", "uint64"), "ser.write_int(self.x as int)");
@@ -1541,7 +1539,7 @@ void main():
     #[test]
     fn test_struct_default_parses() {
         let src =
-            generate_struct_default("Config", "", &[("w", "int"), ("on", "bool"), ("n", "str")]);
+            generate_struct_default("Config", "", &[("w", "int"), ("on", "bool"), ("n", "String")]);
         let mut parser = Parser::new(&src);
         let module = parser.parse_module();
         assert!(
@@ -1570,18 +1568,17 @@ void main():
         assert_eq!(field_default_value("float"), "0.0");
         assert_eq!(field_default_value("float32"), "0.0");
         assert_eq!(field_default_value("bool"), "false");
-        assert_eq!(field_default_value("str"), "\"\"");
         assert_eq!(field_default_value("String"), "String()");
         assert_eq!(field_default_value("Point"), "Point.default()");
     }
 
     #[test]
     fn test_struct_deserializable() {
-        let src = generate_struct_deserializable("User", "", &[("name", "str"), ("age", "int")]);
-        assert!(src.contains("Result[User, str] deserialize_User(Box[Deserializer] de)"));
+        let src = generate_struct_deserializable("User", "", &[("name", "String"), ("age", "int")]);
+        assert!(src.contains("Result[User, String] deserialize_User(Box[Deserializer] de)"));
         assert!(src.contains("de.begin_struct()"));
         assert!(src.contains("de.field(\"name\")"));
-        assert!(src.contains("str name = de.read_str()"));
+        assert!(src.contains("String name = de.read_str()"));
         assert!(src.contains("de.field(\"age\")"));
         assert!(src.contains("int age = de.read_int()"));
         assert!(src.contains("de.end_struct()"));
@@ -1595,7 +1592,7 @@ void main():
         let src = generate_struct_deserializable(
             "Point",
             "",
-            &[("x", "float"), ("y", "float"), ("label", "str")],
+            &[("x", "float"), ("y", "float"), ("label", "String")],
         );
         let mut parser = Parser::new(&src);
         let module = parser.parse_module();
@@ -1612,7 +1609,7 @@ void main():
         let src = generate_struct_deserializable(
             "Profile",
             "",
-            &[("label", "str"), ("user", "User")],
+            &[("label", "String"), ("user", "User")],
         );
         assert!(src.contains("User user = deserialize_User(de)"));
     }
@@ -1622,8 +1619,7 @@ void main():
         assert_eq!(field_read_decl("x", "int"), "int x = de.read_int()");
         assert_eq!(field_read_decl("x", "float"), "float x = de.read_float()");
         assert_eq!(field_read_decl("x", "bool"), "bool x = de.read_bool()");
-        assert_eq!(field_read_decl("x", "str"), "str x = de.read_str()");
-        assert_eq!(field_read_decl("x", "String"), "str x = de.read_str()");
+        assert_eq!(field_read_decl("x", "String"), "String x = de.read_str()");
         assert_eq!(
             field_read_decl("x", "int8"),
             "int x_raw = de.read_int()\n    int8 x = x_raw as int8"
@@ -1689,7 +1685,7 @@ void main():
     fn test_struct_try_from() {
         let src = generate_struct_try_from("Celsius", "", &[("value", "float")]);
         assert!(src.contains("equip Celsius with TryFrom[float]"));
-        assert!(src.contains("Result[Celsius, str] try_from(float value)"));
+        assert!(src.contains("Result[Celsius, String] try_from(float value)"));
         assert!(src.contains("return Ok(Celsius(value))"));
     }
 

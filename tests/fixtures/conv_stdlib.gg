@@ -108,7 +108,7 @@ void main():
     bool bd = bool.default()
     print(f"{bd}")
 
-    String sd = str.default()
+    String sd = String.default()
     print(f"str_default:{sd}:")
 
     # ── Out-of-range narrow parse ────────────────────────────

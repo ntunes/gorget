@@ -86,7 +86,7 @@ fn describe_primitive(prim: &PrimitiveType) -> String {
         PrimitiveType::Float64 => "float64".to_string(),
         PrimitiveType::Float => "float".to_string(),
         PrimitiveType::Bool => "bool".to_string(),
-        PrimitiveType::StringView => "str".to_string(),
+        PrimitiveType::StringView => "String".to_string(),
         PrimitiveType::StringType => "String".to_string(),
         PrimitiveType::CStr => "cstr".to_string(),
         PrimitiveType::Void => "void".to_string(),
@@ -3143,7 +3143,7 @@ impl<'a> TypeChecker<'a> {
             "float32" => Some(PrimitiveType::Float32),
             "float64" => Some(PrimitiveType::Float64),
             "bool" => Some(PrimitiveType::Bool),
-            "str" => Some(PrimitiveType::StringType),
+            "str" | "String" => Some(PrimitiveType::StringType),
             _ => None,
         };
         let prim = prim?;
@@ -3207,7 +3207,7 @@ impl<'a> TypeChecker<'a> {
                 (self.scopes.get_def(*def_id).name.clone(), vec![])
             }
             ResolvedType::Primitive(PrimitiveType::StringView | PrimitiveType::StringType | PrimitiveType::CStr) => {
-                ("str".to_string(), vec![])
+                ("String".to_string(), vec![])
             }
             ResolvedType::Primitive(PrimitiveType::Uint8) => {
                 ("uint8".to_string(), vec![])
@@ -3839,7 +3839,7 @@ fn ast_type_to_gorget_name(ty: &Type) -> Option<String> {
                 PrimitiveType::Int => "int",
                 PrimitiveType::Float => "float",
                 PrimitiveType::Bool => "bool",
-                PrimitiveType::StringView | PrimitiveType::StringType => "str",
+                PrimitiveType::StringView | PrimitiveType::StringType => "String",
                 PrimitiveType::Void => "void",
                 _ => return None,
             };

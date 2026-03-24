@@ -44,12 +44,12 @@ trait Drawable:
 
 # Trait with extends
 trait Colorable extends Drawable:
-    str color(self)
+    String color(self)
 
-# NOT YET: Displayable equip requires `str display(self)` method name,
+# NOT YET: Displayable equip requires `String display(self)` method name,
 # and self.x/self.y interpolation in return value needs testing.
 # equip Point with Displayable:
-#     str display(self):
+#     String display(self):
 #         return "({self.x}, {self.y})"
 
 # Inherent implementation
@@ -74,11 +74,11 @@ int double(int x): x * 2
 #         print("{item}")
 
 # NOT YET: async functions
-# async str fetch(str url):
+# async String fetch(String url):
 #     pass
 
 # NOT YET: throws declarations on function signatures
-# int parse_int(str s) throws ValueError:
+# int parse_int(String s) throws ValueError:
 #     pass
 
 # Main function exercising many constructs
@@ -135,14 +135,14 @@ void main():
             print("other")
 
     # Move and borrow
-    str greeting = "hello"
-    str owned = !greeting
+    String greeting = "hello"
+    String owned = !greeting
     # greeting is now dead — borrow checker enforced
 
     # NOT YET: @derive macros
     # @derive(Debuggable)
     # struct Config:
-    #     str host
+    #     String host
     #     int port
 
     print("done")

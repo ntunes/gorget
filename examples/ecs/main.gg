@@ -15,7 +15,7 @@ void main():
     SparseSet[Health] health = SparseSet[Health].new()
     SparseSet[Attack] attacks = SparseSet[Attack].new()
     SparseSet[int] teams = SparseSet[int].new()
-    SparseSet[str] names = SparseSet[str].new()
+    SparseSet[String] names = SparseSet[String].new()
     World world = World(pool, health, attacks, teams, names)
 
     # Team 1 (Heroes)
