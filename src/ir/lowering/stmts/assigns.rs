@@ -120,6 +120,10 @@ pub(super) fn lower_assign(
                             {
                                 assign_mode = AssignMode::Move;
                             }
+                            // Safety net: no Copy for resource types.
+                            if assign_mode == AssignMode::Copy && ctx.type_registry.is_resource_type(rhs_type) {
+                                assign_mode = AssignMode::Move;
+                            }
                         }
                     }
 

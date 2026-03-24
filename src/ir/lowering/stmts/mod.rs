@@ -341,6 +341,12 @@ fn lower_var_decl(
                     {
                         assign_mode = AssignMode::Move;
                     }
+                    // Safety net: if still Copy for a resource type, use Move.
+                    // This catches edge cases not covered by the specific guards above
+                    // (e.g., named resource structs where clone_fn lookup failed).
+                    if assign_mode == AssignMode::Copy && ctx.type_registry.is_resource_type(rhs_type) {
+                        assign_mode = AssignMode::Move;
+                    }
                 }
             }
 

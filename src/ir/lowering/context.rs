@@ -617,11 +617,13 @@ impl<'a> LoweringContext<'a> {
         self.is_ref_param(base_type, ownership) || self.is_mut_ref_param(base_type, ownership)
     }
 
-    /// Return the clone function name for a Ptr(T) → T conversion (auto-clone).
-    /// Maps resource type names to their runtime clone functions.
+    /// Return the clone function name for deep-cloning a resource type.
+    /// Used for Ptr(T) → T auto-clone and named-variable clone.
+    /// Returns None for trivial types and GorgetString (uses provenance).
     pub fn clone_fn_for_ptr(&self, inner_type: TypeId) -> Option<String> {
-        use crate::ir::types::GirType;
+        use crate::ir::types::{GirType, DropStrategy};
         if let Some(GirType::Named(name)) = self.type_registry.get(inner_type) {
+            // Built-in collection types → runtime clone functions
             if name.starts_with("Vector__") || name.starts_with("Deque__") || name == "GorgetArray" {
                 return Some("gorget_array_clone".to_string());
             }
@@ -631,9 +633,20 @@ impl<'a> LoweringContext<'a> {
             if name.starts_with("Set__") || name.starts_with("HashSet__") || name == "GorgetSet" {
                 return Some("gorget_set_clone".to_string());
             }
-            // GorgetString excluded: has its own provenance-based ownership tracking
-            // (str/String VarDecl move-zero + unregister). Auto-cloning GorgetStrings
-            // breaks the .str() method chain (clone gets freed while str view is alive).
+            // GorgetString excluded: uses provenance-based ownership tracking.
+            // Auto-cloning GorgetStrings breaks the .str() method chain.
+
+            // User structs with Recursive or Custom drop → generated {Name}__clone.
+            // Recursive: emitted by emit_recursive_struct_clones in C backend.
+            // Custom: same mechanism — deep-clone resource fields (the custom drop
+            // function handles cleanup, so clone just needs field-level independence).
+            if let Some(type_def) = self.type_registry.get_type_def(name) {
+                if matches!(type_def.metadata.drop_strategy,
+                    DropStrategy::Recursive | DropStrategy::Custom(_))
+                {
+                    return Some(format!("{name}__clone"));
+                }
+            }
         }
         None
     }

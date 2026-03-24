@@ -263,7 +263,9 @@ impl<'a> LoweringContext<'a> {
             .map(|td| (td.name.clone(), td.metadata.drop_strategy.clone(), td.kind.clone()))
             .collect();
         for (name, strategy, kind) in &type_defs {
-            if !matches!(strategy, DropStrategy::Recursive) {
+            // Collect field→drop mappings for both Recursive and Custom-drop structs.
+            // Both need {Name}__clone for deep-clone support.
+            if !matches!(strategy, DropStrategy::Recursive | DropStrategy::Custom(_)) {
                 continue;
             }
             let sdef = match kind {

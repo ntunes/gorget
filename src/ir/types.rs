@@ -330,11 +330,10 @@ impl TypeRegistry {
 
     /// Drop check for anonymous call result temps.
     /// Includes Trivial/Custom drop and collection types.
-    /// Excludes Recursive — deep clone infrastructure exists for IndexLoad and
-    /// Option unwrap, but arbitrary function calls returning Recursive structs
-    /// (like DataFrame.tail()) may return shallow copies sharing internal data.
-    /// Including Recursive requires ALL return paths to produce independently-owned
-    /// copies, which needs library-level changes.
+    /// Excludes Recursive — enum deep clone (tag-based variant clone) not yet
+    /// implemented. Collections containing enum elements with resource fields
+    /// would have shallow-copy values after gorget_*_clone.
+    /// Blocked on: enum __clone generation with tag-based dispatch.
     pub fn needs_drop_for_temp(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
         if let Some(GirType::Named(name)) = self.get(type_id) {
