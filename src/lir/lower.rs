@@ -71,6 +71,11 @@ impl<'a> LoweringContext<'a> {
             let id = module.add_struct(def.clone());
             struct_reg.register(&def.name, id);
         }
+        // Both "Str" and "GorgetString" are registered as separate structs with
+        // identical layout. The "Str" entry is kept for stable StructId indexing —
+        // removing it shifts all subsequent IDs, breaking type resolution.
+        // Future cleanup: consolidate to single struct once all index-dependent
+        // code uses name-based lookup instead of positional indexing.
 
         Self {
             gir,

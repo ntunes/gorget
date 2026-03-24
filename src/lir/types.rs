@@ -46,7 +46,9 @@ impl Default for StructRegistry {
 /// Well-known struct layouts for Gorget runtime types.
 pub fn builtin_struct_defs() -> Vec<StructDef> {
     vec![
-        // str — unified view/owned string (cap==0 ⟺ view, cap>0 ⟺ owned)
+        // Str — legacy name, kept for stable StructId indexing.
+        // Identical to GorgetString. Will be removed once all internal
+        // references use "GorgetString" exclusively.
         StructDef {
             name: "Str".into(),
             fields: vec![
@@ -57,7 +59,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             ],
             is_enum: false,
                       },
-        // String — owned heap string (unified with Str: same 32-byte layout)
+        // GorgetString — 32-byte string struct (cap==0 ⟺ view, cap>0 ⟺ owned)
         StructDef {
             name: "GorgetString".into(),
             fields: vec![
