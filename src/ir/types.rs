@@ -328,11 +328,12 @@ impl TypeRegistry {
         false
     }
 
-    /// Narrower drop check for anonymous call result temps.
-    /// Only returns true for types with concrete drop functions (Trivial/Custom)
-    /// or collection types. Excludes Recursive drop strategy because call result
-    /// temps may be consumed (assigned to a variable) without mark_moved, causing
-    /// double-frees when both the temp and the variable are dropped.
+    /// Drop check for anonymous call result temps.
+    /// Returns true for types with concrete drop functions (Trivial/Custom)
+    /// or collection types. Excludes Recursive drop strategy because the
+    /// move-zero on consumed temps can zero fields that are still referenced
+    /// through shallow copies (e.g., Column pointing into DataFrame internals).
+    /// Recursive temps will be covered once deep-clone-on-return is implemented.
     pub fn needs_drop_for_temp(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
         if let Some(GirType::Named(name)) = self.get(type_id) {
