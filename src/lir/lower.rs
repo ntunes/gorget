@@ -1535,12 +1535,51 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     let result = self.lir_func.next_value();
                     let field_ty = self.resolve_field_type(effective_type, *field);
+                    let field_ty_clone = field_ty.clone();
                     self.lir_func.block_mut(bb).insts.push(Inst::Load {
                         dst: result,
                         ptr: fptr,
                         ty: field_ty,
                     });
                     self.store_to_local(*dst, result, bb);
+
+                    // GorgetString field → Str destination: zero cap+alloc fields to create
+                    // a non-owning view. Without this, the raw Load copies cap>0 from the
+                    // owned field, and gorget_string_free on the view would free shared data.
+                    let is_str_dst = matches!(self.gir_types.get(dst_gir_type), Some(GirType::Named(n)) if n == "Str");
+                    let is_gs_field = matches!(field_ty_clone, LirType::Struct(sid) if {
+                        self.module_structs.get(sid.0 as usize)
+                            .map_or(false, |s| s.name == "GorgetString")
+                    });
+                    if is_str_dst && is_gs_field {
+                        // Zero the last 16 bytes (cap + alloc) of the 32-byte Str/GorgetString.
+                        // This turns an owned string into a non-owning view.
+                        let dst_slot = self.local_to_slot[dst.0 as usize];
+                        let dst_addr = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                            dst: dst_addr, slot: dst_slot,
+                        });
+                        // Use ElemPtr with elem_size=1 and index=16 to get cap offset
+                        let offset = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                            dst: offset, ty: LirType::I64, value: 16,
+                        });
+                        let cap_ptr = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
+                            dst: cap_ptr, base: dst_addr, index: offset, elem_size: 1,
+                        });
+                        let zero = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                            dst: zero, ty: LirType::I32, value: 0,
+                        });
+                        let sixteen = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                            dst: sixteen, ty: LirType::I64, value: 16,
+                        });
+                        self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+                            ptr: cap_ptr, byte: zero, size: sixteen,
+                        });
+                    }
                 }
             }
 
