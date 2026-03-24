@@ -609,7 +609,7 @@ mod tests {
                 callee: Box::new(Spanned::new(Expr::Identifier("Pair".to_string()), callee_span)),
                 generic_args: Some(vec![
                     Spanned::new(Type::Primitive(PrimitiveType::Int), dummy_span()),
-                    Spanned::new(Type::Primitive(PrimitiveType::Str), dummy_span()),
+                    Spanned::new(Type::Primitive(PrimitiveType::StringView), dummy_span()),
                 ]),
                 args: vec![
                     Spanned::new(

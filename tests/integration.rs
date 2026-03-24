@@ -7046,7 +7046,7 @@ fn format_primitive_canonical(p: &PrimitiveType) -> &'static str {
         PrimitiveType::Float32 => "float32",
         PrimitiveType::Float64 => "float64",
         PrimitiveType::Bool => "bool",
-        PrimitiveType::Str => "str",
+        PrimitiveType::StringView => "str",
         PrimitiveType::CStr => "cstr",
         PrimitiveType::StringType => "String",
         PrimitiveType::Void => "void",

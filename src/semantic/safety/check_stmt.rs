@@ -27,7 +27,7 @@ impl<'a> BorrowChecker<'a> {
                 // the target type to Str for view bindings.
                 // Destructuring patterns (Tuple) implicitly move the value,
                 // so suppress MoveWithoutOperator for them.
-                let target_is_view_str = matches!(type_.node, Type::Primitive(PrimitiveType::Str));
+                let target_is_view_str = matches!(type_.node, Type::Primitive(PrimitiveType::StringView));
                 if !target_is_view_str {
                     let is_destructure = matches!(&pattern.node, Pattern::Tuple(_));
                     if is_destructure {

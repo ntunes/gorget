@@ -300,7 +300,7 @@ impl TypeMapper {
             PrimitiveType::Float | PrimitiveType::Float64 => F64_TYPE,
             PrimitiveType::Float32 => F32_TYPE,
             PrimitiveType::Bool => BOOL_TYPE,
-            PrimitiveType::Str | PrimitiveType::CStr => self.str_type,
+            PrimitiveType::StringView | PrimitiveType::CStr => self.str_type,
             PrimitiveType::StringType => self.owned_string_type,
             PrimitiveType::Void => UNIT_TYPE,
         }
@@ -692,7 +692,7 @@ pub fn mangle_type_for_name(ty: &Type) -> String {
             PrimitiveType::Float | PrimitiveType::Float64 => "double".to_string(),
             PrimitiveType::Float32 => "float".to_string(),
             PrimitiveType::Bool => "bool".to_string(),
-            PrimitiveType::Str => "Str".to_string(),
+            PrimitiveType::StringView => "Str".to_string(),
             PrimitiveType::CStr => "cstr".to_string(),
             PrimitiveType::StringType => "Str".to_string(),
             PrimitiveType::Void => "void".to_string(),
@@ -804,7 +804,7 @@ mod tests {
         assert_eq!(mapper.map_primitive(&PrimitiveType::Bool), BOOL_TYPE);
         assert_eq!(mapper.map_primitive(&PrimitiveType::Void), UNIT_TYPE);
         // str maps to a Named("Str") type (matches the runtime fat pointer struct)
-        let str_id = mapper.map_primitive(&PrimitiveType::Str);
+        let str_id = mapper.map_primitive(&PrimitiveType::StringView);
         assert_eq!(str_id, mapper.str_type);
         assert!(matches!(reg.get(str_id), Some(GirType::Named(name)) if name == "Str"));
     }
@@ -909,7 +909,7 @@ mod tests {
             "Result",
             &[
                 spanned(Type::Primitive(PrimitiveType::StringType)),
-                spanned(Type::Primitive(PrimitiveType::Str)),
+                spanned(Type::Primitive(PrimitiveType::StringView)),
             ],
         );
         assert_eq!(name, "Result__Str__Str");

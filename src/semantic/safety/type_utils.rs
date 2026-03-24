@@ -33,7 +33,7 @@ pub(super) fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTab
                     | Float32
                     | Float64
                     | Bool
-                    | Str
+                    | StringView
                     | CStr
             )
         }
@@ -71,7 +71,7 @@ pub(super) fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTab
 /// type whose DefId is in `ref_structs`.
 pub(super) fn is_ast_type_ref(ty: &Type, scopes: &ScopeTable, ref_structs: &FxHashSet<DefId>) -> bool {
     match ty {
-        Type::Primitive(PrimitiveType::Str) => true,
+        Type::Primitive(PrimitiveType::StringView) => true,
         Type::Ref(_) => true,
         Type::Slice { .. } => true,
         Type::Named { name, .. } => {

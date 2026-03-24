@@ -450,7 +450,7 @@ pub enum PrimitiveType {
     Float32,
     Float64,
     Bool,
-    Str,
+    StringView,  // Internal provenance marker — never parsed, created by Pass 4.5
     CStr,
     StringType,
     Void,

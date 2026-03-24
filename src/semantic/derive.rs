@@ -276,7 +276,7 @@ fn format_type(ty: &crate::parser::ast::Type) -> String {
             PrimitiveType::Float32 => "float32".to_string(),
             PrimitiveType::Float64 => "float64".to_string(),
             PrimitiveType::Bool => "bool".to_string(),
-            PrimitiveType::Str => "str".to_string(),
+            PrimitiveType::StringView => "str".to_string(),
             PrimitiveType::CStr => "cstr".to_string(),
             PrimitiveType::StringType => "String".to_string(),
             PrimitiveType::Void => "void".to_string(),

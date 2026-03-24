@@ -77,12 +77,12 @@ pub fn infer_string_provenance(
 }
 
 /// Rewrite AST type annotations to match provenance-adjusted semantic type_ids.
-/// Recursively rewrite `PrimitiveType::StringType` → `PrimitiveType::Str` in a type tree.
+/// Recursively rewrite `PrimitiveType::StringType` → `PrimitiveType::StringView` in a type tree.
 /// Handles bare `String`, generic args like `Vector[String]`, tuples, etc.
 fn rewrite_type_to_str(ty: &mut Type) {
     match ty {
         Type::Primitive(PrimitiveType::StringType) => {
-            *ty = Type::Primitive(PrimitiveType::Str);
+            *ty = Type::Primitive(PrimitiveType::StringView);
         }
         Type::Named { generic_args, .. } => {
             for arg in generic_args {
@@ -184,7 +184,7 @@ fn rewrite_function(
             && param.node.ownership == Ownership::Borrow
             && param.node.name.node != "self"
         {
-            param.node.type_.node = Type::Primitive(PrimitiveType::Str);
+            param.node.type_.node = Type::Primitive(PrimitiveType::StringView);
         }
     }
 
@@ -193,7 +193,7 @@ fn rewrite_function(
         if let Some(def_id) = scopes.lookup_def_by_span(&func.name.node, func.name.span) {
             if let Some(fi) = function_info.get(&def_id) {
                 if fi.return_type_id == Some(string_id) {
-                    func.return_type.node = Type::Primitive(PrimitiveType::Str);
+                    func.return_type.node = Type::Primitive(PrimitiveType::StringView);
                 }
             }
         }
@@ -228,7 +228,7 @@ fn rewrite_stmt(
                         let def = scopes.get_def(def_id);
                         if let Some(tid) = def.type_id {
                             if tid == string_id {
-                                type_.node = Type::Primitive(PrimitiveType::Str);
+                                type_.node = Type::Primitive(PrimitiveType::StringView);
                             }
                         }
                     }

@@ -1047,7 +1047,7 @@ fn decl_async_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef 
 }
 
 fn ty_str() -> Type {
-    Type::Primitive(PrimitiveType::Str)
+    Type::Primitive(PrimitiveType::StringView)
 }
 
 fn ty_string() -> Type {

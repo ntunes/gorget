@@ -86,7 +86,7 @@ fn describe_primitive(prim: &PrimitiveType) -> String {
         PrimitiveType::Float64 => "float64".to_string(),
         PrimitiveType::Float => "float".to_string(),
         PrimitiveType::Bool => "bool".to_string(),
-        PrimitiveType::Str => "str".to_string(),
+        PrimitiveType::StringView => "str".to_string(),
         PrimitiveType::StringType => "String".to_string(),
         PrimitiveType::CStr => "cstr".to_string(),
         PrimitiveType::Void => "void".to_string(),
@@ -726,13 +726,13 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             // String→str coercion: String auto-coerces to str (owned → view)
-            (ResolvedType::Primitive(PrimitiveType::Str), ResolvedType::Primitive(PrimitiveType::StringType))
-            | (ResolvedType::Primitive(PrimitiveType::StringType), ResolvedType::Primitive(PrimitiveType::Str)) => {
+            (ResolvedType::Primitive(PrimitiveType::StringView), ResolvedType::Primitive(PrimitiveType::StringType))
+            | (ResolvedType::Primitive(PrimitiveType::StringType), ResolvedType::Primitive(PrimitiveType::StringView)) => {
                 a // accept the expected (lhs) type
             }
             // cstr ↔ str coercion (both are const char* in S0)
-            (ResolvedType::Primitive(PrimitiveType::Str), ResolvedType::Primitive(PrimitiveType::CStr))
-            | (ResolvedType::Primitive(PrimitiveType::CStr), ResolvedType::Primitive(PrimitiveType::Str)) => {
+            (ResolvedType::Primitive(PrimitiveType::StringView), ResolvedType::Primitive(PrimitiveType::CStr))
+            | (ResolvedType::Primitive(PrimitiveType::CStr), ResolvedType::Primitive(PrimitiveType::StringView)) => {
                 a
             }
             // cstr ↔ String coercion
@@ -3206,7 +3206,7 @@ impl<'a> TypeChecker<'a> {
             ResolvedType::Defined(def_id) => {
                 (self.scopes.get_def(*def_id).name.clone(), vec![])
             }
-            ResolvedType::Primitive(PrimitiveType::Str | PrimitiveType::StringType | PrimitiveType::CStr) => {
+            ResolvedType::Primitive(PrimitiveType::StringView | PrimitiveType::StringType | PrimitiveType::CStr) => {
                 ("str".to_string(), vec![])
             }
             ResolvedType::Primitive(PrimitiveType::Uint8) => {
@@ -3839,7 +3839,7 @@ fn ast_type_to_gorget_name(ty: &Type) -> Option<String> {
                 PrimitiveType::Int => "int",
                 PrimitiveType::Float => "float",
                 PrimitiveType::Bool => "bool",
-                PrimitiveType::Str | PrimitiveType::StringType => "str",
+                PrimitiveType::StringView | PrimitiveType::StringType => "str",
                 PrimitiveType::Void => "void",
                 _ => return None,
             };
