@@ -320,9 +320,25 @@ impl TypeRegistry {
             if self.is_collection_type_name(name) {
                 return true;
             }
+            // GorgetString is always droppable
+            if name == "GorgetString" { return true; }
             if let Some(type_def) = self.get_type_def(name) {
-                return type_def.metadata.copy_semantics == CopySemantics::Resource
-                    || type_def.metadata.drop_strategy != DropStrategy::None;
+                if type_def.metadata.copy_semantics == CopySemantics::Resource
+                    || type_def.metadata.drop_strategy != DropStrategy::None
+                {
+                    return true;
+                }
+                // Enum with resource-type variant payloads needs drop
+                // (even without explicit Recursive strategy, e.g. user enums with String fields)
+                if let TypeDefKind::Enum(ref edef) = type_def.kind {
+                    if !name.starts_with("Option__") && !name.starts_with("Result__") {
+                        if edef.variants.iter().any(|v| {
+                            v.fields.iter().any(|f| self.needs_drop(f.type_id))
+                        }) {
+                            return true;
+                        }
+                    }
+                }
             }
         }
         false

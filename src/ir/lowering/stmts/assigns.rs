@@ -65,9 +65,9 @@ pub(super) fn lower_assign(
                         let type_name = type_name.clone();
                         if ctx.type_registry.is_collection_type_name(&type_name) {
                             ctx.drops.is_moved(local_id)
-                        } else if let Some(type_def) = ctx.type_registry.get_type_def(&type_name) {
-                            type_def.metadata.drop_strategy != DropStrategy::None
-                        } else { false }
+                        } else {
+                            ctx.type_registry.needs_drop(type_id)
+                        }
                     } else { false }
                 };
                 // Compute new value FIRST (it may reference the old value, e.g. s = s + x)
