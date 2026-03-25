@@ -409,32 +409,25 @@ equip YamlParser:
             self.yaml_pos = self.yaml_pos + 1
             # Value: inline or next-line
             self.skip_spaces()
+            Yaml yaml_val = Null()
             if self.at_end() or self.is_newline():
                 # Value on next line, indented deeper
                 if not self.at_end():
                     self.consume_newline()
-                Yaml yaml_val = self.parse_block_value(yaml_map_indent + 1)
-                if yaml_key == "<<":
-                    merge_into(&yaml_map, yaml_val)
-                else:
-                    yaml_map.put(yaml_key, yaml_val)
+                yaml_val = self.parse_block_value(yaml_map_indent + 1)
             elif self.yaml_input.char_at(self.yaml_pos) == '#':
                 # Comment after colon — value on next line
                 self.skip_to_eol()
                 if not self.at_end():
                     self.consume_newline()
-                Yaml yaml_val = self.parse_block_value(yaml_map_indent + 1)
-                if yaml_key == "<<":
-                    merge_into(&yaml_map, yaml_val)
-                else:
-                    yaml_map.put(yaml_key, yaml_val)
+                yaml_val = self.parse_block_value(yaml_map_indent + 1)
             else:
                 # Inline value
-                Yaml yaml_val = self.parse_inline_value(yaml_map_indent)
-                if yaml_key == "<<":
-                    merge_into(&yaml_map, yaml_val)
-                else:
-                    yaml_map.put(yaml_key, yaml_val)
+                yaml_val = self.parse_inline_value(yaml_map_indent)
+            if yaml_key == "<<":
+                merge_into(&yaml_map, yaml_val)
+            else:
+                yaml_map.put(yaml_key, yaml_val)
         return Map(yaml_map)
 
     # Parse a mapping key (bare, double-quoted, or single-quoted)
