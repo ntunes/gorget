@@ -77,24 +77,34 @@ pub(super) fn lower_for(
     if iter_type == ctx.type_mapper.string_view_type || iter_type == ctx.type_mapper.owned_string_type {
         lower_for_string(ctx, builder, &var_name, iter_op, body, else_arm);
     } else {
-        // Determine collection kind from the named type
+        // Determine collection kind from type metadata (set by BuiltinTypeProtocol).
+        // Falls back to name-based detection, then Iterable/Iterator trait dispatch.
+        use crate::ir::types::CollectionKind;
         let collection_kind = if let Operand::Copy(ref p) | Operand::Move(ref p) = iter_op {
             let local_idx = p.local.0 as usize;
             if local_idx < builder.locals.len() {
                 let tid = builder.locals[local_idx].type_id;
                 let tid = ctx.pointee_type(tid).unwrap_or(tid);
                 if let Some(GirType::Named(name)) = ctx.type_registry.get(tid) {
-                    if name.starts_with("GorgetArray") || name.starts_with("Vector__") {
-                        Some("array")
-                    } else if name.starts_with("Dict__") || name.starts_with("GorgetDict") {
-                        Some("dict")
-                    } else if name.starts_with("HashMap__") || name.starts_with("GorgetMap") {
-                        Some("hashmap")
-                    } else if name.starts_with("Set__") || name.starts_with("GorgetSet") || name.starts_with("HashSet__") {
-                        Some("set")
-                    } else {
-                        None
-                    }
+                    // Metadata-based: check collection_kind on the TypeDef
+                    ctx.type_registry.get_type_def(name)
+                        .and_then(|td| td.metadata.collection_kind)
+                        .or_else(|| {
+                            // Fallback for types without TypeDefs (registered via register_collection_alias)
+                            if name.starts_with("Vector__") || name.starts_with("GorgetArray") || name.starts_with("Deque__") {
+                                Some(CollectionKind::Array)
+                            } else if name.starts_with("Dict__") {
+                                Some(CollectionKind::OrderedMap)
+                            } else if name.starts_with("HashMap__") || name.starts_with("GorgetMap") || name.starts_with("GorgetDict") {
+                                Some(CollectionKind::Map)
+                            } else if name.starts_with("Set__") {
+                                Some(CollectionKind::OrderedSet)
+                            } else if name.starts_with("HashSet__") || name.starts_with("GorgetSet") {
+                                Some(CollectionKind::Set)
+                            } else {
+                                None
+                            }
+                        })
                 } else {
                     None
                 }
@@ -105,10 +115,13 @@ pub(super) fn lower_for(
             None
         };
         match collection_kind {
-            Some("array") => lower_for_array(ctx, builder, &var_name, iter_op, body, else_arm, pattern),
-            Some("dict") | Some("hashmap") => lower_for_dict(ctx, builder, iter_op, body, else_arm, pattern),
-            Some("set") => lower_for_set(ctx, builder, &var_name, iter_op, body, else_arm),
-            _ => {
+            Some(CollectionKind::Array) =>
+                lower_for_array(ctx, builder, &var_name, iter_op, body, else_arm, pattern),
+            Some(CollectionKind::OrderedMap | CollectionKind::Map) =>
+                lower_for_dict(ctx, builder, iter_op, body, else_arm, pattern),
+            Some(CollectionKind::OrderedSet | CollectionKind::Set) =>
+                lower_for_set(ctx, builder, &var_name, iter_op, body, else_arm),
+            None => {
                 // Try Iterable/Iterator trait dispatch for user-defined types
                 if let Some(type_name) = ctx.type_registry.get(iter_type)
                     .and_then(|gt| if let GirType::Named(n) = gt { Some(n.clone()) } else { None })
