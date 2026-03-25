@@ -383,9 +383,15 @@ pub fn emit_pattern_bindings(
                 return;
             };
 
+            // Is the scrutinee a Ptr (borrowed)?
+            let scrut_is_ptr = matches!(
+                ctx.type_registry.get(scrut_type),
+                Some(GirType::Ptr(_) | GirType::MutPtr(_))
+            );
+
             for (i, field_pat) in fields.iter().enumerate() {
                 // Determine the field type from the enum variant definition
-                let field_type = if let Some(type_def) = ctx.type_registry.get_type_def(&enum_name) {
+                let mut field_type = if let Some(type_def) = ctx.type_registry.get_type_def(&enum_name) {
                     if let TypeDefKind::Enum(ref e) = type_def.kind {
                         if let Some(v) = e.variants.iter().find(|v| v.name == variant_name) {
                             if let Some(f) = v.fields.get(i) {
@@ -403,12 +409,30 @@ pub fn emit_pattern_bindings(
                     I64_TYPE
                 };
 
+                // When scrutinee is Ptr (borrowed param), resource-type variant
+                // fields should be references, not owned copies.
+                // Same conversion as struct field loads:
+                // - Collections → Ptr(T) (reference into the enum)
+                // - GorgetString → StringView (non-owning view)
+                if scrut_is_ptr {
+                    if ctx.type_registry.is_collection_type(field_type) {
+                        field_type = ctx.type_registry.insert(GirType::Ptr(field_type));
+                    } else if field_type == ctx.type_mapper.owned_string_type {
+                        field_type = ctx.type_mapper.string_view_type;
+                    }
+                }
+
                 let dst = builder.enum_field_load(
                     Place::local(scrut_local),
                     variant_name.clone(),
                     i as u32,
                     field_type,
                 );
+
+                // Mark Ptr-extracted locals as ref_locals (no auto-deref, no drop)
+                if matches!(ctx.type_registry.get(field_type), Some(GirType::Ptr(_))) {
+                    ctx.ref_locals.insert(dst);
+                }
 
                 // Recurse on sub-pattern
                 emit_pattern_bindings(ctx, builder, field_pat, dst, field_type);

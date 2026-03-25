@@ -358,11 +358,9 @@ impl<'a> LoweringContext<'a> {
         local
     }
 
-    /// Call a function and auto-register the result for drop if it has a concrete
-    /// drop function (Trivial/Custom) or is a collection type. Uses the narrow
-    /// `needs_drop_for_temp` check to avoid registering user structs with Recursive
-    /// drop strategy — those would be double-freed when the temp is consumed by an
-    /// assign but not marked as moved.
+    /// Call a function and auto-register the result for drop if it needs dropping.
+    /// Uses `needs_drop` which covers Trivial, Custom, Recursive, and collection types.
+    /// Safe because Move semantics zero the source when temps are consumed by assignment.
     pub fn call_tracked(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
@@ -371,14 +369,13 @@ impl<'a> LoweringContext<'a> {
         return_type: crate::ir::types::TypeId,
     ) -> crate::ir::types::LocalId {
         let local = builder.call(func, args, return_type);
-        if self.type_registry.needs_drop_for_temp(return_type) {
+        if self.type_registry.needs_drop(return_type) {
             self.drops.register_local(local, return_type, &self.type_registry);
         }
         local
     }
 
     /// Call an extern function and auto-register the result for drop.
-    /// Same narrow check as `call_tracked`.
     pub fn call_extern_tracked(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
@@ -387,7 +384,7 @@ impl<'a> LoweringContext<'a> {
         return_type: crate::ir::types::TypeId,
     ) -> crate::ir::types::LocalId {
         let local = builder.call_extern(func, args, return_type);
-        if self.type_registry.needs_drop_for_temp(return_type) {
+        if self.type_registry.needs_drop(return_type) {
             self.drops.register_local(local, return_type, &self.type_registry);
         }
         local

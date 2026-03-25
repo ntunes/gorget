@@ -79,37 +79,6 @@ pub fn infer_string_provenance(
 /// Rewrite AST type annotations to match provenance-adjusted semantic type_ids.
 /// Recursively rewrite `PrimitiveType::StringType` → `PrimitiveType::StringView` in a type tree.
 /// Handles bare `String`, generic args like `Vector[String]`, tuples, etc.
-fn rewrite_type_to_str(ty: &mut Type) {
-    match ty {
-        Type::Primitive(PrimitiveType::StringType) => {
-            *ty = Type::Primitive(PrimitiveType::StringView);
-        }
-        Type::Named { generic_args, .. } => {
-            for arg in generic_args {
-                rewrite_type_to_str(&mut arg.node);
-            }
-        }
-        Type::Tuple(elems) => {
-            for elem in elems {
-                rewrite_type_to_str(&mut elem.node);
-            }
-        }
-        Type::Array { element, .. } | Type::Slice { element } => {
-            rewrite_type_to_str(&mut element.node);
-        }
-        Type::Function { return_type, params, .. } => {
-            rewrite_type_to_str(&mut return_type.node);
-            for p in params {
-                rewrite_type_to_str(&mut p.node);
-            }
-        }
-        Type::Ref(inner) | Type::Owned(inner) => {
-            rewrite_type_to_str(&mut inner.node);
-        }
-        _ => {}
-    }
-}
-
 /// After str→StringType unification, all string annotations are `StringType`.
 /// Provenance downgrades some bindings' type_ids to `string_id` (view).
 /// This pass rewrites the AST `StringType` → `Str` for those bindings so the

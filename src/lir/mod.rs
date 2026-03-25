@@ -11,7 +11,7 @@ pub mod ssa;
 pub mod types;
 pub mod validate;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 // ── Identity types ──────────────────────────────────────────────────────────
@@ -757,6 +757,10 @@ pub struct LirModule {
     /// Recursive drop enums: type_name → Vec<(variant_index, variant_name, field_name, drop_fn_name)>.
     /// Used for tag-based clone/drop dispatch on enum types with resource variant payloads.
     pub recursive_drop_enums: HashMap<String, Vec<(u32, String, String, String)>>,
+    /// Types whose `{Name}__drop` name collides with a user-defined method.
+    /// When dropping fields of these types, the backend must inline sub-field drops
+    /// instead of calling `{Name}__drop`.
+    pub drop_collision_types: HashSet<String>,
 }
 
 impl LirModule {
@@ -783,6 +787,7 @@ impl LirModule {
             hot_reload_has_reload_fn: false,
             recursive_drop_structs: HashMap::new(),
             recursive_drop_enums: HashMap::new(),
+            drop_collision_types: HashSet::new(),
         }
     }
 

@@ -58,6 +58,8 @@ struct FuncLowering<'a> {
     pending_externs: Vec<LirExtern>,
     /// Whether `directive overflow=wrap` is active (integer overflow wraps).
     overflow_wrap: bool,
+    /// Types whose `{Name}__drop` collides with a user method (e.g., DataFrame.drop()).
+    drop_collision_types: &'a std::collections::HashSet<String>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -128,6 +130,10 @@ impl<'a> LoweringContext<'a> {
             self.global_index.insert(global.name.clone(), gid);
         }
 
+        // Generate recursive drop function metadata BEFORE function lowering,
+        // so FuncLowering can access drop_collision_types for inline drops.
+        self.populate_recursive_drop_structs();
+
         // Lower functions.
         let mut all_pending_externs: Vec<LirExtern> = Vec::new();
         let funcs: Vec<LirFunction> = self
@@ -144,6 +150,7 @@ impl<'a> LoweringContext<'a> {
                     &self.module.structs,
                     &self.module.globals,
                     self.gir.runtime.overflow_wrap,
+                    &self.module.drop_collision_types,
                 );
                 fl.lower();
                 all_pending_externs.extend(fl.pending_externs.drain(..));
@@ -247,9 +254,6 @@ impl<'a> LoweringContext<'a> {
         // Compute elem_drop_recipes for types that need compound drops.
         self.compute_all_drop_recipes();
 
-        // Generate recursive drop function metadata for structs with droppable fields.
-        self.populate_recursive_drop_structs();
-
         self.module
     }
 
@@ -289,11 +293,14 @@ impl<'a> LoweringContext<'a> {
                         // handles the drop inline via lower_field_drops.
                         let candidate = format!("{field_type_name}__drop");
                         // If a function with this name exists in the GIR and is NOT the
-                        // Drop trait impl, skip this field to avoid the naming collision.
+                        // Drop trait impl, skip. Check both exact match and module-prefixed
+                        // names (GIR uses `mod___Name__drop` but C emits `Name__drop`).
+                        let suffix = format!("___{candidate}");
                         let is_non_destructor = self.gir.functions.iter().any(|f| {
-                            f.name == candidate && f.params.len() > 1
+                            (f.name == candidate || f.name.ends_with(&suffix)) && f.params.len() > 1
                         });
                         if is_non_destructor {
+                            self.module.drop_collision_types.insert(field_type_name.clone());
                             continue;
                         }
                         candidate
@@ -911,6 +918,7 @@ impl<'a> FuncLowering<'a> {
         module_structs: &'a [StructDef],
         module_globals: &'a [LirGlobal],
         overflow_wrap: bool,
+        drop_collision_types: &'a std::collections::HashSet<String>,
     ) -> Self {
         let params: Vec<LirType> = gir_func
             .params
@@ -960,6 +968,7 @@ impl<'a> FuncLowering<'a> {
             module_globals,
             pending_externs: Vec::new(),
             overflow_wrap,
+            drop_collision_types,
         }
     }
 
@@ -2063,14 +2072,55 @@ impl<'a> FuncLowering<'a> {
                     struct_id,
                     field: (field_offset + *field as usize) as u32,
                 });
-                let result = self.lir_func.next_value();
-                let field_ty = self.resolve_enum_field_type(gir_type_id, variant, *field);
-                self.lir_func.block_mut(bb).insts.push(Inst::Load {
-                    dst: result,
-                    ptr: fptr,
-                    ty: field_ty,
-                });
-                self.store_to_local(*dst, result, bb);
+                // If destination is Ptr(T), return field address as pointer reference.
+                // This happens when the scrutinee is a borrowed enum (Ptr param).
+                let dst_gir_type = self.gir_func.locals[dst.0 as usize].type_id;
+                if matches!(self.gir_types.get(dst_gir_type), Some(GirType::Ptr(_))) {
+                    self.store_to_local(*dst, fptr, bb);
+                } else {
+                    let result = self.lir_func.next_value();
+                    let field_ty = self.resolve_enum_field_type(gir_type_id, variant, *field);
+                    let field_ty_clone = field_ty.clone();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: result,
+                        ptr: fptr,
+                        ty: field_ty,
+                    });
+                    self.store_to_local(*dst, result, bb);
+
+                    // GorgetString field → StringView destination: zero cap for view semantics.
+                    let is_str_dst = matches!(self.gir_types.get(dst_gir_type), Some(GirType::Named(n)) if n == "GorgetStringView");
+                    let is_gs_field = matches!(field_ty_clone, LirType::Struct(sid) if {
+                        self.module_structs.get(sid.0 as usize)
+                            .map_or(false, |s| s.name == "GorgetString")
+                    });
+                    if is_str_dst && is_gs_field {
+                        let dst_slot = self.local_to_slot[dst.0 as usize];
+                        let dst_addr = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                            dst: dst_addr, slot: dst_slot,
+                        });
+                        let offset = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                            dst: offset, ty: LirType::I64, value: 16,
+                        });
+                        let cap_ptr = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
+                            dst: cap_ptr, base: dst_addr, index: offset, elem_size: 1,
+                        });
+                        let zero = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                            dst: zero, ty: LirType::I32, value: 0,
+                        });
+                        let sixteen = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+                            dst: sixteen, ty: LirType::I64, value: 16,
+                        });
+                        self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+                            ptr: cap_ptr, byte: zero, size: sixteen,
+                        });
+                    }
+                }
             }
 
             Instruction::TupleInit { dst, elements } => {
@@ -3510,7 +3560,17 @@ impl<'a> FuncLowering<'a> {
                         let drop_fn = match &field_drop {
                             DropStrategy::Trivial(fn_name) | DropStrategy::Custom(fn_name) => Some(fn_name.clone()),
                             DropStrategy::Recursive => {
-                                field_type_name.as_ref().map(|n| format!("{n}__drop"))
+                                if let Some(ref ftn) = field_type_name {
+                                    // Check for naming collision (detected during
+                                    // populate_recursive_drop_structs).
+                                    if self.drop_collision_types.contains(ftn.as_str()) {
+                                        None // Will be handled by inline sub-field drops below
+                                    } else {
+                                        Some(format!("{ftn}__drop"))
+                                    }
+                                } else {
+                                    None
+                                }
                             }
                             DropStrategy::None => None,
                         };
@@ -3531,6 +3591,56 @@ impl<'a> FuncLowering<'a> {
                                     dst: None, name: drop_fn_name, args: vec![field_ptr],
                                     original_name: None,
                                 });
+                            }
+                        } else if matches!(&field_drop, DropStrategy::Recursive) {
+                            // Naming collision: inline the sub-struct's field drops
+                            // instead of calling {Name}__drop.
+                            if let Some(ref ftn) = field_type_name {
+                                if let Some(sub_def) = self.gir_types.get_type_def(ftn) {
+                                    if let crate::ir::types::TypeDefKind::Struct(ref sub_sdef) = sub_def.kind {
+                                        let sub_struct_id = self.struct_reg.lookup(ftn).unwrap_or(StructId(0));
+                                        let field_ptr = self.lir_func.next_value();
+                                        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                            dst: field_ptr,
+                                            base: base_addr,
+                                            struct_id,
+                                            field: field_idx as u32,
+                                        });
+                                        for (sub_idx, sub_field) in sub_sdef.fields.iter().enumerate() {
+                                            let sub_type_name = match self.gir_types.get(sub_field.type_id) {
+                                                Some(GirType::Named(n)) => Some(n.clone()),
+                                                _ => None,
+                                            };
+                                            let sub_drop = sub_type_name.as_ref().map(|n| {
+                                                self.infer_drop_strategy(n)
+                                            }).unwrap_or(DropStrategy::None);
+                                            let sub_drop_fn = match &sub_drop {
+                                                DropStrategy::Trivial(fn_name) | DropStrategy::Custom(fn_name) => Some(fn_name.clone()),
+                                                DropStrategy::Recursive => sub_type_name.as_ref().map(|n| format!("{n}__drop")),
+                                                DropStrategy::None => None,
+                                            };
+                                            if let Some(sub_fn) = sub_drop_fn {
+                                                let sub_ptr = self.lir_func.next_value();
+                                                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                                    dst: sub_ptr,
+                                                    base: field_ptr,
+                                                    struct_id: sub_struct_id,
+                                                    field: sub_idx as u32,
+                                                });
+                                                if let Some(&fid) = self.func_index.get(sub_fn.as_str()) {
+                                                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                                                        dst: None, func: fid, args: vec![sub_ptr],
+                                                    });
+                                                } else {
+                                                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                                        dst: None, name: sub_fn, args: vec![sub_ptr],
+                                                        original_name: None,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

@@ -328,26 +328,6 @@ impl TypeRegistry {
         false
     }
 
-    /// Drop check for anonymous call result temps.
-    /// Includes Trivial/Custom drop and collection types.
-    /// Excludes Recursive — pattern match extraction from borrowed (Ptr) enums
-    /// creates owned copies of variant payloads. With Recursive drop, these
-    /// copies are freed at scope exit, corrupting the borrowed source data.
-    /// Fix: enum pattern extraction from Ptr should produce Ptr payloads.
-    pub fn needs_drop_for_temp(&self, type_id: TypeId) -> bool {
-        if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
-        if let Some(GirType::Named(name)) = self.get(type_id) {
-            if self.is_collection_type_name(name) {
-                return true;
-            }
-            if let Some(type_def) = self.get_type_def(name) {
-                return matches!(type_def.metadata.drop_strategy,
-                    DropStrategy::Trivial(_) | DropStrategy::Custom(_));
-            }
-        }
-        false
-    }
-
     /// Check if a type name is a collection type (Vector, Dict, Set, etc.).
     /// Name-based check used by `needs_drop()` to avoid TypeDef registration.
     pub fn is_collection_type_name(&self, name: &str) -> bool {
