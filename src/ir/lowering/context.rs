@@ -295,33 +295,101 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    /// Process deferred builtin type registrations: populate fn_sigs and runtime_callees
-    /// from the BuiltinTypeProtocol declarations collected during type registration.
+    /// Populate fn_sigs and runtime_callees from the BuiltinTypeProtocol declarations.
+    ///
+    /// Scans ALL registered named types and matches them against the protocol table.
+    /// For each match, instantiates method signatures with the type's concrete type args
+    /// and inserts them into fn_sigs and runtime_callees.
     ///
     /// Called once during module setup, after all types have been registered.
     pub fn register_builtin_method_sigs(&mut self) {
-        use crate::ir::lowering::builtins::LookupCtx;
+        use crate::ir::lowering::builtins::{self, LookupCtx, BuiltinTypeArgs};
+        use crate::ir::types::GirType;
 
-        let deferred = std::mem::take(&mut self.type_mapper.deferred_builtins);
-        for entry in &deferred {
-            let ctx = LookupCtx {
+        // Helper: resolve a C type name fragment to a TypeId.
+        // Handles both primitives (int64_t, bool, double) and named types (GorgetStringView, Point).
+        let resolve_type_name = |name: &str, mapper: &super::types::TypeMapper| -> TypeId {
+            match name {
+                "bool" => BOOL_TYPE,
+                "double" | "float64_t" => F64_TYPE,
+                "float" => crate::ir::types::F32_TYPE,
+                "int64_t" | "int" => I64_TYPE,
+                "int32_t" => crate::ir::types::I32_TYPE,
+                "int16_t" => crate::ir::types::I16_TYPE,
+                "int8_t" => crate::ir::types::I8_TYPE,
+                "uint64_t" => crate::ir::types::U64_TYPE,
+                "uint32_t" => crate::ir::types::U32_TYPE,
+                "uint16_t" => crate::ir::types::U16_TYPE,
+                "uint8_t" => crate::ir::types::U8_TYPE,
+                "void" => UNIT_TYPE,
+                "GorgetStringView" | "Str" => mapper.string_view_type,
+                "GorgetString" => mapper.owned_string_type,
+                other => mapper.lookup_named(other).unwrap_or(I64_TYPE),
+            }
+        };
+
+        // Collect (mangled_name, type_id, protocol) for all builtin types.
+        // We collect first to avoid borrow conflicts on self.
+        let mut entries: Vec<(String, TypeId, &'static builtins::BuiltinTypeProtocol)> = Vec::new();
+        for (mangled_name, &type_id) in &self.type_mapper.named_types {
+            if let Some(protocol) = builtins::protocol_for_mangled_name(mangled_name) {
+                entries.push((mangled_name.clone(), type_id, protocol));
+            }
+        }
+
+        for (mangled_name, type_id, protocol) in &entries {
+            // Extract type args from the mangled name.
+            // Convention: Vector__int64_t → elem = resolve("int64_t")
+            //             Dict__int64_t__Str → key = resolve("int64_t"), val = resolve("Str")
+            let suffix = mangled_name.strip_prefix(protocol.base_name)
+                .and_then(|s| s.strip_prefix("__"))
+                .unwrap_or("");
+
+            let (elem, key, val) = if protocol.type_arity == 2 {
+                // Two type args: K__V — split at first __ separator
+                if let Some(pos) = suffix.find("__") {
+                    let key_name = &suffix[..pos];
+                    let val_name = &suffix[pos + 2..];
+                    let key = resolve_type_name(key_name, &self.type_mapper);
+                    let val = resolve_type_name(val_name, &self.type_mapper);
+                    (key, key, val)
+                } else {
+                    (I64_TYPE, I64_TYPE, I64_TYPE)
+                }
+            } else if !suffix.is_empty() {
+                // Single type arg: T
+                let elem = resolve_type_name(suffix, &self.type_mapper);
+                (elem, elem, elem)
+            } else {
+                (I64_TYPE, I64_TYPE, I64_TYPE)
+            };
+
+            let type_args = BuiltinTypeArgs {
+                elem,
+                key,
+                val,
+                self_type: *type_id,
+                self_name: mangled_name.clone(),
+            };
+
+            let lookup_ctx = LookupCtx {
                 lookup_type_by_name: &|name: &str| self.type_mapper.lookup_named(name),
                 string_view_type: self.type_mapper.string_view_type,
                 owned_string_type: self.type_mapper.owned_string_type,
             };
 
-            for method in entry.protocol.methods {
-                let fn_key = format!("{}__{}", entry.mangled_name, method.name);
+            for method in protocol.methods {
+                let fn_key = format!("{mangled_name}__{}", method.name);
 
                 // Build parameter types: self pointer + method params
-                let method_params = (method.params)(&entry.type_args);
+                let method_params = (method.params)(&type_args);
                 let self_ptr_type = self.type_registry.insert(
-                    crate::ir::types::GirType::MutPtr(entry.type_args.self_type)
+                    GirType::MutPtr(*type_id)
                 );
                 let mut params = vec![self_ptr_type];
                 params.extend(method_params);
 
-                let ret = (method.return_type)(&entry.type_args, &ctx);
+                let ret = (method.return_type)(&type_args, &lookup_ctx);
 
                 // Only insert if not already present (equip-defined methods take precedence)
                 if !self.fn_sigs.contains_key(&fn_key) {
@@ -334,8 +402,108 @@ impl<'a> LoweringContext<'a> {
                 }
             }
         }
-        // Put the deferred list back (may be useful for validation)
-        self.type_mapper.deferred_builtins = deferred;
+    }
+
+    /// Populate only the runtime_callees table from the protocol (not fn_sigs).
+    /// Called at startup; fn_sigs is populated on-the-fly by resolve_builtin_method_return_type.
+    pub fn register_builtin_runtime_callees(&mut self) {
+        use crate::ir::lowering::builtins;
+
+        for (mangled_name, &_type_id) in &self.type_mapper.named_types.clone() {
+            if let Some(protocol) = builtins::protocol_for_mangled_name(mangled_name) {
+                for method in protocol.methods {
+                    if let Some(callee) = method.runtime_callee {
+                        let fn_key = format!("{mangled_name}__{}", method.name);
+                        self.runtime_callees.entry(fn_key).or_insert_with(|| callee.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Resolve a builtin method's return type on-the-fly from the protocol table.
+    /// Used as a fallback when fn_sigs doesn't have an entry (late-registered types).
+    /// Also populates fn_sigs and runtime_callees for future lookups.
+    pub fn resolve_builtin_method_return_type(&mut self, type_name: &str, method_name: &str) -> Option<TypeId> {
+        use crate::ir::lowering::builtins::{self, LookupCtx, BuiltinTypeArgs};
+
+        let protocol = builtins::protocol_for_mangled_name(type_name)?;
+
+        // Find the method in the protocol
+        let method = protocol.methods.iter().find(|m| m.name == method_name)?;
+
+        // Extract type args
+        let suffix = type_name.strip_prefix(protocol.base_name)
+            .and_then(|s| s.strip_prefix("__"))
+            .unwrap_or("");
+
+        let resolve = |name: &str| -> TypeId {
+            match name {
+                "bool" => BOOL_TYPE,
+                "double" | "float64_t" => crate::ir::types::F64_TYPE,
+                "int64_t" | "int" => I64_TYPE,
+                "int32_t" => crate::ir::types::I32_TYPE,
+                "int8_t" => crate::ir::types::I8_TYPE,
+                "uint8_t" => crate::ir::types::U8_TYPE,
+                "uint16_t" => crate::ir::types::U16_TYPE,
+                "uint32_t" => crate::ir::types::U32_TYPE,
+                "uint64_t" => crate::ir::types::U64_TYPE,
+                "void" => UNIT_TYPE,
+                "GorgetStringView" | "Str" => self.type_mapper.string_view_type,
+                "GorgetString" => self.type_mapper.owned_string_type,
+                other => self.type_mapper.lookup_named(other).unwrap_or(I64_TYPE),
+            }
+        };
+
+        let self_type = self.type_mapper.lookup_named(type_name).unwrap_or(I64_TYPE);
+
+        let (elem, key, val) = if protocol.type_arity == 2 {
+            if let Some(pos) = suffix.find("__") {
+                let k = resolve(&suffix[..pos]);
+                let v = resolve(&suffix[pos + 2..]);
+                (k, k, v)
+            } else {
+                (I64_TYPE, I64_TYPE, I64_TYPE)
+            }
+        } else if !suffix.is_empty() {
+            let e = resolve(suffix);
+            (e, e, e)
+        } else {
+            (I64_TYPE, I64_TYPE, I64_TYPE)
+        };
+
+        let type_args = BuiltinTypeArgs {
+            elem, key, val,
+            self_type,
+            self_name: type_name.to_string(),
+        };
+
+        let lookup_ctx = LookupCtx {
+            lookup_type_by_name: &|name: &str| self.type_mapper.lookup_named(name),
+            string_view_type: self.type_mapper.string_view_type,
+            owned_string_type: self.type_mapper.owned_string_type,
+        };
+
+        let ret = (method.return_type)(&type_args, &lookup_ctx);
+
+        // Populate fn_sigs for future lookups
+        let fn_key = format!("{type_name}__{method_name}");
+        if !self.fn_sigs.contains_key(&fn_key) {
+            let method_params = (method.params)(&type_args);
+            let self_ptr_type = self.type_registry.insert(
+                crate::ir::types::GirType::MutPtr(self_type)
+            );
+            let mut params = vec![self_ptr_type];
+            params.extend(method_params);
+            self.fn_sigs.insert(fn_key.clone(), (params, ret));
+        }
+
+        // Populate runtime_callees
+        if let Some(callee) = method.runtime_callee {
+            self.runtime_callees.entry(fn_key).or_insert_with(|| callee.to_string());
+        }
+
+        Some(ret)
     }
 
     /// Emit an implicit clone warning for a resource type being auto-cloned.

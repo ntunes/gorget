@@ -782,10 +782,12 @@ pub fn lower_module(
     // Register built-in collection method signatures (Vector, Dict, HashMap, etc.)
     register_collection_method_sigs(&mut ctx, &generic_collector);
 
-    // Register builtin method signatures from the declarative protocol table.
-    // This populates fn_sigs and runtime_callees for all builtin types
-    // (Vector, Dict, Channel, etc.) registered during type creation.
-    ctx.register_builtin_method_sigs();
+    // Builtin method signatures are resolved on-the-fly from the BuiltinTypeProtocol
+    // table in builtins.rs via ctx.resolve_builtin_method_return_type() when fn_sigs
+    // doesn't have an entry. Pre-populating fn_sigs at startup is deferred until the
+    // protocol return types are fully verified (Phase 3b). Runtime callees are populated
+    // here for the LIR backend.
+    ctx.register_builtin_runtime_callees();
 
     // P2.5: Register trait equip method signatures
     traits::register_trait_equip_sigs(&mut ctx, &trait_info, ast_module);
