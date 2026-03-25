@@ -2,9 +2,9 @@
 
 ## High
 
-- **Explicit clone roadmap (Phase 2 remaining)**: **Phase 1 DONE.** **Phase 2 partial:** `.clone()` method works on all types. `directive explicit-clone` promotes warnings to errors. **Remaining:** Fix fixture/library implicit clone warnings with explicit `.clone()` or `!`. Add `Cloneable` trait to formal type system (currently `.clone()` works by name convention, not trait dispatch). [added: 2026-03-24, updated: 2026-03-25]
+- **Explicit clone roadmap (Phase 2 remaining)**: **Phase 1 DONE.** **Phase 2 partial:** `.clone()` method works on all types. `directive explicit-clone` promotes warnings to errors. `xtd/p2p.gg` reduced from 35 to 5 implicit clone warnings. **Remaining 5 p2p.gg warnings** appear to be compiler-level false positives — spans point to comments, struct definitions, or code already using explicit `.clone()`/`!` moves. Root cause: GIR lowering emits warnings for internal Ptr(T)→T conversions that don't correspond to user-visible clones. Needs compiler-side investigation. **Also remaining:** Fix remaining fixture/library implicit clone warnings. Add `Cloneable` trait to formal type system (currently `.clone()` works by name convention, not trait dispatch). [added: 2026-03-24, updated: 2026-03-25]
 
-- **`should_unregister_string_args` leak**: Less impactful after struct field ownership fix. Standalone string temps from concat/format passed to non-void functions still leak. [updated: 2026-03-24]
+- **String temp leaks (reduced 77%)**: `should_unregister_string_args` now only leaks for struct/enum-returning functions (primitives, strings, collections safe). `char_at` return type fixed to GorgetString. StringView→GorgetString upgrade in VarDecl when RHS is owned. Remaining leaks: `char_at`/string-method temps used inline (not assigned to named variables) — needs method call result temp tracking independent of VarDecl. [updated: 2026-03-25]
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
