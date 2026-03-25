@@ -232,6 +232,8 @@ pub struct LoweringContext<'a> {
     /// Maps temp locals from field_load → (source_field_place, field_type).
     /// Used by VarDecl/Assign to emit MoveZero after extracting resource-type fields.
     pub field_load_origins: FxHashMap<LocalId, (crate::ir::instructions::Place, TypeId)>,
+    /// Accumulated implicit clone warnings during lowering.
+    pub implicit_clone_warnings: Vec<crate::ir::ImplicitCloneWarning>,
 }
 
 
@@ -277,9 +279,82 @@ impl<'a> LoweringContext<'a> {
             move_override_params: std::collections::HashSet::new(),
             sentinel_to_option_methods: rustc_hash::FxHashSet::default(),
             field_load_origins: FxHashMap::default(),
+            implicit_clone_warnings: Vec::new(),
         }
     }
 
+    /// Emit an implicit clone warning for a resource type being auto-cloned.
+    pub fn warn_implicit_clone(
+        &mut self,
+        span: crate::span::Span,
+        type_id: TypeId,
+        reason: crate::ir::ImplicitCloneReason,
+    ) {
+        let type_name = self.type_registry.type_name(type_id)
+            .map(|n| demangle_type_name(&n))
+            .unwrap_or_else(|| "unknown".to_string());
+        self.implicit_clone_warnings.push(crate::ir::ImplicitCloneWarning {
+            span,
+            type_name,
+            reason,
+        });
+    }
+
+}
+
+/// Convert an internal mangled type name to user-friendly Gorget syntax.
+/// e.g., `Vector__int64_t` → `Vector[int]`, `Dict__GorgetString__int64_t` → `Dict[String, int]`
+fn demangle_type_name(name: &str) -> String {
+    // Map C type names back to Gorget names
+    fn c_to_gorget(s: &str) -> &str {
+        match s {
+            "int64_t" => "int",
+            "double" => "float",
+            "bool" => "bool",
+            "int32_t" => "int32",
+            "int16_t" => "int16",
+            "int8_t" => "int8",
+            "uint64_t" => "uint",
+            "uint32_t" => "uint32",
+            "uint16_t" => "uint16",
+            "uint8_t" => "uint8",
+            "float" => "float32",
+            "GorgetString" => "String",
+            "GorgetStringView" => "String",
+            _ => s,
+        }
+    }
+
+    // Vector__int64_t → Vector[int]
+    if let Some(elem) = name.strip_prefix("Vector__") {
+        return format!("Vector[{}]", c_to_gorget(elem));
+    }
+    // Dict__K__V → Dict[K, V]
+    if let Some(rest) = name.strip_prefix("Dict__") {
+        if let Some(sep) = rest.find("__") {
+            let key = &rest[..sep];
+            let val = &rest[sep + 2..];
+            return format!("Dict[{}, {}]", c_to_gorget(key), c_to_gorget(val));
+        }
+    }
+    // Set__T → Set[T]
+    if let Some(elem) = name.strip_prefix("Set__") {
+        return format!("Set[{}]", c_to_gorget(elem));
+    }
+    // GorgetString → String
+    if name == "GorgetString" { return "String".to_string(); }
+
+    // Fallback: replace __ with generic brackets for other types
+    if let Some(sep) = name.find("__") {
+        let base = &name[..sep];
+        let arg = &name[sep + 2..];
+        return format!("{}[{}]", base, c_to_gorget(arg));
+    }
+
+    name.to_string()
+}
+
+impl<'a> LoweringContext<'a> {
     /// Resolve a type name, applying any active substitutions.
     pub fn resolve_type_name(&self, name: &str) -> String {
         if let Some(resolved) = self.generics.type_name_subs.get(name) {

@@ -416,6 +416,14 @@ fn try_build_ir(
     // Lower AST to GIR
     let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
 
+    // Display implicit clone warnings (non-fatal)
+    if !gir_module.implicit_clone_warnings.is_empty() {
+        let reporter = ErrorReporter::new_multi(file_infos.clone());
+        for warn in &gir_module.implicit_clone_warnings {
+            reporter.report_implicit_clone_warning(warn);
+        }
+    }
+
     // Run GIR optimization passes
     let opt_stats = gorget::ir::transforms::optimize::optimize_module(&mut gir_module);
     let _ = opt_stats; // available for --emit-gir stats or future --verbose

@@ -128,6 +128,45 @@ pub struct RuntimeFeatures {
     pub hot_reload_has_reload_fn: bool,
 }
 
+/// Warning emitted when the compiler auto-clones a resource type.
+/// Phase 1 of the explicit-clone roadmap: make hidden allocations visible.
+#[derive(Debug, Clone)]
+pub struct ImplicitCloneWarning {
+    /// Source span of the expression that triggers the clone.
+    pub span: crate::span::Span,
+    /// Human-readable type name being cloned.
+    pub type_name: String,
+    /// What triggered the clone.
+    pub reason: ImplicitCloneReason,
+}
+
+/// Why the compiler inserted an implicit clone.
+#[derive(Debug, Clone)]
+pub enum ImplicitCloneReason {
+    /// `Type x = borrowed_ref` — explicit type receives a borrow
+    VarDeclFromBorrow,
+    /// `x = named_var` — named variable assigned to another named variable
+    NamedToNamed,
+    /// `return borrowed_ref` — return type mismatch (Ptr → owned)
+    ReturnFromBorrow,
+    /// `f(!borrowed_ref)` — move parameter receives a borrow
+    MoveParamFromBorrow,
+    /// `MyStruct{field: borrowed_ref}` — struct field receives a borrow
+    StructFieldFromBorrow,
+}
+
+impl std::fmt::Display for ImplicitCloneReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::VarDeclFromBorrow => write!(f, "use `auto` for zero-cost borrow, or `.clone()` for explicit copy"),
+            Self::NamedToNamed => write!(f, "use `!x` for move, or `.clone()` for explicit copy"),
+            Self::ReturnFromBorrow => write!(f, "use `.clone()` for explicit copy"),
+            Self::MoveParamFromBorrow => write!(f, "use `.clone()` for explicit copy"),
+            Self::StructFieldFromBorrow => write!(f, "use `.clone()` for explicit copy"),
+        }
+    }
+}
+
 /// A complete GIR module.
 #[derive(Debug, Clone)]
 pub struct Module {
@@ -145,6 +184,8 @@ pub struct Module {
     pub fn_param_abis: rustc_hash::FxHashMap<String, Vec<crate::ir::lowering::context::ParamABI>>,
     /// Inferred function purity: name → Purity level.
     pub fn_purity: crate::semantic::purity::PurityByName,
+    /// Implicit clone warnings emitted during lowering.
+    pub implicit_clone_warnings: Vec<ImplicitCloneWarning>,
 }
 
 impl Module {
@@ -160,6 +201,7 @@ impl Module {
             runtime: RuntimeFeatures::default(),
             fn_param_abis: rustc_hash::FxHashMap::default(),
             fn_purity: rustc_hash::FxHashMap::default(),
+            implicit_clone_warnings: Vec::new(),
         }
     }
 

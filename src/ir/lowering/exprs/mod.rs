@@ -1321,7 +1321,7 @@ fn lower_struct_literal(
     // Auto-clone Ptr(collection) operands used as struct fields.
     // Field loads return Ptr(T) for collection fields. When passed to StructInit,
     // the struct needs an owned copy (T), not a pointer. Clone via runtime function.
-    for op in &mut field_operands {
+    for (i, op) in field_operands.iter_mut().enumerate() {
         if let Operand::Copy(place) | Operand::Move(place) = op {
             if place.projections.is_empty() {
                 let idx = place.local.0 as usize;
@@ -1329,6 +1329,9 @@ fn lower_struct_literal(
                     let local_type = builder.locals[idx].type_id;
                     if let Some(inner) = ctx.pointee_type(local_type) {
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                            if let Some(arg_span) = args.get(i).map(|a| a.span) {
+                                ctx.warn_implicit_clone(arg_span, inner, crate::ir::ImplicitCloneReason::StructFieldFromBorrow);
+                            }
                             let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(place.local)], inner);
                             *op = FunctionBuilder::copy(cloned);
                         }

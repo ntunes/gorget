@@ -285,6 +285,7 @@ fn lower_var_decl(
                     if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
                         // Explicit T declaration, operand is Ptr(T) → auto-clone
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                            ctx.warn_implicit_clone(value.span, inner, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
                             let cloned = builder.call(&clone_fn, vec![operand.clone()], inner);
                             operand = FunctionBuilder::copy(cloned);
                         } else {
@@ -325,6 +326,7 @@ fn lower_var_decl(
                     // Named resource variable → deep clone (independent copy)
                     else if ctx.is_named_local(place.local) {
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
+                            ctx.warn_implicit_clone(value.span, rhs_type, crate::ir::ImplicitCloneReason::NamedToNamed);
                             let ptr_type = ctx.register_ptr_type(rhs_type);
                             let ptr_local = builder.add_local(ptr_type, None);
                             builder.emit_borrow(ptr_local, place.clone());
@@ -716,6 +718,7 @@ fn lower_return(
                             if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
                                 if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
                                     if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                                        ctx.warn_implicit_clone(expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                                         let cloned = builder.call(&clone_fn, vec![operand.clone()], inner);
                                         operand = FunctionBuilder::copy(cloned);
                                     } else {

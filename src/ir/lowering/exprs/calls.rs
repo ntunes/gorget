@@ -154,6 +154,7 @@ pub(super) fn lower_call_arg(
                     let local_type = builder.locals[place.local.0 as usize].type_id;
                     if let Some(inner) = ctx.pointee_type(local_type) {
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                            ctx.warn_implicit_clone(arg.span, inner, crate::ir::ImplicitCloneReason::MoveParamFromBorrow);
                             let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(place.local)], inner);
                             let ptr_type = ctx.register_mut_ptr_type(inner);
                             let dst = builder.add_local(ptr_type, None);

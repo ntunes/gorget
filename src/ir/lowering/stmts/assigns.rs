@@ -106,6 +106,7 @@ pub(super) fn lower_assign(
                                 assign_mode = AssignMode::Borrow;
                             } else if ctx.is_named_local(place.local) {
                                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
+                                    ctx.warn_implicit_clone(value.span, rhs_type, crate::ir::ImplicitCloneReason::NamedToNamed);
                                     let ptr_type = ctx.register_ptr_type(rhs_type);
                                     let ptr_local = builder.add_local(ptr_type, None);
                                     builder.emit_borrow(ptr_local, place.clone());

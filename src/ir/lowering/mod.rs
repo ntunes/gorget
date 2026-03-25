@@ -1111,6 +1111,9 @@ pub fn lower_module(
     // Thread purity data to the module
     module.fn_purity = ctx.analysis.fn_purity.clone();
 
+    // Transfer implicit clone warnings
+    module.implicit_clone_warnings = ctx.implicit_clone_warnings;
+
     module
 }
 
