@@ -580,7 +580,6 @@ private bool obj_put(Json &node, String key, Json value):
     match node:
         case Obj(d):
             d.put(key, value)
-            node = Obj(d)
             return true
         else:
             Dict[String, Json] new_d = Dict[String, Json]()

@@ -56,8 +56,22 @@ pub(super) fn lower_method_call(
         if ctx.lookup_local(name).is_none() && !ctx.module_constants.contains_key(name) {
             // Box.new(value) → heap allocation
             if name == "Box" && method_name == "new" && !args.is_empty() {
-                let val = lower_expr(ctx, builder, &args[0].node.value);
-                let inner_type = infer_operand_type_full(ctx, &val, builder);
+                let mut val = lower_expr(ctx, builder, &args[0].node.value);
+                let raw_type = infer_operand_type_full(ctx, &val, builder);
+                // Unwrap Ptr(T) → T: when the argument is a bare-borrowed resource
+                // type (passed by pointer), Box should box the value, not the pointer.
+                // Emit a LoadRef to dereference the pointer and get the value.
+                let inner_type = match ctx.type_registry.get(raw_type) {
+                    Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => {
+                        let pointee = *inner;
+                        if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
+                            let derefed = builder.load_ref(place.clone(), pointee);
+                            val = FunctionBuilder::copy(derefed);
+                        }
+                        pointee
+                    }
+                    _ => raw_type,
+                };
                 let inner_c = ctx.c_type_name_for_id(inner_type);
 
                 // For Box.new(closure): return the closure struct directly in the GIR path.
