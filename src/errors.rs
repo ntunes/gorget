@@ -355,7 +355,11 @@ impl ErrorReporter {
     pub fn report_implicit_clone_warning(&self, warn: &crate::ir::ImplicitCloneWarning) {
         let label = self.primary_label(warn.span)
             .with_message(format!("implicit clone of `{}`", warn.type_name));
-        let diag = diagnostic::Diagnostic::warning()
+        let diag = if warn.is_error {
+            diagnostic::Diagnostic::error()
+        } else {
+            diagnostic::Diagnostic::warning()
+        }
             .with_message(format!("implicit clone of `{}`", warn.type_name))
             .with_labels(vec![label])
             .with_notes(vec![warn.reason.to_string()]);

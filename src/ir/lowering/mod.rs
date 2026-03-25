@@ -469,6 +469,7 @@ pub fn lower_module(
         if let Item::Directive(d) = &item.node {
             match d.name.as_str() {
                 "strip-asserts" => ctx.strip_asserts = true,
+                "explicit-clone" => ctx.explicit_clone = true,
                 "overflow" if d.value.as_deref() == Some("wrap") => ctx.overflow_wrap = true,
                 "scheduler" => match d.value.as_deref() {
                     Some("pool") => ctx.spawn.scheduler_mode = crate::ir::SchedulerMode::Pool,

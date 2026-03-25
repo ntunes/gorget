@@ -416,11 +416,16 @@ fn try_build_ir(
     // Lower AST to GIR
     let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
 
-    // Display implicit clone warnings (non-fatal)
+    // Display implicit clone warnings/errors
     if !gir_module.implicit_clone_warnings.is_empty() {
         let reporter = ErrorReporter::new_multi(file_infos.clone());
+        let mut clone_errors = 0;
         for warn in &gir_module.implicit_clone_warnings {
             reporter.report_implicit_clone_warning(warn);
+            if warn.is_error { clone_errors += 1; }
+        }
+        if clone_errors > 0 {
+            return Err(format!("{clone_errors} implicit clone error(s) — use .clone() for explicit copy or ! for move"));
         }
     }
 
