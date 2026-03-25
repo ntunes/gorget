@@ -60,6 +60,8 @@ struct FuncLowering<'a> {
     overflow_wrap: bool,
     /// Types whose `{Name}__drop` collides with a user method (e.g., DataFrame.drop()).
     drop_collision_types: &'a std::collections::HashSet<String>,
+    /// Monomorphized method name → C runtime callee (from BuiltinTypeProtocol).
+    runtime_callees: &'a rustc_hash::FxHashMap<String, String>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -107,7 +109,7 @@ impl<'a> LoweringContext<'a> {
         // Skip externs whose names map to runtime functions (e.g., Vector__int64_t__new
         // maps to gorget_array_new which is already in the C runtime).
         for ext in &self.gir.externs {
-            if map_monomorphized_to_runtime(&ext.name).is_some() {
+            if map_monomorphized_to_runtime_with_table(&ext.name, &self.gir.runtime_callees).is_some() {
                 continue;
             }
             self.module.add_extern(LirExtern {
@@ -151,6 +153,7 @@ impl<'a> LoweringContext<'a> {
                     &self.module.globals,
                     self.gir.runtime.overflow_wrap,
                     &self.module.drop_collision_types,
+                    &self.gir.runtime_callees,
                 );
                 fl.lower();
                 all_pending_externs.extend(fl.pending_externs.drain(..));
@@ -919,6 +922,7 @@ impl<'a> FuncLowering<'a> {
         module_globals: &'a [LirGlobal],
         overflow_wrap: bool,
         drop_collision_types: &'a std::collections::HashSet<String>,
+        runtime_callees: &'a rustc_hash::FxHashMap<String, String>,
     ) -> Self {
         let params: Vec<LirType> = gir_func
             .params
@@ -969,6 +973,7 @@ impl<'a> FuncLowering<'a> {
             pending_externs: Vec::new(),
             overflow_wrap,
             drop_collision_types,
+            runtime_callees,
         }
     }
 
@@ -1264,7 +1269,7 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     // Unknown function — treat as extern.
                     // Map monomorphized collection/method names to runtime function names.
-                    let emit_name = map_monomorphized_to_runtime(func)
+                    let emit_name = map_monomorphized_to_runtime_with_table(func, self.runtime_callees)
                         .unwrap_or_else(|| func.clone());
                     // For collection/concurrency methods that take self by pointer,
                     // if the first arg is a GlobalRef, emit GlobalAddr (pointer)
@@ -1381,7 +1386,7 @@ impl<'a> FuncLowering<'a> {
                 } else {
                 // Remap monomorphized names to runtime equivalents
                 // (e.g., Vector__int64_t__push → gorget_array_push).
-                let mut emit_name = map_monomorphized_to_runtime(func)
+                let mut emit_name = map_monomorphized_to_runtime_with_table(func, self.runtime_callees)
                     .unwrap_or_else(|| func.clone());
                 // Dispatch abs/min/max to float variants (fabs/fmin/fmax) when args are float.
                 if matches!(emit_name.as_str(), "gorget_abs" | "gorget_min" | "gorget_max") {
@@ -5108,6 +5113,18 @@ fn is_self_by_ptr_method(name: &str) -> bool {
         || name.starts_with("GorgetString__")
         || name.starts_with("GorgetStringView__")
         || name.starts_with("Deque__")
+}
+
+fn map_monomorphized_to_runtime_with_table(
+    name: &str,
+    table: &rustc_hash::FxHashMap<String, String>,
+) -> Option<String> {
+    // Check the protocol-populated table first (covers all builtins).
+    if let Some(callee) = table.get(name) {
+        return Some(callee.clone());
+    }
+    // Fall through to legacy name-based mapping for types not in the table.
+    map_monomorphized_to_runtime(name)
 }
 
 fn map_monomorphized_to_runtime(name: &str) -> Option<String> {

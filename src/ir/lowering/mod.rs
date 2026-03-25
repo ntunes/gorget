@@ -1131,6 +1131,9 @@ pub fn lower_module(
     // Transfer implicit clone warnings
     module.implicit_clone_warnings = ctx.implicit_clone_warnings;
 
+    // Transfer runtime callees table for LIR backend
+    module.runtime_callees = ctx.runtime_callees;
+
     module
 }
 

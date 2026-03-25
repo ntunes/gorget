@@ -188,6 +188,10 @@ pub struct Module {
     pub fn_purity: crate::semantic::purity::PurityByName,
     /// Implicit clone warnings emitted during lowering.
     pub implicit_clone_warnings: Vec<ImplicitCloneWarning>,
+    /// Maps monomorphized method name → C runtime function name.
+    /// Populated from BuiltinTypeProtocol declarations. Used by LIR backend
+    /// to replace `map_monomorphized_to_runtime()`.
+    pub runtime_callees: rustc_hash::FxHashMap<String, String>,
 }
 
 impl Module {
@@ -204,6 +208,7 @@ impl Module {
             fn_param_abis: rustc_hash::FxHashMap::default(),
             fn_purity: rustc_hash::FxHashMap::default(),
             implicit_clone_warnings: Vec::new(),
+            runtime_callees: rustc_hash::FxHashMap::default(),
         }
     }
 
