@@ -345,23 +345,23 @@ impl<'a> LoweringContext<'a> {
                 .and_then(|s| s.strip_prefix("__"))
                 .unwrap_or("");
 
-            let (elem, key, val) = if protocol.type_arity == 2 {
+            let (elem, key, val, elem_name_str, val_name_str) = if protocol.type_arity == 2 {
                 // Two type args: K__V — split at first __ separator
                 if let Some(pos) = suffix.find("__") {
                     let key_name = &suffix[..pos];
                     let val_name = &suffix[pos + 2..];
                     let key = resolve_type_name(key_name, &self.type_mapper);
                     let val = resolve_type_name(val_name, &self.type_mapper);
-                    (key, key, val)
+                    (key, key, val, key_name.to_string(), val_name.to_string())
                 } else {
-                    (I64_TYPE, I64_TYPE, I64_TYPE)
+                    (I64_TYPE, I64_TYPE, I64_TYPE, "int64_t".to_string(), "int64_t".to_string())
                 }
             } else if !suffix.is_empty() {
                 // Single type arg: T
                 let elem = resolve_type_name(suffix, &self.type_mapper);
-                (elem, elem, elem)
+                (elem, elem, elem, suffix.to_string(), suffix.to_string())
             } else {
-                (I64_TYPE, I64_TYPE, I64_TYPE)
+                (I64_TYPE, I64_TYPE, I64_TYPE, "int64_t".to_string(), "int64_t".to_string())
             };
 
             let type_args = BuiltinTypeArgs {
@@ -372,24 +372,35 @@ impl<'a> LoweringContext<'a> {
                 self_name: mangled_name.clone(),
             };
 
+            let type_registry = &self.type_registry;
             let lookup_ctx = LookupCtx {
                 lookup_type_by_name: &|name: &str| self.type_mapper.lookup_named(name),
                 string_view_type: self.type_mapper.string_view_type,
                 owned_string_type: self.type_mapper.owned_string_type,
+                is_resource: &|tid| type_registry.is_resource_type(tid),
+                ensure_option: &|name: &str, _inner: TypeId| {
+                    // At startup, Options should already be registered; just look up.
+                    self.type_mapper.lookup_named(name).unwrap_or(I64_TYPE)
+                },
+                elem_name: elem_name_str.clone(),
+                val_name: val_name_str.clone(),
             };
 
-            for method in protocol.methods {
+            // Collect method entries first (to avoid borrow conflicts with type_registry)
+            let method_entries: Vec<_> = protocol.methods.iter().map(|method| {
                 let fn_key = format!("{mangled_name}__{}", method.name);
-
-                // Build parameter types: self pointer + method params
                 let method_params = (method.params)(&type_args);
+                let ret = (method.return_type)(&type_args, &lookup_ctx);
+                (fn_key, method_params, ret, method.runtime_callee)
+            }).collect();
+
+            for (fn_key, method_params, ret, runtime_callee) in method_entries {
+                // Build full params: self pointer + method params
                 let self_ptr_type = self.type_registry.insert(
                     GirType::MutPtr(*type_id)
                 );
                 let mut params = vec![self_ptr_type];
                 params.extend(method_params);
-
-                let ret = (method.return_type)(&type_args, &lookup_ctx);
 
                 // Only insert if not already present (equip-defined methods take precedence)
                 if !self.fn_sigs.contains_key(&fn_key) {
@@ -397,7 +408,7 @@ impl<'a> LoweringContext<'a> {
                 }
 
                 // Runtime callee mapping (for LIR backend)
-                if let Some(callee) = method.runtime_callee {
+                if let Some(callee) = runtime_callee {
                     self.runtime_callees.insert(fn_key, callee.to_string());
                 }
             }
@@ -457,19 +468,21 @@ impl<'a> LoweringContext<'a> {
 
         let self_type = self.type_mapper.lookup_named(type_name).unwrap_or(I64_TYPE);
 
-        let (elem, key, val) = if protocol.type_arity == 2 {
+        let (elem, key, val, elem_name_str, val_name_str) = if protocol.type_arity == 2 {
             if let Some(pos) = suffix.find("__") {
-                let k = resolve(&suffix[..pos]);
-                let v = resolve(&suffix[pos + 2..]);
-                (k, k, v)
+                let key_name = &suffix[..pos];
+                let val_name = &suffix[pos + 2..];
+                let k = resolve(key_name);
+                let v = resolve(val_name);
+                (k, k, v, key_name.to_string(), val_name.to_string())
             } else {
-                (I64_TYPE, I64_TYPE, I64_TYPE)
+                (I64_TYPE, I64_TYPE, I64_TYPE, "int64_t".to_string(), "int64_t".to_string())
             }
         } else if !suffix.is_empty() {
             let e = resolve(suffix);
-            (e, e, e)
+            (e, e, e, suffix.to_string(), suffix.to_string())
         } else {
-            (I64_TYPE, I64_TYPE, I64_TYPE)
+            (I64_TYPE, I64_TYPE, I64_TYPE, "int64_t".to_string(), "int64_t".to_string())
         };
 
         let type_args = BuiltinTypeArgs {
@@ -478,10 +491,25 @@ impl<'a> LoweringContext<'a> {
             self_name: type_name.to_string(),
         };
 
+        let type_registry = &self.type_registry;
+        let type_mapper = &self.type_mapper;
         let lookup_ctx = LookupCtx {
             lookup_type_by_name: &|name: &str| self.type_mapper.lookup_named(name),
             string_view_type: self.type_mapper.string_view_type,
             owned_string_type: self.type_mapper.owned_string_type,
+            is_resource: &|tid| type_registry.is_resource_type(tid),
+            ensure_option: &|name: &str, inner: TypeId| {
+                // On-the-fly: look up or register the Option type
+                if let Some(tid) = type_mapper.lookup_named(name) {
+                    return tid;
+                }
+                // Option not registered yet — return I64_TYPE as fallback.
+                // The Option type will be registered by the override logic in
+                // lower_method_call if needed.
+                I64_TYPE
+            },
+            elem_name: elem_name_str.clone(),
+            val_name: val_name_str.clone(),
         };
 
         let ret = (method.return_type)(&type_args, &lookup_ctx);
