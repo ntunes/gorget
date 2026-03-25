@@ -5989,8 +5989,15 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         if let Some(drop_fn) = elem_drop_fn_for_c_type(elem_type) {
                             write!(out, " {dv}.elem_drop = (__gorget_drop_fn){drop_fn};").unwrap();
                         }
+                        if let Some(clone_fn) = elem_clone_fn_for_c_type(elem_type) {
+                            write!(out, " {dv}.elem_clone = (__gorget_drop_fn){clone_fn};").unwrap();
+                        } else if module.recursive_drop_structs.contains_key(elem_type)
+                            || module.recursive_drop_enums.contains_key(elem_type)
+                        {
+                            write!(out, " {dv}.elem_clone = (__gorget_drop_fn){elem_type}__clone_inplace;").unwrap();
+                        }
                     }
-                    // Dict/HashMap constructor: set val_drop
+                    // Dict/HashMap constructor: set val_drop + val_clone
                     if (name.starts_with("gorget_dict_new") || name.starts_with("gorget_map_new"))
                         && (orig.starts_with("Dict__") || orig.starts_with("HashMap__"))
                     {
@@ -6000,6 +6007,13 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 let val_type = &rest[pos + 2..];
                                 if let Some(drop_fn) = elem_drop_fn_for_c_type(val_type) {
                                     write!(out, " {dv}.val_drop = (__gorget_drop_fn){drop_fn};").unwrap();
+                                }
+                                if let Some(clone_fn) = elem_clone_fn_for_c_type(val_type) {
+                                    write!(out, " {dv}.val_clone = (__gorget_drop_fn){clone_fn};").unwrap();
+                                } else if module.recursive_drop_structs.contains_key(val_type)
+                                    || module.recursive_drop_enums.contains_key(val_type)
+                                {
+                                    write!(out, " {dv}.val_clone = (__gorget_drop_fn){val_type}__clone_inplace;").unwrap();
                                 }
                             }
                         }
@@ -6503,6 +6517,8 @@ fn emit_recursive_struct_clones(out: &mut String, module: &LirModule, sn: &HashM
         }
         writeln!(out, "    return dst;").unwrap();
         writeln!(out, "}}").unwrap();
+        // In-place wrapper for use as elem_clone/val_clone function pointer.
+        writeln!(out, "void {clone_fn_name}_inplace(void* __p) {{ *({c_name}*)__p = {clone_fn_name}(__p); }}").unwrap();
         writeln!(out).unwrap();
     }
 }
@@ -6583,6 +6599,7 @@ fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, sn: &HashMap
         writeln!(out, "    }}").unwrap();
         writeln!(out, "    return dst;").unwrap();
         writeln!(out, "}}").unwrap();
+        writeln!(out, "void {clone_fn_name}_inplace(void* __p) {{ *({c_name}*)__p = {clone_fn_name}(__p); }}").unwrap();
         writeln!(out).unwrap();
     }
 }
@@ -7633,6 +7650,23 @@ fn elem_drop_fn_for_c_type(c_type: &str) -> Option<&'static str> {
     } else if c_type == "GorgetString" {
         Some("gorget_string_free")
     } else {
+        None
+    }
+}
+
+fn elem_clone_fn_for_c_type(c_type: &str) -> Option<String> {
+    if c_type.starts_with("GorgetArray") || c_type.starts_with("Vector__") {
+        Some("gorget_array_clone_inplace".into())
+    } else if c_type.starts_with("GorgetMap") || c_type.starts_with("Dict__") || c_type.starts_with("HashMap__") {
+        Some("gorget_map_clone_inplace".into())
+    } else if c_type.starts_with("GorgetSet") || c_type.starts_with("Set__") || c_type.starts_with("HashSet__") {
+        Some("gorget_set_clone_inplace".into())
+    } else if c_type == "GorgetString" || c_type == "GorgetStringView" {
+        Some("gorget_string_clone_inplace".into())
+    } else {
+        // User struct/enum clone functions are set via dv.elem_clone = ...
+        // at the specific call sites where we know the type has a __clone function.
+        // Don't guess here — return None for unknown types.
         None
     }
 }

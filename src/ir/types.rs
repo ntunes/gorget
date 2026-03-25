@@ -330,10 +330,11 @@ impl TypeRegistry {
 
     /// Drop check for anonymous call result temps.
     /// Includes Trivial/Custom drop and collection types.
-    /// Excludes Recursive — gorget_map_clone/gorget_array_clone don't call
-    /// per-element clone functions. Dict[K, EnumType] values would be
-    /// shallow-copied during collection clone. Blocked on element-level
-    /// clone support in collection runtime functions.
+    /// Excludes Recursive — elem_clone/val_clone infrastructure exists on
+    /// GorgetArray/GorgetMap, but the constructor codegen doesn't yet set
+    /// val_clone for user enum element types (Dict[String, Column] in DataFrame).
+    /// The type name from the monomorphized Dict name needs to be mapped to
+    /// the recursive_drop_enums key to find the clone function.
     pub fn needs_drop_for_temp(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
         if let Some(GirType::Named(name)) = self.get(type_id) {

@@ -5293,15 +5293,14 @@ fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> usize {
         _ => {
             // Runtime collection structs: GorgetArray = {data, len, cap, elem_size, alloc} = 40 bytes
             if type_name.starts_with("Vector__") || type_name == "GorgetArray" {
-                return 48;
+                return 56; // {data, len, cap, elem_size, alloc, elem_drop, elem_clone}
             }
-            // GorgetMap = 13 fields × 8 = 104 bytes (keys, values, states, count, cap, key_size, val_size, alloc, order, order_len, tombstones, hash_fn, eq_fn)
             if type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") || type_name == "GorgetMap" {
-                return 112;
+                return 120; // 15 fields × 8 (added val_clone)
             }
             // GorgetSet aliases GorgetMap (same struct)
             if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") || type_name == "GorgetSet" {
-                return 112;
+                return 120;
             }
             // GorgetString = {data, len, cap, alloc} = 32 bytes
             if type_name == "GorgetString" || type_name == "String" {
@@ -5411,9 +5410,9 @@ fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
                 // authoritative hardcoded size rather than counting LIR fields.
                 let runtime_size = match sd.name.as_str() {
                     // GorgetArray: {data, len, cap, elem_size, alloc} = 5 × 8 = 40
-                    "GorgetArray" => Some(48usize),
+                    "GorgetArray" => Some(56usize),
                     // GorgetMap / GorgetSet: 13 fields × 8 = 104
-                    "GorgetMap" | "GorgetSet" => Some(112usize),
+                    "GorgetMap" | "GorgetSet" => Some(120usize),
                     // GorgetString: {data, len, cap, alloc} = 4 × 8 = 32
                     "GorgetString" => Some(32usize),
                     // GorgetStringView: {data, len, cap, alloc} = 4 × 8 = 32

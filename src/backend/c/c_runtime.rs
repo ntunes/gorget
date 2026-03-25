@@ -147,6 +147,7 @@ typedef struct {
     size_t elem_size;
     GorgetAllocator* alloc;
     __gorget_drop_fn elem_drop;  // drop function for resource-type elements (NULL if trivial)
+    __gorget_drop_fn elem_clone; // clone function for resource-type elements (NULL if trivial)
 } GorgetArray;
 
 typedef uint64_t (*__gorget_hash_fn)(const void*);
@@ -166,6 +167,7 @@ typedef struct {
     __gorget_hash_fn hash_fn;
     __gorget_eq_fn eq_fn;
     __gorget_drop_fn val_drop;  // drop function for resource-type values (NULL if trivial)
+    __gorget_drop_fn val_clone; // clone function for resource-type values (NULL if trivial)
 } GorgetMap;
 
 typedef GorgetMap GorgetSet;
@@ -4605,13 +4607,13 @@ pub const RUNTIME_ARRAY: &str = r#"
 
 static inline GorgetArray gorget_array_new(size_t elem_size) {
     __gorget_array_new_count++;
-    return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc, NULL};
+    return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc, NULL, NULL};
 }
 
 // Array constructor with element drop function for resource-type elements.
 static inline GorgetArray gorget_array_new_drop(size_t elem_size, __gorget_drop_fn drop) {
     __gorget_array_new_count++;
-    return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc, drop};
+    return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc, drop, NULL};
 }
 
 static inline void gorget_array_push(GorgetArray* arr, const void* elem) {
@@ -4854,12 +4856,30 @@ static inline GorgetArray gorget_array_clone(const GorgetArray* src) {
     __gorget_array_clone_count++;
     GorgetArray dst = gorget_array_new(src->elem_size);
     dst.elem_drop = src->elem_drop;
+    dst.elem_clone = src->elem_clone;
     if (src->len > 0) {
         gorget_array_reserve(&dst, src->len);
         memcpy(dst.data, src->data, src->len * src->elem_size);
         dst.len = src->len;
+        // Deep-clone resource-type elements so the copy is independent.
+        if (dst.elem_clone) {
+            for (size_t i = 0; i < dst.len; i++) {
+                dst.elem_clone((char*)dst.data + i * dst.elem_size);
+            }
+        }
     }
     return dst;
+}
+
+// In-place clone wrappers for use as elem_clone/val_clone function pointers.
+// These take void* and clone the resource in place.
+static inline void gorget_array_clone_inplace(void* p) {
+    GorgetArray* a = (GorgetArray*)p;
+    *a = gorget_array_clone(a);
+}
+static inline void gorget_string_clone_inplace(void* p) {
+    GorgetString* s = (GorgetString*)p;
+    *s = gorget_string_clone(s);
 }
 
 static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t start, int64_t end) {
@@ -5094,6 +5114,7 @@ static inline GorgetMap gorget_dict_new(size_t key_size, size_t val_size) {
     m.hash_fn = NULL;
     m.eq_fn = NULL;
     m.val_drop = NULL;
+    m.val_clone = NULL;
     return m;
 }
 
@@ -5266,6 +5287,7 @@ static inline GorgetMap gorget_map_clone(const GorgetMap* src) {
     dst.hash_fn = src->hash_fn;
     dst.eq_fn = src->eq_fn;
     dst.val_drop = src->val_drop;
+    dst.val_clone = src->val_clone;
     dst.alloc = a;
     if (src->cap > 0) {
         dst.keys = a->alloc(a->ctx, src->cap * src->key_size);
@@ -5282,8 +5304,25 @@ static inline GorgetMap gorget_map_clone(const GorgetMap* src) {
             memcpy(dst.order, src->order, src->order_len * sizeof(size_t));
             dst.order_len = src->order_len;
         }
+        // Deep-clone resource-type values so the copy is independent.
+        if (dst.val_clone) {
+            for (size_t i = 0; i < dst.cap; i++) {
+                if (dst.states[i] == 1) { // occupied slot
+                    dst.val_clone((char*)dst.values + i * dst.val_size);
+                }
+            }
+        }
     }
     return dst;
+}
+
+static inline void gorget_map_clone_inplace(void* p) {
+    GorgetMap* m = (GorgetMap*)p;
+    *m = gorget_map_clone(m);
+}
+static inline void gorget_set_clone_inplace(void* p) {
+    GorgetMap* s = (GorgetMap*)p;  // GorgetSet == GorgetMap
+    *s = gorget_map_clone(s);
 }
 
 // Ordered iteration: keys → GorgetArray
