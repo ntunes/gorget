@@ -62,6 +62,10 @@ struct FuncLowering<'a> {
     drop_collision_types: &'a std::collections::HashSet<String>,
     /// Monomorphized method name → C runtime callee (from BuiltinTypeProtocol).
     runtime_callees: &'a rustc_hash::FxHashMap<String, String>,
+    /// Enum types needing tag-based variant drop dispatch.
+    recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String)>>,
+    /// Struct types with field-level drop functions.
+    recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String)>>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -154,6 +158,8 @@ impl<'a> LoweringContext<'a> {
                     self.gir.runtime.overflow_wrap,
                     &self.module.drop_collision_types,
                     &self.gir.runtime_callees,
+                    &self.module.recursive_drop_enums,
+                    &self.module.recursive_drop_structs,
                 );
                 fl.lower();
                 all_pending_externs.extend(fl.pending_externs.drain(..));
@@ -923,6 +929,8 @@ impl<'a> FuncLowering<'a> {
         overflow_wrap: bool,
         drop_collision_types: &'a std::collections::HashSet<String>,
         runtime_callees: &'a rustc_hash::FxHashMap<String, String>,
+        recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String)>>,
+        recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String)>>,
     ) -> Self {
         let params: Vec<LirType> = gir_func
             .params
@@ -974,6 +982,8 @@ impl<'a> FuncLowering<'a> {
             overflow_wrap,
             drop_collision_types,
             runtime_callees,
+            recursive_drop_enums,
+            recursive_drop_structs,
         }
     }
 
@@ -3374,7 +3384,24 @@ impl<'a> FuncLowering<'a> {
                     args: vec![addr],
                     original_name: None,
                 });
-                self.lower_field_drops(place, &type_name, bb);
+                // For enums: call the generated {Name}__drop which uses tag dispatch.
+                // For structs: walk fields and call per-field drop functions.
+                let is_enum_drop = type_name.as_ref()
+                    .map(|tn| self.recursive_drop_enums.contains_key(tn.as_str())
+                        && !self.recursive_drop_structs.contains_key(tn.as_str()))
+                    .unwrap_or(false);
+                if is_enum_drop {
+                    let drop_fn = format!("{}__drop", type_name.as_ref().unwrap());
+                    let addr2 = self.lower_place_addr(place, bb);
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: drop_fn,
+                        args: vec![addr2],
+                        original_name: None,
+                    });
+                } else {
+                    self.lower_field_drops(place, &type_name, bb);
+                }
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: None,
                     name: "__gorget_drop_if_alive_close".to_string(),

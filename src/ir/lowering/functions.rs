@@ -76,11 +76,6 @@ pub fn lower_function(
         if ctx.is_ref_param(base_type, p.node.ownership) {
             // Bare-borrow resource param: Ptr, no auto-deref
             ctx.ref_locals.insert(local_id);
-        } else if matches!(p.node.ownership, crate::parser::ast::Ownership::MutableBorrow)
-            && ctx.type_registry.is_resource_type(base_type)
-        {
-            // &-borrow resource param: MutPtr, no auto-deref (same as bare borrow)
-            ctx.ref_locals.insert(local_id);
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             // ! resource params and & trivial params: MutPtr, auto-deref + write-through
             ctx.mut_capture_locals.insert(local_id, base_type);
