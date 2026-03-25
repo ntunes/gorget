@@ -1204,6 +1204,21 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         }
     }
 
+    // Forward-declare enum drop and clone functions (needed when enum A's
+    // drop/clone calls B__drop/B__clone before B's definition).
+    for (idx, sdef) in module.structs.iter().enumerate() {
+        if module.recursive_drop_enums.contains_key(sdef.name.as_str()) {
+            let c_name = struct_names.get(&(idx as u32)).cloned().unwrap_or_else(|| sdef.name.clone());
+            let drop_fn = format!("{}__drop", sdef.name);
+            if !module.functions.iter().any(|f| f.name == drop_fn) {
+                writeln!(out, "void {drop_fn}(void*);").unwrap();
+            }
+            let clone_fn = format!("{}__clone", sdef.name);
+            if !module.functions.iter().any(|f| f.name == clone_fn) {
+                writeln!(out, "{c_name} {clone_fn}(void*);").unwrap();
+            }
+        }
+    }
     // Emit struct drop functions for structs with Recursive drop strategy.
     // These are needed when a Recursive-drop struct appears as a field in
     // another struct — the parent's field drop calls {Name}__drop.

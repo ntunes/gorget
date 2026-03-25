@@ -300,6 +300,24 @@ pub fn lower_module(
                             false
                         }
                     })
+                } else if let TypeDefKind::Enum(ref edef) = td.kind {
+                    // Same rule as Rust: if any variant has a droppable field,
+                    // the enum is a Resource type with Recursive drop.
+                    // Option/Result excluded — they have special unwrap handling.
+                    if name.starts_with("Option__") || name.starts_with("Result__") {
+                        false
+                    } else {
+                        edef.variants.iter().any(|v| {
+                            v.fields.iter().any(|f| {
+                                if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
+                                    droppable_names.contains(field_type_name)
+                                        || field_type_name == "GorgetString"
+                                } else {
+                                    false
+                                }
+                            })
+                        })
+                    }
                 } else {
                     false
                 }
