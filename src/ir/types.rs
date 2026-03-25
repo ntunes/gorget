@@ -328,7 +328,12 @@ impl TypeRegistry {
         false
     }
 
-    /// Drop check for anonymous call result temps. See needs_drop().
+    /// Drop check for anonymous call result temps.
+    /// Includes Trivial/Custom drop and collection types.
+    /// Excludes Recursive — pattern match extraction from borrowed (Ptr) enums
+    /// creates owned copies of variant payloads. With Recursive drop, these
+    /// copies are freed at scope exit, corrupting the borrowed source data.
+    /// Fix: enum pattern extraction from Ptr should produce Ptr payloads.
     pub fn needs_drop_for_temp(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
         if let Some(GirType::Named(name)) = self.get(type_id) {

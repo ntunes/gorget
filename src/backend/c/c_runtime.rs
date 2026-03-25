@@ -4624,7 +4624,6 @@ static inline void gorget_array_push(GorgetArray* arr, const void* elem) {
         arr->cap = new_cap;
     }
     memcpy((char*)arr->data + arr->len * arr->elem_size, elem, arr->elem_size);
-    if (arr->elem_clone) arr->elem_clone((char*)arr->data + arr->len * arr->elem_size);
     arr->len++;
 }
 
@@ -5148,7 +5147,6 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                 memcpy((char*)m->keys + idx * m->key_size, key, m->key_size);
                 if (m->val_size > 0 && value != NULL) {
                     memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
-                    if (m->val_clone) m->val_clone((char*)m->values + idx * m->val_size);
                 }
                 m->states[idx] = 1;
                 m->count++;
@@ -5161,7 +5159,6 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                         m->val_drop((char*)m->values + idx * m->val_size);
                     }
                     memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
-                    if (m->val_clone) m->val_clone((char*)m->values + idx * m->val_size);
                 }
                 return;
             }
@@ -5182,7 +5179,6 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
             memcpy((char*)m->keys + target * m->key_size, key, m->key_size);
             if (m->val_size > 0 && value != NULL) {
                 memcpy((char*)m->values + target * m->val_size, value, m->val_size);
-                if (m->val_clone) m->val_clone((char*)m->values + target * m->val_size);
             }
             m->states[target] = 1;
             m->count++;
@@ -5197,7 +5193,6 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                     m->val_drop((char*)m->values + idx * m->val_size);
                 }
                 memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
-                if (m->val_clone) m->val_clone((char*)m->values + idx * m->val_size);
             }
             return;
         }
