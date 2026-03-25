@@ -4451,25 +4451,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 v(*d)).unwrap();
                         }
                     }
-                    // Deep clone resource fields if the unwrapped value is a Recursive-drop struct.
-                    // This ensures the extracted copy owns its data independently from the collection.
-                    if let Some(d) = dst {
-                        let eff = recovered_ty.as_ref().or(dst_ty);
-                        if let Some(LirType::Struct(sid)) = eff {
-                            let sname = module.structs.get(sid.0 as usize).map(|s| s.name.as_str()).unwrap_or("");
-                            if module.recursive_drop_structs.contains_key(sname) {
-                                let c_name = sn.get(&sid.0).cloned().unwrap_or_else(|| sname.to_string());
-                                if let Some(ops) = deep_clone_resource_fields(*sid, &format!("(*({}*)&{})", c_name, v(*d)), module) {
-                                    for op in ops {
-                                        write!(out, " {op}").unwrap();
-                                    }
-                                }
-                            } else if module.recursive_drop_enums.contains_key(sname) {
-                                // Enum with resource payloads: call {Name}__clone_inplace
-                                write!(out, " {sname}__clone_inplace(&{});", v(*d)).unwrap();
-                            }
-                        }
-                    }
+                    // Note: cloning of Recursive/Custom-drop types is handled at the
+                    // GIR level (clone_fn_for_ptr in unwrap lowering), not here.
+                    // The GIR emits an explicit clone call tracked for drop.
                 }
                 return;
             }

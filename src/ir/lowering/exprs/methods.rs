@@ -362,7 +362,7 @@ pub(super) fn lower_method_call(
                         Operand::Constant(Constant::I64(0))
                     };
                     let extern_name = if is_result { "__result_unwrap_or" } else { "__option_unwrap_or" };
-                    let dst = builder.call_extern(
+                    let dst = ctx.call_extern_tracked(builder,
                         extern_name,
                         vec![FunctionBuilder::copy(borrow), default_val],
                         inner_type,
@@ -377,7 +377,7 @@ pub(super) fn lower_method_call(
                 } else {
                     // unwrap() / expect() → direct extraction
                     let extern_name = if is_result { "__result_unwrap" } else { "__option_unwrap" };
-                    let dst = builder.call_extern(
+                    let dst = ctx.call_extern_tracked(builder,
                         extern_name,
                         vec![FunctionBuilder::copy(borrow)],
                         inner_type,
@@ -388,11 +388,10 @@ pub(super) fn lower_method_call(
                         builder.move_zero(place.clone());
                         ctx.drops.mark_moved(place.local);
                     }
-                    // T & reference: keep as Ptr for ALL types — the variable
-                    // borrows from the collection. No copy, no clone, no
-                    // double-free risk. The var decl lowering will propagate the
-                    // Ptr type to the named local via ref_locals.
-                    // Field/method access uses pointee_type() + Deref naturally.
+                    // Note: Ptr(T) results for Recursive types are NOT cloned here.
+                    // The VarDecl/assign site handles cloning via the Ptr→T auto-clone
+                    // path when the caller uses an explicit type (String x = ...).
+                    // auto x = ... keeps the Ptr (zero-cost borrow).
                     return FunctionBuilder::copy(dst);
                 }
             }
@@ -2308,17 +2307,38 @@ pub(super) fn lower_index_access(
             // Try to infer element type from collection type name
             infer_collection_element_type(ctx, base_type)
         };
-        // Resource-type elements: return Ptr(T) reference into collection.
-        // Auto-clone at use site when T is expected (VarDecl, return, move call).
+        // Resource-type elements: return Ptr(T) reference for direct collections
+        // (zero-cost borrow — LIR reads through pointer without clone).
+        // For Recursive/Custom-drop types (Yaml, user structs), the LIR clones
+        // unconditionally, so return owned type and register for drop.
         // Exception: Task elements are consumed on await, not borrowed.
         let is_task = matches!(ctx.type_registry.get(elem_type),
             Some(GirType::Named(n)) if n.starts_with("Task__"));
-        let result_type = if !is_task && ctx.type_registry.is_resource_type(elem_type) {
+        let lir_will_clone = if let Some(GirType::Named(n)) = ctx.type_registry.get(elem_type) {
+            // LIR clones Recursive-drop types that aren't direct collections
+            !ctx.type_registry.is_collection_type(elem_type) && {
+                ctx.type_registry.get_type_def(n)
+                    .map(|td| matches!(td.metadata.drop_strategy,
+                        crate::ir::types::DropStrategy::Recursive | crate::ir::types::DropStrategy::Custom(_)))
+                    .unwrap_or(false)
+            }
+        } else { false };
+        let result_type = if is_task {
+            elem_type
+        } else if lir_will_clone {
+            // LIR will clone → result is owned, needs drop tracking
+            elem_type
+        } else if ctx.type_registry.is_resource_type(elem_type) {
+            // Direct collection → Ptr (zero-cost borrow)
             ctx.type_registry.insert(GirType::Ptr(elem_type))
         } else {
             elem_type
         };
         let dst = builder.index_load(place.clone(), idx, result_type);
+        // Register owned clones for drop
+        if lir_will_clone {
+            ctx.drops.register_local(dst, result_type, &ctx.type_registry);
+        }
         return FunctionBuilder::copy(dst);
     }
 
