@@ -154,6 +154,12 @@ impl ErrorReporter {
         (fid, global.saturating_sub(base))
     }
 
+    /// Check whether a span belongs to the entry file (file_id 0, i.e., the user's source).
+    pub fn is_entry_file(&self, span: Span) -> bool {
+        let (fid, _) = self.resolve_offset(span.start);
+        fid == self.file_id
+    }
+
     /// Create a primary label for a span, resolving to the correct file.
     fn primary_label(&self, span: Span) -> Label<usize> {
         let (fid, local_start) = self.resolve_offset(span.start);

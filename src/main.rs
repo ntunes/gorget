@@ -420,9 +420,28 @@ fn try_build_ir(
     if !gir_module.implicit_clone_warnings.is_empty() {
         let reporter = ErrorReporter::new_multi(file_infos.clone());
         let mut clone_errors = 0;
+        let mut shown = std::collections::HashSet::new();
+        let mut lib_warning_count = 0usize;
         for warn in &gir_module.implicit_clone_warnings {
+            // Errors always shown (directive explicit-clone)
+            if warn.is_error {
+                reporter.report_implicit_clone_warning(warn);
+                clone_errors += 1;
+                continue;
+            }
+            // Warnings from imported libraries: count but don't show
+            if !reporter.is_entry_file(warn.span) {
+                lib_warning_count += 1;
+                continue;
+            }
+            // Deduplicate by source location (same span = same warning)
+            if !shown.insert(warn.span.start) {
+                continue;
+            }
             reporter.report_implicit_clone_warning(warn);
-            if warn.is_error { clone_errors += 1; }
+        }
+        if lib_warning_count > 0 {
+            eprintln!("  ... and {lib_warning_count} implicit clone warning(s) in imported libraries");
         }
         if clone_errors > 0 {
             return Err(format!("{clone_errors} implicit clone error(s) — use .clone() for explicit copy or ! for move"));
