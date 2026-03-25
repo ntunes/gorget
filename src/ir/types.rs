@@ -122,12 +122,33 @@ pub struct EnumVariant {
 /// | Resource      | Custom(fn)      | User-defined Drop::drop — runs custom cleanup then field drops |
 ///
 /// **Suspicious** (flagged by validator): Trivial + Recursive, Trivial + Custom
+/// What kind of builtin collection a type is (if any).
+/// Used for metadata-based dispatch instead of string-prefix matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionKind {
+    /// Vector, Deque, GorgetArray — contiguous indexed storage.
+    Array,
+    /// Dict — ordered key-value map (preserves insertion order).
+    OrderedMap,
+    /// HashMap, GorgetMap — unordered key-value map.
+    Map,
+    /// Set — ordered unique elements.
+    OrderedSet,
+    /// HashSet, GorgetSet — unordered unique elements.
+    Set,
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeMetadata {
     pub size: Option<u64>,
     pub align: Option<u64>,
     pub drop_strategy: DropStrategy,
     pub copy_semantics: CopySemantics,
+    /// Clone function name for deep-cloning this type (e.g., "gorget_array_clone").
+    /// Set from BuiltinTypeProtocol during type registration.
+    pub clone_fn: Option<String>,
+    /// Collection kind for metadata-based dispatch (replaces name-prefix matching).
+    pub collection_kind: Option<CollectionKind>,
 }
 
 impl Default for TypeMetadata {
@@ -137,6 +158,8 @@ impl Default for TypeMetadata {
             align: None,
             drop_strategy: DropStrategy::None,
             copy_semantics: CopySemantics::Trivial,
+            clone_fn: None,
+            collection_kind: None,
         }
     }
 }
@@ -528,6 +551,7 @@ mod tests {
                 align: Some(8),
                 drop_strategy: DropStrategy::None,
                 copy_semantics: CopySemantics::Trivial,
+                ..Default::default()
             },
         };
         reg.add_type_def(def);

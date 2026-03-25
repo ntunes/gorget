@@ -1,3 +1,4 @@
+pub mod builtins;
 pub mod closures;
 pub mod context;
 pub mod drops;
@@ -330,6 +331,7 @@ pub fn lower_module(
                 align: None,
                 drop_strategy: DropStrategy::Trivial("gorget_array_free".to_string()),
                 copy_semantics: CopySemantics::Resource,
+                ..Default::default()
             },
         });
         let array_type_id = module.type_registry.insert(GirType::Named("GorgetArray".to_string()));
@@ -345,6 +347,7 @@ pub fn lower_module(
                 align: None,
                 drop_strategy: DropStrategy::Trivial("gorget_map_free".to_string()),
                 copy_semantics: CopySemantics::Resource,
+                ..Default::default()
             },
         });
         let map_type_id = module.type_registry.insert(GirType::Named("GorgetMap".to_string()));
@@ -360,6 +363,7 @@ pub fn lower_module(
                 align: None,
                 drop_strategy: DropStrategy::Trivial("gorget_set_free".to_string()),
                 copy_semantics: CopySemantics::Resource,
+                ..Default::default()
             },
         });
         let set_type_id = module.type_registry.insert(GirType::Named("GorgetSet".to_string()));
@@ -417,6 +421,7 @@ pub fn lower_module(
                     align: None,
                     drop_strategy: DropStrategy::Trivial(drop_fn.to_string()),
                     copy_semantics: CopySemantics::Resource,
+                    ..Default::default()
                 },
             });
             let tid = module.type_registry.insert(GirType::Named(mangled_name.clone()));
@@ -444,6 +449,7 @@ pub fn lower_module(
                         align: None,
                         drop_strategy: DropStrategy::Trivial("gorget_array_free".to_string()),
                         copy_semantics: CopySemantics::Resource,
+                        ..Default::default()
                     },
                 });
             }
@@ -775,6 +781,11 @@ pub fn lower_module(
     register_builtin_enum_method_sigs(&mut ctx, &generic_collector);
     // Register built-in collection method signatures (Vector, Dict, HashMap, etc.)
     register_collection_method_sigs(&mut ctx, &generic_collector);
+
+    // Register builtin method signatures from the declarative protocol table.
+    // This populates fn_sigs and runtime_callees for all builtin types
+    // (Vector, Dict, Channel, etc.) registered during type creation.
+    ctx.register_builtin_method_sigs();
 
     // P2.5: Register trait equip method signatures
     traits::register_trait_equip_sigs(&mut ctx, &trait_info, ast_module);

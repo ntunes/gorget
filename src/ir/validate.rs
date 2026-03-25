@@ -1054,6 +1054,7 @@ mod tests {
                 align: None,
                 drop_strategy: DropStrategy::Trivial("buf_free".into()),
                 copy_semantics: CopySemantics::Resource,
+                ..Default::default()
             },
         });
         let buf_id = module.type_registry.insert(GirType::Named("OwnedBuf".into()));
@@ -1098,6 +1099,7 @@ mod tests {
                 align: None,
                 drop_strategy: DropStrategy::Recursive,
                 copy_semantics: CopySemantics::Trivial,
+                ..Default::default()
             },
         });
 
@@ -1217,6 +1219,7 @@ mod tests {
                 align: None,
                 drop_strategy: DropStrategy::Trivial("buf_free".into()),
                 copy_semantics: CopySemantics::Resource,
+                ..Default::default()
             },
         });
         let buf_id = module.type_registry.insert(GirType::Named("Buf".into()));
@@ -1247,6 +1250,7 @@ mod tests {
                 align: None,
                 drop_strategy: DropStrategy::Trivial("shared_decref".into()),
                 copy_semantics: CopySemantics::Trivial,
+                ..Default::default()
             },
         });
 

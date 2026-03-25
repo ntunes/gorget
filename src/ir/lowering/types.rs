@@ -1,8 +1,20 @@
 use rustc_hash::FxHashMap;
 
 use crate::ir::types::*;
+use crate::ir::lowering::builtins::{self, BuiltinTypeArgs};
 use crate::parser::ast::{self, PrimitiveType, Type};
 use crate::span::Spanned;
+
+/// A deferred builtin type registration: populated during `map_ast_type_mut`,
+/// consumed later to populate `fn_sigs` and `runtime_callees` on LoweringContext.
+pub struct DeferredBuiltin {
+    /// Mangled type name (e.g., "Vector__int64_t").
+    pub mangled_name: String,
+    /// Reference to the builtin protocol.
+    pub protocol: &'static builtins::BuiltinTypeProtocol,
+    /// Resolved type arguments.
+    pub type_args: BuiltinTypeArgs,
+}
 
 /// Maps AST types to GIR TypeIds.
 pub struct TypeMapper {
@@ -12,6 +24,8 @@ pub struct TypeMapper {
     pub owned_string_type: TypeId,
     /// Cache of Named type → GIR TypeId.
     pub named_types: FxHashMap<String, TypeId>,
+    /// Builtin types registered during `map_ast_type_mut`, pending fn_sigs population.
+    pub deferred_builtins: Vec<DeferredBuiltin>,
 }
 
 impl TypeMapper {
@@ -27,6 +41,7 @@ impl TypeMapper {
                 align: None,
                 drop_strategy: DropStrategy::Trivial("gorget_string_free".to_string()),
                 copy_semantics: CopySemantics::Resource,
+                ..Default::default()
             },
         });
         let owned_string_type = registry.insert(GirType::Named("GorgetString".to_string()));
@@ -34,6 +49,7 @@ impl TypeMapper {
             string_view_type,
             owned_string_type,
             named_types: FxHashMap::default(),
+            deferred_builtins: Vec::new(),
         }
     }
 
@@ -111,39 +127,60 @@ impl TypeMapper {
                             make_result_type_def(n, ok_type, err_type)
                         });
                     }
-                    // Auto-register collection types (Vector[T], etc.) with proper drop metadata
-                    if matches!(base, "Vector" | "Set" | "HashSet" | "Dict" | "HashMap") {
-                        let drop_fn = match base {
-                            "Dict" | "HashMap" => "gorget_map_free",
-                            "Set" | "HashSet" => "gorget_set_free",
-                            _ => "gorget_array_free",
+                    // Auto-register builtin generic types via protocol table.
+                    // Collections, concurrency types, etc. — drop metadata, clone_fn,
+                    // collection_kind all come from the BuiltinTypeProtocol.
+                    if let Some(protocol) = builtins::lookup_protocol(base) {
+                        // Resolve type args to TypeIds (available from generic_args)
+                        let elem = self.map_ast_type_mut(&generic_args[0].node, registry);
+                        let val = if generic_args.len() >= 2 {
+                            self.map_ast_type_mut(&generic_args[1].node, registry)
+                        } else {
+                            elem
                         };
-                        return self.get_or_register(&mangled, registry, |n| {
-                            make_opaque_type_def(n, CopySemantics::Resource, DropStrategy::Trivial(drop_fn.to_string()))
-                        });
-                    }
-                    // Auto-register concurrency types: Channel[T], Shared[T], Weak[T], Mutex[T], Guard[T].
-                    if matches!(base, "Channel" | "Shared" | "Weak" | "Mutex" | "Guard") {
-                        let (copy_sem, drop_strat) = match base {
-                            "Guard" => (CopySemantics::Resource, DropStrategy::Trivial(format!("{mangled}__drop"))),
-                            "Shared" | "Weak" | "Channel" => (CopySemantics::Trivial, DropStrategy::Trivial(format!("{mangled}__drop"))),
-                            _ => (CopySemantics::Trivial, DropStrategy::None),
+
+                        // Drop strategy: protocol provides the free function, but some
+                        // types use per-monomorphization drop wrappers.
+                        let drop_strat = match base {
+                            "Guard" | "Shared" | "Weak" | "Channel"
+                            | "ReadGuard" | "WriteGuard" =>
+                                DropStrategy::Trivial(format!("{mangled}__drop")),
+                            _ => match protocol.drop_fn {
+                                Some(f) => DropStrategy::Trivial(f.to_string()),
+                                None => DropStrategy::None,
+                            },
                         };
-                        return self.get_or_register(&mangled, registry, |n| {
-                            make_opaque_type_def(n, copy_sem, drop_strat)
+
+                        let type_id = self.get_or_register(&mangled, registry, |n| {
+                            make_opaque_type_def(n, protocol.copy_semantics, drop_strat)
                         });
-                    }
-                    // Auto-register std.sync generic types: RWLock[T], ReadGuard[T], WriteGuard[T].
-                    if matches!(base, "RWLock" | "ReadGuard" | "WriteGuard") {
-                        let (copy_sem, drop_strat) = match base {
-                            "ReadGuard" | "WriteGuard" => (CopySemantics::Resource, DropStrategy::Trivial(format!("{mangled}__drop"))),
-                            _ => (CopySemantics::Trivial, DropStrategy::None),
-                        };
-                        return self.get_or_register(&mangled, registry, |n| {
-                            make_opaque_type_def(n, copy_sem, drop_strat)
+
+                        // Set protocol-derived metadata on the TypeDef
+                        if let Some(td) = registry.get_type_def_mut(&mangled) {
+                            td.metadata.clone_fn = protocol.clone_fn.map(String::from);
+                            td.metadata.collection_kind = protocol.collection_kind;
+                        }
+
+                        // Defer fn_sigs population (needs LoweringContext, not available here)
+                        let elem_name = crate::ir::types::format_type_for_mangle(elem, registry);
+                        self.deferred_builtins.push(DeferredBuiltin {
+                            mangled_name: mangled.clone(),
+                            protocol,
+                            type_args: BuiltinTypeArgs {
+                                elem,
+                                key: elem,
+                                val,
+                                self_type: type_id,
+                                self_name: mangled,
+                            },
                         });
+
+                        // Suppress unused variable warning
+                        let _ = elem_name;
+
+                        return type_id;
                     }
-                    // Auto-register std.thread generic type: Thread[T].
+                    // Thread[T] — resource semantics but no protocol methods (yet).
                     if base == "Thread" {
                         return self.get_or_register(&mangled, registry, |n| {
                             make_opaque_type_def(n, CopySemantics::Resource, DropStrategy::None)
@@ -564,6 +601,7 @@ pub(super) fn register_collection_alias(
                 align: None,
                 copy_semantics: CopySemantics::Resource,
                 drop_strategy: DropStrategy::Trivial("free".to_string()),
+                ..Default::default()
             },
         };
         registry.add_type_def(type_def);
@@ -725,6 +763,7 @@ pub fn make_opaque_type_def(name: &str, copy_semantics: CopySemantics, drop_stra
             align: None,
             copy_semantics,
             drop_strategy,
+            ..Default::default()
         },
     }
 }
@@ -781,6 +820,7 @@ pub fn make_wrapper_type_def(name: &str, inner_type: TypeId, copy_semantics: Cop
             align: None,
             copy_semantics,
             drop_strategy,
+            ..Default::default()
         },
     }
 }

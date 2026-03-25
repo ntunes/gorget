@@ -239,6 +239,10 @@ pub struct LoweringContext<'a> {
     pub tuple_element_locals: FxHashMap<LocalId, Vec<LocalId>>,
     /// Accumulated implicit clone warnings during lowering.
     pub implicit_clone_warnings: Vec<crate::ir::ImplicitCloneWarning>,
+    /// Maps monomorphized method name → C runtime function name.
+    /// Populated from BuiltinTypeProtocol declarations during module setup.
+    /// Used by the LIR backend to replace `map_monomorphized_to_runtime()`.
+    pub runtime_callees: FxHashMap<String, String>,
 }
 
 
@@ -287,7 +291,51 @@ impl<'a> LoweringContext<'a> {
             field_load_origins: FxHashMap::default(),
             tuple_element_locals: FxHashMap::default(),
             implicit_clone_warnings: Vec::new(),
+            runtime_callees: FxHashMap::default(),
         }
+    }
+
+    /// Process deferred builtin type registrations: populate fn_sigs and runtime_callees
+    /// from the BuiltinTypeProtocol declarations collected during type registration.
+    ///
+    /// Called once during module setup, after all types have been registered.
+    pub fn register_builtin_method_sigs(&mut self) {
+        use crate::ir::lowering::builtins::LookupCtx;
+
+        let deferred = std::mem::take(&mut self.type_mapper.deferred_builtins);
+        for entry in &deferred {
+            let ctx = LookupCtx {
+                lookup_type_by_name: &|name: &str| self.type_mapper.lookup_named(name),
+                string_view_type: self.type_mapper.string_view_type,
+                owned_string_type: self.type_mapper.owned_string_type,
+            };
+
+            for method in entry.protocol.methods {
+                let fn_key = format!("{}__{}", entry.mangled_name, method.name);
+
+                // Build parameter types: self pointer + method params
+                let method_params = (method.params)(&entry.type_args);
+                let self_ptr_type = self.type_registry.insert(
+                    crate::ir::types::GirType::MutPtr(entry.type_args.self_type)
+                );
+                let mut params = vec![self_ptr_type];
+                params.extend(method_params);
+
+                let ret = (method.return_type)(&entry.type_args, &ctx);
+
+                // Only insert if not already present (equip-defined methods take precedence)
+                if !self.fn_sigs.contains_key(&fn_key) {
+                    self.fn_sigs.insert(fn_key.clone(), (params, ret));
+                }
+
+                // Runtime callee mapping (for LIR backend)
+                if let Some(callee) = method.runtime_callee {
+                    self.runtime_callees.insert(fn_key, callee.to_string());
+                }
+            }
+        }
+        // Put the deferred list back (may be useful for validation)
+        self.type_mapper.deferred_builtins = deferred;
     }
 
     /// Emit an implicit clone warning for a resource type being auto-cloned.

@@ -491,6 +491,7 @@ fn lower_shared_var_decl(
                         align: None,
                         copy_semantics: CopySemantics::Trivial, // pointer type, cheap to copy
                         drop_strategy: DropStrategy::Trivial(drop_fn),
+                        ..Default::default()
                     },
                 };
                 ctx.type_registry.add_type_def(type_def);

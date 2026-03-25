@@ -1047,6 +1047,7 @@ fn monomorphize_struct(
             align: None,
             copy_semantics: CopySemantics::Resource,
             drop_strategy: DropStrategy::Trivial("free".to_string()),
+            ..Default::default()
         }
     } else if matches!(template.name.node.as_str(), "ReadGuard" | "WriteGuard") {
         TypeMetadata {
@@ -1054,6 +1055,7 @@ fn monomorphize_struct(
             align: None,
             copy_semantics: CopySemantics::Resource,
             drop_strategy: DropStrategy::Trivial(format!("{mangled_name}__drop")),
+            ..Default::default()
         }
     } else {
         TypeMetadata::default()

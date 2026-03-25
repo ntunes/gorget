@@ -310,6 +310,7 @@ mod tests {
                 align: Some(8),
                 drop_strategy: DropStrategy::Trivial("gorget_string_free".into()),
                 copy_semantics: CopySemantics::Resource,
+                ..Default::default()
             },
         });
         reg.insert(GirType::Named("OwnedString".into()));

@@ -715,6 +715,7 @@ mod tests {
                 align: Some(8),
                 drop_strategy: DropStrategy::None,
                 copy_semantics: CopySemantics::Trivial,
+                ..Default::default()
             },
         });
 
@@ -797,6 +798,7 @@ mod tests {
                 align: Some(8),
                 drop_strategy: DropStrategy::None,
                 copy_semantics: CopySemantics::Trivial,
+                ..Default::default()
             },
         });
 
