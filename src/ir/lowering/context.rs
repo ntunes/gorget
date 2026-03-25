@@ -920,7 +920,20 @@ impl<'a> LoweringContext<'a> {
     pub fn clone_fn_for_ptr(&self, inner_type: TypeId) -> Option<String> {
         use crate::ir::types::{GirType, DropStrategy};
         if let Some(GirType::Named(name)) = self.type_registry.get(inner_type) {
-            // Built-in collection types → runtime clone functions
+            // Metadata-based check: clone_fn set during type registration from protocol table.
+            if let Some(type_def) = self.type_registry.get_type_def(name) {
+                if let Some(ref clone_fn) = type_def.metadata.clone_fn {
+                    return Some(clone_fn.clone());
+                }
+            }
+
+            // GorgetString → gorget_string_clone_to_owned (always produces owned copy).
+            if name == "GorgetString" || name == "GorgetStringView" {
+                return Some("gorget_string_clone_to_owned".to_string());
+            }
+
+            // Fallback for types without metadata.clone_fn (migration safety):
+            // Collections that might not have TypeDefs with clone_fn yet.
             if name.starts_with("Vector__") || name.starts_with("Deque__") || name == "GorgetArray" {
                 return Some("gorget_array_clone".to_string());
             }
@@ -929,10 +942,6 @@ impl<'a> LoweringContext<'a> {
             }
             if name.starts_with("Set__") || name.starts_with("HashSet__") || name == "GorgetSet" {
                 return Some("gorget_set_clone".to_string());
-            }
-            // GorgetString → gorget_string_clone_to_owned (always produces owned copy).
-            if name == "GorgetString" || name == "GorgetStringView" {
-                return Some("gorget_string_clone_to_owned".to_string());
             }
 
             // User structs with Recursive or Custom drop → generated {Name}__clone.
@@ -943,8 +952,6 @@ impl<'a> LoweringContext<'a> {
                     return Some(format!("{name}__clone"));
                 }
                 // User enums with cloneable variant payloads → generated {Name}__clone.
-                // Clone is generated for any enum whose variants contain resource types,
-                // regardless of the enum's own drop strategy.
                 if let crate::ir::types::TypeDefKind::Enum(ref edef) = type_def.kind {
                     if !name.starts_with("Option__") && !name.starts_with("Result__") {
                         let has_cloneable_payload = edef.variants.iter().any(|v| {

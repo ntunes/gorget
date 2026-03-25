@@ -331,7 +331,8 @@ pub fn lower_module(
                 align: None,
                 drop_strategy: DropStrategy::Trivial("gorget_array_free".to_string()),
                 copy_semantics: CopySemantics::Resource,
-                ..Default::default()
+                clone_fn: Some("gorget_array_clone".to_string()),
+                collection_kind: Some(CollectionKind::Array),
             },
         });
         let array_type_id = module.type_registry.insert(GirType::Named("GorgetArray".to_string()));
@@ -347,7 +348,8 @@ pub fn lower_module(
                 align: None,
                 drop_strategy: DropStrategy::Trivial("gorget_map_free".to_string()),
                 copy_semantics: CopySemantics::Resource,
-                ..Default::default()
+                clone_fn: Some("gorget_map_clone".to_string()),
+                collection_kind: Some(CollectionKind::Map),
             },
         });
         let map_type_id = module.type_registry.insert(GirType::Named("GorgetMap".to_string()));
@@ -363,7 +365,8 @@ pub fn lower_module(
                 align: None,
                 drop_strategy: DropStrategy::Trivial("gorget_set_free".to_string()),
                 copy_semantics: CopySemantics::Resource,
-                ..Default::default()
+                clone_fn: Some("gorget_set_clone".to_string()),
+                collection_kind: Some(CollectionKind::Set),
             },
         });
         let set_type_id = module.type_registry.insert(GirType::Named("GorgetSet".to_string()));

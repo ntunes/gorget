@@ -368,8 +368,16 @@ impl TypeRegistry {
     }
 
     /// Check if a type name is a collection type (Vector, Dict, Set, etc.).
-    /// Name-based check used by `needs_drop()` to avoid TypeDef registration.
+    /// Uses metadata-based detection via `collection_kind` field on TypeDef.
+    /// Falls back to name-based check for types without TypeDefs.
     pub fn is_collection_type_name(&self, name: &str) -> bool {
+        if let Some(type_def) = self.get_type_def(name) {
+            if type_def.metadata.collection_kind.is_some() {
+                return true;
+            }
+        }
+        // Fallback for types registered without TypeDefs (shouldn't happen with protocol table,
+        // but kept for safety during the migration)
         name.starts_with("Vector__") || name.starts_with("Dict__")
             || name.starts_with("HashMap__") || name.starts_with("Set__")
             || name.starts_with("HashSet__") || name.starts_with("Deque__")
@@ -443,6 +451,13 @@ impl TypeRegistry {
     pub fn is_collection_type(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
         if let Some(GirType::Named(name)) = self.get(type_id) {
+            // Metadata-based check: collection_kind set during type registration
+            if let Some(type_def) = self.get_type_def(name) {
+                if type_def.metadata.collection_kind.is_some() {
+                    return true;
+                }
+            }
+            // Fallback for migration safety
             name.starts_with("Vector__") || name.starts_with("Dict__")
                 || name.starts_with("HashMap__") || name.starts_with("Set__")
                 || name.starts_with("HashSet__") || name == "GorgetArray"
@@ -453,13 +468,22 @@ impl TypeRegistry {
     }
 
     /// Check if a named type is a resource type (owns heap allocations).
-    /// Checks collection prefixes, TypeDef metadata, and struct fields transitively.
+    /// Checks TypeDef metadata (collection_kind, copy_semantics) and struct fields transitively.
     fn is_resource_name(&self, name: &str) -> bool {
-        // Collection/string types are always Resource regardless of TypeDef metadata
+        // Metadata-based check: collection types have collection_kind set
+        if let Some(type_def) = self.get_type_def(name) {
+            if type_def.metadata.collection_kind.is_some() {
+                return true;
+            }
+        }
+        // GorgetString is always Resource
+        if name == "GorgetString" {
+            return true;
+        }
+        // Fallback for types without TypeDefs (migration safety)
         if name.starts_with("Vector__") || name.starts_with("Dict__")
             || name.starts_with("HashMap__") || name.starts_with("Set__")
-            || name.starts_with("HashSet__") || name == "GorgetString"
-            || name == "GorgetArray"
+            || name.starts_with("HashSet__") || name == "GorgetArray"
         {
             return true;
         }
