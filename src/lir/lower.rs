@@ -3384,24 +3384,7 @@ impl<'a> FuncLowering<'a> {
                     args: vec![addr],
                     original_name: None,
                 });
-                // For enums: call the generated {Name}__drop which uses tag dispatch.
-                // For structs: walk fields and call per-field drop functions.
-                let is_enum_drop = type_name.as_ref()
-                    .map(|tn| self.recursive_drop_enums.contains_key(tn.as_str())
-                        && !self.recursive_drop_structs.contains_key(tn.as_str()))
-                    .unwrap_or(false);
-                if is_enum_drop {
-                    let drop_fn = format!("{}__drop", type_name.as_ref().unwrap());
-                    let addr2 = self.lower_place_addr(place, bb);
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None,
-                        name: drop_fn,
-                        args: vec![addr2],
-                        original_name: None,
-                    });
-                } else {
-                    self.lower_field_drops(place, &type_name, bb);
-                }
+                self.lower_field_drops(place, &type_name, bb);
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: None,
                     name: "__gorget_drop_if_alive_close".to_string(),
