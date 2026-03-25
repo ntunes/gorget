@@ -2,7 +2,7 @@
 
 ## High
 
-- **Explicit clone roadmap (Phases 2-3)**: **Phase 1 DONE (2026-03-25):** `needs_drop` unified, ImplicitClone warnings at all 6 auto-clone sites, `drop_collision_types` for `.drop()` method conflicts. **Phase 2 (next):** Add `Cloneable` trait + wire `.clone()` method to generated `{Name}__clone` functions. Fix all fixture/library warnings with explicit `.clone()` or `!`. **Phase 3:** Promote warnings to errors, remove auto-clone. **Clone infrastructure ready**: per-type `{Name}__clone` functions, IndexLoad deep clone, Option unwrap deep clone, elem_clone/val_clone on collections. [added: 2026-03-24, updated: 2026-03-25]
+- **Explicit clone roadmap (Phase 2 remaining)**: **Phase 1 DONE.** **Phase 2 partial:** `.clone()` method works on all types. `directive explicit-clone` promotes warnings to errors. **Remaining:** Fix fixture/library implicit clone warnings with explicit `.clone()` or `!`. Add `Cloneable` trait to formal type system (currently `.clone()` works by name convention, not trait dispatch). [added: 2026-03-24, updated: 2026-03-25]
 
 - **`should_unregister_string_args` leak**: Less impactful after struct field ownership fix. Standalone string temps from concat/format passed to non-void functions still leak. [updated: 2026-03-24]
 

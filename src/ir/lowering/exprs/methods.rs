@@ -1213,6 +1213,50 @@ pub(super) fn lower_method_call(
             }
         }
 
+        // .clone() on resource types: route to the generated {Name}__clone function.
+        // The clone function takes a const pointer and returns an owned copy.
+        if method_name == "clone" && args.is_empty() {
+            // Resolve the receiver's concrete type
+            let recv_type_id = match &recv {
+                Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                    let lid = p.local.0 as usize;
+                    if lid < builder.locals.len() {
+                        let tid = builder.locals[lid].type_id;
+                        // Unwrap Ptr(T) → T for borrowed receivers
+                        match ctx.type_registry.get(tid) {
+                            Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => *inner,
+                            _ => tid,
+                        }
+                    } else { UNIT_TYPE }
+                }
+                _ => UNIT_TYPE,
+            };
+            if let Some(clone_fn) = ctx.clone_fn_for_ptr(recv_type_id) {
+                // Build the call: clone_fn(&receiver) → owned T
+                let ptr_arg = match &recv {
+                    Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                        let lid = p.local.0 as usize;
+                        let tid = builder.locals[lid].type_id;
+                        if matches!(ctx.type_registry.get(tid), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))) {
+                            // Already a pointer — pass directly
+                            FunctionBuilder::copy(p.local)
+                        } else {
+                            // Value — take a borrow
+                            let pt = ctx.register_ptr_type(recv_type_id);
+                            let pl = builder.add_local(pt, None);
+                            builder.emit_borrow(pl, p.clone());
+                            FunctionBuilder::copy(pl)
+                        }
+                    }
+                    _ => recv.clone(),
+                };
+                let dst = ctx.call_tracked(builder, clone_fn, vec![ptr_arg], recv_type_id);
+                return FunctionBuilder::copy(dst);
+            }
+            // Non-resource type: .clone() is a trivial copy (no deep clone needed)
+            return recv;
+        }
+
         let mangled = format!("{type_name}__{method_name}");
 
         // Build args: &receiver + explicit args
