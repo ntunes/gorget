@@ -9,10 +9,10 @@ void main():
     Vector[Vector[String]] rows2 = parse(out).unwrap()
     int nrows = rows2.len()
     print(f"{nrows}")
-    Vector[String] r0 = rows2.get(0).unwrap()
+    auto r0 = rows2.get(0).unwrap()
     print(r0.get(0).unwrap())
     print(r0.get(1).unwrap())
-    Vector[String] r1 = rows2.get(1).unwrap()
+    auto r1 = rows2.get(1).unwrap()
     print(r1.get(0).unwrap())
     print(r1.get(1).unwrap())
 
@@ -23,7 +23,7 @@ void main():
     Vector[Vector[String]] pipe_rows2 = parse_delim(pipe_out, "|").unwrap()
     int pnrows = pipe_rows2.len()
     print(f"{pnrows}")
-    Vector[String] pr0 = pipe_rows2.get(0).unwrap()
+    auto pr0 = pipe_rows2.get(0).unwrap()
     print(pr0.get(0).unwrap())
     print(pr0.get(1).unwrap())
 

@@ -11,8 +11,7 @@ struct DataHolder:
 
 equip DataHolder:
     Vector[int] take_payload(&self):
-        Vector[int] result = self.payload
-        return result
+        return self.payload.clone()
 
 # Test 4: chained field access (obj.nested.items)
 struct Inner:
@@ -38,7 +37,7 @@ void main():
     h2.data.push(30)
     h2.data.push(40)
     h2.data.push(50)
-    Vector[int] extracted = h2.data
+    auto extracted = h2.data
     print(f"extracted {extracted.len()}")
 
     # Test 3: self.field
@@ -52,7 +51,7 @@ void main():
     # Test 4: chained access
     Outer o = Outer(Inner(Vector[int]()))
     o.nested.items.push(42)
-    Vector[int] chained = o.nested.items
+    auto chained = o.nested.items
     print(f"chained {chained.len()}")
 
     print("done")

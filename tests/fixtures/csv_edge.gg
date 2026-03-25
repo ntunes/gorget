@@ -23,10 +23,10 @@ void main():
     Vector[Vector[String]] rows = parse(tricky).unwrap()
     String serialized = stringify(rows)
     Vector[Vector[String]] rows2 = parse(serialized).unwrap()
-    Vector[String] r0 = rows2.get(0).unwrap()
+    auto r0 = rows2.get(0).unwrap()
     print(r0.get(0).unwrap())
     print(r0.get(1).unwrap())
-    Vector[String] r1 = rows2.get(1).unwrap()
+    auto r1 = rows2.get(1).unwrap()
     print(r1.get(0).unwrap())
     print(r1.get(1).unwrap())
 

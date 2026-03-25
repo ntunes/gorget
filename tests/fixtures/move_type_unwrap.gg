@@ -8,7 +8,7 @@ void main():
     row2.push(3)
     row2.push(4)
     grid.push(row2)
-    Vector[int] first = grid.get(0).unwrap()
+    auto first = grid.get(0).unwrap()
     print(first.get(0).unwrap())
     print(first.get(1).unwrap())
     print(grid.len())

@@ -24,13 +24,13 @@ HttpServerResponse handle_post_item(HttpRequest req):
     return HttpServerResponse.ok("post:" + req.params["id"])
 
 HttpServerResponse mw1(HttpRequest req, HttpServerResponse resp):
-    return HttpServerResponse(resp.status_code, resp.body + "-mw1", resp.content_type, resp.headers)
+    return HttpServerResponse(resp.status_code, resp.body + "-mw1", resp.content_type, resp.headers.clone())
 
 HttpServerResponse mw2(HttpRequest req, HttpServerResponse resp):
-    return HttpServerResponse(resp.status_code, resp.body + "-mw2", resp.content_type, resp.headers)
+    return HttpServerResponse(resp.status_code, resp.body + "-mw2", resp.content_type, resp.headers.clone())
 
 HttpServerResponse mw3(HttpRequest req, HttpServerResponse resp):
-    return HttpServerResponse(resp.status_code, resp.body + "-mw3", resp.content_type, resp.headers)
+    return HttpServerResponse(resp.status_code, resp.body + "-mw3", resp.content_type, resp.headers.clone())
 
 void main():
     Router router = Router.new()

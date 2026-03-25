@@ -50,11 +50,11 @@ void main():
         users.push(u)
         i += 1
 
-    User u0 = users.get(0).unwrap()
+    auto u0 = users.get(0).unwrap()
     print(u0.name)  # alice
     print(u0.age)   # 30
 
-    User u1 = users.get(1).unwrap()
+    auto u1 = users.get(1).unwrap()
     print(u1.name)  # bob
     print(u1.age)   # 25
 

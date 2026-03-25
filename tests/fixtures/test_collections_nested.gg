@@ -18,11 +18,11 @@ void main():
     print(vv.len())                            # 2
 
     # access v[0] then element [1]
-    Vector[int] row0 = vv.get(0).unwrap()
+    auto row0 = vv.get(0).unwrap()
     print(row0[1])                             # 20
 
     # access v[1] then element [0]
-    Vector[int] row1 = vv.get(1).unwrap()
+    auto row1 = vv.get(1).unwrap()
     print(row1[0])                             # 40
 
     # modify inner and verify independence after clone

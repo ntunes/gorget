@@ -7,11 +7,11 @@ void main():
     match csv_r1:
         case Ok(csv_rows):
             print(csv_rows.len())
-            Vector[String] csv_row0 = csv_rows.get(0).unwrap()
+            auto csv_row0 = csv_rows.get(0).unwrap()
             print(csv_row0.get(0).unwrap())
             print(csv_row0.get(1).unwrap())
             print(csv_row0.get(2).unwrap())
-            Vector[String] csv_row1 = csv_rows.get(1).unwrap()
+            auto csv_row1 = csv_rows.get(1).unwrap()
             print(csv_row1.get(0).unwrap())
             print(csv_row1.get(1).unwrap())
             print(csv_row1.get(2).unwrap())
@@ -22,7 +22,7 @@ void main():
     auto csv_r2 = parse("name,value\n\"a,b\",c\n")
     match csv_r2:
         case Ok(csv_rows):
-            Vector[String] csv_qr = csv_rows.get(1).unwrap()
+            auto csv_qr = csv_rows.get(1).unwrap()
             print(csv_qr.get(0).unwrap())
             print(csv_qr.get(1).unwrap())
         else:
@@ -32,7 +32,7 @@ void main():
     auto csv_r3 = parse("x\n\"he said \"\"hi\"\"\"\n")
     match csv_r3:
         case Ok(csv_rows):
-            Vector[String] csv_qr = csv_rows.get(1).unwrap()
+            auto csv_qr = csv_rows.get(1).unwrap()
             print(csv_qr.get(0).unwrap())
         else:
             print("error")
@@ -41,7 +41,7 @@ void main():
     auto csv_r4 = parse("x\n\"line1\nline2\"\n")
     match csv_r4:
         case Ok(csv_rows):
-            Vector[String] csv_qr = csv_rows.get(1).unwrap()
+            auto csv_qr = csv_rows.get(1).unwrap()
             print(csv_qr.get(0).unwrap())
         else:
             print("error")
@@ -51,7 +51,7 @@ void main():
     match csv_r5:
         case Ok(csv_rows):
             print(csv_rows.len())
-            Vector[String] csv_tr = csv_rows.get(0).unwrap()
+            auto csv_tr = csv_rows.get(0).unwrap()
             print(csv_tr.get(0).unwrap())
             print(csv_tr.get(2).unwrap())
         else:
@@ -61,7 +61,7 @@ void main():
     auto csv_r6 = parse("a,,b\n")
     match csv_r6:
         case Ok(csv_rows):
-            Vector[String] csv_er = csv_rows.get(0).unwrap()
+            auto csv_er = csv_rows.get(0).unwrap()
             print(csv_er.len())
             print(csv_er.get(1).unwrap() == "")
         else:
@@ -139,7 +139,7 @@ void main():
     match csv_r10:
         case Ok(csv_rows):
             print(csv_rows.len())
-            Vector[String] csv_cr = csv_rows.get(1).unwrap()
+            auto csv_cr = csv_rows.get(1).unwrap()
             print(csv_cr.get(0).unwrap())
         else:
             print("error")

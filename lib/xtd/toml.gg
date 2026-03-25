@@ -496,7 +496,7 @@ equip TomlParser:
         # For dotted keys like a.b.c = val, we store key "a" → wrap_dotted
         # For simple keys, store directly in current section
         TomlSection cur = self.sections.get(self.current_sec).unwrap()
-        Dict[String, TomlValue] sd = cur.sec_data
+        Dict[String, TomlValue] sd = cur.sec_data.clone()
         if key_parts.len() == 1:
             sd.put(key_parts.get(0).unwrap(), toml_val)
         else:
@@ -510,7 +510,7 @@ equip TomlParser:
                 sd.put(top_key, Tbl(merged))
             else:
                 sd.put(top_key, wrapped)
-        TomlSection updated = TomlSection(cur.sec_path, sd, cur.sec_is_aot)
+        TomlSection updated = TomlSection(cur.sec_path.clone(), sd, cur.sec_is_aot)
         self.sections.set(self.current_sec, updated)
 
     void start_section(&self, Vector[String] !hdr_path, bool is_aot):
@@ -608,10 +608,10 @@ private TomlValue assemble(Vector[TomlSection] secs):
     Dict[String, TomlValue] root = Dict[String, TomlValue]()
     int si = 0
     while si < secs.len():
-        TomlSection sec = secs.get(si).unwrap()
+        auto sec = secs.get(si).unwrap()
         if sec.sec_path.len() == 0:
             # Root section — copy entries directly
-            Dict[String, TomlValue] sd = sec.sec_data
+            auto sd = sec.sec_data
             Vector[String] rk = sd.keys()
             int ri = 0
             while ri < rk.len():

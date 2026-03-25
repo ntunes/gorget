@@ -417,7 +417,7 @@ equip XmlNode:
     Vector[XmlNode] children(self):
         match self:
             case Element(xtag, xattr_dict, xkids):
-                return xkids
+                return xkids.clone()
             else:
                 return Vector[XmlNode]()
 

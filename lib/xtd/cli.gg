@@ -61,7 +61,7 @@ equip CliParser:
                 bool found = false
                 int ai = 0
                 while ai < self.args.len():
-                    CliArg a = self.args.get(ai).unwrap()
+                    auto a = self.args.get(ai).unwrap()
                     bool matches_tok = tok == a.long_name or tok == a.short_name
                     if not a.positional and matches_tok:
                         String key = strip_dashes(a.long_name)
@@ -95,7 +95,7 @@ equip CliParser:
         return ""
 
     Vector[String] positionals(self):
-        return self.positional_vals
+        return self.positional_vals.clone()
 
     void print_help(self):
         print("Usage: " + self.app_name)
@@ -104,7 +104,7 @@ equip CliParser:
         int pos_count = 0
         int ai = 0
         while ai < self.args.len():
-            CliArg a = self.args.get(ai).unwrap()
+            auto a = self.args.get(ai).unwrap()
             if a.positional:
                 pos_count = pos_count + 1
             ai = ai + 1
@@ -112,14 +112,14 @@ equip CliParser:
             print("Arguments:")
             ai = 0
             while ai < self.args.len():
-                CliArg a = self.args.get(ai).unwrap()
+                auto a = self.args.get(ai).unwrap()
                 if a.positional:
                     print("  " + a.pos_name + "  " + a.help)
                 ai = ai + 1
         print("Options:")
         ai = 0
         while ai < self.args.len():
-            CliArg a = self.args.get(ai).unwrap()
+            auto a = self.args.get(ai).unwrap()
             if not a.positional:
                 String line = "  " + a.long_name
                 if a.short_name != "":

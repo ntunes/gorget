@@ -7,9 +7,9 @@ void main():
     groups["even"] = move evens
     groups["odd"] = move odds
 
-    Vector[int] e = groups["even"]
+    auto e = groups["even"]
     print(e.len())
     print(e[0])
-    Vector[int] o = groups["odd"]
+    auto o = groups["odd"]
     print(o.len())
     print(o[2])

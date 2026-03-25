@@ -18,7 +18,7 @@ HttpServerResponse add_x_header(HttpRequest req, HttpServerResponse resp):
 
 # Middleware that appends a suffix to the body.
 HttpServerResponse append_suffix(HttpRequest req, HttpServerResponse resp):
-    return HttpServerResponse(resp.status_code, resp.body + "!", resp.content_type, resp.headers)
+    return HttpServerResponse(resp.status_code, resp.body + "!", resp.content_type, resp.headers.clone())
 
 # Middleware that counts requests (side-effects via a mutable upvalue not testable without
 # shared state, so just checks the request method instead).

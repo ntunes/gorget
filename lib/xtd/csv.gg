@@ -122,20 +122,20 @@ equip CsvTable:
 
     int col_count(self): self.headers_data.len()
 
-    Vector[String] headers(self): self.headers_data
+    Vector[String] headers(self): self.headers_data.clone()
 
     Vector[String] row(self, int n):
-        return self.rows_data.get(n).unwrap()
+        return self.rows_data.get(n).unwrap().clone()
 
     String get(self, int row_idx, int col_idx):
-        Vector[String] r = self.rows_data.get(row_idx).unwrap()
+        auto r = self.rows_data.get(row_idx).unwrap()
         return r.get(col_idx).unwrap()
 
     String get_named(self, int row_idx, String col):
         int ci = self.column_index(col)
         if ci < 0:
             return ""
-        Vector[String] r = self.rows_data.get(row_idx).unwrap()
+        auto r = self.rows_data.get(row_idx).unwrap()
         return r.get(ci).unwrap()
 
     bool has_column(self, String name):
@@ -203,7 +203,7 @@ Result[CsvTable, String] parse_table_delim(String text, String sep):
         Vector[String] empty_hdr = Vector[String]()
         Vector[Vector[String]] empty_rows = Vector[Vector[String]]()
         return Ok(CsvTable(empty_hdr, empty_rows))
-    Vector[String] hdr = all.get(0).unwrap()
+    auto hdr = all.get(0).unwrap()
     Vector[Vector[String]] data = Vector[Vector[String]]()
     int ri = 1
     while ri < all.len():
@@ -218,7 +218,7 @@ String stringify_delim(Vector[Vector[String]] rows, String sep):
     String out = ""
     int ri = 0
     while ri < rows.len():
-        Vector[String] r = rows.get(ri).unwrap()
+        auto r = rows.get(ri).unwrap()
         int ci = 0
         while ci < r.len():
             if ci > 0:
@@ -245,7 +245,7 @@ String stringify_table_delim(CsvTable tbl, String sep):
     # Rows
     int ri = 0
     while ri < tbl.rows_data.len():
-        Vector[String] r = tbl.rows_data.get(ri).unwrap()
+        auto r = tbl.rows_data.get(ri).unwrap()
         int ci = 0
         while ci < r.len():
             if ci > 0:

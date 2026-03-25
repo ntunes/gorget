@@ -12,10 +12,10 @@ void main():
     grid.push(row1)
     grid.push(row2)
     print(f"{grid.len()}")
-    Vector[int] first_row = grid.get(0).unwrap()
+    auto first_row = grid.get(0).unwrap()
     print(f"{first_row.get(0).unwrap()}")
     print(f"{first_row.get(1).unwrap()}")
-    Vector[int] second_row = grid.get(1).unwrap()
+    auto second_row = grid.get(1).unwrap()
     print(f"{second_row.get(0).unwrap()}")
     print(f"{second_row.get(1).unwrap()}")
 

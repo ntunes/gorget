@@ -1327,7 +1327,7 @@ DataFrame df_from_records(Vector[String] headers, Vector[Vector[String]] rows):
         Vector[String] col_vals = Vector[String]()
         int ri = 0
         while ri < nrows:
-            Vector[String] row = rows.get(ri).unwrap()
+            auto row = rows.get(ri).unwrap()
             String val = ""
             if ci < row.len():
                 val = row.get(ci).unwrap()
@@ -1385,7 +1385,7 @@ Result[DataFrame, String] df_from_csv(String csv_text):
         bool all_float = true
         int ri = 0
         while ri < nrows:
-            Vector[String] row = rows.get(ri).unwrap()
+            auto row = rows.get(ri).unwrap()
             String val = ""
             if i < row.len():
                 val = row.get(i).unwrap()
@@ -1400,7 +1400,7 @@ Result[DataFrame, String] df_from_csv(String csv_text):
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[String] row = rows.get(ri).unwrap()
+                auto row = rows.get(ri).unwrap()
                 String val = ""
                 if i < row.len():
                     val = row.get(i).unwrap()
@@ -1417,7 +1417,7 @@ Result[DataFrame, String] df_from_csv(String csv_text):
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[String] row = rows.get(ri).unwrap()
+                auto row = rows.get(ri).unwrap()
                 String val = ""
                 if i < row.len():
                     val = row.get(i).unwrap()
@@ -1434,7 +1434,7 @@ Result[DataFrame, String] df_from_csv(String csv_text):
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[String] row = rows.get(ri).unwrap()
+                auto row = rows.get(ri).unwrap()
                 String val = ""
                 if i < row.len():
                     val = row.get(i).unwrap()
@@ -2270,7 +2270,7 @@ DataFrame df_from_records_typed(Vector[String] headers, Vector[Vector[String]] r
         bool all_bool = true
         int ri = 0
         while ri < nrows:
-            Vector[String] row = rows.get(ri).unwrap()
+            auto row = rows.get(ri).unwrap()
             String val = ""
             if ci < row.len():
                 val = row.get(ci).unwrap()
@@ -2287,7 +2287,7 @@ DataFrame df_from_records_typed(Vector[String] headers, Vector[Vector[String]] r
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[String] row = rows.get(ri).unwrap()
+                auto row = rows.get(ri).unwrap()
                 String val = ""
                 if ci < row.len():
                     val = row.get(ci).unwrap()
@@ -2304,7 +2304,7 @@ DataFrame df_from_records_typed(Vector[String] headers, Vector[Vector[String]] r
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[String] row = rows.get(ri).unwrap()
+                auto row = rows.get(ri).unwrap()
                 String val = ""
                 if ci < row.len():
                     val = row.get(ci).unwrap()
@@ -2321,7 +2321,7 @@ DataFrame df_from_records_typed(Vector[String] headers, Vector[Vector[String]] r
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[String] row = rows.get(ri).unwrap()
+                auto row = rows.get(ri).unwrap()
                 String val = ""
                 if ci < row.len():
                     val = row.get(ci).unwrap()
@@ -2338,7 +2338,7 @@ DataFrame df_from_records_typed(Vector[String] headers, Vector[Vector[String]] r
             Vector[bool] mask = Vector[bool]()
             ri = 0
             while ri < nrows:
-                Vector[String] row = rows.get(ri).unwrap()
+                auto row = rows.get(ri).unwrap()
                 String val = ""
                 if ci < row.len():
                     val = row.get(ci).unwrap()

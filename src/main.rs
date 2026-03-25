@@ -429,9 +429,13 @@ fn try_build_ir(
                 clone_errors += 1;
                 continue;
             }
-            // Warnings from imported libraries: count but don't show
+            // Warnings from imported libraries: count but don't show by default.
+            // Set GORGET_SHOW_LIB_CLONE_WARNINGS=1 to display them.
             if !reporter.is_entry_file(warn.span) {
                 lib_warning_count += 1;
+                if std::env::var("GORGET_SHOW_LIB_CLONE_WARNINGS").is_ok() {
+                    reporter.report_implicit_clone_warning(warn);
+                }
                 continue;
             }
             // Deduplicate by source location (same span = same warning)

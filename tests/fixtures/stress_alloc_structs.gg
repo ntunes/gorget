@@ -33,7 +33,7 @@ int count_hobbies(Team team):
     int total = 0
     int i = 0
     while i < team.members.len():
-        Person p = team.members[i]
+        auto p = team.members[i]
         total = total + p.hobbies.len()
         i = i + 1
     return total
