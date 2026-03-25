@@ -2306,16 +2306,39 @@ pub fn register_owned_string_for_drop(
 }
 
 /// Check whether GorgetString temps should be unregistered (leaked) for a call.
-/// Returns false (safe to keep in drop tracking) when the callee is void-returning
-/// with no mutable-reference params — the str view cannot escape the call frame.
+/// Returns false (safe to keep in drop tracking) when:
+/// - The callee is void-returning with no mutable-reference params
+/// - The callee returns GorgetString (owned) — it creates new allocations,
+///   doesn't store views from the args
+/// - The callee returns a primitive (int, float, bool) — can't store views
 pub fn should_unregister_string_args(
     ctx: &LoweringContext,
     callee_name: &str,
     ret_type: crate::ir::types::TypeId,
 ) -> bool {
-    use crate::ir::types::UNIT_TYPE;
-    // Non-void return: str view might escape via return value
-    if ret_type != UNIT_TYPE {
+    use crate::ir::types::{UNIT_TYPE, PRIMITIVE_TYPE_COUNT};
+    // Void return: str view can't escape via result
+    if ret_type == UNIT_TYPE {
+        // Still check for ByMutPtr params below
+    }
+    // Primitive return (int, float, bool): can't store str views
+    else if ret_type.0 < PRIMITIVE_TYPE_COUNT {
+        return false;
+    }
+    // GorgetString return: callee produces a new allocation, doesn't store arg views
+    else if ret_type == ctx.type_mapper.owned_string_type {
+        return false;
+    }
+    // StringView return: callee might return a view into the arg (safe — same scope)
+    else if ret_type == ctx.type_mapper.string_view_type {
+        return false;
+    }
+    // Collection return (Vector, Dict, etc.): collections own their string data
+    else if ctx.type_registry.is_collection_type(ret_type) {
+        return false;
+    }
+    // Non-void, non-primitive, non-string, non-collection: might store str views
+    else {
         return true;
     }
     // Check for ByMutPtr params — str view could escape through mutable ref

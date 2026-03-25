@@ -1151,7 +1151,7 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
     }
     ctx.fn_sigs.insert("GorgetStringView__byte_slice".to_string(), (vec![string_view_type, I64_TYPE, I64_TYPE], string_view_type));
     ctx.fn_sigs.insert("GorgetStringView__byte_at".to_string(), (vec![string_view_type, I64_TYPE], U8_TYPE));
-    ctx.fn_sigs.insert("GorgetStringView__char_at".to_string(), (vec![string_view_type, I64_TYPE], string_view_type));
+    ctx.fn_sigs.insert("GorgetStringView__char_at".to_string(), (vec![string_view_type, I64_TYPE], owned_str_type));
     // Methods returning GorgetString
     for m in &["to_upper", "to_lower"] {
         ctx.fn_sigs.insert(format!("GorgetStringView__{m}"), (str_self.clone(), owned_str_type));

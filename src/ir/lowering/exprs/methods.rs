@@ -1722,7 +1722,7 @@ fn infer_collection_method_return_type(
         }
         // String methods returning GorgetString (allocating)
         "to_upper" | "to_lower" | "replace" | "repeat" | "pad_left" | "pad_right"
-        | "join" if is_string => {
+        | "join" | "char_at" if is_string => {
             ctx.type_mapper.owned_string_type
         }
         // String .str() / .as_str() → Str
