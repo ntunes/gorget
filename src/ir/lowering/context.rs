@@ -710,8 +710,10 @@ impl<'a> LoweringContext<'a> {
             if name.starts_with("Set__") || name.starts_with("HashSet__") || name == "GorgetSet" {
                 return Some("gorget_set_clone".to_string());
             }
-            // GorgetString excluded: uses provenance-based ownership tracking.
-            // Auto-cloning GorgetStrings breaks the .str() method chain.
+            // GorgetString → gorget_string_clone_to_owned (always produces owned copy).
+            if name == "GorgetString" || name == "GorgetStringView" {
+                return Some("gorget_string_clone_to_owned".to_string());
+            }
 
             // User structs with Recursive or Custom drop → generated {Name}__clone.
             if let Some(type_def) = self.type_registry.get_type_def(name) {
