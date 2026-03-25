@@ -1613,7 +1613,7 @@ static inline Str gorget_str_index(Str s, int64_t idx) {
         i++;
     }
     int cplen = gorget_utf8_codepoint_len((unsigned char)s.data[byte_off]);
-    return gorget_str_own_region(s.data + byte_off, (size_t)cplen);
+    return gorget_str_view_region(s.data + byte_off, (size_t)cplen);
 }
 
 // Return owned copy of codepoint range [start, end). Supports negative indices.
@@ -1637,7 +1637,7 @@ static inline Str gorget_str_slice(Str s, int64_t start, int64_t end) {
     for (int64_t i = start; i < end; i++) {
         end_byte += (size_t)gorget_utf8_codepoint_len((unsigned char)s.data[end_byte]);
     }
-    return gorget_str_own_region(s.data + start_byte, end_byte - start_byte);
+    return gorget_str_view_region(s.data + start_byte, end_byte - start_byte);
 }
 // Zero-copy view variant of gorget_str_slice (substring).
 static inline Str gorget_str_slice_view(Str s, int64_t start, int64_t end) {
@@ -1683,7 +1683,7 @@ static inline Str gorget_str_byte_slice(Str s, int64_t start, int64_t end) {
         fprintf(stderr, "gorget: panic: string byte_slice out of bounds: [%" PRId64 "..%" PRId64 "], byte length %zu\n", start, end, s.len);
         exit(1);
     }
-    return gorget_str_own_region(s.data + start, (size_t)(end - start));
+    return gorget_str_view_region(s.data + start, (size_t)(end - start));
 }
 // Zero-copy view variant of byte_slice.
 static inline Str gorget_str_byte_slice_view(Str s, int64_t start, int64_t end) {
@@ -2018,7 +2018,7 @@ static inline Str gorget_str_trim(Str s) {
         if (!gorget_is_unicode_whitespace(cp)) end = pos;
         (void)cp_start;
     }
-    return gorget_str_own_region(s.data + start, end - start);
+    return gorget_str_view_region(s.data + start, end - start);
 }
 // Zero-copy view variant of trim.
 static inline Str gorget_str_trim_view(Str s) {
@@ -2048,7 +2048,7 @@ static inline Str gorget_str_lstrip_ws(Str s) {
         if (!gorget_is_unicode_whitespace(cp)) break;
         start = pos;
     }
-    return gorget_str_own_region(s.data + start, s.len - start);
+    return gorget_str_view_region(s.data + start, s.len - start);
 }
 // Zero-copy view variant of lstrip_ws.
 static inline Str gorget_str_lstrip_ws_view(Str s) {
@@ -2071,7 +2071,7 @@ static inline Str gorget_str_rstrip_ws(Str s) {
         if (!gorget_is_unicode_whitespace(cp)) end = pos;
         (void)cp_start;
     }
-    return gorget_str_own_region(s.data, end);
+    return gorget_str_view_region(s.data, end);
 }
 // Zero-copy view variant of rstrip_ws.
 static inline Str gorget_str_rstrip_ws_view(Str s) {
@@ -2112,7 +2112,7 @@ static inline Str gorget_str_strip(Str s, Str chars) {
         if (!gorget_cp_in_str(cp, chars)) end = pos;
         (void)cp_start;
     }
-    return gorget_str_own_region(s.data + start, end - start);
+    return gorget_str_view_region(s.data + start, end - start);
 }
 // Zero-copy view variant of strip.
 static inline Str gorget_str_strip_view(Str s, Str chars) {
@@ -2142,7 +2142,7 @@ static inline Str gorget_str_lstrip(Str s, Str chars) {
         if (!gorget_cp_in_str(cp, chars)) break;
         start = pos;
     }
-    return gorget_str_own_region(s.data + start, s.len - start);
+    return gorget_str_view_region(s.data + start, s.len - start);
 }
 // Zero-copy view variant of lstrip.
 static inline Str gorget_str_lstrip_view(Str s, Str chars) {
@@ -2165,7 +2165,7 @@ static inline Str gorget_str_rstrip(Str s, Str chars) {
         if (!gorget_cp_in_str(cp, chars)) end = pos;
         (void)cp_start;
     }
-    return gorget_str_own_region(s.data, end);
+    return gorget_str_view_region(s.data, end);
 }
 // Zero-copy view variant of rstrip.
 static inline Str gorget_str_rstrip_view(Str s, Str chars) {
@@ -2182,8 +2182,8 @@ static inline Str gorget_str_rstrip_view(Str s, Str chars) {
 
 static inline Str gorget_str_removeprefix(Str s, Str prefix) {
     if (gorget_str_starts_with(s, prefix))
-        return gorget_str_own_region(s.data + prefix.len, s.len - prefix.len);
-    return gorget_str_own_region(s.data, s.len);
+        return gorget_str_view_region(s.data + prefix.len, s.len - prefix.len);
+    return gorget_str_view_region(s.data, s.len);
 }
 // Zero-copy view variant of removeprefix.
 static inline Str gorget_str_removeprefix_view(Str s, Str prefix) {
@@ -2194,8 +2194,8 @@ static inline Str gorget_str_removeprefix_view(Str s, Str prefix) {
 
 static inline Str gorget_str_removesuffix(Str s, Str suffix) {
     if (gorget_str_ends_with(s, suffix))
-        return gorget_str_own_region(s.data, s.len - suffix.len);
-    return gorget_str_own_region(s.data, s.len);
+        return gorget_str_view_region(s.data, s.len - suffix.len);
+    return gorget_str_view_region(s.data, s.len);
 }
 // Zero-copy view variant of removesuffix.
 static inline Str gorget_str_removesuffix_view(Str s, Str suffix) {

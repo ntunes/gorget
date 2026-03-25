@@ -29,9 +29,9 @@ struct HttpResponse:
     bool http_use_tls = true
 
     if url.starts_with("https://"):
-        http_rest = url.byte_slice(8, url.byte_len())
+        http_rest = url.byte_slice(8, url.byte_len()).clone()
     elif url.starts_with("http://"):
-        http_rest = url.byte_slice(7, url.byte_len())
+        http_rest = url.byte_slice(7, url.byte_len()).clone()
         http_port = 80
         http_use_tls = false
 
@@ -41,16 +41,16 @@ struct HttpResponse:
     String http_path = "/"
     if http_sl.is_some():
         int http_sl_v = http_sl.unwrap()
-        http_hp = http_rest.byte_slice(0, http_sl_v)
-        http_path = http_rest.byte_slice(http_sl_v, http_rest.byte_len())
+        http_hp = http_rest.byte_slice(0, http_sl_v).clone()
+        http_path = http_rest.byte_slice(http_sl_v, http_rest.byte_len()).clone()
 
     # Split host:port
     Option[int] http_cp = http_hp.index_of(":")
     String http_host = http_hp
     if http_cp.is_some():
         int http_cp_v = http_cp.unwrap()
-        http_host = http_hp.byte_slice(0, http_cp_v)
-        String http_ps = http_hp.byte_slice(http_cp_v + 1, http_hp.byte_len())
+        http_host = http_hp.byte_slice(0, http_cp_v).clone()
+        String http_ps = http_hp.byte_slice(http_cp_v + 1, http_hp.byte_len()).clone()
         Option[int] http_port_parsed = int.parse(http_ps)
         if http_port_parsed is Some(http_pv):
             http_port = http_pv
@@ -93,8 +93,9 @@ private String read_body_chunked(TlsSocket &http_conn):
         # Strip any chunk extensions after ";"
         Option[int] http_semi = http_size_line.index_of(";")
         if http_semi.is_some():
-            http_size_line = http_size_line.byte_slice(0, http_semi.unwrap())
-        http_size_line = http_size_line.trim()
+            http_size_line = http_size_line.byte_slice(0, http_semi.unwrap()).trim().clone()
+        else:
+            http_size_line = http_size_line.trim().clone()
         int http_chunk_sz = parse_hex(http_size_line)
         if http_chunk_sz == 0:
             http_reading = false
@@ -135,8 +136,9 @@ private String read_body_chunked_plain(Socket &http_conn):
         String http_size_line = http_conn.read_line().unwrap()
         Option[int] http_semi = http_size_line.index_of(";")
         if http_semi.is_some():
-            http_size_line = http_size_line.byte_slice(0, http_semi.unwrap())
-        http_size_line = http_size_line.trim()
+            http_size_line = http_size_line.byte_slice(0, http_semi.unwrap()).trim().clone()
+        else:
+            http_size_line = http_size_line.trim().clone()
         int http_chunk_sz = parse_hex(http_size_line)
         if http_chunk_sz == 0:
             http_reading = false
@@ -201,10 +203,10 @@ Result[HttpResponse, String] http_single(String http_method, String http_url, St
         Option[int] http_tls_sp1 = http_tls_sl.index_of(" ")
         int http_tls_code = 0
         if http_tls_sp1.is_some():
-            String http_tls_after = http_tls_sl.byte_slice(http_tls_sp1.unwrap() + 1, http_tls_sl.byte_len())
+            String http_tls_after = http_tls_sl.byte_slice(http_tls_sp1.unwrap() + 1, http_tls_sl.byte_len()).clone()
             Option[int] http_tls_sp2 = http_tls_after.index_of(" ")
             if http_tls_sp2.is_some():
-                String http_tls_cs = http_tls_after.byte_slice(0, http_tls_sp2.unwrap())
+                String http_tls_cs = http_tls_after.byte_slice(0, http_tls_sp2.unwrap()).clone()
                 Option[int] http_tls_co = int.parse(http_tls_cs)
                 if http_tls_co is Some(http_tls_cv):
                     http_tls_code = http_tls_cv
@@ -224,7 +226,7 @@ Result[HttpResponse, String] http_single(String http_method, String http_url, St
                 if http_tls_colon.is_some():
                     int http_tls_cv3 = http_tls_colon.unwrap()
                     String http_tls_hn = http_tls_hl.byte_slice(0, http_tls_cv3).trim().to_lower()
-                    String http_tls_hv = http_tls_hl.byte_slice(http_tls_cv3 + 1, http_tls_hl.byte_len()).trim()
+                    String http_tls_hv = http_tls_hl.byte_slice(http_tls_cv3 + 1, http_tls_hl.byte_len()).trim().clone()
                     http_tls_hdrs.put(http_tls_hn, http_tls_hv)
 
         String http_tls_body = ""
@@ -256,10 +258,10 @@ Result[HttpResponse, String] http_single(String http_method, String http_url, St
         Option[int] http_plain_sp1 = http_plain_sl.index_of(" ")
         int http_plain_code = 0
         if http_plain_sp1.is_some():
-            String http_plain_after = http_plain_sl.byte_slice(http_plain_sp1.unwrap() + 1, http_plain_sl.byte_len())
+            String http_plain_after = http_plain_sl.byte_slice(http_plain_sp1.unwrap() + 1, http_plain_sl.byte_len()).clone()
             Option[int] http_plain_sp2 = http_plain_after.index_of(" ")
             if http_plain_sp2.is_some():
-                String http_plain_cs = http_plain_after.byte_slice(0, http_plain_sp2.unwrap())
+                String http_plain_cs = http_plain_after.byte_slice(0, http_plain_sp2.unwrap()).clone()
                 Option[int] http_plain_co = int.parse(http_plain_cs)
                 if http_plain_co is Some(http_plain_cv):
                     http_plain_code = http_plain_cv
@@ -279,7 +281,7 @@ Result[HttpResponse, String] http_single(String http_method, String http_url, St
                 if http_plain_colon.is_some():
                     int http_plain_cv3 = http_plain_colon.unwrap()
                     String http_plain_hn = http_plain_hl.byte_slice(0, http_plain_cv3).trim().to_lower()
-                    String http_plain_hv = http_plain_hl.byte_slice(http_plain_cv3 + 1, http_plain_hl.byte_len()).trim()
+                    String http_plain_hv = http_plain_hl.byte_slice(http_plain_cv3 + 1, http_plain_hl.byte_len()).trim().clone()
                     http_plain_hdrs.put(http_plain_hn, http_plain_hv)
 
         String http_plain_body = ""

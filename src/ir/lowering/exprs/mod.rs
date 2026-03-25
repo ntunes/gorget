@@ -295,8 +295,18 @@ fn lower_expr_inner(
             let elem_types: Vec<TypeId> = operands.iter()
                 .map(|op| infer_operand_type_full(ctx, op, builder))
                 .collect();
+            // Track which locals are used as tuple elements (for return MoveZero)
+            let elem_locals: Vec<LocalId> = operands.iter()
+                .filter_map(|op| match op {
+                    Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
+                    _ => None,
+                })
+                .collect();
             let type_id = register_tuple_type(ctx, &elem_types);
             let dst = builder.tuple_init(operands, type_id);
+            if !elem_locals.is_empty() {
+                ctx.tuple_element_locals.insert(dst, elem_locals);
+            }
             FunctionBuilder::copy(dst)
         }
 

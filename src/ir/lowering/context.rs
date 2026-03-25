@@ -234,6 +234,9 @@ pub struct LoweringContext<'a> {
     /// Maps temp locals from field_load → (source_field_place, field_type).
     /// Used by VarDecl/Assign to emit MoveZero after extracting resource-type fields.
     pub field_load_origins: FxHashMap<LocalId, (crate::ir::instructions::Place, TypeId)>,
+    /// TupleInit element origins: tuple_local → Vec<element_local_ids>.
+    /// Used by the return path to MoveZero element locals when returning a tuple.
+    pub tuple_element_locals: FxHashMap<LocalId, Vec<LocalId>>,
     /// Accumulated implicit clone warnings during lowering.
     pub implicit_clone_warnings: Vec<crate::ir::ImplicitCloneWarning>,
 }
@@ -282,6 +285,7 @@ impl<'a> LoweringContext<'a> {
             move_override_params: std::collections::HashSet::new(),
             sentinel_to_option_methods: rustc_hash::FxHashSet::default(),
             field_load_origins: FxHashMap::default(),
+            tuple_element_locals: FxHashMap::default(),
             implicit_clone_warnings: Vec::new(),
         }
     }

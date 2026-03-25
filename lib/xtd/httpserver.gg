@@ -127,8 +127,9 @@ String http_server_read_body_chunked(Socket &conn):
             continue
         Option[int] semi = size_line.index_of(";")
         if semi.is_some():
-            size_line = size_line.byte_slice(0, semi.unwrap())
-        size_line = size_line.trim()
+            size_line = size_line.byte_slice(0, semi.unwrap()).trim().clone()
+        else:
+            size_line = size_line.trim().clone()
         int chunk_sz = http_server_parse_hex(size_line)
         if chunk_sz == 0:
             reading = false
@@ -161,8 +162,9 @@ String http_server_read_body_chunked_tls(TlsSocket &conn):
             continue
         Option[int] semi = size_line.index_of(";")
         if semi.is_some():
-            size_line = size_line.byte_slice(0, semi.unwrap())
-        size_line = size_line.trim()
+            size_line = size_line.byte_slice(0, semi.unwrap()).trim().clone()
+        else:
+            size_line = size_line.trim().clone()
         int chunk_sz = http_server_parse_hex(size_line)
         if chunk_sz == 0:
             reading = false
@@ -192,15 +194,15 @@ Result[HttpRequest, String] http_server_parse_request(Socket &conn, int max_body
     if sp1_opt.is_none():
         return Error("malformed request line")
     int sp1 = sp1_opt.unwrap()
-    String req_method = req_line.byte_slice(0, sp1)
-    String req_rest = req_line.byte_slice(sp1 + 1, req_line.byte_len())
+    String req_method = req_line.byte_slice(0, sp1).clone()
+    String req_rest = req_line.byte_slice(sp1 + 1, req_line.byte_len()).clone()
 
     Option[int] sp2_opt = req_rest.index_of(" ")
     if sp2_opt.is_none():
         return Error("malformed request line")
     int sp2 = sp2_opt.unwrap()
-    String raw_path = req_rest.byte_slice(0, sp2)
-    String req_version = req_rest.byte_slice(sp2 + 1, req_rest.byte_len())
+    String raw_path = req_rest.byte_slice(0, sp2).clone()
+    String req_version = req_rest.byte_slice(sp2 + 1, req_rest.byte_len()).clone()
 
     # Split path at "?" then percent-decode both parts
     String req_path = raw_path
@@ -208,8 +210,8 @@ Result[HttpRequest, String] http_server_parse_request(Socket &conn, int max_body
     Option[int] qm_opt = raw_path.index_of("?")
     if qm_opt.is_some():
         int qm = qm_opt.unwrap()
-        req_path = raw_path.byte_slice(0, qm)
-        req_query = raw_path.byte_slice(qm + 1, raw_path.byte_len())
+        req_path = raw_path.byte_slice(0, qm).clone()
+        req_query = raw_path.byte_slice(qm + 1, raw_path.byte_len()).clone()
     Result[String, String] pd = url_decode(req_path)
     if pd.is_ok():
         req_path = pd.unwrap()
@@ -229,7 +231,7 @@ Result[HttpRequest, String] http_server_parse_request(Socket &conn, int max_body
             if colon_opt.is_some():
                 int colon = colon_opt.unwrap()
                 String hdr_name = hdr_line.byte_slice(0, colon).trim().to_lower()
-                String hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim()
+                String hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim().clone()
                 req_headers.put(hdr_name, hdr_val)
 
     # Body: chunked transfer-encoding takes priority over content-length
@@ -362,23 +364,23 @@ Result[HttpRequest, String] http_server_parse_request_tls(TlsSocket &conn, int m
     if sp1_opt.is_none():
         return Error("malformed request line")
     int sp1 = sp1_opt.unwrap()
-    String req_method = req_line.byte_slice(0, sp1)
-    String req_rest = req_line.byte_slice(sp1 + 1, req_line.byte_len())
+    String req_method = req_line.byte_slice(0, sp1).clone()
+    String req_rest = req_line.byte_slice(sp1 + 1, req_line.byte_len()).clone()
 
     Option[int] sp2_opt = req_rest.index_of(" ")
     if sp2_opt.is_none():
         return Error("malformed request line")
     int sp2 = sp2_opt.unwrap()
-    String raw_path = req_rest.byte_slice(0, sp2)
-    String req_version = req_rest.byte_slice(sp2 + 1, req_rest.byte_len())
+    String raw_path = req_rest.byte_slice(0, sp2).clone()
+    String req_version = req_rest.byte_slice(sp2 + 1, req_rest.byte_len()).clone()
 
     String req_path = raw_path
     String req_query = ""
     Option[int] qm_opt = raw_path.index_of("?")
     if qm_opt.is_some():
         int qm = qm_opt.unwrap()
-        req_path = raw_path.byte_slice(0, qm)
-        req_query = raw_path.byte_slice(qm + 1, raw_path.byte_len())
+        req_path = raw_path.byte_slice(0, qm).clone()
+        req_query = raw_path.byte_slice(qm + 1, raw_path.byte_len()).clone()
     Result[String, String] tls_pd = url_decode(req_path)
     if tls_pd.is_ok():
         req_path = tls_pd.unwrap()
@@ -397,7 +399,7 @@ Result[HttpRequest, String] http_server_parse_request_tls(TlsSocket &conn, int m
             if colon_opt.is_some():
                 int colon = colon_opt.unwrap()
                 String hdr_name = hdr_line.byte_slice(0, colon).trim().to_lower()
-                String hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim()
+                String hdr_val = hdr_line.byte_slice(colon + 1, hdr_line.byte_len()).trim().clone()
                 req_headers.put(hdr_name, hdr_val)
 
     String req_body = ""
@@ -571,8 +573,8 @@ Dict[String, String] parse_query_string(String qs):
         Option[int] eq_opt = pair.index_of("=")
         if eq_opt.is_some():
             int eq = eq_opt.unwrap()
-            String raw_key = pair.byte_slice(0, eq)
-            String raw_val = pair.byte_slice(eq + 1, pair.byte_len())
+            String raw_key = pair.byte_slice(0, eq).clone()
+            String raw_val = pair.byte_slice(eq + 1, pair.byte_len()).clone()
             Result[String, String] dk = url_decode(raw_key)
             Result[String, String] dv = url_decode(raw_val)
             params.put(dk.unwrap_or(raw_key), dv.unwrap_or(raw_val))
@@ -595,8 +597,8 @@ Dict[String, String] parse_form_body(String body):
         Option[int] eq_opt = pair.index_of("=")
         if eq_opt.is_some():
             int eq = eq_opt.unwrap()
-            String raw_key = pair.byte_slice(0, eq)
-            String raw_val = pair.byte_slice(eq + 1, pair.byte_len())
+            String raw_key = pair.byte_slice(0, eq).clone()
+            String raw_val = pair.byte_slice(eq + 1, pair.byte_len()).clone()
             Result[String, String] dk = form_decode(raw_key)
             Result[String, String] dv = form_decode(raw_val)
             params.put(dk.unwrap_or(raw_key), dv.unwrap_or(raw_val))
@@ -616,12 +618,12 @@ Dict[String, String] parse_cookies(String header):
     Vector[String] parts = header.split(";")
     int i = 0
     while i < parts.len():
-        String part = parts[i].trim()
+        String part = parts[i].trim().clone()
         Option[int] eq_opt = part.index_of("=")
         if eq_opt.is_some():
             int eq = eq_opt.unwrap()
-            String name = part.byte_slice(0, eq).trim()
-            String value = part.byte_slice(eq + 1, part.byte_len()).trim()
+            String name = part.byte_slice(0, eq).trim().clone()
+            String value = part.byte_slice(eq + 1, part.byte_len()).trim().clone()
             if name != "":
                 cookies.put(name, value)
         i = i + 1
@@ -674,7 +676,7 @@ Result[Dict[String, String], String] http_router_match_pattern(Vector[String] pa
         String seg = pattern[i]
         String part = parts[i]
         if seg.starts_with(":"):
-            String param_name = seg.byte_slice(1, seg.byte_len())
+            String param_name = seg.byte_slice(1, seg.byte_len()).clone()
             params.put(param_name, part)
         elif seg != part:
             return Error("")
@@ -694,7 +696,7 @@ Result[Dict[String, String], String] http_router_match_wildcard(Vector[String] p
         String seg = pattern[pi]
         if seg.starts_with("*"):
             wc_idx = pi
-            wc_name = seg.byte_slice(1, seg.byte_len())
+            wc_name = seg.byte_slice(1, seg.byte_len()).clone()
         pi = pi + 1
     if wc_idx < 0:
         return Error("")
@@ -710,7 +712,7 @@ Result[Dict[String, String], String] http_router_match_wildcard(Vector[String] p
         String pseg = pattern[si]
         String ppart = parts[si]
         if pseg.starts_with(":"):
-            String pname = pseg.byte_slice(1, pseg.byte_len())
+            String pname = pseg.byte_slice(1, pseg.byte_len()).clone()
             params.put(pname, ppart)
         elif pseg != ppart:
             return Error("")
@@ -805,8 +807,8 @@ equip Router:
             String k = ex_keys[ei]
             Option[int] sp = k.index_of(" ")
             if sp.is_some():
-                String mth = k.byte_slice(0, sp.unwrap())
-                String pth = k.byte_slice(sp.unwrap() + 1, k.byte_len())
+                String mth = k.byte_slice(0, sp.unwrap()).clone()
+                String pth = k.byte_slice(sp.unwrap() + 1, k.byte_len()).clone()
                 Callable[HttpServerResponse(HttpRequest)] h = sub.exact_routes[k]
                 self.exact_routes.put(mth + " " + prefix + pth, h)
             ei = ei + 1
@@ -816,8 +818,8 @@ equip Router:
             String k = pr_keys[pri]
             Option[int] sp2 = k.index_of("|")
             if sp2.is_some():
-                String mth = k.byte_slice(0, sp2.unwrap())
-                String pth = k.byte_slice(sp2.unwrap() + 1, k.byte_len())
+                String mth = k.byte_slice(0, sp2.unwrap()).clone()
+                String pth = k.byte_slice(sp2.unwrap() + 1, k.byte_len()).clone()
                 Callable[HttpServerResponse(HttpRequest)] h = sub.param_routes[k]
                 self.param_routes.put(mth + "|" + prefix + pth, h)
             pri = pri + 1
@@ -827,8 +829,8 @@ equip Router:
             String k = wr_keys[wri]
             Option[int] sp3 = k.index_of("|")
             if sp3.is_some():
-                String mth = k.byte_slice(0, sp3.unwrap())
-                String pth = k.byte_slice(sp3.unwrap() + 1, k.byte_len())
+                String mth = k.byte_slice(0, sp3.unwrap()).clone()
+                String pth = k.byte_slice(sp3.unwrap() + 1, k.byte_len()).clone()
                 Callable[HttpServerResponse(HttpRequest)] h = sub.wildcard_routes[k]
                 self.wildcard_routes.put(mth + "|" + prefix + pth, h)
             wri = wri + 1
@@ -860,7 +862,7 @@ equip Router:
             while pi < pkeys.len():
                 String pkey = pkeys[pi]
                 if pkey.starts_with(mpfx):
-                    String route_path = pkey.byte_slice(mpfx_len, pkey.byte_len())
+                    String route_path = pkey.byte_slice(mpfx_len, pkey.byte_len()).clone()
                     Vector[String] pattern = route_path.split("/")
                     Result[Dict[String, String], String] mr = http_router_match_pattern(pattern, path_parts)
                     if mr.is_ok():
@@ -872,7 +874,7 @@ equip Router:
                 while wi < wkeys.len():
                     String wkey = wkeys[wi]
                     if wkey.starts_with(mpfx):
-                        String wpath = wkey.byte_slice(mpfx_len, wkey.byte_len())
+                        String wpath = wkey.byte_slice(mpfx_len, wkey.byte_len()).clone()
                         Vector[String] wpat = wpath.split("/")
                         Result[Dict[String, String], String] wmr = http_router_match_wildcard(wpat, path_parts)
                         if wmr.is_ok():
@@ -899,7 +901,7 @@ equip Router:
         while pi < pkeys.len():
             String pkey = pkeys[pi]
             if pkey.starts_with(method_prefix):
-                String route_path = pkey.byte_slice(method_prefix_len, pkey.byte_len())
+                String route_path = pkey.byte_slice(method_prefix_len, pkey.byte_len()).clone()
                 Vector[String] pattern = route_path.split("/")
                 Result[Dict[String, String], String] m = http_router_match_pattern(pattern, path_parts)
                 if m.is_ok():
@@ -916,7 +918,7 @@ equip Router:
         while wi < wkeys.len():
             String wkey = wkeys[wi]
             if wkey.starts_with(wpfx):
-                String wpath = wkey.byte_slice(wpfx_len, wkey.byte_len())
+                String wpath = wkey.byte_slice(wpfx_len, wkey.byte_len()).clone()
                 Vector[String] wpat = wpath.split("/")
                 Result[Dict[String, String], String] wm = http_router_match_wildcard(wpat, path_parts)
                 if wm.is_ok():
@@ -1063,13 +1065,13 @@ HttpServerResponse http_serve_file(String base_dir, HttpRequest req):
     if req.headers.contains("range"):
         String range_hdr = req.headers["range"]
         if range_hdr.starts_with("bytes="):
-            String spec = range_hdr.byte_slice(6, range_hdr.byte_len())
+            String spec = range_hdr.byte_slice(6, range_hdr.byte_len()).clone()
             int total = content.byte_len()
             Option[int] dash_opt = spec.index_of("-")
             if dash_opt.is_some():
                 int dash = dash_opt.unwrap()
-                String start_s = spec.byte_slice(0, dash).trim()
-                String end_s = spec.byte_slice(dash + 1, spec.byte_len()).trim()
+                String start_s = spec.byte_slice(0, dash).trim().clone()
+                String end_s = spec.byte_slice(dash + 1, spec.byte_len()).trim().clone()
                 Option[int] start_opt = int.parse(start_s)
                 if start_opt.is_some():
                     int start = start_opt.unwrap()
@@ -1079,7 +1081,7 @@ HttpServerResponse http_serve_file(String base_dir, HttpRequest req):
                         if end_opt.is_some():
                             end_exclusive = end_opt.unwrap() + 1
                     if start < total and start < end_exclusive:
-                        String partial = content.byte_slice(start, end_exclusive)
+                        String partial = content.byte_slice(start, end_exclusive).clone()
                         Dict[String, String] rhdrs = Dict[String, String]()
                         rhdrs.put("Content-Range", "bytes " + int_to_str(start) + "-" + int_to_str(end_exclusive - 1) + "/" + int_to_str(total))
                         rhdrs.put("ETag", etag)
