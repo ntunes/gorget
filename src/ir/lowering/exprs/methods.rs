@@ -1253,6 +1253,30 @@ pub(super) fn lower_method_call(
                 let dst = ctx.call_tracked(builder, clone_fn, vec![ptr_arg], recv_type_id);
                 return FunctionBuilder::copy(dst);
             }
+            // String .clone(): use gorget_string_clone_to_owned to produce an
+            // independent owned copy (gorget_string_clone preserves views).
+            let is_string = recv_type_id == ctx.type_mapper.owned_string_type
+                || recv_type_id == ctx.type_mapper.string_view_type;
+            if is_string {
+                let owned_type = ctx.type_mapper.owned_string_type;
+                let ptr_arg = match &recv {
+                    Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                        let lid = p.local.0 as usize;
+                        let tid = builder.locals[lid].type_id;
+                        if matches!(ctx.type_registry.get(tid), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))) {
+                            FunctionBuilder::copy(p.local)
+                        } else {
+                            let pt = ctx.register_ptr_type(recv_type_id);
+                            let pl = builder.add_local(pt, None);
+                            builder.emit_borrow(pl, p.clone());
+                            FunctionBuilder::copy(pl)
+                        }
+                    }
+                    _ => recv.clone(),
+                };
+                let dst = ctx.call_tracked(builder, "gorget_string_clone_to_owned", vec![ptr_arg], owned_type);
+                return FunctionBuilder::copy(dst);
+            }
             // Non-resource type: .clone() is a trivial copy (no deep clone needed)
             return recv;
         }
@@ -1722,7 +1746,7 @@ fn infer_collection_method_return_type(
         }
         // String methods returning GorgetString (allocating)
         "to_upper" | "to_lower" | "replace" | "repeat" | "pad_left" | "pad_right"
-        | "join" | "char_at" if is_string => {
+        | "join" if is_string => {
             ctx.type_mapper.owned_string_type
         }
         // String .str() / .as_str() → Str

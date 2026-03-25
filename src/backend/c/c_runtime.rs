@@ -1261,6 +1261,20 @@ static inline GorgetString gorget_string_clone(const GorgetString* src) {
     return dst;
 }
 
+// Clone that always produces an owned copy — used by explicit .clone() method.
+// Unlike gorget_string_clone, this allocates even for views (cap==0).
+static inline GorgetString gorget_string_clone_to_owned(const GorgetString* src) {
+    GorgetAllocator* a = __gorget_current_alloc;
+    if (src->len == 0) {
+        return (GorgetString){NULL, 0, 0, a};
+    }
+    size_t new_cap = (src->cap > 0) ? src->cap : src->len + 1;
+    char* buf = (char*)a->alloc(a->ctx, new_cap);
+    memcpy(buf, src->data, src->len);
+    buf[src->len] = '\0';
+    return (GorgetString){(const char*)buf, src->len, new_cap, a};
+}
+
 static inline GorgetString gorget_string_concat(const GorgetString* a, const GorgetString* b) {
     GorgetAllocator* al = __gorget_current_alloc;
     size_t len = a->len + b->len;
@@ -1680,19 +1694,17 @@ static inline Str gorget_str_byte_slice_view(Str s, int64_t start, int64_t end) 
     return gorget_str_view_region(s.data + start, (size_t)(end - start));
 }
 
-// Return the byte at index as a 1-byte owned Str. Deprecated compat: prefer byte_at() for byte access.
+// Return a zero-copy view of the character at the given byte index.
+// The view is valid as long as the source string is alive.
 static inline Str gorget_str_char_at(Str s, int64_t index) {
     if (index < 0 || (size_t)index >= s.len) {
         return gorget_str_empty();
     }
-    return gorget_str_own_region(s.data + index, 1);
-}
-// Zero-copy view variant of char_at.
-static inline Str gorget_str_char_at_view(Str s, int64_t index) {
-    if (index < 0 || (size_t)index >= s.len) {
-        return gorget_str_empty();
-    }
     return gorget_str_view_region(s.data + index, 1);
+}
+// Backwards-compat alias for C backend view promotion.
+static inline Str gorget_str_char_at_view(Str s, int64_t index) {
+    return gorget_str_char_at(s, index);
 }
 
 // Return the byte at index (byte-level). Bounds-checked against byte length.
