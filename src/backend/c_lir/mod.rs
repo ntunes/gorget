@@ -4464,6 +4464,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                         write!(out, " {op}").unwrap();
                                     }
                                 }
+                            } else if module.recursive_drop_enums.contains_key(sname) {
+                                // Enum with resource payloads: call {Name}__clone_inplace
+                                write!(out, " {sname}__clone_inplace(&{});", v(*d)).unwrap();
                             }
                         }
                     }
@@ -6003,8 +6006,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     {
                         let prefix = if orig.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
                         if let Some(rest) = orig.strip_prefix(prefix) {
-                            if let Some(pos) = rest.find("__") {
-                                let val_type = &rest[pos + 2..];
+                            // Strip constructor suffixes like __new, __new_str
+                            let rest_stripped = rest.strip_suffix("__new_str")
+                                .or_else(|| rest.strip_suffix("__new"))
+                                .unwrap_or(rest);
+                            if let Some(pos) = rest_stripped.find("__") {
+                                let val_type = &rest_stripped[pos + 2..];
                                 if let Some(drop_fn) = elem_drop_fn_for_c_type(val_type) {
                                     write!(out, " {dv}.val_drop = (__gorget_drop_fn){drop_fn};").unwrap();
                                 }
