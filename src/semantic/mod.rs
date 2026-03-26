@@ -61,6 +61,9 @@ pub struct AnalysisResult {
     pub warnings: Vec<SemanticWarning>,
     /// Inferred function purity: name → Purity level.
     pub fn_purity: purity::PurityByName,
+    /// Borrow dependencies: borrower DefId → Vec<source DefId>.
+    /// Used by the drop elaborator to order drops correctly.
+    pub borrow_deps: rustc_hash::FxHashMap<DefId, Vec<DefId>>,
 }
 
 /// Run all semantic analysis passes on a parsed module.
@@ -253,7 +256,7 @@ pub fn analyze_with_source_dir(
     provenance::rewrite_ast_string_types(module, &scopes, &types, &resolve_ctx.function_info);
 
     // Pass 5: Borrow checking (two sub-passes: 5a computes return_borrows_from, 5b does full check)
-    let (shared_bindings, warnings, fn_purity) = safety::check_module(
+    let (shared_bindings, warnings, fn_purity, borrow_deps) = safety::check_module(
         module,
         &scopes,
         &types,
@@ -281,5 +284,6 @@ pub fn analyze_with_source_dir(
         shared_bindings,
         warnings,
         fn_purity,
+        borrow_deps,
     }
 }

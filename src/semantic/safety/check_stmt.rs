@@ -1448,6 +1448,18 @@ impl<'a> BorrowChecker<'a> {
             FunctionBody::Declaration | FunctionBody::Extern(_) => {}
         }
 
+        // Export borrow dependency data for drop ordering.
+        // For each reference-typed local, record which locals it borrows from.
+        for (borrower_id, origin) in &self.var_origins {
+            let sources: Vec<DefId> = origin.source_def_ids()
+                .into_iter()
+                .filter(|&did| did != *borrower_id) // no self-references
+                .collect();
+            if !sources.is_empty() {
+                self.borrow_deps.entry(*borrower_id).or_default().extend(sources);
+            }
+        }
+
         // Phase 3: Emit unused variable warnings (skip in imported modules)
         if self.imported_module_depth == 0 {
             for (_, (name, span, is_used)) in &self.local_var_usage {

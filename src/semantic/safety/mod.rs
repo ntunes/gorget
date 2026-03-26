@@ -275,6 +275,11 @@ pub(super) struct BorrowChecker<'a> {
     /// Current function's param (DefId, param_index) pairs.
     pub(super) current_param_def_ids: Vec<(DefId, usize)>,
 
+    // ── Borrow dependency export (for drop ordering) ──
+    /// Per-local borrow sources: borrower DefId → Vec<source DefId>.
+    /// Exported to AnalysisResult so the drop elaborator can order drops correctly.
+    pub(super) borrow_deps: FxHashMap<DefId, Vec<DefId>>,
+
     // ── Method resolution (Phase 7) ──
     /// Method span start → DefId (from typechecker, for origin/temporary tracking).
     pub(super) method_resolutions: &'a FxHashMap<usize, DefId>,
@@ -415,6 +420,7 @@ impl<'a> BorrowChecker<'a> {
             struct_field_ref_flags,
             var_origins: FxHashMap::default(),
             invalidated_origins: FxHashSet::default(),
+            borrow_deps: FxHashMap::default(),
             current_return_type_id: None,
             imported_module_depth: 0,
             current_param_def_ids: Vec::new(),
@@ -487,7 +493,7 @@ pub fn check_module(
     method_resolutions: &FxHashMap<usize, DefId>,
     errors: &mut Vec<SemanticError>,
     warn_const: bool,
-) -> (FxHashMap<DefId, super::SharedStrategy>, Vec<super::errors::SemanticWarning>, super::purity::PurityByName) {
+) -> (FxHashMap<DefId, super::SharedStrategy>, Vec<super::errors::SemanticWarning>, super::purity::PurityByName, FxHashMap<DefId, Vec<DefId>>) {
     // Phase 4: compute which structs have reference-type fields
     let ref_type_structs = compute_ref_type_structs(module, scopes);
     let struct_field_ref_flags = compute_struct_field_ref_flags(module, scopes, &ref_type_structs);
@@ -561,8 +567,10 @@ pub fn check_module(
 
     warnings.extend(checker.stale_warnings);
     errors.extend(checker.errors);
+    let shared_out = checker.shared_out;
+    let borrow_deps = checker.borrow_deps;
 
-    (checker.shared_out, warnings, purity_by_name)
+    (shared_out, warnings, purity_by_name, borrow_deps)
 }
 
 fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
