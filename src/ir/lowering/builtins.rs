@@ -596,6 +596,106 @@ pub static RESULT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     ],
 };
 
+// Non-generic sync/concurrency types: ByValue receiver, no runtime_callee mapping
+// (the LIR backend's map_monomorphized_to_runtime handles the GIR→C name mapping).
+
+pub static ATOMIC_INT: BuiltinTypeProtocol = BuiltinTypeProtocol {
+    base_name: "AtomicInt",
+    type_arity: 0,
+    copy_semantics: CopySemantics::Trivial,
+    drop_fn: None,
+    clone_fn: None,
+    collection_kind: None,
+    methods: &[
+        BuiltinMethodDecl { name: "load", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_int },
+        BuiltinMethodDecl { name: "store", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: true, params: int_param, return_type: ret_void },
+        BuiltinMethodDecl { name: "add", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: int_param, return_type: ret_int },
+        BuiltinMethodDecl { name: "sub", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: int_param, return_type: ret_int },
+        BuiltinMethodDecl { name: "compare_exchange", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: two_ints, return_type: ret_bool },
+    ],
+};
+
+pub static ATOMIC_BOOL: BuiltinTypeProtocol = BuiltinTypeProtocol {
+    base_name: "AtomicBool",
+    type_arity: 0,
+    copy_semantics: CopySemantics::Trivial,
+    drop_fn: None,
+    clone_fn: None,
+    collection_kind: None,
+    methods: &[
+        BuiltinMethodDecl { name: "load", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_bool },
+        BuiltinMethodDecl { name: "store", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: true, params: |_| vec![BOOL_TYPE], return_type: ret_void },
+        BuiltinMethodDecl { name: "swap", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: |_| vec![BOOL_TYPE], return_type: ret_bool },
+        BuiltinMethodDecl { name: "compare_exchange", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: |_| vec![BOOL_TYPE, BOOL_TYPE], return_type: ret_bool },
+    ],
+};
+
+pub static BARRIER: BuiltinTypeProtocol = BuiltinTypeProtocol {
+    base_name: "Barrier",
+    type_arity: 0,
+    copy_semantics: CopySemantics::Trivial,
+    drop_fn: None,
+    clone_fn: None,
+    collection_kind: None,
+    methods: &[
+        BuiltinMethodDecl { name: "wait", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_void },
+    ],
+};
+
+pub static WAIT_GROUP: BuiltinTypeProtocol = BuiltinTypeProtocol {
+    base_name: "WaitGroup",
+    type_arity: 0,
+    copy_semantics: CopySemantics::Trivial,
+    drop_fn: None,
+    clone_fn: None,
+    collection_kind: None,
+    methods: &[
+        BuiltinMethodDecl { name: "add", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: int_param, return_type: ret_void },
+        BuiltinMethodDecl { name: "done", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_void },
+        BuiltinMethodDecl { name: "wait", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_void },
+    ],
+};
+
+pub static SEMAPHORE: BuiltinTypeProtocol = BuiltinTypeProtocol {
+    base_name: "Semaphore",
+    type_arity: 0,
+    copy_semantics: CopySemantics::Trivial,
+    drop_fn: None,
+    clone_fn: None,
+    collection_kind: None,
+    methods: &[
+        BuiltinMethodDecl { name: "acquire", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_void },
+        BuiltinMethodDecl { name: "release", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_void },
+        BuiltinMethodDecl { name: "try_acquire", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_bool },
+    ],
+};
+
+pub static ONCE_FLAG: BuiltinTypeProtocol = BuiltinTypeProtocol {
+    base_name: "OnceFlag",
+    type_arity: 0,
+    copy_semantics: CopySemantics::Trivial,
+    drop_fn: None,
+    clone_fn: None,
+    collection_kind: None,
+    methods: &[
+        BuiltinMethodDecl { name: "do_once", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_bool },
+        BuiltinMethodDecl { name: "is_done", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_bool },
+    ],
+};
+
+pub static TASK_GROUP: BuiltinTypeProtocol = BuiltinTypeProtocol {
+    base_name: "TaskGroup",
+    type_arity: 0,
+    copy_semantics: CopySemantics::Trivial,
+    drop_fn: None,
+    clone_fn: None,
+    collection_kind: None,
+    methods: &[
+        BuiltinMethodDecl { name: "spawn", runtime_callee: Some("gorget_task_group_submit"), self_conv: SelfConvention::ByValue, is_mutating: false, params: elem_param, return_type: ret_void },
+        BuiltinMethodDecl { name: "join", runtime_callee: Some("gorget_task_group_join"), self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_void },
+    ],
+};
+
 // ── Lookup ────────────────────────────────────────────────────────────
 
 /// All registered builtin type protocols.
@@ -605,6 +705,7 @@ static ALL_PROTOCOLS: &[&BuiltinTypeProtocol] = &[
     &RWLOCK, &READ_GUARD, &WRITE_GUARD,
     &THREAD, &HEAP,
     &GORGET_STRING_VIEW, &OPTION, &RESULT,
+    &ATOMIC_INT, &ATOMIC_BOOL, &BARRIER, &WAIT_GROUP, &SEMAPHORE, &ONCE_FLAG, &TASK_GROUP,
 ];
 
 /// Look up a builtin type protocol by base name (e.g., "Vector", "Dict").
@@ -620,4 +721,17 @@ pub fn protocol_for_mangled_name(mangled: &str) -> Option<&'static BuiltinTypePr
         (mangled.len() == p.base_name.len() ||
          mangled.as_bytes().get(p.base_name.len()) == Some(&b'_'))
     }).copied()
+}
+
+/// Check if a type uses by-value receiver convention (Copy-semantics pointer handles).
+/// Used by the generic dispatch path to skip borrow creation for these types.
+pub fn is_by_value_receiver(type_name: &str) -> bool {
+    if let Some(protocol) = protocol_for_mangled_name(type_name) {
+        // All methods on the type use ByValue — check any method
+        protocol.methods.first()
+            .map(|m| m.self_conv == SelfConvention::ByValue)
+            .unwrap_or(false)
+    } else {
+        false
+    }
 }

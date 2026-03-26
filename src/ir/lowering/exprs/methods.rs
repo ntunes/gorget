@@ -635,91 +635,6 @@ pub(super) fn lower_method_call(
         }
     }
 
-    // AtomicInt methods — pass the GorgetAtomicInt* receiver directly by value.
-    // fn_name_map maps AtomicInt__method → gorget_atomic_int_method in the C backend.
-    {
-        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-        if let Some(ref atn) = recv_type_name {
-            if atn == "AtomicInt" {
-                let recv_type = infer_operand_type_full(ctx, &recv, builder);
-                match method_name {
-                    "load" => {
-                        let dst = builder.call("AtomicInt__load", vec![recv], I64_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "store" if !args.is_empty() => {
-                        let val = lower_expr(ctx, builder, &args[0].node.value);
-                        builder.call_void("AtomicInt__store", vec![recv, val]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    "add" if !args.is_empty() => {
-                        let val = lower_expr(ctx, builder, &args[0].node.value);
-                        let dst = builder.call("AtomicInt__add", vec![recv, val], I64_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "sub" if !args.is_empty() => {
-                        let val = lower_expr(ctx, builder, &args[0].node.value);
-                        let dst = builder.call("AtomicInt__sub", vec![recv, val], I64_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "compare_exchange" if args.len() == 2 => {
-                        let expected = lower_expr(ctx, builder, &args[0].node.value);
-                        let desired  = lower_expr(ctx, builder, &args[1].node.value);
-                        let dst = builder.call("AtomicInt__compare_exchange", vec![recv, expected, desired], BOOL_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    _ => { let _ = recv_type; }
-                }
-            }
-        }
-    }
-
-    // AtomicBool methods — pass the GorgetAtomicBool* receiver directly by value.
-    {
-        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-        if let Some(ref atn) = recv_type_name {
-            if atn == "AtomicBool" {
-                let recv_type = infer_operand_type_full(ctx, &recv, builder);
-                match method_name {
-                    "load" => {
-                        let dst = builder.call("AtomicBool__load", vec![recv], BOOL_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "store" if !args.is_empty() => {
-                        let val = lower_expr(ctx, builder, &args[0].node.value);
-                        builder.call_void("AtomicBool__store", vec![recv, val]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    "swap" if !args.is_empty() => {
-                        let val = lower_expr(ctx, builder, &args[0].node.value);
-                        let dst = builder.call("AtomicBool__swap", vec![recv, val], BOOL_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "compare_exchange" if args.len() == 2 => {
-                        let expected = lower_expr(ctx, builder, &args[0].node.value);
-                        let desired  = lower_expr(ctx, builder, &args[1].node.value);
-                        let dst = builder.call("AtomicBool__compare_exchange", vec![recv, expected, desired], BOOL_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    _ => { let _ = recv_type; }
-                }
-            }
-        }
-    }
-
-    // Barrier methods — pass the GorgetBarrier* receiver directly by value.
-    {
-        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-        if let Some(ref btn) = recv_type_name {
-            if btn == "Barrier" {
-                if method_name == "wait" {
-                    builder.call_void("Barrier__wait", vec![recv]);
-                    return Operand::Constant(Constant::Unit);
-                }
-            }
-        }
-    }
-
     // CondVar methods — receiver is GorgetCondVar* (pointer), passed by value.
     // CondVar.wait(g) passes a mutable pointer to the Guard so the C bridge can access
     // g->mutex->lock for pthread_cond_wait (gorget_condvar_wait_guard in MUTEX_RUNTIME).
@@ -756,75 +671,6 @@ pub(super) fn lower_method_call(
                         };
                         builder.call_void("CondVar__wait", vec![recv, guard_ptr]);
                         return Operand::Constant(Constant::Unit);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    // WaitGroup methods — receiver is GorgetWaitGroup* (pointer), passed by value.
-    {
-        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-        if let Some(ref wtn) = recv_type_name {
-            if wtn == "WaitGroup" {
-                match method_name {
-                    "add" if !args.is_empty() => {
-                        let n = lower_expr(ctx, builder, &args[0].node.value);
-                        builder.call_void("WaitGroup__add", vec![recv, n]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    "done" => {
-                        builder.call_void("WaitGroup__done", vec![recv]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    "wait" => {
-                        builder.call_void("WaitGroup__wait", vec![recv]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    // Semaphore methods — receiver is GorgetSemaphore* (pointer), passed by value.
-    {
-        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-        if let Some(ref stn) = recv_type_name {
-            if stn == "Semaphore" {
-                match method_name {
-                    "acquire" => {
-                        builder.call_void("Semaphore__acquire", vec![recv]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    "release" => {
-                        builder.call_void("Semaphore__release", vec![recv]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    "try_acquire" => {
-                        let dst = builder.call("Semaphore__try_acquire", vec![recv], BOOL_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    // OnceFlag methods — receiver is GorgetOnceFlag* (pointer), passed by value.
-    {
-        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-        if let Some(ref otn) = recv_type_name {
-            if otn == "OnceFlag" {
-                match method_name {
-                    "do_once" => {
-                        let dst = builder.call("OnceFlag__do_once", vec![recv], BOOL_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "is_done" => {
-                        let dst = builder.call("OnceFlag__is_done", vec![recv], BOOL_TYPE);
-                        return FunctionBuilder::copy(dst);
                     }
                     _ => {}
                 }
@@ -1017,26 +863,8 @@ pub(super) fn lower_method_call(
         }
     }
 
-    // TaskGroup methods: spawn, join — dispatch via C runtime functions.
-    {
-        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-        if let Some(ref ttn) = recv_type_name {
-            if ttn == "TaskGroup" {
-                match method_name {
-                    "spawn" if !args.is_empty() => {
-                        let task_op = lower_expr(ctx, builder, &args[0].node.value);
-                        builder.call_void("gorget_task_group_submit", vec![recv, task_op]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    "join" => {
-                        builder.call_void("gorget_task_group_join", vec![recv]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+    // TaskGroup, AtomicInt, AtomicBool, Barrier, WaitGroup, Semaphore, OnceFlag
+    // — handled by generic dispatch via BuiltinTypeProtocol (builtins.rs)
 
     // .is_some() / .is_none() / .is_ok() / .is_error() on Option/Result → tag check
     // On non-Option/Result types → pass-through (return false)
@@ -1353,6 +1181,10 @@ pub(super) fn lower_method_call(
             );
             if is_ptr {
                 call_args.push(FunctionBuilder::copy(place.local));
+            } else if crate::ir::lowering::builtins::is_by_value_receiver(&type_name) {
+                // Copy-semantics pointer handles (AtomicInt, Barrier, Semaphore, etc.)
+                // — pass by value, not by reference.
+                call_args.push(recv.clone());
             } else if recv_type_id.0 < crate::ir::types::PRIMITIVE_TYPE_COUNT {
                 // Scalar types (int, float, bool, uint8, etc.) — pass by value, not by reference.
                 // Equip methods on scalars (e.g. uint8.is_alpha()) expect the value directly.
