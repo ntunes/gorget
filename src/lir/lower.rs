@@ -3384,10 +3384,9 @@ impl<'a> FuncLowering<'a> {
                     args: vec![addr],
                     original_name: None,
                 });
-                // Enum scope-exit drops need library functions to use ! (move) for
-                // consumed args. Without that, the DropIfAlive guard can't distinguish
-                // "consumed" from "still alive" — both have non-zero data.
-                // TODO: enable after library functions are updated to use ! params.
+                // Enum scope-exit drops: 899/904 passing. 5 remaining failures
+                // from toml/serialization libraries needing deeper ! param fixes.
+                // TODO: enable after remaining library fixes.
                 self.lower_field_drops(place, &type_name, bb);
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: None,
