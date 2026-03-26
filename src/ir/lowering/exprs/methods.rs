@@ -1576,8 +1576,11 @@ pub(super) fn lower_method_call(
         };
 
         // Collect Move-ownership Move-type arg locals for post-call MoveZero.
-        // Includes both (a) explicit !arg at call site and (b) bare args whose callee
-        // param is declared Move (e.g., collection push/set consuming resource-type args).
+        // Includes: (a) explicit !arg at call site, (b) bare args whose callee
+        // param is declared Move, (c) resource-type args to consuming methods
+        // (push, put, set, send) — these transfer ownership to the collection.
+        let consuming_method = matches!(method_name,
+            "push" | "put" | "set" | "push_back" | "push_front" | "send" | "add");
         let move_zero_locals: Vec<Place> = args.iter()
             .enumerate()
             .filter_map(|(i, arg)| {
