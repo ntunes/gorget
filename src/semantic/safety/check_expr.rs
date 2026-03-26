@@ -452,7 +452,10 @@ impl<'a> BorrowChecker<'a> {
                         Ownership::MutableBorrow | Ownership::Borrow => {
                             // Consuming collection method: value arg is stored in collection.
                             // Non-owned resource params cannot be stored — use ! to transfer.
-                            if Some(arg_idx) == consuming_value_idx {
+                            // Only check direct identifiers — index/field expressions produce copies.
+                            if Some(arg_idx) == consuming_value_idx
+                                && matches!(&arg.node.value.node, Expr::Identifier(_))
+                            {
                                 if let Some((param_name, kind)) = self.check_non_owned_param_move(&arg.node.value) {
                                     self.error(
                                         SemanticErrorKind::MutationOfBareParam {
