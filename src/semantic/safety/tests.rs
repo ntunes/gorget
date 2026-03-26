@@ -591,6 +591,7 @@ void main():
         let source = "\
 struct View:
     String name
+    String name
 
 void main():
     View v = View(\"hello\")
@@ -665,7 +666,6 @@ void main():
         // consume(!s) is a double move.
         let source = "\
 struct Tagged:
-    String label
     int count
 
 void consume(String !s):
@@ -3127,6 +3127,7 @@ async void main():
 
     #[test]
     fn bare_param_field_assign_rejected() {
+        // String field makes the struct non-Copy (passed by pointer on bare borrow)
         let source = "\
 struct Point:
     String label
@@ -3233,6 +3234,7 @@ void consume_point(Point !p):
     fn bare_param_nested_field_assign_rejected() {
         let source = "\
 struct Inner:
+    String name
     int val
 
 struct Outer:

@@ -397,11 +397,15 @@ impl<'a> BorrowChecker<'a> {
         if !def.is_param {
             return None;
         }
-        // Only bare (Ownership::Borrow) params are immutable
+        // Only bare (Ownership::Borrow) params are immutable.
+        // Bare borrow = immutable regardless of Copy/non-Copy.
+        // Mutating a Copy param silently loses the change (bug trap).
         if def.param_ownership != Some(crate::parser::ast::Ownership::Borrow) {
             return None;
         }
-        // Only non-Copy types are affected — primitives are passed by value and can be freely mutated
+        // Copy types (primitives + all-Copy-field structs) pass by value.
+        // Mutation modifies the local copy — harmless. Only reject for
+        // non-Copy types where bare borrow means pass-by-pointer (immutable).
         if let Some(type_id) = def.type_id {
             if is_copy_type(type_id, self.types, self.scopes) {
                 return None;
@@ -419,12 +423,16 @@ impl<'a> BorrowChecker<'a> {
         if !def.is_param {
             return None;
         }
-        // Only non-Copy types are affected
+        // Copy types (primitives + all-Copy-field structs) pass by value.
+        // Storing them in collections is harmless (value-copied).
         if let Some(type_id) = def.type_id {
             if is_copy_type(type_id, self.types, self.scopes) {
                 return None;
             }
         }
+        // Bare borrow = immutable for non-Copy types.
+        // Mutating a Copy-type bare param silently loses the change (bug trap).
+        // Mutating a non-Copy bare param violates the borrow contract.
         match def.param_ownership {
             Some(crate::parser::ast::Ownership::Borrow) =>
                 Some((def.name.clone(), "immutable")),
