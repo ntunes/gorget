@@ -727,10 +727,17 @@ fn lower_return(
                                 vec![operand.clone()],
                                 ret_type,
                             );
-                            builder.assign(
+                            // Move (not Copy) to the return slot — avoids
+                            // redundant gorget_string_clone. from_str already
+                            // allocated an owned copy; Move transfers it.
+                            builder.assign_mode(
+                                crate::ir::instructions::AssignMode::Move,
                                 Place::local(LocalId(0)),
                                 FunctionBuilder::copy(clone_result),
                             );
+                            // Zero the temp so scope-exit DropIfAlive is a no-op.
+                            builder.move_zero(Place::local(clone_result));
+                            ctx.drops.mark_moved(clone_result);
                             did_clone_return = true;
                         }
                     }
