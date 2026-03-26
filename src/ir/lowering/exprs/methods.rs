@@ -1656,7 +1656,30 @@ pub(super) fn lower_method_call(
                 }
             }
         }
-
+        // MoveZero named locals consumed by push/put/set/add.
+        // The value is transferred to the collection; the source must be zeroed
+        // to prevent scope-exit DropIfAlive from double-freeing.
+        let consuming_value_pos: Option<usize> = match method_name {
+            "push" | "add" | "extend" | "send" | "push_back" | "push_front" => Some(0),
+            "put" | "set" | "insert" => if lowered_method_args.len() >= 2 { Some(1) } else { None },
+            _ => None,
+        };
+        if let Some(value_idx) = consuming_value_pos {
+            // Use the ORIGINAL AST args to find the source local name,
+            // since lowered args go through pointer transformation.
+            if let Some(ast_arg) = args.get(value_idx) {
+                if let Expr::Identifier(name) = &ast_arg.node.value.node {
+                    if let Some((local_id, _)) = ctx.lookup_local(name) {
+                        if ctx.is_named_local(local_id)
+                            && is_resource_type_local(local_id, builder, &ctx.type_registry)
+                        {
+                            builder.move_zero(Place::local(local_id));
+                            ctx.drops.mark_moved(local_id);
+                        }
+                    }
+                }
+            }
+        }
         result
     } else {
         // Can't determine receiver type — fallback
