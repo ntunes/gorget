@@ -3327,6 +3327,7 @@ impl<'a> FuncLowering<'a> {
                             }
                         }
                     }
+
                 }
 
                 if let Some(&fid) = self.func_index.get(fn_name.as_str()) {

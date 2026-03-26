@@ -1091,7 +1091,7 @@ fn lower_struct_literal(
         } else {
             "gorget_string_from_str"
         };
-        let dst = builder.call_extern(fn_name, vec![arg_op], owned_type);
+        let dst = ctx.call_extern_tracked(builder, fn_name, vec![arg_op], owned_type);
         return FunctionBuilder::copy(dst);
     }
     // String() with no args → empty GorgetString

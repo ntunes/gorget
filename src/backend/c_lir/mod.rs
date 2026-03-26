@@ -3999,6 +3999,20 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 return;
             }
 
+            // ── Map key drops ──
+            // __gorget_map_drop_keys__drop_fn(addr) → drop each key in the map
+            if let Some(drop_fn) = name.strip_prefix("__gorget_map_drop_keys__") {
+                if !args.is_empty() {
+                    let map = v(args[0]);
+                    write!(out,
+                        "for (size_t __di = 0; __di < ((GorgetMap*){map})->cap; __di++) {{ \
+                         if (((GorgetMap*){map})->states[__di] == 1) {{ \
+                         void* __key = (char*)((GorgetMap*){map})->keys + __di * ((GorgetMap*){map})->key_size; \
+                         {drop_fn}(__key); }} }}").unwrap();
+                }
+                return;
+            }
+
             // ── Recipe-based compound element drop ──
             // __gorget_array_drop_recipe__TypeName(addr) → compound drop per element
             if let Some(type_name) = name.strip_prefix("__gorget_array_drop_recipe__") {
@@ -8804,6 +8818,14 @@ fn emit_recipe_map_drop(
          void* __val{depth} = (char*)((GorgetMap*){map})->values + {idx} * ((GorgetMap*){map})->val_size; ").unwrap();
     emit_drop_actions(out, &format!("__val{depth}"), actions, module, sn, depth + 1);
     write!(out, " }} }}").unwrap();
+}
+
+/// Emit per-key drops for a map with droppable keys.
+fn emit_map_key_drops(out: &mut String, map: &str, drop_fn: &str) {
+    write!(out,
+        "for (size_t __dki = 0; __dki < ((GorgetMap*){map})->cap; __dki++) {{ \
+         if (((GorgetMap*){map})->states[__dki] == 1) {{ \
+         {drop_fn}((char*)((GorgetMap*){map})->keys + __dki * ((GorgetMap*){map})->key_size); }} }}").unwrap();
 }
 
 /// Emit a sequence of drop actions on a pointer to an element.

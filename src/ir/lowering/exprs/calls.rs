@@ -305,11 +305,12 @@ pub(super) fn lower_call(
                 } else {
                     "gorget_string_from_str"
                 };
-                let dst = builder.call_extern(fn_name, vec![arg_op], owned_type);
+                let dst = ctx.call_extern_tracked(builder, fn_name, vec![arg_op], owned_type);
                 return FunctionBuilder::copy(dst);
             } else if args.is_empty() {
                 let owned_type = ctx.type_mapper.owned_string_type;
-                let dst = builder.call_extern(
+                let dst = ctx.call_extern_tracked(
+                    builder,
                     "gorget_string_from_str",
                     vec![Operand::Constant(Constant::Str(String::new()))],
                     owned_type,
@@ -327,7 +328,7 @@ pub(super) fn lower_call(
                     // Plain string literal → gorget_string_from_str(str_literal)
                     let str_op = lower_expr(ctx, builder, &args[0].node.value);
                     let owned_type = ctx.type_mapper.owned_string_type;
-                    let dst = builder.call_extern("gorget_string_from_str", vec![str_op], owned_type);
+                    let dst = ctx.call_extern_tracked(builder, "gorget_string_from_str", vec![str_op], owned_type);
                     return FunctionBuilder::copy(dst);
                 }
             }
