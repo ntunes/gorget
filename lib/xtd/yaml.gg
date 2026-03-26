@@ -254,7 +254,7 @@ equip YamlParser:
             Yaml yaml_doc = self.parse_document()
             if self.failed():
                 break
-            yaml_docs.push(yaml_doc)
+            yaml_docs.push(!yaml_doc)
             # Safety: break if no progress to avoid infinite loop
             if self.yaml_pos <= yaml_saved:
                 break
@@ -425,9 +425,9 @@ equip YamlParser:
                 # Inline value
                 yaml_val = self.parse_inline_value(yaml_map_indent)
             if yaml_key == "<<":
-                merge_into(&yaml_map, yaml_val)
+                merge_into(&yaml_map, !yaml_val)
             else:
-                yaml_map.put(yaml_key, yaml_val)
+                yaml_map.put(yaml_key, !yaml_val)
         return Map(yaml_map)
 
     # Parse a mapping key (bare, double-quoted, or single-quoted)
@@ -500,10 +500,10 @@ equip YamlParser:
                 if not self.at_end():
                     self.consume_newline()
                 Yaml yaml_item_val = self.parse_block_value(yaml_seq_indent + 1)
-                yaml_items.push(yaml_item_val)
+                yaml_items.push(!yaml_item_val)
             else:
                 Yaml yaml_item_val = self.parse_inline_value(yaml_seq_indent)
-                yaml_items.push(yaml_item_val)
+                yaml_items.push(!yaml_item_val)
         return Seq(yaml_items)
 
     # ── Inline value (after ': ' or '- ' on same line) ───────
@@ -593,9 +593,9 @@ equip YamlParser:
             if self.failed():
                 return Null()
             if yaml_fkey == "<<":
-                merge_into(&yaml_fmap, yaml_fval)
+                merge_into(&yaml_fmap, !yaml_fval)
             else:
-                yaml_fmap.put(yaml_fkey, yaml_fval)
+                yaml_fmap.put(yaml_fkey, !yaml_fval)
             self.skip_flow_ws()
             if self.at_end():
                 self.fail("unterminated flow mapping")
@@ -625,7 +625,7 @@ equip YamlParser:
             Yaml yaml_fitem = self.parse_flow_value()
             if self.failed():
                 return Null()
-            yaml_fitems.push(yaml_fitem)
+            yaml_fitems.push(!yaml_fitem)
             self.skip_flow_ws()
             if self.at_end():
                 self.fail("unterminated flow sequence")
@@ -1039,7 +1039,7 @@ equip YamlParser:
 
 # ── Merge key helper ─────────────────────────────────────────
 
-private void merge_into(Dict[String, Yaml] &yaml_target, Yaml yaml_source):
+private void merge_into(Dict[String, Yaml] &yaml_target, Yaml !yaml_source):
     match yaml_source:
         case Map(yaml_merge_map):
             Vector[String] yaml_mkeys = yaml_merge_map.keys()
