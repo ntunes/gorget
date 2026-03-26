@@ -94,6 +94,18 @@ pub(super) fn lower_method_call(
                 };
                 let alloc_fn = format!("__gorget_box_alloc_{inner_c}");
                 let dst = builder.call(alloc_fn, vec![val], box_type);
+                // MoveZero the source: Box.new consumes the value (heap-allocates it).
+                // The source must be zeroed to prevent scope-exit double-free.
+                if let Expr::Identifier(name) = &args[0].node.value.node {
+                    if let Some((local_id, _)) = ctx.lookup_local(name) {
+                        if ctx.is_named_local(local_id)
+                            && is_resource_type_local(local_id, builder, &ctx.type_registry)
+                        {
+                            builder.move_zero(Place::local(local_id));
+                            ctx.drops.mark_moved(local_id);
+                        }
+                    }
+                }
                 return FunctionBuilder::copy(dst);
             }
 
