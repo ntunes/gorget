@@ -10,8 +10,8 @@ struct TaskStore:
     Vector[Task] tasks
 
 equip TaskStore:
-    void add(&self, Task t):
-        self.tasks.push(t)
+    void add(&self, Task !t):
+        self.tasks.push(!t)
 
     int count(self):
         return self.tasks.len()

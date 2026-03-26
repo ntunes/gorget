@@ -1178,17 +1178,17 @@ equip Parser:
 
     # ── Helper: make spanned nodes ───────────────────────────
 
-    SpannedExpr mk_expr(self, Expr e, int start):
+    SpannedExpr mk_expr(self, Expr !e, int start):
         SpannedToken cur = self.peek()
-        return SpannedExpr(e, Span(start, cur.lex_start))
+        return SpannedExpr(!e, Span(start, cur.lex_start))
 
-    SpannedType mk_type(self, Type t, int start):
+    SpannedType mk_type(self, Type !t, int start):
         SpannedToken cur = self.peek()
-        return SpannedType(t, Span(start, cur.lex_start))
+        return SpannedType(!t, Span(start, cur.lex_start))
 
-    SpannedPattern mk_pat(self, Pattern p, int start):
+    SpannedPattern mk_pat(self, Pattern !p, int start):
         SpannedToken cur = self.peek()
-        return SpannedPattern(p, Span(start, cur.lex_start))
+        return SpannedPattern(!p, Span(start, cur.lex_start))
 
     # ── Type parsing ─────────────────────────────────────────
 

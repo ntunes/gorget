@@ -1,6 +1,7 @@
 # Tests that the borrow checker rejects moving from a bare (immutable) param.
 
 struct Data:
+    String label
     int value
 
 void consume(Data !d):
@@ -10,5 +11,5 @@ void bad(Data d):
     consume(!d)
 
 void main():
-    Data d = Data(value=42)
+    Data d = Data(label="x", value=42)
     bad(d)

@@ -2,6 +2,7 @@
 # Only the owner (! param) can move — & params borrow, they don't own.
 
 struct Data:
+    String label
     int value
 
 void consume(Data !d):
@@ -11,6 +12,6 @@ void bad(Data &d):
     consume(!d)
 
 void main():
-    Data d = Data(value=42)
+    Data d = Data(label="x", value=42)
     bad(&d)
     print(f"{d.value}")

@@ -1,4 +1,5 @@
 struct Items:
+    String label
     int count
 
 equip Items:
@@ -9,5 +10,5 @@ void process(Items items):
     items.add()
 
 void main():
-    Items i = Items(count=0)
+    Items i = Items(label="x", count=0)
     process(i)

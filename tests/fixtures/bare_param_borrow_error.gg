@@ -1,6 +1,7 @@
 # Tests that the borrow checker rejects escalating a bare param to mutable borrow.
 
 struct Counter:
+    String label
     int count
 
 void mutate(Counter &c):
@@ -10,5 +11,5 @@ void bad(Counter c):
     mutate(&c)
 
 void main():
-    Counter c = Counter(count=0)
+    Counter c = Counter(label="x", count=0)
     bad(c)

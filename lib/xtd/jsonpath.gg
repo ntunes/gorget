@@ -456,7 +456,8 @@ private void query_step(Vector[Json] current, Segment seg, Vector[Json] &out):
 
 private Vector[Json] query_segments(Json doc, Vector[Segment] segments):
     Vector[Json] current = Vector[Json]()
-    current.push(doc)
+    Json d = doc
+    current.push(d)
     int si = 0
     while si < segments.len():
         Segment seg = segments.get(si).unwrap()
@@ -579,11 +580,13 @@ private bool del_recursive(Json &node, Vector[Segment] segments, int depth):
 private bool obj_put(Json &node, String key, Json value):
     match node:
         case Obj(d):
-            d.put(key, value)
+            Json v = value
+            d.put(key, v)
             return true
         else:
             Dict[String, Json] new_d = Dict[String, Json]()
-            new_d.put(key, value)
+            Json v = value
+            new_d.put(key, v)
             node = Obj(new_d)
             return true
 
@@ -597,7 +600,8 @@ private bool arr_set(Json &node, int index, Json value):
     match node:
         case Arr(arr):
             if index >= 0 and index < arr.len():
-                arr.set(index, value)
+                Json v = value
+                arr.set(index, v)
                 node = Arr(arr)
                 return true
             return false

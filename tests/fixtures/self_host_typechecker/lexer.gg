@@ -306,8 +306,8 @@ equip Lexer:
     void lex_advance(&self):
         self.lex_pos = self.lex_pos + 1
 
-    void lex_emit(&self, Token tok, int start, int end):
-        self.lex_tokens.push(SpannedToken(tok, start, end))
+    void lex_emit(&self, Token !tok, int start, int end):
+        self.lex_tokens.push(SpannedToken(!tok, start, end))
 
     # ── Indentation helpers ───────────────────────────────────
 

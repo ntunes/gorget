@@ -181,7 +181,7 @@ equip YamlParser:
         return self.yaml_input.byte_slice(yaml_astart, self.yaml_pos)
 
     # Store an anchor value
-    void anchor_put(&self, String yaml_aname, Yaml yaml_aval):
+    void anchor_put(&self, String yaml_aname, Yaml !yaml_aval):
         # Overwrite if already exists
         int yaml_ai = 0
         while yaml_ai < self.yaml_anc_names.len():
@@ -294,7 +294,7 @@ equip YamlParser:
             if self.failed():
                 return Null()
             Yaml yaml_aval = self.parse_block_value(min_indent)
-            self.anchor_put(yaml_anchor, yaml_aval)
+            self.anchor_put(yaml_anchor, !yaml_aval)
             return self.anchor_get(yaml_anchor)
         # Flow collections
         if yaml_fc == '{':
@@ -536,10 +536,10 @@ equip YamlParser:
                 if not self.at_end():
                     self.consume_newline()
                 Yaml yaml_aval = self.parse_block_value(yaml_ctx_indent + 1)
-                self.anchor_put(yaml_anchor, yaml_aval)
+                self.anchor_put(yaml_anchor, !yaml_aval)
                 return self.anchor_get(yaml_anchor)
             Yaml yaml_aval = self.parse_inline_value(yaml_ctx_indent)
-            self.anchor_put(yaml_anchor, yaml_aval)
+            self.anchor_put(yaml_anchor, !yaml_aval)
             return self.anchor_get(yaml_anchor)
         if yaml_ic == '{':
             return self.parse_flow_mapping()
@@ -699,7 +699,7 @@ equip YamlParser:
             if self.failed():
                 return Null()
             Yaml yaml_aval = self.parse_flow_value()
-            self.anchor_put(yaml_anchor, yaml_aval)
+            self.anchor_put(yaml_anchor, !yaml_aval)
             return self.anchor_get(yaml_anchor)
         if yaml_fvc == '{':
             return self.parse_flow_mapping()
