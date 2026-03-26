@@ -424,85 +424,7 @@ pub(super) fn lower_method_call(
         }
     }
 
-    // Channel methods: send, recv, close, poll_recv — dispatch via C wrapper functions.
-    // Channel is emitted as a pointer typedef; methods take &self (Channel__T*).
-    {
-        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-        if let Some(ref chan_tn) = recv_type_name {
-            if chan_tn.starts_with("Channel__") {
-                let elem_suffix = chan_tn.strip_prefix("Channel__").unwrap_or("int64_t");
-                let recv_type = infer_operand_type_full(ctx, &recv, builder);
-                // Get a mutable pointer to the channel local (Channel__T*)
-                let ch_ptr = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
-                    let ptr_type = ctx.register_mut_ptr_type(recv_type);
-                    let ptr_local = builder.add_local(ptr_type, None);
-                    builder.emit_borrow_mut(ptr_local, place.clone());
-                    Operand::Copy(Place::local(ptr_local))
-                } else {
-                    // Temp local needed
-                    let temp = builder.add_local(recv_type, None);
-                    builder.assign(Place::local(temp), recv.clone());
-                    let ptr_type = ctx.register_mut_ptr_type(recv_type);
-                    let ptr_local = builder.add_local(ptr_type, None);
-                    builder.emit_borrow_mut(ptr_local, Place::local(temp));
-                    Operand::Copy(Place::local(ptr_local))
-                };
-                match method_name {
-                    "send" if !args.is_empty() => {
-                        let val = lower_expr(ctx, builder, &args[0].node.value);
-                        let send_fn = format!("{chan_tn}__send");
-                        builder.call_void(&send_fn, vec![ch_ptr, val]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    "recv" => {
-                        let elem_type = ctx.type_mapper.lookup_named(elem_suffix)
-                            .unwrap_or(I64_TYPE);
-                        let recv_fn = format!("{chan_tn}__recv");
-                        let dst = builder.call(&recv_fn, vec![ch_ptr], elem_type);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "close" => {
-                        let close_fn = format!("{chan_tn}__close");
-                        builder.call_void(&close_fn, vec![ch_ptr]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    "poll_recv" if args.len() >= 2 => {
-                        // poll_recv(&self, &mut out, waker)
-                        let out_ptr = lower_expr(ctx, builder, &args[0].node.value);
-                        let waker = lower_expr(ctx, builder, &args[1].node.value);
-                        let poll_fn = format!("{chan_tn}__poll_recv");
-                        let dst = builder.call(&poll_fn, vec![ch_ptr, out_ptr, waker], BOOL_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "recv_timeout" if !args.is_empty() => {
-                        let ms = lower_expr(ctx, builder, &args[0].node.value);
-                        let option_name = format!("Option__{elem_suffix}");
-                        let option_type = ctx.lookup_type_by_name(&option_name)
-                            .unwrap_or(I64_TYPE);
-                        let recv_fn = format!("{chan_tn}__recv_timeout");
-                        let dst = builder.call(&recv_fn, vec![ch_ptr, ms], option_type);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "len" => {
-                        let len_fn = format!("{chan_tn}__len");
-                        let dst = builder.call(&len_fn, vec![ch_ptr], I64_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "capacity" => {
-                        let cap_fn = format!("{chan_tn}__capacity");
-                        let dst = builder.call(&cap_fn, vec![ch_ptr], I64_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "is_closed" => {
-                        let closed_fn = format!("{chan_tn}__is_closed");
-                        let dst = builder.call(&closed_fn, vec![ch_ptr], BOOL_TYPE);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+    // Channel[T] — handled by generic dispatch via BuiltinTypeProtocol (MutBorrow self_conv)
 
     // Shared[T] methods: clone, get, strong_count, downgrade — via C wrapper functions.
     // Shared[T] is a Copy pointer typedef (GorgetShared*); methods pass value directly.
@@ -705,45 +627,7 @@ pub(super) fn lower_method_call(
         }
     }
 
-    // ReadGuard[T] / WriteGuard[T] methods: get, set — pass by mutable reference (like Guard).
-    {
-        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-        if let Some(ref gtn) = recv_type_name {
-            if gtn.starts_with("ReadGuard__") || gtn.starts_with("WriteGuard__") {
-                let elem_suffix = if let Some(s) = gtn.strip_prefix("ReadGuard__") { s }
-                    else { gtn.strip_prefix("WriteGuard__").unwrap_or("int64_t") };
-                let elem_type = c_suffix_to_type_id(elem_suffix, ctx);
-                let recv_type = infer_operand_type_full(ctx, &recv, builder);
-                let guard_ptr = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
-                    let pt = ctx.register_mut_ptr_type(recv_type);
-                    let pl = builder.add_local(pt, None);
-                    builder.emit_borrow_mut(pl, place.clone());
-                    Operand::Copy(Place::local(pl))
-                } else {
-                    let tmp = builder.add_local(recv_type, None);
-                    builder.assign(Place::local(tmp), recv.clone());
-                    let pt = ctx.register_mut_ptr_type(recv_type);
-                    let pl = builder.add_local(pt, None);
-                    builder.emit_borrow_mut(pl, Place::local(tmp));
-                    Operand::Copy(Place::local(pl))
-                };
-                match method_name {
-                    "get" => {
-                        let get_fn = format!("{gtn}__get");
-                        let dst = builder.call(&get_fn, vec![guard_ptr], elem_type);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "set" if !args.is_empty() => {
-                        let val = lower_expr(ctx, builder, &args[0].node.value);
-                        let set_fn = format!("{gtn}__set");
-                        builder.call_void(&set_fn, vec![guard_ptr, val]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+    // ReadGuard[T] / WriteGuard[T] — handled by generic dispatch (MutBorrow self_conv)
 
     // Thread[T] methods: join (Move, pass by value), id (pass by value — pointer).
     {
@@ -822,46 +706,7 @@ pub(super) fn lower_method_call(
         }
     }
 
-    // Guard[T] methods: get, set — dispatch via C wrapper functions.
-    // Guard[T] is a Move struct (gorget_guard_t value type).
-    {
-        let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-        if let Some(ref gtn) = recv_type_name {
-            if gtn.starts_with("Guard__") {
-                let elem_suffix = gtn.strip_prefix("Guard__").unwrap_or("int64_t");
-                let recv_type = infer_operand_type_full(ctx, &recv, builder);
-                // Get a pointer to the guard local so we can pass by reference
-                let guard_ptr = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
-                    let ptr_type = ctx.register_mut_ptr_type(recv_type);
-                    let ptr_local = builder.add_local(ptr_type, None);
-                    builder.emit_borrow_mut(ptr_local, place.clone());
-                    Operand::Copy(Place::local(ptr_local))
-                } else {
-                    let temp = builder.add_local(recv_type, None);
-                    builder.assign(Place::local(temp), recv.clone());
-                    let ptr_type = ctx.register_mut_ptr_type(recv_type);
-                    let ptr_local = builder.add_local(ptr_type, None);
-                    builder.emit_borrow_mut(ptr_local, Place::local(temp));
-                    Operand::Copy(Place::local(ptr_local))
-                };
-                match method_name {
-                    "get" => {
-                        let elem_type = c_suffix_to_type_id(elem_suffix, ctx);
-                        let get_fn = format!("{gtn}__get");
-                        let dst = builder.call(&get_fn, vec![guard_ptr], elem_type);
-                        return FunctionBuilder::copy(dst);
-                    }
-                    "set" if !args.is_empty() => {
-                        let val = lower_expr(ctx, builder, &args[0].node.value);
-                        let set_fn = format!("{gtn}__set");
-                        builder.call_void(&set_fn, vec![guard_ptr, val]);
-                        return Operand::Constant(Constant::Unit);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+    // Guard[T] — handled by generic dispatch via BuiltinTypeProtocol (MutBorrow self_conv)
 
     // TaskGroup, AtomicInt, AtomicBool, Barrier, WaitGroup, Semaphore, OnceFlag
     // — handled by generic dispatch via BuiltinTypeProtocol (builtins.rs)
@@ -1148,8 +993,10 @@ pub(super) fn lower_method_call(
             | "add" | "push_line" | "push_str" | "push_char"
         );
 
-        // Determine if we need a mutable borrow (from explicit list or fn_sigs)
-        let needs_mut = is_mutating || ctx.fn_sigs.get(&mangled)
+        // Determine if we need a mutable borrow (from explicit list, protocol, or fn_sigs)
+        let needs_mut = is_mutating
+            || crate::ir::lowering::builtins::is_mut_borrow_method(&type_name, method_name)
+            || ctx.fn_sigs.get(&mangled)
             .and_then(|(params, _)| params.first())
             .map(|&p| matches!(ctx.type_registry.get(p), Some(GirType::MutPtr(_))))
             .unwrap_or(false);

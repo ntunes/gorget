@@ -363,14 +363,14 @@ pub static CHANNEL: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_fn: None,
     collection_kind: None,
     methods: &[
-        BuiltinMethodDecl { name: "send", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: true, params: elem_param, return_type: ret_void },
-        BuiltinMethodDecl { name: "recv", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_elem },
-        BuiltinMethodDecl { name: "close", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: true, params: no_params, return_type: ret_void },
-        BuiltinMethodDecl { name: "poll_recv", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: elem_param, return_type: ret_bool },
-        BuiltinMethodDecl { name: "recv_timeout", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: int_param, return_type: ret_option_elem },
-        BuiltinMethodDecl { name: "len", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_int },
-        BuiltinMethodDecl { name: "capacity", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_int },
-        BuiltinMethodDecl { name: "is_closed", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, params: no_params, return_type: ret_bool },
+        BuiltinMethodDecl { name: "send", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: true, params: elem_param, return_type: ret_void },
+        BuiltinMethodDecl { name: "recv", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: false, params: no_params, return_type: ret_elem },
+        BuiltinMethodDecl { name: "close", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: true, params: no_params, return_type: ret_void },
+        BuiltinMethodDecl { name: "poll_recv", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: false, params: elem_param, return_type: ret_bool },
+        BuiltinMethodDecl { name: "recv_timeout", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: false, params: int_param, return_type: ret_option_elem },
+        BuiltinMethodDecl { name: "len", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: false, params: no_params, return_type: ret_int },
+        BuiltinMethodDecl { name: "capacity", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: false, params: no_params, return_type: ret_int },
+        BuiltinMethodDecl { name: "is_closed", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: false, params: no_params, return_type: ret_bool },
     ],
 };
 
@@ -734,4 +734,13 @@ pub fn is_by_value_receiver(type_name: &str) -> bool {
     } else {
         false
     }
+}
+
+/// Check if a specific method on a type requires a mutable borrow receiver.
+/// Used by the generic dispatch path to emit `emit_borrow_mut` instead of `emit_borrow`.
+pub fn is_mut_borrow_method(type_name: &str, method_name: &str) -> bool {
+    protocol_for_mangled_name(type_name)
+        .and_then(|p| p.methods.iter().find(|m| m.name == method_name))
+        .map(|m| m.self_conv == SelfConvention::MutBorrow)
+        .unwrap_or(false)
 }
