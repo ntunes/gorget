@@ -22,6 +22,9 @@ use crate::ir::types::*;
 pub struct DropElaborator {
     /// Stack of drop scopes, innermost last.
     scopes: Vec<DropScope>,
+    /// Borrow dependency edges: borrower LocalId → Vec<source LocalId>.
+    /// A borrower must be dropped BEFORE its sources.
+    borrow_deps: rustc_hash::FxHashMap<LocalId, Vec<LocalId>>,
 }
 
 /// A drop scope corresponds to a language construct that owns locals.
@@ -52,7 +55,14 @@ impl DropElaborator {
     pub fn new() -> Self {
         Self {
             scopes: Vec::new(),
+            borrow_deps: rustc_hash::FxHashMap::default(),
         }
+    }
+
+    /// Register that `borrower` borrows from `source`.
+    /// At scope exit, `borrower` will be dropped before `source`.
+    pub fn add_borrow_dep(&mut self, borrower: LocalId, source: LocalId) {
+        self.borrow_deps.entry(borrower).or_default().push(source);
     }
 
     /// Push a new drop scope.
@@ -64,9 +74,10 @@ impl DropElaborator {
     }
 
     /// Pop the current drop scope and emit drops for all registered locals.
+    /// Uses topological ordering if borrow dependencies exist.
     pub fn pop_scope(&mut self, builder: &mut FunctionBuilder, registry: &TypeRegistry) {
         if let Some(scope) = self.scopes.pop() {
-            emit_scope_drops(builder, registry, &scope.entries);
+            emit_scope_drops_ordered(builder, registry, &scope.entries, &self.borrow_deps);
         }
     }
 
@@ -257,6 +268,94 @@ fn emit_scope_drops(
     entries: &[DropEntry],
 ) {
     emit_scope_drops_excluding(builder, registry, entries, None);
+}
+
+/// Emit drops with borrow-aware topological ordering.
+/// Borrowers are dropped before their sources to prevent use-after-free.
+fn emit_scope_drops_ordered(
+    builder: &mut FunctionBuilder,
+    registry: &TypeRegistry,
+    entries: &[DropEntry],
+    borrow_deps: &rustc_hash::FxHashMap<LocalId, Vec<LocalId>>,
+) {
+    if entries.is_empty() { return; }
+
+    // Build index: LocalId → position in entries
+    let local_to_idx: rustc_hash::FxHashMap<LocalId, usize> = entries.iter()
+        .enumerate()
+        .map(|(i, e)| (e.local, i))
+        .collect();
+
+    // Check if any borrow deps touch entries in this scope
+    let mut has_constraints = false;
+    let n = entries.len();
+    let mut must_precede: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut in_degree = vec![0u32; n];
+
+    for (i, entry) in entries.iter().enumerate() {
+        if let Some(sources) = borrow_deps.get(&entry.local) {
+            for source_local in sources {
+                if let Some(&j) = local_to_idx.get(source_local) {
+                    if i != j {
+                        // entry[i] borrows from entry[j]
+                        // => drop entry[i] before entry[j]
+                        // => i must come before j in drop order
+                        must_precede[i].push(j);
+                        in_degree[j] += 1;
+                        has_constraints = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if !has_constraints {
+        // Fast path: plain LIFO (no borrow constraints in this scope)
+        emit_scope_drops(builder, registry, entries);
+        return;
+    }
+
+    // Topological sort (Kahn's algorithm) with LIFO tiebreaker.
+    // Use a max-heap so later-declared entries (higher index) get priority
+    // when there's no constraint forcing a different order.
+    let mut heap = std::collections::BinaryHeap::new();
+    for i in 0..n {
+        if in_degree[i] == 0 {
+            heap.push(i);
+        }
+    }
+
+    let mut order = Vec::with_capacity(n);
+    while let Some(i) = heap.pop() {
+        order.push(i);
+        for &j in &must_precede[i] {
+            in_degree[j] -= 1;
+            if in_degree[j] == 0 {
+                heap.push(j);
+            }
+        }
+    }
+
+    // Append any remaining (cycle — shouldn't happen with well-formed borrows)
+    if order.len() < n {
+        for i in (0..n).rev() {
+            if !order.contains(&i) {
+                order.push(i);
+            }
+        }
+    }
+
+    // Emit drops in computed order
+    for &idx in &order {
+        let entry = &entries[idx];
+        if !needs_drop(entry.type_id, registry) { continue; }
+        let place = Place::local(entry.local);
+        if entry.maybe_moved {
+            builder.drop_if_alive(place);
+        } else {
+            builder.drop(place);
+        }
+    }
 }
 
 /// Emit Drop/DropIfAlive for a list of entries in LIFO order,

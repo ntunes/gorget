@@ -224,6 +224,19 @@ fn lower_var_decl(
             ctx.register_local(name, local_id, gir_type);
             // P2.6: Register Move-type locals for drop at scope exit
             ctx.drops.register_local(local_id, gir_type, &ctx.type_registry);
+            // Register borrow dependencies for drop ordering.
+            // If this local borrows from other locals, the drop elaborator
+            // will ensure this local is dropped before its sources.
+            if let Some(def_id) = ctx.analysis.scopes.lookup_def_by_span(name, pattern.span) {
+                if let Some(source_def_ids) = ctx.analysis.borrow_deps.get(&def_id) {
+                    for &source_def_id in source_def_ids {
+                        let source_name = ctx.analysis.scopes.get_def(source_def_id).name.clone();
+                        if let Some((source_local, _)) = ctx.lookup_local(&source_name) {
+                            ctx.drops.add_borrow_dep(local_id, source_local);
+                        }
+                    }
+                }
+            }
             // Set expected type hint so enum variant constructors (Some, None, Ok, Error)
             // can pick the correctly-monomorphized type
             let prev_expected = ctx.expected_type;
