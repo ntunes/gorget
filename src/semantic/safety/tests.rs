@@ -3129,6 +3129,7 @@ async void main():
     fn bare_param_field_assign_rejected() {
         let source = "\
 struct Point:
+    String label
     int x
     int y
 
@@ -3163,6 +3164,7 @@ void move_point(Point &p):
     fn bare_param_mut_borrow_at_call_rejected() {
         let source = "\
 struct Data:
+    String name
     int val
 
 void mutate(Data &d):
@@ -3182,6 +3184,7 @@ void process(Data d):
     fn bare_param_compound_assign_field_rejected() {
         let source = "\
 struct Counter:
+    String label
     int count
 
 void increment(Counter c):
@@ -3249,6 +3252,7 @@ void process(Outer o):
     fn bare_param_method_call_rejected() {
         let source = "\
 struct Items:
+    String label
     int count
 
 equip Items:
@@ -3289,6 +3293,7 @@ void process(Items items):
     fn bare_param_in_closure_rejected() {
         let source = "\
 struct Point:
+    String label
     int x
 
 void process(Point p):
@@ -3307,6 +3312,7 @@ void process(Point p):
     fn bare_param_in_match_rejected() {
         let source = "\
 struct Point:
+    String label
     int x
 
 void process(Point p, int v):
