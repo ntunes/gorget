@@ -412,9 +412,30 @@ impl<'a> BorrowChecker<'a> {
                 } else {
                     false
                 };
-                for arg in args {
+                // Detect consuming collection methods: push, put, set, add, etc.
+                // These store their value arg in the collection, transferring ownership.
+                let mname = method.node.as_str();
+                let consuming_value_idx: Option<usize> = match mname {
+                    "push" | "add" | "extend" | "send" | "push_back" | "push_front" => Some(0),
+                    "put" | "set" | "insert" | "update" | "get_or_put" => {
+                        if args.len() >= 2 { Some(1) } else { None }
+                    }
+                    _ => None,
+                };
+
+                for (arg_idx, arg) in args.iter().enumerate() {
                     match arg.node.ownership {
                         Ownership::Move => {
+                            // Cannot move from a non-owned parameter
+                            if let Some((param_name, kind)) = self.check_non_owned_param_move(&arg.node.value) {
+                                self.error(
+                                    SemanticErrorKind::MutationOfBareParam {
+                                        name: param_name,
+                                        detail: format!("cannot move from {kind} parameter"),
+                                    },
+                                    arg.span,
+                                );
+                            }
                             if let Expr::Identifier(_) = &arg.node.value.node {
                                 if let Some(&def_id) =
                                     self.resolution_map.get(&arg.node.value.span.start)
@@ -429,6 +450,21 @@ impl<'a> BorrowChecker<'a> {
                             }
                         }
                         Ownership::MutableBorrow | Ownership::Borrow => {
+                            // Consuming collection method: value arg is stored in collection.
+                            // Non-owned resource params cannot be stored — use ! to transfer.
+                            if Some(arg_idx) == consuming_value_idx {
+                                if let Some((param_name, kind)) = self.check_non_owned_param_move(&arg.node.value) {
+                                    self.error(
+                                        SemanticErrorKind::MutationOfBareParam {
+                                            name: param_name,
+                                            detail: format!(
+                                                "cannot store {kind} parameter in collection via .{}() — use `!` to transfer ownership", mname
+                                            ),
+                                        },
+                                        arg.span,
+                                    );
+                                }
+                            }
                             // Track passing `&` param with `&` to callee as mutation
                             if arg.node.ownership == Ownership::MutableBorrow {
                                 self.mark_mut_param_if_applicable(&arg.node.value);
