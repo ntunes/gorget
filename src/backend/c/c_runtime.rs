@@ -4751,9 +4751,10 @@ static inline void gorget_array_clear(GorgetArray* arr) {
 
 static inline void gorget_array_free(GorgetArray* arr) {
     __gorget_array_free_count++;
-    // Note: element drops on collection destruction are handled by the LIR's
-    // elem_drop_recipes / lower_field_drops. elem_drop here is used ONLY by
-    // gorget_array_set (overwrite) to free the old element before replacing it.
+    // Element drops on collection destruction are handled by the LIR's
+    // per-element drop tags (emitted before gorget_array_free at scope exit).
+    // elem_drop here is used ONLY by gorget_array_set (overwrite) and
+    // gorget_array_remove to free old elements before replacing/removing.
     if (arr->data) arr->alloc->dealloc(arr->alloc->ctx, arr->data, arr->cap * arr->elem_size);
     arr->data = NULL;
     arr->len = 0;
@@ -5269,8 +5270,10 @@ static inline void gorget_map_clear(GorgetMap* m) {
 
 static inline void gorget_map_free(GorgetMap* m) {
     if (!m->alloc) return;  // zeroed struct — already freed or never initialized
-    // Note: element drops on collection destruction are handled by the LIR.
-    // val_drop here is used ONLY by gorget_map_put (overwrite) to free old values.
+    // Value drops on collection destruction are handled by the LIR's
+    // per-element drop tags (emitted before gorget_map_free at scope exit).
+    // val_drop here is used ONLY by gorget_map_put (overwrite) and
+    // gorget_map_remove to free old values.
     GorgetAllocator* a = m->alloc;
     if (m->keys) a->dealloc(a->ctx, m->keys, m->cap * m->key_size);
     if (m->values) a->dealloc(a->ctx, m->values, m->cap * m->val_size);

@@ -4,7 +4,9 @@
 
 - **Explicit clone roadmap (Phase 2 remaining)**: **Phase 1 DONE.** **Phase 2 partial:** `.clone()` method works on all types. `directive explicit-clone` promotes warnings to errors. `xtd/p2p.gg` reduced from 35 to 5 implicit clone warnings. **Remaining 5 p2p.gg warnings** appear to be compiler-level false positives — spans point to comments, struct definitions, or code already using explicit `.clone()`/`!` moves. Root cause: GIR lowering emits warnings for internal Ptr(T)→T conversions that don't correspond to user-visible clones. Needs compiler-side investigation. **Also remaining:** Fix remaining fixture/library implicit clone warnings. Add `Cloneable` trait to formal type system (currently `.clone()` works by name convention, not trait dispatch). [added: 2026-03-24, updated: 2026-03-25]
 
-- **String/resource temp leaks (reduced 91.5%)**: yaml_parse: 7,623→647 allocations, 382KB→174KB. All string view methods return zero-copy views. `should_unregister_string_args` only leaks for struct/enum returns. Hidden C backend clone on unwrap removed (moved to GIR Ptr→owned auto-clone). Remaining 647 leaks: parser-level Dict/string temp ownership in `lib/xtd/yaml.gg` — needs library-side fixes. [updated: 2026-03-25]
+- **Remaining ~256 leaks in yaml_parse (down from 374→256 with deep drops)**: Enum/struct drop functions now deep-drop collection variant fields. Remaining leaks: likely from (1) intermediate method chain temps not being dropped, (2) parser-internal Dict/String temps in `lib/xtd/yaml.gg`, (3) string return temps. Need ASan stack trace analysis to identify top leak sources. [updated: 2026-03-26]
+
+- **Box.new should enforce `!` at borrow checker level**: Currently Box.new implicitly MoveZeros the source, but the user should be required to write `Box(name!)`. Need to add Box.new to the consumed-param detection in the borrow checker. [added: 2026-03-26]
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 

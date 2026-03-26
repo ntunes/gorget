@@ -63,9 +63,9 @@ struct FuncLowering<'a> {
     /// Monomorphized method name → C runtime callee (from BuiltinTypeProtocol).
     runtime_callees: &'a rustc_hash::FxHashMap<String, String>,
     /// Enum types needing tag-based variant drop dispatch.
-    recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String)>>,
+    recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String, String)>>,
     /// Struct types with field-level drop functions.
-    recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String)>>,
+    recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String, String)>>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -285,7 +285,7 @@ impl<'a> LoweringContext<'a> {
                 TypeDefKind::Struct(s) => s,
                 _ => continue,
             };
-            let mut field_drops: Vec<(String, String)> = Vec::new();
+            let mut field_drops: Vec<(String, String, String)> = Vec::new();
             for field in &sdef.fields {
                 let field_type_name = match self.gir.type_registry.get(field.type_id) {
                     Some(GirType::Named(n)) => n.clone(),
@@ -316,7 +316,7 @@ impl<'a> LoweringContext<'a> {
                     }
                     DropStrategy::None => continue,
                 };
-                field_drops.push((field.name.clone(), drop_fn));
+                field_drops.push((field.name.clone(), drop_fn, field_type_name));
             }
             if !field_drops.is_empty() {
                 self.module.recursive_drop_structs.insert(name.clone(), field_drops);
@@ -336,7 +336,7 @@ impl<'a> LoweringContext<'a> {
             if name.starts_with("Option__") || name.starts_with("Result__") {
                 continue;
             }
-            let mut variant_drops: Vec<(u32, String, String, String)> = Vec::new();
+            let mut variant_drops: Vec<(u32, String, String, String, String)> = Vec::new();
             for (vi, variant) in edef.variants.iter().enumerate() {
                 for (fi, field) in variant.fields.iter().enumerate() {
                     let field_type_name = match self.gir.type_registry.get(field.type_id) {
@@ -352,7 +352,7 @@ impl<'a> LoweringContext<'a> {
                     };
                     // LIR field name: {VariantName}_{field_index_within_variant}
                     let field_name = format!("{}_{fi}", variant.name);
-                    variant_drops.push((vi as u32, variant.name.clone(), field_name, drop_fn));
+                    variant_drops.push((vi as u32, variant.name.clone(), field_name, drop_fn, field_type_name));
                 }
             }
             if !variant_drops.is_empty() {
@@ -444,13 +444,18 @@ impl<'a> LoweringContext<'a> {
                 }
             }
             DropStrategy::Custom(ref fn_name) => {
-                // Custom drop + field drops.
-                let mut actions = vec![ElemDropAction::Call(fn_name.clone())];
-                let field_drops = self.compute_field_drop_actions(type_name);
-                actions.extend(field_drops);
-                actions
+                // Custom drop already handles field drops internally.
+                // Just call the drop function — no need for separate field drops.
+                vec![ElemDropAction::Call(fn_name.clone())]
             }
             DropStrategy::Recursive => {
+                // For enums, call the generated __drop function directly rather
+                // than trying to enumerate fields (which only works for structs).
+                if let Some(td) = self.gir.type_registry.get_type_def(type_name) {
+                    if matches!(td.kind, crate::ir::types::TypeDefKind::Enum(_)) {
+                        return vec![ElemDropAction::Call(format!("{type_name}__drop"))];
+                    }
+                }
                 // No custom drop function, but fields need dropping.
                 self.compute_field_drop_actions(type_name)
             }
@@ -929,8 +934,8 @@ impl<'a> FuncLowering<'a> {
         overflow_wrap: bool,
         drop_collision_types: &'a std::collections::HashSet<String>,
         runtime_callees: &'a rustc_hash::FxHashMap<String, String>,
-        recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String)>>,
-        recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String)>>,
+        recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String, String)>>,
+        recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String, String)>>,
     ) -> Self {
         let params: Vec<LirType> = gir_func
             .params
@@ -3259,9 +3264,6 @@ impl<'a> FuncLowering<'a> {
 
                 // For collection types (Vector, Set, Dict), emit a special extern call
                 // that tells the backend to generate element-level drops before freeing.
-                // The name encodes the element drop function:
-                //   __gorget_array_drop_elems__ElemDrop (for Vector)
-                //   __gorget_map_drop_vals__ValDrop (for Dict)
                 let is_array_free = fn_name == "gorget_array_free";
                 let is_map_free = fn_name == "gorget_map_free";
                 if is_array_free || is_map_free {
@@ -3282,13 +3284,9 @@ impl<'a> FuncLowering<'a> {
                             .map(|td| td.metadata.drop_strategy.clone())
                             .unwrap_or(DS::None);
 
-                        // Check if this element type needs compound drops (Custom with
-                        // droppable fields, Recursive, or nested collection).
                         let needs_recipe = self.elem_needs_compound_drop(elem_name);
 
                         if needs_recipe {
-                            // Use recipe-based drop: the backend will look up the recipe
-                            // and generate nested for-loops and field accesses.
                             let tag = if is_array_free {
                                 format!("__gorget_array_drop_recipe__{elem_name}")
                             } else {

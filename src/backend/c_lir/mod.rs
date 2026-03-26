@@ -5986,12 +5986,20 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     if (name.starts_with("gorget_array_new") || name == "gorget_array_with_capacity")
                         && (orig.starts_with("Vector__") || orig.starts_with("Deque__"))
                     {
-                        let elem_type = orig.strip_prefix("Vector__")
+                        let raw_elem = orig.strip_prefix("Vector__")
                             .or_else(|| orig.strip_prefix("Deque__"))
                             .unwrap_or("");
+                        // Strip method suffix (__new, __with_capacity, etc.):
+                        // "Tracked__new" → "Tracked", "Vector__int64_t__new" → "Vector__int64_t"
+                        let elem_type = raw_elem.strip_suffix("__new")
+                            .or_else(|| raw_elem.strip_suffix("__with_capacity"))
+                            .unwrap_or(raw_elem);
                         if let Some(drop_fn) = elem_drop_fn_for_c_type(elem_type) {
                             write!(out, " {dv}.elem_drop = (__gorget_drop_fn){drop_fn};").unwrap();
                         }
+                        // Note: Custom/Recursive types do NOT get elem_drop set here
+                        // because the GIR generates explicit pre-drops for set/remove.
+                        // Setting elem_drop would cause double-drops.
                         if let Some(clone_fn) = elem_clone_fn_for_c_type(elem_type) {
                             write!(out, " {dv}.elem_clone = (__gorget_drop_fn){clone_fn};").unwrap();
                         } else if module.recursive_drop_structs.contains_key(elem_type)
@@ -6015,6 +6023,8 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 if let Some(drop_fn) = elem_drop_fn_for_c_type(val_type) {
                                     write!(out, " {dv}.val_drop = (__gorget_drop_fn){drop_fn};").unwrap();
                                 }
+                                // Note: Custom/Recursive types do NOT get val_drop set here.
+                                // GIR generates explicit pre-drops for map put/remove.
                                 if let Some(clone_fn) = elem_clone_fn_for_c_type(val_type) {
                                     write!(out, " {dv}.val_clone = (__gorget_drop_fn){clone_fn};").unwrap();
                                 } else if module.recursive_drop_structs.contains_key(val_type)
@@ -6451,7 +6461,32 @@ fn emit_recursive_struct_drops(out: &mut String, module: &LirModule, sn: &HashMa
 
         // Generate the drop function
         writeln!(out, "static inline void {drop_fn_name}({c_name}* self) {{").unwrap();
-        for (field_name, drop_fn) in drop_info {
+        for (field_name, drop_fn, field_type_name) in drop_info {
+            // For collection fields, emit per-element drops before freeing.
+            let is_array_free = drop_fn == "gorget_array_free";
+            let is_map_free = drop_fn == "gorget_map_free";
+            if is_array_free || is_map_free {
+                let elem_type_name = if is_array_free {
+                    field_type_name.strip_prefix("Vector__")
+                        .or_else(|| field_type_name.strip_prefix("Deque__"))
+                } else {
+                    field_type_name.strip_prefix("Dict__")
+                        .or_else(|| field_type_name.strip_prefix("HashMap__"))
+                        .and_then(|rest| rest.find("__").map(|idx| &rest[idx + 2..]))
+                };
+                if let Some(elem_name) = elem_type_name {
+                    if let Some(recipe) = module.elem_drop_recipes.get(elem_name) {
+                        let addr = format!("&self->{field_name}");
+                        write!(out, "    ").unwrap();
+                        if is_array_free {
+                            emit_recipe_array_drop(out, &addr, recipe, module, sn, 0);
+                        } else {
+                            emit_recipe_map_drop(out, &addr, recipe, module, sn, 0);
+                        }
+                        writeln!(out).unwrap();
+                    }
+                }
+            }
             writeln!(out, "    {drop_fn}(&self->{field_name});").unwrap();
         }
         writeln!(out, "}}").unwrap();
@@ -6484,7 +6519,7 @@ fn emit_recursive_struct_clones(out: &mut String, module: &LirModule, sn: &HashM
         // NOT static — the IndexLoad path emits a non-static extern declaration.
         writeln!(out, "{c_name} {clone_fn_name}(void* __p) {{").unwrap();
         writeln!(out, "    {c_name} dst = *({c_name}*)__p;").unwrap();
-        for (field_name, drop_fn) in drop_info {
+        for (field_name, drop_fn, _field_type_name) in drop_info {
             // Map drop function → clone function
             let clone_fn = match drop_fn.as_str() {
                 "gorget_string_free" => "gorget_string_clone",
@@ -6569,9 +6604,9 @@ fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, sn: &HashMap
         writeln!(out, "    switch (dst.tag) {{").unwrap();
 
         // Group variant_info by variant index
-        let mut by_variant: std::collections::HashMap<u32, Vec<(&str, &str, &str)>> = std::collections::HashMap::new();
-        for (vi, vname, field_name, drop_fn) in variant_info {
-            by_variant.entry(*vi).or_default().push((vname, field_name, drop_fn));
+        let mut by_variant: std::collections::HashMap<u32, Vec<(&str, &str, &str, &str)>> = std::collections::HashMap::new();
+        for (vi, vname, field_name, drop_fn, field_type_name) in variant_info {
+            by_variant.entry(*vi).or_default().push((vname, field_name, drop_fn, field_type_name));
         }
 
         let mut indices: Vec<u32> = by_variant.keys().copied().collect();
@@ -6579,7 +6614,7 @@ fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, sn: &HashMap
         for vi in indices {
             let fields = &by_variant[&vi];
             write!(out, "        case {vi}: ").unwrap();
-            for (variant_name, field_name, drop_fn) in fields {
+            for (variant_name, field_name, drop_fn, _field_type_name) in fields {
                 let clone_fn = drop_to_clone(drop_fn);
                 if !clone_fn.is_empty() {
                     // Count how many LIR struct fields belong to this variant
@@ -6634,9 +6669,9 @@ fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &HashMap<u32, St
             continue;
         }
         let c_name = sn.get(&(idx as u32)).cloned().unwrap_or_else(|| type_name.clone());
-        let mut by_variant: std::collections::HashMap<u32, Vec<(&str, &str, &str)>> = std::collections::HashMap::new();
-        for (vi, vname, field_name, drop_fn) in variant_info {
-            by_variant.entry(*vi).or_default().push((vname, field_name, drop_fn));
+        let mut by_variant: std::collections::HashMap<u32, Vec<(&str, &str, &str, &str)>> = std::collections::HashMap::new();
+        for (vi, vname, field_name, drop_fn, field_type_name) in variant_info {
+            by_variant.entry(*vi).or_default().push((vname, field_name, drop_fn, field_type_name));
         }
         if by_variant.is_empty() { continue; }
         writeln!(out, "void {drop_fn_name}(void* __p) {{").unwrap();
@@ -6647,7 +6682,7 @@ fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &HashMap<u32, St
         for vi in indices {
             let fields = &by_variant[&vi];
             write!(out, "        case {vi}: ").unwrap();
-            for (variant_name, field_name, drop_fn) in fields {
+            for (variant_name, field_name, drop_fn, field_type_name) in fields {
                 let variant_prefix = format!("{variant_name}_");
                 let variant_field_count = sdef.fields.iter()
                     .filter(|(n, _)| n.starts_with(&variant_prefix))
@@ -6659,6 +6694,30 @@ fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &HashMap<u32, St
                 } else {
                     field_name.to_string()
                 };
+                // For collection fields, emit per-element drops before freeing.
+                let is_array_free = *drop_fn == "gorget_array_free";
+                let is_map_free = *drop_fn == "gorget_map_free";
+                if is_array_free || is_map_free {
+                    let elem_type_name = if is_array_free {
+                        field_type_name.strip_prefix("Vector__")
+                            .or_else(|| field_type_name.strip_prefix("Deque__"))
+                    } else {
+                        field_type_name.strip_prefix("Dict__")
+                            .or_else(|| field_type_name.strip_prefix("HashMap__"))
+                            .and_then(|rest| rest.find("__").map(|idx| &rest[idx + 2..]))
+                    };
+                    if let Some(elem_name) = elem_type_name {
+                        if let Some(recipe) = module.elem_drop_recipes.get(elem_name) {
+                            let addr = format!("&self->{access}");
+                            if is_array_free {
+                                emit_recipe_array_drop(out, &addr, recipe, module, sn, 0);
+                            } else {
+                                emit_recipe_map_drop(out, &addr, recipe, module, sn, 0);
+                            }
+                            write!(out, " ").unwrap();
+                        }
+                    }
+                }
                 // Box fields (free): pass the pointer value directly.
                 // Other drop fns (gorget_string_free, etc.): pass address of field.
                 if *drop_fn == "free" {
