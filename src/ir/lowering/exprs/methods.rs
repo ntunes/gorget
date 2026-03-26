@@ -340,7 +340,8 @@ pub(super) fn lower_method_call(
     if matches!(method_name, "unwrap" | "expect" | "unwrap_or") {
         let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
         let is_option_or_result = type_name.as_ref()
-            .map(|n| n.starts_with("Option") || n.starts_with("Result"))
+            .map(|n| ctx.type_registry.is_option_or_result(n)
+                || n.starts_with("Option") || n.starts_with("Result"))
             .unwrap_or(false);
         if !is_option_or_result {
             // Not an Option/Result — unwrap is a no-op
@@ -716,7 +717,8 @@ pub(super) fn lower_method_call(
     if matches!(method_name, "is_some" | "is_none" | "is_ok" | "is_error") {
         let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
         let is_option_or_result = type_name.as_ref()
-            .map(|n| n.starts_with("Option") || n.starts_with("Result"))
+            .map(|n| ctx.type_registry.is_option_or_result(n)
+                || n.starts_with("Option") || n.starts_with("Result"))
             .unwrap_or(false);
         if !is_option_or_result {
             // Not an Option/Result — return false

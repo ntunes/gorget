@@ -699,7 +699,9 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
                     // Check expected_type from context
                     if let Some(et) = ctx.expected_type {
                         let tn = ctx.type_registry.type_name(et).unwrap_or_default();
-                        if tn.starts_with("Result__") {
+                        let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
+                            || tn.starts_with("Result__");
+                        if is_result {
                             return et;
                         }
                     }
@@ -722,7 +724,9 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
             if matches!(callee.node, Expr::NoneLiteral) {
                 if let Some(et) = ctx.expected_type {
                     let tn = ctx.type_registry.type_name(et).unwrap_or_default();
-                    if tn.starts_with("Option__") {
+                    let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option)
+                        || tn.starts_with("Option__");
+                    if is_option {
                         return et;
                     }
                 }
@@ -733,7 +737,9 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
             // Bare `None` — check expected_type for Option context
             if let Some(et) = ctx.expected_type {
                 let tn = ctx.type_registry.type_name(et).unwrap_or_default();
-                if tn.starts_with("Option__") {
+                let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option)
+                    || tn.starts_with("Option__");
+                if is_option {
                     return et;
                 }
             }

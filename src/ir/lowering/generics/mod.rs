@@ -1108,10 +1108,18 @@ fn monomorphize_enum(
         });
     }
 
+    let enum_category = match template.name.node.as_str() {
+        "Option" => Some(EnumCategory::Option),
+        "Result" => Some(EnumCategory::Result),
+        _ => None,
+    };
     let type_def = TypeDef {
         name: mangled_name.to_string(),
         kind: TypeDefKind::Enum(EnumDef { variants }),
-        metadata: TypeMetadata::default(),
+        metadata: TypeMetadata {
+            enum_category,
+            ..Default::default()
+        },
     };
 
     registry.add_type_def(type_def);

@@ -976,7 +976,9 @@ fn resolve_option_result_variant(
                     // Fall back to expected type from context (e.g., VarDecl target)
                     ctx.expected_type.and_then(|et| {
                         let name = ctx.type_registry.type_name(et)?;
-                        if name.starts_with("Option__") {
+                        let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option)
+                            || name.starts_with("Option__");
+                        if is_option {
                             Some(et)
                         } else {
                             None
@@ -993,7 +995,9 @@ fn resolve_option_result_variant(
             let (type_name, type_id) = if let Some(et) = ctx.expected_type {
                 let name = ctx.type_registry.type_name(et)
                     .unwrap_or_else(|| "Option__int64_t".to_string());
-                if name.starts_with("Option__") {
+                let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option)
+                    || name.starts_with("Option__");
+                if is_option {
                     (name, et)
                 } else {
                     // Expected type isn't Option — fall back to enum_variants
@@ -1010,7 +1014,9 @@ fn resolve_option_result_variant(
             // Ok(value) — determine Result type from context (expected_type)
             if let Some(et) = ctx.expected_type {
                 let name = ctx.type_registry.type_name(et).unwrap_or_default();
-                if name.starts_with("Result__") {
+                let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
+                    || name.starts_with("Result__");
+                if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
                     let consumed = consumed_local_id(&field_op);
                     let dst = builder.enum_init(&name, "Ok", et, vec![field_op]);
@@ -1024,7 +1030,9 @@ fn resolve_option_result_variant(
             // Also check current_throws_result_type
             if let Some(rt) = ctx.current_throws_result_type {
                 let name = ctx.type_registry.type_name(rt).unwrap_or_default();
-                if name.starts_with("Result__") {
+                let is_result = ctx.type_registry.enum_category(rt) == Some(EnumCategory::Result)
+                    || name.starts_with("Result__");
+                if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
                     let consumed = consumed_local_id(&field_op);
                     let dst = builder.enum_init(&name, "Ok", rt, vec![field_op]);
@@ -1040,7 +1048,9 @@ fn resolve_option_result_variant(
             // Error(value) — determine Result type from context
             if let Some(et) = ctx.expected_type {
                 let name = ctx.type_registry.type_name(et).unwrap_or_default();
-                if name.starts_with("Result__") {
+                let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
+                    || name.starts_with("Result__");
+                if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
                     let dst = builder.enum_init(&name, "Error", et, vec![field_op]);
                     return Some(FunctionBuilder::copy(dst));
@@ -1048,7 +1058,9 @@ fn resolve_option_result_variant(
             }
             if let Some(rt) = ctx.current_throws_result_type {
                 let name = ctx.type_registry.type_name(rt).unwrap_or_default();
-                if name.starts_with("Result__") {
+                let is_result = ctx.type_registry.enum_category(rt) == Some(EnumCategory::Result)
+                    || name.starts_with("Result__");
+                if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
                     let dst = builder.enum_init(&name, "Error", rt, vec![field_op]);
                     return Some(FunctionBuilder::copy(dst));
@@ -1849,7 +1861,9 @@ pub fn emit_result_auto_propagate(
     let fn_result_type = ctx.current_throws_result_type.or_else(|| {
         let ret_type = builder.locals[0].type_id;
         let type_name = ctx.type_registry.type_name(ret_type)?;
-        if type_name.starts_with("Result__") {
+        let is_result = ctx.type_registry.enum_category(ret_type) == Some(EnumCategory::Result)
+            || type_name.starts_with("Result__");
+        if is_result {
             Some(ret_type)
         } else {
             None
@@ -1897,7 +1911,9 @@ fn extract_result_field_types(ctx: &LoweringContext, result_type: TypeId) -> (Ty
 /// 2. The current function can propagate: has `throws` OR returns `Result`
 pub fn should_auto_propagate(ctx: &LoweringContext, builder: &FunctionBuilder, type_id: TypeId) -> Option<TypeId> {
     let type_name = ctx.type_registry.type_name(type_id)?;
-    if !type_name.starts_with("Result__") {
+    let is_result = ctx.type_registry.enum_category(type_id) == Some(EnumCategory::Result)
+        || type_name.starts_with("Result__");
+    if !is_result {
         return None;
     }
     // Check if current function can propagate
@@ -1906,7 +1922,9 @@ pub fn should_auto_propagate(ctx: &LoweringContext, builder: &FunctionBuilder, t
     }
     let ret_type = builder.locals[0].type_id;
     let ret_name = ctx.type_registry.type_name(ret_type)?;
-    if ret_name.starts_with("Result__") {
+    let ret_is_result = ctx.type_registry.enum_category(ret_type) == Some(EnumCategory::Result)
+        || ret_name.starts_with("Result__");
+    if ret_is_result {
         return Some(type_id);
     }
     None
@@ -1925,7 +1943,9 @@ pub fn maybe_auto_propagate(
     // If the destination expects a Result, don't unwrap
     if let Some(expected) = ctx.expected_type {
         if let Some(name) = ctx.type_registry.type_name(expected) {
-            if name.starts_with("Result__") {
+            let is_result = ctx.type_registry.enum_category(expected) == Some(EnumCategory::Result)
+                || name.starts_with("Result__");
+            if is_result {
                 return operand;
             }
         }

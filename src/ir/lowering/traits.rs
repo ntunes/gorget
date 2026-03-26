@@ -119,7 +119,10 @@ pub fn register_trait_types(
                                         },
                                     ],
                                 }),
-                                metadata: TypeMetadata::default(),
+                                metadata: TypeMetadata {
+                                    enum_category: Some(EnumCategory::Result),
+                                    ..Default::default()
+                                },
                             };
                             ctx.type_registry.add_type_def(type_def);
                             let type_id = ctx.type_registry.insert(GirType::Named(result_name.clone()));

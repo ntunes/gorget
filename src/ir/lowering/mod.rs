@@ -304,7 +304,7 @@ pub fn lower_module(
                     // Same rule as Rust: if any variant has a droppable field,
                     // the enum is a Resource type with Recursive drop.
                     // Option/Result excluded — they have special unwrap handling.
-                    if name.starts_with("Option__") || name.starts_with("Result__") {
+                    if module.type_registry.is_option_or_result(name) || name.starts_with("Option__") || name.starts_with("Result__") {
                         false
                     } else {
                         edef.variants.iter().any(|v| {
@@ -351,6 +351,7 @@ pub fn lower_module(
                 copy_semantics: CopySemantics::Resource,
                 clone_fn: Some("gorget_array_clone".to_string()),
                 collection_kind: Some(CollectionKind::Array),
+                enum_category: None,
             },
         });
         let array_type_id = module.type_registry.insert(GirType::Named("GorgetArray".to_string()));
@@ -368,6 +369,7 @@ pub fn lower_module(
                 copy_semantics: CopySemantics::Resource,
                 clone_fn: Some("gorget_map_clone".to_string()),
                 collection_kind: Some(CollectionKind::Map),
+                enum_category: None,
             },
         });
         let map_type_id = module.type_registry.insert(GirType::Named("GorgetMap".to_string()));
@@ -385,6 +387,7 @@ pub fn lower_module(
                 copy_semantics: CopySemantics::Resource,
                 clone_fn: Some("gorget_set_clone".to_string()),
                 collection_kind: Some(CollectionKind::Set),
+                enum_category: None,
             },
         });
         let set_type_id = module.type_registry.insert(GirType::Named("GorgetSet".to_string()));
@@ -631,7 +634,10 @@ pub fn lower_module(
                                 },
                             ],
                         }),
-                        metadata: TypeMetadata::default(),
+                        metadata: TypeMetadata {
+                            enum_category: Some(EnumCategory::Result),
+                            ..Default::default()
+                        },
                     };
                     ctx.type_registry.add_type_def(type_def);
                     let type_id = ctx.type_registry.insert(GirType::Named(result_name.clone()));

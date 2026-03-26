@@ -122,6 +122,16 @@ pub struct EnumVariant {
 /// | Resource      | Custom(fn)      | User-defined Drop::drop — runs custom cleanup then field drops |
 ///
 /// **Suspicious** (flagged by validator): Trivial + Recursive, Trivial + Custom
+/// Distinguishes Option/Result enums from user-defined enums.
+/// Used for metadata-based dispatch instead of `starts_with("Option__")` matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnumCategory {
+    /// Option[T] — Some(T) | None.
+    Option,
+    /// Result[T, E] — Ok(T) | Error(E).
+    Result,
+}
+
 /// What kind of builtin collection a type is (if any).
 /// Used for metadata-based dispatch instead of string-prefix matching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +159,8 @@ pub struct TypeMetadata {
     pub clone_fn: Option<String>,
     /// Collection kind for metadata-based dispatch (replaces name-prefix matching).
     pub collection_kind: Option<CollectionKind>,
+    /// Enum category for Option/Result detection (replaces starts_with("Option__") matching).
+    pub enum_category: Option<EnumCategory>,
 }
 
 impl Default for TypeMetadata {
@@ -160,6 +172,7 @@ impl Default for TypeMetadata {
             copy_semantics: CopySemantics::Trivial,
             clone_fn: None,
             collection_kind: None,
+            enum_category: None,
         }
     }
 }
@@ -354,7 +367,8 @@ impl TypeRegistry {
                 // Enum with resource-type variant payloads needs drop
                 // (even without explicit Recursive strategy, e.g. user enums with String fields)
                 if let TypeDefKind::Enum(ref edef) = type_def.kind {
-                    if !name.starts_with("Option__") && !name.starts_with("Result__") {
+                    if type_def.metadata.enum_category.is_none()
+                        && !name.starts_with("Option__") && !name.starts_with("Result__") {
                         if edef.variants.iter().any(|v| {
                             v.fields.iter().any(|f| self.needs_drop(f.type_id))
                         }) {
@@ -503,6 +517,24 @@ impl TypeRegistry {
             }
         }
         false
+    }
+
+    /// Get the enum category (Option/Result) for a named type, if any.
+    pub fn enum_category(&self, type_id: TypeId) -> Option<EnumCategory> {
+        if type_id.0 < PRIMITIVE_TYPE_COUNT { return None; }
+        if let Some(GirType::Named(name)) = self.get(type_id) {
+            if let Some(type_def) = self.get_type_def(name) {
+                return type_def.metadata.enum_category;
+            }
+        }
+        None
+    }
+
+    /// Check if a named type is an Option or Result enum.
+    pub fn is_option_or_result(&self, name: &str) -> bool {
+        self.get_type_def(name)
+            .and_then(|td| td.metadata.enum_category)
+            .is_some()
     }
 }
 

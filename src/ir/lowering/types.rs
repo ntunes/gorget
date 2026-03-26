@@ -529,7 +529,10 @@ fn register_builtin_option(
                 },
             ],
         }),
-        metadata: TypeMetadata::default(),
+        metadata: TypeMetadata {
+            enum_category: Some(EnumCategory::Option),
+            ..Default::default()
+        },
     };
     registry.add_type_def(type_def);
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
@@ -559,7 +562,10 @@ fn register_builtin_result(
                 },
             ],
         }),
-        metadata: TypeMetadata::default(),
+        metadata: TypeMetadata {
+            enum_category: Some(EnumCategory::Result),
+            ..Default::default()
+        },
     };
     registry.add_type_def(type_def);
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
@@ -784,7 +790,10 @@ pub fn make_option_type_def(name: &str, inner_type: TypeId) -> TypeDef {
                 },
             ],
         }),
-        metadata: TypeMetadata::default(),
+        metadata: TypeMetadata {
+            enum_category: Some(EnumCategory::Option),
+            ..Default::default()
+        },
     }
 }
 
@@ -804,7 +813,10 @@ pub fn make_result_type_def(name: &str, ok_type: TypeId, err_type: TypeId) -> Ty
                 },
             ],
         }),
-        metadata: TypeMetadata::default(),
+        metadata: TypeMetadata {
+            enum_category: Some(EnumCategory::Result),
+            ..Default::default()
+        },
     }
 }
 

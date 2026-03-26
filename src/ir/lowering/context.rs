@@ -799,8 +799,10 @@ impl<'a> LoweringContext<'a> {
     /// Extract the Ok type from a Result TypeId, if it is a Result type.
     pub fn unwrap_result_ok_type(&self, result_type: TypeId) -> Option<TypeId> {
         let name = self.type_registry.type_name(result_type)?;
-        if !name.starts_with("Result__") { return None; }
         let td = self.type_registry.get_type_def(&name)?;
+        if td.metadata.enum_category != Some(EnumCategory::Result) && !name.starts_with("Result__") {
+            return None;
+        }
         if let TypeDefKind::Enum(e) = &td.kind {
             e.variants.iter().find(|v| v.name == "Ok")
                 .and_then(|v| v.fields.first().map(|f| f.type_id))
@@ -981,7 +983,7 @@ impl<'a> LoweringContext<'a> {
                 }
                 // User enums with cloneable variant payloads → generated {Name}__clone.
                 if let crate::ir::types::TypeDefKind::Enum(ref edef) = type_def.kind {
-                    if !name.starts_with("Option__") && !name.starts_with("Result__") {
+                    if !self.type_registry.is_option_or_result(name) && !name.starts_with("Option__") && !name.starts_with("Result__") {
                         let has_cloneable_payload = edef.variants.iter().any(|v| {
                             v.fields.iter().any(|f| self.type_registry.is_resource_type(f.type_id))
                         });
