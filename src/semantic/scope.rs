@@ -38,6 +38,12 @@ pub struct DefInfo {
     pub param_ownership: Option<crate::parser::ast::Ownership>,
     /// Whether this variable was declared with `shared` (for CFA).
     pub shared: crate::parser::ast::SharedKind,
+    /// For struct defs: field TypeIds in declaration order.
+    /// Populated during type checking. Used by is_copy_type for transitive checks.
+    pub field_types: Option<Vec<TypeId>>,
+    /// For enum defs: variant field TypeIds (Vec per variant, in declaration order).
+    /// Populated during type checking. Used by is_copy_type for transitive checks.
+    pub variant_field_types: Option<Vec<Vec<TypeId>>>,
 }
 
 /// A lexical scope.
@@ -139,6 +145,8 @@ impl ScopeTable {
             is_param: false,
             param_ownership: None,
             shared: crate::parser::ast::SharedKind::None,
+            field_types: None,
+            variant_field_types: None,
         });
         def_id
     }
@@ -174,6 +182,8 @@ impl ScopeTable {
                     is_param: false,
                     param_ownership: None,
                     shared: crate::parser::ast::SharedKind::None,
+                    field_types: None,
+                    variant_field_types: None,
                 });
                 self.scopes[self.current.0 as usize]
                     .names
@@ -201,6 +211,8 @@ impl ScopeTable {
             is_param: false,
             param_ownership: None,
             shared: crate::parser::ast::SharedKind::None,
+            field_types: None,
+            variant_field_types: None,
         });
         self.scopes[self.current.0 as usize]
             .names

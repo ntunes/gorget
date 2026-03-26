@@ -49,9 +49,25 @@ pub(super) fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTab
         }
         ResolvedType::Defined(def_id) => {
             let def = scopes.get_def(*def_id);
-            // Enums are Copy — they're ordinals or tagged unions of value data
+            // Enums: Copy if all variant fields are Copy
             if def.kind == crate::semantic::scope::DefKind::Enum {
-                return true;
+                if let Some(ref variant_types) = def.variant_field_types {
+                    return variant_types.iter().all(|vt| {
+                        vt.iter().all(|&field_tid| is_copy_type(field_tid, types, scopes))
+                    });
+                }
+                return true; // No variant field info → assume Copy (ordinal enums)
+            }
+            // Structs: Copy if all fields are Copy
+            if def.kind == crate::semantic::scope::DefKind::Struct {
+                if let Some(ref field_tids) = def.field_types {
+                    return field_tids.iter().all(|&tid| is_copy_type(tid, types, scopes));
+                }
+                // No field info → conservative: check name whitelist
+                return matches!(def.name.as_str(),
+                    "Arena" | "TrackingAllocator" | "PoolAllocator"
+                    | "TlsfAllocator" | "FixedBufferAllocator" | "FallbackAllocator"
+                );
             }
             // Arena/TrackingAllocator/PoolAllocator/TlsfAllocator/FixedBufferAllocator/FallbackAllocator are Copy — they're pointers
             matches!(def.name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator" | "FixedBufferAllocator" | "FallbackAllocator")

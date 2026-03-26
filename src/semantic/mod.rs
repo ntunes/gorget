@@ -249,6 +249,9 @@ pub fn analyze_with_source_dir(
         &mut resolve_ctx.function_info, &method_resolutions,
     );
 
+    // Pass 4.5: Populate struct/enum field types on DefInfo for is_copy_type.
+    populate_def_field_types(module, &mut scopes, &types);
+
     // Pass 4.6: Rewrite AST type annotations to match provenance-adjusted type_ids.
     // After str→StringType parser unification, all string annotations are StringType.
     // Provenance downgrades some to Str (view). This pass rewrites the AST to match,
@@ -286,4 +289,60 @@ pub fn analyze_with_source_dir(
         fn_purity,
         borrow_deps,
     }
+}
+
+/// Populate `field_types` and `variant_field_types` on DefInfo for structs/enums.
+/// This enables `is_copy_type` to transitively check if all fields are Copy.
+/// Populate `field_types` and `variant_field_types` on DefInfo for structs/enums.
+/// This enables `is_copy_type` to transitively check if all fields are Copy.
+fn populate_def_field_types(
+    module: &crate::parser::ast::Module,
+    scopes: &mut scope::ScopeTable,
+    types: &types::TypeTable,
+) {
+    use crate::parser::ast::{Item, VariantFields};
+    fn scan_items(
+        items: &[crate::span::Spanned<Item>],
+        scopes: &mut scope::ScopeTable,
+        types: &types::TypeTable,
+    ) {
+        for item in items {
+            match &item.node {
+                Item::Struct(s) => {
+                    if let Some(def_id) = scopes.lookup(&s.name.node) {
+                        let field_tids: Vec<_> = s.fields.iter()
+                            .filter_map(|f| types.resolve_type(&f.node.type_.node))
+                            .collect();
+                        if !field_tids.is_empty() {
+                            scopes.get_def_mut(def_id).field_types = Some(field_tids);
+                        }
+                    }
+                }
+                Item::Enum(e) => {
+                    if let Some(def_id) = scopes.lookup(&e.name.node) {
+                        let variant_tids: Vec<Vec<TypeId>> = e.variants.iter()
+                            .map(|v| {
+                                match &v.node.fields {
+                                    VariantFields::Unit => Vec::new(),
+                                    VariantFields::Tuple(fields) => {
+                                        fields.iter()
+                                            .filter_map(|f| types.resolve_type(&f.node))
+                                            .collect()
+                                    }
+                                }
+                            })
+                            .collect();
+                        if variant_tids.iter().any(|v| !v.is_empty()) {
+                            scopes.get_def_mut(def_id).variant_field_types = Some(variant_tids);
+                        }
+                    }
+                }
+                Item::Module { items: inner, .. } => {
+                    scan_items(inner, scopes, types);
+                }
+                _ => {}
+            }
+        }
+    }
+    scan_items(&module.items, scopes, types);
 }

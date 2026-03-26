@@ -300,6 +300,28 @@ impl TypeTable {
             ResolvedType::Never => "never".into(),
         }
     }
+
+    /// Resolve an AST type annotation to a TypeId.
+    /// Handles primitives and named types. Returns None for unresolvable types.
+    pub fn resolve_type(&self, ty: &crate::parser::ast::Type) -> Option<TypeId> {
+        use crate::parser::ast::{Type, PrimitiveType as P};
+        match ty {
+            Type::Primitive(p) => {
+                let tid = match p {
+                    P::Int | P::Int64 => self.int_id,
+                    P::Float | P::Float64 => self.float_id,
+                    P::Bool => self.bool_id,
+                    P::StringType => self.owned_string_id,
+                    P::StringView => self.string_id,
+                    P::CStr => self.cstr_id,
+                    P::Void => self.void_id,
+                    _ => return None,
+                };
+                Some(tid)
+            }
+            _ => None, // Named/Generic types not resolvable without scope table
+        }
+    }
 }
 
 /// Returns true if a type is a reference type that needs lifetime tracking.
