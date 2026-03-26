@@ -6659,7 +6659,13 @@ fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &HashMap<u32, St
                 } else {
                     field_name.to_string()
                 };
-                write!(out, "{drop_fn}(&self->{access}); ").unwrap();
+                // Box fields (free): pass the pointer value directly.
+                // Other drop fns (gorget_string_free, etc.): pass address of field.
+                if *drop_fn == "free" {
+                    write!(out, "free(self->{access}); ").unwrap();
+                } else {
+                    write!(out, "{drop_fn}(&self->{access}); ").unwrap();
+                }
             }
             writeln!(out, "break;").unwrap();
         }

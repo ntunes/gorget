@@ -3384,6 +3384,10 @@ impl<'a> FuncLowering<'a> {
                     args: vec![addr],
                     original_name: None,
                 });
+                // Note: for enums, lower_field_drops is a no-op (struct-only).
+                // Enum scope-exit drops need borrow tracking to be safe — without it,
+                // the drop can fire while borrows into the enum's data are still live.
+                // Drop-before-reassign (assigns.rs) handles the safe subset.
                 self.lower_field_drops(place, &type_name, bb);
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: None,
