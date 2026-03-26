@@ -138,7 +138,7 @@ equip JsonDeserializer with Deserializer:
         if self.de_err != "":
             return
         if self.de_current.is_object():
-            self.de_stack.push(self.de_current)
+            self.de_stack.push(self.de_current.clone())
         else:
             self.de_err = "expected object"
 
@@ -170,7 +170,7 @@ equip JsonDeserializer with Deserializer:
             return 0
         if self.de_current.is_array():
             int de_seq_len = self.de_current.len()
-            self.de_stack.push(self.de_current)
+            self.de_stack.push(self.de_current.clone())
             return de_seq_len
         self.de_err = "expected array"
         return 0
