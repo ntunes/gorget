@@ -783,6 +783,12 @@ pub fn lower_module(
                     }
                     ctx.fn_param_abis.insert(mangled.clone(), param_abis);
 
+                    // Register param ownerships for equip methods (for ! param MoveZero)
+                    let param_ownerships: Vec<ast::Ownership> = method_def.params.iter()
+                        .map(|p| p.node.ownership)
+                        .collect();
+                    ctx.fn_param_ownerships.insert(mangled.clone(), param_ownerships);
+
                     // Register extern binding for equip methods (e.g., UdpSocket__local_addr → gorget_udp_local_addr)
                     if let FunctionBody::Extern(c_symbol) = &method_def.body {
                         ctx.extern_bindings.insert(mangled, c_symbol.clone());
