@@ -365,9 +365,7 @@ fn lower_var_decl(
                         operand = FunctionBuilder::copy(cloned);
                         assign_mode = AssignMode::Move;
                     }
-                    // Named resource variable → CoW alias (zero-cost pointer until mutation)
-                    // Skip CoW for locals that are reassigned later (pre-scanned),
-                    // and for source locals that are reassigned (alias would dangle).
+                    // Named resource variable → CoW alias OR clone (if unsafe for CoW).
                     else if ctx.is_named_local(place.local)
                         && ctx.type_registry.is_resource_type(rhs_type)
                         && !ctx.cow_reassigned_names.contains(name)
@@ -390,6 +388,19 @@ fn lower_var_decl(
                         }
                         // Skip normal assign_mode logic — borrow already emitted
                         assign_mode = AssignMode::Borrow;
+                    }
+                    // Named resource local unsafe for CoW (reassigned/moved) → clone (old behavior).
+                    else if ctx.is_named_local(place.local)
+                        && ctx.type_registry.is_resource_type(rhs_type)
+                    {
+                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
+                            let ptr_type = ctx.register_ptr_type(rhs_type);
+                            let ptr_local = builder.add_local(ptr_type, None);
+                            builder.emit_borrow(ptr_local, place.clone());
+                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
+                            operand = FunctionBuilder::copy(cloned);
+                            assign_mode = AssignMode::Move;
+                        }
                     }
                     // Drop-registered temp OR unregistered droppable temp → move.
                     // Temps (not named vars) that need drop should be moved to transfer

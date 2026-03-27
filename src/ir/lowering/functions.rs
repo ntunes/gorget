@@ -11,56 +11,115 @@ use super::exprs::lower_expr;
 use super::generics;
 use super::stmts::lower_block;
 
-/// Pre-scan a function body to find variable names that are reassigned.
-/// Used by CoW to skip aliasing for locals that get reassigned (especially in loops),
-/// because the LIR can't change local types mid-function for loop phis.
-fn prescan_reassigned_names(body: &[Spanned<Stmt>]) -> rustc_hash::FxHashSet<String> {
+/// Pre-scan a function body to find variable names unsafe for CoW aliasing:
+/// reassigned, !-moved, or used as RHS for Move-type VarDecls.
+/// CoW skips aliasing for these because the LIR can't change local types
+/// mid-function (static ref_locals), and MoveZero on a source invalidates aliases.
+fn prescan_cow_unsafe_names(body: &[Spanned<Stmt>]) -> rustc_hash::FxHashSet<String> {
     let mut declared: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
-    let mut reassigned: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
-    prescan_block(body, &mut declared, &mut reassigned);
-    reassigned
+    let mut unsafe_names: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
+    prescan_block(body, &mut declared, &mut unsafe_names);
+    unsafe_names
 }
 
 fn prescan_block(
     stmts: &[Spanned<Stmt>],
     declared: &mut rustc_hash::FxHashSet<String>,
-    reassigned: &mut rustc_hash::FxHashSet<String>,
+    unsafe_names: &mut rustc_hash::FxHashSet<String>,
 ) {
     use crate::parser::ast::Pattern;
     for stmt in stmts {
         match &stmt.node {
-            Stmt::VarDecl { pattern, .. } => {
+            Stmt::VarDecl { pattern, value, .. } => {
                 if let Pattern::Binding(name) = &pattern.node {
                     declared.insert(name.clone());
                 }
+                // Scan for !-moved args in the value expression
+                prescan_expr_moves(&value.node, declared, unsafe_names);
             }
-            Stmt::Assign { target, .. } | Stmt::CompoundAssign { target, .. } => {
+            Stmt::Assign { target, value, .. } => {
                 if let Expr::Identifier(name) = &target.node {
                     if declared.contains(name.as_str()) {
-                        reassigned.insert(name.clone());
+                        unsafe_names.insert(name.clone());
                     }
                 }
+                prescan_expr_moves(&value.node, declared, unsafe_names);
+            }
+            Stmt::CompoundAssign { target, value, .. } => {
+                if let Expr::Identifier(name) = &target.node {
+                    if declared.contains(name.as_str()) {
+                        unsafe_names.insert(name.clone());
+                    }
+                }
+                prescan_expr_moves(&value.node, declared, unsafe_names);
+            }
+            Stmt::Expr(expr) => {
+                prescan_expr_moves(&expr.node, declared, unsafe_names);
+            }
+            Stmt::Return(Some(expr)) => {
+                prescan_expr_moves(&expr.node, declared, unsafe_names);
             }
             Stmt::While { body, else_body, .. } => {
-                prescan_block(&body.stmts, declared, reassigned);
+                prescan_block(&body.stmts, declared, unsafe_names);
                 if let Some(eb) = else_body {
-                    prescan_block(&eb.stmts, declared, reassigned);
+                    prescan_block(&eb.stmts, declared, unsafe_names);
                 }
             }
             Stmt::For { body, .. } => {
-                prescan_block(&body.stmts, declared, reassigned);
+                prescan_block(&body.stmts, declared, unsafe_names);
             }
             Stmt::If { then_body, elif_branches, else_body, .. } => {
-                prescan_block(&then_body.stmts, declared, reassigned);
+                prescan_block(&then_body.stmts, declared, unsafe_names);
                 for (_, branch_body) in elif_branches {
-                    prescan_block(&branch_body.stmts, declared, reassigned);
+                    prescan_block(&branch_body.stmts, declared, unsafe_names);
                 }
                 if let Some(eb) = else_body {
-                    prescan_block(&eb.stmts, declared, reassigned);
+                    prescan_block(&eb.stmts, declared, unsafe_names);
                 }
             }
             _ => {}
         }
+    }
+}
+
+/// Scan an expression for `!name` (Move) arguments in function/method calls.
+fn prescan_expr_moves(
+    expr: &Expr,
+    declared: &rustc_hash::FxHashSet<String>,
+    unsafe_names: &mut rustc_hash::FxHashSet<String>,
+) {
+    match expr {
+        Expr::Call { args, callee, .. } => {
+            prescan_expr_moves(&callee.node, declared, unsafe_names);
+            for arg in args {
+                if matches!(arg.node.ownership, Ownership::Move) {
+                    if let Expr::Identifier(name) = &arg.node.value.node {
+                        if declared.contains(name.as_str()) {
+                            unsafe_names.insert(name.clone());
+                        }
+                    }
+                }
+                prescan_expr_moves(&arg.node.value.node, declared, unsafe_names);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            prescan_expr_moves(&receiver.node, declared, unsafe_names);
+            for arg in args {
+                if matches!(arg.node.ownership, Ownership::Move) {
+                    if let Expr::Identifier(name) = &arg.node.value.node {
+                        if declared.contains(name.as_str()) {
+                            unsafe_names.insert(name.clone());
+                        }
+                    }
+                }
+                prescan_expr_moves(&arg.node.value.node, declared, unsafe_names);
+            }
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            prescan_expr_moves(&left.node, declared, unsafe_names);
+            prescan_expr_moves(&right.node, declared, unsafe_names);
+        }
+        _ => {}
     }
 }
 
@@ -156,6 +215,11 @@ pub fn lower_function(
         let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.drops.register_param(local_id, gir_type, &ctx.type_registry);
+    }
+
+    // Pre-scan: find variables unsafe for CoW (reassigned, !-moved).
+    if let FunctionBody::Block(block) = &func.body {
+        ctx.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
     }
 
     // Lower the body
@@ -409,6 +473,11 @@ pub fn lower_equip_method(
             .map(|p| ctx.type_mapper.map_ast_type(&p.node.type_.node))
             .collect();
         ctx.fn_sigs.insert(mangled_name.clone(), (base_param_types, return_type));
+    }
+
+    // Pre-scan: find variables unsafe for CoW (reassigned, !-moved).
+    if let FunctionBody::Block(block) = &method.body {
+        ctx.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
     }
 
     // Lower the body
