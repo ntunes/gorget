@@ -4652,6 +4652,15 @@ fn test_process() {
 }
 
 #[test]
+fn test_process_timeout() {
+    run_gg_test(
+        "test_process_timeout.gg",
+        &["4 passed, 0 failed"],
+        true,
+    );
+}
+
+#[test]
 fn test_cleanup() {
     // "dropping alpha" from the failing test appears in captured output;
     // "dropping beta" from the passing test is captured and discarded.

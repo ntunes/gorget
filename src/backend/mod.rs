@@ -64,6 +64,9 @@ pub fn map_stdlib_name(name: &str) -> Option<&'static str> {
         "Process__close_stdin" => "gorget_process_close_stdin",
         "Process__read_stdout" => "gorget_process_read_stdout",
         "Process__read_stderr" => "gorget_process_read_stderr",
+        "Process__wait_timeout" => "gorget_process_wait_timeout",
+        "Process__read_all" => "gorget_process_read_all",
+        "Process__read_all_timeout" => "gorget_process_read_all_timeout",
         // Memory diagnostics (std.os)
         "mem_allocated" => "gorget_mem_allocated",
         "mem_freed" => "gorget_mem_freed",

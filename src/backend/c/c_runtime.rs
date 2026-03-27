@@ -9695,6 +9695,107 @@ static inline GorgetString gorget_process_read_stderr(GorgetProcess* proc) {
     return (GorgetString){buf, len, cap, __gorget_current_alloc};
 }
 
+// wait_timeout(ms) — poll-based wait with deadline.
+// Returns exit code on child exit, or -2 on timeout (child is NOT killed).
+static inline int64_t gorget_process_wait_timeout(GorgetProcess* proc, int64_t timeout_ms) {
+    struct timespec start, now;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        int status = 0;
+        pid_t r = waitpid(proc->pid, &status, WNOHANG);
+        if (r > 0) return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : (int64_t)-1;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        int64_t elapsed = (now.tv_sec - start.tv_sec) * 1000
+                        + (now.tv_nsec - start.tv_nsec) / 1000000;
+        if (elapsed >= timeout_ms) return (int64_t)-2; // timeout
+        struct timespec ts = {0, 5000000}; // 5ms poll interval
+        nanosleep(&ts, NULL);
+    }
+}
+
+// Shared poll-based drain of stdout + stderr into buffers.
+// If timeout_ms >= 0, kills child and sets timed_out on deadline.
+// If timeout_ms < 0, blocks indefinitely.
+#include <poll.h>
+static inline ExecResult gorget_process__drain(GorgetProcess* proc, int64_t timeout_ms) {
+    ExecResult result;
+    int stdout_fd = proc->stdout_fd;
+    int stderr_fd = proc->stderr_fd;
+    // Close stdin so child sees EOF
+    if (proc->stdin_fd >= 0) { close(proc->stdin_fd); proc->stdin_fd = -1; }
+
+    size_t o_cap = 256, o_len = 0;
+    char* o_buf = (char*)GORGET_ALLOC(o_cap);
+    size_t e_cap = 256, e_len = 0;
+    char* e_buf = (char*)GORGET_ALLOC(e_cap);
+
+    struct timespec start;
+    if (timeout_ms >= 0) clock_gettime(CLOCK_MONOTONIC, &start);
+    int timed_out = 0;
+
+    int open_fds = (stdout_fd >= 0 ? 1 : 0) + (stderr_fd >= 0 ? 1 : 0);
+    while (open_fds > 0 && !timed_out) {
+        int poll_timeout = -1; // block indefinitely
+        if (timeout_ms >= 0) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            int64_t elapsed = (now.tv_sec - start.tv_sec) * 1000
+                            + (now.tv_nsec - start.tv_nsec) / 1000000;
+            int64_t remaining = timeout_ms - elapsed;
+            if (remaining <= 0) { timed_out = 1; break; }
+            poll_timeout = (int)(remaining < 100 ? remaining : 100);
+        }
+
+        struct pollfd fds[2];
+        int nfds = 0;
+        int stdout_idx = -1, stderr_idx = -1;
+        if (stdout_fd >= 0) { stdout_idx = nfds; fds[nfds].fd = stdout_fd; fds[nfds].events = POLLIN; nfds++; }
+        if (stderr_fd >= 0) { stderr_idx = nfds; fds[nfds].fd = stderr_fd; fds[nfds].events = POLLIN; nfds++; }
+        if (nfds == 0) break;
+        int r = poll(fds, (nfds_t)nfds, poll_timeout);
+        if (r < 0) break;
+        if (stdout_idx >= 0 && (fds[stdout_idx].revents & (POLLIN|POLLHUP))) {
+            if (o_len + 1 >= o_cap) { size_t nc = o_cap * 2; o_buf = (char*)GORGET_REALLOC(o_buf, o_cap, nc); o_cap = nc; }
+            ssize_t n = read(stdout_fd, o_buf + o_len, o_cap - o_len - 1);
+            if (n <= 0) { close(stdout_fd); stdout_fd = -1; proc->stdout_fd = -1; open_fds--; }
+            else o_len += (size_t)n;
+        }
+        if (stderr_idx >= 0 && (fds[stderr_idx].revents & (POLLIN|POLLHUP))) {
+            if (e_len + 1 >= e_cap) { size_t nc = e_cap * 2; e_buf = (char*)GORGET_REALLOC(e_buf, e_cap, nc); e_cap = nc; }
+            ssize_t n = read(stderr_fd, e_buf + e_len, e_cap - e_len - 1);
+            if (n <= 0) { close(stderr_fd); stderr_fd = -1; proc->stderr_fd = -1; open_fds--; }
+            else e_len += (size_t)n;
+        }
+    }
+    o_buf[o_len] = '\0'; e_buf[e_len] = '\0';
+
+    if (timed_out) {
+        kill(proc->pid, SIGKILL);
+        waitpid(proc->pid, NULL, 0);
+        if (stdout_fd >= 0) close(stdout_fd);
+        if (stderr_fd >= 0) close(stderr_fd);
+        proc->stdout_fd = -1; proc->stderr_fd = -1;
+        result.exit_code = (int64_t)-2;
+    } else {
+        int status = 0;
+        waitpid(proc->pid, &status, 0);
+        result.exit_code = WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : (int64_t)-1;
+    }
+    result.output = gorget_string_adopt(o_buf);
+    result.errors = gorget_string_adopt(e_buf);
+    return result;
+}
+
+// read_all() — drain stdout + stderr simultaneously, wait for exit.
+static inline ExecResult gorget_process_read_all(GorgetProcess* proc) {
+    return gorget_process__drain(proc, -1);
+}
+
+// read_all_timeout(ms) — drain with deadline; kills child on timeout (exit_code == -2).
+static inline ExecResult gorget_process_read_all_timeout(GorgetProcess* proc, int64_t timeout_ms) {
+    return gorget_process__drain(proc, timeout_ms);
+}
+
 static inline int64_t gorget_getpid(void) {
     return (int64_t)getpid();
 }

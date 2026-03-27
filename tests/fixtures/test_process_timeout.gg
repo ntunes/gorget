@@ -1,0 +1,54 @@
+from std.process import process_spawn, ExecResult
+
+test "read_all captures stdout and stderr":
+    Vector[String] args = Vector[String]()
+    args.push("-c")
+    args.push("echo out && echo err >&2")
+    auto r = process_spawn("sh", args)
+    match r:
+        case Ok(proc):
+            ExecResult result = proc.read_all()
+            assert result.exit_code == 0
+            assert result.output == "out\n"
+            assert result.errors == "err\n"
+        case Error(msg):
+            assert false, f"spawn failed: {msg}"
+
+test "read_all_timeout kills on timeout":
+    Vector[String] args = Vector[String]()
+    args.push("-c")
+    args.push("sleep 60")
+    auto r = process_spawn("sh", args)
+    match r:
+        case Ok(proc):
+            ExecResult result = proc.read_all_timeout(100)
+            assert result.exit_code == -2
+        case Error(msg):
+            assert false, f"spawn failed: {msg}"
+
+test "read_all_timeout completes before deadline":
+    Vector[String] args = Vector[String]()
+    args.push("-c")
+    args.push("echo fast")
+    auto r = process_spawn("sh", args)
+    match r:
+        case Ok(proc):
+            ExecResult result = proc.read_all_timeout(5000)
+            assert result.exit_code == 0
+            assert result.output == "fast\n"
+        case Error(msg):
+            assert false, f"spawn failed: {msg}"
+
+test "wait_timeout returns -2 on timeout":
+    Vector[String] args = Vector[String]()
+    args.push("-c")
+    args.push("sleep 60")
+    auto r = process_spawn("sh", args)
+    match r:
+        case Ok(proc):
+            int code = proc.wait_timeout(100)
+            assert code == -2
+            proc.kill()
+            proc.wait()
+        case Error(msg):
+            assert false, f"spawn failed: {msg}"

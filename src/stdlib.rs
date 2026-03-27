@@ -365,12 +365,15 @@ fn gen_process_module() -> Module {
     let process_struct = opaque_struct("Process");
     let process_equip = equip_block("Process", vec![
         decl_method("wait", Ownership::Borrow, &[], ty_int()),
+        decl_method("wait_timeout", Ownership::Borrow, &[("timeout_ms", ty_int())], ty_int()),
         decl_method("kill", Ownership::Borrow, &[], ty_void()),
         decl_method("pid", Ownership::Borrow, &[], ty_int()),
         decl_method("write_stdin", Ownership::Borrow, &[("data", ty_str())], ty_void()),
         decl_method("close_stdin", Ownership::Borrow, &[], ty_void()),
         decl_method("read_stdout", Ownership::Borrow, &[], ty_string()),
         decl_method("read_stderr", Ownership::Borrow, &[], ty_string()),
+        decl_method("read_all", Ownership::Borrow, &[], exec_result_type.clone()),
+        decl_method("read_all_timeout", Ownership::Borrow, &[("timeout_ms", ty_int())], exec_result_type.clone()),
     ]);
     let items = vec![
         Spanned::dummy(Item::Struct(struct_def)),

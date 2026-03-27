@@ -700,6 +700,24 @@ pub(super) fn lower_method_call(
                     let dst = builder.call("Process__read_stderr", vec![recv], gs_type);
                     return FunctionBuilder::copy(dst);
                 }
+                "wait_timeout" if !args.is_empty() => {
+                    let ms = lower_expr(ctx, builder, &args[0].node.value);
+                    let dst = builder.call("Process__wait_timeout", vec![recv, ms], I64_TYPE);
+                    return FunctionBuilder::copy(dst);
+                }
+                "read_all" => {
+                    if let Some(&exec_result_tid) = ctx.type_mapper.named_types.get("ExecResult") {
+                        let dst = builder.call("Process__read_all", vec![recv], exec_result_tid);
+                        return FunctionBuilder::copy(dst);
+                    }
+                }
+                "read_all_timeout" if !args.is_empty() => {
+                    let ms = lower_expr(ctx, builder, &args[0].node.value);
+                    if let Some(&exec_result_tid) = ctx.type_mapper.named_types.get("ExecResult") {
+                        let dst = builder.call("Process__read_all_timeout", vec![recv, ms], exec_result_tid);
+                        return FunctionBuilder::copy(dst);
+                    }
+                }
                 _ => {}
             }
         }
