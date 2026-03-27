@@ -191,7 +191,7 @@ pub(super) fn lower_call_arg(
             }
             val
         }
-        _ => val, // Borrow-of-Copy or Move-of-Copy: pass by value
+        _ => ctx.auto_clone_if_ptr(builder, val), // Auto-clone Ptr(T) → T at boundary
     }
 }
 

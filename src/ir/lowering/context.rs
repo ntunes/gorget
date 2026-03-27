@@ -1016,6 +1016,33 @@ impl<'a> LoweringContext<'a> {
         None
     }
 
+    /// If an operand is Ptr(T), deep-clone it to produce an owned T.
+    /// Used at Ptr→T boundaries: function args, enum constructors, collection push, etc.
+    /// Returns the cloned operand (owned T), or the original if not Ptr.
+    pub fn auto_clone_if_ptr(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        operand: Operand,
+    ) -> Operand {
+        if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+            if place.projections.is_empty() {
+                let local_type = builder.locals[place.local.0 as usize].type_id;
+                if let Some(inner) = self.pointee_type(local_type) {
+                    if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
+                        let cloned = builder.call(
+                            &clone_fn,
+                            vec![crate::ir::builder::FunctionBuilder::copy(place.local)],
+                            inner,
+                        );
+                        self.drops.register_local(cloned, inner, &self.type_registry);
+                        return crate::ir::builder::FunctionBuilder::copy(cloned);
+                    }
+                }
+            }
+        }
+        operand
+    }
+
     // ── Copy-on-Write alias management ────────────────────────────────
 
     /// Register a CoW alias: `alias_local` is a Ptr(T) borrowing from `source_local`.

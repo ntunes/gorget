@@ -1792,37 +1792,20 @@ pub(super) fn lower_index_access(
             // Try to infer element type from collection type name
             infer_collection_element_type(ctx, base_type)
         };
-        // Resource-type elements: return Ptr(T) reference for direct collections
-        // (zero-cost borrow — LIR reads through pointer without clone).
-        // For Recursive/Custom-drop types (Yaml, user structs), the LIR clones
-        // unconditionally, so return owned type and register for drop.
-        // Exception: Task elements are consumed on await, not borrowed.
+        // CoW: all resource-type elements return Ptr(T) — zero-cost borrow.
+        // Auto-clone happens at Ptr→T boundaries (call args, VarDecl, return, etc.).
         let is_task = matches!(ctx.type_registry.get(elem_type),
             Some(GirType::Named(n)) if n.starts_with("Task__"));
-        let lir_will_clone = if let Some(GirType::Named(n)) = ctx.type_registry.get(elem_type) {
-            // LIR clones Recursive-drop types that aren't direct collections
-            !ctx.type_registry.is_collection_type(elem_type) && {
-                ctx.type_registry.get_type_def(n)
-                    .map(|td| matches!(td.metadata.drop_strategy,
-                        crate::ir::types::DropStrategy::Recursive | crate::ir::types::DropStrategy::Custom(_)))
-                    .unwrap_or(false)
-            }
-        } else { false };
         let result_type = if is_task {
             elem_type
-        } else if lir_will_clone {
-            // LIR will clone → result is owned, needs drop tracking
-            elem_type
         } else if ctx.type_registry.is_resource_type(elem_type) {
-            // Direct collection → Ptr (zero-cost borrow)
-            ctx.type_registry.insert(GirType::Ptr(elem_type))
+            ctx.register_ptr_type(elem_type)
         } else {
             elem_type
         };
         let dst = builder.index_load(place.clone(), idx, result_type);
-        // Register owned clones for drop
-        if lir_will_clone {
-            ctx.drops.register_local(dst, result_type, &ctx.type_registry);
+        if ctx.type_registry.is_resource_type(elem_type) && !is_task {
+            ctx.ref_locals.insert(dst);
         }
         return FunctionBuilder::copy(dst);
     }
