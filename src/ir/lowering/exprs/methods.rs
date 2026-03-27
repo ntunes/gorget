@@ -1003,6 +1003,15 @@ pub(super) fn lower_method_call(
             .map(|&p| matches!(ctx.type_registry.get(p), Some(GirType::MutPtr(_))))
             .unwrap_or(false);
 
+        // CoW: if receiver is being mutated, sever any alias relationships first.
+        if needs_mut {
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+                if place.projections.is_empty() {
+                    ctx.cow_before_mutation(builder, place.local);
+                }
+            }
+        }
+
         // If receiver is a field access, borrow the field in-place instead of
         // borrowing a copy (which would mutate the copy, not the original).
         if let Some((field_place, field_type_id)) = &field_place_info {

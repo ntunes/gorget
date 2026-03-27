@@ -351,6 +351,20 @@ fn lower_var_decl(
                         ctx.drops.unregister(place.local);
                         assign_mode = AssignMode::Borrow;
                     }
+                    // Named non-resource local with clone_fn (e.g., Str → GorgetString conversion):
+                    // still clone, not CoW alias (different types, not an alias relationship).
+                    else if ctx.is_named_local(place.local)
+                        && !ctx.type_registry.is_resource_type(rhs_type)
+                        && ctx.clone_fn_for_ptr(rhs_type).is_some()
+                    {
+                        let clone_fn = ctx.clone_fn_for_ptr(rhs_type).unwrap();
+                        let ptr_type = ctx.register_ptr_type(rhs_type);
+                        let ptr_local = builder.add_local(ptr_type, None);
+                        builder.emit_borrow(ptr_local, place.clone());
+                        let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
+                        operand = FunctionBuilder::copy(cloned);
+                        assign_mode = AssignMode::Move;
+                    }
                     // Named resource variable → CoW alias (zero-cost pointer until mutation)
                     else if ctx.is_named_local(place.local)
                         && ctx.type_registry.is_resource_type(rhs_type)

@@ -1051,6 +1051,14 @@ impl<'a> LoweringContext<'a> {
         builder: &mut crate::ir::builder::FunctionBuilder,
         local: LocalId,
     ) {
+        // Early exit: if local has no CoW relationships, nothing to do.
+        if !self.cow_alias_sources.contains_key(&local)
+            && !self.cow_alias_targets.contains_key(&local)
+            && !self.cow_collection_refs.contains_key(&local)
+        {
+            return;
+        }
+
         // Case 1: local is an alias of something else → clone source into local
         if let Some(source) = self.cow_alias_sources.remove(&local) {
             // Remove from reverse map
@@ -1101,26 +1109,35 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         alias_local: LocalId,
-        source_local: LocalId,
+        _source_local: LocalId,
     ) {
         let alias_type = builder.locals[alias_local.0 as usize].type_id;
-        // Get the inner type (unwrap Ptr)
-        let inner_type = self.pointee_type(alias_type).unwrap_or(alias_type);
+        // Only materialize if alias is actually a Ptr(T)
+        let inner_type = match self.pointee_type(alias_type) {
+            Some(inner) => inner,
+            None => return, // Not a Ptr — nothing to materialize
+        };
         if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
-            // Borrow the source to pass to clone
-            let ptr_type = self.register_ptr_type(inner_type);
-            let ptr_local = builder.add_local(ptr_type, None);
-            builder.emit_borrow(ptr_local, crate::ir::instructions::Place::local(source_local));
-            // Call clone
-            let cloned = builder.call(&clone_fn, vec![crate::ir::builder::FunctionBuilder::copy(ptr_local)], inner_type);
-            // Update alias local: change type from Ptr(T) to T, store the clone
-            builder.locals[alias_local.0 as usize].type_id = inner_type;
-            builder.assign(crate::ir::instructions::Place::local(alias_local),
+            // The alias local already holds a Ptr(T) to the source data.
+            // Clone it to produce an owned T.
+            let cloned = builder.call(&clone_fn,
+                vec![crate::ir::builder::FunctionBuilder::copy(alias_local)], inner_type);
+            // Create a NEW local for the owned copy (can't reuse alias_local because
+            // ref_locals is static per-function in the LIR — changing type mid-function breaks).
+            let name_hint = builder.locals[alias_local.0 as usize].name_hint.clone();
+            let owned_local = builder.add_local(inner_type,
+                name_hint.as_deref());
+            builder.assign(crate::ir::instructions::Place::local(owned_local),
                           crate::ir::builder::FunctionBuilder::copy(cloned));
-            // Remove from ref_locals (no longer a pointer)
-            self.ref_locals.remove(&alias_local);
-            // Register for drop (now owns the data)
-            self.drops.register_local(alias_local, inner_type, &self.type_registry);
+            // Register the owned local for drop
+            self.drops.register_local(owned_local, inner_type, &self.type_registry);
+            // Update context: redirect the variable name to the new owned local
+            if let Some(ref hint) = builder.locals[alias_local.0 as usize].name_hint {
+                let name = hint.clone();
+                self.register_local(&name, owned_local, inner_type);
+                self.named_locals.insert(owned_local);
+            }
+            // The old alias_local stays as Ptr in ref_locals (dead — no more references).
         }
     }
 

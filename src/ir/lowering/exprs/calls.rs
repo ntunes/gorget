@@ -55,6 +55,8 @@ pub(super) fn lower_call_arg(
     if matches!(arg.node.ownership, Ownership::MutableBorrow) {
         if let Expr::Identifier(name) = &arg.node.value.node {
             if let Some((local_id, _)) = ctx.lookup_local(name) {
+                // CoW: mutable borrow mutates the local. Sever aliases first.
+                ctx.cow_before_mutation(builder, local_id);
                 let is_already_ptr = {
                     let lid = local_id.0 as usize;
                     lid < builder.locals.len() && matches!(
@@ -167,6 +169,8 @@ pub(super) fn lower_call_arg(
             // Move of a Move-type value: callee expects MutPtr. Emit borrow_mut.
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 if place.projections.is_empty() {
+                    // CoW: move transfers ownership. Sever aliases first.
+                    ctx.cow_before_mutation(builder, place.local);
                     let local_type = builder.locals[place.local.0 as usize].type_id;
                     let ptr_type = ctx.register_mut_ptr_type(local_type);
                     let dst = builder.add_local(ptr_type, None);

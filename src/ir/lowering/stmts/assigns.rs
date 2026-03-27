@@ -55,10 +55,21 @@ pub(super) fn lower_assign(
                     }
                 }
                 let type_id = _type_id;
+                // CoW: if this local is a source with aliases, sever them first.
+                // Aliases keep the old value; this local gets the new value.
+                if ctx.cow_has_aliases(local_id) {
+                    ctx.cow_sever_all_aliases_from(builder, local_id);
+                }
+                // CoW: if this local is an alias, just remove from alias maps.
+                // The reassignment naturally replaces the binding value.
+                if ctx.cow_is_alias(local_id) {
+                    if let Some(source) = ctx.cow_alias_sources.remove(&local_id) {
+                        if let Some(targets) = ctx.cow_alias_targets.get_mut(&source) {
+                            targets.remove(&local_id);
+                        }
+                    }
+                }
                 // Check if old value needs dropping before reassignment.
-                // For collection types (no TypeDef), only drop if the local is
-                // confirmed sole owner (was move-zero'd at VarDecl). Shallow copies
-                // from struct field reads share data and must not be freed here.
                 let needs_drop = {
                     use crate::ir::types::GirType;
                     if let Some(GirType::Named(type_name)) = ctx.type_registry.get(type_id) {
@@ -75,7 +86,6 @@ pub(super) fn lower_assign(
                 ctx.expected_type = Some(type_id);
                 let operand = lower_expr(ctx, builder, value);
                 // Auto-propagate: if RHS is Result-typed but target is not, unwrap
-                // NOTE: must run before restoring expected_type so the guard sees type_id.
                 let mut operand = maybe_auto_propagate(ctx, builder, operand);
                 ctx.expected_type = prev_expected;
                 // P2.6: Drop old value AFTER computing new value, BEFORE assigning
@@ -221,6 +231,13 @@ pub(super) fn lower_field_assign(
     value: &Spanned<Expr>,
 ) {
     use crate::ir::types::TypeDefKind;
+
+    // CoW: field write mutates the object. Sever aliases before proceeding.
+    if let Expr::Identifier(obj_name) = &object.node {
+        if let Some((local_id, _)) = ctx.lookup_local(obj_name) {
+            ctx.cow_before_mutation(builder, local_id);
+        }
+    }
 
     // Try to resolve the full field projection chain without materializing
     // intermediate struct values. This handles nested field writes like
@@ -444,6 +461,13 @@ pub(super) fn lower_index_assign(
     index: &Spanned<Expr>,
     value: &Spanned<Expr>,
 ) {
+    // CoW: index write mutates the object. Sever aliases before proceeding.
+    if let Expr::Identifier(obj_name) = &object.node {
+        if let Some((local_id, _)) = ctx.lookup_local(obj_name) {
+            ctx.cow_before_mutation(builder, local_id);
+        }
+    }
+
     // When the object is a struct field access (e.g. self.dict_field[key] = val),
     // resolve the field to a Place in-place to avoid copying the Dict struct.
     // This ensures hash table resizes and metadata updates propagate to the original.
