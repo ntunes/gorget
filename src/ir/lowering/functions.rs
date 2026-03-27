@@ -11,6 +11,59 @@ use super::exprs::lower_expr;
 use super::generics;
 use super::stmts::lower_block;
 
+/// Pre-scan a function body to find variable names that are reassigned.
+/// Used by CoW to skip aliasing for locals that get reassigned (especially in loops),
+/// because the LIR can't change local types mid-function for loop phis.
+fn prescan_reassigned_names(body: &[Spanned<Stmt>]) -> rustc_hash::FxHashSet<String> {
+    let mut declared: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
+    let mut reassigned: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
+    prescan_block(body, &mut declared, &mut reassigned);
+    reassigned
+}
+
+fn prescan_block(
+    stmts: &[Spanned<Stmt>],
+    declared: &mut rustc_hash::FxHashSet<String>,
+    reassigned: &mut rustc_hash::FxHashSet<String>,
+) {
+    use crate::parser::ast::Pattern;
+    for stmt in stmts {
+        match &stmt.node {
+            Stmt::VarDecl { pattern, .. } => {
+                if let Pattern::Binding(name) = &pattern.node {
+                    declared.insert(name.clone());
+                }
+            }
+            Stmt::Assign { target, .. } | Stmt::CompoundAssign { target, .. } => {
+                if let Expr::Identifier(name) = &target.node {
+                    if declared.contains(name.as_str()) {
+                        reassigned.insert(name.clone());
+                    }
+                }
+            }
+            Stmt::While { body, else_body, .. } => {
+                prescan_block(&body.stmts, declared, reassigned);
+                if let Some(eb) = else_body {
+                    prescan_block(&eb.stmts, declared, reassigned);
+                }
+            }
+            Stmt::For { body, .. } => {
+                prescan_block(&body.stmts, declared, reassigned);
+            }
+            Stmt::If { then_body, elif_branches, else_body, .. } => {
+                prescan_block(&then_body.stmts, declared, reassigned);
+                for (_, branch_body) in elif_branches {
+                    prescan_block(&branch_body.stmts, declared, reassigned);
+                }
+                if let Some(eb) = else_body {
+                    prescan_block(&eb.stmts, declared, reassigned);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Lower a single function definition into the GIR module.
 ///
 /// `name_override` — when `Some`, use this as the GIR/C function name instead of

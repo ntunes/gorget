@@ -366,8 +366,13 @@ fn lower_var_decl(
                         assign_mode = AssignMode::Move;
                     }
                     // Named resource variable → CoW alias (zero-cost pointer until mutation)
+                    // Skip CoW for locals that are reassigned later (pre-scanned),
+                    // and for source locals that are reassigned (alias would dangle).
                     else if ctx.is_named_local(place.local)
                         && ctx.type_registry.is_resource_type(rhs_type)
+                        && !ctx.cow_reassigned_names.contains(name)
+                        && !builder.locals[place.local.0 as usize].name_hint.as_ref()
+                            .map_or(false, |n| ctx.cow_reassigned_names.contains(n.as_str()))
                     {
                         // Create Ptr(T) alias instead of cloning
                         let ptr_type = ctx.register_ptr_type(rhs_type);

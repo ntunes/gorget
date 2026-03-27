@@ -243,6 +243,9 @@ pub struct LoweringContext<'a> {
     /// Populated from BuiltinTypeProtocol declarations during module setup.
     /// Used by the LIR backend to replace `map_monomorphized_to_runtime()`.
     pub runtime_callees: FxHashMap<String, String>,
+    /// CoW: variable names that are reassigned in the current function body.
+    /// Pre-scanned before lowering. Locals in this set skip CoW aliasing.
+    pub cow_reassigned_names: rustc_hash::FxHashSet<String>,
     /// CoW: alias_local → source_local. The alias holds a Ptr(T) that borrows source's data.
     /// When either side is mutated, the alias is severed by cloning.
     pub cow_alias_sources: FxHashMap<LocalId, LocalId>,
@@ -300,6 +303,7 @@ impl<'a> LoweringContext<'a> {
             tuple_element_locals: FxHashMap::default(),
             implicit_clone_warnings: Vec::new(),
             runtime_callees: FxHashMap::default(),
+            cow_reassigned_names: rustc_hash::FxHashSet::default(),
             cow_alias_sources: FxHashMap::default(),
             cow_alias_targets: FxHashMap::default(),
             cow_collection_refs: FxHashMap::default(),
@@ -746,6 +750,7 @@ impl<'a> LoweringContext<'a> {
         self.with_shared_refresh.clear();
         self.postconditions.clear();
         self.move_override_params.clear();
+        self.cow_reassigned_names.clear();
         self.cow_alias_sources.clear();
         self.cow_alias_targets.clear();
         self.cow_collection_refs.clear();
