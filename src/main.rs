@@ -1497,6 +1497,11 @@ fn main() {
         println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
         println!("  --emit-c-lir            Dump C code generated from LIR to stdout");
         println!();
+        println!("Interpreter:");
+        println!("  gg sim <file.gg>               Interpret via GIR (no C compilation)");
+        println!("  gg sim test <file.gg>          Run tests via interpreter (fast, no compile step)");
+        println!("  gg sim test <file.gg> --bench  Run benchmarks via interpreter");
+        println!();
         println!("Profile:");
         println!("  gg profile <file.gg>                           Profile compilation phases (JSON to stdout)");
         println!("  gg profile --compare <base.json> <cur.json>    Compare two profiles");
@@ -1642,7 +1647,7 @@ fn main() {
         eprintln!("       gg <command> <file.gg>     Run a compiler command");
         eprintln!("       gg                         Interactive REPL");
         eprintln!("       gg --version               Print version");
-        eprintln!("Compiler commands: lex, parse, check, build, run, fmt, test, report, profile");
+        eprintln!("Compiler commands: lex, parse, check, build, run, sim, fmt, test, report, profile");
         eprintln!("Package commands:  init, new, add, remove");
         process::exit(1);
     }
