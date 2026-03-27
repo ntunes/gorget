@@ -1281,6 +1281,141 @@ fn run_tui() {
     let _ = fs::remove_dir_all(&tmp_dir);
 }
 
+/// Interpreter-backed REPL (`gg sim` with no file argument).
+/// Same interface as run_tui but uses the GIR interpreter instead of compiling.
+fn run_sim_tui() {
+    let version = env!("CARGO_PKG_VERSION");
+    println!("Gorget {version} (interpreter)");
+    println!("Type code, then /run to execute. /help for commands.\n");
+
+    let mut definitions: Vec<String> = Vec::new();
+    let mut statements: Vec<String> = Vec::new();
+
+    loop {
+        let line = match tui::read_line(">>> ", true) {
+            tui::ReadLineResult::Line(l) => l,
+            tui::ReadLineResult::Eof => { println!(); break; }
+        };
+
+        let trimmed = line.trim();
+
+        if trimmed == "/quit" || trimmed == "/exit" { break; }
+        if trimmed == "/reset" {
+            definitions.clear();
+            statements.clear();
+            println!("State cleared.");
+            continue;
+        }
+        if trimmed == "/show" {
+            if !definitions.is_empty() {
+                println!("--- definitions ---");
+                for d in &definitions { println!("{d}"); }
+            }
+            if !statements.is_empty() {
+                println!("--- statements ---");
+                for s in &statements { println!("{s}"); }
+            }
+            if definitions.is_empty() && statements.is_empty() {
+                println!("(empty)");
+            }
+            continue;
+        }
+        if trimmed == "/run" {
+            if definitions.is_empty() && statements.is_empty() {
+                println!("(nothing to run)");
+                continue;
+            }
+            let source = generate_tui_source(&definitions, &statements);
+            sim_tui_run(&source);
+            continue;
+        }
+        if trimmed == "/check" {
+            if definitions.is_empty() && statements.is_empty() {
+                println!("(nothing to check)");
+                continue;
+            }
+            let source = generate_tui_source(&definitions, &statements);
+            sim_tui_check(&source);
+            continue;
+        }
+        if trimmed == "/help" {
+            println!("/run    — interpret the accumulated code (no compilation)");
+            println!("/check  — type-check and show any errors");
+            println!("/show   — show accumulated code");
+            println!("/reset  — clear accumulated code");
+            println!("/quit   — exit (also Ctrl+D)");
+            println!("/help   — show this help");
+            println!();
+            println!("Type definitions and statements, then /run to execute.");
+            println!("Lines ending with ':' start indented blocks (blank line ends block).");
+            continue;
+        }
+
+        if trimmed.is_empty() { continue; }
+
+        let mut block_lines: Vec<String> = vec![trimmed.to_string()];
+        if trimmed.ends_with(':') {
+            loop {
+                let cont_line = match tui::read_line("... ", false) {
+                    tui::ReadLineResult::Line(l) => l,
+                    tui::ReadLineResult::Eof => break,
+                };
+                let cont = cont_line.trim_end();
+                if cont.is_empty() { break; }
+                if !cont.starts_with(' ') && !cont.starts_with('\t') {
+                    block_lines.push(cont.to_string());
+                    break;
+                }
+                block_lines.push(cont.to_string());
+            }
+        }
+
+        let entry = block_lines.join("\n");
+        if is_definition_line(&block_lines[0]) {
+            definitions.push(entry);
+        } else {
+            statements.push(entry);
+        }
+    }
+}
+
+fn sim_tui_run(source: &str) {
+    let mut parser = gorget::parser::Parser::new(source);
+    let mut module = parser.parse_module();
+    if !parser.errors.is_empty() {
+        let reporter = gorget::errors::ErrorReporter::new("<repl>".to_string(), source.to_string());
+        for err in &parser.errors { reporter.report_parse_error(err); }
+        return;
+    }
+    let result = gorget::semantic::analyze(&mut module, &[]);
+    if !result.errors.is_empty() {
+        let reporter = gorget::errors::ErrorReporter::new("<repl>".to_string(), source.to_string());
+        for err in &result.errors { reporter.report_semantic_error(err); }
+        return;
+    }
+    let opts = gorget::ir::lowering::LoweringOptions::default();
+    let gir_module = gorget::ir::lowering::lower_module(&module, &result, &opts);
+    let config = gorget::sim::SimConfig::default();
+    gorget::sim::interpret(&gir_module, "<repl>", &config);
+}
+
+fn sim_tui_check(source: &str) {
+    let mut parser = gorget::parser::Parser::new(source);
+    let mut module = parser.parse_module();
+    if !parser.errors.is_empty() {
+        let reporter = gorget::errors::ErrorReporter::new("<repl>".to_string(), source.to_string());
+        for err in &parser.errors { reporter.report_parse_error(err); }
+        return;
+    }
+    let result = gorget::semantic::analyze(&mut module, &[]);
+    if !result.errors.is_empty() {
+        let reporter = gorget::errors::ErrorReporter::new("<repl>".to_string(), source.to_string());
+        for err in &result.errors { reporter.report_semantic_error(err); }
+    } else {
+        println!("OK: no errors");
+    }
+}
+
 // ══════════════════════════════════════════════════════════════
 // Package management commands
 // ══════════════════════════════════════════════════════════════
@@ -1498,6 +1633,7 @@ fn main() {
         println!("  --emit-c-lir            Dump C code generated from LIR to stdout");
         println!();
         println!("Interpreter:");
+        println!("  gg sim                         Interactive REPL (interpreted, no compilation)");
         println!("  gg sim <file.gg>               Interpret via GIR (no C compilation)");
         println!("  gg sim test <file.gg>          Run tests via interpreter (fast, no compile step)");
         println!("  gg sim test <file.gg> --bench  Run benchmarks via interpreter");
@@ -1639,6 +1775,14 @@ fn main() {
             process::exit(1);
         }
         cmd_remove(&args[2]);
+        return;
+    }
+
+    // `gg sim` with no file → interpreter REPL (handled before the < 3 args check)
+    if args.len() >= 2 && args[1] == "sim"
+        && !args.iter().skip(2).any(|a| !a.starts_with("--") && a != "test")
+    {
+        run_sim_tui();
         return;
     }
 
