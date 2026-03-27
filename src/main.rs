@@ -1710,6 +1710,142 @@ fn main() {
         })
     };
 
+    // Directory mode for `gg test`: discover and run all test files.
+    if command == "test" && Path::new(filename).is_dir() {
+        let dir = Path::new(filename);
+        let bench_mode = args.iter().any(|a| a == "--bench");
+        let test_files = discover_test_files(dir, bench_mode);
+        if test_files.is_empty() {
+            eprintln!("No test files found in {}", dir.display());
+            process::exit(1);
+        }
+
+        // Forward all remaining flags (everything after the directory arg) to each file run.
+        let forward_flags: Vec<&String> = args.iter().skip(2)
+            .filter(|a| a.as_str() != filename)
+            .collect();
+
+        let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from(&args[0]));
+        let mut total_passed = 0u64;
+        let mut total_failed = 0u64;
+        let mut total_skipped = 0u64;
+        let mut any_failed = false;
+        let mut files_with_tests = 0u64;
+
+        for file in &test_files {
+            let rel = file.strip_prefix(dir).unwrap_or(file);
+            let mut cmd = Command::new(&exe);
+            cmd.arg("test");
+            cmd.arg(file);
+            for flag in &forward_flags {
+                cmd.arg(flag);
+            }
+            // Capture output to parse summary line for aggregation.
+            let output = cmd.output().unwrap_or_else(|e| {
+                eprintln!("Failed to run tests for {}: {e}", file.display());
+                process::exit(1);
+            });
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            // Parse the summary line: "N passed, N failed[, N skipped] (Nms)"
+            let mut file_passed = 0u64;
+            let mut file_failed = 0u64;
+            let mut file_skipped = 0u64;
+            for line in stdout.lines().rev() {
+                let trimmed = line.trim();
+                if trimmed.contains("passed,") && trimmed.contains("failed") {
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    if parts.len() >= 4 {
+                        file_passed = parts[0].parse().unwrap_or(0);
+                        file_failed = parts[2].trim_end_matches(',').parse().unwrap_or(0);
+                        if parts.len() >= 6 {
+                            file_skipped = parts[4].trim_end_matches(',').parse().unwrap_or(0);
+                        }
+                    }
+                    break;
+                }
+            }
+
+            let file_total = file_passed + file_failed + file_skipped;
+            // Skip files where no tests ran (e.g. all filtered out).
+            if file_total == 0 && output.status.success() {
+                continue;
+            }
+
+            files_with_tests += 1;
+            println!("--- {} ---", rel.display());
+
+            // Compilation failure: no tests ran but exit code is non-zero.
+            if file_total == 0 && !output.status.success() {
+                // Show only the semantic/parse error lines, not C compiler noise.
+                let stderr_str = stderr.to_string();
+                let mut showed_error = false;
+                for line in stderr_str.lines() {
+                    let t = line.trim();
+                    if t.contains("error(s) found") || t.contains("error:") || t.contains("error[") {
+                        eprintln!("{line}");
+                        showed_error = true;
+                    }
+                }
+                if !showed_error {
+                    eprintln!("  FAIL: compilation failed");
+                }
+                any_failed = true;
+                total_failed += 1;
+                continue;
+            }
+
+            // Print test lines (skip the "Running N tests..." and summary lines).
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("Running ") && trimmed.ends_with(" tests...") {
+                    continue;
+                }
+                if trimmed.contains("passed,") && trimmed.contains("failed") {
+                    continue;
+                }
+                // Skip alloc-report lines and size-bucket lines.
+                if trimmed.starts_with("[alloc-report]") || trimmed.ends_with(" allocs") {
+                    continue;
+                }
+                if trimmed.is_empty() {
+                    continue;
+                }
+                println!("{line}");
+            }
+            if !stderr.is_empty() {
+                // Filter alloc-report and size-bucket lines from stderr.
+                for line in stderr.lines() {
+                    let t = line.trim();
+                    if t.starts_with("[alloc-report]") || t.ends_with(" allocs") || t.is_empty() {
+                        continue;
+                    }
+                    eprintln!("{line}");
+                }
+            }
+            if !output.status.success() {
+                any_failed = true;
+            }
+            total_passed += file_passed;
+            total_failed += file_failed;
+            total_skipped += file_skipped;
+        }
+
+        // Print aggregate summary.
+        println!();
+        if files_with_tests == 0 {
+            println!("No matching tests found in {} file(s).", test_files.len());
+            process::exit(0);
+        }
+        if total_skipped > 0 {
+            println!("{total_passed} passed, {total_failed} failed, {total_skipped} skipped ({files_with_tests} file(s))");
+        } else {
+            println!("{total_passed} passed, {total_failed} failed ({files_with_tests} file(s))");
+        }
+        process::exit(if any_failed { 1 } else { 0 });
+    }
+
     let source = match fs::read_to_string(filename) {
         Ok(s) => s,
         Err(e) => {
@@ -2677,4 +2813,59 @@ fn snapshot_diff(name1: &str, json1: &str, name2: &str, json2: &str) -> i32 {
     }
     println!("\n{changed} test(s) changed, {unchanged} test(s) unchanged");
     if changed > 0 { 1 } else { 0 }
+}
+
+/// Recursively discover `.gg` files under `dir` that contain test blocks.
+/// Skips hidden directories (starting with `.`) and non-`.gg` files.
+/// If `bench_mode` is true, also includes files with only `bench` blocks.
+/// Returns paths sorted alphabetically for deterministic ordering.
+fn discover_test_files(dir: &Path, bench_mode: bool) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    discover_test_files_recursive(dir, bench_mode, &mut files);
+    files.sort();
+    files
+}
+
+fn discover_test_files_recursive(dir: &Path, bench_mode: bool, out: &mut Vec<PathBuf>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut dirs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        // Skip hidden entries.
+        if name_str.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            dirs.push(path);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("gg") {
+            if let Ok(contents) = fs::read_to_string(&path) {
+                if file_has_test_blocks(&contents, bench_mode) {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    for d in dirs {
+        discover_test_files_recursive(&d, bench_mode, out);
+    }
+}
+
+/// Fast heuristic: check if source contains `test "` at the start of a line.
+/// In bench mode, `bench "` also qualifies.
+fn file_has_test_blocks(source: &str, bench_mode: bool) -> bool {
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("test \"") {
+            return true;
+        }
+        if bench_mode && trimmed.starts_with("bench \"") {
+            return true;
+        }
+    }
+    false
 }

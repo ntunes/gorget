@@ -4497,6 +4497,7 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `gg build <file>`  | Compile to native binary                 |
 | `gg run <file>`    | Compile and execute                      |
 | `gg test <file>`   | Compile and run tests                    |
+| `gg test <dir>`    | Discover and run all test files recursively |
 | `gg fmt <file>`    | Format source code (prints to stdout; use `-i`/`--in-place` to overwrite) |
 | `gg report <file>` | Generate HTML report from trace file     |
 | `gg init`          | Initialize a new Gorget project in the current directory |
@@ -4599,6 +4600,18 @@ Exclude tagged tests: `gg test file.gg --exclude-tag slow`. If a test's tag is b
 ### 18.4 Name Filtering
 
 Filter tests by name substring: `gg test file.gg --filter "fibonacci"`. Only tests whose name contains the substring will run. Can be combined with `--tag` and `--exclude-tag`.
+
+### 18.4.1 Test Discovery
+
+When the argument to `gg test` is a directory, all `.gg` files containing test blocks are discovered recursively and run:
+
+```bash
+gg test .                            # all test files under current directory
+gg test tests/                       # all test files under tests/
+gg test src/ --tag smoke --filter x  # all flags are forwarded to each file
+```
+
+Hidden directories (starting with `.`) are skipped. Files where no tests match the current filters are silently omitted from output. Results are aggregated across all files.
 
 ### 18.5 `@should_panic`
 

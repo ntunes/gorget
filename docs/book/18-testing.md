@@ -363,6 +363,39 @@ gg report app.trace.jsonl
 
 ---
 
+## Test Discovery
+
+Pass a directory instead of a file to discover and run all test files recursively:
+
+```bash
+gg test .                            # all test files under cwd
+gg test tests/                       # all test files under tests/
+gg test src/ --tag smoke             # with flags — forwarded to each file
+```
+
+Discovery rules:
+- Finds `.gg` files containing `test "` blocks (or `bench "` with `--bench`)
+- Recurses into subdirectories, skipping hidden directories (`.gorget/`, `.git/`, etc.)
+- Files are run in alphabetical order for deterministic results
+- Files where no tests match the current filters are silently skipped
+
+Output groups results by file, then prints an aggregate summary:
+
+```
+--- math.gg ---
+  test: addition ... PASS (0ms)
+  test: division ... PASS (0ms)
+--- strings.gg ---
+  test: concat ... PASS (0ms)
+
+3 passed, 0 failed (2 file(s))
+```
+
+All flags work in directory mode: `--filter`, `--tag`, `--exclude-tag`, `--timeout`,
+`--parallel`, `--failed-only`, `--failed-first`, `--bench`, `--report html`.
+
+---
+
 ## Summary
 
 | Feature | Syntax | Example |
@@ -377,6 +410,7 @@ gg report app.trace.jsonl
 | Timeout | `@timeout("ms")` / `--timeout` | Interrupt slow tests |
 | Tags | `@tag("name")` | Categorize tests |
 | Filter | `--filter "pattern"` | Run matching tests |
+| Discovery | `gg test <dir>` | Run all test files in directory |
 | Parallel | `--parallel N` | Multi-process execution |
 | Re-run | `--failed-only` / `--failed-first` | Focus on failures |
 | Snapshot | `snapshot "name" expr` | Capture values for diffing |
