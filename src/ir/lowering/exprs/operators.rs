@@ -9,6 +9,25 @@ use crate::span::Spanned;
 use super::super::context::LoweringContext;
 use super::{lower_expr, infer_operand_type_full, resolve_none_tag};
 
+/// If an operand is a CoW alias (Ptr(T) in ref_locals), emit a LoadRef to dereference it.
+/// Returns the dereferenced operand (type T), or the original if not a Ptr.
+fn cow_deref_if_ptr(
+    ctx: &LoweringContext,
+    builder: &mut FunctionBuilder,
+    operand: Operand,
+) -> Operand {
+    if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+        if place.projections.is_empty() && ctx.ref_locals.contains(&place.local) {
+            let ptr_type = builder.locals[place.local.0 as usize].type_id;
+            if let Some(inner) = ctx.pointee_type(ptr_type) {
+                let derefed = builder.load_ref(place.clone(), inner);
+                return FunctionBuilder::copy(derefed);
+            }
+        }
+    }
+    operand
+}
+
 /// Lower a binary operation.
 pub(super) fn lower_binary_op(
     ctx: &mut LoweringContext,
@@ -24,8 +43,12 @@ pub(super) fn lower_binary_op(
         return lower_short_circuit(ctx, builder, left, op, right);
     }
 
-    let lhs = lower_expr(ctx, builder, left);
-    let rhs = lower_expr(ctx, builder, right);
+    let mut lhs = lower_expr(ctx, builder, left);
+    let mut rhs = lower_expr(ctx, builder, right);
+
+    // CoW: if operands are Ptr(T) aliases, deref to get the underlying value.
+    lhs = cow_deref_if_ptr(ctx, builder, lhs);
+    rhs = cow_deref_if_ptr(ctx, builder, rhs);
 
     // Determine result type from lhs operand type (use _full to check builder temps too)
     let operand_type = infer_operand_type_full(ctx, &lhs, builder);

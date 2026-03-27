@@ -351,17 +351,26 @@ fn lower_var_decl(
                         ctx.drops.unregister(place.local);
                         assign_mode = AssignMode::Borrow;
                     }
-                    // Named resource variable → deep clone (independent copy)
-                    else if ctx.is_named_local(place.local) {
-                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
-                            ctx.warn_implicit_clone(value.span, rhs_type, crate::ir::ImplicitCloneReason::NamedToNamed);
-                            let ptr_type = ctx.register_ptr_type(rhs_type);
-                            let ptr_local = builder.add_local(ptr_type, None);
-                            builder.emit_borrow(ptr_local, place.clone());
-                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
-                            operand = FunctionBuilder::copy(cloned);
-                            assign_mode = AssignMode::Move; // clone result is a temp
+                    // Named resource variable → CoW alias (zero-cost pointer until mutation)
+                    else if ctx.is_named_local(place.local)
+                        && ctx.type_registry.is_resource_type(rhs_type)
+                    {
+                        // Create Ptr(T) alias instead of cloning
+                        let ptr_type = ctx.register_ptr_type(rhs_type);
+                        builder.locals[local_id.0 as usize].type_id = ptr_type;
+                        ctx.ref_locals.insert(local_id);
+                        builder.emit_borrow(local_id, place.clone());
+                        ctx.cow_register_alias(local_id, place.local);
+                        // Ptr doesn't own data — don't register for drop.
+                        // Unregister if already registered (from line 226).
+                        ctx.drops.unregister(local_id);
+                        // Update local type in context lookup
+                        if let Some(ref hint) = builder.locals[local_id.0 as usize].name_hint {
+                            let name = hint.clone();
+                            ctx.register_local(&name, local_id, ptr_type);
                         }
+                        // Skip normal assign_mode logic — borrow already emitted
+                        assign_mode = AssignMode::Borrow;
                     }
                     // Drop-registered temp OR unregistered droppable temp → move.
                     // Temps (not named vars) that need drop should be moved to transfer

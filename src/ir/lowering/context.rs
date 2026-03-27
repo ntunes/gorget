@@ -243,6 +243,14 @@ pub struct LoweringContext<'a> {
     /// Populated from BuiltinTypeProtocol declarations during module setup.
     /// Used by the LIR backend to replace `map_monomorphized_to_runtime()`.
     pub runtime_callees: FxHashMap<String, String>,
+    /// CoW: alias_local → source_local. The alias holds a Ptr(T) that borrows source's data.
+    /// When either side is mutated, the alias is severed by cloning.
+    pub cow_alias_sources: FxHashMap<LocalId, LocalId>,
+    /// CoW reverse: source_local → {alias_locals}. For severing when source is mutated.
+    pub cow_alias_targets: FxHashMap<LocalId, rustc_hash::FxHashSet<LocalId>>,
+    /// CoW: collection_local → [ref_locals pointing into it].
+    /// When the collection is mutated, these refs must be cloned out first.
+    pub cow_collection_refs: FxHashMap<LocalId, Vec<LocalId>>,
 }
 
 
@@ -292,6 +300,9 @@ impl<'a> LoweringContext<'a> {
             tuple_element_locals: FxHashMap::default(),
             implicit_clone_warnings: Vec::new(),
             runtime_callees: FxHashMap::default(),
+            cow_alias_sources: FxHashMap::default(),
+            cow_alias_targets: FxHashMap::default(),
+            cow_collection_refs: FxHashMap::default(),
         }
     }
 
@@ -735,6 +746,9 @@ impl<'a> LoweringContext<'a> {
         self.with_shared_refresh.clear();
         self.postconditions.clear();
         self.move_override_params.clear();
+        self.cow_alias_sources.clear();
+        self.cow_alias_targets.clear();
+        self.cow_collection_refs.clear();
     }
 
     /// Clone the locals map for save/restore around nested scopes (if, while, for, match, etc.).
@@ -995,6 +1009,140 @@ impl<'a> LoweringContext<'a> {
             }
         }
         None
+    }
+
+    // ── Copy-on-Write alias management ────────────────────────────────
+
+    /// Register a CoW alias: `alias_local` is a Ptr(T) borrowing from `source_local`.
+    /// Resolves transitively: if source is itself an alias, points to the root.
+    pub fn cow_register_alias(&mut self, alias_local: LocalId, source_local: LocalId) {
+        // Resolve to root source (transitively)
+        let root = self.cow_resolve_root(source_local);
+        self.cow_alias_sources.insert(alias_local, root);
+        self.cow_alias_targets.entry(root).or_default().insert(alias_local);
+    }
+
+    /// Resolve a local to its root source (follow alias chain).
+    fn cow_resolve_root(&self, local: LocalId) -> LocalId {
+        let mut current = local;
+        while let Some(&source) = self.cow_alias_sources.get(&current) {
+            if source == current { break; }
+            current = source;
+        }
+        current
+    }
+
+    /// Check if a local is a CoW alias of something else.
+    pub fn cow_is_alias(&self, local: LocalId) -> bool {
+        self.cow_alias_sources.contains_key(&local)
+    }
+
+    /// Check if a local has CoW aliases pointing to it (is a source).
+    pub fn cow_has_aliases(&self, local: LocalId) -> bool {
+        self.cow_alias_targets.get(&local).map_or(false, |s| !s.is_empty())
+    }
+
+    /// Before mutating `local`, sever all CoW alias relationships:
+    /// - If `local` is an alias → clone source into local (local becomes owned).
+    /// - If `local` is a source → clone into each alias (aliases become owned).
+    /// - If `local` is a collection with refs → clone each ref out.
+    pub fn cow_before_mutation(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        local: LocalId,
+    ) {
+        // Case 1: local is an alias of something else → clone source into local
+        if let Some(source) = self.cow_alias_sources.remove(&local) {
+            // Remove from reverse map
+            if let Some(targets) = self.cow_alias_targets.get_mut(&source) {
+                targets.remove(&local);
+            }
+            // Clone: get the source's inner type, call clone, store in local
+            self.cow_materialize_alias(builder, local, source);
+        }
+
+        // Case 2: local is a source with aliases → clone into each alias
+        if let Some(aliases) = self.cow_alias_targets.remove(&local) {
+            for alias in aliases {
+                self.cow_alias_sources.remove(&alias);
+                self.cow_materialize_alias(builder, alias, local);
+            }
+        }
+
+        // Case 3: local is a collection with refs into it → clone each ref
+        if let Some(refs) = self.cow_collection_refs.remove(&local) {
+            for ref_local in refs {
+                // Only sever if the ref is still live (not already moved/reassigned)
+                if self.ref_locals.contains(&ref_local) {
+                    self.cow_materialize_collection_ref(builder, ref_local);
+                }
+            }
+        }
+    }
+
+    /// Sever all aliases that point to `source_local` as their root.
+    /// Used when `source_local` is about to be reassigned (aliases keep old value).
+    pub fn cow_sever_all_aliases_from(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        source_local: LocalId,
+    ) {
+        if let Some(aliases) = self.cow_alias_targets.remove(&source_local) {
+            for alias in aliases {
+                self.cow_alias_sources.remove(&alias);
+                self.cow_materialize_alias(builder, alias, source_local);
+            }
+        }
+    }
+
+    /// Materialize an alias: clone the source's data into the alias local.
+    /// Changes the alias from Ptr(T) to owned T, registers for drop.
+    fn cow_materialize_alias(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        alias_local: LocalId,
+        source_local: LocalId,
+    ) {
+        let alias_type = builder.locals[alias_local.0 as usize].type_id;
+        // Get the inner type (unwrap Ptr)
+        let inner_type = self.pointee_type(alias_type).unwrap_or(alias_type);
+        if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
+            // Borrow the source to pass to clone
+            let ptr_type = self.register_ptr_type(inner_type);
+            let ptr_local = builder.add_local(ptr_type, None);
+            builder.emit_borrow(ptr_local, crate::ir::instructions::Place::local(source_local));
+            // Call clone
+            let cloned = builder.call(&clone_fn, vec![crate::ir::builder::FunctionBuilder::copy(ptr_local)], inner_type);
+            // Update alias local: change type from Ptr(T) to T, store the clone
+            builder.locals[alias_local.0 as usize].type_id = inner_type;
+            builder.assign(crate::ir::instructions::Place::local(alias_local),
+                          crate::ir::builder::FunctionBuilder::copy(cloned));
+            // Remove from ref_locals (no longer a pointer)
+            self.ref_locals.remove(&alias_local);
+            // Register for drop (now owns the data)
+            self.drops.register_local(alias_local, inner_type, &self.type_registry);
+        }
+    }
+
+    /// Materialize a collection ref: clone the pointed-to element into an owned local.
+    fn cow_materialize_collection_ref(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        ref_local: LocalId,
+    ) {
+        let ref_type = builder.locals[ref_local.0 as usize].type_id;
+        let inner_type = self.pointee_type(ref_type).unwrap_or(ref_type);
+        if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
+            // The ref_local already holds a Ptr — use it directly as the clone arg
+            let cloned = builder.call(&clone_fn,
+                vec![crate::ir::builder::FunctionBuilder::copy(ref_local)], inner_type);
+            // Update type, store clone, register for drop
+            builder.locals[ref_local.0 as usize].type_id = inner_type;
+            builder.assign(crate::ir::instructions::Place::local(ref_local),
+                          crate::ir::builder::FunctionBuilder::copy(cloned));
+            self.ref_locals.remove(&ref_local);
+            self.drops.register_local(ref_local, inner_type, &self.type_registry);
+        }
     }
 
     /// If the given local came from a resource-type field load, emit MoveZero for the
