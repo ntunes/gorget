@@ -3975,9 +3975,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
             }
 
             // ── Collection element drop loops ──
-            // __gorget_array_drop_elems__ElemDropFn(addr) → for-loop calling ElemDropFn on each element
+            // Self-cleaning: skip loops for built-in types (gorget_*_free handles them).
+            // Keep loops for Recursive/Custom types (no elem_drop on collection).
             if let Some(drop_fn) = name.strip_prefix("__gorget_array_drop_elems__") {
-                if !args.is_empty() {
+                let self_cleaning = matches!(drop_fn,
+                    "gorget_string_free" | "gorget_array_free" | "gorget_map_free" | "gorget_set_free");
+                if !self_cleaning && !args.is_empty() {
                     let arr = v(args[0]);
                     write!(out,
                         "for (size_t __di = 0; __di < ((GorgetArray*){arr})->len; __di++) {{ \
@@ -3985,11 +3988,11 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 }
                 return;
             }
-            // __gorget_map_drop_vals__ValDropFn(addr) → for-loop calling ValDropFn on each value
             if let Some(drop_fn) = name.strip_prefix("__gorget_map_drop_vals__") {
-                if !args.is_empty() {
+                let self_cleaning = matches!(drop_fn,
+                    "gorget_string_free" | "gorget_array_free" | "gorget_map_free" | "gorget_set_free");
+                if !self_cleaning && !args.is_empty() {
                     let map = v(args[0]);
-                    // Iterate occupied slots using the states array (1=occupied)
                     write!(out,
                         "for (size_t __di = 0; __di < ((GorgetMap*){map})->cap; __di++) {{ \
                          if (((GorgetMap*){map})->states[__di] == 1) {{ \
@@ -6489,15 +6492,18 @@ fn emit_recursive_struct_drops(out: &mut String, module: &LirModule, sn: &HashMa
                         .and_then(|rest| rest.find("__").map(|idx| &rest[idx + 2..]))
                 };
                 if let Some(elem_name) = elem_type_name {
-                    if let Some(recipe) = module.elem_drop_recipes.get(elem_name) {
-                        let addr = format!("&self->{field_name}");
-                        write!(out, "    ").unwrap();
-                        if is_array_free {
-                            emit_recipe_array_drop(out, &addr, recipe, module, sn, 0);
-                        } else {
-                            emit_recipe_map_drop(out, &addr, recipe, module, sn, 0);
+                    let self_cleaning = elem_drop_fn_for_c_type(elem_name).is_some();
+                    if !self_cleaning {
+                        if let Some(recipe) = module.elem_drop_recipes.get(elem_name) {
+                            let addr = format!("&self->{field_name}");
+                            write!(out, "    ").unwrap();
+                            if is_array_free {
+                                emit_recipe_array_drop(out, &addr, recipe, module, sn, 0);
+                            } else {
+                                emit_recipe_map_drop(out, &addr, recipe, module, sn, 0);
+                            }
+                            writeln!(out).unwrap();
                         }
-                        writeln!(out).unwrap();
                     }
                 }
             }
@@ -6721,14 +6727,17 @@ fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &HashMap<u32, St
                             .and_then(|rest| rest.find("__").map(|idx| &rest[idx + 2..]))
                     };
                     if let Some(elem_name) = elem_type_name {
-                        if let Some(recipe) = module.elem_drop_recipes.get(elem_name) {
-                            let addr = format!("&self->{access}");
-                            if is_array_free {
-                                emit_recipe_array_drop(out, &addr, recipe, module, sn, 0);
-                            } else {
-                                emit_recipe_map_drop(out, &addr, recipe, module, sn, 0);
+                        let self_cleaning = elem_drop_fn_for_c_type(elem_name).is_some();
+                        if !self_cleaning {
+                            if let Some(recipe) = module.elem_drop_recipes.get(elem_name) {
+                                let addr = format!("&self->{access}");
+                                if is_array_free {
+                                    emit_recipe_array_drop(out, &addr, recipe, module, sn, 0);
+                                } else {
+                                    emit_recipe_map_drop(out, &addr, recipe, module, sn, 0);
+                                }
+                                write!(out, " ").unwrap();
                             }
-                            write!(out, " ").unwrap();
                         }
                     }
                 }

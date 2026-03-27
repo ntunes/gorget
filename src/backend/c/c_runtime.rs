@@ -166,8 +166,9 @@ typedef struct {
     size_t tombstones;
     __gorget_hash_fn hash_fn;
     __gorget_eq_fn eq_fn;
-    __gorget_drop_fn val_drop;  // drop function for resource-type values (NULL if trivial)
-    __gorget_drop_fn val_clone; // clone function for resource-type values (NULL if trivial)
+    __gorget_drop_fn val_drop;
+    __gorget_drop_fn val_clone;
+    __gorget_drop_fn key_drop;
 } GorgetMap;
 
 typedef GorgetMap GorgetSet;
@@ -4751,10 +4752,11 @@ static inline void gorget_array_clear(GorgetArray* arr) {
 
 static inline void gorget_array_free(GorgetArray* arr) {
     __gorget_array_free_count++;
-    // Element drops on collection destruction are handled by the LIR's
-    // per-element drop tags (emitted before gorget_array_free at scope exit).
-    // elem_drop here is used ONLY by gorget_array_set (overwrite) and
-    // gorget_array_remove to free old elements before replacing/removing.
+    if (arr->elem_drop && arr->data) {
+        for (size_t i = 0; i < arr->len; i++) {
+            arr->elem_drop((char*)arr->data + i * arr->elem_size);
+        }
+    }
     if (arr->data) arr->alloc->dealloc(arr->alloc->ctx, arr->data, arr->cap * arr->elem_size);
     arr->data = NULL;
     arr->len = 0;
@@ -5128,6 +5130,7 @@ static inline GorgetMap gorget_dict_new(size_t key_size, size_t val_size) {
     m.eq_fn = NULL;
     m.val_drop = NULL;
     m.val_clone = NULL;
+    m.key_drop = NULL;
     return m;
 }
 
@@ -5136,6 +5139,8 @@ static inline GorgetMap gorget_map_new_str(size_t val_size) {
     GorgetMap m = gorget_map_new(sizeof(Str), val_size);
     m.hash_fn = __gorget_str_key_hash;
     m.eq_fn = __gorget_str_key_eq;
+    // key_drop not set yet — string keys leak on map free.
+    // Enabling requires all consumers to clone key data before free.
     return m;
 }
 static inline GorgetMap gorget_dict_new_str(size_t val_size) {
@@ -5269,11 +5274,17 @@ static inline void gorget_map_clear(GorgetMap* m) {
 }
 
 static inline void gorget_map_free(GorgetMap* m) {
-    if (!m->alloc) return;  // zeroed struct — already freed or never initialized
-    // Value drops on collection destruction are handled by the LIR's
-    // per-element drop tags (emitted before gorget_map_free at scope exit).
-    // val_drop here is used ONLY by gorget_map_put (overwrite) and
-    // gorget_map_remove to free old values.
+    if (!m->alloc) return;
+    if (m->states) {
+        for (size_t i = 0; i < m->cap; i++) {
+            if (m->states[i] == 1) {
+                if (m->val_drop && m->values)
+                    m->val_drop((char*)m->values + i * m->val_size);
+                if (m->key_drop && m->keys)
+                    m->key_drop((char*)m->keys + i * m->key_size);
+            }
+        }
+    }
     GorgetAllocator* a = m->alloc;
     if (m->keys) a->dealloc(a->ctx, m->keys, m->cap * m->key_size);
     if (m->values) a->dealloc(a->ctx, m->values, m->cap * m->val_size);
@@ -5301,6 +5312,7 @@ static inline GorgetMap gorget_map_clone(const GorgetMap* src) {
     dst.eq_fn = src->eq_fn;
     dst.val_drop = src->val_drop;
     dst.val_clone = src->val_clone;
+    dst.key_drop = src->key_drop;
     dst.alloc = a;
     if (src->cap > 0) {
         dst.keys = a->alloc(a->ctx, src->cap * src->key_size);
@@ -5320,8 +5332,20 @@ static inline GorgetMap gorget_map_clone(const GorgetMap* src) {
         // Deep-clone resource-type values so the copy is independent.
         if (dst.val_clone) {
             for (size_t i = 0; i < dst.cap; i++) {
-                if (dst.states[i] == 1) { // occupied slot
+                if (dst.states[i] == 1) {
                     dst.val_clone((char*)dst.values + i * dst.val_size);
+                }
+            }
+        }
+        // Deep-clone resource-type keys (e.g., owned strings).
+        if (dst.key_drop) {
+            for (size_t i = 0; i < dst.cap; i++) {
+                if (dst.states[i] == 1) {
+                    Str* key = (Str*)((char*)dst.keys + i * dst.key_size);
+                    if (key->cap > 0 && key->data) {
+                        Str cloned = gorget_string_clone(key);
+                        *key = cloned;
+                    }
                 }
             }
         }
