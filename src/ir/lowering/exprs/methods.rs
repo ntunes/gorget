@@ -1182,10 +1182,9 @@ pub(super) fn lower_method_call(
                 }
             }
         }
-        // For Dict/HashMap.get(), auto-register Option[V] so get returns Option.
-        // Dict.get() uses value payload (not Ptr) because the GIR→LIR struct pipeline
-        // doesn't yet propagate Ptr payload types to the C backend's Option wrapping.
-        // dict[key] (IndexLoad) already returns Ptr for resource values via a separate path.
+        // For Dict/HashMap.get(), auto-register Option type for the value.
+        // Resource types get Option[Ref_V] (Ptr payload — borrows into Dict storage).
+        // Primitive types get Option[V] (value payload — copied).
         if method_name == "get"
             && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__"))
         {
@@ -1193,10 +1192,19 @@ pub(super) fn lower_method_call(
             if let Some(rest) = type_name.strip_prefix(prefix) {
                 if let Some(pos) = rest.find("__") {
                     let val_name = &rest[pos + 2..];
-                    let option_name = format!("Option__{val_name}");
-                    if ctx.lookup_type_by_name(&option_name).is_none() {
-                        let inner_type = resolve_inner_type(ctx, val_name);
-                        ctx.ensure_option_type_registered(&option_name, inner_type);
+                    let inner_type = resolve_inner_type(ctx, val_name);
+                    let is_resource = ctx.type_registry.is_resource_type(inner_type);
+                    if is_resource {
+                        let option_name = format!("Option__Ref_{val_name}");
+                        if ctx.lookup_type_by_name(&option_name).is_none() {
+                            let ptr_type = ctx.type_registry.insert(GirType::Ptr(inner_type));
+                            ctx.ensure_option_type_registered(&option_name, ptr_type);
+                        }
+                    } else {
+                        let option_name = format!("Option__{val_name}");
+                        if ctx.lookup_type_by_name(&option_name).is_none() {
+                            ctx.ensure_option_type_registered(&option_name, inner_type);
+                        }
                     }
                 }
             }
@@ -1227,12 +1235,18 @@ pub(super) fn lower_method_call(
             } else if method_name == "get"
                 && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__"))
             {
-                // Dict/HashMap.get() returns Option[V]
+                // Dict/HashMap.get() returns Option[Ref_V] for resource, Option[V] for primitive
                 let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
                 if let Some(rest) = type_name.strip_prefix(prefix) {
                     if let Some(pos) = rest.find("__") {
                         let val_name = &rest[pos + 2..];
-                        let option_name = format!("Option__{val_name}");
+                        let inner_type = resolve_inner_type(ctx, val_name);
+                        let is_resource = ctx.type_registry.is_resource_type(inner_type);
+                        let option_name = if is_resource {
+                            format!("Option__Ref_{val_name}")
+                        } else {
+                            format!("Option__{val_name}")
+                        };
                         ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
                     } else { ret }
                 } else { ret }
