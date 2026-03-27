@@ -187,6 +187,45 @@ static inline void gorget_init_args(int argc, char** argv) {
     gorget_argv = argv;
 }
 
+// ── Print capture layer ──
+// Always available; capture state is toggled by the test runner.
+static int    __gorget_capturing = 0;
+static char  *__gorget_capture_buf = NULL;
+static size_t __gorget_capture_len = 0;
+static size_t __gorget_capture_cap = 0;
+
+static void __gorget_capture_ensure(size_t extra) {
+    size_t needed = __gorget_capture_len + extra + 1;
+    if (needed > __gorget_capture_cap) {
+        __gorget_capture_cap = needed * 2;
+        __gorget_capture_buf = (char *)realloc(__gorget_capture_buf, __gorget_capture_cap);
+    }
+}
+
+__attribute__((format(printf, 1, 2)))
+static int __gorget_printf(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    int ret;
+    if (__gorget_capturing) {
+        va_list args_copy;
+        va_copy(args_copy, args);
+        int needed = vsnprintf(NULL, 0, fmt, args_copy);
+        va_end(args_copy);
+        if (needed > 0) {
+            __gorget_capture_ensure((size_t)needed);
+            vsnprintf(__gorget_capture_buf + __gorget_capture_len,
+                      (size_t)needed + 1, fmt, args);
+            __gorget_capture_len += (size_t)needed;
+        }
+        ret = needed;
+    } else {
+        ret = vprintf(fmt, args);
+    }
+    va_end(args);
+    return ret;
+}
+
 "#;
 
 /// Arena allocator — bump allocator with overflow blocks.
@@ -2664,6 +2703,20 @@ static inline void __gorget_cancel_timeout(void) {
     struct itimerval off = {{0,0}, {0,0}};
     setitimer(ITIMER_REAL, &off, NULL);
     signal(SIGALRM, SIG_DFL);
+}
+
+// ── Test Output Capture (start/end — toggling is test-runner only) ──
+static void __gorget_capture_start(void) {
+    __gorget_capturing = 1;
+    __gorget_capture_len = 0;
+}
+
+static const char *__gorget_capture_end(size_t *out_len) {
+    __gorget_capturing = 0;
+    if (__gorget_capture_buf && __gorget_capture_len > 0)
+        __gorget_capture_buf[__gorget_capture_len] = '\0';
+    *out_len = __gorget_capture_len;
+    return __gorget_capture_buf ? __gorget_capture_buf : "";
 }
 
 // ── Snapshot Capture ──

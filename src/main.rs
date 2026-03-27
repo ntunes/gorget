@@ -2095,6 +2095,7 @@ fn main() {
             let mut parallel: Option<usize> = None;
             let mut failed_only = false;
             let mut failed_first = false;
+            let mut nocapture = false;
             let mut snapshot_cmd: Option<String> = None;
             let mut snapshot_args: Vec<String> = Vec::new();
             let mut i = 0;
@@ -2143,6 +2144,9 @@ fn main() {
                     i += 1;
                 } else if args[i] == "--failed-first" {
                     failed_first = true;
+                    i += 1;
+                } else if args[i] == "--nocapture" {
+                    nocapture = true;
                     i += 1;
                 } else if args[i] == "--snapshot" && i + 1 < args.len() {
                     snapshot_cmd = Some(args[i + 1].clone());
@@ -2311,11 +2315,12 @@ fn main() {
                 let n = n.max(1);
                 let mut children = Vec::new();
                 for worker_id in 0..n {
-                    let child = Command::new(&exe_path)
-                        .env("GORGET_PARALLEL_ID", worker_id.to_string())
+                    let mut worker_cmd = Command::new(&exe_path);
+                    worker_cmd.env("GORGET_PARALLEL_ID", worker_id.to_string())
                         .env("GORGET_PARALLEL_TOTAL", n.to_string())
-                        .env("GORGET_TEST_RESULTS", worker_results_path(&results_path, worker_id).display().to_string())
-                        .spawn()
+                        .env("GORGET_TEST_RESULTS", worker_results_path(&results_path, worker_id).display().to_string());
+                    if nocapture { worker_cmd.env("GORGET_TEST_NOCAPTURE", "1"); }
+                    let child = worker_cmd.spawn()
                         .unwrap_or_else(|e| {
                             eprintln!("Failed to spawn worker {worker_id}: {e}");
                             process::exit(1);
@@ -2345,6 +2350,9 @@ fn main() {
             // Sequential execution (default)
             let mut cmd = Command::new(&exe_path);
             cmd.env("GORGET_TEST_RESULTS", results_path.display().to_string());
+            if nocapture {
+                cmd.env("GORGET_TEST_NOCAPTURE", "1");
+            }
             if let Some(ref snap_path) = snapshot_tmp {
                 cmd.env("GORGET_SNAPSHOT_PATH", snap_path.display().to_string());
             }

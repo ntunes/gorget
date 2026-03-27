@@ -4653,22 +4653,23 @@ fn test_process() {
 
 #[test]
 fn test_cleanup() {
+    // "dropping alpha" from the failing test appears in captured output;
+    // "dropping beta" from the passing test is captured and discarded.
     run_gg_test(
         "test_cleanup.gg",
-        &["dropping alpha", "dropping beta", "1 passed, 1 failed"],
+        &["dropping alpha", "1 passed, 1 failed"],
         false,
     );
 }
 
 #[test]
 fn test_with_clause() {
+    // Only "dropping beta" appears — from the failing test's captured output.
+    // Drops from passing tests are captured and discarded.
     run_gg_test(
         "test_with_clause.gg",
         &[
-            "dropping alpha",
             "dropping beta",
-            "dropping delta",
-            "dropping gamma",
             "2 passed, 1 failed",
         ],
         false,

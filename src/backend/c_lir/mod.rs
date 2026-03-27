@@ -4512,7 +4512,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 || name == "snprintf" || name == "sprintf";
             let strip_ws_name: String;
             let view_name: String;
-            let emit_name = if is_stderr_print { "fprintf" }
+            // Route user print() through capture layer; test runner uses raw printf.
+            let emit_name = if name == "printf" { "__gorget_printf" }
+            else if is_stderr_print { "fprintf" }
             else if args.len() == 1 {
                 match name.as_str() {
                     "gorget_str_strip" => { strip_ws_name = "gorget_str_trim".into(); strip_ws_name.as_str() }
@@ -7960,6 +7962,7 @@ fn emit_test_runner_main(out: &mut String, module: &LirModule) {
         writeln!(out, "    __gorget_trace_init(\"{escaped}\");").unwrap();
     }
     writeln!(out, "    int __test_passed = 0, __test_failed = 0, __test_skipped = 0;").unwrap();
+    writeln!(out, "    int __nocapture = (getenv(\"GORGET_TEST_NOCAPTURE\") != NULL);").unwrap();
     writeln!(out, "    struct timespec __total_start, __total_end;").unwrap();
     writeln!(out, "    clock_gettime(CLOCK_MONOTONIC, &__total_start);").unwrap();
 
@@ -8026,6 +8029,7 @@ fn emit_test_runner_main(out: &mut String, module: &LirModule) {
                 writeln!(out, "        __gorget_set_timeout({ms}L);").unwrap();
             }
 
+            writeln!(out, "        if (!__nocapture) __gorget_capture_start();").unwrap();
             writeln!(out, "        int __jmp_val = setjmp(__gorget_test_jmp);").unwrap();
             writeln!(out, "        if (__jmp_val == 0) {{").unwrap();
             writeln!(out, "            {fn_name}();").unwrap();
@@ -8040,6 +8044,8 @@ fn emit_test_runner_main(out: &mut String, module: &LirModule) {
             // On panic (jmp_val==1): gorget_panic already ran cleanup, this is a no-op
             writeln!(out, "        __gorget_cleanup_run(__cleanup_mark);").unwrap();
             writeln!(out, "        __gorget_in_test = 0;").unwrap();
+            writeln!(out, "        size_t __cap_len = 0;").unwrap();
+            writeln!(out, "        const char *__cap_buf = __gorget_capture_end(&__cap_len);").unwrap();
 
             writeln!(out, "        clock_gettime(CLOCK_MONOTONIC, &__t_end);").unwrap();
             writeln!(out, "        long __t_ms = (__t_end.tv_sec - __t_start.tv_sec) * 1000 + (__t_end.tv_nsec - __t_start.tv_nsec) / 1000000;").unwrap();
@@ -8088,6 +8094,14 @@ fn emit_test_runner_main(out: &mut String, module: &LirModule) {
                 writeln!(out, "            printf(\"FAIL: %s (%ldms)\\n\", __gorget_test_fail_msg, __t_ms);").unwrap();
                 writeln!(out, "        }}").unwrap();
             }
+
+            // Dump captured output on failure.
+            writeln!(out, "        if (__results[{idx}] == 2 && __cap_len > 0) {{").unwrap();
+            writeln!(out, "            printf(\"    --- captured output ---\\n\");").unwrap();
+            writeln!(out, "            fwrite(__cap_buf, 1, __cap_len, stdout);").unwrap();
+            writeln!(out, "            if (__cap_len > 0 && __cap_buf[__cap_len - 1] != '\\n') printf(\"\\n\");").unwrap();
+            writeln!(out, "            printf(\"    ---\\n\");").unwrap();
+            writeln!(out, "        }}").unwrap();
 
             // Trace: test_end event with status and duration
             if module.trace_filename.is_some() {

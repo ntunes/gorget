@@ -363,6 +363,34 @@ gg report app.trace.jsonl
 
 ---
 
+## Output Capture
+
+By default, `print()` output from test bodies is captured and only shown for
+failing tests. Passing tests produce no output noise:
+
+```
+Running 3 tests...
+  test: setup works ... PASS (0ms)
+  test: validation fails ... FAIL: assertion failed: left == right
+  left:  1
+  right: 2 (0ms)
+    --- captured output ---
+debug: checking value
+debug: value was 42
+    ---
+  test: cleanup works ... PASS (0ms)
+```
+
+To see all output (including from passing tests), use `--nocapture`:
+
+```bash
+gg test app.gg --nocapture
+```
+
+Suite setup and teardown output is never captured — it prints directly.
+
+---
+
 ## Test Discovery
 
 Pass a directory instead of a file to discover and run all test files recursively:
@@ -410,6 +438,7 @@ All flags work in directory mode: `--filter`, `--tag`, `--exclude-tag`, `--timeo
 | Timeout | `@timeout("ms")` / `--timeout` | Interrupt slow tests |
 | Tags | `@tag("name")` | Categorize tests |
 | Filter | `--filter "pattern"` | Run matching tests |
+| Capture | default on / `--nocapture` | Show output only on failure |
 | Discovery | `gg test <dir>` | Run all test files in directory |
 | Parallel | `--parallel N` | Multi-process execution |
 | Re-run | `--failed-only` / `--failed-first` | Focus on failures |
