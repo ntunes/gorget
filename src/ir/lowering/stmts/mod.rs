@@ -807,7 +807,26 @@ fn lower_return(
                         }
                     }
                 }
-                builder.assign(Place::local(LocalId(0)), operand.clone());
+                // Use Move for resource-type temps — transfers ownership to return slot.
+                let use_move = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                    p.projections.is_empty()
+                        && !ctx.is_named_local(p.local)
+                        && ctx.type_registry.needs_drop(
+                            builder.locals[p.local.0 as usize].type_id)
+                } else { false };
+                if use_move {
+                    builder.assign_mode(
+                        crate::ir::instructions::AssignMode::Move,
+                        Place::local(LocalId(0)),
+                        operand.clone(),
+                    );
+                    if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                        builder.move_zero(Place::local(p.local));
+                        ctx.drops.mark_moved(p.local);
+                    }
+                } else {
+                    builder.assign(Place::local(LocalId(0)), operand.clone());
+                }
             }
             // If the return local is str-typed and the operand is a GorgetString temp,
             // unregister the temp to prevent use-after-free: the str view in the return
