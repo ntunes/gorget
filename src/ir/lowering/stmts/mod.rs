@@ -361,7 +361,11 @@ fn lower_var_decl(
                         let ptr_type = ctx.register_ptr_type(rhs_type);
                         let ptr_local = builder.add_local(ptr_type, None);
                         builder.emit_borrow(ptr_local, place.clone());
-                        let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
+                        // Use the TARGET type (actual_var_type) as clone return type,
+                        // not the source type. E.g., gorget_string_clone_to_owned
+                        // returns GorgetString, not GorgetStringView.
+                        let clone_ret_type = actual_var_type;
+                        let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], clone_ret_type);
                         operand = FunctionBuilder::copy(cloned);
                         assign_mode = AssignMode::Move;
                     }
