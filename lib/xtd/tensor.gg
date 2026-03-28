@@ -82,7 +82,7 @@ Vector[int] vec_int_copy(Vector[int] v):
     return out
 
 # Odometer-style multi-index increment. Returns true if successful, false if wrapped around.
-private bool increment_index(Vector[int] indices, Vector[int] shape):
+private bool increment_index(Vector[int] &indices, Vector[int] shape):
     int n = indices.len()
     int i = n - 1
     while i >= 0:
@@ -271,7 +271,7 @@ Tensor[T] tensor_clone[Numeric T](Tensor[T] t):
     while k < sz:
         new_data.push(t.at(indices))
         if k < sz - 1:
-            increment_index(indices, t.shape)
+            increment_index(&indices, t.shape)
         k = k + 1
     Vector[int] new_shape = vec_int_copy(t.shape)
     Vector[int] new_strides = tensor_compute_strides(new_shape)
@@ -409,7 +409,7 @@ Tensor[T] tensor_badd[Numeric T](Tensor[T] a, Tensor[T] b):
         T bv = tensor_bc_elem[T](b, bc_shape, idx)
         out.storage.set_at(k, av + bv)
         if k < sz - 1:
-            increment_index(idx, bc_shape)
+            increment_index(&idx, bc_shape)
         k = k + 1
     return out
 
@@ -428,7 +428,7 @@ Tensor[T] tensor_bsub[Numeric T](Tensor[T] a, Tensor[T] b):
         T bv = tensor_bc_elem[T](b, bc_shape, idx)
         out.storage.set_at(k, av - bv)
         if k < sz - 1:
-            increment_index(idx, bc_shape)
+            increment_index(&idx, bc_shape)
         k = k + 1
     return out
 
@@ -447,7 +447,7 @@ Tensor[T] tensor_bmul[Numeric T](Tensor[T] a, Tensor[T] b):
         T bv = tensor_bc_elem[T](b, bc_shape, idx)
         out.storage.set_at(k, av * bv)
         if k < sz - 1:
-            increment_index(idx, bc_shape)
+            increment_index(&idx, bc_shape)
         k = k + 1
     return out
 
@@ -546,7 +546,7 @@ Tensor[T] tensor_sum_axis[Numeric T](Tensor[T] t, int axis):
             aj = aj + 1
         out.set_at(out_idx, acc)
         if k < out_sz - 1:
-            increment_index(out_idx, out_shape)
+            increment_index(&out_idx, out_shape)
         k = k + 1
     return out
 

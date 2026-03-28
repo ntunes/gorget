@@ -252,7 +252,7 @@ pub(super) fn lower_method_call(
         None
     };
 
-    let recv = if borrow_param_local.is_some() {
+    let mut recv = if borrow_param_local.is_some() {
         // Skip auto-deref — use the raw pointer
         let local_id = borrow_param_local.unwrap();
         Operand::Copy(Place::local(local_id))
@@ -1038,10 +1038,21 @@ pub(super) fn lower_method_call(
             .unwrap_or(false);
 
         // CoW: if receiver is being mutated, sever any alias relationships first.
+        // This may materialize a Ptr param → new owned local (Phase 1c),
+        // so re-resolve the receiver afterwards.
         if needs_mut {
             if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
                 if place.projections.is_empty() {
                     ctx.cow_before_mutation(builder, place.local);
+                    // Re-resolve: cow_before_mutation may have redirected the variable
+                    // name to a new owned local (Phase 1c param materialization).
+                    if let Some(hint) = builder.locals[place.local.0 as usize].name_hint.clone() {
+                        if let Some((new_local, _)) = ctx.lookup_local(&hint) {
+                            if new_local != place.local {
+                                recv = FunctionBuilder::copy(new_local);
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -253,6 +253,9 @@ pub struct LoweringContext<'a> {
     pub cow_alias_targets: FxHashMap<LocalId, rustc_hash::FxHashSet<LocalId>>,
     /// CoW: collection_local → [ref_locals pointing into it].
     /// When the collection is mutated, these refs must be cloned out first.
+    /// CoW Phase 1c: bare Ptr params (borrow from caller). On mutation, these
+    /// are cloned to owned copies so the caller's data is not modified.
+    pub cow_ptr_params: rustc_hash::FxHashSet<LocalId>,
     pub cow_collection_refs: FxHashMap<LocalId, Vec<LocalId>>,
 }
 
@@ -307,6 +310,7 @@ impl<'a> LoweringContext<'a> {
             cow_alias_sources: FxHashMap::default(),
             cow_alias_targets: FxHashMap::default(),
             cow_collection_refs: FxHashMap::default(),
+            cow_ptr_params: rustc_hash::FxHashSet::default(),
         }
     }
 
@@ -766,6 +770,7 @@ impl<'a> LoweringContext<'a> {
         self.cow_alias_sources.clear();
         self.cow_alias_targets.clear();
         self.cow_collection_refs.clear();
+        self.cow_ptr_params.clear();
     }
 
     /// Clone the locals map for save/restore around nested scopes (if, while, for, match, etc.).
@@ -1095,6 +1100,14 @@ impl<'a> LoweringContext<'a> {
         builder: &mut crate::ir::builder::FunctionBuilder,
         local: LocalId,
     ) {
+        // Phase 1c: bare Ptr params — clone to owned before mutation
+        // so the caller's data is not modified.
+        if self.cow_ptr_params.remove(&local) {
+            self.cow_materialize_alias(builder, local, local);
+            // After materialization, fall through to check other CoW relationships
+            // (the new owned local might itself be a source).
+        }
+
         // Early exit: if local has no CoW relationships, nothing to do.
         if !self.cow_alias_sources.contains_key(&local)
             && !self.cow_alias_targets.contains_key(&local)

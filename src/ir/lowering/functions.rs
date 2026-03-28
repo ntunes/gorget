@@ -188,6 +188,8 @@ pub fn lower_function(
         if ctx.is_ref_param(base_type, p.node.ownership) {
             // Bare-borrow resource param: Ptr, no auto-deref
             ctx.ref_locals.insert(local_id);
+            // CoW Phase 1c: track for clone-on-mutation
+            ctx.cow_ptr_params.insert(local_id);
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             // ! resource params and & trivial params: MutPtr, auto-deref + write-through
             ctx.mut_capture_locals.insert(local_id, base_type);
@@ -426,6 +428,7 @@ pub fn lower_equip_method(
         ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
             ctx.ref_locals.insert(LocalId(param_idx));
+            ctx.cow_ptr_params.insert(LocalId(param_idx));
         } else if matches!(p.node.ownership, crate::parser::ast::Ownership::MutableBorrow)
             && ctx.type_registry.is_resource_type(base_type)
         {
@@ -698,6 +701,7 @@ pub fn lower_generic_function(
         ctx.register_local(&p.node.name.node, local_id, gir_type);
         if ctx.is_ref_param(base_type, ownership) {
             ctx.ref_locals.insert(local_id);
+            ctx.cow_ptr_params.insert(local_id);
         } else if matches!(ownership, Ownership::MutableBorrow)
             && ctx.type_registry.is_resource_type(base_type)
         {
@@ -916,6 +920,7 @@ pub fn lower_generic_equip_methods_with_defaults(
             ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
             if ctx.is_ref_param(base_type, p.node.ownership) {
                 ctx.ref_locals.insert(LocalId(param_idx));
+                ctx.cow_ptr_params.insert(LocalId(param_idx));
             } else if matches!(p.node.ownership, Ownership::MutableBorrow)
                 && ctx.type_registry.is_resource_type(base_type)
             {

@@ -909,7 +909,7 @@ int col_compare(Column col, int ia, int ib):
             return 1
 
 # Bottom-up merge sort on index array with typed column comparison
-Vector[int] merge_sort_idxs(Vector[int] idxs, Column col, bool ascending):
+Vector[int] merge_sort_idxs(Vector[int] &idxs, Column col, bool ascending):
     int n = idxs.len()
     if n <= 1:
         return vec_int_copy(idxs)
@@ -970,7 +970,7 @@ equip DataFrame:
         while i < self.num_rows:
             idxs.push(i)
             i = i + 1
-        Vector[int] sorted_idxs = merge_sort_idxs(idxs, col, ascending)
+        Vector[int] sorted_idxs = merge_sort_idxs(&idxs, col, ascending)
         Vector[Column] new_cols = Vector[Column]()
         i = 0
         while i < self.col_names.len():
@@ -1596,7 +1596,7 @@ equip DataFrame:
                     idxs.push(i)
                     i = i + 1
                 Column temp = col_from_ints(vals)
-                Vector[int] sorted = merge_sort_idxs(idxs, temp, true)
+                Vector[int] sorted = merge_sort_idxs(&idxs, temp, true)
                 int n = sorted.len()
                 if n % 2 == 1:
                     int mid_idx = sorted.get(n / 2).unwrap()
@@ -1622,7 +1622,7 @@ equip DataFrame:
                     idxs.push(i)
                     i = i + 1
                 Column temp = col_from_floats(vals)
-                Vector[int] sorted = merge_sort_idxs(idxs, temp, true)
+                Vector[int] sorted = merge_sort_idxs(&idxs, temp, true)
                 int n = sorted.len()
                 if n % 2 == 1:
                     int mid_idx = sorted.get(n / 2).unwrap()
