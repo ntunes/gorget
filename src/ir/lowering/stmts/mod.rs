@@ -344,9 +344,13 @@ fn lower_var_decl(
                 if place.projections.is_empty() && place.local != local_id {
                     let rhs_type = builder.locals[place.local.0 as usize].type_id;
 
-                    // GorgetString → str view: unregister (intentional leak for view safety)
+                    // GorgetString → str view: if the source is a NAMED local, unregister
+                    // it so the view can borrow its data safely. Unnamed temps (from
+                    // function calls) should NOT be unregistered — they may hold
+                    // owned data that needs freeing.
                     if rhs_type == ctx.type_mapper.owned_string_type
                         && actual_var_type == ctx.type_mapper.string_view_type
+                        && ctx.is_named_local(place.local)
                     {
                         ctx.drops.unregister(place.local);
                         assign_mode = AssignMode::Borrow;

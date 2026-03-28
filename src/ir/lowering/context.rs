@@ -711,9 +711,21 @@ impl<'a> LoweringContext<'a> {
         args: Vec<Operand>,
         return_type: crate::ir::types::TypeId,
     ) -> crate::ir::types::LocalId {
-        let local = builder.call(func, args, return_type);
+        let func_name: String = func.into();
+        let local = builder.call(&func_name, args, return_type);
         if self.type_registry.needs_drop(return_type) {
             self.drops.register_local(local, return_type, &self.type_registry);
+        }
+        // User-defined functions that return StringView actually return owned
+        // data at runtime (IR clones/materializes on return). Upgrade to
+        // GorgetString and register for drop. Only for GIR-lowered equip
+        // methods — runtime builtins may genuinely return views.
+        else if return_type == self.type_mapper.string_view_type
+            && self.gir_equip_methods.contains(func_name.as_str())
+        {
+            let owned = self.type_mapper.owned_string_type;
+            builder.locals[local.0 as usize].type_id = owned;
+            self.drops.register_local(local, owned, &self.type_registry);
         }
         local
     }

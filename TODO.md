@@ -8,7 +8,7 @@
 
 - **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation (Python-like `groups[key].push(i)`). Needs the `is_storing_method` flag on BuiltinMethodDecl (currently fragile name-matching). [updated: 2026-03-28]
 
-- **Remaining ~256 leaks in yaml_parse**: Full self-cleaning (above) + key_drop would eliminate most. [updated: 2026-03-28]
+- **Remaining leaks in yaml_parse**: Provenance-driven StringView leak class fixed (call_tracked upgrade for GIR equip methods). Remaining leaks likely from: (1) free functions returning StringView (need `gir_free_functions` tracking), (2) nested GIR locals/slot interactions. [updated: 2026-03-28]
 
 - **Box.new should enforce `!` at borrow checker level**: Currently Box.new implicitly MoveZeros the source, but the user should be required to write `Box(name!)`. Need to add Box.new to the consumed-param detection in the borrow checker. [added: 2026-03-26]
 

@@ -5109,6 +5109,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                             };
                             let dst_is_str = acc_c == "Str";
                             let acc_is_str_lit = str_lit_vals.get(emit_args[1].0 as usize).copied().unwrap_or(false);
+                            let acc_is_gs = acc_c == "GorgetString";
                             if closure_returns_gorget_string && dst_is_str {
                                 // Use GorgetString as internal accumulator, convert at boundaries
                                 let acc_init = if acc_is_str_lit {
@@ -5122,6 +5123,15 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                     {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
                                     __acc = {call_fn2}({fn_a_ref}, (Str){{ .data = __acc.data, .len = __acc.len, .cap = 0, .alloc = NULL }}, __elem); \
                                     }} (Str){{ .data = __acc.data, .len = __acc.len, .cap = 0, .alloc = NULL }}; }});").unwrap();
+                            } else if acc_is_str_lit && (acc_is_gs || dst_is_str) {
+                                // String literal init for string fold: wrap with gorget_str_from_literal
+                                let acc_init = format!("gorget_str_from_literal({acc_arg}, strlen({acc_arg}))");
+                                write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
+                                    {acc_c} __acc = {acc_init}; \
+                                    for (size_t __i = 0; __i < __src.len; __i++) {{ \
+                                    {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
+                                    __acc = {call_fn2}({fn_a_ref}, __acc, __elem); \
+                                    }} __acc; }});").unwrap();
                             } else {
                                 write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
                                     {acc_c} __acc = {acc_arg}; \
