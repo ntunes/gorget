@@ -2132,7 +2132,7 @@ MultiGroupBy df_group_by_multi(DataFrame df, Vector[String] cols):
         else:
             Vector[int] new_group = Vector[int]()
             new_group.push(i)
-            groups.set(key, new_group)
+            groups.set(key, !new_group)
         i = i + 1
     Vector[String] cols_copy = Vector[String]()
     int ci = 0
