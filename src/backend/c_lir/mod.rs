@@ -5035,32 +5035,33 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 let is_consuming = matches!(call_name,
                     "gorget_array_safe_pop" | "gorget_array_remove_opt"
                     | "gorget_map_remove" | "gorget_set_remove");
-                let clone_fn = if payload_is_ptr || is_consuming {
+                let clone_fn: Option<String> = if payload_is_ptr || is_consuming {
                     None // Ptr payload (borrowed) or consuming method (moved out)
                 } else {
                     match payload_c.as_str() {
-                        "GorgetArray" => Some("gorget_array_clone"),
-                        "GorgetMap" => Some("gorget_map_clone"),
-                        "GorgetSet" => Some("gorget_set_clone"),
-                        "GorgetString" => Some("gorget_string_clone"),
-                        _ => None,
+                        "GorgetArray" => Some("gorget_array_clone".into()),
+                        "GorgetMap" => Some("gorget_map_clone".into()),
+                        "GorgetSet" => Some("gorget_set_clone".into()),
+                        "GorgetString" => Some("gorget_string_clone".into()),
+                        _ => {
+                            // Recursive/Custom types: look up original name → {Name}__clone
+                            module.structs.iter().enumerate()
+                                .find(|(i, _)| sn.get(&(*i as u32)).map(|n| n.as_str()) == Some(payload_c.as_str()))
+                                .and_then(|(_, s)| {
+                                    if module.recursive_drop_structs.contains_key(s.name.as_str())
+                                        || module.recursive_drop_enums.contains_key(s.name.as_str())
+                                    {
+                                        Some(format!("{}__clone", s.name))
+                                    } else { None }
+                                })
+                        }
                     }
                 };
-                // Deep-clone placeholder: when Phase 6 collection drops are enabled,
-                // struct payloads with resource fields need field-level cloning here.
-                // Currently disabled — collection locals are not dropped at scope exit.
-                let deep_clone_ops: Option<Vec<String>> = None;
                 if payload_is_ptr {
                     // Option[T &]: store pointer directly (borrowed, not dereferenced)
                     write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = __tmp; }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
-                } else if let Some(cfn) = clone_fn {
+                } else if let Some(ref cfn) = clone_fn {
                     write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = {cfn}(({payload_c}*)__tmp); }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
-                } else if let Some(ops) = deep_clone_ops {
-                    write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = *({payload_c}*)__tmp;", dv = v(d)).unwrap();
-                    for op in &ops {
-                        write!(out, " {op}").unwrap();
-                    }
-                    write!(out, " }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
                 } else {
                     write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = *({payload_c}*)__tmp; }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
                 }
@@ -6013,10 +6014,11 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                             .unwrap_or(raw_elem);
                         if let Some(drop_fn) = elem_drop_fn_for_c_type(elem_type) {
                             write!(out, " {dv}.elem_drop = (__gorget_drop_fn){drop_fn};").unwrap();
+                        } else if module.recursive_drop_structs.contains_key(elem_type)
+                            || module.recursive_drop_enums.contains_key(elem_type)
+                        {
+                            write!(out, " {dv}.elem_drop = (__gorget_drop_fn){elem_type}__drop;").unwrap();
                         }
-                        // Note: Custom/Recursive types do NOT get elem_drop set here
-                        // because the GIR generates explicit pre-drops for set/remove.
-                        // Setting elem_drop would cause double-drops.
                         if let Some(clone_fn) = elem_clone_fn_for_c_type(elem_type) {
                             write!(out, " {dv}.elem_clone = (__gorget_drop_fn){clone_fn};").unwrap();
                         } else if module.recursive_drop_structs.contains_key(elem_type)
@@ -6039,9 +6041,11 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 let val_type = &rest_stripped[pos + 2..];
                                 if let Some(drop_fn) = elem_drop_fn_for_c_type(val_type) {
                                     write!(out, " {dv}.val_drop = (__gorget_drop_fn){drop_fn};").unwrap();
+                                } else if module.recursive_drop_structs.contains_key(val_type)
+                                    || module.recursive_drop_enums.contains_key(val_type)
+                                {
+                                    write!(out, " {dv}.val_drop = (__gorget_drop_fn){val_type}__drop;").unwrap();
                                 }
-                                // Note: Custom/Recursive types do NOT get val_drop set here.
-                                // GIR generates explicit pre-drops for map put/remove.
                                 if let Some(clone_fn) = elem_clone_fn_for_c_type(val_type) {
                                     write!(out, " {dv}.val_clone = (__gorget_drop_fn){clone_fn};").unwrap();
                                 } else if module.recursive_drop_structs.contains_key(val_type)
@@ -6478,35 +6482,8 @@ fn emit_recursive_struct_drops(out: &mut String, module: &LirModule, sn: &HashMa
 
         // Generate the drop function
         writeln!(out, "static inline void {drop_fn_name}({c_name}* self) {{").unwrap();
-        for (field_name, drop_fn, field_type_name) in drop_info {
-            // For collection fields, emit per-element drops before freeing.
-            let is_array_free = drop_fn == "gorget_array_free";
-            let is_map_free = drop_fn == "gorget_map_free";
-            if is_array_free || is_map_free {
-                let elem_type_name = if is_array_free {
-                    field_type_name.strip_prefix("Vector__")
-                        .or_else(|| field_type_name.strip_prefix("Deque__"))
-                } else {
-                    field_type_name.strip_prefix("Dict__")
-                        .or_else(|| field_type_name.strip_prefix("HashMap__"))
-                        .and_then(|rest| rest.find("__").map(|idx| &rest[idx + 2..]))
-                };
-                if let Some(elem_name) = elem_type_name {
-                    let self_cleaning = elem_drop_fn_for_c_type(elem_name).is_some();
-                    if !self_cleaning {
-                        if let Some(recipe) = module.elem_drop_recipes.get(elem_name) {
-                            let addr = format!("&self->{field_name}");
-                            write!(out, "    ").unwrap();
-                            if is_array_free {
-                                emit_recipe_array_drop(out, &addr, recipe, module, sn, 0);
-                            } else {
-                                emit_recipe_map_drop(out, &addr, recipe, module, sn, 0);
-                            }
-                            writeln!(out).unwrap();
-                        }
-                    }
-                }
-            }
+        for (field_name, drop_fn, _field_type_name) in drop_info {
+            // Self-cleaning: gorget_array_free/gorget_map_free drop elements.
             writeln!(out, "    {drop_fn}(&self->{field_name});").unwrap();
         }
         writeln!(out, "}}").unwrap();
@@ -6714,33 +6691,7 @@ fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &HashMap<u32, St
                 } else {
                     field_name.to_string()
                 };
-                // For collection fields, emit per-element drops before freeing.
-                let is_array_free = *drop_fn == "gorget_array_free";
-                let is_map_free = *drop_fn == "gorget_map_free";
-                if is_array_free || is_map_free {
-                    let elem_type_name = if is_array_free {
-                        field_type_name.strip_prefix("Vector__")
-                            .or_else(|| field_type_name.strip_prefix("Deque__"))
-                    } else {
-                        field_type_name.strip_prefix("Dict__")
-                            .or_else(|| field_type_name.strip_prefix("HashMap__"))
-                            .and_then(|rest| rest.find("__").map(|idx| &rest[idx + 2..]))
-                    };
-                    if let Some(elem_name) = elem_type_name {
-                        let self_cleaning = elem_drop_fn_for_c_type(elem_name).is_some();
-                        if !self_cleaning {
-                            if let Some(recipe) = module.elem_drop_recipes.get(elem_name) {
-                                let addr = format!("&self->{access}");
-                                if is_array_free {
-                                    emit_recipe_array_drop(out, &addr, recipe, module, sn, 0);
-                                } else {
-                                    emit_recipe_map_drop(out, &addr, recipe, module, sn, 0);
-                                }
-                                write!(out, " ").unwrap();
-                            }
-                        }
-                    }
-                }
+                // Self-cleaning: gorget_array_free/gorget_map_free drop elements.
                 // Box fields (free): pass the pointer value directly.
                 // Other drop fns (gorget_string_free, etc.): pass address of field.
                 if *drop_fn == "free" {

@@ -2852,25 +2852,7 @@ impl<'a> FuncLowering<'a> {
         };
         self.ensure_extern(&actual_emit_name, &arg_types, &ret_ty);
 
-        // Pre-drop for gorget_array_set: drop the old element before overwriting.
-        // The GIR backend does this inline; in LIR we emit the full drop sequence.
-        if emit_name == "gorget_array_set" && lir_args.len() >= 3 {
-            if let Some(elem_type) = collection_elem_type_from_name(original_name) {
-                if type_needs_drop(elem_type, self.gir_types, &self.func_index) {
-                    let arr_ptr = lir_args[0];
-                    let idx = lir_args[1];
-                    let old_ptr = self.lir_func.next_value();
-                    self.ensure_extern("gorget_array_get", &[LirType::Ptr, LirType::I64], &LirType::Ptr);
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: Some(old_ptr),
-                        name: "gorget_array_get".to_string(),
-                        args: vec![arr_ptr, idx],
-                        original_name: None,
-                    });
-                    self.emit_drop_at_ptr(old_ptr, elem_type, bb);
-                }
-            }
-        }
+        // Self-cleaning: gorget_array_set calls elem_drop internally.
 
         let is_void_ret = matches!(ret_ty, LirType::Void);
         let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
@@ -3262,73 +3244,7 @@ impl<'a> FuncLowering<'a> {
                 // Trivial drop: single free/cleanup call. fn_name(&place)
                 let addr = self.lower_place_addr(place, bb);
 
-                // For collection types (Vector, Set, Dict), emit a special extern call
-                // that tells the backend to generate element-level drops before freeing.
-                let is_array_free = fn_name == "gorget_array_free";
-                let is_map_free = fn_name == "gorget_map_free";
-                if is_array_free || is_map_free {
-                    let elem_type_name = type_name.as_deref().and_then(|tn| {
-                        if is_array_free {
-                            tn.strip_prefix("Vector__").or_else(|| tn.strip_prefix("Deque__"))
-                        } else {
-                            tn.strip_prefix("Dict__").or_else(|| tn.strip_prefix("HashMap__"))
-                                .and_then(|rest| {
-                                    rest.find("__").map(|idx| &rest[idx + 2..])
-                                })
-                        }
-                    });
-
-                    if let Some(elem_name) = elem_type_name {
-                        use crate::ir::types::DropStrategy as DS;
-                        let elem_drop = self.gir_types.get_type_def(elem_name)
-                            .map(|td| td.metadata.drop_strategy.clone())
-                            .unwrap_or(DS::None);
-
-                        let needs_recipe = self.elem_needs_compound_drop(elem_name);
-
-                        if needs_recipe {
-                            let tag = if is_array_free {
-                                format!("__gorget_array_drop_recipe__{elem_name}")
-                            } else {
-                                format!("__gorget_map_drop_recipe__{elem_name}")
-                            };
-                            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                                dst: None,
-                                name: tag,
-                                args: vec![addr],
-                                original_name: None,
-                            });
-                        } else {
-                            let elem_drop_fn = match &elem_drop {
-                                DS::Trivial(fn_name) => Some(fn_name.clone()),
-                                DS::Custom(fn_name) => Some(fn_name.clone()),
-                                DS::Recursive => {
-                                    let name = format!("{elem_name}__drop");
-                                    if self.func_index.contains_key(name.as_str()) {
-                                        Some(name)
-                                    } else {
-                                        None
-                                    }
-                                }
-                                DS::None => None,
-                            };
-                            if let Some(drop_fn) = elem_drop_fn {
-                                let tag = if is_array_free {
-                                    format!("__gorget_array_drop_elems__{drop_fn}")
-                                } else {
-                                    format!("__gorget_map_drop_vals__{drop_fn}")
-                                };
-                                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                                    dst: None,
-                                    name: tag,
-                                    args: vec![addr],
-                                    original_name: None,
-                                });
-                            }
-                        }
-                    }
-
-                }
+                // Self-cleaning: collections drop elements via elem_drop/val_drop.
 
                 if let Some(&fid) = self.func_index.get(fn_name.as_str()) {
                     self.lir_func.block_mut(bb).insts.push(Inst::Call {
