@@ -641,7 +641,7 @@ void p2p_publish(Node &node, String topic, Vector[uint8] data):
 ReliableStream p2p_new_stream(int stream_id, int remote_stream_id, String peer_hex, int initial_state):
     int now = time_ms()
     return ReliableStream(
-        stream_id, remote_stream_id, peer_hex, initial_state,
+        stream_id, remote_stream_id, peer_hex.clone(), initial_state,
         0, 0, 0, 0,
         Vector[SendSegment](), Vector[uint8](), Vector[RecvSegment](), Vector[uint8](),
         0, 0, 1000,
@@ -908,7 +908,7 @@ Result[int, String] p2p_stream_open_protocol(Node &node, String peer_hex, String
     s.local_seq = 1
     s.local_initial_seq = 0
     s.syn_send_ms = time_ms()
-    s.protocol = protocol
+    s.protocol = protocol.clone()
     node.streams.push(!s)
     # Send SYN with protocol tag
     Vector[uint8] payload = p2p_encode_syn_protocol_payload(sid, 0, protocol)
@@ -933,7 +933,7 @@ Result[int, String] p2p_stream_open_encrypted_protocol(Node &node, String peer_h
     s.authenticated = true
     s.local_ephemeral_pub = bytes_slice(epub, 0, epub.len())
     s.local_ephemeral_priv = bytes_slice(epriv, 0, epriv.len())
-    s.protocol = protocol
+    s.protocol = protocol.clone()
     node.streams.push(!s)
     Vector[uint8] sig = crypto_ed25519_sign(node.identity.private_key, epub).unwrap()
     Vector[uint8] payload = p2p_encode_syn_auth_protocol_payload(sid, 0, epub, node.identity.public_key, sig, protocol)
@@ -1110,7 +1110,7 @@ P2PEvent p2p_handle_syn(Node &node, String sender_hex, Vector[uint8] payload):
                 if payload.len() >= base_off + 2 + proto_len:
                     Vector[uint8] proto_bytes = bytes_slice(payload, base_off + 2, base_off + 2 + proto_len)
                     syn_protocol = bytes_to_str(proto_bytes).unwrap()
-    s.protocol = syn_protocol
+    s.protocol = syn_protocol.clone()
     node.streams.push(!s)
     # Return STREAM_SYN event with our local stream_id in data, protocol in topic
     Vector[uint8] ev_data = p2p_make_u32(local_sid)
