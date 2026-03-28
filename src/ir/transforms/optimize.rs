@@ -200,11 +200,14 @@ fn propagate_copies(func: &mut Function) {
                             // Only propagate when src and dst have the same type —
                             // cross-type copies involve implicit coercions (e.g.,
                             // GorgetString → Str) that the backend handles specially.
+                            // Also skip LocalId(0) (return slot): the C backend's
+                            // SlotStore may clone strings on assign to the return
+                            // slot; propagating past it would bypass the clone.
                             let dst_type = func.locals.get(dst.local.0 as usize)
                                 .map(|l| l.type_id);
                             let src_type = func.locals.get(src_place.local.0 as usize)
                                 .map(|l| l.type_id);
-                            if dst_type == src_type && dst_type.is_some() {
+                            if dst_type == src_type && dst_type.is_some() && written != 0 {
                                 copies.insert(written, src_place.clone());
                             } else {
                                 copies.remove(&written);
