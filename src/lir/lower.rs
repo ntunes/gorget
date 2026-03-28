@@ -356,6 +356,100 @@ impl<'a> LoweringContext<'a> {
                 self.module.recursive_drop_enums.insert(name.clone(), variant_drops);
             }
         }
+
+        // Third pass: populate unified type_drop_fns for all types with droppable fields.
+        // This covers structs (Recursive + Custom) and enums with resource payloads.
+        // Naming collision handling: if Type__drop is a user method, use __gorget_dtor_Type.
+        for (name, strategy, kind) in &type_defs {
+            match kind {
+                TypeDefKind::Struct(sdef) => {
+                    if !matches!(strategy, DropStrategy::Recursive | DropStrategy::Custom(_)) {
+                        continue;
+                    }
+                    let mut field_drops: Vec<(String, String, String)> = Vec::new();
+                    for field in &sdef.fields {
+                        let field_type_name = match self.gir.type_registry.get(field.type_id) {
+                            Some(GirType::Named(n)) => n.clone(),
+                            _ => continue,
+                        };
+                        let field_drop_strategy = self.infer_drop_strategy(&field_type_name);
+                        let drop_fn = match &field_drop_strategy {
+                            DropStrategy::Trivial(fn_name) => fn_name.clone(),
+                            DropStrategy::Custom(fn_name) => fn_name.clone(),
+                            DropStrategy::Recursive => {
+                                // For collision types, use mangled destructor name
+                                if self.module.drop_collision_types.contains(&field_type_name) {
+                                    format!("__gorget_dtor_{field_type_name}")
+                                } else {
+                                    format!("{field_type_name}__drop")
+                                }
+                            }
+                            DropStrategy::None => continue,
+                        };
+                        field_drops.push((field.name.clone(), drop_fn, field_type_name));
+                    }
+                    if field_drops.is_empty() && !matches!(strategy, DropStrategy::Custom(_)) {
+                        continue;
+                    }
+                    let user_drop_fn = if let DropStrategy::Custom(fn_name) = strategy {
+                        Some(fn_name.clone())
+                    } else {
+                        None
+                    };
+                    // Determine drop function name (handle collision)
+                    let drop_fn_name = if self.module.drop_collision_types.contains(name) {
+                        format!("__gorget_dtor_{name}")
+                    } else {
+                        format!("{name}__drop")
+                    };
+                    self.module.type_drop_fns.insert(name.clone(), crate::lir::TypeDropInfo {
+                        drop_fn_name,
+                        field_drops,
+                        user_drop_fn,
+                        enum_variants: None,
+                    });
+                }
+                _ => continue, // Alias types — skip
+                TypeDefKind::Enum(edef) => {
+                    if name.starts_with("Option__") || name.starts_with("Result__") {
+                        continue;
+                    }
+                    let mut variant_drops: Vec<(u32, String, String, String, String)> = Vec::new();
+                    for (vi, variant) in edef.variants.iter().enumerate() {
+                        for (fi, field) in variant.fields.iter().enumerate() {
+                            let field_type_name = match self.gir.type_registry.get(field.type_id) {
+                                Some(GirType::Named(n)) => n.clone(),
+                                _ => continue,
+                            };
+                            let field_drop = self.infer_drop_strategy(&field_type_name);
+                            let drop_fn = match &field_drop {
+                                DropStrategy::Trivial(fn_name) => fn_name.clone(),
+                                DropStrategy::Custom(fn_name) => fn_name.clone(),
+                                DropStrategy::Recursive => {
+                                    if self.module.drop_collision_types.contains(&field_type_name) {
+                                        format!("__gorget_dtor_{field_type_name}")
+                                    } else {
+                                        format!("{field_type_name}__drop")
+                                    }
+                                }
+                                DropStrategy::None => continue,
+                            };
+                            let field_name = format!("{}_{fi}", variant.name);
+                            variant_drops.push((vi as u32, variant.name.clone(), field_name, drop_fn, field_type_name));
+                        }
+                    }
+                    if !variant_drops.is_empty() {
+                        let drop_fn_name = format!("{name}__drop");
+                        self.module.type_drop_fns.insert(name.clone(), crate::lir::TypeDropInfo {
+                            drop_fn_name,
+                            field_drops: Vec::new(),
+                            user_drop_fn: None,
+                            enum_variants: Some(variant_drops),
+                        });
+                    }
+                }
+            }
+        }
     }
 
     /// Infer the drop strategy for a type, falling back to name-based detection

@@ -741,6 +741,23 @@ pub struct LirModule {
     /// When dropping fields of these types, the backend must inline sub-field drops
     /// instead of calling `{Name}__drop`.
     pub drop_collision_types: HashSet<String>,
+    /// Unified drop function info for all types with droppable fields.
+    /// Maps type name → drop function specification. The C backend generates
+    /// one `Type__drop(void*)` per entry. Scope-exit emits a single call.
+    pub type_drop_fns: HashMap<String, TypeDropInfo>,
+}
+
+/// Specification for a generated `Type__drop` function.
+#[derive(Debug, Clone)]
+pub struct TypeDropInfo {
+    /// The C function name (usually "Type__drop", mangled for collisions).
+    pub drop_fn_name: String,
+    /// Struct fields to drop: (field_name, drop_fn_name, field_type_name).
+    pub field_drops: Vec<(String, String, String)>,
+    /// For Custom-drop types: user's drop function to call BEFORE field drops.
+    pub user_drop_fn: Option<String>,
+    /// For enum types: variant dispatch (tag, variant_name, field_name, drop_fn, field_type_name).
+    pub enum_variants: Option<Vec<(u32, String, String, String, String)>>,
 }
 
 impl LirModule {
@@ -767,6 +784,7 @@ impl LirModule {
             recursive_drop_structs: HashMap::new(),
             recursive_drop_enums: HashMap::new(),
             drop_collision_types: HashSet::new(),
+            type_drop_fns: HashMap::new(),
         }
     }
 
