@@ -5,6 +5,8 @@ tests/fixtures/*.c
 tests/fixtures/*_error
 tests/fixtures/*_asan
 tests/fixtures/*_dbg
+tests/fixtures/yaml_parse
+tests/fixtures/xml_roundtrip
 tests/fixtures/test_traced
 tests/fixtures/test_traced.trace.jsonl
 tests/fixtures/test_traced.report.html
