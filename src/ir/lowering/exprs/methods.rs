@@ -1182,9 +1182,10 @@ pub(super) fn lower_method_call(
                 }
             }
         }
-        // For Dict/HashMap.get(), register Option type for value access.
-        // Resource types: Option[Ref_V] (Ptr payload, zero-cost borrow into Dict storage).
-        // Primitive types: Option[V] (value payload, copied).
+        // For Dict/HashMap.get(), auto-register Option[V] so get returns Option.
+        // Dict.get() uses value payload (not Ptr) because the GIR→LIR struct pipeline
+        // doesn't yet propagate Ptr payload types to the C backend's Option wrapping.
+        // dict[key] (IndexLoad) already returns Ptr for resource values via a separate path.
         if method_name == "get"
             && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__"))
         {
@@ -1192,20 +1193,10 @@ pub(super) fn lower_method_call(
             if let Some(rest) = type_name.strip_prefix(prefix) {
                 if let Some(pos) = rest.find("__") {
                     let val_name = &rest[pos + 2..];
-                    let inner_type = resolve_inner_type(ctx, val_name);
-                    let is_resource = ctx.type_registry.is_resource_type(inner_type)
-                        || ctx.type_registry.needs_drop(inner_type);
-                    if is_resource {
-                        let option_name = format!("Option__Ref_{val_name}");
-                        if ctx.lookup_type_by_name(&option_name).is_none() {
-                            let ptr_type = ctx.type_registry.insert(GirType::Ptr(inner_type));
-                            ctx.ensure_option_type_registered(&option_name, ptr_type);
-                        }
-                    } else {
-                        let option_name = format!("Option__{val_name}");
-                        if ctx.lookup_type_by_name(&option_name).is_none() {
-                            ctx.ensure_option_type_registered(&option_name, inner_type);
-                        }
+                    let option_name = format!("Option__{val_name}");
+                    if ctx.lookup_type_by_name(&option_name).is_none() {
+                        let inner_type = resolve_inner_type(ctx, val_name);
+                        ctx.ensure_option_type_registered(&option_name, inner_type);
                     }
                 }
             }
@@ -1241,14 +1232,7 @@ pub(super) fn lower_method_call(
                 if let Some(rest) = type_name.strip_prefix(prefix) {
                     if let Some(pos) = rest.find("__") {
                         let val_name = &rest[pos + 2..];
-                        let inner_type = resolve_inner_type(ctx, val_name);
-                        let is_resource = ctx.type_registry.is_resource_type(inner_type)
-                            || ctx.type_registry.needs_drop(inner_type);
-                        let option_name = if is_resource {
-                            format!("Option__Ref_{val_name}")
-                        } else {
-                            format!("Option__{val_name}")
-                        };
+                        let option_name = format!("Option__{val_name}");
                         ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
                     } else { ret }
                 } else { ret }
@@ -1278,27 +1262,9 @@ pub(super) fn lower_method_call(
             ctx.lookup_type_by_name(&vec_name)
                 .or_else(|| ctx.lookup_type_by_name("GorgetArray"))
                 .unwrap_or(I64_TYPE)
-        } else if method_name == "get"
-            && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__"))
-        {
-            // Dict.get() when fn_sig_ret is None (late-registered types).
-            let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
-            if let Some(rest) = type_name.strip_prefix(prefix) {
-                if let Some(pos) = rest.find("__") {
-                    let val_name = &rest[pos + 2..];
-                    let inner_type = resolve_inner_type(ctx, val_name);
-                    let is_resource = ctx.type_registry.is_resource_type(inner_type)
-                        || ctx.type_registry.needs_drop(inner_type);
-                    let option_name = if is_resource {
-                        format!("Option__Ref_{val_name}")
-                    } else {
-                        format!("Option__{val_name}")
-                    };
-                    ctx.lookup_type_by_name(&option_name).unwrap_or(UNIT_TYPE)
-                } else { UNIT_TYPE }
-            } else { UNIT_TYPE }
         } else {
             // Resolve from the BuiltinTypeProtocol table (lazy substitution + cache).
+            // This covers all builtin methods on late-registered types.
             ctx.resolve_builtin_method_return_type(&type_name, method_name)
                 .unwrap_or(UNIT_TYPE)
         };
