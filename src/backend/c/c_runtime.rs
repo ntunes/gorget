@@ -5139,14 +5139,14 @@ static inline GorgetMap gorget_map_new_str(size_t val_size) {
     GorgetMap m = gorget_map_new(sizeof(Str), val_size);
     m.hash_fn = __gorget_str_key_hash;
     m.eq_fn = __gorget_str_key_eq;
-    // key_drop not set yet — string keys leak on map free.
-    // Enabling requires all consumers to clone key data before free.
+    m.key_drop = (__gorget_drop_fn)gorget_string_free;
     return m;
 }
 static inline GorgetMap gorget_dict_new_str(size_t val_size) {
     GorgetMap m = gorget_dict_new(sizeof(Str), val_size);
     m.hash_fn = __gorget_str_key_hash;
     m.eq_fn = __gorget_str_key_eq;
+    m.key_drop = (__gorget_drop_fn)gorget_string_free;
     return m;
 }
 
@@ -5163,13 +5163,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         for (size_t __probes = 0; __probes < m->cap; __probes++) {
             if (m->states[idx] == 0) {
                 memcpy((char*)m->keys + idx * m->key_size, key, m->key_size);
-                if (m->key_drop) {
-                    // Clone key so the Dict owns an independent copy
-                    Str* dst_key = (Str*)((char*)m->keys + idx * m->key_size);
-                    if (dst_key->cap > 0 && dst_key->data) {
-                        *dst_key = gorget_string_clone(dst_key);
-                    }
-                }
+                // Key ownership transferred by caller (cap/alloc zeroed after put).
                 if (m->val_size > 0 && value != NULL) {
                     memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
                 }
@@ -5202,12 +5196,6 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         if (m->states[idx] == 0) {
             size_t target = first_tombstone != (size_t)-1 ? first_tombstone : idx;
             memcpy((char*)m->keys + target * m->key_size, key, m->key_size);
-            if (m->key_drop) {
-                Str* dst_key = (Str*)((char*)m->keys + target * m->key_size);
-                if (dst_key->cap > 0 && dst_key->data) {
-                    *dst_key = gorget_string_clone(dst_key);
-                }
-            }
             if (m->val_size > 0 && value != NULL) {
                 memcpy((char*)m->values + target * m->val_size, value, m->val_size);
             }
@@ -5378,16 +5366,28 @@ static inline void gorget_set_clone_inplace(void* p) {
 // Ordered iteration: keys → GorgetArray
 static inline GorgetArray gorget_map_keys(const GorgetMap* m) {
     GorgetArray result = gorget_array_new(m->key_size);
+    if (m->key_drop) {
+        result.elem_drop = m->key_drop;
+    }
     if (m->order != NULL) {
         for (size_t oi = 0; oi < m->order_len; oi++) {
             size_t i = m->order[oi];
             if (m->states[i] != 1) continue;
             gorget_array_push(&result, (char*)m->keys + i * m->key_size);
+            // Clone the key so the result owns an independent copy
+            if (m->key_drop) {
+                Str* key = (Str*)gorget_array_get(&result, result.len - 1);
+                if (key->cap > 0 && key->data) *key = gorget_string_clone(key);
+            }
         }
     } else {
         for (size_t i = 0; i < m->cap; i++) {
             if (m->states[i] == 1) {
                 gorget_array_push(&result, (char*)m->keys + i * m->key_size);
+                if (m->key_drop) {
+                    Str* key = (Str*)gorget_array_get(&result, result.len - 1);
+                    if (key->cap > 0 && key->data) *key = gorget_string_clone(key);
+                }
             }
         }
     }
