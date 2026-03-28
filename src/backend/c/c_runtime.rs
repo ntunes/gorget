@@ -5163,6 +5163,13 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         for (size_t __probes = 0; __probes < m->cap; __probes++) {
             if (m->states[idx] == 0) {
                 memcpy((char*)m->keys + idx * m->key_size, key, m->key_size);
+                if (m->key_drop) {
+                    // Clone key so the Dict owns an independent copy
+                    Str* dst_key = (Str*)((char*)m->keys + idx * m->key_size);
+                    if (dst_key->cap > 0 && dst_key->data) {
+                        *dst_key = gorget_string_clone(dst_key);
+                    }
+                }
                 if (m->val_size > 0 && value != NULL) {
                     memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
                 }
@@ -5195,6 +5202,12 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         if (m->states[idx] == 0) {
             size_t target = first_tombstone != (size_t)-1 ? first_tombstone : idx;
             memcpy((char*)m->keys + target * m->key_size, key, m->key_size);
+            if (m->key_drop) {
+                Str* dst_key = (Str*)((char*)m->keys + target * m->key_size);
+                if (dst_key->cap > 0 && dst_key->data) {
+                    *dst_key = gorget_string_clone(dst_key);
+                }
+            }
             if (m->val_size > 0 && value != NULL) {
                 memcpy((char*)m->values + target * m->val_size, value, m->val_size);
             }
