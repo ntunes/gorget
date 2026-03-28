@@ -415,8 +415,9 @@ pub(super) fn lower_method_call(
                         builder.move_zero(place.clone());
                         ctx.drops.mark_moved(place.local);
                     }
-                    // Auto-clone Ptr(T) → owned T for self-cleaning collections.
-                    return ctx.auto_clone_if_ptr(builder, FunctionBuilder::copy(dst));
+                    // CoW: return Ptr as-is. Clone happens at mutation/store/return
+                    // boundaries, not at read. Zero-cost for read-only access.
+                    return FunctionBuilder::copy(dst);
                 }
             }
         }
