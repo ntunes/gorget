@@ -705,15 +705,33 @@ pub(super) fn lower_method_call(
                     let dst = builder.call("Process__wait_timeout", vec![recv, ms], I64_TYPE);
                     return FunctionBuilder::copy(dst);
                 }
-                "read_all" => {
-                    if let Some(&exec_result_tid) = ctx.type_mapper.named_types.get("ExecResult") {
+                "read_all" | "read_all_timeout" => {
+                    let str_type = ctx.type_mapper.owned_string_type;
+                    let exec_result_tid = ctx.type_mapper.get_or_register(
+                        "ExecResult", &mut ctx.type_registry, |n| {
+                            use crate::ir::types::*;
+                            TypeDef {
+                                name: n.to_string(),
+                                kind: TypeDefKind::Struct(StructDef {
+                                    fields: vec![
+                                        StructField { name: "output".into(), type_id: str_type },
+                                        StructField { name: "errors".into(), type_id: str_type },
+                                        StructField { name: "exit_code".into(), type_id: I64_TYPE },
+                                    ],
+                                }),
+                                metadata: TypeMetadata {
+                                    copy_semantics: CopySemantics::Resource,
+                                    drop_strategy: DropStrategy::Recursive,
+                                    ..Default::default()
+                                },
+                            }
+                        },
+                    );
+                    if method_name == "read_all" {
                         let dst = builder.call("Process__read_all", vec![recv], exec_result_tid);
                         return FunctionBuilder::copy(dst);
-                    }
-                }
-                "read_all_timeout" if !args.is_empty() => {
-                    let ms = lower_expr(ctx, builder, &args[0].node.value);
-                    if let Some(&exec_result_tid) = ctx.type_mapper.named_types.get("ExecResult") {
+                    } else {
+                        let ms = lower_expr(ctx, builder, &args[0].node.value);
                         let dst = builder.call("Process__read_all_timeout", vec![recv, ms], exec_result_tid);
                         return FunctionBuilder::copy(dst);
                     }

@@ -503,17 +503,19 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
             out.push_str(crate::backend::c::c_runtime::TLS_SERVER_RUNTIME);
         }
 
-        // Process
-        if has(&|n| n.starts_with("gorget_process_") || n.starts_with("gorget_exec_") || n == "gorget_getenv" || n == "gorget_setenv") {
-            out.push_str(crate::backend::c::c_runtime::PROCESS_RUNTIME);
-        }
-
         // Process spawn (fork+exec with pipes) + signal handling (signal functions live in PROCESS_SPAWN_RUNTIME)
-        if has(&|n| n.starts_with("gorget_process_spawn") || n.starts_with("gorget_process_wait")
+        let needs_spawn = has(&|n| n.starts_with("gorget_process_spawn") || n.starts_with("gorget_process_wait")
             || n.starts_with("gorget_process_kill") || n.starts_with("gorget_process_pid")
             || n.starts_with("gorget_process_read_") || n.starts_with("gorget_process_write_")
             || n.starts_with("gorget_process_close_")
-            || n.starts_with("gorget_signal_") || n == "gorget_getpid") {
+            || n.starts_with("gorget_signal_") || n == "gorget_getpid");
+
+        // Process — also needed when spawn is used (ExecResult typedef lives here)
+        if needs_spawn || has(&|n| n.starts_with("gorget_process_") || n.starts_with("gorget_exec_") || n == "gorget_getenv" || n == "gorget_setenv") {
+            out.push_str(crate::backend::c::c_runtime::PROCESS_RUNTIME);
+        }
+
+        if needs_spawn {
             out.push_str(crate::backend::c::c_runtime::PROCESS_SPAWN_RUNTIME);
         }
 
