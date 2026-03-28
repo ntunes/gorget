@@ -66,6 +66,7 @@ struct FuncLowering<'a> {
     recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String, String)>>,
     /// Struct types with field-level drop functions.
     recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String, String)>>,
+    type_drop_fns: &'a std::collections::HashMap<String, crate::lir::TypeDropInfo>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -160,6 +161,7 @@ impl<'a> LoweringContext<'a> {
                     &self.gir.runtime_callees,
                     &self.module.recursive_drop_enums,
                     &self.module.recursive_drop_structs,
+                    &self.module.type_drop_fns,
                 );
                 fl.lower();
                 all_pending_externs.extend(fl.pending_externs.drain(..));
@@ -898,6 +900,7 @@ impl<'a> FuncLowering<'a> {
         runtime_callees: &'a rustc_hash::FxHashMap<String, String>,
         recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String, String)>>,
         recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String, String)>>,
+        type_drop_fns: &'a std::collections::HashMap<String, crate::lir::TypeDropInfo>,
     ) -> Self {
         let params: Vec<LirType> = gir_func
             .params
@@ -951,6 +954,7 @@ impl<'a> FuncLowering<'a> {
             runtime_callees,
             recursive_drop_enums,
             recursive_drop_structs,
+            type_drop_fns,
         }
     }
 
@@ -3261,21 +3265,32 @@ impl<'a> FuncLowering<'a> {
                     args: vec![addr],
                     original_name: None,
                 });
-                let is_enum_drop = type_name.as_ref()
-                    .map(|tn| self.recursive_drop_enums.contains_key(tn.as_str())
-                        && !self.recursive_drop_structs.contains_key(tn.as_str()))
-                    .unwrap_or(false);
-                if is_enum_drop {
-                    let drop_fn = format!("{}__drop", type_name.as_ref().unwrap());
+                // Use unified Type__drop from type_drop_fns when available.
+                let unified_drop_fn = type_name.as_ref()
+                    .and_then(|tn| self.type_drop_fns.get(tn.as_str()))
+                    .map(|info| info.drop_fn_name.clone());
+                if let Some(drop_fn) = unified_drop_fn {
                     let addr2 = self.lower_place_addr(place, bb);
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None,
-                        name: drop_fn,
-                        args: vec![addr2],
+                        dst: None, name: drop_fn, args: vec![addr2],
                         original_name: None,
                     });
                 } else {
-                    self.lower_field_drops(place, &type_name, bb);
+                    // Fallback: enum dispatch or inline field drops
+                    let is_enum_drop = type_name.as_ref()
+                        .map(|tn| self.recursive_drop_enums.contains_key(tn.as_str())
+                            && !self.recursive_drop_structs.contains_key(tn.as_str()))
+                        .unwrap_or(false);
+                    if is_enum_drop {
+                        let drop_fn = format!("{}__drop", type_name.as_ref().unwrap());
+                        let addr2 = self.lower_place_addr(place, bb);
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: None, name: drop_fn, args: vec![addr2],
+                            original_name: None,
+                        });
+                    } else {
+                        self.lower_field_drops(place, &type_name, bb);
+                    }
                 }
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: None,
