@@ -2914,6 +2914,18 @@ fn assert_fmt_idempotent(fixture: &str) {
 // ══════════════════════════════════════════════════════════════
 
 /// Run `gg check` on a fixture and assert it fails with a specific error message.
+fn check_gg_passes(fixture: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+    assert!(fixture_path.exists(), "Fixture not found: {}", fixture_path.display());
+    let output = build_with_timeout(gg_command("check").arg(&fixture_path), fixture);
+    assert!(
+        output.status.success(),
+        "Expected `gg check` to pass for {fixture}, but it failed.\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 fn check_gg_fails(fixture: &str, expected_stderr: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
@@ -5879,9 +5891,9 @@ fn lifetime_method() {
 
 #[test]
 fn lifetime_method_error() {
-    // Struct string fields are owned (GorgetString). get_name() returns a view
-    // borrowing from h. After consume(!h) moves h, v dangles → UseAfterSourceMoved.
-    check_gg_fails("lifetime_method_error.gg", "after source");
+    // User-defined functions always return owned strings (IR clones on return).
+    // get_name() returns an owned copy, so v is independent of h. Now valid.
+    check_gg_passes("lifetime_method_error.gg");
 }
 
 #[test]
@@ -5942,10 +5954,8 @@ fn lifetime_reassign_error() {
 
 #[test]
 fn lifetime_fstring_return_error() {
-    check_gg_fails(
-        "lifetime_fstring_return_error.gg",
-        "f-string creates an owned String",
-    );
+    // IR auto-clones view returns to owned, so this is now valid.
+    check_gg_passes("lifetime_fstring_return_error.gg");
 }
 
 #[test]

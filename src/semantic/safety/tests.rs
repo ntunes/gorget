@@ -455,6 +455,8 @@ void main():
 
     #[test]
     fn cross_function_dangling() {
+        // User-defined functions always return owned strings (IR clones on return),
+        // so the value is independent — no dangling.
         let source = "\
 String id(String s): s
 
@@ -469,9 +471,9 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
                 if name == "v" && source_name == "s")),
-            "expected UseAfterSourceMoved through cross-function call, got: {:?}", errors
+            "unexpected UseAfterSourceMoved — id() returns owned string, v is independent of s: {:?}", errors
         );
     }
 
@@ -1201,10 +1203,8 @@ void main():
 
     #[test]
     fn method_origin_use_after_source_moved() {
-        // After str→String unification + struct field rewrite, string struct fields
-        // are Str (Copy). Method calls returning strings are classified as owned by
-        // provenance. So `str v = h.get_name()` no longer creates a borrow — `v`
-        // is either owned (provenance) or a Copy of a Copy field. No UseAfterSourceMoved.
+        // User-defined functions always return owned strings (IR clones on return),
+        // so the value is independent — no dangling.
         let source = "\
 struct Holder:
     String name
@@ -1223,11 +1223,9 @@ void main():
     print(v)
 ";
         let errors = check(source);
-        // Struct string fields are owned (GorgetString). `get_name()` returns a view
-        // borrowing from `h`. After `consume(!h)` moves `h`, `v` dangles.
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
-            "should detect UseAfterSourceMoved — v borrows from h which was moved: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — get_name() returns owned string, v is independent of h: {:?}", errors
         );
     }
 
@@ -1330,7 +1328,8 @@ void main():
 
     #[test]
     fn try_expr_origin_propagation() {
-        // str v = get_result()? borrows from param → move param source → use v → error
+        // User-defined functions always return owned strings (IR clones on return),
+        // so the value is independent — no dangling.
         let source = "\
 String get_view(String s):
     return s
@@ -1346,9 +1345,9 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
                 if name == "v" && source_name == "s")),
-            "expected UseAfterSourceMoved for try expr origin propagation, got: {:?}", errors
+            "unexpected UseAfterSourceMoved — get_view() returns owned string, v is independent of s: {:?}", errors
         );
     }
 
@@ -1524,7 +1523,8 @@ void main():
 
     #[test]
     fn reassignment_transitive() {
-        // Transitive through a function call: w borrows from v which borrows from s
+        // User-defined functions always return owned strings (IR clones on return),
+        // so the value is independent — no dangling.
         let source = "\
 String identity(live String x):
     return x
@@ -1538,9 +1538,9 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
                 if name == "w" && source_name == "s")),
-            "expected UseAfterSourceMoved for w (transitive) after s reassigned, got: {:?}", errors
+            "unexpected UseAfterSourceMoved — identity() returns owned string, w is independent of s: {:?}", errors
         );
     }
 
@@ -1609,6 +1609,8 @@ void main():
 
     #[test]
     fn variant_constructor_implicit_move() {
+        // With CoW, enum constructors borrow string arguments (no move).
+        // The IR creates a Ptr alias, not a consume. s is still usable after.
         let source = "\
 enum Container:
     Holding(String)
@@ -1621,8 +1623,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterMove { name, .. } if name == "s")),
-            "expected UseAfterMove for s after implicit move into variant constructor, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterMove { .. })),
+            "string args to enum constructors are borrowed (CoW), not moved: {:?}", errors
         );
     }
 
@@ -1651,7 +1653,8 @@ void wrap(String s):
 
     #[test]
     fn constructor_move_in_loop_not_return() {
-        // `auto w = Wrapper.Value(s)` in a loop should error — s is consumed every iteration
+        // With CoW, string args to enum constructors are borrowed, not consumed.
+        // Each loop iteration borrows s — no MoveInLoop.
         let source = "\
 enum Wrapper:
     Value(String)
@@ -1663,8 +1666,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveInLoop { name } if name == "s")),
-            "expected MoveInLoop for s in non-return constructor, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveInLoop { .. })),
+            "string args to enum constructors are borrowed (CoW), not moved: {:?}", errors
         );
     }
 
@@ -1756,7 +1759,8 @@ void main():
 
     #[test]
     fn return_through_local_use_after_move() {
-        // Return goes through local → Pass 5a traces to `a` → moving source invalidates result
+        // User-defined functions always return owned strings (IR clones on return),
+        // so the value is independent — no dangling.
         let source = "\
 String id(String x):
     return x
@@ -1773,8 +1777,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, .. } if name == "r")),
-            "expected UseAfterSourceMoved for r after source s was moved, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, .. } if name == "r")),
+            "unexpected UseAfterSourceMoved — pick() returns owned string, r is independent of s: {:?}", errors
         );
     }
 
@@ -2194,8 +2198,8 @@ void launch():
 
     #[test]
     fn spawn_with_call_returning_borrowed_str_rejected() {
-        // A function call returning a str derived from a param → still borrowed.
-        // The spawned task may outlive the caller, so this is unsound.
+        // User-defined functions always return owned strings (IR clones on return),
+        // so the value is independent — no dangling.
         let source = "\
 String get_slice(String s):
     return s
@@ -2208,8 +2212,8 @@ void launch(String data):
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef { .. })),
-            "expected SpawnWithBorrowedRef for call-derived borrowed str in spawn: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef { .. })),
+            "unexpected SpawnWithBorrowedRef — get_slice() returns owned string, safe for spawn: {:?}", errors
         );
     }
 

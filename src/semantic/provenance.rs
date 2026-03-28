@@ -702,25 +702,19 @@ impl<'a> ProvenanceCtx<'a> {
             _ => {}
         }
 
-        // Return type — downgrade to view if ALL returns are provably views.
+        // Return type — only downgrade for extern/declaration VIEW_METHODS.
+        // User-defined functions (Block/Expression bodies) are NEVER downgraded
+        // because the IR always materializes owned data on return (CoW alias
+        // materialization, auto-clone). Downgrading causes callers to not
+        // register the return value for drop, leading to leaks.
+        //
+        // Extern VIEW_METHODS (byte_slice, trim, etc.) genuinely return views
+        // into the receiver — the C runtime returns pointers, not owned data.
         if self.is_string_ast_type(&func.return_type.node) {
             if let Some(def_id) = func_def_id {
                 let should_downgrade = match &func.body {
-                    FunctionBody::Block(block) => {
-                        let mut returns = Vec::new();
-                        collect_return_exprs(&block.stmts, &mut returns);
-                        !returns.is_empty() && returns.iter().all(|e| {
-                            self.classify_return_expr(e) == StringProvenance::View
-                        })
-                    }
-                    FunctionBody::Expression(expr) => {
-                        self.classify_return_expr(expr.as_ref()) == StringProvenance::View
-                    }
+                    FunctionBody::Block(_) | FunctionBody::Expression(_) => false,
                     FunctionBody::Declaration | FunctionBody::Extern(_) => {
-                        // No body to analyze. Only known view-returning methods get downgraded.
-                        // Do NOT downgrade based on bare-borrow params — many stdlib functions
-                        // (regex_escape, path_join, replace_all, etc.) take borrowed strings
-                        // but return owned strings.
                         VIEW_METHODS.contains(&func.name.node.as_str())
                     }
                 };

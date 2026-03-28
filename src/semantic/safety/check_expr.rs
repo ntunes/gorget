@@ -474,13 +474,17 @@ impl<'a> BorrowChecker<'a> {
                             }
                             // For qualified enum variant constructors, bare non-Copy
                             // identifier args are implicitly consumed (moved into fields).
+                            // String types are excluded: the IR clones/borrows strings into
+                            // enum fields (CoW), so the source is not consumed.
                             if is_enum_constructor {
                                 if let Expr::Identifier(_) = &arg.node.value.node {
                                     if let Some(&var_def_id) = self.resolution_map.get(&arg.node.value.span.start) {
                                         let def = self.scopes.get_def(var_def_id);
                                         if def.kind == DefKind::Variable && !def.is_param {
                                             if let Some(type_id) = def.type_id {
-                                                if !is_copy_type(type_id, self.types, self.scopes) {
+                                                let is_string = type_id == self.types.string_id
+                                                    || type_id == self.types.owned_string_id;
+                                                if !is_copy_type(type_id, self.types, self.scopes) && !is_string {
                                                     let skip_implicit_move = self.loop_depth > 0
                                                         && !self.loop_local_defs.last()
                                                             .map_or(false, |s| s.contains(&var_def_id))
