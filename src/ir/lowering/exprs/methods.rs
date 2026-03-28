@@ -415,11 +415,8 @@ pub(super) fn lower_method_call(
                         builder.move_zero(place.clone());
                         ctx.drops.mark_moved(place.local);
                     }
-                    // Note: Ptr(T) results for Recursive types are NOT cloned here.
-                    // The VarDecl/assign site handles cloning via the Ptr→T auto-clone
-                    // path when the caller uses an explicit type (String x = ...).
-                    // auto x = ... keeps the Ptr (zero-cost borrow).
-                    return FunctionBuilder::copy(dst);
+                    // Auto-clone Ptr(T) → owned T for self-cleaning collections.
+                    return ctx.auto_clone_if_ptr(builder, FunctionBuilder::copy(dst));
                 }
             }
         }
