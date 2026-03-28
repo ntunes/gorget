@@ -920,6 +920,9 @@ pub fn lower_module(
             let name_override = module_fn_manglings
                 .get(&func.name.span.start)
                 .map(|s| s.as_str());
+            // Register as GIR-lowered so call_tracked upgrades StringView returns
+            let fn_name = name_override.unwrap_or(func.name.node.as_str());
+            ctx.gir_equip_methods.insert(fn_name.to_string());
             lower_function(&mut ctx, &mut module, func, name_override);
         }
     }
@@ -927,6 +930,7 @@ pub fn lower_module(
     // Lower monomorphized generic function instances
     for (base_name, type_args, mangled_name) in generic_collector.function_instances() {
         if let Some(template) = generic_collector.get_fn_template(base_name) {
+            ctx.gir_equip_methods.insert(mangled_name.to_string());
             let op_bindings = generic_collector.meta_op_bindings_for(mangled_name);
             functions::lower_generic_function(
                 &mut ctx,
