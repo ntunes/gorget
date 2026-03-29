@@ -911,9 +911,13 @@ fn lower_expr_inner(
         // Resolves to the enum variant using the expected type from context.
         Expr::DotShorthand { variant, args } => {
             let variant_name = variant.node.clone();
-            let lowered_args: Vec<Operand> = args.iter()
+            let ast_exprs: Vec<Spanned<Expr>> = args.iter()
+                .map(|a| a.node.value.clone())
+                .collect();
+            let mut lowered_args: Vec<Operand> = args.iter()
                 .map(|a| lower_expr(ctx, builder, &a.node.value))
                 .collect();
+            clone_multi_use_resource_args(ctx, builder, &mut lowered_args, &ast_exprs);
 
             // 1. Try expected_type (set by VarDecl, Assign, Return, or function arg)
             if let Some(et) = ctx.expected_type {
@@ -2287,10 +2291,15 @@ fn lower_string_interpolation(
     FunctionBuilder::copy(dst)
 }
 
-/// Phase 1f: clone multi-use resource-type args BEFORE StructInit/EnumInit.
-/// For each resource-type operand whose source variable is multi-use (alive after
-/// the constructor), clone it so the struct gets independent data.
-/// Single-use variables are left as-is — they'll be MoveZero'd after init.
+/// Phase 1f: clone resource-type args that can't be moved BEFORE StructInit/EnumInit.
+///
+/// Must clone when:
+/// - The source is a bare borrow param (cow_ptr_params) — can't move, caller owns it
+/// - The source is a multi-use named local — alive after the constructor
+///
+/// Can move (no clone needed) when:
+/// - The source is a single-use named local — dead after, will be MoveZero'd
+/// - The source is a temp — single-use by definition
 fn clone_multi_use_resource_args(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -2302,12 +2311,14 @@ fn clone_multi_use_resource_args(
             if place.projections.is_empty() {
                 let local = place.local;
                 if is_resource_type_local(local, builder, &ctx.type_registry) {
+                    // Must clone if: bare borrow param OR multi-use named local
+                    let is_borrow_param = ctx.cow_ptr_params.contains(&local);
                     let is_multi_use = ast_args.get(i)
                         .and_then(|arg| if let Expr::Identifier(name) = &arg.node {
                             Some(!ctx.is_single_use(name))
                         } else { None })
                         .unwrap_or(false);
-                    if is_multi_use {
+                    if is_borrow_param || is_multi_use {
                         let local_type = builder.locals[local.0 as usize].type_id;
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(local_type) {
                             let ptr_type = ctx.register_ptr_type(local_type);
