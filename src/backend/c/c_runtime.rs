@@ -7971,6 +7971,7 @@ static GorgetUdpPacket gorget_udp_recvfrom(GorgetUdpSocket* sock, int64_t max_by
     pkt.data.len = (int64_t)n;
     pkt.data.cap = max_bytes;
     pkt.data.elem_size = 1;
+    pkt.data.alloc = &__gorget_global_alloc;
 
     // Build sender address
     static __thread char sender_host[INET_ADDRSTRLEN];
