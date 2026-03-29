@@ -356,8 +356,8 @@ impl TypeRegistry {
             if self.is_collection_type_name(name) {
                 return true;
             }
-            // GorgetString is always droppable
-            if name == "GorgetString" { return true; }
+            // All string types are droppable — gorget_string_free handles cap=0 views.
+            if name == "GorgetString" || name == "GorgetStringView" { return true; }
             if let Some(type_def) = self.get_type_def(name) {
                 if type_def.metadata.copy_semantics == CopySemantics::Resource
                     || type_def.metadata.drop_strategy != DropStrategy::None
