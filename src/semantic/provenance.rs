@@ -416,66 +416,8 @@ impl<'a> ProvenanceCtx<'a> {
         false
     }
 
-    /// Classify a return expression's provenance. Unlike `classify_expr`, plain
-    /// string literals (no interpolation) are View here because they point to static
-    /// data that outlives any function call (no dangling risk). F-strings allocate
-    /// and are Owned. Returning an owned variable transfers ownership → Owned.
-    fn classify_return_expr(&self, expr: &Spanned<Expr>) -> StringProvenance {
-        match &expr.node {
-            Expr::StringLiteral(lit) if !lit.has_interpolation() => StringProvenance::View,
-            // Returning an owned variable transfers ownership → Owned return.
-            Expr::Identifier(name) => {
-                if let Some(def_id) = self.find_binding_def(name, expr.span) {
-                    let def = self.scopes.get_def(def_id);
-                    if def.type_id == Some(self.owned_string_id) {
-                        return StringProvenance::Owned;
-                    }
-                }
-                StringProvenance::View
-            }
-            // Field access in return context: if the root object is a local variable
-            // (not a parameter), the view would dangle — treat as Owned so the IR
-            // auto-clones. Views from parameters are safe (caller keeps them alive).
-            Expr::FieldAccess { object, .. } => {
-                if self.return_expr_borrows_from_local(object) {
-                    StringProvenance::Owned
-                } else {
-                    self.classify_expr(expr)
-                }
-            }
-            // Method call on local in return context: same logic — view from local
-            // would dangle, treat as Owned.
-            Expr::MethodCall { receiver, method, .. } => {
-                // View-returning methods (trim, slice, etc.) on local objects can't escape
-                if VIEW_METHODS.contains(&method.node.as_str())
-                    && self.return_expr_borrows_from_local(receiver)
-                {
-                    StringProvenance::Owned
-                } else {
-                    self.classify_expr(expr)
-                }
-            }
-            _ => self.classify_expr(expr),
-        }
-    }
-
-    /// Check if an expression's root borrows from a local variable (not a parameter).
-    fn return_expr_borrows_from_local(&self, expr: &Spanned<Expr>) -> bool {
-        match &expr.node {
-            Expr::Identifier(name) => {
-                if let Some(def_id) = self.find_binding_def(name, expr.span) {
-                    let def = self.scopes.get_def(def_id);
-                    // Parameters have DefKind::Param; locals have DefKind::Variable
-                    matches!(def.kind, crate::semantic::scope::DefKind::Variable)
-                } else {
-                    false
-                }
-            }
-            Expr::FieldAccess { object, .. } => self.return_expr_borrows_from_local(object),
-            Expr::MethodCall { receiver, .. } => self.return_expr_borrows_from_local(receiver),
-            _ => false,
-        }
-    }
+    // classify_return_expr and return_expr_borrows_from_local removed:
+    // user-defined function return types are never downgraded (CoW materializes on return).
 
     fn is_string_expr(&self, expr: &Spanned<Expr>) -> bool {
         if let Some(&tid) = self.expr_types.get(&expr.span) {
@@ -967,54 +909,6 @@ impl<'a> ProvenanceCtx<'a> {
                 for p in pats {
                     self.downgrade_pattern_bindings(p);
                 }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Collect all return expressions from a list of statements.
-fn collect_return_exprs<'a>(stmts: &'a [Spanned<Stmt>], out: &mut Vec<&'a Spanned<Expr>>) {
-    for stmt in stmts {
-        match &stmt.node {
-            Stmt::Return(Some(expr)) => out.push(expr),
-            Stmt::If { then_body, elif_branches, else_body, .. } => {
-                collect_return_exprs(&then_body.stmts, out);
-                for (_, branch) in elif_branches {
-                    collect_return_exprs(&branch.stmts, out);
-                }
-                if let Some(else_br) = else_body {
-                    collect_return_exprs(&else_br.stmts, out);
-                }
-            }
-            Stmt::While { body, .. } | Stmt::Loop { body, .. } => {
-                collect_return_exprs(&body.stmts, out);
-            }
-            Stmt::For { body, .. } => {
-                collect_return_exprs(&body.stmts, out);
-            }
-            Stmt::Match { arms, else_arm, .. } => {
-                for item in arms {
-                    if let MatchItem::Arm(arm) = item {
-                        if let Expr::Block(block) = &arm.body.node {
-                            collect_return_exprs(&block.stmts, out);
-                        }
-                    }
-                }
-                if let Some(else_block) = else_arm {
-                    collect_return_exprs(&else_block.stmts, out);
-                }
-            }
-            Stmt::Select { arms, else_arm, .. } => {
-                for arm in arms {
-                    collect_return_exprs(&arm.body.stmts, out);
-                }
-                if let Some(else_block) = else_arm {
-                    collect_return_exprs(&else_block.stmts, out);
-                }
-            }
-            Stmt::With { body, .. } | Stmt::NamedScope { body, .. } | Stmt::Unsafe { body, .. } => {
-                collect_return_exprs(&body.stmts, out);
             }
             _ => {}
         }
