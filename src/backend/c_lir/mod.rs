@@ -4984,7 +4984,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         "GorgetArray" => Some("gorget_array_clone".into()),
                         "GorgetMap" => Some("gorget_map_clone".into()),
                         "GorgetSet" => Some("gorget_set_clone".into()),
-                        "GorgetString" => Some("gorget_string_clone".into()),
+                        "GorgetString" | "Str" => Some("gorget_string_clone".into()),
                         _ => {
                             // Recursive/Custom types: look up original name → {Name}__clone
                             module.structs.iter().enumerate()
@@ -5553,7 +5553,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     "GorgetArray" => Some("gorget_array_clone"),
                     "GorgetMap" => Some("gorget_map_clone"),
                     "GorgetSet" => Some("gorget_set_clone"),
-                    "GorgetString" => Some("gorget_string_clone"),
+                    "GorgetString" | "Str" => Some("gorget_string_clone"),
                     _ => None,
                 };
                 // Deep-clone placeholder: when Phase 6 collection drops are enabled,

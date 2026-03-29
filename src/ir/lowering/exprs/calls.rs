@@ -177,6 +177,10 @@ pub(super) fn lower_call_arg(
                     builder.emit_borrow_mut(dst, place.clone());
                     // Mark the source as moved in the caller
                     ctx.drops.mark_moved(place.local);
+                    // Schedule MoveZero AFTER the call — the callee reads from this
+                    // address, so we can't zero before. The post-call MoveZero
+                    // prevents the scope-exit drop from double-freeing.
+                    ctx.pending_move_zeros.push(place.local);
                     return FunctionBuilder::copy(dst);
                 }
             }
@@ -775,6 +779,9 @@ pub(super) fn lower_call(
         let param_types: Vec<TypeId> = ctx.fn_sigs.get(effective_name.as_str())
             .map(|(params, _)| params.clone())
             .unwrap_or_default();
+        // Save pending_move_zeros baseline so we only drain entries added
+        // by THIS call's argument lowering (not from nested/prior calls).
+        let move_zero_baseline = ctx.pending_move_zeros.len();
         let lowered_args: Vec<Operand> = resolved_args
             .iter()
             .enumerate()
@@ -873,6 +880,15 @@ pub(super) fn lower_call(
         for local in &collection_arg_locals {
             builder.move_zero(Place::local(*local));
             ctx.drops.mark_moved(*local);
+        }
+
+        // MoveZero locals from Move-argument lowering (e.g., !expr.clone()).
+        // These were borrowed (borrow_mut) for the callee; now that the call
+        // has returned, zero the source to prevent double-free at scope exit.
+        // Only drain entries added during THIS call's arg lowering.
+        let pending: Vec<LocalId> = ctx.pending_move_zeros.drain(move_zero_baseline..).collect();
+        for local in pending {
+            builder.move_zero(Place::local(local));
         }
 
         result

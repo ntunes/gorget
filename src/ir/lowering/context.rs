@@ -260,6 +260,10 @@ pub struct LoweringContext<'a> {
     /// Phase 1f: name → use count in the function body. Names with count=1 are
     /// single-use (dead after their one use) → auto-move at push/constructor.
     pub name_use_counts: rustc_hash::FxHashMap<String, u32>,
+    /// Locals from Move-argument lowering that need MoveZero AFTER the call.
+    /// Populated by lower_call_arg when a Move param borrows a local, drained by
+    /// the call lowering site after emitting the Call instruction.
+    pub pending_move_zeros: Vec<LocalId>,
 }
 
 
@@ -315,6 +319,7 @@ impl<'a> LoweringContext<'a> {
             cow_collection_refs: FxHashMap::default(),
             cow_ptr_params: rustc_hash::FxHashSet::default(),
             name_use_counts: rustc_hash::FxHashMap::default(),
+            pending_move_zeros: Vec::new(),
         }
     }
 
