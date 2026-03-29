@@ -1,6 +1,6 @@
 # Copy-on-Write Ownership Model
 
-> **Status:** Design — not yet implemented.
+> **Status:** Phases 1a–1e, 2b implemented. Phase 1f in progress.
 > **Date:** 2026-03-27
 > **Supersedes:** Implicit clone warnings, `directive explicit-clone`, LIR per-element drop recipes.
 
@@ -159,7 +159,7 @@ This is safe because CoW guarantees every collection element is solely owned by 
 | 1a | Static mutation analysis pass — detect which locals are mutated | Done |
 | 1b | Pointer semantics for variable assignment — aliased values stay as pointers | Done |
 | 1c | Pointer semantics for function params — bare params clone on mutation | Done |
-| 1d | Pointer semantics for collection reads — IndexLoad returns pointer, clone on mutation | Done |
+| 1d | Pointer semantics for collection reads — IndexLoad returns pointer, clone on mutation | Done (cow_collection_refs wired up) |
 | 1e | `!` optional for push/put/set | Done |
 | 1f | Auto-move-when-dead at push/constructor — move if source dead, clone if alive | In progress |
 | 2a | Unified `Type__drop` — one drop function per type, eliminate inline field walks | Steps 1-4 done, Step 5 blocked on 1f |

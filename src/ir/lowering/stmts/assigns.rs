@@ -69,6 +69,11 @@ pub(super) fn lower_assign(
                         }
                     }
                 }
+                // CoW: if this collection has element refs, clone them out.
+                // Reassignment replaces the buffer; outstanding refs would dangle.
+                if ctx.cow_collection_refs.contains_key(&local_id) {
+                    ctx.cow_before_mutation(builder, local_id);
+                }
                 // Check if old value needs dropping before reassignment.
                 let needs_drop = {
                     use crate::ir::types::GirType;

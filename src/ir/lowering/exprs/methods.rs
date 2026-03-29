@@ -1858,6 +1858,12 @@ pub(super) fn lower_index_access(
         let dst = builder.index_load(place.clone(), idx, result_type);
         if ctx.type_registry.is_resource_type(elem_type) && !is_task {
             ctx.ref_locals.insert(dst);
+            // Track that dst borrows from the collection — if the collection
+            // is mutated (push/pop/etc.), dst must be cloned out first.
+            ctx.cow_collection_refs
+                .entry(place.local)
+                .or_insert_with(Vec::new)
+                .push(dst);
         }
         return FunctionBuilder::copy(dst);
     }
