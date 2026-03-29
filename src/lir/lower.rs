@@ -398,8 +398,11 @@ impl<'a> LoweringContext<'a> {
                     } else {
                         None
                     };
-                    // Determine drop function name (handle collision)
-                    let drop_fn_name = if self.module.drop_collision_types.contains(name) {
+                    // Determine drop function name. Custom-drop types need a mangled
+                    // name because Type__drop is the USER's function.
+                    let drop_fn_name = if user_drop_fn.is_some()
+                        || self.module.drop_collision_types.contains(name)
+                    {
                         format!("__gorget_dtor_{name}")
                     } else {
                         format!("{name}__drop")
@@ -3224,9 +3227,9 @@ impl<'a> FuncLowering<'a> {
                 }
             }
             DropStrategy::Custom(ref fn_name) => {
-                // Custom drop: call user drop, then drop fields recursively.
+                // Custom drop: call user drop, then drop fields.
                 // Guard with memcmp zero check — if the struct was moved (zeroed),
-                // skip the drop entirely.  Mirrors GIR backend emit_drop_code.
+                // skip the drop entirely.
                 let addr = self.lower_place_addr(place, bb);
                 let byte_size = self.compute_place_byte_size(place);
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
@@ -3235,19 +3238,31 @@ impl<'a> FuncLowering<'a> {
                     args: vec![addr],
                     original_name: None,
                 });
-                // Re-compute addr after the guard since we emitted new instructions.
-                let addr2 = self.lower_place_addr(place, bb);
-                if let Some(&fid) = self.func_index.get(fn_name.as_str()) {
-                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
-                        dst: None, func: fid, args: vec![addr2],
-                    });
-                } else {
+                // Use unified __gorget_dtor_Type which calls user fn + field drops.
+                let unified_drop_fn = type_name.as_ref()
+                    .and_then(|tn| self.type_drop_fns.get(tn.as_str()))
+                    .map(|info| info.drop_fn_name.clone());
+                if let Some(drop_fn) = unified_drop_fn {
+                    let addr2 = self.lower_place_addr(place, bb);
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None, name: fn_name.clone(), args: vec![addr2],
+                        dst: None, name: drop_fn, args: vec![addr2],
                         original_name: None,
                     });
+                } else {
+                    // Fallback: call user fn + inline field drops
+                    let addr2 = self.lower_place_addr(place, bb);
+                    if let Some(&fid) = self.func_index.get(fn_name.as_str()) {
+                        self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                            dst: None, func: fid, args: vec![addr2],
+                        });
+                    } else {
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: None, name: fn_name.clone(), args: vec![addr2],
+                            original_name: None,
+                        });
+                    }
+                    self.lower_field_drops(place, &type_name, bb);
                 }
-                self.lower_field_drops(place, &type_name, bb);
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: None,
                     name: "__gorget_drop_if_alive_close".to_string(),

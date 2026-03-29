@@ -132,6 +132,21 @@ fn find_live_functions(module: &LirModule) -> HashSet<FuncId> {
         }
     }
 
+    // Functions referenced by type_drop_fns (user Drop trait impls called
+    // from generated __gorget_dtor_* wrappers via CallExtern, invisible to DCE).
+    for info in module.type_drop_fns.values() {
+        if let Some(ref user_fn) = info.user_drop_fn {
+            for (i, func) in module.functions.iter().enumerate() {
+                if func.name == *user_fn {
+                    let fid = FuncId(i as u32);
+                    if live.insert(fid) {
+                        worklist.push(fid);
+                    }
+                }
+            }
+        }
+    }
+
     // Functions referenced by global initializers.
     for global in &module.globals {
         collect_global_func_refs(&global.init, &mut |fid| {
