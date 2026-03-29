@@ -138,8 +138,7 @@ pub(super) fn lower_method_call(
                     if let TypeDefKind::Enum(ref e) = type_def.kind {
                         if e.variants.iter().any(|v| v.name == method_name) {
                             let type_id = ctx.type_mapper.lookup_named(name).unwrap_or(UNIT_TYPE);
-                            let dst = builder.enum_init(name, method_name, type_id, lowered_args.clone());
-                            super::move_zero_consumed_args(ctx, builder, &lowered_args);
+                            let dst = ctx.emit_enum_init_owned(builder, name, method_name, type_id, lowered_args);
                             return FunctionBuilder::copy(dst);
                         }
                     }

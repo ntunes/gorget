@@ -280,7 +280,7 @@ pub fn lower_module(
                         if let TypeDefKind::Struct(ref sdef) = td.kind {
                             let has_droppable_fields = sdef.fields.iter().any(|f| {
                                 if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
-                                    droppable_names.contains(field_type_name)
+                                    droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
                                 } else {
                                     false
                                 }
@@ -295,7 +295,7 @@ pub fn lower_module(
                 } else if let TypeDefKind::Struct(ref sdef) = td.kind {
                     sdef.fields.iter().any(|f| {
                         if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
-                            droppable_names.contains(field_type_name)
+                            droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
                         } else {
                             false
                         }
@@ -310,7 +310,7 @@ pub fn lower_module(
                         edef.variants.iter().any(|v| {
                             v.fields.iter().any(|f| {
                                 if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
-                                    droppable_names.contains(field_type_name)
+                                    droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
                                         || field_type_name == "GorgetString"
                                 } else {
                                     false

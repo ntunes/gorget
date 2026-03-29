@@ -760,6 +760,79 @@ impl<'a> LoweringContext<'a> {
         local
     }
 
+    /// Centralized ownership-aware enum init. Clones borrow-param and multi-use
+    /// resource-type args before init, MoveZeros single-use args after.
+    /// ALL enum_init call sites with non-empty args should use this.
+    pub fn emit_enum_init_owned(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        enum_name: &str,
+        variant_name: &str,
+        type_id: TypeId,
+        mut args: Vec<Operand>,
+    ) -> LocalId {
+        // Clone borrow-param resource args (they can't be moved)
+        for op in args.iter_mut() {
+            if let Operand::Copy(place) = op {
+                if place.projections.is_empty() {
+                    let local = place.local;
+                    let local_type = builder.locals[local.0 as usize].type_id;
+                    // Check both direct resource types and Ptr(resource) types.
+                    // Bare borrow params are Ptr(T) — is_resource_type returns false for Ptr.
+                    let is_resource = self.type_registry.is_resource_type(local_type);
+                    let is_ptr_resource = self.pointee_type(local_type)
+                        .map(|inner| self.type_registry.is_resource_type(inner))
+                        .unwrap_or(false);
+                    let is_borrow_param = self.cow_ptr_params.contains(&local);
+                    let needs_clone = (is_resource || is_ptr_resource) && is_borrow_param;
+                    if needs_clone {
+                        // For Ptr(T) params: clone the pointed-to data via T's clone fn.
+                        // The local IS already a pointer — pass it directly to clone.
+                        let clone_type = if is_ptr_resource {
+                            self.pointee_type(local_type).unwrap_or(local_type)
+                        } else {
+                            local_type
+                        };
+                        if let Some(clone_fn) = self.clone_fn_for_ptr(clone_type) {
+                            if is_ptr_resource {
+                                // Local is Ptr(T) — pass directly as clone arg
+                                let cloned = builder.call(&clone_fn,
+                                    vec![crate::ir::builder::FunctionBuilder::copy(local)], clone_type);
+                                self.drops.register_local(cloned, clone_type, &self.type_registry);
+                                *op = crate::ir::builder::FunctionBuilder::copy(cloned);
+                            } else {
+                                // Local is T — borrow then clone
+                                let ptr_type = self.register_ptr_type(local_type);
+                                let ptr = builder.add_local(ptr_type, None);
+                                builder.emit_borrow(ptr, crate::ir::instructions::Place::local(local));
+                                let cloned = builder.call(&clone_fn,
+                                    vec![crate::ir::builder::FunctionBuilder::copy(ptr)], local_type);
+                                self.drops.register_local(cloned, local_type, &self.type_registry);
+                                *op = crate::ir::builder::FunctionBuilder::copy(cloned);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let dst = builder.enum_init(enum_name, variant_name, type_id, args.clone());
+        // MoveZero single-use/temp resource args after init
+        for op in &args {
+            if let Operand::Copy(place) = op {
+                if place.projections.is_empty() {
+                    let local_type = builder.locals[place.local.0 as usize].type_id;
+                    if self.type_registry.is_resource_type(local_type) {
+                        if !self.drops.is_moved(place.local) {
+                            builder.move_zero(place.clone());
+                            self.drops.mark_moved(place.local);
+                        }
+                    }
+                }
+            }
+        }
+        dst
+    }
+
     /// Look up a variable by name.
     pub fn lookup_local(&self, name: &str) -> Option<(LocalId, TypeId)> {
         self.locals.get(name).copied()

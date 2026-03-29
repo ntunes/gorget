@@ -911,13 +911,9 @@ fn lower_expr_inner(
         // Resolves to the enum variant using the expected type from context.
         Expr::DotShorthand { variant, args } => {
             let variant_name = variant.node.clone();
-            let ast_exprs: Vec<Spanned<Expr>> = args.iter()
-                .map(|a| a.node.value.clone())
-                .collect();
-            let mut lowered_args: Vec<Operand> = args.iter()
+            let lowered_args: Vec<Operand> = args.iter()
                 .map(|a| lower_expr(ctx, builder, &a.node.value))
                 .collect();
-            clone_multi_use_resource_args(ctx, builder, &mut lowered_args, &ast_exprs);
 
             // 1. Try expected_type (set by VarDecl, Assign, Return, or function arg)
             if let Some(et) = ctx.expected_type {
@@ -925,8 +921,7 @@ fn lower_expr_inner(
                     if let Some(type_def) = ctx.type_registry.get_type_def(&type_name) {
                         if let TypeDefKind::Enum(ref e) = type_def.kind {
                             if e.variants.iter().any(|v| v.name == variant_name) {
-                                let dst = builder.enum_init(&type_name, &variant_name, et, lowered_args.clone());
-                                move_zero_consumed_args(ctx, builder, &lowered_args);
+                                let dst = ctx.emit_enum_init_owned(builder, &type_name, &variant_name, et, lowered_args);
                                 return FunctionBuilder::copy(dst);
                             }
                         }
@@ -937,8 +932,7 @@ fn lower_expr_inner(
             // 2. Fallback: variant map (for user-defined non-generic enums)
             if let Some((enum_name, vn)) = ctx.resolve_enum_variant(&variant_name) {
                 let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
-                let dst = builder.enum_init(&enum_name, &vn, type_id, lowered_args.clone());
-                move_zero_consumed_args(ctx, builder, &lowered_args);
+                let dst = ctx.emit_enum_init_owned(builder, &enum_name, &vn, type_id, lowered_args);
                 return FunctionBuilder::copy(dst);
             }
 
@@ -1320,24 +1314,20 @@ fn lower_struct_literal(
 
     // Check if this is an enum variant constructor
     if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(&effective_name) {
-        let mut field_operands: Vec<Operand> = args.iter()
+        let field_operands: Vec<Operand> = args.iter()
             .map(|arg| lower_expr(ctx, builder, arg))
             .collect();
-        clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
         let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
-        let dst = builder.enum_init(&enum_name, &variant_name, type_id, field_operands.clone());
-        move_zero_consumed_args(ctx, builder, &field_operands);
+        let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands);
         return FunctionBuilder::copy(dst);
     }
     // Also check the base name for non-generic enum variants
     if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(name) {
-        let mut field_operands: Vec<Operand> = args.iter()
+        let field_operands: Vec<Operand> = args.iter()
             .map(|arg| lower_expr(ctx, builder, arg))
             .collect();
-        clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
         let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
-        let dst = builder.enum_init(&enum_name, &variant_name, type_id, field_operands.clone());
-        move_zero_consumed_args(ctx, builder, &field_operands);
+        let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands);
         return FunctionBuilder::copy(dst);
     }
 
