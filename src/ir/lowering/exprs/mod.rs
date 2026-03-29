@@ -922,7 +922,7 @@ fn lower_expr_inner(
                         if let TypeDefKind::Enum(ref e) = type_def.kind {
                             if e.variants.iter().any(|v| v.name == variant_name) {
                                 let dst = builder.enum_init(&type_name, &variant_name, et, lowered_args.clone());
-                                move_zero_resource_args(ctx, builder, &lowered_args);
+                                move_zero_consumed_args(ctx, builder, &lowered_args);
                                 return FunctionBuilder::copy(dst);
                             }
                         }
@@ -934,7 +934,7 @@ fn lower_expr_inner(
             if let Some((enum_name, vn)) = ctx.resolve_enum_variant(&variant_name) {
                 let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
                 let dst = builder.enum_init(&enum_name, &vn, type_id, lowered_args.clone());
-                move_zero_resource_args(ctx, builder, &lowered_args);
+                move_zero_consumed_args(ctx, builder, &lowered_args);
                 return FunctionBuilder::copy(dst);
             }
 
@@ -1316,24 +1316,24 @@ fn lower_struct_literal(
 
     // Check if this is an enum variant constructor
     if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(&effective_name) {
-        let field_operands: Vec<Operand> = args.iter()
+        let mut field_operands: Vec<Operand> = args.iter()
             .map(|arg| lower_expr(ctx, builder, arg))
             .collect();
-
+        clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
         let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
         let dst = builder.enum_init(&enum_name, &variant_name, type_id, field_operands.clone());
-        move_zero_resource_args(ctx, builder, &field_operands);
+        move_zero_consumed_args(ctx, builder, &field_operands);
         return FunctionBuilder::copy(dst);
     }
     // Also check the base name for non-generic enum variants
     if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(name) {
-        let field_operands: Vec<Operand> = args.iter()
+        let mut field_operands: Vec<Operand> = args.iter()
             .map(|arg| lower_expr(ctx, builder, arg))
             .collect();
-
+        clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
         let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
         let dst = builder.enum_init(&enum_name, &variant_name, type_id, field_operands.clone());
-        move_zero_resource_args(ctx, builder, &field_operands);
+        move_zero_consumed_args(ctx, builder, &field_operands);
         return FunctionBuilder::copy(dst);
     }
 
@@ -1369,23 +1369,14 @@ fn lower_struct_literal(
     // as Str views that outlive the current scope.
     unregister_gorget_string_args(ctx, builder, &field_operands);
 
+    // Phase 1f: clone multi-use resource args BEFORE struct init.
+    clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
+
     let type_id = ctx.type_mapper.lookup_named(&effective_name).unwrap_or(UNIT_TYPE);
     let dst = builder.struct_init(&effective_name, type_id, field_operands.clone());
 
-    // After struct init, the struct owns a shallow copy of every Move-type field.
-    // Without marking the originals as moved, the drop elaborator would emit
-    // a free on those locals at scope exit, leaving the struct's fields
-    // with dangling data pointers. Emit MoveZero + mark_moved for each such local.
-    for op in &field_operands {
-        if let Operand::Copy(place) = op {
-            if place.projections.is_empty() {
-                if is_resource_type_local(place.local, builder, &ctx.type_registry) {
-                    builder.move_zero(place.clone());
-                    ctx.drops.mark_moved(place.local);
-                }
-            }
-        }
-    }
+    // Phase 1f: MoveZero single-use/temp sources AFTER struct init.
+    move_zero_consumed_args(ctx, builder, &field_operands);
 
     FunctionBuilder::copy(dst)
 }
@@ -2296,11 +2287,48 @@ fn lower_string_interpolation(
     FunctionBuilder::copy(dst)
 }
 
-/// MoveZero resource-type operands after they've been consumed by StructInit/EnumInit.
-/// The init instruction creates a shallow copy of each field. Without zeroing the
-/// originals, both the init result AND the original locals would be dropped at scope
-/// exit, double-freeing shared resource data.
-fn move_zero_resource_args(
+/// Phase 1f: clone multi-use resource-type args BEFORE StructInit/EnumInit.
+/// For each resource-type operand whose source variable is multi-use (alive after
+/// the constructor), clone it so the struct gets independent data.
+/// Single-use variables are left as-is — they'll be MoveZero'd after init.
+fn clone_multi_use_resource_args(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    args: &mut Vec<Operand>,
+    ast_args: &[Spanned<Expr>],
+) {
+    for (i, op) in args.iter_mut().enumerate() {
+        if let Operand::Copy(place) = op {
+            if place.projections.is_empty() {
+                let local = place.local;
+                if is_resource_type_local(local, builder, &ctx.type_registry) {
+                    let is_multi_use = ast_args.get(i)
+                        .and_then(|arg| if let Expr::Identifier(name) = &arg.node {
+                            Some(!ctx.is_single_use(name))
+                        } else { None })
+                        .unwrap_or(false);
+                    if is_multi_use {
+                        let local_type = builder.locals[local.0 as usize].type_id;
+                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(local_type) {
+                            let ptr_type = ctx.register_ptr_type(local_type);
+                            let ptr = builder.add_local(ptr_type, None);
+                            builder.emit_borrow(ptr, crate::ir::instructions::Place::local(local));
+                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr)], local_type);
+                            ctx.drops.register_local(cloned, local_type, &ctx.type_registry);
+                            *op = FunctionBuilder::copy(cloned);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// MoveZero resource-type operands AFTER StructInit/EnumInit.
+/// Single-use/temp sources are zeroed (zero-cost transfer). Multi-use sources
+/// that were cloned by clone_multi_use_resource_args are already replaced —
+/// the clone local gets MoveZero'd (it's single-use by definition).
+fn move_zero_consumed_args(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     args: &[Operand],
@@ -2309,8 +2337,10 @@ fn move_zero_resource_args(
         if let Operand::Copy(place) = op {
             if place.projections.is_empty() {
                 if is_resource_type_local(place.local, builder, &ctx.type_registry) {
-                    builder.move_zero(place.clone());
-                    ctx.drops.mark_moved(place.local);
+                    if !ctx.drops.is_moved(place.local) {
+                        builder.move_zero(place.clone());
+                        ctx.drops.mark_moved(place.local);
+                    }
                 }
             }
         }

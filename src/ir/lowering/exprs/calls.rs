@@ -665,7 +665,7 @@ pub(super) fn lower_call(
 
             let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
             let dst = builder.enum_init(&enum_name, &variant_name, type_id, field_operands.clone());
-            super::move_zero_resource_args(ctx, builder, &field_operands);
+            super::move_zero_consumed_args(ctx, builder, &field_operands);
             return FunctionBuilder::copy(dst);
         }
         // Also check base name for non-generic enum variants
@@ -676,7 +676,7 @@ pub(super) fn lower_call(
 
             let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
             let dst = builder.enum_init(&enum_name, &variant_name, type_id, field_operands.clone());
-            super::move_zero_resource_args(ctx, builder, &field_operands);
+            super::move_zero_consumed_args(ctx, builder, &field_operands);
             return FunctionBuilder::copy(dst);
         }
 

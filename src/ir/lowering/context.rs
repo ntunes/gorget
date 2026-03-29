@@ -692,8 +692,9 @@ impl<'a> LoweringContext<'a> {
 
     /// Phase 1f: check if a named variable is single-use (dead after its one use).
     /// Single-use variables can be auto-moved at push/constructor instead of cloned.
+    /// Conservative: if the name wasn't found in the pre-scan (count=0), assume multi-use.
     pub fn is_single_use(&self, name: &str) -> bool {
-        self.name_use_counts.get(name).copied().unwrap_or(0) <= 1
+        matches!(self.name_use_counts.get(name), Some(1))
     }
 
     /// Check if a local is a named variable (vs an anonymous temp).
