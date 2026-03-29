@@ -69,13 +69,36 @@ auto x = v[i]                  # pointer — same behavior
 String x = v[i]                # pointer — same behavior
 ```
 
+## Ownership Transfer (push, put, struct constructors)
+
+When a value is stored into a collection or struct field, the collection/struct must **own** the data exclusively. The compiler automatically determines the cheapest correct strategy:
+
+1. **Auto-move (zero-cost):** If the source variable is dead after the store (not used again in the current scope), the compiler moves it — zeroing the source. No clone needed.
+2. **Auto-clone:** If the source variable is used after the store, the compiler deep-clones it so both the source and the destination have independent copies.
+3. **Explicit `!` (override):** Forces a move regardless of analysis. The source is dead after — using it is a compile error. Use this when the compiler's liveness analysis is too conservative.
+
+```gorget
+Vector[Item] items = Vector[Item]()
+Item a = Item("first")
+items.push(a)                  # auto-move: a is dead after → zero-cost transfer
+                               # (a is zeroed, items owns the data)
+
+Item b = Item("second")
+items.push(b)                  # auto-clone: b is used on next line → clone
+print(b.name)                  # OK: b has its own independent copy
+
+items.push(!b)                 # explicit move: zero-cost, b is dead after
+```
+
+This applies to: `.push()`, `.put()`, `.set()`, struct field initialization, and enum variant construction.
+
 ## Move (`!`) as Optimization
 
 `!` explicitly transfers ownership, avoiding the clone. It is a performance hint, not a correctness requirement. The program is correct with or without `!`.
 
 ```gorget
-v.push(a)                      # clones a into v (a still usable after)
-v.push(!a)                     # moves a into v (a is dead after — avoids clone)
+v.push(a)                      # auto-move if dead, auto-clone if alive
+v.push(!a)                     # always moves (a is dead after)
 ```
 
 ## Mutable Borrow (`&`) Unchanged
@@ -131,12 +154,13 @@ This is safe because CoW guarantees every collection element is solely owned by 
 
 ## Implementation Phases
 
-| Phase | What | Risk |
-|-------|------|------|
-| 1a | Static mutation analysis pass — detect which locals are mutated | Low |
-| 1b | Pointer semantics for variable assignment — aliased values stay as pointers | Medium |
-| 1c | Pointer semantics for function params — bare params passed as pointers, clone on mutation | Medium |
-| 1d | Pointer semantics for collection reads — IndexLoad returns pointer, clone on mutation | Medium |
-| 1e | Remove `!` from library functions, update language docs | Low |
-| 2a | Generate `Type__drop`/`Type__clone_inplace` for all types with resource fields | Low |
-| 2b | Make collections self-cleaning, remove recipe system | Medium (safe after CoW) |
+| Phase | What | Status |
+|-------|------|--------|
+| 1a | Static mutation analysis pass — detect which locals are mutated | Done |
+| 1b | Pointer semantics for variable assignment — aliased values stay as pointers | Done |
+| 1c | Pointer semantics for function params — bare params clone on mutation | Done |
+| 1d | Pointer semantics for collection reads — IndexLoad returns pointer, clone on mutation | Done |
+| 1e | `!` optional for push/put/set | Done |
+| 1f | Auto-move-when-dead at push/constructor — move if source dead, clone if alive | In progress |
+| 2a | Unified `Type__drop` — one drop function per type, eliminate inline field walks | Steps 1-4 done, Step 5 blocked on 1f |
+| 2b | Self-cleaning collections — elem_drop/val_drop/key_drop | Done |

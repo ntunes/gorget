@@ -257,6 +257,9 @@ pub struct LoweringContext<'a> {
     /// are cloned to owned copies so the caller's data is not modified.
     pub cow_ptr_params: rustc_hash::FxHashSet<LocalId>,
     pub cow_collection_refs: FxHashMap<LocalId, Vec<LocalId>>,
+    /// Phase 1f: name → use count in the function body. Names with count=1 are
+    /// single-use (dead after their one use) → auto-move at push/constructor.
+    pub name_use_counts: rustc_hash::FxHashMap<String, u32>,
 }
 
 
@@ -311,6 +314,7 @@ impl<'a> LoweringContext<'a> {
             cow_alias_targets: FxHashMap::default(),
             cow_collection_refs: FxHashMap::default(),
             cow_ptr_params: rustc_hash::FxHashSet::default(),
+            name_use_counts: rustc_hash::FxHashMap::default(),
         }
     }
 
@@ -684,6 +688,12 @@ impl<'a> LoweringContext<'a> {
     pub fn register_local(&mut self, name: &str, local_id: LocalId, type_id: TypeId) {
         self.locals.insert(name.to_string(), (local_id, type_id));
         self.named_locals.insert(local_id);
+    }
+
+    /// Phase 1f: check if a named variable is single-use (dead after its one use).
+    /// Single-use variables can be auto-moved at push/constructor instead of cloned.
+    pub fn is_single_use(&self, name: &str) -> bool {
+        self.name_use_counts.get(name).copied().unwrap_or(0) <= 1
     }
 
     /// Check if a local is a named variable (vs an anonymous temp).

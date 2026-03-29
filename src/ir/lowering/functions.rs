@@ -123,6 +123,114 @@ fn prescan_expr_moves(
     }
 }
 
+/// Pre-scan: count how many times each declared name is USED (read) in the function body.
+/// Names with exactly 1 use-site (beyond their declaration) are "single-use" — they can
+/// be auto-moved at push/constructor sites instead of cloned.
+fn prescan_name_use_counts(body: &[Spanned<Stmt>]) -> rustc_hash::FxHashMap<String, u32> {
+    let mut counts: rustc_hash::FxHashMap<String, u32> = rustc_hash::FxHashMap::default();
+    count_uses_in_block(body, &mut counts);
+    counts
+}
+
+fn count_uses_in_block(stmts: &[Spanned<Stmt>], counts: &mut rustc_hash::FxHashMap<String, u32>) {
+    for stmt in stmts {
+        match &stmt.node {
+            Stmt::VarDecl { value, .. } => {
+                count_uses_in_expr(&value.node, counts);
+            }
+            Stmt::Assign { target, value, .. } => {
+                count_uses_in_expr(&target.node, counts);
+                count_uses_in_expr(&value.node, counts);
+            }
+            Stmt::Return(Some(expr)) => count_uses_in_expr(&expr.node, counts),
+            Stmt::If { condition, then_body, elif_branches, else_body, .. } => {
+                count_uses_in_expr(&condition.node, counts);
+                count_uses_in_block(&then_body.stmts, counts);
+                for (cond, body) in elif_branches {
+                    count_uses_in_expr(&cond.node, counts);
+                    count_uses_in_block(&body.stmts, counts);
+                }
+                if let Some(body) = else_body {
+                    count_uses_in_block(&body.stmts, counts);
+                }
+            }
+            Stmt::While { condition, body, .. } => {
+                count_uses_in_expr(&condition.node, counts);
+                count_uses_in_block(&body.stmts, counts);
+            }
+            Stmt::For { iterable, body, .. } => {
+                count_uses_in_expr(&iterable.node, counts);
+                count_uses_in_block(&body.stmts, counts);
+            }
+            Stmt::Match { scrutinee, arms, else_arm, .. } => {
+                count_uses_in_expr(&scrutinee.node, counts);
+                for item in arms {
+                    if let crate::parser::ast::MatchItem::Arm(arm) = item {
+                        count_uses_in_expr(&arm.body.node, counts);
+                    }
+                }
+                if let Some(body) = else_arm {
+                    count_uses_in_block(&body.stmts, counts);
+                }
+            }
+            Stmt::Expr(expr) => count_uses_in_expr(&expr.node, counts),
+            _ => {}
+        }
+    }
+}
+
+fn count_uses_in_expr(expr: &Expr, counts: &mut rustc_hash::FxHashMap<String, u32>) {
+    match expr {
+        Expr::Identifier(name) => {
+            *counts.entry(name.clone()).or_insert(0) += 1;
+        }
+        Expr::Call { callee, args, .. } => {
+            count_uses_in_expr(&callee.node, counts);
+            for arg in args { count_uses_in_expr(&arg.node.value.node, counts); }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            count_uses_in_expr(&receiver.node, counts);
+            for arg in args { count_uses_in_expr(&arg.node.value.node, counts); }
+        }
+        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+            count_uses_in_expr(&object.node, counts);
+        }
+        Expr::Index { object, index, .. } => {
+            count_uses_in_expr(&object.node, counts);
+            count_uses_in_expr(&index.node, counts);
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            count_uses_in_expr(&left.node, counts);
+            count_uses_in_expr(&right.node, counts);
+        }
+        Expr::UnaryOp { operand, .. } | Expr::Move { expr: operand } => {
+            count_uses_in_expr(&operand.node, counts);
+        }
+        Expr::Block(block) => count_uses_in_block(&block.stmts, counts),
+        Expr::If { condition, then_branch, elif_branches, else_branch, .. } => {
+            count_uses_in_expr(&condition.node, counts);
+            count_uses_in_expr(&then_branch.node, counts);
+            for (cond, body) in elif_branches {
+                count_uses_in_expr(&cond.node, counts);
+                count_uses_in_expr(&body.node, counts);
+            }
+            if let Some(body) = else_branch {
+                count_uses_in_expr(&body.node, counts);
+            }
+        }
+        Expr::StringLiteral(_) => {} // f-string interpolations don't affect move analysis
+        Expr::Closure { body, .. } | Expr::ImplicitClosure { body, .. } => {
+            count_uses_in_expr(&body.node, counts);
+        }
+        Expr::Match { scrutinee, arms, else_arm, .. } => {
+            count_uses_in_expr(&scrutinee.node, counts);
+            for arm in arms { count_uses_in_expr(&arm.body.node, counts); }
+            if let Some(body) = else_arm { count_uses_in_expr(&body.node, counts); }
+        }
+        _ => {} // literals, self, etc.
+    }
+}
+
 /// Lower a single function definition into the GIR module.
 ///
 /// `name_override` — when `Some`, use this as the GIR/C function name instead of
@@ -220,8 +328,10 @@ pub fn lower_function(
     }
 
     // Pre-scan: find variables unsafe for CoW (reassigned, !-moved).
+    // Also count name uses for auto-move-when-dead (Phase 1f).
     if let FunctionBody::Block(block) = &func.body {
         ctx.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
+        ctx.name_use_counts = prescan_name_use_counts(&block.stmts);
     }
 
     // Lower the body
@@ -478,9 +588,10 @@ pub fn lower_equip_method(
         ctx.fn_sigs.insert(mangled_name.clone(), (base_param_types, return_type));
     }
 
-    // Pre-scan: find variables unsafe for CoW (reassigned, !-moved).
+    // Pre-scan: find variables unsafe for CoW + count name uses for auto-move.
     if let FunctionBody::Block(block) = &method.body {
         ctx.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
+        ctx.name_use_counts = prescan_name_use_counts(&block.stmts);
     }
 
     // Lower the body
