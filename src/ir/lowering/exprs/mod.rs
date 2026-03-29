@@ -2301,14 +2301,19 @@ fn clone_multi_use_resource_args(
             if place.projections.is_empty() {
                 let local = place.local;
                 if is_resource_type_local(local, builder, &ctx.type_registry) {
-                    // Must clone if: bare borrow param OR multi-use named local
+                    // Must clone if: bare borrow param, multi-use named local,
+                    // or field access on a struct (the parent owns the field data,
+                    // MoveZero on the temp doesn't zero the parent's field).
                     let is_borrow_param = ctx.cow_ptr_params.contains(&local);
+                    let is_field_access = ast_args.get(i)
+                        .map(|arg| matches!(&arg.node, Expr::FieldAccess { .. }))
+                        .unwrap_or(false);
                     let is_multi_use = ast_args.get(i)
                         .and_then(|arg| if let Expr::Identifier(name) = &arg.node {
                             Some(!ctx.is_single_use(name))
                         } else { None })
                         .unwrap_or(false);
-                    if is_borrow_param || is_multi_use {
+                    if is_borrow_param || is_multi_use || is_field_access {
                         let local_type = builder.locals[local.0 as usize].type_id;
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(local_type) {
                             let ptr_type = ctx.register_ptr_type(local_type);
