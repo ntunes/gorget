@@ -126,13 +126,13 @@ equip TomlParser:
         String first_part = self.parse_key_part()
         if self.failed():
             return parts
-        parts.push(first_part)
+        parts.push(!first_part)
         while self.pos < self.source.byte_len() and self.source.char_at(self.pos) == '.':
             self.pos = self.pos + 1
             String next_part = self.parse_key_part()
             if self.failed():
                 return parts
-            parts.push(next_part)
+            parts.push(!next_part)
         return parts
 
     # ── String parsing ──────────────────────────────────────
@@ -326,7 +326,7 @@ equip TomlParser:
             TomlValue elem = self.parse_value()
             if self.failed():
                 return Str("")
-            elems.push(elem)
+            elems.push(!elem)
             self.skip_ws_and_newlines()
             if self.pos >= self.source.byte_len():
                 self.fail("unterminated array")
@@ -511,12 +511,12 @@ equip TomlParser:
             else:
                 sd.put(top_key, wrapped)
         TomlSection updated = TomlSection(cur.sec_path.clone(), sd, cur.sec_is_aot)
-        self.sections.set(self.current_sec, updated)
+        self.sections.set(self.current_sec, !updated)
 
     void start_section(&self, Vector[String] !hdr_path, bool is_aot):
         Dict[String, TomlValue] new_data = Dict[String, TomlValue]()
         TomlSection new_sec = TomlSection(hdr_path, new_data, is_aot)
-        self.sections.push(new_sec)
+        self.sections.push(!new_sec)
         self.current_sec = self.sections.len() - 1
 
     # ── Top-level document parsing ──────────────────────────
@@ -621,14 +621,14 @@ private TomlValue assemble(Vector[TomlSection] secs):
         else:
             if sec.sec_is_aot:
                 # Array of tables — wrap entries in Tbl, collect into array
-                place_aot(&root, sec.sec_path, sec.sec_data)
+                place_aot(&root, sec.sec_path, !sec.sec_data.clone())
             else:
                 # Regular table — wrap and place
-                place_table(&root, sec.sec_path, 0, sec.sec_data)
+                place_table(&root, sec.sec_path, 0, !sec.sec_data.clone())
         si = si + 1
     return Tbl(root)
 
-private void place_table(Dict[String, TomlValue] &root, Vector[String] tpath, int idx, Dict[String, TomlValue] sec_data):
+private void place_table(Dict[String, TomlValue] &root, Vector[String] tpath, int idx, Dict[String, TomlValue] !sec_data):
     if idx == tpath.len() - 1:
         # Place at this level
         String final_key = tpath.get(idx).unwrap()
@@ -646,14 +646,14 @@ private void place_table(Dict[String, TomlValue] &root, Vector[String] tpath, in
     if root.contains(nav_key):
         TomlValue existing = root[nav_key]
         Dict[String, TomlValue] sub = extract_tbl(existing)
-        place_table(&sub, tpath, idx + 1, sec_data)
+        place_table(&sub, tpath, idx + 1, !sec_data)
         root.put(nav_key, Tbl(sub))
     else:
         Dict[String, TomlValue] fresh = Dict[String, TomlValue]()
-        place_table(&fresh, tpath, idx + 1, sec_data)
+        place_table(&fresh, tpath, idx + 1, !sec_data)
         root.put(nav_key, Tbl(fresh))
 
-private void place_aot(Dict[String, TomlValue] &root, Vector[String] tpath, Dict[String, TomlValue] sec_data):
+private void place_aot(Dict[String, TomlValue] &root, Vector[String] tpath, Dict[String, TomlValue] !sec_data):
     if tpath.len() == 1:
         String aot_key = tpath.get(0).unwrap()
         if root.contains(aot_key):
@@ -673,11 +673,11 @@ private void place_aot(Dict[String, TomlValue] &root, Vector[String] tpath, Dict
     if root.contains(nav_key):
         TomlValue existing = root[nav_key]
         Dict[String, TomlValue] sub = extract_tbl(existing)
-        place_aot(&sub, rest_path, sec_data)
+        place_aot(&sub, rest_path, !sec_data)
         root.put(nav_key, Tbl(sub))
     else:
         Dict[String, TomlValue] fresh = Dict[String, TomlValue]()
-        place_aot(&fresh, rest_path, sec_data)
+        place_aot(&fresh, rest_path, !sec_data)
         root.put(nav_key, Tbl(fresh))
 
 private Dict[String, TomlValue] extract_tbl(TomlValue tv):
@@ -708,7 +708,7 @@ private Vector[String] subpath(Vector[String] full_path, int from_idx):
     Vector[String] sub = Vector[String]()
     int si = from_idx
     while si < full_path.len():
-        sub.push(full_path.get(si).unwrap())
+        sub.push(full_path.get(si).unwrap().clone())
         si = si + 1
     return sub
 
@@ -718,9 +718,9 @@ Result[TomlValue, String] parse(String input):
     Vector[TomlSection] secs = Vector[TomlSection]()
     Dict[String, TomlValue] root_data = Dict[String, TomlValue]()
     Vector[String] root_path = Vector[String]()
-    TomlSection root_sec = TomlSection(root_path, root_data, false)
-    secs.push(root_sec)
-    TomlParser tp = TomlParser(input, 0, "", secs, 0)
+    TomlSection root_sec = TomlSection(!root_path, !root_data, false)
+    secs.push(!root_sec)
+    TomlParser tp = TomlParser(input, 0, "", !secs, 0)
     tp.parse_document()
     if tp.failed():
         return Error(tp.err)
