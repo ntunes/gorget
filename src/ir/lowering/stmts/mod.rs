@@ -1042,11 +1042,9 @@ fn lower_while(
 
     // For while-else: use a break flag to skip else on break
     let (break_exit_bb, else_exit_bb) = if else_arm.is_some() {
-        let break_bb = builder.new_block();
-        let else_bb = builder.new_block();
-        (break_bb, Some(else_bb))
+        (builder.new_block(), builder.new_block())
     } else {
-        (exit_bb, None)
+        (exit_bb, exit_bb)
     };
 
     // Jump from current block to header
@@ -1055,12 +1053,7 @@ fn lower_while(
     // Header: evaluate condition, branch
     builder.switch_to(header_bb);
     let cond = lower_expr(ctx, builder, condition);
-    let natural_exit = if else_arm.is_some() {
-        else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists")
-    } else {
-        exit_bb
-    };
-    builder.branch(cond, body_bb, natural_exit);
+    builder.branch(cond, body_bb, else_exit_bb);
 
     // Body: execute, jump back to header (wrapped in Loop scope for drop cleanup)
     builder.switch_to(body_bb);
@@ -1076,7 +1069,7 @@ fn lower_while(
 
     // Else block: executed when loop completes naturally (no break)
     if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists"));
+        builder.switch_to(else_exit_bb);
         lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
 
