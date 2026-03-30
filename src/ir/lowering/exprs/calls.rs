@@ -878,8 +878,7 @@ pub(super) fn lower_call(
         // MoveZero collection temps passed as args — callee received a
         // shallow copy, so the caller relinquishes the original.
         for local in &collection_arg_locals {
-            builder.move_zero(Place::local(*local));
-            ctx.drops.mark_moved(*local);
+            ctx.move_zero_and_mark(builder, *local);
         }
 
         // MoveZero locals from Move-argument lowering (e.g., !expr.clone()).

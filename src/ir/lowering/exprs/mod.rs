@@ -189,8 +189,7 @@ fn lower_expr_inner(
                 };
                 let tmp = builder.add_local(local_type, None);
                 builder.assign(Place::local(tmp), val);
-                builder.move_zero(place_clone.clone());
-                ctx.drops.mark_moved(place_clone.local);
+                ctx.move_zero_and_mark(builder, place_clone.local);
                 FunctionBuilder::copy(tmp)
             } else {
                 val
@@ -533,8 +532,7 @@ fn lower_expr_inner(
                 // other sources (e.g. Vector.remove().unwrap()), use inner_local.
                 let zero_local = maybe_local_id.or(inner_local);
                 if let Some(local_id) = zero_local {
-                    builder.move_zero(Place::local(local_id));
-                    ctx.drops.mark_moved(local_id);
+                    ctx.move_zero_and_mark(builder, local_id);
                 }
 
                 // Auto-refresh `with shared_var:` bindings after await
@@ -1210,8 +1208,7 @@ fn lower_struct_literal(
         if let Operand::Copy(place) = &val_op {
             if place.projections.is_empty() {
                 if is_resource_type_local(place.local, builder, &ctx.type_registry) {
-                    builder.move_zero(place.clone());
-                    ctx.drops.mark_moved(place.local);
+                    ctx.move_zero_and_mark(builder, place.local);
                 }
             }
         }
@@ -2366,8 +2363,7 @@ fn move_zero_consumed_args(
                 let is_resource = is_resource_type_local(place.local, builder, &ctx.type_registry);
                 let is_string_param = ctx.string_param_locals.contains(&place.local);
                 if (is_resource || is_string_param) && !ctx.drops.is_moved(place.local) {
-                    builder.move_zero(place.clone());
-                    ctx.drops.mark_moved(place.local);
+                    ctx.move_zero_and_mark(builder, place.local);
                 }
             }
         }
@@ -2492,8 +2488,7 @@ fn consumed_local_id(operand: &Operand) -> Option<LocalId> {
 /// local's data pointer is shared — we must zero it to prevent the scope drop
 /// from freeing data that's now owned by the container.
 fn mark_consumed_local_by_id(ctx: &mut LoweringContext, builder: &mut FunctionBuilder, local: LocalId) {
-    builder.move_zero(Place::local(local));
-    ctx.drops.mark_moved(local);
+    ctx.move_zero_and_mark(builder, local);
 }
 
 #[cfg(test)]

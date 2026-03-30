@@ -448,8 +448,7 @@ fn lower_var_decl(
                         && place.local != local_id
                         && !ctx.drops.is_moved(place.local)
                     {
-                        builder.move_zero(Place::local(place.local));
-                        ctx.drops.mark_moved(place.local);
+                        ctx.move_zero_and_mark(builder, place.local);
                     }
                 }
             }
@@ -763,8 +762,7 @@ fn lower_return(
                 builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(ok_dst));
                 // Zero out the original local (its value is now owned by the Result)
                 if let Some(local) = returned_local {
-                    builder.move_zero(Place::local(local));
-                    ctx.drops.mark_moved(local);
+                    ctx.move_zero_and_mark(builder, local);
                 }
             }
         } else {
@@ -793,8 +791,7 @@ fn lower_return(
                                 FunctionBuilder::copy(clone_result),
                             );
                             // Zero the temp so scope-exit DropIfAlive is a no-op.
-                            builder.move_zero(Place::local(clone_result));
-                            ctx.drops.mark_moved(clone_result);
+                            ctx.move_zero_and_mark(builder, clone_result);
                             did_clone_return = true;
                         }
                     }
@@ -844,8 +841,7 @@ fn lower_return(
                         operand.clone(),
                     );
                     if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                        builder.move_zero(Place::local(p.local));
-                        ctx.drops.mark_moved(p.local);
+                        ctx.move_zero_and_mark(builder, p.local);
                     }
                 } else {
                     builder.assign(Place::local(LocalId(0)), operand.clone());
@@ -873,8 +869,7 @@ fn lower_return(
                 if place.projections.is_empty() && place.local != LocalId(0) {
                     let rhs_type = builder.locals[place.local.0 as usize].type_id;
                     if ctx.type_registry.needs_drop(rhs_type) {
-                        builder.move_zero(Place::local(place.local));
-                        ctx.drops.mark_moved(place.local);
+                        ctx.move_zero_and_mark(builder, place.local);
                     }
                     // Tuple return: also MoveZero the individual element locals.
                     // TupleInit copies element values into the tuple struct, then

@@ -101,8 +101,7 @@ pub(super) fn lower_method_call(
                         if ctx.is_named_local(local_id)
                             && is_resource_type_local(local_id, builder, &ctx.type_registry)
                         {
-                            builder.move_zero(Place::local(local_id));
-                            ctx.drops.mark_moved(local_id);
+                            ctx.move_zero_and_mark(builder, local_id);
                         }
                     }
                 }
@@ -311,8 +310,7 @@ pub(super) fn lower_method_call(
             // receiver local extracted above.
             let zero_local = maybe_local_id.or(recv_local);
             if let Some(local_id) = zero_local {
-                builder.move_zero(Place::local(local_id));
-                ctx.drops.mark_moved(local_id);
+                ctx.move_zero_and_mark(builder, local_id);
             }
             return result;
         }
@@ -396,8 +394,7 @@ pub(super) fn lower_method_call(
                     // If the extracted value is a Move type, zero the Option/Result
                     // to prevent its drop from freeing the inner value's buffer.
                     if is_resource_type_local(dst, builder, &ctx.type_registry) {
-                        builder.move_zero(place.clone());
-                        ctx.drops.mark_moved(place.local);
+                        ctx.move_zero_and_mark(builder, place.local);
                     }
                     return FunctionBuilder::copy(dst);
                 } else {
@@ -411,8 +408,7 @@ pub(super) fn lower_method_call(
                     // If the extracted value is a Move type, zero the Option/Result
                     // to prevent its drop from freeing the inner value's buffer.
                     if is_resource_type_local(dst, builder, &ctx.type_registry) {
-                        builder.move_zero(place.clone());
-                        ctx.drops.mark_moved(place.local);
+                        ctx.move_zero_and_mark(builder, place.local);
                     }
                     // CoW: return Ptr as-is. Clone happens at mutation/store/return
                     // boundaries, not at read. Zero-cost for read-only access.
@@ -1459,8 +1455,7 @@ pub(super) fn lower_method_call(
                             && ctx.is_single_use(name)
                         {
                             // Single-use: auto-move (zero-cost transfer)
-                            builder.move_zero(Place::local(local_id));
-                            ctx.drops.mark_moved(local_id);
+                            ctx.move_zero_and_mark(builder, local_id);
                         }
                     }
                 }

@@ -178,8 +178,7 @@ pub(super) fn lower_assign(
                                 && place.local != local_id
                                 && !ctx.drops.is_moved(place.local)
                             {
-                                builder.move_zero(Place::local(place.local));
-                                ctx.drops.mark_moved(place.local);
+                                ctx.move_zero_and_mark(builder, place.local);
                             }
                         }
                     }
@@ -269,8 +268,7 @@ pub(super) fn lower_field_assign(
                 && !ctx.drops.is_moved(p.local)
                 && ctx.drops.is_registered(p.local)
             {
-                builder.move_zero(Place::local(p.local));
-                ctx.drops.mark_moved(p.local);
+                ctx.move_zero_and_mark(builder, p.local);
             }
         }
         super::maybe_emit_field_move_zero(ctx, builder, &rhs);
@@ -376,8 +374,7 @@ pub(super) fn lower_field_assign(
                             && !ctx.drops.is_moved(p.local)
                             && ctx.drops.is_registered(p.local)
                         {
-                            builder.move_zero(Place::local(p.local));
-                            ctx.drops.mark_moved(p.local);
+                            ctx.move_zero_and_mark(builder, p.local);
                         }
                     }
                     super::maybe_emit_field_move_zero(ctx, builder, &rhs);
@@ -407,8 +404,7 @@ pub(super) fn lower_field_assign(
                             && !ctx.drops.is_moved(p.local)
                             && ctx.drops.is_registered(p.local)
                         {
-                            builder.move_zero(Place::local(p.local));
-                            ctx.drops.mark_moved(p.local);
+                            ctx.move_zero_and_mark(builder, p.local);
                         }
                     }
                     super::maybe_emit_field_move_zero(ctx, builder, &rhs);
@@ -692,8 +688,7 @@ pub(super) fn lower_compound_assign(
                 builder.assign(dst, FunctionBuilder::copy(tmp));
                 // Mark the temp as moved so the drop elaborator doesn't free it
                 // (the destination variable now owns the GorgetString)
-                builder.move_zero(Place::local(tmp));
-                ctx.drops.mark_moved(tmp);
+                ctx.move_zero_and_mark(builder, tmp);
                 return;
             }
 
