@@ -841,6 +841,7 @@ impl<'a> LoweringContext<'a> {
             }
         }
         let dst = builder.enum_init(enum_name, variant_name, type_id, args.clone());
+        self.owned_locals.insert(dst);
         // MoveZero single-use/temp resource and string param args after init.
         // Transfers ownership — the struct/enum now owns the data.
         for op in &args {

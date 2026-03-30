@@ -989,6 +989,7 @@ fn resolve_option_result_variant(
                 .unwrap_or(UNIT_TYPE);
             let type_name = ctx.type_registry.type_name(type_id).unwrap_or_else(|| mangled.clone());
             let dst = builder.enum_init(&type_name, "Some", type_id, vec![field_op]);
+            ctx.owned_locals.insert(dst);
             Some(FunctionBuilder::copy(dst))
         }
         "None" if args.is_empty() => {
@@ -1009,6 +1010,7 @@ fn resolve_option_result_variant(
                 return None;
             };
             let dst = builder.enum_init(&type_name, "None", type_id, vec![]);
+            ctx.owned_locals.insert(dst);
             Some(FunctionBuilder::copy(dst))
         }
         "Ok" if args.len() == 1 => {
@@ -1021,7 +1023,7 @@ fn resolve_option_result_variant(
                     let field_op = lower_expr(ctx, builder, &args[0]);
                     let consumed = consumed_local_id(&field_op);
                     let dst = builder.enum_init(&name, "Ok", et, vec![field_op]);
-                    // Mark consumed local as moved AFTER enum_init copies its value
+                    ctx.owned_locals.insert(dst);
                     if let Some(local) = consumed {
                         mark_consumed_local_by_id(ctx, builder, local);
                     }
@@ -1037,6 +1039,7 @@ fn resolve_option_result_variant(
                     let field_op = lower_expr(ctx, builder, &args[0]);
                     let consumed = consumed_local_id(&field_op);
                     let dst = builder.enum_init(&name, "Ok", rt, vec![field_op]);
+                    ctx.owned_locals.insert(dst);
                     if let Some(local) = consumed {
                         mark_consumed_local_by_id(ctx, builder, local);
                     }
@@ -1054,6 +1057,7 @@ fn resolve_option_result_variant(
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
                     let dst = builder.enum_init(&name, "Error", et, vec![field_op]);
+                    ctx.owned_locals.insert(dst);
                     return Some(FunctionBuilder::copy(dst));
                 }
             }
@@ -1064,6 +1068,7 @@ fn resolve_option_result_variant(
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
                     let dst = builder.enum_init(&name, "Error", rt, vec![field_op]);
+                    ctx.owned_locals.insert(dst);
                     return Some(FunctionBuilder::copy(dst));
                 }
             }
@@ -1375,6 +1380,7 @@ fn lower_struct_literal(
 
     // Unregister GorgetString temps used as struct fields — they may be stored
     // as Str views that outlive the current scope.
+    // TODO: narrow or remove once owned_locals tracking is comprehensive
     unregister_gorget_string_args(ctx, builder, &field_operands);
 
     // Phase 1f: clone multi-use resource args BEFORE struct init.
@@ -1382,6 +1388,7 @@ fn lower_struct_literal(
 
     let type_id = ctx.type_mapper.lookup_named(&effective_name).unwrap_or(UNIT_TYPE);
     let dst = builder.struct_init(&effective_name, type_id, field_operands.clone());
+    ctx.owned_locals.insert(dst);
 
     // Phase 1f: MoveZero single-use/temp sources AFTER struct init.
     move_zero_consumed_args(ctx, builder, &field_operands);
@@ -2292,6 +2299,7 @@ fn lower_string_interpolation(
     let dst = builder.call_extern("gorget_string_format", all_args, owned_string_type);
     // Register for drop — needs_drop() handles type filtering.
     ctx.drops.register_local(dst, owned_string_type, &ctx.type_registry);
+    ctx.owned_locals.insert(dst);
     FunctionBuilder::copy(dst)
 }
 
