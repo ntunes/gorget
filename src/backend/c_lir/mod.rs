@@ -6633,7 +6633,7 @@ fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &HashMap<u32, St
         for vi in indices {
             let fields = &by_variant[&vi];
             write!(out, "        case {vi}: ").unwrap();
-            for (variant_name, field_name, drop_fn, field_type_name) in fields {
+            for (variant_name, field_name, drop_fn, _field_type_name) in fields {
                 let variant_prefix = format!("{variant_name}_");
                 let variant_field_count = sdef.fields.iter()
                     .filter(|(n, _)| n.starts_with(&variant_prefix))

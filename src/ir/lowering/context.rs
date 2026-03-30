@@ -534,7 +534,7 @@ impl<'a> LoweringContext<'a> {
             string_view_type: self.type_mapper.string_view_type,
             owned_string_type: self.type_mapper.owned_string_type,
             is_resource: &|tid| type_registry.is_resource_type(tid),
-            ensure_option: &|name: &str, inner: TypeId| {
+            ensure_option: &|name: &str, _inner: TypeId| {
                 // On-the-fly: look up or register the Option type
                 if let Some(tid) = type_mapper.lookup_named(name) {
                     return tid;

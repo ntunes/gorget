@@ -8,7 +8,7 @@ use crate::span::Spanned;
 
 use super::super::context::LoweringContext;
 use super::{lower_expr, lower_call_arg, infer_operand_type_full, register_tuple_type,
-            c_suffix_to_type_id, is_resource_type_local,
+            is_resource_type_local,
             ensure_box_type_def, ensure_guard_type_def, ensure_shared_type_def, ensure_weak_type_def,
             index_expr_to_mangle_fragment, try_resolve_field_place};
 
@@ -1325,7 +1325,7 @@ pub(super) fn lower_method_call(
         // Includes: (a) explicit !arg at call site, (b) bare args whose callee
         // param is declared Move, (c) resource-type args to consuming methods
         // (push, put, set, send) — these transfer ownership to the collection.
-        let consuming_method = matches!(method_name,
+        let _consuming_method = matches!(method_name,
             "push" | "put" | "set" | "push_back" | "push_front" | "send" | "add");
         let move_zero_locals: Vec<Place> = args.iter()
             .enumerate()

@@ -414,7 +414,6 @@ impl<'a> LoweringContext<'a> {
                         enum_variants: None,
                     });
                 }
-                _ => continue, // Alias types — skip
                 TypeDefKind::Enum(edef) => {
                     if name.starts_with("Option__") || name.starts_with("Result__") {
                         continue;
@@ -453,6 +452,7 @@ impl<'a> LoweringContext<'a> {
                         });
                     }
                 }
+                _ => {} // Alias types — skip
             }
         }
     }

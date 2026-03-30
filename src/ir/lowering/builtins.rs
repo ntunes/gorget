@@ -280,7 +280,7 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "clear", runtime_callee: Some("gorget_map_clear"), self_conv: SelfConvention::MutBorrow, is_mutating: true, params: no_params, return_type: ret_void },
         BuiltinMethodDecl { name: "keys", runtime_callee: Some("gorget_map_keys"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_gorget_array },
         BuiltinMethodDecl { name: "values", runtime_callee: Some("gorget_map_values"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_gorget_array },
-        BuiltinMethodDecl { name: "items", runtime_callee: Some("gorget_map_items"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: |a, ctx| {
+        BuiltinMethodDecl { name: "items", runtime_callee: Some("gorget_map_items"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: |_a, ctx| {
             // items() → Vector[Tuple[K, V]] — construct from elem_name (K) and val_name (V)
             let tuple_name = format!("Tuple__{}__{}", ctx.elem_name, ctx.val_name);
             let vec_name = format!("Vector__{tuple_name}");
