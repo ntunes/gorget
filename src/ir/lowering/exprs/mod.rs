@@ -107,6 +107,11 @@ fn lower_expr_inner(
                     };
                     let tmp = builder.add_local(value_type, None);
                     builder.assign(Place::local(tmp), Operand::Copy(deref_place));
+                    // ! param owns its data — the deref copy is also owned.
+                    // Prevents ensure_owned_string from cloning in constructors.
+                    if ctx.owned_locals.contains(&local_id) {
+                        ctx.owned_locals.insert(tmp);
+                    }
                     Operand::Copy(Place::local(tmp))
                 } else {
                     Operand::Copy(Place::local(local_id))

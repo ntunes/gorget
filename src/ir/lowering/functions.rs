@@ -302,13 +302,24 @@ pub fn lower_function(
             // ! resource params and & trivial params: MutPtr, auto-deref + write-through
             ctx.mut_capture_locals.insert(local_id, base_type);
         }
-        // Track bare string params — they hold views of caller's data.
-        // Must be cloned before storing in structs/enums (ensure_owned_string).
-        if matches!(p.node.ownership, crate::parser::ast::Ownership::Borrow) {
+        // Track string param ownership for constructor clone decisions.
+        {
             let is_string = base_type == ctx.type_mapper.string_view_type
                 || base_type == ctx.type_mapper.owned_string_type;
             if is_string {
-                ctx.string_param_locals.insert(local_id);
+                match p.node.ownership {
+                    crate::parser::ast::Ownership::Borrow => {
+                        // Bare string params: views of caller's data.
+                        // Constructors must clone these to own the data.
+                        ctx.string_param_locals.insert(local_id);
+                    }
+                    crate::parser::ast::Ownership::Move => {
+                        // ! string params: caller transfers ownership.
+                        // The callee OWNS this data — no clone needed in constructors.
+                        ctx.owned_locals.insert(local_id);
+                    }
+                    _ => {}
+                }
             }
         }
         // Track callable parameter return types
