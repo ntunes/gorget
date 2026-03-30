@@ -183,6 +183,13 @@ pub(super) fn lower_assign(
                         }
                     }
                     super::maybe_emit_field_move_zero(ctx, builder, &operand);
+                    // Propagate ownership: if RHS local owned its data (call result),
+                    // the target local now owns the data after move/clone.
+                    if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                        if ctx.owned_locals.contains(&p.local) {
+                            ctx.owned_locals.insert(local_id);
+                        }
+                    }
                 }
             } else if ctx.global_names.contains(name.as_str()) {
                 // Module-level static variable — emit GlobalAssign

@@ -260,6 +260,9 @@ pub struct LoweringContext<'a> {
     /// Phase 1f: name → use count in the function body. Names with count=1 are
     /// single-use (dead after their one use) → auto-move at push/constructor.
     pub name_use_counts: rustc_hash::FxHashMap<String, u32>,
+    /// Locals that definitely own their data (created by function calls, constructors,
+    /// or operators). Safe to Move on return — no shared/borrowed data.
+    pub owned_locals: rustc_hash::FxHashSet<LocalId>,
     /// Locals from Move-argument lowering that need MoveZero AFTER the call.
     /// Populated by lower_call_arg when a Move param borrows a local, drained by
     /// the call lowering site after emitting the Call instruction.
@@ -319,6 +322,7 @@ impl<'a> LoweringContext<'a> {
             cow_collection_refs: FxHashMap::default(),
             cow_ptr_params: rustc_hash::FxHashSet::default(),
             name_use_counts: rustc_hash::FxHashMap::default(),
+            owned_locals: rustc_hash::FxHashSet::default(),
             pending_move_zeros: Vec::new(),
         }
     }
@@ -747,6 +751,8 @@ impl<'a> LoweringContext<'a> {
             builder.locals[local.0 as usize].type_id = owned;
             self.drops.register_local(local, owned, &self.type_registry);
         }
+        // Function call results own their data — safe to Move on return.
+        self.owned_locals.insert(local);
         local
     }
 
@@ -762,6 +768,7 @@ impl<'a> LoweringContext<'a> {
         if self.type_registry.needs_drop(return_type) {
             self.drops.register_local(local, return_type, &self.type_registry);
         }
+        self.owned_locals.insert(local);
         local
     }
 
@@ -860,6 +867,7 @@ impl<'a> LoweringContext<'a> {
         self.cow_alias_targets.clear();
         self.cow_collection_refs.clear();
         self.cow_ptr_params.clear();
+        self.owned_locals.clear();
     }
 
     /// Clone the locals map for save/restore around nested scopes (if, while, for, match, etc.).

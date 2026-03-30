@@ -10,7 +10,7 @@
 
 - **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation (Python-like `groups[key].push(i)`). Needs the `is_storing_method` flag on BuiltinMethodDecl (currently fragile name-matching). [updated: 2026-03-28]
 
-- **Measure remaining leaks in yaml_parse**: All 6 library failures fixed (905/905). needs_drop("GorgetStringView")=true + string clone-on-read + move-arg MoveZero fix the double-frees. Need to re-measure yaml_parse leak count — target: 0. [updated: 2026-03-29]
+- **Remaining leaks in yaml_parse (101) and toml_parse (219)**: Down from 374→122→101. All from Clone+MoveZero on named locals that hold owned data but aren't tracked as `owned_locals`. Needs deeper ownership propagation or a different approach (e.g., C backend emits free before memset for non-zero MoveZero targets). [updated: 2026-03-30]
 
 - **Box.new should enforce `!` at borrow checker level**: Currently Box.new implicitly MoveZeros the source, but the user should be required to write `Box(name!)`. Need to add Box.new to the consumed-param detection in the borrow checker. [added: 2026-03-26]
 
@@ -27,7 +27,7 @@
 
 - **`char` type backend bugs**: `char as int` gives garbage values, and char comparison with `==`/`!=` generates `gorget_str_eq` calls. [added: 2026-03-21]
 
-- **Return-path string leak: Clone+MoveZero on named locals**: When `return named_string_local`, the C backend clones (because Copy mode) then MoveZero zeros the struct without freeing the original data → leak. Fix requires either: (a) use Move mode for named locals on return (broke deserializable/serialize_collections), (b) emit gorget_string_free before MoveZero when C backend cloned, or (c) fix at C backend level to detect clone+zero pattern. 122 leaks in yaml_parse, ~230 in toml_parse. [added: 2026-03-29]
+- **Return-path string leak: remaining ~101 leaks**: Partially fixed via `owned_locals` tracking (call results + propagation through VarDecl/reassignment). Named locals from field/pattern extracts still Clone+MoveZero (leak the clone source). Remaining leaks are from locals where ownership isn't propagated through intermediate operations (e.g., string concat assigned through complex paths). 101 leaks in yaml_parse, ~219 in toml_parse. [updated: 2026-03-30]
 
 - **CoW Phase 1f: auto-move-when-dead (optimization)**: Works for push/put/set method calls. Missing: enum variant constructors (`Some(item)`, `Ok(value)`), not all StructInit sites, struct field initialization. Pure performance — extra clones where moves would suffice. Phase 2a Step 5 (unified Type__drop cleanup) blocked on this. [added: 2026-03-29]
 

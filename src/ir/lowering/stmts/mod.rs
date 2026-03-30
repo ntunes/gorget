@@ -429,6 +429,14 @@ fn lower_var_decl(
 
             builder.assign_mode(assign_mode, Place::local(local_id), operand.clone());
 
+            // Propagate ownership: if RHS local owned its data (call result),
+            // the new local also owns the data (via move or clone).
+            if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                if ctx.owned_locals.contains(&p.local) {
+                    ctx.owned_locals.insert(local_id);
+                }
+            }
+
             // Mark source as moved + emit GIR-level move-zero.
             // The LIR also reads AssignMode::Move for zeroing, but the GIR
             // move-zero is still needed for the drop elaborator's DropIfAlive.
@@ -815,12 +823,17 @@ fn lower_return(
                         }
                     }
                 }
-                // Use Move for resource-type temps — transfers ownership to return slot.
+                // Use Move for locals that own their data (call results, constructors).
+                // Move (memcpy) avoids a C backend clone that leaks the original
+                // data when MoveZero zeros the source without freeing.
+                // Locals from field/pattern extracts may be shallow copies — Clone
+                // is needed to produce an independent return value.
                 let use_move = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                     p.projections.is_empty()
-                        && !ctx.is_named_local(p.local)
                         && ctx.type_registry.needs_drop(
                             builder.locals[p.local.0 as usize].type_id)
+                        && (ctx.owned_locals.contains(&p.local)
+                            || !ctx.is_named_local(p.local))
                 } else { false };
                 if use_move {
                     builder.assign_mode(
