@@ -1402,18 +1402,10 @@ pub(super) fn lower_method_call(
                 }
             }
         }
-        // Phase 1f: auto-move/clone for push/put/set/add value args.
-        // The collection takes ownership of the pushed value. For resource-type
-        // structs, the compiler must ensure exclusive ownership:
-        // - Single-use (dead after push): MoveZero source AFTER push (zero-cost)
-        // - Multi-use (alive after push): already handled — the push gets a pointer
-        //   to the source, the runtime memcpy's it, and the source stays alive.
-        //   Both share data → but the source keeps its own copy because it's NOT
-        //   zeroed. The collection's element will be dropped by elem_drop.
-        //   This is safe IF the source is dropped independently (its own scope-exit
-        //   drop handles cleanup). With unified Type__drop (Step 5), both fire →
-        //   double-free. The fix: clone the source into a temp BEFORE the push,
-        //   push the temp, then MoveZero the temp.
+        // Phase 1f: auto-move for push/put/set/add value args.
+        // Single-use named locals: MoveZero after push (zero-cost transfer).
+        // TODO: multi-use locals need clone BEFORE push. Requires proper liveness
+        // analysis — is_single_use over-counts across branches.
         let consuming_value_pos: Option<usize> = match method_name {
             "push" | "add" | "extend" | "send" | "push_back" | "push_front" => Some(0),
             "put" | "set" | "insert" => if lowered_method_args.len() >= 2 { Some(1) } else { None },
@@ -1425,6 +1417,7 @@ pub(super) fn lower_method_call(
                     if let Some((local_id, _)) = ctx.lookup_local(name) {
                         if ctx.is_named_local(local_id)
                             && is_resource_type_local(local_id, builder, &ctx.type_registry)
+                            && ctx.is_single_use(name)
                         {
                             // Single-use: auto-move (zero-cost transfer)
                             builder.move_zero(Place::local(local_id));

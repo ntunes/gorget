@@ -787,14 +787,14 @@ impl<'a> LoweringContext<'a> {
         type_id: TypeId,
         mut args: Vec<Operand>,
     ) -> LocalId {
-        // Clone borrow-param resource args (they can't be moved)
+        // Clone borrow-param resource args (they can't be moved — caller owns them).
+        // TODO Phase 1f: also clone multi-use named locals (alive after constructor).
+        // Needs proper liveness analysis — is_single_use over-counts across branches.
         for op in args.iter_mut() {
             if let Operand::Copy(place) = op {
                 if place.projections.is_empty() {
                     let local = place.local;
                     let local_type = builder.locals[local.0 as usize].type_id;
-                    // Check both direct resource types and Ptr(resource) types.
-                    // Bare borrow params are Ptr(T) — is_resource_type returns false for Ptr.
                     let is_resource = self.type_registry.is_resource_type(local_type);
                     let is_ptr_resource = self.pointee_type(local_type)
                         .map(|inner| self.type_registry.is_resource_type(inner))

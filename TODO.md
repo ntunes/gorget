@@ -29,7 +29,7 @@
 
 - **Return-path string leak: remaining ~101 leaks**: Partially fixed via `owned_locals` tracking (call results + propagation through VarDecl/reassignment). Named locals from field/pattern extracts still Clone+MoveZero (leak the clone source). Remaining leaks are from locals where ownership isn't propagated through intermediate operations (e.g., string concat assigned through complex paths). 101 leaks in yaml_parse, ~219 in toml_parse. [updated: 2026-03-30]
 
-- **CoW Phase 1f: auto-move-when-dead (optimization)**: Works for push/put/set method calls. Missing: enum variant constructors (`Some(item)`, `Ok(value)`), not all StructInit sites, struct field initialization. Pure performance — extra clones where moves would suffice. Phase 2a Step 5 (unified Type__drop cleanup) blocked on this. [added: 2026-03-29]
+- **CoW Phase 1f: multi-use clone needs liveness analysis**: Single-use auto-move works for push/put/set and enum/struct constructors. Multi-use clone (clone before storage, source stays alive) attempted but `is_single_use` over-counts across branches — a variable used once in each of two `if` arms has count=2, causing spurious clones and MoveZero-after-use errors (50 failures). Needs per-path liveness analysis instead of whole-function use counting. Phase 2a Step 5 blocked on this. [updated: 2026-03-30]
 
 ## Medium
 
