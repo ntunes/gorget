@@ -756,7 +756,11 @@ impl<'a> LoweringContext<'a> {
             self.drops.register_local(local, owned, &self.type_registry);
         }
         // Function call results own their data — safe to Move on return.
-        self.owned_locals.insert(local);
+        // Exception: StringView returns may be views (byte_slice, char_at) —
+        // don't mark as owned so constructors will clone them.
+        if return_type != self.type_mapper.string_view_type {
+            self.owned_locals.insert(local);
+        }
         local
     }
 
@@ -799,6 +803,11 @@ impl<'a> LoweringContext<'a> {
                     let is_ptr_resource = self.pointee_type(local_type)
                         .map(|inner| self.type_registry.is_resource_type(inner))
                         .unwrap_or(false);
+                    // String views: clone to owned for constructor storage.
+                    if let Some(owned_op) = self.ensure_owned_string(builder, local) {
+                        *op = owned_op;
+                        continue;
+                    }
                     let is_borrow_param = self.cow_ptr_params.contains(&local);
                     let needs_clone = (is_resource || is_ptr_resource) && is_borrow_param;
                     if needs_clone {
@@ -832,16 +841,17 @@ impl<'a> LoweringContext<'a> {
             }
         }
         let dst = builder.enum_init(enum_name, variant_name, type_id, args.clone());
-        // MoveZero single-use/temp resource args after init
+        // MoveZero single-use/temp resource and string param args after init.
+        // Transfers ownership — the struct/enum now owns the data.
         for op in &args {
             if let Operand::Copy(place) = op {
                 if place.projections.is_empty() {
                     let local_type = builder.locals[place.local.0 as usize].type_id;
-                    if self.type_registry.is_resource_type(local_type) {
-                        if !self.drops.is_moved(place.local) {
-                            builder.move_zero(place.clone());
-                            self.drops.mark_moved(place.local);
-                        }
+                    let is_resource = self.type_registry.is_resource_type(local_type);
+                    let is_string_param = self.string_param_locals.contains(&place.local);
+                    if (is_resource || is_string_param) && !self.drops.is_moved(place.local) {
+                        builder.move_zero(place.clone());
+                        self.drops.mark_moved(place.local);
                     }
                 }
             }
@@ -1082,19 +1092,35 @@ impl<'a> LoweringContext<'a> {
         self.is_ref_param(base_type, ownership) || self.is_mut_ref_param(base_type, ownership)
     }
 
-    /// If `local` is a bare string param (view of caller's data), clone it to
-    /// produce an owned string and return the new operand. Otherwise return None.
-    /// Used at every storage boundary (constructors, struct fields, returns)
-    /// to enforce: "stored strings must be owned."
+    /// Check if a type is a string type, resolving through Ptr.
+    pub fn is_string_type(&self, type_id: TypeId) -> bool {
+        let resolved = self.pointee_type(type_id).unwrap_or(type_id);
+        resolved == self.type_mapper.string_view_type
+            || resolved == self.type_mapper.owned_string_type
+    }
+
+    /// Ensure a string local stored in a constructor is owned (not a view).
+    /// StringView locals (cap=0) are cloned to produce an owned GorgetString.
+    /// Already-owned locals (GorgetString, call results) are left as-is.
+    ///
+    /// Returns Some(owned_operand) if a clone was needed, None if already owned.
     pub fn ensure_owned_string(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         local: LocalId,
     ) -> Option<Operand> {
-        if !self.string_param_locals.contains(&local) {
+        let local_type = builder.locals[local.0 as usize].type_id;
+        // Only handle string types
+        if !self.is_string_type(local_type) {
             return None;
         }
-        let local_type = builder.locals[local.0 as usize].type_id;
+        // Already owned: call results (gorget_str_cat, gorget_string_new, etc.)
+        // produce owned data. Skip the clone — MoveZero transfers ownership.
+        if self.owned_locals.contains(&local) {
+            return None;
+        }
+        // String params, byte_slice results, and other non-owned string locals:
+        // clone to produce an owned copy. The struct/enum owns its fields.
         let clone_fn = self.clone_fn_for_ptr(local_type)?;
         let ptr_type = self.register_ptr_type(local_type);
         let ptr = builder.add_local(ptr_type, None);

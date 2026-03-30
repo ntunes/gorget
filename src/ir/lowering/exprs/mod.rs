@@ -1359,6 +1359,18 @@ fn lower_struct_literal(
         }
     }
 
+    // Clone string param locals before struct init — params hold views of
+    // caller's data; structs must own their fields.
+    for op in field_operands.iter_mut() {
+        if let Operand::Copy(place) | Operand::Move(place) = op {
+            if place.projections.is_empty() {
+                if let Some(owned_op) = ctx.ensure_owned_string(builder, place.local) {
+                    *op = owned_op;
+                }
+            }
+        }
+    }
+
     // Unregister GorgetString temps used as struct fields — they may be stored
     // as Str views that outlive the current scope.
     unregister_gorget_string_args(ctx, builder, &field_operands);
@@ -2301,6 +2313,10 @@ fn clone_multi_use_resource_args(
             if place.projections.is_empty() {
                 let local = place.local;
                 if is_resource_type_local(local, builder, &ctx.type_registry) {
+                    // Skip if already cloned by ensure_owned_string
+                    if ctx.owned_locals.contains(&local) && !ctx.is_named_local(local) {
+                        continue;
+                    }
                     // Must clone if: bare borrow param, multi-use named local,
                     // or field access on a struct (the parent owns the field data,
                     // MoveZero on the temp doesn't zero the parent's field).
@@ -2342,11 +2358,11 @@ fn move_zero_consumed_args(
     for op in args {
         if let Operand::Copy(place) = op {
             if place.projections.is_empty() {
-                if is_resource_type_local(place.local, builder, &ctx.type_registry) {
-                    if !ctx.drops.is_moved(place.local) {
-                        builder.move_zero(place.clone());
-                        ctx.drops.mark_moved(place.local);
-                    }
+                let is_resource = is_resource_type_local(place.local, builder, &ctx.type_registry);
+                let is_string_param = ctx.string_param_locals.contains(&place.local);
+                if (is_resource || is_string_param) && !ctx.drops.is_moved(place.local) {
+                    builder.move_zero(place.clone());
+                    ctx.drops.mark_moved(place.local);
                 }
             }
         }
@@ -2439,6 +2455,12 @@ pub fn unregister_gorget_string_args(
                 if idx < builder.locals.len()
                     && builder.locals[idx].type_id == owned_string_type
                 {
+                    // Don't unregister owned locals — constructors now clone
+                    // string views, so returned structs own their data.
+                    // The caller's string is independent and safe to drop.
+                    if ctx.owned_locals.contains(&place.local) {
+                        continue;
+                    }
                     ctx.drops.unregister(place.local);
                 }
             }
