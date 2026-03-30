@@ -1367,6 +1367,45 @@ pub(super) fn lower_method_call(
             ret_type
         };
 
+        // Auto-clone Ptr(resource) args at consuming method positions.
+        // IndexLoad returns Ptr(T) for CoW. Consuming methods (push/put/set)
+        // need an OWNED copy — clone the pointed-to data.
+        {
+            let consuming_pos: Option<usize> = match method_name {
+                "push" | "add" | "extend" | "send" | "push_back" | "push_front" => Some(0),
+                "put" | "set" | "insert" => if lowered_method_args.len() >= 2 { Some(1) } else { None },
+                _ => None,
+            };
+            if let Some(value_idx) = consuming_pos {
+                let call_idx = 1 + value_idx;
+                let needs_clone = call_args.get(call_idx).and_then(|op| {
+                    if let Operand::Copy(place) | Operand::Move(place) = op {
+                        if place.projections.is_empty() {
+                            let local_type = builder.locals[place.local.0 as usize].type_id;
+                            if let Some(inner) = ctx.pointee_type(local_type) {
+                                if ctx.type_registry.is_resource_type(inner) {
+                                    return Some((place.local, inner));
+                                }
+                            }
+                        }
+                    }
+                    None
+                });
+                if let Some((ptr_local, inner_type)) = needs_clone {
+                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
+                        let cloned = builder.call(&clone_fn,
+                            vec![FunctionBuilder::copy(ptr_local)], inner_type);
+                        ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);
+                        ctx.owned_locals.insert(cloned);
+                        let ptr_type = ctx.register_ptr_type(inner_type);
+                        let ptr = builder.add_local(ptr_type, None);
+                        builder.emit_borrow(ptr, Place::local(cloned));
+                        call_args[call_idx] = FunctionBuilder::copy(ptr);
+                    }
+                }
+            }
+        }
+
         // Unregister GorgetString temps when the callee might store str views.
         if super::should_unregister_string_args(ctx, &sig_name, ret_type) {
             super::unregister_gorget_string_args(ctx, builder, &call_args);
