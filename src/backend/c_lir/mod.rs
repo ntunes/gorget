@@ -3370,14 +3370,16 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 // String literal (const char*) → Str slot: wrap with gorget_str_from_literal.
                 write!(out, "{} = gorget_str_from_literal({}, strlen({}));", s(*slot), v(*value), v(*value)).unwrap();
             } else if slot_is_str && is_cstr {
-                // Known const char* value (from gorget_int_to_str etc.) → Str slot: wrap.
-                write!(out, "{{ const char* __cp = (const char*){}; {} = gorget_str_from_literal(__cp, __cp ? strlen(__cp) : 0); }}", v(*value), s(*slot)).unwrap();
+                // Known const char* value (from gorget_int_to_str etc.) → Str slot:
+                // adopt the heap-allocated cstr into an owned GorgetString.
+                // gorget_string_adopt takes ownership of the char* — no leak.
+                write!(out, "{} = gorget_string_adopt((char*){});", s(*slot), v(*value)).unwrap();
             } else if slot_is_gs && is_str_lit_val {
                 // String literal → GorgetString slot: wrap with gorget_string_new.
                 write!(out, "{} = gorget_string_new({});", s(*slot), v(*value)).unwrap();
             } else if slot_is_gs && is_cstr {
-                // Known const char* → GorgetString slot: wrap.
-                write!(out, "{{ const char* __cp = (const char*){}; {} = gorget_string_new(__cp); }}", v(*value), s(*slot)).unwrap();
+                // Known const char* → GorgetString slot: adopt (takes ownership).
+                write!(out, "{} = gorget_string_adopt((char*){});", s(*slot), v(*value)).unwrap();
             } else if slot_ty.is_aggregate() {
                 // Aggregate store: source may be a pointer (SlotAddr) or a struct value (ParamRef, Call result).
                 let val_is_ptr = matches!(val_ty, Some(LirType::Ptr));
