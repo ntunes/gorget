@@ -1092,6 +1092,17 @@ impl<'a> LoweringContext<'a> {
         self.is_ref_param(base_type, ownership) || self.is_mut_ref_param(base_type, ownership)
     }
 
+    /// Atomic MoveZero + mark_moved. Transfers ownership of a local: zeros the
+    /// source and marks it as moved so scope-exit DropIfAlive is a no-op.
+    pub fn move_zero_and_mark(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        local: LocalId,
+    ) {
+        builder.move_zero(crate::ir::instructions::Place::local(local));
+        self.drops.mark_moved(local);
+    }
+
     /// Check if a type is a string type, resolving through Ptr.
     pub fn is_string_type(&self, type_id: TypeId) -> bool {
         let resolved = self.pointee_type(type_id).unwrap_or(type_id);

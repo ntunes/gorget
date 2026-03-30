@@ -48,6 +48,8 @@ pub enum ValidationErrorKind {
     UseAfterMove { local: LocalId, block: BlockId },
     /// span_map length doesn't match instruction count.
     SpanMapMismatch { block: BlockId, insts: usize, spans: usize },
+    /// Call arg_owners count doesn't match args count.
+    ArgOwnershipCountMismatch { func: String, args: usize, owners: usize },
 }
 
 impl std::fmt::Display for ValidationErrorKind {
@@ -99,6 +101,9 @@ impl std::fmt::Display for ValidationErrorKind {
             }
             Self::SpanMapMismatch { block, insts, spans } => {
                 write!(f, "bb{}: span_map has {} entries but {} instructions", block.0, spans, insts)
+            }
+            Self::ArgOwnershipCountMismatch { func, args, owners } => {
+                write!(f, "Call @{}: {} args but {} arg_owners (must match or be empty)", func, args, owners)
             }
         }
     }
@@ -415,7 +420,24 @@ fn check_instruction_calls(
     errors: &mut Vec<ValidationError>,
 ) {
     match inst {
-        Instruction::Call { func, .. } | Instruction::CallExtern { func, .. } => {
+        Instruction::Call { func, args, arg_owners, .. } => {
+            if !callables.contains(func.as_str()) && !func.starts_with("__callable_") && !func.starts_with("__gorget_closure_call_") {
+                errors.push(ValidationError {
+                    kind: ValidationErrorKind::UndefinedFunction(func.clone()),
+                    context: ctx.into(),
+                });
+            }
+            // arg_owners must be empty (default) or match args count
+            if !arg_owners.is_empty() && arg_owners.len() != args.len() {
+                errors.push(ValidationError {
+                    kind: ValidationErrorKind::ArgOwnershipCountMismatch {
+                        func: func.clone(), args: args.len(), owners: arg_owners.len(),
+                    },
+                    context: ctx.into(),
+                });
+            }
+        }
+        Instruction::CallExtern { func, .. } => {
             if !callables.contains(func.as_str()) && !func.starts_with("__callable_") && !func.starts_with("__gorget_closure_call_") {
                 errors.push(ValidationError {
                     kind: ValidationErrorKind::UndefinedFunction(func.clone()),

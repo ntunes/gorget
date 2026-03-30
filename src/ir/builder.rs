@@ -74,6 +74,14 @@ impl FunctionBuilder {
         id
     }
 
+    /// Get the type of a local with bounds checking.
+    pub fn local_type(&self, id: LocalId) -> TypeId {
+        let idx = id.0 as usize;
+        debug_assert!(idx < self.locals.len(),
+            "BUG: LocalId({}) out of range (only {} locals)", id.0, self.locals.len());
+        self.locals[idx].type_id
+    }
+
     /// Update the type of an existing local (e.g., after discovering the actual
     /// type from lowering a branch of an if-expression).
     pub fn set_local_type(&mut self, id: LocalId, type_id: TypeId) {

@@ -474,8 +474,8 @@ impl TypeRegistry {
             // Fallback for migration safety
             name.starts_with("Vector__") || name.starts_with("Dict__")
                 || name.starts_with("HashMap__") || name.starts_with("Set__")
-                || name.starts_with("HashSet__") || name == "GorgetArray"
-                || name == "GorgetMap" || name == "GorgetSet"
+                || name.starts_with("HashSet__") || name.starts_with("Deque__")
+                || name == "GorgetArray" || name == "GorgetMap" || name == "GorgetSet"
         } else {
             false
         }
@@ -490,7 +490,10 @@ impl TypeRegistry {
                 return true;
             }
         }
-        // GorgetString is always Resource
+        // GorgetString is Resource (owns heap data). GorgetStringView is NOT resource
+        // to avoid triggering Ptr wrapping and CoW aliasing for bare string params.
+        // The gap between is_resource and needs_drop for strings is deliberate —
+        // is_resource_type = needs_drop is the target but requires ~100 deref site fixes.
         if name == "GorgetString" {
             return true;
         }

@@ -244,6 +244,8 @@ pub enum Instruction {
         /// Per-arg ownership mode. Empty means all Borrow (backward compatible).
         arg_owners: Vec<ArgOwnership>,
     },
+    /// Reserved for future dynamic dispatch (function pointers, closures).
+    /// Currently not emitted by the lowering layer.
     CallIndirect {
         dst: Option<LocalId>,
         callee: Operand,
