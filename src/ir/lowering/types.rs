@@ -18,7 +18,7 @@ pub struct DeferredBuiltin {
 
 /// Maps AST types to GIR TypeIds.
 pub struct TypeMapper {
-    /// `str` maps to `Ptr(U8)` in GIR (Phase 1 compat) — will be Named("Str") later.
+    /// The GIR type for string views (cap=0). Maps to Named("GorgetStringView").
     pub string_view_type: TypeId,
     /// `String` (owned) maps to Named("GorgetString") for string interpolation results.
     pub owned_string_type: TypeId,

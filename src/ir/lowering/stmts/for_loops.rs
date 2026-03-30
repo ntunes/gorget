@@ -178,7 +178,7 @@ fn lower_for_string(
     // Header: byte_pos < len
     builder.switch_to(header_bb);
     let cond = builder.cmp(CmpOp::Lt, I64_TYPE, FunctionBuilder::copy(byte_pos), FunctionBuilder::copy(len_local));
-    let natural_exit = if else_arm.is_some() { else_exit_bb.unwrap() } else { exit_bb };
+    let natural_exit = if else_arm.is_some() { else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists") } else { exit_bb };
     builder.branch(FunctionBuilder::copy(cond), body_bb, natural_exit);
 
     // Body
@@ -218,7 +218,7 @@ fn lower_for_string(
 
     // Else block
     if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb.unwrap());
+        builder.switch_to(else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists"));
         lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
         builder.switch_to(break_exit_bb);
@@ -273,7 +273,7 @@ fn lower_for_array(
     // Header: idx < len
     builder.switch_to(header_bb);
     let cond = builder.cmp(CmpOp::Lt, I64_TYPE, FunctionBuilder::copy(idx), FunctionBuilder::copy(len));
-    let natural_exit = if else_arm.is_some() { else_exit_bb.unwrap() } else { exit_bb };
+    let natural_exit = if else_arm.is_some() { else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists") } else { exit_bb };
     builder.branch(FunctionBuilder::copy(cond), body_bb, natural_exit);
 
     // Body
@@ -307,7 +307,7 @@ fn lower_for_array(
 
     // Else block
     if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb.unwrap());
+        builder.switch_to(else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists"));
         lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
         builder.switch_to(break_exit_bb);
@@ -367,7 +367,7 @@ fn lower_for_enumerate(
     // Header: idx < len
     builder.switch_to(header_bb);
     let cond = builder.cmp(CmpOp::Lt, I64_TYPE, FunctionBuilder::copy(idx), FunctionBuilder::copy(len));
-    let natural_exit = if else_arm.is_some() { else_exit_bb.unwrap() } else { exit_bb };
+    let natural_exit = if else_arm.is_some() { else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists") } else { exit_bb };
     builder.branch(FunctionBuilder::copy(cond), body_bb, natural_exit);
 
     // Body
@@ -405,7 +405,7 @@ fn lower_for_enumerate(
 
     // Else block
     if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb.unwrap());
+        builder.switch_to(else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists"));
         lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
         builder.switch_to(break_exit_bb);
@@ -468,7 +468,7 @@ fn lower_for_dict(
     // Header: oi < limit
     builder.switch_to(header_bb);
     let cond = builder.cmp(CmpOp::Lt, I64_TYPE, FunctionBuilder::copy(oi), FunctionBuilder::copy(limit));
-    let natural_exit = if else_arm.is_some() { else_exit_bb.unwrap() } else { exit_bb };
+    let natural_exit = if else_arm.is_some() { else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists") } else { exit_bb };
     builder.branch(FunctionBuilder::copy(cond), body_bb, natural_exit);
 
     // Body
@@ -531,7 +531,7 @@ fn lower_for_dict(
 
     // Else block
     if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb.unwrap());
+        builder.switch_to(else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists"));
         lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
         builder.switch_to(break_exit_bb);
@@ -591,7 +591,7 @@ fn lower_for_set(
 
     builder.switch_to(header_bb);
     let cond = builder.cmp(CmpOp::Lt, I64_TYPE, FunctionBuilder::copy(i_local), FunctionBuilder::copy(limit));
-    let natural_exit = if else_arm.is_some() { else_exit_bb.unwrap() } else { exit_bb };
+    let natural_exit = if else_arm.is_some() { else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists") } else { exit_bb };
     builder.branch(FunctionBuilder::copy(cond), body_bb, natural_exit);
 
     builder.switch_to(body_bb);
@@ -651,7 +651,7 @@ fn lower_for_set(
     builder.jump(header_bb);
 
     if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb.unwrap());
+        builder.switch_to(else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists"));
         lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
         builder.switch_to(break_exit_bb);
@@ -774,7 +774,7 @@ fn lower_for_iterable(
         FunctionBuilder::copy(tag_val),
         Operand::Constant(Constant::I32(0)),
     );
-    let natural_exit = if else_arm.is_some() { else_exit_bb.unwrap() } else { exit_bb };
+    let natural_exit = if else_arm.is_some() { else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists") } else { exit_bb };
     builder.branch(FunctionBuilder::copy(is_none), natural_exit, body_bb);
 
     // Body: extract value from Some variant
@@ -806,7 +806,7 @@ fn lower_for_iterable(
 
     // Else block
     if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb.unwrap());
+        builder.switch_to(else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists"));
         lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
         builder.switch_to(break_exit_bb);
@@ -922,7 +922,7 @@ fn lower_for_range(
     let cmp_op = if inclusive { CmpOp::Le } else { CmpOp::Lt };
     let cond = builder.cmp(cmp_op, loop_type, FunctionBuilder::copy(loop_var), end_val);
     let natural_exit = if else_arm.is_some() {
-        else_exit_bb.unwrap()
+        else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists")
     } else {
         exit_bb
     };
@@ -949,7 +949,7 @@ fn lower_for_range(
 
     // Else block: executed when loop completes naturally (no break)
     if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb.unwrap());
+        builder.switch_to(else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists"));
         lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
 

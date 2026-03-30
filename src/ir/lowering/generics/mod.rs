@@ -532,7 +532,7 @@ impl GenericCollector {
                         if let Expr::Identifier(name) = &callee.node {
                             if self.fn_templates.contains_key(name.as_str()) {
                                 // Collect meta op bindings from MetaOpToken args
-                                let template = self.fn_templates.get(name.as_str()).unwrap();
+                                let template = self.fn_templates.get(name.as_str()).expect("BUG: generic template not found for monomorphization");
                                 let op_bindings: Vec<(String, ast::BinaryOp)> = template
                                     .params
                                     .iter()

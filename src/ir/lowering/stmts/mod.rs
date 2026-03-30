@@ -361,7 +361,7 @@ fn lower_var_decl(
                         && !ctx.type_registry.is_resource_type(rhs_type)
                         && ctx.clone_fn_for_ptr(rhs_type).is_some()
                     {
-                        let clone_fn = ctx.clone_fn_for_ptr(rhs_type).unwrap();
+                        let clone_fn = ctx.clone_fn_for_ptr(rhs_type).expect("BUG: clone_fn_for_ptr returned None after is_some check");
                         let ptr_type = ctx.register_ptr_type(rhs_type);
                         let ptr_local = builder.add_local(ptr_type, None);
                         builder.emit_borrow(ptr_local, place.clone());
@@ -398,7 +398,7 @@ fn lower_var_decl(
                         // Skip normal assign_mode logic — borrow already emitted
                         assign_mode = AssignMode::Borrow;
                     }
-                    // Named resource local unsafe for CoW (reassigned/moved) → clone (old behavior).
+                    // Named resource local unsafe for CoW (reassigned/moved) → clone.
                     else if ctx.is_named_local(place.local)
                         && ctx.type_registry.is_resource_type(rhs_type)
                     {
@@ -1056,7 +1056,7 @@ fn lower_while(
     builder.switch_to(header_bb);
     let cond = lower_expr(ctx, builder, condition);
     let natural_exit = if else_arm.is_some() {
-        else_exit_bb.unwrap()
+        else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists")
     } else {
         exit_bb
     };
@@ -1076,7 +1076,7 @@ fn lower_while(
 
     // Else block: executed when loop completes naturally (no break)
     if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb.unwrap());
+        builder.switch_to(else_exit_bb.expect("BUG: else_exit_bb is None when else_arm exists"));
         lower_block_scoped(ctx, builder, else_body);
         builder.jump(exit_bb);
 
