@@ -302,6 +302,15 @@ pub fn lower_function(
             // ! resource params and & trivial params: MutPtr, auto-deref + write-through
             ctx.mut_capture_locals.insert(local_id, base_type);
         }
+        // Track bare string params — they hold views of caller's data.
+        // Must be cloned before storing in structs/enums (ensure_owned_string).
+        if matches!(p.node.ownership, crate::parser::ast::Ownership::Borrow) {
+            let is_string = base_type == ctx.type_mapper.string_view_type
+                || base_type == ctx.type_mapper.owned_string_type;
+            if is_string {
+                ctx.string_param_locals.insert(local_id);
+            }
+        }
         // Track callable parameter return types
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
             ctx.callable_return_types.insert(local_id, ret_type);

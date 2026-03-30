@@ -256,6 +256,9 @@ pub struct LoweringContext<'a> {
     /// CoW Phase 1c: bare Ptr params (borrow from caller). On mutation, these
     /// are cloned to owned copies so the caller's data is not modified.
     pub cow_ptr_params: rustc_hash::FxHashSet<LocalId>,
+    /// Bare string function params — views of caller's data. Must be cloned
+    /// before storing in structs/enums/collections to prevent escaping views.
+    pub string_param_locals: rustc_hash::FxHashSet<LocalId>,
     pub cow_collection_refs: FxHashMap<LocalId, Vec<LocalId>>,
     /// Phase 1f: name → use count in the function body. Names with count=1 are
     /// single-use (dead after their one use) → auto-move at push/constructor.
@@ -321,6 +324,7 @@ impl<'a> LoweringContext<'a> {
             cow_alias_targets: FxHashMap::default(),
             cow_collection_refs: FxHashMap::default(),
             cow_ptr_params: rustc_hash::FxHashSet::default(),
+            string_param_locals: rustc_hash::FxHashSet::default(),
             name_use_counts: rustc_hash::FxHashMap::default(),
             owned_locals: rustc_hash::FxHashSet::default(),
             pending_move_zeros: Vec::new(),
@@ -867,6 +871,7 @@ impl<'a> LoweringContext<'a> {
         self.cow_alias_targets.clear();
         self.cow_collection_refs.clear();
         self.cow_ptr_params.clear();
+        self.string_param_locals.clear();
         self.owned_locals.clear();
     }
 
@@ -1075,6 +1080,31 @@ impl<'a> LoweringContext<'a> {
     /// Resource types and &-annotated params are passed by pointer.
     pub fn is_passed_by_ptr(&self, base_type: TypeId, ownership: Ownership) -> bool {
         self.is_ref_param(base_type, ownership) || self.is_mut_ref_param(base_type, ownership)
+    }
+
+    /// If `local` is a bare string param (view of caller's data), clone it to
+    /// produce an owned string and return the new operand. Otherwise return None.
+    /// Used at every storage boundary (constructors, struct fields, returns)
+    /// to enforce: "stored strings must be owned."
+    pub fn ensure_owned_string(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        local: LocalId,
+    ) -> Option<Operand> {
+        if !self.string_param_locals.contains(&local) {
+            return None;
+        }
+        let local_type = builder.locals[local.0 as usize].type_id;
+        let clone_fn = self.clone_fn_for_ptr(local_type)?;
+        let ptr_type = self.register_ptr_type(local_type);
+        let ptr = builder.add_local(ptr_type, None);
+        builder.emit_borrow(ptr, crate::ir::instructions::Place::local(local));
+        let owned_type = self.type_mapper.owned_string_type;
+        let cloned = builder.call(&clone_fn,
+            vec![crate::ir::builder::FunctionBuilder::copy(ptr)], owned_type);
+        self.drops.register_local(cloned, owned_type, &self.type_registry);
+        self.owned_locals.insert(cloned);
+        Some(crate::ir::builder::FunctionBuilder::copy(cloned))
     }
 
     /// Return the clone function name for deep-cloning a resource type.
