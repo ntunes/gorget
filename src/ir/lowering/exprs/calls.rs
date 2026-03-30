@@ -1107,7 +1107,7 @@ fn format_for_printf(
         // If apply_format_spec returns None, fall through to default
     }
 
-    if type_id == ctx.type_mapper.string_view_type || type_id == ctx.type_mapper.owned_string_type {
+    if ctx.type_mapper.is_string_type(type_id) {
         // Str/GorgetString → %.*s with (int)expr.len, expr.data
         ("%.*s".to_string(), vec![operand])
     } else if type_id == BOOL_TYPE {
@@ -1183,7 +1183,7 @@ fn apply_format_spec(
         || type_id == U64_TYPE;
     let is_any_int = is_signed_int || is_unsigned_int;
     let is_float = type_id == F32_TYPE || type_id == F64_TYPE;
-    let is_str = type_id == ctx.type_mapper.string_view_type || type_id == ctx.type_mapper.owned_string_type;
+    let is_str = ctx.type_mapper.is_string_type(type_id);
 
     // Parse the spec: [#][0][width][.precision][type_char]
     let bytes = spec.as_bytes();

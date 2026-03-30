@@ -776,7 +776,7 @@ pub(super) fn lower_method_call(
     // Handle .len() for strings and collections
     if method_name == "len" {
         let recv_type = infer_operand_type_full(ctx, &recv, builder);
-        if recv_type == ctx.type_mapper.string_view_type || recv_type == ctx.type_mapper.owned_string_type {
+        if ctx.type_mapper.is_string_type(recv_type) {
             let dst = builder.call_extern(
                 "gorget_str_codepoint_count",
                 vec![recv],
@@ -806,7 +806,7 @@ pub(super) fn lower_method_call(
     // Handle .byte_len() for strings → direct field access
     if method_name == "byte_len" {
         let recv_type = infer_operand_type_full(ctx, &recv, builder);
-        if recv_type == ctx.type_mapper.string_view_type || recv_type == ctx.type_mapper.owned_string_type {
+        if ctx.type_mapper.is_string_type(recv_type) {
             if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
                 let mut len_place = place.clone();
                 len_place.projections.push(Projection::Field(1));

@@ -1389,7 +1389,7 @@ fn assert_format_info_rich(
     }
 
     // String types: show the string value via %.*s
-    if type_id == ctx.type_mapper.string_view_type || type_id == ctx.type_mapper.owned_string_type {
+    if ctx.type_mapper.is_string_type(type_id) {
         return ("%.*s".to_string(), format!("(int){c_expr}.len, {c_expr}.data"));
     }
 
@@ -1514,7 +1514,7 @@ fn lower_snapshot(
         builder.inline_c(format!(
             "__gorget_snapshot_write_bool(__gorget_current_test, \"{point_name}\", {c_expr});"
         ));
-    } else if val_type == ctx.type_mapper.string_view_type || val_type == ctx.type_mapper.owned_string_type {
+    } else if ctx.type_mapper.is_string_type(val_type) {
         builder.inline_c(format!(
             "__gorget_snapshot_write_str(__gorget_current_test, \"{point_name}\", {c_expr});"
         ));

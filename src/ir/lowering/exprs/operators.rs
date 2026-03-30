@@ -191,7 +191,7 @@ pub(super) fn lower_binary_op(
                 .unwrap_or_default();
             let is_map = rhs_type_name.starts_with("Dict__") || rhs_type_name.starts_with("HashMap__");
             let is_set = rhs_type_name.starts_with("Set__") || rhs_type_name.starts_with("HashSet__");
-            let is_string = rhs_type == ctx.type_mapper.string_view_type || rhs_type == ctx.type_mapper.owned_string_type;
+            let is_string = ctx.type_mapper.is_string_type(rhs_type);
             if is_map || is_set {
                 // Map/Set contains: need pointer to collection and pointer to element
                 let fn_name = if is_map { "gorget_map_contains" } else { "gorget_set_contains" };

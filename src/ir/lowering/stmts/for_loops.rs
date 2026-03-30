@@ -74,7 +74,7 @@ pub(super) fn lower_for(
         "__for_elem".to_string()
     };
 
-    if iter_type == ctx.type_mapper.string_view_type || iter_type == ctx.type_mapper.owned_string_type {
+    if ctx.type_mapper.is_string_type(iter_type) {
         lower_for_string(ctx, builder, &var_name, iter_op, body, else_arm);
     } else {
         // Determine collection kind from type metadata (set by BuiltinTypeProtocol).
