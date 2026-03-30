@@ -44,6 +44,8 @@
 
 - **Self-host parser: 3 remaining mismatches**: null byte, str alias, float precision — all unfixable at self-host level. [updated: 2026-03-21]
 
+- **Self-host comparison regression (35/858 resolver, was 797/797)**: After CoW work, the Rust compiler registers new builtins/keywords that the self-host resolver doesn't know about, shifting all DEF IDs. The dangling string view bug is fixed (owned_slice in lexer). Remaining work: sync the self-host resolver's builtin trait list, keyword set, and AST nodes with the current Rust compiler. Similar sync needed for parser/typechecker comparisons. [added: 2026-03-30]
+
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
 - **If-expression `elif` branches**: Parser limitation. Workaround: nested `else: if`. [updated: 2026-03-11]
