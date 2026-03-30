@@ -1656,6 +1656,18 @@ static inline Str gorget_str_index(Str s, int64_t idx) {
     return gorget_str_view_region(s.data + byte_off, (size_t)cplen);
 }
 
+// Allocating helper — copies region into a new owned string.
+static inline Str gorget_str_owned_region(const char* data, size_t len) {
+    GorgetAllocator* a = __gorget_current_alloc;
+    if (len == 0) { char* d = (char*)a->alloc(a->ctx, 1); d[0] = '\0'; return (Str){d, 0, 1, a}; }
+    size_t cap = len + 1;
+    char* d = (char*)a->alloc(a->ctx, cap);
+    memcpy(d, data, len);
+    d[len] = '\0';
+    __gorget_string_new_count++;
+    return (Str){d, len, cap, a};
+}
+
 // Return owned copy of codepoint range [start, end). Supports negative indices.
 static inline Str gorget_str_slice(Str s, int64_t start, int64_t end) {
     int64_t cp_count = gorget_str_codepoint_count(s);
