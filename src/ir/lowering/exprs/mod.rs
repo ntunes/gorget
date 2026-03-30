@@ -2369,8 +2369,8 @@ fn move_zero_consumed_args(
         if let Operand::Copy(place) = op {
             if place.projections.is_empty() {
                 let is_resource = is_resource_type_local(place.local, builder, &ctx.type_registry);
-                let is_string_param = ctx.string_param_locals.contains(&place.local);
-                if (is_resource || is_string_param) && !ctx.drops.is_moved(place.local) {
+                let is_string_view = builder.local_type(place.local) == ctx.type_mapper.string_view_type;
+                if (is_resource || is_string_view) && !ctx.drops.is_moved(place.local) {
                     ctx.move_zero_and_mark(builder, place.local);
                 }
             }

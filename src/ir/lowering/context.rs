@@ -258,7 +258,7 @@ pub struct LoweringContext<'a> {
     pub cow_ptr_params: rustc_hash::FxHashSet<LocalId>,
     /// Bare string function params — views of caller's data. Must be cloned
     /// before storing in structs/enums/collections to prevent escaping views.
-    pub string_param_locals: rustc_hash::FxHashSet<LocalId>,
+    // string_param_locals removed — replaced by type-based StringView check in MoveZero paths.
     pub cow_collection_refs: FxHashMap<LocalId, Vec<LocalId>>,
     /// Phase 1f: name → use count in the function body. Names with count=1 are
     /// single-use (dead after their one use) → auto-move at push/constructor.
@@ -324,7 +324,6 @@ impl<'a> LoweringContext<'a> {
             cow_alias_targets: FxHashMap::default(),
             cow_collection_refs: FxHashMap::default(),
             cow_ptr_params: rustc_hash::FxHashSet::default(),
-            string_param_locals: rustc_hash::FxHashSet::default(),
             name_use_counts: rustc_hash::FxHashMap::default(),
             owned_locals: rustc_hash::FxHashSet::default(),
             pending_move_zeros: Vec::new(),
@@ -849,8 +848,8 @@ impl<'a> LoweringContext<'a> {
                 if place.projections.is_empty() {
                     let local_type = builder.local_type(place.local);
                     let is_resource = self.type_registry.is_resource_type(local_type);
-                    let is_string_param = self.string_param_locals.contains(&place.local);
-                    if (is_resource || is_string_param) && !self.drops.is_moved(place.local) {
+                    let is_string_view = local_type == self.type_mapper.string_view_type;
+                    if (is_resource || is_string_view) && !self.drops.is_moved(place.local) {
                         builder.move_zero(place.clone());
                         self.drops.mark_moved(place.local);
                     }
@@ -882,7 +881,6 @@ impl<'a> LoweringContext<'a> {
         self.cow_alias_targets.clear();
         self.cow_collection_refs.clear();
         self.cow_ptr_params.clear();
-        self.string_param_locals.clear();
         self.owned_locals.clear();
     }
 
