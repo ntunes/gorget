@@ -44,7 +44,7 @@
 
 - **Self-host parser: 3 remaining mismatches**: null byte, str alias, float precision — all unfixable at self-host level. [updated: 2026-03-21]
 
-- **Self-host comparison regression (35/858 resolver, was 797/797)**: After CoW work, the Rust compiler registers new builtins/keywords that the self-host resolver doesn't know about, shifting all DEF IDs. The dangling string view bug is fixed (owned_slice in lexer). Remaining work: sync the self-host resolver's builtin trait list, keyword set, and AST nodes with the current Rust compiler. Similar sync needed for parser/typechecker comparisons. [added: 2026-03-30]
+- **Self-host comparison regression**: Dangling string view fixed (owned_slice in lexer). Current scores on 858 fixtures: parser 729 matched / 36 mismatch / 93 crash, resolver 35 matched / 730 mismatch / 93 crash. The 93 crashes are from newer fixtures using unsupported AST nodes. Parser is in good shape (85%). Resolver regression is deeper — the Gorget resolver produces RES entries with different spans than Rust (parser span differences) and misses some entries. Needs: (1) fix 36 parser mismatches, (2) investigate resolver span/RES divergence, (3) add new AST nodes for 93 crashing fixtures. [updated: 2026-03-30]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
