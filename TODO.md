@@ -10,7 +10,7 @@
 
 - **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation (Python-like `groups[key].push(i)`). Needs the `is_storing_method` flag on BuiltinMethodDecl (currently fragile name-matching). [updated: 2026-03-28]
 
-- **Remaining leaks in yaml_parse (101) and toml_parse (219)**: Down from 374→122→101. All from Clone+MoveZero on named locals that hold owned data but aren't tracked as `owned_locals`. Needs deeper ownership propagation or a different approach (e.g., C backend emits free before memset for non-zero MoveZero targets). [updated: 2026-03-30]
+- **Remaining leaks in yaml_parse (101) and toml_parse (219)**: Down from 374→122→101. Root cause: `unregister_gorget_string_args` conservatively unregisters GorgetString args when the callee returns a struct/enum (like Yaml) — the return value may contain a str view aliasing the arg. Disabling it causes 15 test failures (use-after-free). Proper fix: StringView removal (Phases 1-4) makes all strings in return values either owned or cap=0 views, eliminating the aliasing concern. [updated: 2026-03-30]
 
 - **Box.new should enforce `!` at borrow checker level**: Currently Box.new implicitly MoveZeros the source, but the user should be required to write `Box(name!)`. Need to add Box.new to the consumed-param detection in the borrow checker. [added: 2026-03-26]
 

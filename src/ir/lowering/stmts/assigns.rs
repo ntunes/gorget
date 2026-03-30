@@ -151,6 +151,7 @@ pub(super) fn lower_assign(
                                     let ptr_local = builder.add_local(ptr_type, None);
                                     builder.emit_borrow(ptr_local, place.clone());
                                     let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
+                                    ctx.owned_locals.insert(cloned);
                                     operand = FunctionBuilder::copy(cloned);
                                     assign_mode = AssignMode::Move;
                                 }
