@@ -1114,9 +1114,11 @@ impl<'a> LoweringContext<'a> {
         if !self.is_string_type(local_type) {
             return None;
         }
-        // Already owned: call results (gorget_str_cat, gorget_string_new, etc.)
-        // produce owned data. Skip the clone — MoveZero transfers ownership.
-        if self.owned_locals.contains(&local) {
+        // Already owned: call results (gorget_str_cat, gorget_string_new, etc.),
+        // move params (!), and MutPtr locals — all own their data.
+        if self.owned_locals.contains(&local)
+            || self.mut_capture_locals.contains_key(&local)
+        {
             return None;
         }
         // String params, byte_slice results, and other non-owned string locals:
@@ -1205,6 +1207,7 @@ impl<'a> LoweringContext<'a> {
                             inner,
                         );
                         self.drops.register_local(cloned, inner, &self.type_registry);
+                        self.owned_locals.insert(cloned);
                         return crate::ir::builder::FunctionBuilder::copy(cloned);
                     }
                 }
