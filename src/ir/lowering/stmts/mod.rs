@@ -315,7 +315,7 @@ fn lower_var_decl(
             // StringView but the RHS is an owned GorgetString (from char_at, to_upper, etc.),
             // upgrade the local to GorgetString so the allocation is properly tracked and freed.
             {
-                let actual_var_type = builder.locals[local_id.0 as usize].type_id;
+                let actual_var_type = builder.local_type(local_id);
                 if actual_var_type == ctx.type_mapper.string_view_type {
                     let rhs_type = infer_operand_type_with_builder(ctx, &operand, builder);
                     if rhs_type == ctx.type_mapper.owned_string_type {
@@ -328,7 +328,7 @@ fn lower_var_decl(
             }
             // Also mark auto-reinferred locals that got Ptr type
             if needs_reinfer {
-                let actual = builder.locals[local_id.0 as usize].type_id;
+                let actual = builder.local_type(local_id);
                 if let Some(GirType::Ptr(_)) = ctx.type_registry.get(actual) {
                     if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
                         ctx.ref_locals.insert(local_id);
@@ -337,12 +337,12 @@ fn lower_var_decl(
             }
             // Determine assignment mode and emit with explicit ownership semantics.
             use crate::ir::instructions::AssignMode;
-            let actual_var_type = builder.locals[local_id.0 as usize].type_id;
+            let actual_var_type = builder.local_type(local_id);
             let mut assign_mode = AssignMode::Copy; // default for trivial types
 
             if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                 if place.projections.is_empty() && place.local != local_id {
-                    let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                    let rhs_type = builder.local_type(place.local);
 
                     // GorgetString → str view: if the source is a NAMED local, unregister
                     // it so the view can borrow its data safely. Unnamed temps (from
@@ -775,7 +775,7 @@ fn lower_return(
             if ret_type == ctx.type_mapper.owned_string_type {
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
-                        let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                        let rhs_type = builder.local_type(place.local);
                         if rhs_type == ctx.type_mapper.string_view_type {
                             let clone_result = builder.call(
                                 "gorget_string_from_str",
@@ -830,7 +830,7 @@ fn lower_return(
                 let use_move = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                     p.projections.is_empty()
                         && ctx.type_registry.needs_drop(
-                            builder.locals[p.local.0 as usize].type_id)
+                            builder.local_type(p.local))
                         && (ctx.owned_locals.contains(&p.local)
                             || !ctx.is_named_local(p.local))
                 } else { false };
@@ -853,7 +853,7 @@ fn lower_return(
             if ret_type == ctx.type_mapper.string_view_type {
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
-                        let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                        let rhs_type = builder.local_type(place.local);
                         if rhs_type == ctx.type_mapper.owned_string_type {
                             ctx.drops.unregister(place.local);
                         }
@@ -867,7 +867,7 @@ fn lower_return(
             // drops the return value later → double-free.
             if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                 if place.projections.is_empty() && place.local != LocalId(0) {
-                    let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                    let rhs_type = builder.local_type(place.local);
                     if ctx.type_registry.needs_drop(rhs_type) {
                         ctx.move_zero_and_mark(builder, place.local);
                     }
@@ -881,7 +881,7 @@ fn lower_return(
                             if elem_local != LocalId(0)
                                 && !ctx.drops.is_moved(elem_local)
                             {
-                                let elem_type = builder.locals[elem_local.0 as usize].type_id;
+                                let elem_type = builder.local_type(elem_local);
                                 if ctx.type_registry.needs_drop(elem_type) {
                                     builder.move_zero(Place::local(elem_local));
                                     ctx.drops.mark_moved(elem_local);
@@ -1664,7 +1664,7 @@ fn lower_with(
 
     for &local_id in allocator_locals.iter().rev() {
         builder.pop_allocator();
-        let type_id = builder.locals[local_id.0 as usize].type_id;
+        let type_id = builder.local_type(local_id);
         let type_name = ctx.type_name_for_id(type_id);
         let destroy_fn = match type_name.as_deref() {
             Some("PoolAllocator") => Some("gorget_pool_destroy"),

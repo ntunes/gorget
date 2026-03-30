@@ -276,7 +276,7 @@ pub(super) fn lower_method_call(
         // Fallback: type-based lookup for indexed tasks (e.g., `tasks[j].await()`)
         let resolved = task_local.or_else(|| {
             let type_id = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
-                Some(builder.locals[place.local.0 as usize].type_id)
+                Some(builder.local_type(place.local))
             } else {
                 None
             };
@@ -869,7 +869,7 @@ pub(super) fn lower_method_call(
                                 let mangled = format!("{type_name}__{method_name}");
                                 // Pass borrow of the Box local (or forward pointer if already a pointer)
                                 let recv_self = if let Operand::Copy(ref p) | Operand::Move(ref p) = recv {
-                                    let local_type = builder.locals[p.local.0 as usize].type_id;
+                                    let local_type = builder.local_type(p.local);
                                     if matches!(ctx.type_registry.get(local_type), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))) {
                                         // Already a pointer (pass-by-pointer param) — forward directly
                                         FunctionBuilder::copy(p.local)
@@ -1068,7 +1068,7 @@ pub(super) fn lower_method_call(
             }
         } else if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
             let recv_type_id = if (place.local.0 as usize) < builder.locals.len() {
-                builder.locals[place.local.0 as usize].type_id
+                builder.local_type(place.local)
             } else {
                 UNIT_TYPE
             };
@@ -1181,7 +1181,7 @@ pub(super) fn lower_method_call(
             // Get the other vector's element type from the first explicit arg
             let other_elem_name = if let Some(arg_op) = lowered_method_args.first() {
                 if let Operand::Copy(p) | Operand::Move(p) = arg_op {
-                    let type_id = builder.locals[p.local.0 as usize].type_id;
+                    let type_id = builder.local_type(p.local);
                     let type_str = crate::ir::types::format_type_for_mangle(type_id, &ctx.type_registry);
                     type_str.strip_prefix("Vector__").unwrap_or(&type_str).to_string()
                 } else { "int64_t".to_string() }
@@ -1292,7 +1292,7 @@ pub(super) fn lower_method_call(
             let self_elem = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
             let other_elem_name = if let Some(arg_op) = lowered_method_args.first() {
                 if let Operand::Copy(p) | Operand::Move(p) = arg_op {
-                    let type_id = builder.locals[p.local.0 as usize].type_id;
+                    let type_id = builder.local_type(p.local);
                     let type_str = crate::ir::types::format_type_for_mangle(type_id, &ctx.type_registry);
                     type_str.strip_prefix("Vector__").unwrap_or(&type_str).to_string()
                 } else { "int64_t".to_string() }
@@ -1354,7 +1354,7 @@ pub(super) fn lower_method_call(
                 Operand::Constant(Constant::F64(_)) => F64_TYPE,
                 Operand::Constant(Constant::Str(_)) => ctx.type_mapper.owned_string_type,
                 Operand::Copy(p) | Operand::Move(p) => {
-                    let init_type = builder.locals[p.local.0 as usize].type_id;
+                    let init_type = builder.local_type(p.local);
                     if init_type != I64_TYPE { init_type } else { ret_type }
                 }
                 _ => ret_type,
@@ -1377,7 +1377,7 @@ pub(super) fn lower_method_call(
                 let needs_clone = call_args.get(call_idx).and_then(|op| {
                     if let Operand::Copy(place) | Operand::Move(place) = op {
                         if place.projections.is_empty() {
-                            let local_type = builder.locals[place.local.0 as usize].type_id;
+                            let local_type = builder.local_type(place.local);
                             if let Some(inner) = ctx.pointee_type(local_type) {
                                 if ctx.type_registry.is_resource_type(inner) {
                                     return Some((place.local, inner));

@@ -798,7 +798,7 @@ impl<'a> LoweringContext<'a> {
             if let Operand::Copy(place) = op {
                 if place.projections.is_empty() {
                     let local = place.local;
-                    let local_type = builder.locals[local.0 as usize].type_id;
+                    let local_type = builder.local_type(local);
                     let is_resource = self.type_registry.is_resource_type(local_type);
                     let is_ptr_resource = self.pointee_type(local_type)
                         .map(|inner| self.type_registry.is_resource_type(inner))
@@ -846,7 +846,7 @@ impl<'a> LoweringContext<'a> {
         for op in &args {
             if let Operand::Copy(place) = op {
                 if place.projections.is_empty() {
-                    let local_type = builder.locals[place.local.0 as usize].type_id;
+                    let local_type = builder.local_type(place.local);
                     let is_resource = self.type_registry.is_resource_type(local_type);
                     let is_string_param = self.string_param_locals.contains(&place.local);
                     if (is_resource || is_string_param) && !self.drops.is_moved(place.local) {
@@ -1120,7 +1120,7 @@ impl<'a> LoweringContext<'a> {
         builder: &mut crate::ir::builder::FunctionBuilder,
         local: LocalId,
     ) -> Option<Operand> {
-        let local_type = builder.locals[local.0 as usize].type_id;
+        let local_type = builder.local_type(local);
         // Only handle string types
         if !self.is_string_type(local_type) {
             return None;
@@ -1209,7 +1209,7 @@ impl<'a> LoweringContext<'a> {
     ) -> Operand {
         if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
             if place.projections.is_empty() {
-                let local_type = builder.locals[place.local.0 as usize].type_id;
+                let local_type = builder.local_type(place.local);
                 if let Some(inner) = self.pointee_type(local_type) {
                     if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
                         let cloned = builder.call(
@@ -1335,7 +1335,7 @@ impl<'a> LoweringContext<'a> {
         alias_local: LocalId,
         _source_local: LocalId,
     ) {
-        let alias_type = builder.locals[alias_local.0 as usize].type_id;
+        let alias_type = builder.local_type(alias_local);
         // Only materialize if alias is actually a Ptr(T)
         let inner_type = match self.pointee_type(alias_type) {
             Some(inner) => inner,
@@ -1371,7 +1371,7 @@ impl<'a> LoweringContext<'a> {
         builder: &mut crate::ir::builder::FunctionBuilder,
         ref_local: LocalId,
     ) {
-        let ref_type = builder.locals[ref_local.0 as usize].type_id;
+        let ref_type = builder.local_type(ref_local);
         let inner_type = self.pointee_type(ref_type).unwrap_or(ref_type);
         if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
             // The ref_local already holds a Ptr — use it directly as the clone arg

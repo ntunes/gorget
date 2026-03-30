@@ -137,7 +137,7 @@ pub(super) fn lower_assign(
 
                     if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                         if place.projections.is_empty() && place.local != local_id {
-                            let rhs_type = builder.locals[place.local.0 as usize].type_id;
+                            let rhs_type = builder.local_type(place.local);
 
                             if rhs_type == ctx.type_mapper.owned_string_type
                                 && type_id == ctx.type_mapper.string_view_type
@@ -431,7 +431,7 @@ fn maybe_unregister_owned_string_temp(
         Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => place,
         _ => return,
     };
-    if builder.locals[place.local.0 as usize].type_id == ctx.type_mapper.owned_string_type {
+    if builder.local_type(place.local) == ctx.type_mapper.owned_string_type {
         ctx.drops.unregister(place.local);
     }
 }
@@ -454,7 +454,7 @@ fn maybe_unregister_str_view_temp(
     };
     if let Some(place) = place {
         if place.projections.is_empty() {
-            let rhs_type = builder.locals[place.local.0 as usize].type_id;
+            let rhs_type = builder.local_type(place.local);
             if rhs_type == ctx.type_mapper.owned_string_type {
                 ctx.drops.unregister(place.local);
             }

@@ -82,7 +82,7 @@ pub(super) fn lower_call_arg(
             }
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 let local_type = if (place.local.0 as usize) < builder.locals.len() {
-                    builder.locals[place.local.0 as usize].type_id
+                    builder.local_type(place.local)
                 } else {
                     UNIT_TYPE
                 };
@@ -109,7 +109,7 @@ pub(super) fn lower_call_arg(
             // For constants or complex expressions, materialize into a temp first.
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 if place.projections.is_empty() {
-                    let local_type = builder.locals[place.local.0 as usize].type_id;
+                    let local_type = builder.local_type(place.local);
                     // Already a Ptr (borrowed resource param) — forward directly,
                     // don't wrap in another Ptr layer.
                     if matches!(ctx.type_registry.get(local_type), Some(GirType::Ptr(_))) {
@@ -153,7 +153,7 @@ pub(super) fn lower_call_arg(
             // an owned value before moving to the callee.
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 if place.projections.is_empty() {
-                    let local_type = builder.locals[place.local.0 as usize].type_id;
+                    let local_type = builder.local_type(place.local);
                     if let Some(inner) = ctx.pointee_type(local_type) {
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
                             ctx.warn_implicit_clone(arg.span, inner, crate::ir::ImplicitCloneReason::MoveParamFromBorrow);
@@ -171,7 +171,7 @@ pub(super) fn lower_call_arg(
                 if place.projections.is_empty() {
                     // CoW: move transfers ownership. Sever aliases first.
                     ctx.cow_before_mutation(builder, place.local);
-                    let local_type = builder.locals[place.local.0 as usize].type_id;
+                    let local_type = builder.local_type(place.local);
                     let ptr_type = ctx.register_mut_ptr_type(local_type);
                     let dst = builder.add_local(ptr_type, None);
                     builder.emit_borrow_mut(dst, place.clone());
@@ -850,7 +850,7 @@ pub(super) fn lower_call(
                         && ctx.drops.is_registered(place.local)
                         && !ctx.drops.is_moved(place.local)
                     {
-                        let ty = builder.locals[place.local.0 as usize].type_id;
+                        let ty = builder.local_type(place.local);
                         if ctx.type_registry.is_collection_type(ty) {
                             return Some(place.local);
                         }
@@ -900,7 +900,7 @@ pub(super) fn lower_call(
         if let Operand::Copy(ref place) | Operand::Move(ref place) = closure_op {
             if place.projections.is_empty() {
                 let closure_local = place.local;
-                let closure_type_id = builder.locals[closure_local.0 as usize].type_id;
+                let closure_type_id = builder.local_type(closure_local);
                 if let Some(type_name) = ctx.type_name_for_id(closure_type_id).map(|s| s.to_string()) {
                     if let Some((call_fn, _, _)) = ctx.lookup_closure_info(&type_name) {
                         let call_fn = call_fn.to_string();
@@ -1048,7 +1048,7 @@ pub(super) fn lower_interp_segment(
         let ptr_value_type = ctx.mut_capture_locals.get(&local_id).copied()
             .or_else(|| {
                 if ctx.ref_locals.contains(&local_id) {
-                    ctx.pointee_type(builder.locals[local_id.0 as usize].type_id)
+                    ctx.pointee_type(builder.local_type(local_id))
                 } else {
                     None
                 }

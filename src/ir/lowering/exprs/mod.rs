@@ -183,7 +183,7 @@ fn lower_expr_inner(
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 let place_clone = place.clone();
                 let local_type = if (place_clone.local.0 as usize) < builder.locals.len() {
-                    builder.locals[place_clone.local.0 as usize].type_id
+                    builder.local_type(place_clone.local)
                 } else {
                     I64_TYPE
                 };
@@ -215,7 +215,7 @@ fn lower_expr_inner(
             }
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 let local_type = if (place.local.0 as usize) < builder.locals.len() {
-                    builder.locals[place.local.0 as usize].type_id
+                    builder.local_type(place.local)
                 } else {
                     UNIT_TYPE
                 };
@@ -506,7 +506,7 @@ fn lower_expr_inner(
             });
             // Fallback: type-based lookup for indexed tasks (e.g., `await tasks[j]`)
             let resolved = task_local.or_else(|| {
-                let type_id = inner_local.map(|lid| builder.locals[lid.0 as usize].type_id);
+                let type_id = inner_local.map(|lid| builder.local_type(lid));
                 type_id.and_then(|tid| {
                     ctx.spawn.task_type_fns.get(&tid).and_then(|fns| {
                         if fns.len() == 1 { Some((None, fns[0].clone())) } else { None }
@@ -584,7 +584,7 @@ fn lower_expr_inner(
                     if let Operand::Copy(ref place) | Operand::Move(ref place) = closure_op {
                         if place.projections.is_empty() {
                             let closure_local = place.local;
-                            let closure_type_id = builder.locals[closure_local.0 as usize].type_id;
+                            let closure_type_id = builder.local_type(closure_local);
                             if let Some(type_name) = ctx.type_name_for_id(closure_type_id).map(|s| s.to_string()) {
                                 if ctx.lookup_closure_info(&type_name).is_some() {
                                     let (call_fn_name, struct_type_id, captures) =
@@ -2332,7 +2332,7 @@ fn clone_multi_use_resource_args(
                         } else { None })
                         .unwrap_or(false);
                     if is_borrow_param || is_multi_use || is_field_access {
-                        let local_type = builder.locals[local.0 as usize].type_id;
+                        let local_type = builder.local_type(local);
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(local_type) {
                             let ptr_type = ctx.register_ptr_type(local_type);
                             let ptr = builder.add_local(ptr_type, None);

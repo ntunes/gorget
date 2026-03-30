@@ -258,5 +258,5 @@ pub(super) fn is_resource_type_local(
     builder: &FunctionBuilder,
     registry: &TypeRegistry,
 ) -> bool {
-    registry.is_resource_type(builder.locals[local.0 as usize].type_id)
+    registry.is_resource_type(builder.local_type(local))
 }

@@ -662,7 +662,7 @@ pub fn build_shared_token_wrapper(
     // Phase 3: Release tokens in reverse declaration order
     guard_ptrs_ordered.sort_by_key(|(order, _)| *order);
     for &(_, guard_ptr) in guard_ptrs_ordered.iter().rev() {
-        let guard_type_id = match ctx.type_registry.get(builder.locals[guard_ptr.0 as usize].type_id) {
+        let guard_type_id = match ctx.type_registry.get(builder.local_type(guard_ptr)) {
             Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => *inner,
             _ => UNIT_TYPE,
         };
