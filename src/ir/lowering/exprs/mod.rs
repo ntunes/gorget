@@ -2358,14 +2358,25 @@ fn clone_multi_use_resource_args(
                             Some(!ctx.is_single_use(name))
                         } else { None })
                         .unwrap_or(false);
-                    if is_borrow_param || is_multi_use || is_field_access {
+                    // In a loop body, named locals are effectively multi-use
+                    // (each iteration reads the same local). Force clone.
+                    let in_loop = ctx.current_loop().is_some();
+                    let is_named_in_loop = in_loop && ctx.is_named_local(local);
+                    if is_borrow_param || is_multi_use || is_field_access || is_named_in_loop {
                         let local_type = builder.local_type(local);
-                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(local_type) {
-                            let ptr_type = ctx.register_ptr_type(local_type);
-                            let ptr = builder.add_local(ptr_type, None);
-                            builder.emit_borrow(ptr, crate::ir::instructions::Place::local(local));
-                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr)], local_type);
-                            ctx.drops.register_local(cloned, local_type, &ctx.type_registry);
+                        let inner_type = ctx.pointee_type(local_type).unwrap_or(local_type);
+                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
+                            let clone_arg = if ctx.pointee_type(local_type).is_some() {
+                                // Already Ptr — use directly
+                                FunctionBuilder::copy(local)
+                            } else {
+                                let ptr_type = ctx.register_ptr_type(inner_type);
+                                let ptr = builder.add_local(ptr_type, None);
+                                builder.emit_borrow(ptr, crate::ir::instructions::Place::local(local));
+                                FunctionBuilder::copy(ptr)
+                            };
+                            let cloned = builder.call(&clone_fn, vec![clone_arg], inner_type);
+                            ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);
                             *op = FunctionBuilder::copy(cloned);
                         }
                     }

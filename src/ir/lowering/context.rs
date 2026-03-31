@@ -852,7 +852,11 @@ impl<'a> LoweringContext<'a> {
                     let local_type = builder.local_type(place.local);
                     let is_resource = self.type_registry.is_resource_type(local_type);
                     let is_string_view = local_type == self.type_mapper.string_view_type;
-                    if (is_resource || is_string_view) && !self.drops.is_moved(place.local) {
+                    // Skip MoveZero for named locals in loops — they're used
+                    // each iteration. The clone at ensure_owned_string produces
+                    // a temp that gets MoveZero'd instead.
+                    let skip = self.is_named_local(place.local) && self.current_loop().is_some();
+                    if (is_resource || is_string_view) && !self.drops.is_moved(place.local) && !skip {
                         builder.move_zero(place.clone());
                         self.drops.mark_moved(place.local);
                     }
