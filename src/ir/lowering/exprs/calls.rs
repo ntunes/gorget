@@ -146,7 +146,17 @@ pub(super) fn lower_call_arg(
                     return FunctionBuilder::copy(dst);
                 }
             }
-            Operand::Constant(Constant::Unit) // unreachable: callee_passes_by_ptr implies callee_param_type.is_some()
+            // Fallback: materialize as StringView if the value is a string constant.
+            if let Operand::Constant(Constant::Str(_)) = &val {
+                let sv_type = ctx.type_mapper.string_view_type;
+                let tmp = builder.add_local(sv_type, None);
+                builder.assign(Place::local(tmp), val);
+                let ptr_type = ctx.register_ptr_type(sv_type);
+                let dst = builder.add_local(ptr_type, None);
+                builder.emit_borrow(dst, Place::local(tmp));
+                return FunctionBuilder::copy(dst);
+            }
+            val // pass through for non-string constants
         }
         Ownership::Move if callee_is_move_param => {
             // If the operand is Ptr(T) (borrowed ref), auto-clone to create

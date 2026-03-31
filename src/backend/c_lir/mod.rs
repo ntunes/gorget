@@ -6214,9 +6214,15 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         continue;
                     }
                 }
-                match arg_ty {
-                    Some(t) if t.is_aggregate() => write!(out, "{}", v(*a)).unwrap(),
-                    _ => write!(out, "(void*){}", v(*a)).unwrap(),
+                let is_str_lit_val = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                if is_str_lit_val {
+                    // String literal → Ptr param: wrap in compound Str literal.
+                    write!(out, "&(Str){{ .data = {v}, .len = strlen({v}), .cap = 0, .alloc = NULL }}", v = v(*a)).unwrap();
+                } else {
+                    match arg_ty {
+                        Some(t) if t.is_aggregate() => write!(out, "{}", v(*a)).unwrap(),
+                        _ => write!(out, "(void*){}", v(*a)).unwrap(),
+                    }
                 }
             }
             write!(out, ");").unwrap();
