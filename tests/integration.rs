@@ -7308,13 +7308,13 @@ fn format_expr_canonical(expr: &Expr) -> String {
             format!("{os}[{is}]")
         }
         Expr::Range {
-            start, end, ..
+            start, end, inclusive,
         } => {
             let mut result = String::new();
             if let Some(s) = start {
                 result.push_str(&format_expr_canonical(&s.node));
             }
-            result.push_str("..");
+            result.push_str(if *inclusive { "..=" } else { ".." });
             if let Some(e) = end {
                 result.push_str(&format_expr_canonical(&e.node));
             }
