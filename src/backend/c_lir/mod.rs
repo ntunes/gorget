@@ -2720,42 +2720,48 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         }
     }
 
-    // Propagate Str pointee info for Ptr values from function params.
-    // When a function takes a Ptr param (bare borrow of Str), all values
-    // derived from it should know they point to Str. This covers Option
-    // unwrap, memcpy chains, and other patterns not tracked by SlotAddr/FieldPtr.
+    // Propagate str_ptr_values from LIR function into ptr_pointee.
+    // The LIR lowering marks Ptr params that point to StringView/GorgetString.
+    // Propagate this info through SlotStore→SlotLoad chains so the C backend
+    // can deref Ptr(Str) args in printf, CmpOp, and CallExtern.
     {
         let str_struct_id = module.structs.iter().position(|s| s.name == "GorgetStringView" || s.name == "GorgetString");
         if let Some(sid) = str_struct_id {
             let str_ty = LirType::Struct(crate::lir::StructId(sid as u32));
-            // Mark all Ptr-typed function params as Ptr(Str) if the function's
-            // GIR signature has them as Str
-            for (pi, param) in func.params.iter().enumerate() {
-                if matches!(param, LirType::Ptr) {
-                    let vid_idx = pi; // param values start at 0
-                    if ptr_pointee.get(vid_idx).map_or(true, |p| p.is_none()) {
-                        // Check if there's a slot for this param that's Str-typed
-                        if func.slots.iter().any(|s| s.ty == str_ty) {
-                            ptr_pointee[vid_idx] = Some(str_ty.clone());
-                        }
-                    }
+            // Seed ptr_pointee from LIR's str_ptr_values
+            for vid in &func.str_ptr_values {
+                if (vid.0 as usize) < ptr_pointee.len() {
+                    ptr_pointee[vid.0 as usize] = Some(str_ty.clone());
                 }
             }
-            // Propagate: any Ptr value loaded from a slot whose stored value has Str pointee
-            for block in &func.blocks {
-                for inst in &block.insts {
-                    if let Inst::SlotLoad { dst, slot, .. } = inst {
-                        if matches!(func.slots[slot.0 as usize].ty, LirType::Ptr) {
-                            if let Some(pt) = slot_pointee.get(slot.0 as usize).and_then(|p| p.clone()) {
-                                ptr_pointee[dst.0 as usize] = Some(pt);
+            // Track which slots hold Str ptrs
+            let mut str_ptr_slots: rustc_hash::FxHashSet<u32> = rustc_hash::FxHashSet::default();
+            // Propagate through instruction chains (multiple passes for convergence)
+            for _ in 0..3 {
+                for block in &func.blocks {
+                    for inst in &block.insts {
+                        // SlotStore of Str ptr → mark slot
+                        if let Inst::SlotStore { slot, value, .. } = inst {
+                            let is_str = ptr_pointee.get(value.0 as usize)
+                                .and_then(|p| p.as_ref())
+                                .map_or(false, |p| *p == str_ty);
+                            if is_str {
+                                str_ptr_slots.insert(slot.0);
                             }
                         }
-                    }
-                    // Also: Load from a Ptr that itself points to Str → result is Str
-                    if let Inst::Load { dst, ptr, ty } = inst {
-                        if matches!(ty, LirType::Ptr) {
-                            if let Some(Some(pt)) = ptr_pointee.get(ptr.0 as usize) {
-                                if *pt == str_ty {
+                        // SlotLoad from Str ptr slot → mark loaded value
+                        if let Inst::SlotLoad { dst, slot, .. } = inst {
+                            if str_ptr_slots.contains(&slot.0) {
+                                ptr_pointee[dst.0 as usize] = Some(str_ty.clone());
+                            }
+                        }
+                        // Load through a Str ptr → result is also Str ptr
+                        if let Inst::Load { dst, ptr, ty } = inst {
+                            if matches!(ty, LirType::Ptr) {
+                                let is_str = ptr_pointee.get(ptr.0 as usize)
+                                    .and_then(|p| p.as_ref())
+                                    .map_or(false, |p| *p == str_ty);
+                                if is_str {
                                     ptr_pointee[dst.0 as usize] = Some(str_ty.clone());
                                 }
                             }

@@ -527,6 +527,9 @@ pub struct LirFunction {
     pub param_names: Vec<Option<String>>,
     /// Which pointer params are const (came from `GirType::Ptr`, i.e. bare borrow, not `&`/`!`).
     pub const_params: Vec<bool>,
+    /// Values that are Ptr to GorgetStringView/GorgetString.
+    /// The C backend uses this to deref Ptr(Str) args in printf, CmpOp, and CallExtern.
+    pub str_ptr_values: rustc_hash::FxHashSet<ValueId>,
 }
 
 impl LirFunction {
@@ -542,6 +545,7 @@ impl LirFunction {
             display_name: None,
             param_names: Vec::new(),
             const_params: Vec::new(),
+            str_ptr_values: rustc_hash::FxHashSet::default(),
         }
     }
 

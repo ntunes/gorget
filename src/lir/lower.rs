@@ -973,6 +973,17 @@ impl<'a> FuncLowering<'a> {
                     let param_val = self.lir_func.next_value();
                     let slot = self.local_to_slot[local_id.0 as usize];
                     let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
+                    // Mark Ptr(Str) params for C backend deref decisions.
+                    let gir_type = self.gir_func.locals[local_id.0 as usize].type_id;
+                    if matches!(slot_ty, LirType::Ptr) {
+                        if let Some(ir::types::GirType::Ptr(inner) | ir::types::GirType::MutPtr(inner)) = self.gir_types.get(gir_type) {
+                            if let Some(ir::types::GirType::Named(name)) = self.gir_types.get(*inner) {
+                                if name == "GorgetStringView" || name == "GorgetString" {
+                                    self.lir_func.str_ptr_values.insert(param_val);
+                                }
+                            }
+                        }
+                    }
                     self.lir_func.block_mut(entry_bb).insts.push(Inst::ParamRef {
                         dst: param_val,
                         index: param_idx as u32,
