@@ -1335,7 +1335,15 @@ pub(super) fn lower_method_call(
                 if let Expr::Identifier(name) = &arg.node.value.node {
                     if let Some((local_id, _)) = ctx.lookup_local(name) {
                         if is_resource_type_local(local_id, builder, &ctx.type_registry) {
-                            return Some(Place::local(local_id));
+                            // Skip MoveZero for string locals — strings are immutable,
+                            // Move is conceptually a borrow. The callee gets a Ptr(Str)
+                            // reference, not ownership of the data.
+                            let local_type = builder.local_type(local_id);
+                            let is_string = ctx.type_mapper.is_string_type(
+                                ctx.pointee_type(local_type).unwrap_or(local_type));
+                            if !is_string {
+                                return Some(Place::local(local_id));
+                            }
                         }
                     }
                 }
