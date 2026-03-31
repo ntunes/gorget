@@ -2759,7 +2759,10 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             // Track which slots hold Str ptrs
             let mut str_ptr_slots: rustc_hash::FxHashSet<u32> = rustc_hash::FxHashSet::default();
             // Propagate through instruction chains (multiple passes for convergence)
-            for _ in 0..3 {
+            // DON'T mark Str-typed slots as str_ptr_slots — they hold Str VALUES, not pointers.
+            // Only Ptr-typed slots that receive Str pointer values get marked (via SlotStore propagation).
+            // Fixpoint: propagate through all instruction patterns
+            for _ in 0..4 {
                 for block in &func.blocks {
                     for inst in &block.insts {
                         // SlotStore of Str ptr → mark slot
@@ -2773,11 +2776,13 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                         }
                         // SlotLoad from Str ptr slot → mark loaded value
                         if let Inst::SlotLoad { dst, slot, .. } = inst {
-                            if str_ptr_slots.contains(&slot.0) {
+                            if str_ptr_slots.contains(&slot.0)
+                                && matches!(val_types.get(dst.0 as usize), Some(Some(LirType::Ptr)))
+                            {
                                 ptr_pointee[dst.0 as usize] = Some(str_ty.clone());
                             }
                         }
-                        // Load through a Str ptr → result is also Str ptr
+                        // Load through a Str ptr → result is also Str ptr (if Ptr-typed)
                         if let Inst::Load { dst, ptr, ty } = inst {
                             if matches!(ty, LirType::Ptr) {
                                 let is_str = ptr_pointee.get(ptr.0 as usize)
