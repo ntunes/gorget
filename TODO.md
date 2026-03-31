@@ -44,9 +44,7 @@
 
 - **Self-host parser: 3 remaining mismatches**: null byte, str alias, float precision — all unfixable at self-host level. [updated: 2026-03-21]
 
-- **Box[T] corruption for structs containing large enums**: `Box(ret_ty)` where `ret_ty: SpannedType` (struct with Type enum, 8 variants) produces a Box whose `*b` dereference returns garbage immediately. `format_type(*ret)` in self-host formatter returns `"?"` instead of `"int"`. Confirmed: the value is correct BEFORE Box(), corrupted AFTER. Likely sizeof/memcpy mismatch in C backend Box implementation for types with union-based enum fields. This causes 30 of 35 self-host parser mismatches (`int(int)` → `?(int)`). [added: 2026-03-30]
-
-- **Self-host comparison scores (858 fixtures)**: Parser 729 matched / 35 mismatch / 94 crash, resolver 35 matched / 729 mismatch / 94 crash. 30 parser mismatches from Box[SpannedType] corruption (see above). 94 crashes from newer fixtures using unsupported AST nodes. Resolver regression from builtin/keyword DEF ID shift. [updated: 2026-03-30]
+- **Self-host comparison scores (858 fixtures)**: Parser 760 matched / 4 mismatch / 94 crash (was 729/35/94 before Box fix). Remaining 4 mismatches: null byte (chars.gg), comprehension body (comprehensions.gg), float precision (fstring_format.gg), str alias (dataframe_nulls.gg). Resolver 35 matched / 729 mismatch / 94 crash — builtin/keyword DEF ID shift. 94 crashes from unsupported AST nodes. [updated: 2026-03-30]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
