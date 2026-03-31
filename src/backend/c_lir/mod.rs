@@ -8647,8 +8647,9 @@ fn takes_cstr_for_str_param(fn_name: &str, param_idx: usize) -> bool {
         | "gorget_path_exists" | "gorget_path_is_file" | "gorget_path_is_dir"
         | "gorget_path_normalize"
         | "gorget_getenv" | "gorget_unsetenv"
-        | "gorget_regex_compile"
         | "gorget_exec" | "gorget_exec_capture" => param_idx == 0,
+        // regex_compile takes const char* for both pattern and flags
+        "gorget_regex_compile" => true,
         // File I/O: const char* path (and content for write/append)
         "gorget_read_file" | "gorget_read_file_bytes" | "gorget_write_file_bytes"
         | "gorget_file_exists" | "gorget_delete_file"
