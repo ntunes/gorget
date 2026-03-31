@@ -82,6 +82,11 @@ impl FunctionBuilder {
         self.locals[idx].type_id
     }
 
+    /// Get the name hint of a local (if any).
+    pub fn local_name(&self, id: LocalId) -> Option<&str> {
+        self.locals[id.0 as usize].name_hint.as_ref().map(|s| s.as_str())
+    }
+
     /// Update the type of an existing local (e.g., after discovering the actual
     /// type from lowering a branch of an if-expression).
     pub fn set_local_type(&mut self, id: LocalId, type_id: TypeId) {

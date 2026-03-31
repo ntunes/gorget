@@ -1041,7 +1041,7 @@ pub(super) fn lower_method_call(
                     ctx.cow_before_mutation(builder, place.local);
                     // Re-resolve: cow_before_mutation may have redirected the variable
                     // name to a new owned local (Phase 1c param materialization).
-                    if let Some(hint) = builder.locals[place.local.0 as usize].name_hint.clone() {
+                    if let Some(hint) = builder.local_name(place.local).map(|s| s.to_string()) {
                         if let Some((new_local, _)) = ctx.lookup_local(&hint) {
                             if new_local != place.local {
                                 recv = FunctionBuilder::copy(new_local);

@@ -378,8 +378,8 @@ fn lower_var_decl(
                     else if ctx.is_named_local(place.local)
                         && ctx.type_registry.is_resource_type(rhs_type)
                         && !ctx.cow_reassigned_names.contains(name)
-                        && !builder.locals[place.local.0 as usize].name_hint.as_ref()
-                            .map_or(false, |n| ctx.cow_reassigned_names.contains(n.as_str()))
+                        && !builder.local_name(place.local)
+                            .map_or(false, |n| ctx.cow_reassigned_names.contains(n))
                     {
                         // Create Ptr(T) alias instead of cloning
                         let ptr_type = ctx.register_ptr_type(rhs_type);
@@ -391,7 +391,7 @@ fn lower_var_decl(
                         // Unregister if already registered (from line 226).
                         ctx.drops.unregister(local_id);
                         // Update local type in context lookup
-                        if let Some(ref hint) = builder.locals[local_id.0 as usize].name_hint {
+                        if let Some(ref hint) = builder.local_name(local_id).map(|s| s.to_string()) {
                             let name = hint.clone();
                             ctx.register_local(&name, local_id, ptr_type);
                         }

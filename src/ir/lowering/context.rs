@@ -1347,7 +1347,7 @@ impl<'a> LoweringContext<'a> {
                 vec![crate::ir::builder::FunctionBuilder::copy(alias_local)], inner_type);
             // Create a NEW local for the owned copy (can't reuse alias_local because
             // ref_locals is static per-function in the LIR — changing type mid-function breaks).
-            let name_hint = builder.locals[alias_local.0 as usize].name_hint.clone();
+            let name_hint = builder.local_name(alias_local).map(|s| s.to_string());
             let owned_local = builder.add_local(inner_type,
                 name_hint.as_deref());
             builder.assign(crate::ir::instructions::Place::local(owned_local),
@@ -1355,7 +1355,7 @@ impl<'a> LoweringContext<'a> {
             // Register the owned local for drop
             self.drops.register_local(owned_local, inner_type, &self.type_registry);
             // Update context: redirect the variable name to the new owned local
-            if let Some(ref hint) = builder.locals[alias_local.0 as usize].name_hint {
+            if let Some(ref hint) = builder.local_name(alias_local).map(|s| s.to_string()) {
                 let name = hint.clone();
                 self.register_local(&name, owned_local, inner_type);
                 self.named_locals.insert(owned_local);
