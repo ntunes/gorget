@@ -490,11 +490,9 @@ impl TypeRegistry {
                 return true;
             }
         }
-        // GorgetString is Resource (owns heap data). GorgetStringView is NOT resource
-        // to avoid triggering Ptr wrapping and CoW aliasing for bare string params.
-        // The gap between is_resource and needs_drop for strings is deliberate —
-        // is_resource_type = needs_drop is the target but requires ~100 deref site fixes.
-        if name == "GorgetString" {
+        // All string types are Resource — uniform CoW treatment with collections.
+        // String Borrow params go into ref_locals (read-through without clone).
+        if name == "GorgetString" || name == "GorgetStringView" {
             return true;
         }
         // Fallback for types without TypeDefs (migration safety)

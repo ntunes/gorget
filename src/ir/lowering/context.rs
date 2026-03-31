@@ -1210,6 +1210,12 @@ impl<'a> LoweringContext<'a> {
             if place.projections.is_empty() {
                 let local_type = builder.local_type(place.local);
                 if let Some(inner) = self.pointee_type(local_type) {
+                    // String Ptr params: read-through without clone.
+                    // Strings are immutable — no clone needed on access.
+                    // Cloning only at ownership boundaries (ensure_owned_string).
+                    if self.type_mapper.is_string_type(inner) {
+                        return operand;
+                    }
                     if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
                         let cloned = builder.call(
                             &clone_fn,
