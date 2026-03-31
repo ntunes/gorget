@@ -8085,6 +8085,10 @@ fn emit_collection_constructor(
 /// (i.e. the C prototype uses `const GorgetArray*`, `const GorgetX25519KeyPair*`, etc.)
 /// but LIR passes it as a Struct value. The codegen must emit `&(val)` or pass the pointer directly.
 fn runtime_arg_by_ptr(name: &str, idx: usize) -> bool {
+    // String clone functions take Str by pointer
+    if name == "gorget_string_clone_to_owned" || name == "gorget_string_clone" || name == "gorget_string_free" {
+        return true;
+    }
     // Self-by-pointer for collection/string methods (arg 0)
     if idx == 0 && collection_self_by_ptr(name) {
         return true;
