@@ -4870,11 +4870,19 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 let is_str_struct = matches!(arg_ty, Some(LirType::Struct(sid)) if {
                                     module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView" || s.name == "GorgetString")
                                 });
-                                // Also check if arg is Ptr to GorgetStringView (e.g., SlotAddr → Str slot)
+                                // Check if arg is Ptr to GorgetStringView via:
+                                // (1) ptr_pointee tracking, (2) ext_params, (3) callee param types
                                 let is_ptr_to_str = matches!(arg_ty, Some(LirType::Ptr)) && {
-                                    ptr_pointee.get(a.0 as usize).and_then(|t| t.as_ref()).map_or(false, |t| {
+                                    let from_pointee = ptr_pointee.get(a.0 as usize).and_then(|t| t.as_ref()).map_or(false, |t| {
                                         matches!(t, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView" || s.name == "GorgetString"))
-                                    })
+                                    });
+                                    let from_ext_params = ext_params.and_then(|p| p.get(i)).map_or(false, |pt| {
+                                        matches!(pt, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView" || s.name == "GorgetString"))
+                                    });
+                                    let from_callee = module.functions.iter().find(|f| f.name == emit_name).and_then(|f| f.params.get(i)).map_or(false, |pt| {
+                                        matches!(pt, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView" || s.name == "GorgetString"))
+                                    });
+                                    from_pointee || from_ext_params || from_callee
                                 };
                                 let needs_null_term = needs_null_terminated_cstr(emit_name);
                                 if needs_cstr && is_str_lit {
@@ -5818,15 +5826,6 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 {
                     write!(out, "(int)({v}).len, ({v}).data", v = v(*a)).unwrap();
                     continue;
-                }
-                // Printf with Ptr(Str) arg — deref then decompose.
-                if need_fmt_fix && is_printf && i > 0 && matches!(arg_ty, Some(LirType::Ptr)) {
-                    if let Some(Some(pt)) = ptr_pointee.get(a.0 as usize) {
-                        if matches!(pt, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView" || s.name == "GorgetString")) {
-                            write!(out, "(int)((Str*){v})->len, ((Str*){v})->data", v = v(*a)).unwrap();
-                            continue;
-                        }
-                    }
                 }
                 // Runtime arg-by-pointer: the C prototype takes a pointer to the struct.
                 // If the LIR value is a Ptr, pass directly; if Struct, take address.
