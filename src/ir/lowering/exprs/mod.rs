@@ -1402,11 +1402,6 @@ fn lower_struct_literal(
         }
     }
 
-    // Unregister GorgetString temps used as struct fields — they may be stored
-    // as Str views that outlive the current scope.
-    // TODO: narrow or remove once owned_locals tracking is comprehensive
-    unregister_gorget_string_args(ctx, builder, &field_operands);
-
     // Phase 1f: clone multi-use resource args BEFORE struct init.
     clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
 
@@ -2415,84 +2410,6 @@ fn move_zero_consumed_args(
 /// store the view in structs) will cause use-after-free. Those call sites
 /// need to use `String` parameters instead of `str`.
 /// Check whether GorgetString temps should be unregistered (leaked) for a call.
-/// Returns false (safe to keep in drop tracking) when:
-/// - The callee is void-returning with no mutable-reference params
-/// - The callee returns GorgetString (owned) — it creates new allocations,
-///   doesn't store views from the args
-/// - The callee returns a primitive (int, float, bool) — can't store views
-pub fn should_unregister_string_args(
-    ctx: &LoweringContext,
-    callee_name: &str,
-    ret_type: crate::ir::types::TypeId,
-) -> bool {
-    use crate::ir::types::{UNIT_TYPE, PRIMITIVE_TYPE_COUNT};
-    // Void return: str view can't escape via result
-    if ret_type == UNIT_TYPE {
-        // Still check for ByMutPtr params below
-    }
-    // Primitive return (int, float, bool): can't store str views
-    else if ret_type.0 < PRIMITIVE_TYPE_COUNT {
-        return false;
-    }
-    // GorgetString return: callee produces a new allocation, doesn't store arg views
-    else if ret_type == ctx.type_mapper.owned_string_type {
-        return false;
-    }
-    // StringView return: callee might return a view into the arg (safe — same scope)
-    else if ret_type == ctx.type_mapper.string_view_type {
-        return false;
-    }
-    // Collection return (Vector, Dict, etc.): collections own their string data
-    else if ctx.type_registry.is_collection_type(ret_type) {
-        return false;
-    }
-    // Non-void, non-primitive, non-string, non-collection: might store str views
-    else {
-        return true;
-    }
-    // Check for ByMutPtr params — str view could escape through mutable ref
-    if let Some(abis) = ctx.fn_param_abis.get(callee_name) {
-        use super::context::ParamABI;
-        return abis.iter().any(|abi| *abi == ParamABI::ByMutPtr);
-    }
-    // Unknown callee (runtime/extern): void-returning + not in fn_param_abis.
-    // Safe: C runtime functions take Str by value (no mutable refs in Gorget sense),
-    // and void return means no str view escapes via the result. Gorget-defined
-    // functions with ByMutPtr params are always registered in fn_param_abis.
-    false
-}
-
-/// Unregister GorgetString temps used as call/struct arguments.
-/// When a GorgetString temp is passed to a function that takes `str`, the function
-/// may store the str view in a struct that outlives the current scope. Freeing the
-/// GorgetString at scope exit would create a use-after-free. Instead, we unregister
-/// the temp (accepting a leak) to preserve correctness.
-pub fn unregister_gorget_string_args(
-    ctx: &mut LoweringContext,
-    builder: &FunctionBuilder,
-    args: &[Operand],
-) {
-    let owned_string_type = ctx.type_mapper.owned_string_type;
-    for arg in args {
-        if let Operand::Copy(place) | Operand::Move(place) = arg {
-            if place.projections.is_empty() {
-                let idx = place.local.0 as usize;
-                if idx < builder.locals.len()
-                    && builder.locals[idx].type_id == owned_string_type
-                {
-                    // Don't unregister owned locals — constructors now clone
-                    // string views, so returned structs own their data.
-                    // The caller's string is independent and safe to drop.
-                    if ctx.owned_locals.contains(&place.local) {
-                        continue;
-                    }
-                    ctx.drops.unregister(place.local);
-                }
-            }
-        }
-    }
-}
-
 /// Infer the GIR type of an operand by examining its structure.
 /// Register (or reuse) a Tuple TypeDef for the given element types.
 /// Infer operand type using both ctx locals and builder locals.

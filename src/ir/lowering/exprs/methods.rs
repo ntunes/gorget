@@ -183,9 +183,6 @@ pub(super) fn lower_method_call(
                     // Try to infer return type — for .from(), .default() etc., return the type itself
                     ctx.type_mapper.lookup_named(name).unwrap_or(I64_TYPE)
                 };
-                if super::should_unregister_string_args(ctx, &effective_name, ret_type) {
-                    super::unregister_gorget_string_args(ctx, builder, &lowered_args);
-                }
                 if ret_type == UNIT_TYPE {
                     builder.call_void(effective_name, lowered_args);
                     return Operand::Constant(Constant::Unit);
@@ -1400,11 +1397,6 @@ pub(super) fn lower_method_call(
                     }
                 }
             }
-        }
-
-        // Unregister GorgetString temps when the callee might store str views.
-        if super::should_unregister_string_args(ctx, &sig_name, ret_type) {
-            super::unregister_gorget_string_args(ctx, builder, &call_args);
         }
 
         let result = if ret_type == UNIT_TYPE {
