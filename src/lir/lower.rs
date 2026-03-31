@@ -1765,6 +1765,14 @@ impl<'a> FuncLowering<'a> {
                     // If dst is Ptr(T), return the raw pointer (borrowed reference).
                     let dst_gir_type = self.gir_func.locals[dst.0 as usize].type_id;
                     if matches!(self.gir_types.get(dst_gir_type), Some(GirType::Ptr(_))) {
+                        // Mark Ptr(Str) element reads for C backend deref decisions.
+                        if let Some(GirType::Ptr(inner)) = self.gir_types.get(dst_gir_type) {
+                            if let Some(GirType::Named(name)) = self.gir_types.get(*inner) {
+                                if name == "GorgetStringView" || name == "GorgetString" {
+                                    self.lir_func.str_ptr_values.insert(ptr_val);
+                                }
+                            }
+                        }
                         self.store_to_local(*dst, ptr_val, bb);
                         return;
                     }
