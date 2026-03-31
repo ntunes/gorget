@@ -543,6 +543,9 @@ pub static GORGET_STRING_VIEW: BuiltinTypeProtocol = BuiltinTypeProtocol {
         // Allocating operations → GorgetString
         BuiltinMethodDecl { name: "to_upper", runtime_callee: Some("gorget_str_to_upper"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
         BuiltinMethodDecl { name: "to_lower", runtime_callee: Some("gorget_str_to_lower"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
+        // Aliases for upper/lower (some code uses .upper()/.lower() instead of .to_upper()/.to_lower())
+        BuiltinMethodDecl { name: "upper", runtime_callee: Some("gorget_str_upper"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
+        BuiltinMethodDecl { name: "lower", runtime_callee: Some("gorget_str_lower"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
     ],
 };
 
