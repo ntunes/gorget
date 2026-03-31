@@ -9,7 +9,7 @@ from std.conv import parse_int, parse_float, chr
 # Required because byte_slice returns a view into the source string, which is
 # freed when the Lexer is dropped at the end of lex_tokenize.
 String owned_slice(String s, int start, int end):
-    return "" + s.byte_slice(start, end)
+    return s.byte_slice(start, end).clone()
 
 # ── Keyword enum ──────────────────────────────────────────────
 
@@ -405,14 +405,14 @@ equip Lexer:
             int hex_start = self.lex_pos
             while self.lex_pos < self.lex_source.byte_len() and self.lex_peek() != b'}':
                 self.lex_advance()
-            String hex_str = owned_slice(self.lex_source,hex_start, self.lex_pos)
+            String hex_str = owned_slice(self.lex_source, hex_start, self.lex_pos)
             if self.lex_pos < self.lex_source.byte_len():
                 self.lex_advance()
             int code = lex_parse_int_radix(hex_str, 16)
             return Some(chr(code))
         else:
             self.lex_advance()
-            return Some(owned_slice(self.lex_source,self.lex_pos - 1, self.lex_pos))
+            return Some(owned_slice(self.lex_source, self.lex_pos - 1, self.lex_pos))
 
     # ── Identifier scanning ───────────────────────────────────
 
@@ -424,7 +424,7 @@ equip Lexer:
                 self.lex_pos = self.lex_pos + 1
             else:
                 break
-        String word = owned_slice(self.lex_source,start, self.lex_pos)
+        String word = owned_slice(self.lex_source, start, self.lex_pos)
         Option[Keyword] kw = keyword_from_str(word)
         match kw:
             case Some(k):
@@ -452,7 +452,7 @@ equip Lexer:
                         self.lex_pos = self.lex_pos + 1
                     else:
                         break
-                String hex_body = owned_slice(self.lex_source,start + 2, self.lex_pos)
+                String hex_body = owned_slice(self.lex_source, start + 2, self.lex_pos)
                 String clean = str_remove_char(hex_body, b'_')
                 int val = lex_parse_int_radix(clean, 16)
                 self.lex_emit(TkInt(val), start, self.lex_pos)
@@ -465,7 +465,7 @@ equip Lexer:
                         self.lex_pos = self.lex_pos + 1
                     else:
                         break
-                String oct_body = owned_slice(self.lex_source,start + 2, self.lex_pos)
+                String oct_body = owned_slice(self.lex_source, start + 2, self.lex_pos)
                 String clean = str_remove_char(oct_body, b'_')
                 int val = lex_parse_int_radix(clean, 8)
                 self.lex_emit(TkInt(val), start, self.lex_pos)
@@ -478,7 +478,7 @@ equip Lexer:
                         self.lex_pos = self.lex_pos + 1
                     else:
                         break
-                String bin_body = owned_slice(self.lex_source,start + 2, self.lex_pos)
+                String bin_body = owned_slice(self.lex_source, start + 2, self.lex_pos)
                 String clean = str_remove_char(bin_body, b'_')
                 int val = lex_parse_int_radix(clean, 2)
                 self.lex_emit(TkInt(val), start, self.lex_pos)
@@ -521,7 +521,7 @@ equip Lexer:
                         break
                     self.lex_pos = self.lex_pos + 1
 
-        String num_str = owned_slice(self.lex_source,start, self.lex_pos)
+        String num_str = owned_slice(self.lex_source, start, self.lex_pos)
         String clean = str_remove_char(num_str, b'_')
         if is_float:
             float fval = parse_float(clean).unwrap_or(0.0)
@@ -626,7 +626,7 @@ equip Lexer:
                             self.lex_advance()
                     self.lex_advance()
 
-                String expr_text = owned_slice(self.lex_source,expr_start, self.lex_pos)
+                String expr_text = owned_slice(self.lex_source, expr_start, self.lex_pos)
                 segments.push(SegInterpolation(expr_text))
                 if self.lex_pos < self.lex_source.byte_len():
                     self.lex_advance()
@@ -640,7 +640,7 @@ equip Lexer:
                     continue
 
             # Regular character
-            current_lit = current_lit + owned_slice(self.lex_source,self.lex_pos, self.lex_pos + 1)
+            current_lit = current_lit + owned_slice(self.lex_source, self.lex_pos, self.lex_pos + 1)
             self.lex_advance()
 
         if current_lit.len() > 0:
@@ -676,7 +676,7 @@ equip Lexer:
                         self.lex_emit(TkError("unterminated char"), start, self.lex_pos)
                         return
             else:
-                lit = lit + owned_slice(self.lex_source,self.lex_pos, self.lex_pos + 1)
+                lit = lit + owned_slice(self.lex_source, self.lex_pos, self.lex_pos + 1)
                 self.lex_advance()
 
         if self.lex_at_end() or self.lex_peek() == b'\n':
@@ -891,7 +891,7 @@ equip Lexer:
                 self.lex_advance()
             int content_start = self.lex_pos
             self.lex_skip_to_eol()
-            String content = owned_slice(self.lex_source,content_start, self.lex_pos)
+            String content = owned_slice(self.lex_source, content_start, self.lex_pos)
             self.lex_emit(TkDocComment(content), start, self.lex_pos)
             return
 
@@ -900,7 +900,7 @@ equip Lexer:
             self.lex_advance()
         int content_start = self.lex_pos
         self.lex_skip_to_eol()
-        String content = owned_slice(self.lex_source,content_start, self.lex_pos)
+        String content = owned_slice(self.lex_source, content_start, self.lex_pos)
         self.lex_emit(TkComment(content), start, self.lex_pos)
 
     # ── Tokenize one line's content ───────────────────────────
