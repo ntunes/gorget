@@ -1111,8 +1111,21 @@ fn lower_struct_literal(
 
     // Box(value) constructor → heap allocation via __gorget_box_alloc
     if (name == "Box" || name.starts_with("Box__")) && args.len() == 1 {
-        let val_op = lower_expr(ctx, builder, &args[0]);
-        let val_type = super::exprs::infer_operand_type_full(ctx, &val_op, builder);
+        let mut val_op = lower_expr(ctx, builder, &args[0]);
+        let raw_type = super::exprs::infer_operand_type_full(ctx, &val_op, builder);
+        // Unwrap Ptr(T) → T: when the argument is a bare-borrowed resource
+        // type (passed by pointer), Box should box the value, not the pointer.
+        let val_type = match ctx.type_registry.get(raw_type) {
+            Some(crate::ir::types::GirType::Ptr(inner)) | Some(crate::ir::types::GirType::MutPtr(inner)) => {
+                let pointee = *inner;
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = val_op {
+                    let derefed = builder.load_ref(place.clone(), pointee);
+                    val_op = FunctionBuilder::copy(derefed);
+                }
+                pointee
+            }
+            _ => raw_type,
+        };
         // Determine inner type name for the mangled Box type
         let inner_c = if let Some(rest) = name.strip_prefix("Box__") {
             // Already mangled (e.g., "Box__int64_t") — use the suffix directly

@@ -278,8 +278,21 @@ pub(super) fn lower_call(
 
         // Box(value) constructor → heap allocation via __gorget_box_alloc
         if (name == "Box" || name.starts_with("Box__")) && args.len() == 1 {
-            let val_op = lower_expr(ctx, builder, &args[0].node.value);
-            let val_type = infer_operand_type_full(ctx, &val_op, builder);
+            let mut val_op = lower_expr(ctx, builder, &args[0].node.value);
+            let raw_type = infer_operand_type_full(ctx, &val_op, builder);
+            // Unwrap Ptr(T) → T: bare-borrowed resource params are passed by pointer.
+            // Box should box the value, not the pointer.
+            let val_type = match ctx.type_registry.get(raw_type) {
+                Some(crate::ir::types::GirType::Ptr(inner)) | Some(crate::ir::types::GirType::MutPtr(inner)) => {
+                    let pointee = *inner;
+                    if let Operand::Copy(ref place) | Operand::Move(ref place) = val_op {
+                        let derefed = builder.load_ref(place.clone(), pointee);
+                        val_op = FunctionBuilder::copy(derefed);
+                    }
+                    pointee
+                }
+                _ => raw_type,
+            };
             let inner_c = if let Some(rest) = name.strip_prefix("Box__") {
                 rest.to_string()
             } else {
