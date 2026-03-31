@@ -106,11 +106,18 @@ fn lower_expr_inner(
                         projections: vec![Projection::Deref],
                     };
                     let tmp = builder.add_local(value_type, None);
-                    builder.assign(Place::local(tmp), Operand::Copy(deref_place));
-                    // ! param owns its data — the deref copy is also owned.
-                    // Prevents ensure_owned_string from cloning in constructors.
-                    if ctx.owned_locals.contains(&local_id) {
+                    // ! params (owned): use Move to transfer ownership (memcpy, no clone).
+                    // & params (mutable borrow): use Copy (clone to prevent aliasing).
+                    let is_move_param = ctx.owned_locals.contains(&local_id);
+                    if is_move_param {
+                        builder.assign_mode(
+                            crate::ir::instructions::AssignMode::Move,
+                            Place::local(tmp),
+                            Operand::Move(deref_place),
+                        );
                         ctx.owned_locals.insert(tmp);
+                    } else {
+                        builder.assign(Place::local(tmp), Operand::Copy(deref_place));
                     }
                     Operand::Copy(Place::local(tmp))
                 } else {
