@@ -2390,14 +2390,6 @@ fn move_zero_consumed_args(
 /// but temps whose str views escape the block (e.g. passed to functions that
 /// store the view in structs) will cause use-after-free. Those call sites
 /// need to use `String` parameters instead of `str`.
-pub fn register_owned_string_for_drop(
-    ctx: &mut LoweringContext,
-    dst: LocalId,
-) {
-    let owned_string_type = ctx.type_mapper.owned_string_type;
-    ctx.drops.register_local(dst, owned_string_type, &ctx.type_registry);
-}
-
 /// Check whether GorgetString temps should be unregistered (leaked) for a call.
 /// Returns false (safe to keep in drop tracking) when:
 /// - The callee is void-returning with no mutable-reference params
