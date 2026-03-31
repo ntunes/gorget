@@ -1,1 +1,9 @@
-# Compiled fixture binaries (not source)
+# Compiled fixture binaries and generated C files
+# Keep only .gg source, .expected files, and self-host subdirectories
+*
+!*.gg
+!*.expected
+!*.md
+!.gitignore
+!self_host_*/
+!self_host_*/**
