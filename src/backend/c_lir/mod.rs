@@ -5819,7 +5819,13 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         .find(|sf| sf.fn_name == spawn_fn_name)
                         .and_then(|sf| sf.params.get(i))
                         .map(|(_, ct)| ct.as_str());
-                    if matches!(spawn_c_ty, Some("GorgetArray" | "GorgetMap" | "GorgetSet")) {
+                    let is_str_lit_arg = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                    if matches!(spawn_c_ty, Some("Str" | "GorgetString" | "GorgetStringView")) && is_str_lit_arg {
+                        // String literal → Str param: wrap
+                        write!(out, "gorget_str_from_literal({v}, strlen({v}))", v = v(*a)).unwrap();
+                        continue;
+                    }
+                    if matches!(spawn_c_ty, Some("GorgetArray" | "GorgetMap" | "GorgetSet" | "Str" | "GorgetString" | "GorgetStringView")) {
                         write!(out, "*({}*){}", spawn_c_ty.unwrap(), v(*a)).unwrap();
                         continue;
                     }
@@ -8622,11 +8628,13 @@ fn deep_clone_resource_fields(
 /// at the given parameter position, even though the LIR extern declaration says `Str`.
 /// Returns true if the function takes Str by value at the given param index.
 /// Used to deref Ptr(Str) args when the callee expects Str struct by value.
-fn fn_takes_str_by_value(fn_name: &str, _param_idx: usize) -> bool {
+fn fn_takes_str_by_value(fn_name: &str, param_idx: usize) -> bool {
     // All gorget_str_* functions take Str by value
     fn_name.starts_with("gorget_str_")
         || fn_name == "gorget_string_from_str"
         || fn_name == "gorget_string_new"
+        // sqlite_bind_str param 2 is Str by value
+        || (fn_name == "gorget_sqlite_bind_str" && param_idx == 2)
 }
 
 /// These are C runtime functions where the signature uses `const char*` but the GIR
@@ -8652,9 +8660,8 @@ fn takes_cstr_for_str_param(fn_name: &str, param_idx: usize) -> bool {
         | "gorget_process_pipe_write" => param_idx == 0,
         // regex_compile takes const char* for both pattern and flags
         "gorget_regex_compile" => true,
-        // sqlite functions take const char* for SQL and string values
-        "gorget_sqlite_open" | "gorget_sqlite_exec" | "gorget_sqlite_query"
-        | "gorget_sqlite_bind_str" => true,
+        // sqlite functions take const char* for SQL strings
+        "gorget_sqlite_open" | "gorget_sqlite_exec" | "gorget_sqlite_query" => true,
         // File I/O: const char* path (and content for write/append)
         "gorget_read_file" | "gorget_read_file_bytes" | "gorget_write_file_bytes"
         | "gorget_file_exists" | "gorget_delete_file"
