@@ -2364,8 +2364,8 @@ fn emit_spawn_helpers(out: &mut String, module: &LirModule) {
         let call_args: Vec<String> = sf.params.iter().enumerate().map(|(i, (name, c_type))| {
             if sf.ref_param_indices.contains(&i) {
                 format!("&__ctx->__{name}")
-            } else if matches!(c_type.as_str(), "GorgetArray" | "GorgetMap" | "GorgetSet") {
-                // Collection params are void* in the LIR function signature but stored
+            } else if matches!(c_type.as_str(), "GorgetArray" | "GorgetMap" | "GorgetSet" | "Str" | "GorgetString" | "GorgetStringView") {
+                // Resource params are void* in the LIR function signature but stored
                 // as the actual struct in the spawn context.  Pass the address.
                 format!("(void*)&__ctx->__{name}")
             } else {
@@ -8647,9 +8647,14 @@ fn takes_cstr_for_str_param(fn_name: &str, param_idx: usize) -> bool {
         | "gorget_path_exists" | "gorget_path_is_file" | "gorget_path_is_dir"
         | "gorget_path_normalize"
         | "gorget_getenv" | "gorget_unsetenv"
-        | "gorget_exec" | "gorget_exec_capture" => param_idx == 0,
+        | "gorget_exec" | "gorget_exec_capture"
+        | "gorget_process_spawn" | "gorget_process_spawn_with_pipe"
+        | "gorget_process_pipe_write" => param_idx == 0,
         // regex_compile takes const char* for both pattern and flags
         "gorget_regex_compile" => true,
+        // sqlite functions take const char* for SQL and string values
+        "gorget_sqlite_open" | "gorget_sqlite_exec" | "gorget_sqlite_query"
+        | "gorget_sqlite_bind_str" => true,
         // File I/O: const char* path (and content for write/append)
         "gorget_read_file" | "gorget_read_file_bytes" | "gorget_write_file_bytes"
         | "gorget_file_exists" | "gorget_delete_file"
