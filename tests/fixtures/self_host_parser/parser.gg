@@ -935,6 +935,8 @@ int infix_left_bp(int tag):
         return 3
     elif tag == TOK_DOTDOT:
         return 23
+    elif tag == TOK_DOTDOTEQ:
+        return 23
     elif tag == TOK_EQEQ:
         return 11
     elif tag == TOK_BANGEQ:
@@ -973,6 +975,8 @@ int infix_right_bp(int tag):
     if tag == TOK_DOUBLEQUESTION:
         return 4
     elif tag == TOK_DOTDOT:
+        return 24
+    elif tag == TOK_DOTDOTEQ:
         return 24
     elif tag == TOK_EQEQ:
         return 12
@@ -1706,7 +1710,9 @@ equip Parser:
             self.advance()
             SpannedExpr rhs = self.parse_expr_bp(r_bp)
             if ptag == TOK_DOTDOT:
-                lhs = SpannedExpr(ERange(Some(Box(lhs)), Some(Box(rhs))), Span(lhs.span.start, rhs.span.end))
+                lhs = SpannedExpr(ERange(Some(Box(lhs)), Some(Box(rhs)), false), Span(lhs.span.start, rhs.span.end))
+            elif ptag == TOK_DOTDOTEQ:
+                lhs = SpannedExpr(ERange(Some(Box(lhs)), Some(Box(rhs)), true), Span(lhs.span.start, rhs.span.end))
             else:
                 lhs = SpannedExpr(EBinaryOp(Box(lhs), op, Box(rhs)), Span(lhs.span.start, rhs.span.end))
 
