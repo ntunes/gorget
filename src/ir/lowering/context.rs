@@ -399,11 +399,14 @@ impl<'a> LoweringContext<'a> {
                 (I64_TYPE, I64_TYPE, I64_TYPE, "int64_t".to_string(), "int64_t".to_string())
             };
 
+            // Resolve through Ptr — string borrow params are Ptr(StringView)
+            // but method return types should use the base type.
+            let resolved_self = self.pointee_type(*type_id).unwrap_or(*type_id);
             let type_args = BuiltinTypeArgs {
                 elem,
                 key,
                 val,
-                self_type: *type_id,
+                self_type: resolved_self,
                 self_name: mangled_name.clone(),
             };
 
