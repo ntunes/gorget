@@ -1136,13 +1136,21 @@ impl<'a> LoweringContext<'a> {
         }
         // String params, byte_slice results, and other non-owned string locals:
         // clone to produce an owned copy. The struct/enum owns its fields.
-        let clone_fn = self.clone_fn_for_ptr(local_type)?;
-        let ptr_type = self.register_ptr_type(local_type);
-        let ptr = builder.add_local(ptr_type, None);
-        builder.emit_borrow(ptr, crate::ir::instructions::Place::local(local));
+        let resolved = self.pointee_type(local_type).unwrap_or(local_type);
+        let clone_fn = self.clone_fn_for_ptr(resolved)?;
+        // If the local is already a Ptr (e.g., string borrow param), use it directly.
+        // If it's a Str value, take its address.
+        let clone_arg = if self.pointee_type(local_type).is_some() {
+            // Already a pointer — use directly as the clone arg.
+            crate::ir::builder::FunctionBuilder::copy(local)
+        } else {
+            let ptr_type = self.register_ptr_type(local_type);
+            let ptr = builder.add_local(ptr_type, None);
+            builder.emit_borrow(ptr, crate::ir::instructions::Place::local(local));
+            crate::ir::builder::FunctionBuilder::copy(ptr)
+        };
         let owned_type = self.type_mapper.owned_string_type;
-        let cloned = builder.call(&clone_fn,
-            vec![crate::ir::builder::FunctionBuilder::copy(ptr)], owned_type);
+        let cloned = builder.call(&clone_fn, vec![clone_arg], owned_type);
         self.drops.register_local(cloned, owned_type, &self.type_registry);
         self.owned_locals.insert(cloned);
         Some(crate::ir::builder::FunctionBuilder::copy(cloned))

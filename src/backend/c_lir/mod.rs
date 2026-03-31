@@ -3960,8 +3960,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         write!(out, "(void*)(void*[2]){{(void*){call_fn}, (void*)&{}}}", v(*a)).unwrap();
                     }
                 } else if param_is_void {
-                    // Check if arg is a FuncAddr — needs adapter wrapping for closure protocol.
-                    if let Some(fid) = func_addr_targets.get(a.0 as usize).and_then(|t| *t) {
+                    let is_str_lit_arg = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                    let is_const = target_func.const_params.get(i).copied().unwrap_or(false);
+                    if is_str_lit_arg && is_const {
+                        // String literal → Str borrow param: wrap in compound literal.
+                        write!(out, "&(Str){{ .data = {v}, .len = strlen({v}), .cap = 0, .alloc = NULL }}", v = v(*a)).unwrap();
+                    } else if let Some(fid) = func_addr_targets.get(a.0 as usize).and_then(|t| *t) {
                         let adapt_name = format!("__adapt_{}", c_func_name(&module.functions[fid.0 as usize].name));
                         write!(out, "(void*)(void*[2]){{(void*){adapt_name}, NULL}}").unwrap();
                     } else {

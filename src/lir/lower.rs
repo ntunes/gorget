@@ -117,10 +117,25 @@ impl<'a> LoweringContext<'a> {
             if map_monomorphized_to_runtime_with_table(&ext.name, &self.gir.runtime_callees).is_some() {
                 continue;
             }
+            let mut ret_ty = map_gir_type_with_structs(&ext.return_type, &self.gir.type_registry, Some(&self.struct_reg));
+            // String-returning runtime functions return Str by value in C,
+            // even though the GIR types them as Ptr(StringView) (resource type).
+            // Override Ptr → Struct(Str) to prevent the C backend from deref'ing.
+            if matches!(ret_ty, LirType::Ptr) {
+                if let Some(ir::types::GirType::Ptr(inner) | ir::types::GirType::MutPtr(inner)) = self.gir.type_registry.get(ext.return_type) {
+                    if let Some(ir::types::GirType::Named(name)) = self.gir.type_registry.get(*inner) {
+                        if name == "GorgetStringView" || name == "GorgetString" {
+                            if let Some(sid) = self.struct_reg.lookup(name) {
+                                ret_ty = LirType::Struct(sid);
+                            }
+                        }
+                    }
+                }
+            }
             self.module.add_extern(LirExtern {
                 name: ext.name.clone(),
                 params: ext.params.iter().map(|t| map_gir_type_with_structs(t, &self.gir.type_registry, Some(&self.struct_reg))).collect(),
-                return_type: map_gir_type_with_structs(&ext.return_type, &self.gir.type_registry, Some(&self.struct_reg)),
+                return_type: ret_ty,
                 is_variadic: ext.is_variadic,
             });
         }
