@@ -2,11 +2,10 @@
 
 ## High
 
-- **Remaining 50 leaks in yaml_parse**: Down from 374→50 (-87%). Three categories: (1) String temps unregistered by `unregister_gorget_string_args` (12 leaks) — owned string temps passed to functions returning struct/enum. `owned_locals` skip helps for direct call results but misses VarDecl/assign chains. (2) Yaml anchor merge intermediates (8 leaks) — merge_into destructures `!yaml_source`, puts values into target Dict, but source Dict values leak on drop. (3) cstr-returning functions (10 leaks) — gorget_string_adopt wraps correctly but GIR type is still StringView → return path adds redundant gorget_string_from_str clone. Remaining 20: str_cat, string_clone, misc. [updated: 2026-03-30]
+- **Remaining 50 leaks in yaml_parse**: Down from 374→50 (-87%). `unregister_gorget_string_args` removed entirely (99 lines deleted, zero impact on leaks). Remaining leaks from: (1) Yaml anchor merge intermediates (8 leaks) — merge_into shallow copies into target Dict. (2) cstr-returning functions (10 leaks) — gorget_string_adopt wraps correctly but GIR type is still StringView → return path adds redundant clone. (3) Remaining ~32: str_cat, string_clone in library functions. [updated: 2026-03-30]
 
 - **`is_resource_type = needs_drop` (deferred)**: The correct architectural unification — all droppable types get uniform CoW treatment. Eliminates the string special-casing and `unregister_gorget_string_args` workaround. `string_param_locals` already removed (replaced with type-based check). 110 failures from ABI change (String params become Ptr). Needs ~100 deref site fixes. Deferred until current ownership model is stable. [updated: 2026-03-30]
 
-- **`!` string params: C backend Ptr→Str clone**: `!` string params pass via MutPtr. C backend's Ptr→Str SlotStore clones (`gorget_string_clone`) instead of memcpy. Should be zero-cost move. Needs C backend fix: when is_move=true in SlotStore for string types, use memcpy not clone. [added: 2026-03-30]
 
 - **CoW Phase 1f: multi-use clone needs liveness analysis**: Single-use auto-move works for push/put/set and enum/struct constructors. Multi-use clone attempted but `is_single_use` over-counts across branches (50 failures). Needs per-path liveness analysis. Phase 2a Step 5 (unified Type__drop cleanup) blocked on this. [updated: 2026-03-30]
 
