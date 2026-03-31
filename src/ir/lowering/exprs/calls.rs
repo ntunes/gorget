@@ -169,9 +169,19 @@ pub(super) fn lower_call_arg(
             // Move of a Move-type value: callee expects MutPtr. Emit borrow_mut.
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 if place.projections.is_empty() {
+                    let local_type = builder.local_type(place.local);
+                    // Pragmatic: skip Move for named string locals (! is no-op for strings).
+                    // TODO: borrow checker should reject multi-use ! on strings.
+                    let inner = ctx.pointee_type(local_type).unwrap_or(local_type);
+                    if ctx.type_mapper.is_string_type(inner) && ctx.is_named_local(place.local) {
+                        // Pass as const Ptr (borrow), no MoveZero
+                        let ptr_type = ctx.register_ptr_type(local_type);
+                        let dst = builder.add_local(ptr_type, None);
+                        builder.emit_borrow(dst, place.clone());
+                        return FunctionBuilder::copy(dst);
+                    }
                     // CoW: move transfers ownership. Sever aliases first.
                     ctx.cow_before_mutation(builder, place.local);
-                    let local_type = builder.local_type(place.local);
                     let ptr_type = ctx.register_mut_ptr_type(local_type);
                     let dst = builder.add_local(ptr_type, None);
                     builder.emit_borrow_mut(dst, place.clone());
