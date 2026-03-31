@@ -42,9 +42,7 @@
 
 - **`char` type backend bugs**: `char as int` gives garbage, char `==`/`!=` uses `gorget_str_eq`. [added: 2026-03-21]
 
-- **Self-host parser: 3 remaining mismatches**: null byte, str alias, float precision — all unfixable at self-host level. [updated: 2026-03-21]
-
-- **Self-host comparison scores (858 fixtures)**: Parser 760 matched / 4 mismatch / 94 crash. Remaining 4 mismatches: null byte (chars.gg, unfixable), float precision (fstring_format.gg, unfixable), catch block formatting (error_catch_in_loop.gg), range expression (range_operations.gg — `for i in 0..3` parsed as `for i in 0:`). Resolver 35 matched / 729 mismatch / 94 crash — builtin/keyword DEF ID shift. 94 crashes from unsupported AST nodes (mostly traits/generics/meta). [updated: 2026-03-30]
+- **Self-host comparison (858 fixtures)**: Parser 761 matched / 3 mismatch / 94 crash. Remaining 3 mismatches all unfixable: null byte (chars.gg), float precision (fstring_format.gg), catch-do-block (error_catch_in_loop.gg). 94 crashes from unsupported AST nodes (traits/generics/meta). Resolver 35 matched / 729 mismatch / 94 crash — builtin/keyword DEF ID shift. [updated: 2026-03-30]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
