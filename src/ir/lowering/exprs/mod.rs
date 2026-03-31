@@ -303,7 +303,7 @@ fn lower_expr_inner(
                 .map(|e| lower_expr(ctx, builder, e))
                 .collect();
             // Infer element types using builder locals (handles nested tuples)
-            let elem_types: Vec<TypeId> = operands.iter()
+            let _elem_types: Vec<TypeId> = operands.iter()
                 .map(|op| infer_operand_type_full(ctx, op, builder))
                 .collect();
             // Track which locals are used as tuple elements (for return MoveZero)
@@ -312,6 +312,36 @@ fn lower_expr_inner(
                     Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
                     _ => None,
                 })
+                .collect();
+            // For Ptr(Str) operands (string borrow params): deref to get owned Str value.
+            // Tuple fields are stored by value, not by Ptr.
+            let mut operands = operands;
+            for op in operands.iter_mut() {
+                if let Operand::Copy(place) | Operand::Move(place) = op {
+                    if place.projections.is_empty() {
+                        let local = place.local;
+                        let local_type = builder.local_type(local);
+                        // Only deref Ptr(Str) — already-owned Str values are fine
+                        if let Some(inner) = ctx.pointee_type(local_type) {
+                            if ctx.type_mapper.is_string_type(inner) {
+                                // Deref Ptr to get Str value
+                                let tmp = builder.add_local(inner, None);
+                                builder.assign(
+                                    crate::ir::instructions::Place::local(tmp),
+                                    Operand::Copy(crate::ir::instructions::Place {
+                                        local,
+                                        projections: vec![crate::ir::instructions::Projection::Deref],
+                                    }),
+                                );
+                                *op = FunctionBuilder::copy(tmp);
+                            }
+                        }
+                    }
+                }
+            }
+            // Re-infer types after deref (Ptr→Str change)
+            let elem_types: Vec<TypeId> = operands.iter()
+                .map(|op| infer_operand_type_full(ctx, op, builder))
                 .collect();
             let type_id = register_tuple_type(ctx, &elem_types);
             let dst = builder.tuple_init(operands, type_id);
