@@ -1021,11 +1021,13 @@ fn resolve_option_result_variant(
                     || name.starts_with("Result__");
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
-                    let consumed = consumed_local_id(&field_op);
+                    let consumed = if let Operand::Copy(ref p) | Operand::Move(ref p) = field_op {
+                        if p.projections.is_empty() { Some(p.local) } else { None }
+                    } else { None };
                     let dst = builder.enum_init(&name, "Ok", et, vec![field_op]);
                     ctx.owned_locals.insert(dst);
                     if let Some(local) = consumed {
-                        mark_consumed_local_by_id(ctx, builder, local);
+                        ctx.move_zero_and_mark(builder, local);
                     }
                     return Some(FunctionBuilder::copy(dst));
                 }
@@ -1037,11 +1039,13 @@ fn resolve_option_result_variant(
                     || name.starts_with("Result__");
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
-                    let consumed = consumed_local_id(&field_op);
+                    let consumed = if let Operand::Copy(ref p) | Operand::Move(ref p) = field_op {
+                        if p.projections.is_empty() { Some(p.local) } else { None }
+                    } else { None };
                     let dst = builder.enum_init(&name, "Ok", rt, vec![field_op]);
                     ctx.owned_locals.insert(dst);
                     if let Some(local) = consumed {
-                        mark_consumed_local_by_id(ctx, builder, local);
+                        ctx.move_zero_and_mark(builder, local);
                     }
                     return Some(FunctionBuilder::copy(dst));
                 }
@@ -2474,23 +2478,6 @@ pub fn unregister_gorget_string_args(
 /// Infer operand type using both ctx locals and builder locals.
 /// This handles compiler temporaries (tuples, struct inits, etc.) that aren't in ctx.locals.
 /// Extract the local ID from an operand if it's a simple local reference.
-fn consumed_local_id(operand: &Operand) -> Option<LocalId> {
-    if let Operand::Copy(place) | Operand::Move(place) = operand {
-        if place.projections.is_empty() {
-            return Some(place.local);
-        }
-    }
-    None
-}
-
-/// Mark a consumed local as moved so it won't be double-freed at scope exit.
-/// When a local's value is moved into a container (Result.Ok, etc.), the original
-/// local's data pointer is shared — we must zero it to prevent the scope drop
-/// from freeing data that's now owned by the container.
-fn mark_consumed_local_by_id(ctx: &mut LoweringContext, builder: &mut FunctionBuilder, local: LocalId) {
-    ctx.move_zero_and_mark(builder, local);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -44,7 +44,9 @@
 
 - **Self-host parser: 3 remaining mismatches**: null byte, str alias, float precision — all unfixable at self-host level. [updated: 2026-03-21]
 
-- **Self-host comparison regression**: Dangling string view fixed (owned_slice in lexer). Current scores on 858 fixtures: parser 729 matched / 36 mismatch / 93 crash, resolver 35 matched / 730 mismatch / 93 crash. The 93 crashes are from newer fixtures using unsupported AST nodes. Parser is in good shape (85%). Resolver regression is deeper — the Gorget resolver produces RES entries with different spans than Rust (parser span differences) and misses some entries. Needs: (1) fix 36 parser mismatches, (2) investigate resolver span/RES divergence, (3) add new AST nodes for 93 crashing fixtures. [updated: 2026-03-30]
+- **Box[T] corruption for structs containing large enums**: `Box(ret_ty)` where `ret_ty: SpannedType` (struct with Type enum, 8 variants) produces a Box whose `*b` dereference returns garbage immediately. `format_type(*ret)` in self-host formatter returns `"?"` instead of `"int"`. Confirmed: the value is correct BEFORE Box(), corrupted AFTER. Likely sizeof/memcpy mismatch in C backend Box implementation for types with union-based enum fields. This causes 30 of 35 self-host parser mismatches (`int(int)` → `?(int)`). [added: 2026-03-30]
+
+- **Self-host comparison scores (858 fixtures)**: Parser 729 matched / 35 mismatch / 94 crash, resolver 35 matched / 729 mismatch / 94 crash. 30 parser mismatches from Box[SpannedType] corruption (see above). 94 crashes from newer fixtures using unsupported AST nodes. Resolver regression from builtin/keyword DEF ID shift. [updated: 2026-03-30]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
