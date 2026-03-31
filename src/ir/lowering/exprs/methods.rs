@@ -1335,15 +1335,30 @@ pub(super) fn lower_method_call(
                 if let Expr::Identifier(name) = &arg.node.value.node {
                     if let Some((local_id, _)) = ctx.lookup_local(name) {
                         if is_resource_type_local(local_id, builder, &ctx.type_registry) {
-                            // Skip MoveZero for string locals — strings are immutable,
-                            // Move is conceptually a borrow. The callee gets a Ptr(Str)
-                            // reference, not ownership of the data.
+                            // For string Move args: auto-clone to prevent
+                            // use-after-move in loops. The clone transfers ownership;
+                            // the original stays alive for the next iteration.
                             let local_type = builder.local_type(local_id);
-                            let is_string = ctx.type_mapper.is_string_type(
-                                ctx.pointee_type(local_type).unwrap_or(local_type));
-                            if !is_string {
-                                return Some(Place::local(local_id));
+                            let inner = ctx.pointee_type(local_type).unwrap_or(local_type);
+                            if ctx.type_mapper.is_string_type(inner) && ctx.is_named_local(local_id) {
+                                // Clone the string, use clone as the Move source
+                                if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                                    let clone_arg = if ctx.pointee_type(local_type).is_some() {
+                                        FunctionBuilder::copy(local_id)
+                                    } else {
+                                        let ptr_type = ctx.register_ptr_type(inner);
+                                        let ptr = builder.add_local(ptr_type, None);
+                                        builder.emit_borrow(ptr, crate::ir::instructions::Place::local(local_id));
+                                        FunctionBuilder::copy(ptr)
+                                    };
+                                    let owned_type = ctx.type_mapper.owned_string_type;
+                                    let cloned = builder.call(&clone_fn, vec![clone_arg], owned_type);
+                                    ctx.drops.register_local(cloned, owned_type, &ctx.type_registry);
+                                    // MoveZero the CLONE, not the original
+                                    return Some(Place::local(cloned));
+                                }
                             }
+                            return Some(Place::local(local_id));
                         }
                     }
                 }
