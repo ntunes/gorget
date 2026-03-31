@@ -1,6 +1,0 @@
-# gorget.lock — auto-generated, do not edit
-
-[[package]]
-name = "greeter"
-source = "path+../modules_pkg_dep"
-version = "0.1.0"

@@ -6375,9 +6375,10 @@ fn emit_coerced_arg(
         return;
     }
 
-    // Str → const char* coercion: when the extern expects a pointer but we have a Str struct.
+    // Str struct → pointer: when the extern expects a pointer and we have a Str struct,
+    // take the address of the struct (not .data — that gives const char*, not const Str*).
     if matches!(param_ty, Some(LirType::Ptr)) && (arg_name.as_deref() == Some("Str") || arg_name.as_deref() == Some("GorgetString")) {
-        write!(out, "(__v{}).data", a.0).unwrap();
+        write!(out, "&__v{}", a.0).unwrap();
         return;
     }
 
