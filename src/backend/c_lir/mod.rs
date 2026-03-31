@@ -5711,7 +5711,10 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     if i > 0 { write!(out, ", ").unwrap(); }
                     let spawn_c_ty = spawn_param_c_types.get(i).map(|s| s.as_str());
                     let arg_is_ptr = matches!(val_types.get(a.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
-                    if arg_is_ptr && matches!(spawn_c_ty, Some("GorgetArray" | "GorgetMap" | "GorgetSet")) {
+                    let is_str_lit_arg = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                    if arg_is_ptr && is_str_lit_arg && matches!(spawn_c_ty, Some("Str" | "GorgetString" | "GorgetStringView")) {
+                        write!(out, "gorget_str_from_literal({v}, strlen({v}))", v = v(*a)).unwrap();
+                    } else if arg_is_ptr && matches!(spawn_c_ty, Some("Str" | "GorgetString" | "GorgetStringView" | "GorgetArray" | "GorgetMap" | "GorgetSet")) {
                         write!(out, "*({}*){}", spawn_c_ty.unwrap(), v(*a)).unwrap();
                     } else {
                         let ext_param = ext_params.and_then(|p| p.get(i));
