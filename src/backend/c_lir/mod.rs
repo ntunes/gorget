@@ -2720,6 +2720,52 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         }
     }
 
+    // Propagate Str pointee info for Ptr values from function params.
+    // When a function takes a Ptr param (bare borrow of Str), all values
+    // derived from it should know they point to Str. This covers Option
+    // unwrap, memcpy chains, and other patterns not tracked by SlotAddr/FieldPtr.
+    {
+        let str_struct_id = module.structs.iter().position(|s| s.name == "GorgetStringView" || s.name == "GorgetString");
+        if let Some(sid) = str_struct_id {
+            let str_ty = LirType::Struct(crate::lir::StructId(sid as u32));
+            // Mark all Ptr-typed function params as Ptr(Str) if the function's
+            // GIR signature has them as Str
+            for (pi, param) in func.params.iter().enumerate() {
+                if matches!(param, LirType::Ptr) {
+                    let vid_idx = pi; // param values start at 0
+                    if ptr_pointee.get(vid_idx).map_or(true, |p| p.is_none()) {
+                        // Check if there's a slot for this param that's Str-typed
+                        if func.slots.iter().any(|s| s.ty == str_ty) {
+                            ptr_pointee[vid_idx] = Some(str_ty.clone());
+                        }
+                    }
+                }
+            }
+            // Propagate: any Ptr value loaded from a slot whose stored value has Str pointee
+            for block in &func.blocks {
+                for inst in &block.insts {
+                    if let Inst::SlotLoad { dst, slot, .. } = inst {
+                        if matches!(func.slots[slot.0 as usize].ty, LirType::Ptr) {
+                            if let Some(pt) = slot_pointee.get(slot.0 as usize).and_then(|p| p.clone()) {
+                                ptr_pointee[dst.0 as usize] = Some(pt);
+                            }
+                        }
+                    }
+                    // Also: Load from a Ptr that itself points to Str → result is Str
+                    if let Inst::Load { dst, ptr, ty } = inst {
+                        if matches!(ty, LirType::Ptr) {
+                            if let Some(Some(pt)) = ptr_pointee.get(ptr.0 as usize) {
+                                if *pt == str_ty {
+                                    ptr_pointee[dst.0 as usize] = Some(str_ty.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Fix val_types for values with no inferred type (e.g. InlineC dst values).
     // For InlineC→SlotStore, use the slot's type.
     // For values passed as block parameter arguments, use the block param's type.
@@ -3609,11 +3655,14 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         format!("gorget_str_from_literal({v}, strlen({v}))", v = v(*vid))
                     } else if let Some(Some(pt)) = ptr_pointee.get(vid.0 as usize) {
                         if pt.is_aggregate() {
-                            // Pointer to Str slot — dereference.
+                            // Known Ptr-to-Str slot — dereference.
                             format!("(*(Str*){v})", v = v(*vid))
                         } else {
                             v(*vid)
                         }
+                    } else if matches!(val_types.get(vid.0 as usize), Some(Some(LirType::Ptr))) {
+                        // Ptr value (e.g., from Option unwrap) — deref to Str.
+                        format!("(*(Str*){v})", v = v(*vid))
                     } else {
                         v(*vid)
                     }
@@ -4847,6 +4896,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 } else if runtime_arg_by_ptr(emit_name, i) && matches!(arg_ty, Some(LirType::Ptr)) {
                                     // Already a pointer, pass directly
                                     write!(out, "{}", v(*a)).unwrap();
+                                } else if matches!(arg_ty, Some(LirType::Ptr)) && fn_takes_str_by_value(emit_name, i) {
+                                    // Ptr(Str) → Str: deref for runtime fns that take Str by value
+                                    write!(out, "*(Str*){}", v(*a)).unwrap();
+                                } else if matches!(arg_ty, Some(LirType::Ptr)) && is_ptr_to_str {
+                                    // Known Ptr(Str): deref to pass by value.
+                                    write!(out, "*(Str*){}", v(*a)).unwrap();
                                 } else {
                                     let ext_param = ext_params.and_then(|p| p.get(i));
                                     emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
@@ -5763,6 +5818,15 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 {
                     write!(out, "(int)({v}).len, ({v}).data", v = v(*a)).unwrap();
                     continue;
+                }
+                // Printf with Ptr(Str) arg — deref then decompose.
+                if need_fmt_fix && is_printf && i > 0 && matches!(arg_ty, Some(LirType::Ptr)) {
+                    if let Some(Some(pt)) = ptr_pointee.get(a.0 as usize) {
+                        if matches!(pt, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView" || s.name == "GorgetString")) {
+                            write!(out, "(int)((Str*){v})->len, ((Str*){v})->data", v = v(*a)).unwrap();
+                            continue;
+                        }
+                    }
                 }
                 // Runtime arg-by-pointer: the C prototype takes a pointer to the struct.
                 // If the LIR value is a Ptr, pass directly; if Struct, take address.
@@ -8491,6 +8555,15 @@ fn deep_clone_resource_fields(
 
 /// Returns true if the given extern function takes a `const char*` (raw C string)
 /// at the given parameter position, even though the LIR extern declaration says `Str`.
+/// Returns true if the function takes Str by value at the given param index.
+/// Used to deref Ptr(Str) args when the callee expects Str struct by value.
+fn fn_takes_str_by_value(fn_name: &str, _param_idx: usize) -> bool {
+    // All gorget_str_* functions take Str by value
+    fn_name.starts_with("gorget_str_")
+        || fn_name == "gorget_string_from_str"
+        || fn_name == "gorget_string_new"
+}
+
 /// These are C runtime functions where the signature uses `const char*` but the GIR
 /// passes Gorget's `str` type.
 fn takes_cstr_for_str_param(fn_name: &str, param_idx: usize) -> bool {

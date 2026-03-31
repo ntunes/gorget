@@ -19,3 +19,4 @@ tests/fixtures/self_host_*/driver.c
 fuzz/artifacts/
 fuzz/corpus/
 fuzz/target/
+_test_output*
