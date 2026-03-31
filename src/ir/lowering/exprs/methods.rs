@@ -1855,9 +1855,9 @@ pub(super) fn lower_index_access(
             }
         }
 
-        let elem_type = if base_type == ctx.type_mapper.string_view_type
-            || base_type == ctx.type_mapper.owned_string_type
-        {
+        // Resolve through Ptr — string params are now Ptr(StringView)
+        let resolved_base = ctx.pointee_type(base_type).unwrap_or(base_type);
+        let elem_type = if ctx.type_mapper.is_string_type(resolved_base) {
             ctx.type_mapper.string_view_type // indexing a string returns Str
         } else {
             // Try to infer element type from collection type name
@@ -1867,7 +1867,9 @@ pub(super) fn lower_index_access(
         // Auto-clone happens at Ptr→T boundaries (call args, VarDecl, return, etc.).
         let is_task = matches!(ctx.type_registry.get(elem_type),
             Some(GirType::Named(n)) if n.starts_with("Task__"));
-        let result_type = if is_task {
+        // String character indexing: returns a new Str value (not a borrow).
+        let is_string_base = ctx.type_mapper.is_string_type(resolved_base);
+        let result_type = if is_task || is_string_base {
             elem_type
         } else if ctx.type_registry.is_resource_type(elem_type) {
             ctx.register_ptr_type(elem_type)
@@ -1875,7 +1877,7 @@ pub(super) fn lower_index_access(
             elem_type
         };
         let dst = builder.index_load(place.clone(), idx, result_type);
-        if ctx.type_registry.is_resource_type(elem_type) && !is_task {
+        if ctx.type_registry.is_resource_type(elem_type) && !is_task && !is_string_base {
             ctx.ref_locals.insert(dst);
             // Track that dst borrows from the collection — if the collection
             // is mutated (push/pop/etc.), dst must be cloned out first.

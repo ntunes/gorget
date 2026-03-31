@@ -1705,11 +1705,10 @@ impl<'a> FuncLowering<'a> {
                     // Str[int] → gorget_str_index(str, idx)
                     let base_val = self.lower_place_addr(base, bb);
                     let idx = self.lower_operand(index, bb);
-                    let dst_gir_ty = self.gir_func.locals[dst.0 as usize].type_id;
-                    let ret_ty = map_gir_type_with_structs(&dst_gir_ty, self.gir_types, Some(self.struct_reg));
                     let str_ty = self.struct_reg.lookup("GorgetStringView")
                         .map(LirType::Struct).unwrap_or(LirType::Ptr);
-                    self.ensure_extern("gorget_str_index", &[str_ty, LirType::I64], &ret_ty);
+                    // Return type is Str by value (the C function returns Str, not Ptr).
+                    self.ensure_extern("gorget_str_index", &[str_ty.clone(), LirType::I64], &str_ty);
                     let result = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: Some(result),
