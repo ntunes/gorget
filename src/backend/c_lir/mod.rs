@@ -2664,6 +2664,28 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                     _collection_get_vals[d.0 as usize] = true;
                 }
             }
+            // Track Option unwrap results that produce Str pointers.
+            if let Inst::CallExtern { dst: Some(d), name, args, .. } = inst {
+                if is_option_result_unwrap(name) && !args.is_empty() {
+                    let str_sid = module.structs.iter().position(|s| s.name == "GorgetStringView" || s.name == "GorgetString");
+                    if let Some(sid) = str_sid {
+                        let str_ty = LirType::Struct(crate::lir::StructId(sid as u32));
+                        let arg0 = args[0].0 as usize;
+                        // Check if the arg's pointee struct is an Option containing Str
+                        let is_str_option = ptr_pointee.get(arg0).and_then(|t| t.as_ref()).map_or(false, |pt| {
+                            if let LirType::Struct(opt_sid) = pt {
+                                module.structs.get(opt_sid.0 as usize).map_or(false, |sd| {
+                                    (sd.name.contains("GorgetStringView") || sd.name.contains("GorgetString") || sd.name.contains("__Str"))
+                                    && sd.fields.get(1).map_or(false, |(_, ft)| matches!(ft, LirType::Ptr))
+                                })
+                            } else { false }
+                        });
+                        if is_str_option {
+                            ptr_pointee[d.0 as usize] = Some(str_ty);
+                        }
+                    }
+                }
+            }
             // Track spawn source function for void* destinations.
             // When __gorget_spawn_X returns Task__T but dst is void*, the codegen
             // extracts .__task; we record X so task_group_submit can reconstruct
@@ -5707,8 +5729,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 str_lit_vals.get(fid.0 as usize).copied().unwrap_or(false)
             }) && emit_args.iter().skip(1).any(|a| {
                 let ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                let is_str_ptr = matches!(ty, Some(LirType::Ptr)) && ptr_pointee.get(a.0 as usize)
+                    .and_then(|p| p.as_ref())
+                    .map_or(false, |p| matches!(p, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView" || s.name == "GorgetString")));
                 matches!(ty, Some(LirType::F32 | LirType::F64))
                 || matches!(ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView"))
+                || is_str_ptr
             });
 
             // printf(var) with a single arg triggers -Wformat-security on macOS
@@ -5808,8 +5834,13 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         let arg_kinds: Vec<PrintfArgKind> = emit_args[1..].iter()
                             .map(|ea| {
                                 let ty = val_types.get(ea.0 as usize).and_then(|t| t.as_ref());
+                                let is_str_ptr = matches!(ty, Some(LirType::Ptr)) && ptr_pointee.get(ea.0 as usize)
+                                    .and_then(|p| p.as_ref())
+                                    .map_or(false, |p| matches!(p, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView" || s.name == "GorgetString")));
                                 if matches!(ty, Some(LirType::F32 | LirType::F64)) {
                                     PrintfArgKind::Float
+                                } else if is_str_ptr {
+                                    PrintfArgKind::Str
                                 } else if matches!(ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView")) {
                                     PrintfArgKind::Str
                                 } else {
@@ -5832,6 +5863,16 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 {
                     write!(out, "(int)({v}).len, ({v}).data", v = v(*a)).unwrap();
                     continue;
+                }
+                // Ptr(Str) in printf — deref then decompose.
+                if need_fmt_fix && is_printf && i > 0 && matches!(arg_ty, Some(LirType::Ptr)) {
+                    let is_str_ptr = ptr_pointee.get(a.0 as usize)
+                        .and_then(|p| p.as_ref())
+                        .map_or(false, |p| matches!(p, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView" || s.name == "GorgetString")));
+                    if is_str_ptr {
+                        write!(out, "(int)((Str*){v})->len, ((Str*){v})->data", v = v(*a)).unwrap();
+                        continue;
+                    }
                 }
                 // Runtime arg-by-pointer: the C prototype takes a pointer to the struct.
                 // If the LIR value is a Ptr, pass directly; if Struct, take address.
