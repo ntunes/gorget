@@ -680,6 +680,11 @@ pub fn lower_module(
                 .collect();
             ctx.fn_param_abis.insert(name.clone(), param_abis.clone());
 
+            // Record extern ABI kinds from FunctionDef (for Declaration functions)
+            if !func.param_abis.is_empty() {
+                ctx.fn_extern_abi_kinds.insert(name.clone(), func.param_abis.clone());
+            }
+
             // Record default parameter values
             let defaults: Vec<(usize, ast::Expr)> = func.params.iter()
                 .enumerate()
@@ -1159,6 +1164,9 @@ pub fn lower_module(
 
     // Thread ParamABI data to the module for C backend consumption
     module.fn_param_abis = ctx.fn_param_abis.clone();
+
+    // Thread extern ABI kinds to the module
+    module.fn_extern_abi_kinds = ctx.fn_extern_abi_kinds.clone();
 
     // Thread purity data to the module
     module.fn_purity = ctx.analysis.fn_purity.clone();

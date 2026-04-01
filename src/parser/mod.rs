@@ -1654,6 +1654,7 @@ impl Parser {
             body,
             doc_comment,
             span: start.merge(end),
+            param_abis: vec![],
         })
     }
 

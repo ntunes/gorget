@@ -193,6 +193,9 @@ pub struct LoweringContext<'a> {
     /// Unified parameter ABI: fn_name → Vec<ParamABI> (in declaration order).
     /// Single source of truth for how each parameter is passed at the C ABI level.
     pub fn_param_abis: FxHashMap<String, Vec<ParamABI>>,
+    /// Extern ABI marshalling kinds: fn_name → Vec<AbiKind>.
+    /// Populated from FunctionDef.param_abis for Declaration-body functions.
+    pub fn_extern_abi_kinds: FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
     /// If current function uses `throws`, the Result TypeId for wrapping return/throw.
     pub current_throws_result_type: Option<TypeId>,
     /// Target type hint for the current expression being lowered.
@@ -303,6 +306,7 @@ impl<'a> LoweringContext<'a> {
             fn_param_names: FxHashMap::default(),
             fn_param_ownerships: FxHashMap::default(),
             fn_param_abis: FxHashMap::default(),
+            fn_extern_abi_kinds: FxHashMap::default(),
             current_throws_result_type: None,
             expected_type: None,
             closure_param_type_hints: Vec::new(),

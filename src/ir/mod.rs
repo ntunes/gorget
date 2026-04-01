@@ -193,6 +193,9 @@ pub struct Module {
     /// Populated from BuiltinTypeProtocol declarations. Used by LIR backend
     /// to replace `map_monomorphized_to_runtime()`.
     pub runtime_callees: rustc_hash::FxHashMap<String, String>,
+    /// Per-function extern ABI kinds: fn_name → Vec<AbiKind>.
+    /// Populated from FunctionDef.param_abis for Declaration-body functions.
+    pub fn_extern_abi_kinds: rustc_hash::FxHashMap<String, Vec<abi::AbiKind>>,
 }
 
 impl Module {
@@ -210,6 +213,7 @@ impl Module {
             fn_purity: rustc_hash::FxHashMap::default(),
             implicit_clone_warnings: Vec::new(),
             runtime_callees: rustc_hash::FxHashMap::default(),
+            fn_extern_abi_kinds: rustc_hash::FxHashMap::default(),
         }
     }
 

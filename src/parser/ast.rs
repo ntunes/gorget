@@ -131,6 +131,8 @@ pub struct FunctionDef {
     pub body: FunctionBody,
     pub doc_comment: Option<String>,
     pub span: Span,
+    /// Per-parameter ABI marshalling for extern functions. Empty = all Auto.
+    pub param_abis: Vec<crate::ir::abi::AbiKind>,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -1040,7 +1040,22 @@ fn decl_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
         body: FunctionBody::Declaration,
         doc_comment: None,
         span: Span::dummy(),
+        param_abis: vec![],
     }
+}
+
+/// Declare an extern function with explicit ABI annotations per parameter.
+#[allow(dead_code)]
+fn decl_fn_abi(name: &str, params: &[(&str, Type, crate::ir::abi::AbiKind)], ret: Type) -> FunctionDef {
+    use crate::ir::abi::AbiKind;
+    let param_abis: Vec<AbiKind> = params.iter().map(|(_, _, abi)| *abi).collect();
+    let mut f = decl_fn(
+        name,
+        &params.iter().map(|(n, t, _)| (*n, t.clone())).collect::<Vec<_>>(),
+        ret,
+    );
+    f.param_abis = param_abis;
+    f
 }
 
 fn decl_async_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
@@ -1576,6 +1591,7 @@ fn decl_method(
         body: FunctionBody::Declaration,
         doc_comment: None,
         span: Span::dummy(),
+        param_abis: vec![],
     }
 }
 
