@@ -1602,15 +1602,31 @@ impl<'a> FuncLowering<'a> {
                 if matches!(self.gir_types.get(dst_gir_type), Some(GirType::Ptr(_))) {
                     self.store_to_local(*dst, fptr, bb);
                 } else {
-                    let result = self.lir_func.next_value();
                     let field_ty = self.resolve_field_type(effective_type, *field);
                     let field_ty_clone = field_ty.clone();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
-                        dst: result,
-                        ptr: fptr,
-                        ty: field_ty,
-                    });
-                    self.store_to_local(*dst, result, bb);
+                    // If field is Ptr but dst is a value type (Str), double-deref:
+                    // load Ptr from field, then load Str value through Ptr.
+                    let dst_slot = self.local_to_slot[dst.0 as usize];
+                    let dst_slot_ty = self.lir_func.slots[dst_slot.0 as usize].ty.clone();
+                    if matches!(field_ty, LirType::Ptr) && dst_slot_ty.is_aggregate() {
+                        let ptr_val = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                            dst: ptr_val, ptr: fptr, ty: LirType::Ptr,
+                        });
+                        let result = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                            dst: result, ptr: ptr_val, ty: dst_slot_ty,
+                        });
+                        self.store_to_local(*dst, result, bb);
+                    } else {
+                        let result = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                            dst: result,
+                            ptr: fptr,
+                            ty: field_ty,
+                        });
+                        self.store_to_local(*dst, result, bb);
+                    }
 
                     // GorgetString field → Str destination: zero cap+alloc fields to create
                     // a non-owning view. Without this, the raw Load copies cap>0 from the
