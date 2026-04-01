@@ -152,44 +152,47 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
 // ─── Module Generators ──────────────────────────────────────
 
 fn gen_fs_module() -> Module {
+    use crate::ir::abi::AbiKind::{CStr, Ptr};
     make_module(vec![
-        decl_fn("read_file", &[("path", ty_str())], ty_string()),
-        decl_fn("read_file_bytes", &[("path", ty_str())], ty_vector_uint8()),
-        decl_fn("write_file", &[("path", ty_str()), ("content", ty_str())], ty_void()),
-        decl_fn("write_file_bytes", &[("path", ty_str()), ("data", ty_vector_uint8())], ty_void()),
-        decl_fn("append_file", &[("path", ty_str()), ("content", ty_str())], ty_void()),
-        decl_fn("file_exists", &[("path", ty_str())], ty_bool()),
-        decl_fn("delete_file", &[("path", ty_str())], ty_bool()),
-        decl_fn("mkdir", &[("path", ty_str())], ty_bool()),
-        decl_fn("rmdir", &[("path", ty_str())], ty_bool()),
-        decl_fn("rename", &[("old_path", ty_str()), ("new_path", ty_str())], ty_bool()),
-        decl_fn("copy_file", &[("src", ty_str()), ("dst", ty_str())], ty_bool()),
-        decl_fn("file_size", &[("path", ty_str())], ty_int()),
-        decl_fn("is_dir", &[("path", ty_str())], ty_bool()),
+        decl_fn_abi("read_file", &[("path", ty_str(), CStr)], ty_string()),
+        decl_fn_abi("read_file_bytes", &[("path", ty_str(), CStr)], ty_vector_uint8()),
+        decl_fn_abi("write_file", &[("path", ty_str(), CStr), ("content", ty_str(), CStr)], ty_void()),
+        decl_fn_abi("write_file_bytes", &[("path", ty_str(), CStr), ("data", ty_vector_uint8(), Ptr)], ty_void()),
+        decl_fn_abi("append_file", &[("path", ty_str(), CStr), ("content", ty_str(), CStr)], ty_void()),
+        decl_fn_abi("file_exists", &[("path", ty_str(), CStr)], ty_bool()),
+        decl_fn_abi("delete_file", &[("path", ty_str(), CStr)], ty_bool()),
+        decl_fn_abi("mkdir", &[("path", ty_str(), CStr)], ty_bool()),
+        decl_fn_abi("rmdir", &[("path", ty_str(), CStr)], ty_bool()),
+        decl_fn_abi("rename", &[("old_path", ty_str(), CStr), ("new_path", ty_str(), CStr)], ty_bool()),
+        decl_fn_abi("copy_file", &[("src", ty_str(), CStr), ("dst", ty_str(), CStr)], ty_bool()),
+        decl_fn_abi("file_size", &[("path", ty_str(), CStr)], ty_int()),
+        decl_fn_abi("is_dir", &[("path", ty_str(), CStr)], ty_bool()),
     ])
 }
 
 fn gen_path_module() -> Module {
+    use crate::ir::abi::AbiKind::CStr;
     make_module(vec![
-        decl_fn("path_join", &[("a", ty_str()), ("b", ty_str())], ty_string()),
-        decl_fn("path_parent", &[("path", ty_str())], ty_string()),
-        decl_fn("path_basename", &[("path", ty_str())], ty_string()),
-        decl_fn("path_extension", &[("path", ty_str())], ty_string()),
-        decl_fn("path_stem", &[("path", ty_str())], ty_string()),
-        decl_fn("path_normalize", &[("path", ty_str())], ty_string()),
-        decl_fn("path_absolute", &[("path", ty_str())], ty_string()),
+        decl_fn_abi("path_join", &[("a", ty_str(), CStr), ("b", ty_str(), CStr)], ty_string()),
+        decl_fn_abi("path_parent", &[("path", ty_str(), CStr)], ty_string()),
+        decl_fn_abi("path_basename", &[("path", ty_str(), CStr)], ty_string()),
+        decl_fn_abi("path_extension", &[("path", ty_str(), CStr)], ty_string()),
+        decl_fn_abi("path_stem", &[("path", ty_str(), CStr)], ty_string()),
+        decl_fn_abi("path_normalize", &[("path", ty_str(), CStr)], ty_string()),
+        decl_fn_abi("path_absolute", &[("path", ty_str(), CStr)], ty_string()),
     ])
 }
 
 fn gen_os_module() -> Module {
+    use crate::ir::abi::AbiKind::CStr;
     make_module(vec![
         decl_fn("exit", &[("code", ty_int())], ty_void()),
-        decl_fn("getenv", &[("name", ty_str())], ty_str()),
-        decl_fn("setenv", &[("name", ty_str()), ("value", ty_str())], ty_void()),
+        decl_fn_abi("getenv", &[("name", ty_str(), CStr)], ty_str()),
+        decl_fn_abi("setenv", &[("name", ty_str(), CStr), ("value", ty_str(), CStr)], ty_void()),
         decl_fn("getcwd", &[], ty_string()),
         decl_fn("platform", &[], ty_str()),
         decl_fn("args", &[], ty_vector_str()),
-        decl_fn("readdir", &[("path", ty_str())], ty_vector_str()),
+        decl_fn_abi("readdir", &[("path", ty_str(), CStr)], ty_vector_str()),
         decl_fn("mem_allocated", &[], ty_int()),
         decl_fn("mem_freed", &[], ty_int()),
         decl_fn("mem_live", &[], ty_int()),
@@ -198,11 +201,12 @@ fn gen_os_module() -> Module {
 }
 
 fn gen_conv_module() -> Module {
+    use crate::ir::abi::AbiKind::CStr;
     make_module(vec![
-        decl_fn("ord", &[("s", ty_str())], ty_int()),
+        decl_fn_abi("ord", &[("s", ty_str(), CStr)], ty_int()),
         decl_fn("chr", &[("n", ty_int())], ty_str()),
-        decl_fn("parse_int", &[("s", ty_str())], ty_result(ty_int(), ty_str())),
-        decl_fn("parse_float", &[("s", ty_str())], ty_result(ty_float(), ty_str())),
+        decl_fn_abi("parse_int", &[("s", ty_str(), CStr)], ty_result(ty_int(), ty_str())),
+        decl_fn_abi("parse_float", &[("s", ty_str(), CStr)], ty_result(ty_float(), ty_str())),
         decl_fn("int_to_str", &[("n", ty_int())], ty_str()),
         decl_fn("float_to_str", &[("x", ty_float())], ty_str()),
         decl_fn("bool_to_str", &[("b", ty_bool())], ty_str()),
@@ -238,9 +242,10 @@ fn gen_io_module() -> Module {
             decl_fn(name, &[], ty_int()),
         )));
     }
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("input", &[("prompt", ty_str())], ty_string()),
-    )));
+    items.push(Spanned::dummy(Item::Function({
+        use crate::ir::abi::AbiKind::CStr;
+        decl_fn_abi("input", &[("prompt", ty_str(), CStr)], ty_string())
+    })));
     items.push(Spanned::dummy(Item::Function(
         decl_fn("readline", &[], ty_string()),
     )));
@@ -262,13 +267,14 @@ fn gen_random_module() -> Module {
 }
 
 fn gen_time_module() -> Module {
+    use crate::ir::abi::AbiKind::{CStr, Scalar};
     make_module(vec![
         decl_fn("time", &[], ty_int()),
         decl_fn("time_ms", &[], ty_int()),
         decl_fn("sleep_ms", &[("ms", ty_int())], ty_void()),
         decl_async_fn("sleep", &[("seconds", ty_float())], ty_void()),
-        decl_fn("format_time", &[("epoch", ty_int()), ("fmt", ty_str())], ty_string()),
-        decl_fn("parse_time", &[("s", ty_str()), ("fmt", ty_str())], ty_int()),
+        decl_fn_abi("format_time", &[("epoch", ty_int(), Scalar), ("fmt", ty_str(), CStr)], ty_string()),
+        decl_fn_abi("parse_time", &[("s", ty_str(), CStr), ("fmt", ty_str(), CStr)], ty_int()),
     ])
 }
 
@@ -379,13 +385,22 @@ fn gen_process_module() -> Module {
         Spanned::dummy(Item::Struct(struct_def)),
         process_struct,
         process_equip,
-        Spanned::dummy(Item::Function(decl_fn("exec", &[("cmd", ty_str())], ty_int()))),
-        Spanned::dummy(Item::Function(decl_fn("exec_output", &[("cmd", ty_str())], exec_result_type))),
-        Spanned::dummy(Item::Function(decl_fn(
-            "process_spawn",
-            &[("program", ty_str()), ("args", ty_vector_str())],
-            ty_result(ty_process(), ty_str()),
-        ))),
+        Spanned::dummy(Item::Function({
+            use crate::ir::abi::AbiKind::CStr;
+            decl_fn_abi("exec", &[("cmd", ty_str(), CStr)], ty_int())
+        })),
+        Spanned::dummy(Item::Function({
+            use crate::ir::abi::AbiKind::CStr;
+            decl_fn_abi("exec_output", &[("cmd", ty_str(), CStr)], exec_result_type)
+        })),
+        Spanned::dummy(Item::Function({
+            use crate::ir::abi::AbiKind::{CStr, Ptr};
+            decl_fn_abi(
+                "process_spawn",
+                &[("program", ty_str(), CStr), ("args", ty_vector_str(), Ptr)],
+                ty_result(ty_process(), ty_str()),
+            )
+        })),
         Spanned::dummy(Item::Function(decl_fn("getpid", &[], ty_int()))),
     ];
     Module {
@@ -1180,7 +1195,10 @@ fn gen_crypto_module() -> Module {
         extern_fn("crypto_sha256", &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_crypto_sha256"),
         extern_fn("crypto_sha1", &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_crypto_sha1"),
         // HMAC — Result wrapping in codegen
-        decl_fn("crypto_hmac", &[("algo", ty_str()), ("key", ty_vector_uint8()), ("data", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str())),
+        {
+            use crate::ir::abi::AbiKind::{CStr, Ptr};
+            decl_fn_abi("crypto_hmac", &[("algo", ty_str(), CStr), ("key", ty_vector_uint8(), Ptr), ("data", ty_vector_uint8(), Ptr)], ty_result(ty_vector_uint8(), ty_str()))
+        },
         // AES-CTR — Result wrapping in codegen
         decl_fn("crypto_aes_ctr_new", &[("key", ty_vector_uint8()), ("iv", ty_vector_uint8())], ty_result(ty_cipher(), ty_str())),
         // BigNum
@@ -1252,9 +1270,10 @@ fn gen_socket_module() -> Module {
     items.push(opaque_struct("Socket"));
 
     // Free function: socket_connect(host, port) -> Result[Socket, str]
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("socket_connect", &[("host", ty_str()), ("port", ty_int())], ty_result(ty_socket(), ty_str())),
-    )));
+    items.push(Spanned::dummy(Item::Function({
+        use crate::ir::abi::AbiKind::{CStr, Scalar};
+        decl_fn_abi("socket_connect", &[("host", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_socket(), ty_str()))
+    })));
 
     // NOTE: async_socket_connect deferred — connect is rarely the hot path in servers.
     // The important async ops are async_accept, async_read, async_write for server loops.
@@ -1278,9 +1297,10 @@ fn gen_socket_module() -> Module {
     items.push(opaque_struct("ServerSocket"));
 
     // Free function: server_socket_bind(host, port) -> Result[ServerSocket, str]
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("server_socket_bind", &[("host", ty_str()), ("port", ty_int())], ty_result(ty_server_socket(), ty_str())),
-    )));
+    items.push(Spanned::dummy(Item::Function({
+        use crate::ir::abi::AbiKind::{CStr, Scalar};
+        decl_fn_abi("server_socket_bind", &[("host", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_server_socket(), ty_str()))
+    })));
 
     // ServerSocket methods — extern bindings
     // accept() returns a Result[Socket, str]: the accepted client reuses all Socket methods.
@@ -1364,9 +1384,10 @@ fn gen_udp_socket_module() -> Module {
     })));
 
     // Free function: udp_bind(addr, port) -> Result[UdpSocket, str]
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("udp_bind", &[("addr", ty_str()), ("port", ty_int())], ty_result(ty_udp_socket(), ty_str())),
-    )));
+    items.push(Spanned::dummy(Item::Function({
+        use crate::ir::abi::AbiKind::{CStr, Scalar};
+        decl_fn_abi("udp_bind", &[("addr", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_udp_socket(), ty_str()))
+    })));
 
     // UdpSocket methods
     items.push(equip_block("UdpSocket", vec![
@@ -1415,19 +1436,21 @@ fn gen_tls_socket_module() -> Module {
     items.push(opaque_struct("TlsServerSocket"));
 
     // Free function: tls_connect(host, port) -> Result[TlsSocket, str]
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("tls_connect", &[("host", ty_str()), ("port", ty_int())], ty_result(ty_tls_socket(), ty_str())),
-    )));
+    items.push(Spanned::dummy(Item::Function({
+        use crate::ir::abi::AbiKind::{CStr, Scalar};
+        decl_fn_abi("tls_connect", &[("host", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_tls_socket(), ty_str()))
+    })));
 
     // Free function: tls_server_bind(host, port, cert_path, key_path) -> Result[TlsServerSocket, str]
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("tls_server_bind", &[
-            ("host", ty_str()),
-            ("port", ty_int()),
-            ("cert_path", ty_str()),
-            ("key_path", ty_str()),
-        ], ty_result(ty_tls_server_socket(), ty_str())),
-    )));
+    items.push(Spanned::dummy(Item::Function({
+        use crate::ir::abi::AbiKind::{CStr, Scalar};
+        decl_fn_abi("tls_server_bind", &[
+            ("host", ty_str(), CStr),
+            ("port", ty_int(), Scalar),
+            ("cert_path", ty_str(), CStr),
+            ("key_path", ty_str(), CStr),
+        ], ty_result(ty_tls_server_socket(), ty_str()))
+    })));
 
     // TlsSocket methods — extern bindings
     items.push(equip_block("TlsSocket", vec![
@@ -1474,31 +1497,14 @@ fn gen_regex_module() -> Module {
     items.push(opaque_struct("Regex"));
     items.push(opaque_struct("Match"));
 
-    // Free functions
-    // regex_compile → Result[Regex, str] (hardcoded dispatch)
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("regex_compile", &[("pattern", ty_str())], ty_result(ty_regex(), ty_str())),
-    )));
-    // regex_compile_with → Result[Regex, str] (hardcoded dispatch)
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("regex_compile_with", &[("pattern", ty_str()), ("flags", ty_str())], ty_result(ty_regex(), ty_str())),
-    )));
-    // regex_escape → String (extern)
-    items.push(Spanned::dummy(Item::Function(
-        extern_fn("regex_escape", &[("s", ty_str())], ty_string(), "gorget_regex_escape"),
-    )));
-    // regex_is_match → bool (hardcoded — compile, match, free)
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("regex_is_match", &[("pattern", ty_str()), ("subject", ty_str())], ty_bool()),
-    )));
-    // regex_find → Option[Match] (hardcoded — compile, find, free pattern)
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("regex_find", &[("pattern", ty_str()), ("subject", ty_str())], ty_option(ty_match())),
-    )));
-    // regex_replace → String (hardcoded — compile, replace, free pattern)
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("regex_replace", &[("pattern", ty_str()), ("subject", ty_str()), ("repl", ty_str())], ty_string()),
-    )));
+    // Free functions (handled by takes_cstr_for_str_param whitelists — ABI tags
+    // don't reach the C dispatch names like gorget_regex_is_match_pat)
+    items.push(Spanned::dummy(Item::Function(decl_fn("regex_compile", &[("pattern", ty_str())], ty_result(ty_regex(), ty_str())))));
+    items.push(Spanned::dummy(Item::Function(decl_fn("regex_compile_with", &[("pattern", ty_str()), ("flags", ty_str())], ty_result(ty_regex(), ty_str())))));
+    items.push(Spanned::dummy(Item::Function(extern_fn("regex_escape", &[("s", ty_str())], ty_string(), "gorget_regex_escape"))));
+    items.push(Spanned::dummy(Item::Function(decl_fn("regex_is_match", &[("pattern", ty_str()), ("subject", ty_str())], ty_bool()))));
+    items.push(Spanned::dummy(Item::Function(decl_fn("regex_find", &[("pattern", ty_str()), ("subject", ty_str())], ty_option(ty_match())))));
+    items.push(Spanned::dummy(Item::Function(decl_fn("regex_replace", &[("pattern", ty_str()), ("subject", ty_str()), ("repl", ty_str())], ty_string()))));
 
     // Regex methods
     items.push(equip_block("Regex", vec![
@@ -2638,24 +2644,27 @@ fn gen_image_module() -> Module {
     };
 
     let mut items = vec![image_struct];
-    items.push(fn_item(extern_fn("image_load", &[("path", ty_str())], ty_result(ty_image(), ty_str()), "gorget_image_load")));
-    items.push(fn_item(extern_fn("image_load_rgba", &[("path", ty_str())], ty_result(ty_image(), ty_str()), "gorget_image_load_rgba")));
-    items.push(fn_item(extern_fn("image_load_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_load_from_memory")));
-    items.push(fn_item(extern_fn("image_flip_vertically", &[("img", ty_image())], ty_image(), "gorget_image_flip_vertically")));
+    {
+        use crate::ir::abi::AbiKind::{CStr, Ptr, Scalar};
+        items.push(fn_item(extern_fn_abi("image_load", &[("path", ty_str(), CStr)], ty_result(ty_image(), ty_str()), "gorget_image_load")));
+        items.push(fn_item(extern_fn_abi("image_load_rgba", &[("path", ty_str(), CStr)], ty_result(ty_image(), ty_str()), "gorget_image_load_rgba")));
+        items.push(fn_item(extern_fn("image_load_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_load_from_memory")));
+        items.push(fn_item(extern_fn("image_flip_vertically", &[("img", ty_image())], ty_image(), "gorget_image_flip_vertically")));
 
-    // ── Enhanced Image Functions ─────────────────────────────
-    // Query image info without full decode
-    items.push(fn_item(extern_fn("image_info", &[("path", ty_str())], ty_result(ty_image(), ty_str()), "gorget_image_info")));
-    items.push(fn_item(extern_fn("image_info_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_info_from_memory")));
-    // Load from memory with forced RGBA
-    items.push(fn_item(extern_fn("image_load_rgba_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_load_rgba_from_memory")));
-    // Resize
-    items.push(fn_item(extern_fn("image_resize", &[("img", ty_image()), ("new_width", ty_int()), ("new_height", ty_int())], ty_result(ty_image(), ty_str()), "gorget_image_resize")));
-    // Write (stb_image_write — PNG and JPG)
-    items.push(fn_item(extern_fn("image_write_png", &[("path", ty_str()), ("img", ty_image())], ty_result(ty_int(), ty_str()), "gorget_image_write_png")));
-    items.push(fn_item(extern_fn("image_write_jpg", &[("path", ty_str()), ("img", ty_image()), ("quality", ty_int())], ty_result(ty_int(), ty_str()), "gorget_image_write_jpg")));
-    // Encode to memory
-    items.push(fn_item(extern_fn("image_encode_png", &[("img", ty_image())], ty_result(ty_vector_uint8(), ty_str()), "gorget_image_encode_png")));
+        // ── Enhanced Image Functions ─────────────────────────────
+        // Query image info without full decode
+        items.push(fn_item(extern_fn_abi("image_info", &[("path", ty_str(), CStr)], ty_result(ty_image(), ty_str()), "gorget_image_info")));
+        items.push(fn_item(extern_fn("image_info_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_info_from_memory")));
+        // Load from memory with forced RGBA
+        items.push(fn_item(extern_fn("image_load_rgba_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_load_rgba_from_memory")));
+        // Resize
+        items.push(fn_item(extern_fn("image_resize", &[("img", ty_image()), ("new_width", ty_int()), ("new_height", ty_int())], ty_result(ty_image(), ty_str()), "gorget_image_resize")));
+        // Write (stb_image_write — PNG and JPG)
+        items.push(fn_item(extern_fn_abi("image_write_png", &[("path", ty_str(), CStr), ("img", ty_image(), Ptr)], ty_result(ty_int(), ty_str()), "gorget_image_write_png")));
+        items.push(fn_item(extern_fn_abi("image_write_jpg", &[("path", ty_str(), CStr), ("img", ty_image(), Ptr), ("quality", ty_int(), Scalar)], ty_result(ty_int(), ty_str()), "gorget_image_write_jpg")));
+        // Encode to memory
+        items.push(fn_item(extern_fn("image_encode_png", &[("img", ty_image())], ty_result(ty_vector_uint8(), ty_str()), "gorget_image_encode_png")));
+    }
 
     Module {
         items,
@@ -2691,7 +2700,10 @@ fn gen_audio_module() -> Module {
     items.push(fn_item(extern_fn("audio_allocate_channels", &[("num_channels", ty_int())], ty_void(), "gorget_audio_allocate_channels")));
 
     // Sound effects
-    items.push(fn_item(extern_fn("audio_load_wav", &[("path", ty_str())], ty_result(ty_chunk(), ty_str()), "gorget_audio_load_wav")));
+    items.push(fn_item({
+        use crate::ir::abi::AbiKind::CStr;
+        extern_fn_abi("audio_load_wav", &[("path", ty_str(), CStr)], ty_result(ty_chunk(), ty_str()), "gorget_audio_load_wav")
+    }));
     items.push(fn_item(extern_fn("audio_free_chunk", &[("chunk", ty_chunk())], ty_void(), "gorget_audio_free_chunk")));
     items.push(fn_item(extern_fn("audio_play_channel", &[("channel", ty_int()), ("chunk", ty_chunk()), ("loops", ty_int())], ty_int(), "gorget_audio_play_channel")));
     items.push(fn_item(extern_fn("audio_halt_channel", &[("channel", ty_int())], ty_void(), "gorget_audio_halt_channel")));
@@ -2700,7 +2712,10 @@ fn gen_audio_module() -> Module {
     items.push(fn_item(extern_fn("audio_set_channel_panning", &[("channel", ty_int()), ("left", ty_int()), ("right", ty_int())], ty_void(), "gorget_audio_set_channel_panning")));
 
     // Music
-    items.push(fn_item(extern_fn("audio_load_music", &[("path", ty_str())], ty_result(ty_music(), ty_str()), "gorget_audio_load_music")));
+    items.push(fn_item({
+        use crate::ir::abi::AbiKind::CStr;
+        extern_fn_abi("audio_load_music", &[("path", ty_str(), CStr)], ty_result(ty_music(), ty_str()), "gorget_audio_load_music")
+    }));
     items.push(fn_item(extern_fn("audio_free_music", &[("music", ty_music())], ty_void(), "gorget_audio_free_music")));
     items.push(fn_item(extern_fn("audio_play_music", &[("music", ty_music()), ("loops", ty_int())], ty_void(), "gorget_audio_play_music")));
     items.push(fn_item(extern_fn("audio_halt_music", &[], ty_void(), "gorget_audio_halt_music")));
@@ -2931,9 +2946,12 @@ fn gen_metal_module() -> Module {
     items.push(fn_item(extern_fn("metal_create_sampler", &[("device", ty_int()), ("min_filter", ty_int()), ("mag_filter", ty_int()), ("mip_filter", ty_int()), ("address_s", ty_int()), ("address_t", ty_int())], ty_int(), "gorget_metal_create_sampler")));
 
     // ── Shaders / Library ──────────────────────────────────
-    items.push(fn_item(extern_fn("metal_create_library", &[("device", ty_int()), ("source", ty_str())], ty_int(), "gorget_metal_create_library")));
-    items.push(fn_item(extern_fn("metal_create_library_from_data", &[("device", ty_int()), ("data", ty_vector_uint8())], ty_int(), "gorget_metal_create_library_from_data")));
-    items.push(fn_item(extern_fn("metal_library_function", &[("library", ty_int()), ("name", ty_str())], ty_int(), "gorget_metal_library_function")));
+    {
+        use crate::ir::abi::AbiKind::{CStr, Scalar as S};
+        items.push(fn_item(extern_fn_abi("metal_create_library", &[("device", ty_int(), S), ("source", ty_str(), CStr)], ty_int(), "gorget_metal_create_library")));
+        items.push(fn_item(extern_fn("metal_create_library_from_data", &[("device", ty_int()), ("data", ty_vector_uint8())], ty_int(), "gorget_metal_create_library_from_data")));
+        items.push(fn_item(extern_fn_abi("metal_library_function", &[("library", ty_int(), S), ("name", ty_str(), CStr)], ty_int(), "gorget_metal_library_function")));
+    }
 
     // ── Vertex Descriptor ──────────────────────────────────
     items.push(fn_item(extern_fn("metal_create_vertex_descriptor", &[], ty_int(), "gorget_metal_create_vertex_descriptor")));
@@ -3120,10 +3138,13 @@ fn gen_metal_module() -> Module {
     items.push(fn_item(extern_fn("metal_create_sampler_with_compare", &[("device", ty_int()), ("min_filter", ty_int()), ("mag_filter", ty_int()), ("address_s", ty_int()), ("address_t", ty_int()), ("compare_fn", ty_int())], ty_int(), "gorget_metal_create_sampler_with_compare")));
 
     // ── Debug Groups ─────────────────────────────────────────────
-    items.push(fn_item(extern_fn("metal_encoder_push_debug_group", &[("encoder", ty_int()), ("label", ty_str())], ty_void(), "gorget_metal_encoder_push_debug_group")));
-    items.push(fn_item(extern_fn("metal_encoder_pop_debug_group", &[("encoder", ty_int())], ty_void(), "gorget_metal_encoder_pop_debug_group")));
-    items.push(fn_item(extern_fn("metal_encoder_insert_debug_signpost", &[("encoder", ty_int()), ("label", ty_str())], ty_void(), "gorget_metal_encoder_insert_debug_signpost")));
-    items.push(fn_item(extern_fn("metal_command_buffer_push_debug_group", &[("cmd_buf", ty_int()), ("label", ty_str())], ty_void(), "gorget_metal_cmd_buf_push_debug_group")));
+    {
+        use crate::ir::abi::AbiKind::{CStr, Scalar as S};
+        items.push(fn_item(extern_fn_abi("metal_encoder_push_debug_group", &[("encoder", ty_int(), S), ("label", ty_str(), CStr)], ty_void(), "gorget_metal_encoder_push_debug_group")));
+        items.push(fn_item(extern_fn("metal_encoder_pop_debug_group", &[("encoder", ty_int())], ty_void(), "gorget_metal_encoder_pop_debug_group")));
+        items.push(fn_item(extern_fn_abi("metal_encoder_insert_debug_signpost", &[("encoder", ty_int(), S), ("label", ty_str(), CStr)], ty_void(), "gorget_metal_encoder_insert_debug_signpost")));
+        items.push(fn_item(extern_fn_abi("metal_command_buffer_push_debug_group", &[("cmd_buf", ty_int(), S), ("label", ty_str(), CStr)], ty_void(), "gorget_metal_cmd_buf_push_debug_group")));
+    }
     items.push(fn_item(extern_fn("metal_command_buffer_pop_debug_group", &[("cmd_buf", ty_int())], ty_void(), "gorget_metal_cmd_buf_pop_debug_group")));
 
     // ── MRT (Multiple Render Target) Pipeline ────────────────────
@@ -3249,7 +3270,10 @@ fn gen_metal_module() -> Module {
     items.push(fn_item(extern_fn("metal_create_instance_accel_desc", &[("instance_buffer", ty_int()), ("instance_count", ty_int())], ty_int(), "gorget_metal_create_instance_accel_desc")));
     // Intersection function tables
     items.push(fn_item(extern_fn("metal_create_intersection_function_table", &[("pipeline", ty_int()), ("count", ty_int())], ty_int(), "gorget_metal_create_intersection_fn_table")));
-    items.push(fn_item(extern_fn("metal_intersection_fn_table_set_function", &[("table", ty_int()), ("index", ty_int()), ("pipeline", ty_int()), ("function_name", ty_str())], ty_void(), "gorget_metal_intersection_fn_table_set_fn")));
+    items.push(fn_item({
+        use crate::ir::abi::AbiKind::{CStr, Scalar as S};
+        extern_fn_abi("metal_intersection_fn_table_set_function", &[("table", ty_int(), S), ("index", ty_int(), S), ("pipeline", ty_int(), S), ("function_name", ty_str(), CStr)], ty_void(), "gorget_metal_intersection_fn_table_set_fn")
+    }));
     // Acceleration structure encoder
     items.push(fn_item(extern_fn("metal_command_buffer_acceleration_structure_encoder", &[("cmd_buf", ty_int())], ty_int(), "gorget_metal_cmd_buf_accel_encoder")));
     items.push(fn_item(extern_fn("metal_accel_encoder_end", &[("encoder", ty_int())], ty_void(), "gorget_metal_accel_encoder_end")));
@@ -3259,17 +3283,26 @@ fn gen_metal_module() -> Module {
     items.push(fn_item(extern_fn("metal_compute_encoder_set_accel_structure", &[("encoder", ty_int()), ("index", ty_int()), ("accel", ty_int())], ty_void(), "gorget_metal_compute_enc_set_accel_struct")));
 
     // ── Mesh Shaders (Metal 3) ──────────────────────────────
-    items.push(fn_item(extern_fn("metal_create_mesh_render_pipeline", &[("device", ty_int()), ("object_fn", ty_str()), ("mesh_fn", ty_str()), ("frag_fn", ty_str()), ("library", ty_int()), ("pixel_format", ty_int())], ty_int(), "gorget_metal_create_mesh_pipeline")));
+    items.push(fn_item({
+        use crate::ir::abi::AbiKind::{CStr, Scalar as S};
+        extern_fn_abi("metal_create_mesh_render_pipeline", &[("device", ty_int(), S), ("object_fn", ty_str(), CStr), ("mesh_fn", ty_str(), CStr), ("frag_fn", ty_str(), CStr), ("library", ty_int(), S), ("pixel_format", ty_int(), S)], ty_int(), "gorget_metal_create_mesh_pipeline")
+    }));
     items.push(fn_item(extern_fn("metal_render_encoder_draw_mesh_threadgroups", &[("encoder", ty_int()), ("mesh_tg_x", ty_int()), ("mesh_tg_y", ty_int()), ("mesh_tg_z", ty_int()), ("mesh_threads_x", ty_int()), ("mesh_threads_y", ty_int()), ("mesh_threads_z", ty_int()), ("object_threads_x", ty_int()), ("object_threads_y", ty_int()), ("object_threads_z", ty_int())], ty_void(), "gorget_metal_render_enc_draw_mesh_tg")));
 
     // ── Binary Archives (Metal 2.3+) ────────────────────────
-    items.push(fn_item(extern_fn("metal_create_binary_archive", &[("device", ty_int()), ("url", ty_str())], ty_int(), "gorget_metal_create_binary_archive")));
-    items.push(fn_item(extern_fn("metal_binary_archive_add_pipeline", &[("archive", ty_int()), ("desc", ty_int())], ty_int(), "gorget_metal_binary_archive_add_pipeline")));
-    items.push(fn_item(extern_fn("metal_binary_archive_serialize", &[("archive", ty_int()), ("url", ty_str())], ty_int(), "gorget_metal_binary_archive_serialize")));
+    {
+        use crate::ir::abi::AbiKind::{CStr, Scalar as S};
+        items.push(fn_item(extern_fn_abi("metal_create_binary_archive", &[("device", ty_int(), S), ("url", ty_str(), CStr)], ty_int(), "gorget_metal_create_binary_archive")));
+        items.push(fn_item(extern_fn("metal_binary_archive_add_pipeline", &[("archive", ty_int()), ("desc", ty_int())], ty_int(), "gorget_metal_binary_archive_add_pipeline")));
+        items.push(fn_item(extern_fn_abi("metal_binary_archive_serialize", &[("archive", ty_int(), S), ("url", ty_str(), CStr)], ty_int(), "gorget_metal_binary_archive_serialize")));
+    }
 
     // ── Visible Functions / Function Pointers (Metal 2.3+) ──
     items.push(fn_item(extern_fn("metal_create_visible_function_table", &[("pipeline", ty_int()), ("count", ty_int())], ty_int(), "gorget_metal_create_visible_fn_table")));
-    items.push(fn_item(extern_fn("metal_visible_fn_table_set_function", &[("table", ty_int()), ("index", ty_int()), ("pipeline", ty_int()), ("function_name", ty_str())], ty_void(), "gorget_metal_visible_fn_table_set_fn")));
+    items.push(fn_item({
+        use crate::ir::abi::AbiKind::{CStr, Scalar as S};
+        extern_fn_abi("metal_visible_fn_table_set_function", &[("table", ty_int(), S), ("index", ty_int(), S), ("pipeline", ty_int(), S), ("function_name", ty_str(), CStr)], ty_void(), "gorget_metal_visible_fn_table_set_fn")
+    }));
     items.push(fn_item(extern_fn("metal_render_encoder_set_visible_fn_table", &[("encoder", ty_int()), ("index", ty_int()), ("table", ty_int())], ty_void(), "gorget_metal_render_enc_set_visible_fn_table")));
     items.push(fn_item(extern_fn("metal_compute_encoder_set_visible_fn_table", &[("encoder", ty_int()), ("index", ty_int()), ("table", ty_int())], ty_void(), "gorget_metal_compute_enc_set_visible_fn_table")));
 
