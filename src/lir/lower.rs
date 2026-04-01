@@ -1580,7 +1580,11 @@ impl<'a> FuncLowering<'a> {
                 let effective_type = self.effective_place_type(base);
                 // If the effective type is a pointer (e.g., closure env param),
                 // load the pointer value first so FieldPtr operates on the struct, not the slot.
-                if let Some(GirType::Ptr(_) | GirType::MutPtr(_)) = self.gir_types.get(effective_type) {
+                // Skip for ref_locals — they're already pointers from collection reads;
+                // lower_place_addr already does the SlotLoad to get the pointer value.
+                let is_ref_local = base.projections.is_empty()
+                    && self.gir_func.ref_locals.contains(&base.local);
+                if !is_ref_local && matches!(self.gir_types.get(effective_type), Some(GirType::Ptr(_) | GirType::MutPtr(_))) {
                     let deref = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::Load {
                         dst: deref,
