@@ -67,6 +67,8 @@ struct FuncLowering<'a> {
     /// Struct types with field-level drop functions.
     recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String, String)>>,
     type_drop_fns: &'a std::collections::HashMap<String, crate::lir::TypeDropInfo>,
+    /// Extern ABI kinds from module declarations (fn_name → Vec<AbiKind>).
+    extern_abi_kinds: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -178,6 +180,7 @@ impl<'a> LoweringContext<'a> {
                     &self.module.recursive_drop_enums,
                     &self.module.recursive_drop_structs,
                     &self.module.type_drop_fns,
+                    &self.gir.fn_extern_abi_kinds,
                 );
                 fl.lower();
                 all_pending_externs.extend(fl.pending_externs.drain(..));
@@ -920,6 +923,7 @@ impl<'a> FuncLowering<'a> {
         recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String, String)>>,
         recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String, String)>>,
         type_drop_fns: &'a std::collections::HashMap<String, crate::lir::TypeDropInfo>,
+        extern_abi_kinds: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
     ) -> Self {
         let params: Vec<LirType> = gir_func
             .params
@@ -974,6 +978,7 @@ impl<'a> FuncLowering<'a> {
             recursive_drop_enums,
             recursive_drop_structs,
             type_drop_fns,
+            extern_abi_kinds,
         }
     }
 
@@ -3605,15 +3610,12 @@ impl<'a> FuncLowering<'a> {
     /// If the extern already exists from a previous call site, merge parameter types
     /// by preferring more specific types (e.g., Struct over Ptr).
     fn ensure_extern(&mut self, name: &str, arg_types: &[LirType], ret_ty: &LirType) {
-        // Unwrap PtrTo → Struct for extern params. CoW's Ptr wrapping is a
-        // compiler-internal ownership convention, not an ABI contract. Extern
-        // functions expect structs by value; the C backend auto-derefs Ptr args
-        // when ext_params says Struct (via emit_coerced_arg).
-        let arg_types: Vec<LirType> = arg_types.iter().map(|t| match t {
-            LirType::PtrTo(sid) => LirType::Struct(*sid),
-            other => other.clone(),
-        }).collect();
-        let arg_types = arg_types.as_slice();
+        // Look up extern ABI kinds from module declarations.
+        // Try both the C name and the Gorget name (strip gorget_ prefix).
+        let abi_tags: Vec<crate::ir::abi::AbiKind> = self.extern_abi_kinds.get(name)
+            .or_else(|| name.strip_prefix("gorget_").and_then(|stripped| self.extern_abi_kinds.get(stripped)))
+            .cloned()
+            .unwrap_or_default();
 
         // For known runtime functions, use canonical signatures instead of call-site inference.
         if let Some((canon_params, canon_ret)) = runtime_extern_sig(name, self.struct_reg) {
@@ -3626,7 +3628,7 @@ impl<'a> FuncLowering<'a> {
                     params: canon_params,
                     return_type: canon_ret,
                     is_variadic: false,
-                    param_abis: vec![],
+                    param_abis: abi_tags.clone(),
                 });
             }
             return;
@@ -3660,7 +3662,7 @@ impl<'a> FuncLowering<'a> {
             params: arg_types.to_vec(),
             return_type: actual_ret,
             is_variadic: false,
-            param_abis: vec![],
+            param_abis: abi_tags,
         });
     }
 

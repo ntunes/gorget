@@ -4927,6 +4927,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 if i > 0 { write!(out, ", ").unwrap(); }
                                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                                 let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                                // Check ABI tag first.
+                                if let Some(abi) = ext_decl.and_then(|e| e.param_abis.get(i)).copied() {
+                                    if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
+                                        continue;
+                                    }
+                                }
                                 let needs_cstr = takes_cstr_for_str_param(emit_name, i);
                                 let arg_is_str = arg_ty.map_or(false, |t| is_str_struct(t, module));
                                 let is_ptr_to_str = is_str_ptr_opt(arg_ty, module)
@@ -5552,6 +5558,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                             if i > 0 { write!(out, ", ").unwrap(); }
                             let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                             let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                            // Check ABI tag first.
+                            if let Some(abi) = ext_decl.and_then(|e| e.param_abis.get(i)).copied() {
+                                if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
+                                    continue;
+                                }
+                            }
                             let needs_cstr = takes_cstr_for_str_param(emit_name, i);
                             if needs_cstr {
                                 let is_ptr_val = matches!(arg_ty, Some(LirType::Ptr));
@@ -5620,6 +5632,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                             if i > 0 { write!(out, ", ").unwrap(); }
                             let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                             let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                            // Check ABI tag first.
+                            if let Some(abi) = ext_decl.and_then(|e| e.param_abis.get(i)).copied() {
+                                if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
+                                    continue;
+                                }
+                            }
                             let needs_cstr = takes_cstr_for_str_param(emit_name, i);
                             if needs_cstr {
                                 let is_ptr_val = matches!(arg_ty, Some(LirType::Ptr));
@@ -5860,6 +5878,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 }
                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                // Check ABI tag first — if non-Auto, use data-driven marshalling.
+                if let Some(abi) = ext_decl.and_then(|e| e.param_abis.get(i)).copied() {
+                    if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
+                        continue;
+                    }
+                }
                 // For await helpers, coerce arg to Task__T.
                 if is_await && i == 0 {
                     let is_task_struct = matches!(arg_ty, Some(LirType::Struct(sid)) if {
@@ -6598,6 +6622,61 @@ fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty: &LirType, 
 /// Returns true if the function is provided by standard C headers
 /// (stdio.h, stdlib.h, string.h) and should not be re-declared.
 /// Emit a coerced argument value.
+/// Emit an argument with explicit ABI marshalling. Returns true if handled,
+/// false if the caller should fall back to existing logic.
+fn emit_abi_arg(
+    out: &mut String,
+    val: &str,
+    abi: crate::ir::abi::AbiKind,
+    arg_ty: Option<&LirType>,
+    is_str_lit: bool,
+) -> bool {
+    use crate::ir::abi::AbiKind;
+    let is_ptr = arg_ty.map_or(false, |t| t.is_ptr());
+    let is_struct = arg_ty.map_or(false, |t| t.is_aggregate());
+    match abi {
+        AbiKind::CStr => {
+            if is_str_lit {
+                write!(out, "{val}").unwrap();
+            } else if is_ptr {
+                write!(out, "({val} ? gorget_str_to_cstr(*(Str*){val}) : NULL)").unwrap();
+            } else if is_struct {
+                write!(out, "gorget_str_to_cstr({val})").unwrap();
+            } else {
+                write!(out, "{val}").unwrap();
+            }
+            true
+        }
+        AbiKind::BytePtr => {
+            if is_str_lit {
+                write!(out, "{val}").unwrap();
+            } else if is_ptr {
+                write!(out, "({val} ? ((Str*){val})->data : NULL)").unwrap();
+            } else if is_struct {
+                write!(out, "({val}).data").unwrap();
+            } else {
+                write!(out, "{val}").unwrap();
+            }
+            true
+        }
+        AbiKind::GorgetString => {
+            if is_str_lit {
+                write!(out, "gorget_str_from_literal({val}, strlen({val}))").unwrap();
+            } else if is_ptr {
+                write!(out, "*(Str*){val}").unwrap();
+            } else {
+                write!(out, "{val}").unwrap();
+            }
+            true
+        }
+        AbiKind::Opaque | AbiKind::Ptr | AbiKind::Scalar => {
+            write!(out, "{val}").unwrap();
+            true
+        }
+        AbiKind::Auto => false, // fall back to existing logic
+    }
+}
+
 /// Handles: Ptr→Str (string literal wrapping), Ptr→Aggregate (dereference), GorgetString→Str.
 fn emit_coerced_arg(
     out: &mut String,

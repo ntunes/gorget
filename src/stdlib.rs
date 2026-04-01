@@ -878,8 +878,11 @@ fn gen_sdl_module() -> Module {
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_quit", &[], ty_void()))));
 
     // Window
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_create_window", &[("title", ty_str()), ("w", ty_int()), ("h", ty_int()), ("flags", ty_int())], ty_sdl_window()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_create_window_try", &[("title", ty_str()), ("w", ty_int()), ("h", ty_int()), ("flags", ty_int())], ty_sdl_window()))));
+    {
+        use crate::ir::abi::AbiKind::*;
+        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_create_window", &[("title", ty_str(), CStr), ("w", ty_int(), Scalar), ("h", ty_int(), Scalar), ("flags", ty_int(), Scalar)], ty_sdl_window()))));
+        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_create_window_try", &[("title", ty_str(), CStr), ("w", ty_int(), Scalar), ("h", ty_int(), Scalar), ("flags", ty_int(), Scalar)], ty_sdl_window()))));
+    }
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_window_is_null", &[("win", ty_sdl_window())], ty_bool()))));
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_window_to_handle", &[("win", ty_sdl_window())], ty_int()))));
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_error", &[], ty_str()))));
@@ -904,7 +907,10 @@ fn gen_sdl_module() -> Module {
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_set_blend_mode", &[("r", ty_sdl_renderer()), ("mode", ty_int())], ty_void()))));
 
     // Textures (SDL2_image)
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_load_texture", &[("r", ty_sdl_renderer()), ("path", ty_str())], ty_sdl_texture()))));
+    {
+        use crate::ir::abi::AbiKind::*;
+        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_load_texture", &[("r", ty_sdl_renderer(), Opaque), ("path", ty_str(), CStr)], ty_sdl_texture()))));
+    }
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_destroy_texture", &[("t", ty_sdl_texture())], ty_void()))));
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_render_texture", &[("r", ty_sdl_renderer()), ("t", ty_sdl_texture()), ("x", ty_int()), ("y", ty_int())], ty_void()))));
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_render_texture_sized", &[("r", ty_sdl_renderer()), ("t", ty_sdl_texture()), ("x", ty_int()), ("y", ty_int()), ("w", ty_int()), ("h", ty_int())], ty_void()))));
@@ -913,12 +919,15 @@ fn gen_sdl_module() -> Module {
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_set_texture_alpha", &[("t", ty_sdl_texture()), ("alpha", ty_int())], ty_void()))));
 
     // Text (SDL2_ttf)
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_load_font", &[("path", ty_str()), ("size", ty_int())], ty_sdl_font()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_close_font", &[("f", ty_sdl_font())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_render_text", &[("r", ty_sdl_renderer()), ("f", ty_sdl_font()), ("text", ty_str()), ("red", ty_int()), ("green", ty_int()), ("blue", ty_int())], ty_sdl_texture()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_draw_text", &[("r", ty_sdl_renderer()), ("f", ty_sdl_font()), ("text", ty_str()), ("x", ty_int()), ("y", ty_int()), ("red", ty_int()), ("green", ty_int()), ("blue", ty_int())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_text_width", &[("f", ty_sdl_font()), ("text", ty_str())], ty_int()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_text_height", &[("f", ty_sdl_font()), ("text", ty_str())], ty_int()))));
+    {
+        use crate::ir::abi::AbiKind::*;
+        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_load_font", &[("path", ty_str(), CStr), ("size", ty_int(), Scalar)], ty_sdl_font()))));
+        items.push(Spanned::dummy(Item::Function(decl_fn("sdl_close_font", &[("f", ty_sdl_font())], ty_void()))));
+        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_render_text", &[("r", ty_sdl_renderer(), Opaque), ("f", ty_sdl_font(), Opaque), ("text", ty_str(), CStr), ("red", ty_int(), Scalar), ("green", ty_int(), Scalar), ("blue", ty_int(), Scalar)], ty_sdl_texture()))));
+        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_draw_text", &[("r", ty_sdl_renderer(), Opaque), ("f", ty_sdl_font(), Opaque), ("text", ty_str(), CStr), ("x", ty_int(), Scalar), ("y", ty_int(), Scalar), ("red", ty_int(), Scalar), ("green", ty_int(), Scalar), ("blue", ty_int(), Scalar)], ty_void()))));
+        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_text_width", &[("f", ty_sdl_font(), Opaque), ("text", ty_str(), CStr)], ty_int()))));
+        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_text_height", &[("f", ty_sdl_font(), Opaque), ("text", ty_str(), CStr)], ty_int()))));
+    }
 
     // Events
     items.push(Spanned::dummy(Item::Function(decl_fn("sdl_poll_event", &[], ty_sdl_event()))));
@@ -1537,6 +1546,14 @@ fn extern_fn(name: &str, params: &[(&str, Type)], ret: Type, c_symbol: &str) -> 
     f
 }
 
+/// Build an extern free function declaration with ABI annotations.
+#[allow(dead_code)]
+fn extern_fn_abi(name: &str, params: &[(&str, Type, crate::ir::abi::AbiKind)], ret: Type, c_symbol: &str) -> FunctionDef {
+    let mut f = decl_fn_abi(name, params, ret);
+    f.body = FunctionBody::Extern(c_symbol.to_string());
+    f
+}
+
 /// Build an extern method binding for an equip block (has `self` as first param).
 /// The C symbol is called directly instead of going through hardcoded dispatch.
 fn extern_method(
@@ -2104,7 +2121,9 @@ fn gen_gl_module() -> Module {
 
     // ── Shaders ─────────────────────────────────────────────
     items.push(fn_item(extern_fn("gl_create_shader", &[("type_", ty_int())], ty_int(), "gorget_gl_create_shader")));
-    items.push(fn_item(extern_fn("gl_shader_source", &[("shader", ty_int()), ("source", ty_str())], ty_void(), "gorget_gl_shader_source")));
+    {
+    use crate::ir::abi::AbiKind::{GorgetString as Str, Scalar as S};
+    items.push(fn_item(extern_fn_abi("gl_shader_source", &[("shader", ty_int(), S), ("source", ty_str(), Str)], ty_void(), "gorget_gl_shader_source")));
     items.push(fn_item(extern_fn("gl_compile_shader", &[("shader", ty_int())], ty_void(), "gorget_gl_compile_shader")));
     items.push(fn_item(extern_fn("gl_create_program", &[], ty_int(), "gorget_gl_create_program")));
     items.push(fn_item(extern_fn("gl_attach_shader", &[("program", ty_int()), ("shader", ty_int())], ty_void(), "gorget_gl_attach_shader")));
@@ -2116,7 +2135,7 @@ fn gen_gl_module() -> Module {
     items.push(fn_item(extern_fn("gl_get_program_info_log", &[("program", ty_int())], ty_str(), "gorget_gl_get_program_info_log")));
 
     // ── Uniforms ────────────────────────────────────────────
-    items.push(fn_item(extern_fn("gl_get_uniform_location", &[("program", ty_int()), ("name", ty_str())], ty_int(), "gorget_gl_get_uniform_location")));
+    items.push(fn_item(extern_fn_abi("gl_get_uniform_location", &[("program", ty_int(), S), ("name", ty_str(), Str)], ty_int(), "gorget_gl_get_uniform_location")));
     items.push(fn_item(extern_fn("gl_uniform_1i", &[("location", ty_int()), ("v0", ty_int())], ty_void(), "gorget_gl_uniform_1i")));
     items.push(fn_item(extern_fn("gl_uniform_1f", &[("location", ty_int()), ("v0", ty_float())], ty_void(), "gorget_gl_uniform_1f")));
     items.push(fn_item(extern_fn("gl_uniform_2f", &[("location", ty_int()), ("v0", ty_float()), ("v1", ty_float())], ty_void(), "gorget_gl_uniform_2f")));
@@ -2195,8 +2214,8 @@ fn gen_gl_module() -> Module {
     items.push(fn_item(extern_fn("gl_get_program_iv", &[("program", ty_int()), ("pname", ty_int())], ty_int(), "gorget_gl_get_program_iv")));
     items.push(fn_item(extern_fn("gl_validate_program", &[("program", ty_int())], ty_void(), "gorget_gl_validate_program")));
     items.push(fn_item(extern_fn("gl_detach_shader", &[("program", ty_int()), ("shader", ty_int())], ty_void(), "gorget_gl_detach_shader")));
-    items.push(fn_item(extern_fn("gl_bind_attrib_location", &[("program", ty_int()), ("index", ty_int()), ("name", ty_str())], ty_void(), "gorget_gl_bind_attrib_location")));
-    items.push(fn_item(extern_fn("gl_get_attrib_location", &[("program", ty_int()), ("name", ty_str())], ty_int(), "gorget_gl_get_attrib_location")));
+    items.push(fn_item(extern_fn_abi("gl_bind_attrib_location", &[("program", ty_int(), S), ("index", ty_int(), S), ("name", ty_str(), Str)], ty_void(), "gorget_gl_bind_attrib_location")));
+    items.push(fn_item(extern_fn_abi("gl_get_attrib_location", &[("program", ty_int(), S), ("name", ty_str(), Str)], ty_int(), "gorget_gl_get_attrib_location")));
 
     // ── Framebuffer Objects ─────────────────────────────────
     items.push(fn_item(extern_fn("gl_gen_framebuffer", &[], ty_int(), "gorget_gl_gen_framebuffer")));
@@ -2238,7 +2257,7 @@ fn gen_gl_module() -> Module {
     // ── UBO (Uniform Buffer Objects — GL 3.1+) ──────────────
     items.push(fn_item(extern_fn("gl_bind_buffer_base", &[("target", ty_int()), ("index", ty_int()), ("buffer", ty_int())], ty_void(), "gorget_gl_bind_buffer_base")));
     items.push(fn_item(extern_fn("gl_bind_buffer_range", &[("target", ty_int()), ("index", ty_int()), ("buffer", ty_int()), ("offset", ty_int()), ("size", ty_int())], ty_void(), "gorget_gl_bind_buffer_range")));
-    items.push(fn_item(extern_fn("gl_get_uniform_block_index", &[("program", ty_int()), ("name", ty_str())], ty_int(), "gorget_gl_get_uniform_block_index")));
+    items.push(fn_item(extern_fn_abi("gl_get_uniform_block_index", &[("program", ty_int(), S), ("name", ty_str(), Str)], ty_int(), "gorget_gl_get_uniform_block_index")));
     items.push(fn_item(extern_fn("gl_uniform_block_binding", &[("program", ty_int()), ("block_index", ty_int()), ("binding_point", ty_int())], ty_void(), "gorget_gl_uniform_block_binding")));
 
     // ── 3D Textures / Texture Arrays (GL 1.2+ / GL 3.0+) ────
@@ -2352,7 +2371,7 @@ fn gen_gl_module() -> Module {
 
     // ── Shader Storage Buffer Objects (GL 4.3+) ─────────────
     items.push(fn_item(extern_fn("gl_shader_storage_block_binding", &[("program", ty_int()), ("block_index", ty_int()), ("binding", ty_int())], ty_void(), "gorget_gl_shader_storage_block_binding")));
-    items.push(fn_item(extern_fn("gl_get_program_resource_index", &[("program", ty_int()), ("interface", ty_int()), ("name", ty_str())], ty_int(), "gorget_gl_get_program_resource_index")));
+    items.push(fn_item(extern_fn_abi("gl_get_program_resource_index", &[("program", ty_int(), S), ("interface", ty_int(), S), ("name", ty_str(), Str)], ty_int(), "gorget_gl_get_program_resource_index")));
 
     // ── Immutable Texture Storage (GL 4.2+) ─────────────────
     items.push(fn_item(extern_fn("gl_tex_storage_2d", &[("target", ty_int()), ("levels", ty_int()), ("format", ty_int()), ("width", ty_int()), ("height", ty_int())], ty_void(), "gorget_gl_tex_storage_2d")));
@@ -2377,14 +2396,15 @@ fn gen_gl_module() -> Module {
     items.push(fn_item(extern_fn("gl_bind_transform_feedback", &[("target", ty_int()), ("id", ty_int())], ty_void(), "gorget_gl_bind_transform_feedback")));
     items.push(fn_item(extern_fn("gl_begin_transform_feedback", &[("mode", ty_int())], ty_void(), "gorget_gl_begin_transform_feedback")));
     items.push(fn_item(extern_fn("gl_end_transform_feedback", &[], ty_void(), "gorget_gl_end_transform_feedback")));
-    items.push(fn_item(extern_fn("gl_transform_feedback_varyings", &[("program", ty_int()), ("count", ty_int()), ("varyings", ty_str()), ("mode", ty_int())], ty_void(), "gorget_gl_transform_feedback_varyings")));
+    items.push(fn_item(extern_fn_abi("gl_transform_feedback_varyings", &[("program", ty_int(), S), ("count", ty_int(), S), ("varyings", ty_str(), Str), ("mode", ty_int(), S)], ty_void(), "gorget_gl_transform_feedback_varyings")));
 
     // ── Clip Control (GL 4.5+) ──────────────────────────────
     items.push(fn_item(extern_fn("gl_clip_control", &[("origin", ty_int()), ("depth", ty_int())], ty_void(), "gorget_gl_clip_control")));
 
     // ── Debug Output (GL 4.3+) ──────────────────────────────
     items.push(fn_item(extern_fn("gl_debug_message_control", &[("source", ty_int()), ("type_", ty_int()), ("severity", ty_int()), ("enabled", ty_int())], ty_void(), "gorget_gl_debug_message_control")));
-    items.push(fn_item(extern_fn("gl_object_label", &[("identifier", ty_int()), ("name", ty_int()), ("label", ty_str())], ty_void(), "gorget_gl_object_label")));
+    items.push(fn_item(extern_fn_abi("gl_object_label", &[("identifier", ty_int(), S), ("name", ty_int(), S), ("label", ty_str(), Str)], ty_void(), "gorget_gl_object_label")));
+    } // close GL ABI block
 
     // ── Copy Image (GL 4.3+) ────────────────────────────────
     items.push(fn_item(extern_fn("gl_copy_image_sub_data", &[("src", ty_int()), ("src_target", ty_int()), ("src_level", ty_int()), ("src_x", ty_int()), ("src_y", ty_int()), ("src_z", ty_int()), ("dst", ty_int()), ("dst_target", ty_int()), ("dst_level", ty_int()), ("dst_x", ty_int()), ("dst_y", ty_int()), ("dst_z", ty_int()), ("width", ty_int()), ("height", ty_int()), ("depth", ty_int())], ty_void(), "gorget_gl_copy_image_sub_data")));
