@@ -95,6 +95,10 @@ pub enum LirType {
     Bool,
     /// Opaque pointer (like LLVM's `ptr`). Pointed-to type carried by load/store.
     Ptr,
+    /// Typed pointer — known to point at a specific struct (e.g. `*GorgetStringView`).
+    /// Semantically identical to `Ptr` at runtime (8 bytes, scalar), but carries
+    /// the pointee identity so the C backend can emit correct dereferences.
+    PtrTo(StructId),
 
     // Aggregates (address-only — live in stack slots)
     Struct(StructId),
@@ -133,6 +137,20 @@ impl LirType {
     pub fn is_float(&self) -> bool {
         matches!(self, LirType::F32 | LirType::F64)
     }
+
+    /// True if this is any pointer type (`Ptr` or `PtrTo`).
+    pub fn is_ptr(&self) -> bool {
+        matches!(self, LirType::Ptr | LirType::PtrTo(_))
+    }
+
+    /// If this is a `PtrTo(sid)`, return the pointee struct id.
+    pub fn pointee_struct(&self) -> Option<StructId> {
+        if let LirType::PtrTo(sid) = self {
+            Some(*sid)
+        } else {
+            None
+        }
+    }
 }
 
 impl fmt::Display for LirType {
@@ -150,6 +168,7 @@ impl fmt::Display for LirType {
             LirType::F64 => write!(f, "f64"),
             LirType::Bool => write!(f, "bool"),
             LirType::Ptr => write!(f, "ptr"),
+            LirType::PtrTo(id) => write!(f, "ptr.{}", id.0),
             LirType::Struct(id) => write!(f, "{id}"),
             LirType::Void => write!(f, "void"),
         }

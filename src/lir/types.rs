@@ -166,7 +166,7 @@ pub fn scalar_size(ty: &LirType) -> Option<u32> {
         LirType::I8 | LirType::U8 | LirType::Bool => Some(1),
         LirType::I16 | LirType::U16 => Some(2),
         LirType::I32 | LirType::U32 | LirType::F32 => Some(4),
-        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr => Some(8),
+        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => Some(8),
         LirType::Struct(_) | LirType::Void => None,
     }
 }

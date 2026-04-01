@@ -990,7 +990,7 @@ impl<'a> FuncLowering<'a> {
                     let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
                     // Mark Ptr(Str) params for C backend deref decisions.
                     let gir_type = self.gir_func.locals[local_id.0 as usize].type_id;
-                    if matches!(slot_ty, LirType::Ptr) {
+                    if slot_ty.is_ptr() {
                         if let Some(ir::types::GirType::Ptr(inner) | ir::types::GirType::MutPtr(inner)) = self.gir_types.get(gir_type) {
                             if let Some(ir::types::GirType::Named(name)) = self.gir_types.get(*inner) {
                                 if name == "GorgetStringView" || name == "GorgetString" {
@@ -4480,7 +4480,18 @@ pub fn map_gir_type_with_structs(
             GirType::F32 => LirType::F32,
             GirType::F64 => LirType::F64,
             GirType::Unit => LirType::Void,
-            GirType::Ptr(_) | GirType::MutPtr(_) => LirType::Ptr,
+            GirType::Ptr(inner) | GirType::MutPtr(inner) => {
+                if let Some(sr) = struct_reg {
+                    if let Some(GirType::Named(name)) = registry.get(*inner) {
+                        if name == "GorgetStringView" || name == "GorgetString" {
+                            if let Some(sid) = sr.lookup(name) {
+                                return LirType::PtrTo(sid);
+                            }
+                        }
+                    }
+                }
+                LirType::Ptr
+            }
             GirType::FnPtr { .. } => {
                 // FnPtr in GIR is a GorgetClosure struct (fn_ptr + env).
                 if let Some(sr) = struct_reg {
@@ -5128,7 +5139,7 @@ fn lir_type_sizeof(ty: &LirType) -> usize {
         LirType::I16 | LirType::U16 => 2,
         LirType::I32 | LirType::U32 | LirType::F32 => 4,
         LirType::I64 | LirType::U64 | LirType::F64 => 8,
-        LirType::Ptr => 8,
+        LirType::Ptr | LirType::PtrTo(_) => 8,
         LirType::Struct(_) => 8, // conservative; struct sizeof varies
         LirType::Void => 0,
     }
@@ -5255,7 +5266,7 @@ fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
         LirType::I8 | LirType::U8 | LirType::Bool => 1,
         LirType::I16 | LirType::U16 => 2,
         LirType::I32 | LirType::U32 => 4,
-        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr => 8,
+        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8,
         LirType::F32 => 4,
         LirType::Struct(sid) => {
             if let Some(sd) = structs.get(sid.0 as usize) {
