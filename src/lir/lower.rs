@@ -3604,6 +3604,16 @@ impl<'a> FuncLowering<'a> {
     /// If the extern already exists from a previous call site, merge parameter types
     /// by preferring more specific types (e.g., Struct over Ptr).
     fn ensure_extern(&mut self, name: &str, arg_types: &[LirType], ret_ty: &LirType) {
+        // Unwrap PtrTo → Struct for extern params. CoW's Ptr wrapping is a
+        // compiler-internal ownership convention, not an ABI contract. Extern
+        // functions expect structs by value; the C backend auto-derefs Ptr args
+        // when ext_params says Struct (via emit_coerced_arg).
+        let arg_types: Vec<LirType> = arg_types.iter().map(|t| match t {
+            LirType::PtrTo(sid) => LirType::Struct(*sid),
+            other => other.clone(),
+        }).collect();
+        let arg_types = arg_types.as_slice();
+
         // For known runtime functions, use canonical signatures instead of call-site inference.
         if let Some((canon_params, canon_ret)) = runtime_extern_sig(name, self.struct_reg) {
             if let Some(existing) = self.pending_externs.iter_mut().find(|e| e.name == name) {
