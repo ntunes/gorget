@@ -1098,7 +1098,7 @@ impl<'a> FuncLowering<'a> {
                     self.store_to_local(*dst, result, bb);
                 } else {
                     let result = self.lir_func.next_value();
-                    let ty = map_gir_type_with_structs(type_id, self.gir_types, Some(self.struct_reg));
+                    let ty = self.map_type(type_id);
                     let inst = lower_binop(result, *op, l, r, ty, self.overflow_wrap);
                     self.lir_func.block_mut(bb).insts.push(inst);
                     self.store_to_local(*dst, result, bb);
@@ -1113,7 +1113,7 @@ impl<'a> FuncLowering<'a> {
             } => {
                 let val = self.lower_operand(operand, bb);
                 let result = self.lir_func.next_value();
-                let ty = map_gir_type_with_structs(type_id, self.gir_types, Some(self.struct_reg));
+                let ty = self.map_type(type_id);
                 let inst = lower_unop(result, *op, val, ty);
                 self.lir_func.block_mut(bb).insts.push(inst);
                 self.store_to_local(*dst, result, bb);
@@ -1144,7 +1144,7 @@ impl<'a> FuncLowering<'a> {
                 value,
             } => {
                 let val = self.lower_operand(value, bb);
-                let to = map_gir_type_with_structs(target_type, self.gir_types, Some(self.struct_reg));
+                let to = self.map_type(target_type);
 
                 // Check if target is Str — emit conversion call instead of invalid (Str)(val) cast.
                 let is_str_target = matches!(&to, LirType::Struct(sid) if {
@@ -1242,7 +1242,7 @@ impl<'a> FuncLowering<'a> {
                 value,
             } => {
                 let val = self.lower_operand(value, bb);
-                let to = map_gir_type_with_structs(target_type, self.gir_types, Some(self.struct_reg));
+                let to = self.map_type(target_type);
                 let result = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::Bitcast {
                     dst: result,
@@ -1365,10 +1365,7 @@ impl<'a> FuncLowering<'a> {
                     };
                     // gorget_regex_find/split take 3 args but GIR only passes 2 — inject default 0
                     if (emit_name == "gorget_regex_find" || emit_name == "gorget_regex_split") && lir_args.len() == 2 {
-                        let zero_val = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                            dst: zero_val, ty: LirType::I64, value: 0,
-                        });
+                        let zero_val = self.emit_i64_const(bb, 0);
                         lir_args.push(zero_val);
                     }
                     // Delegate to the shared extern-call emitter (same logic as CallExtern).
@@ -1462,10 +1459,7 @@ impl<'a> FuncLowering<'a> {
                 }
                 // gorget_regex_find/split take 3 args but GIR only passes 2 — inject default 0
                 if (emit_name == "gorget_regex_find" || emit_name == "gorget_regex_split") && lir_args.len() == 2 {
-                    let zero_val = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                        dst: zero_val, ty: LirType::I64, value: 0,
-                    });
+                    let zero_val = self.emit_i64_const(bb, 0);
                     lir_args.push(zero_val);
                 }
                 self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
@@ -1532,12 +1526,7 @@ impl<'a> FuncLowering<'a> {
                                     struct_id,
                                     field: i as u32,
                                 });
-                                let tag_val = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                                    dst: tag_val,
-                                    ty: LirType::I32,
-                                    value: tag_ordinal as i64,
-                                });
+                                let tag_val = self.emit_i32_const(bb, tag_ordinal as i64);
                                 let tag_ptr = self.lir_func.next_value();
                                 self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                                     dst: tag_ptr,
@@ -1649,22 +1638,13 @@ impl<'a> FuncLowering<'a> {
                             dst: dst_addr, slot: dst_slot,
                         });
                         // Use ElemPtr with elem_size=1 and index=16 to get cap offset
-                        let offset = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                            dst: offset, ty: LirType::I64, value: 16,
-                        });
+                        let offset = self.emit_i64_const(bb, 16);
                         let cap_ptr = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
                             dst: cap_ptr, base: dst_addr, index: offset, elem_size: 1,
                         });
-                        let zero = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                            dst: zero, ty: LirType::I32, value: 0,
-                        });
-                        let sixteen = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                            dst: sixteen, ty: LirType::I64, value: 16,
-                        });
+                        let zero = self.emit_i32_const(bb, 0);
+                        let sixteen = self.emit_i64_const(bb, 16);
                         self.lir_func.block_mut(bb).insts.push(Inst::Memset {
                             ptr: cap_ptr, byte: zero, size: sixteen,
                         });
@@ -1719,7 +1699,7 @@ impl<'a> FuncLowering<'a> {
                     });
                     let fn_name = if is_str { "gorget_str_slice" } else { "gorget_array_slice" };
                     let dst_gir_ty = self.gir_func.locals[dst.0 as usize].type_id;
-                    let ret_ty = map_gir_type_with_structs(&dst_gir_ty, self.gir_types, Some(self.struct_reg));
+                    let ret_ty = self.map_type(&dst_gir_ty);
                     let str_ty = self.struct_reg.lookup("GorgetStringView")
                         .map(LirType::Struct).unwrap_or(LirType::Ptr);
                     let arg_types = if is_str {
@@ -1883,14 +1863,8 @@ impl<'a> FuncLowering<'a> {
                         if elem_needs_zero {
                             let byte_size = c_sizeof_lir_type(&elem_ty, &self.module_structs) as i64;
                             if byte_size > 0 {
-                                let zero = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                                    dst: zero, ty: LirType::I32, value: 0,
-                                });
-                                let sz = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                                    dst: sz, ty: LirType::I64, value: byte_size,
-                                });
+                                let zero = self.emit_i32_const(bb, 0);
+                                let sz = self.emit_i64_const(bb, byte_size);
                                 self.lir_func.block_mut(bb).insts.push(Inst::Memset {
                                     ptr: ptr_val, byte: zero, size: sz,
                                 });
@@ -1950,13 +1924,8 @@ impl<'a> FuncLowering<'a> {
                 });
 
                 // Store tag (field 0).
-                let tag_val = self.lir_func.next_value();
                 let tag_ordinal = self.resolve_variant_ordinal(type_name, variant);
-                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                    dst: tag_val,
-                    ty: LirType::I32,
-                    value: tag_ordinal as i64,
-                });
+                let tag_val = self.emit_i32_const(bb, tag_ordinal as i64);
                 let tag_ptr = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                     dst: tag_ptr,
@@ -2035,18 +2004,8 @@ impl<'a> FuncLowering<'a> {
                         dst: addr,
                         slot: src_slot,
                     });
-                    let zero = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                        dst: zero,
-                        ty: LirType::I32,
-                        value: 0,
-                    });
-                    let size = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                        dst: size,
-                        ty: LirType::I64,
-                        value: byte_size,
-                    });
+                    let zero = self.emit_i32_const(bb, 0);
+                    let size = self.emit_i64_const(bb, byte_size);
                     self.lir_func.block_mut(bb).insts.push(Inst::Memset {
                         ptr: addr,
                         byte: zero,
@@ -2142,22 +2101,13 @@ impl<'a> FuncLowering<'a> {
                         self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
                             dst: dst_addr, slot: dst_slot,
                         });
-                        let offset = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                            dst: offset, ty: LirType::I64, value: 16,
-                        });
+                        let offset = self.emit_i64_const(bb, 16);
                         let cap_ptr = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
                             dst: cap_ptr, base: dst_addr, index: offset, elem_size: 1,
                         });
-                        let zero = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                            dst: zero, ty: LirType::I32, value: 0,
-                        });
-                        let sixteen = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                            dst: sixteen, ty: LirType::I64, value: 16,
-                        });
+                        let zero = self.emit_i32_const(bb, 0);
+                        let sixteen = self.emit_i64_const(bb, 16);
                         self.lir_func.block_mut(bb).insts.push(Inst::Memset {
                             ptr: cap_ptr, byte: zero, size: sixteen,
                         });
@@ -2216,13 +2166,7 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     self.lower_place_addr(place, bb)
                 };
-                let zero = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                    dst: zero,
-                    ty: LirType::I32,
-                    value: 0,
-                });
-                let size = self.lir_func.next_value();
+                let zero = self.emit_i32_const(bb, 0);
                 // Resolve the actual type being zeroed, following projections.
                 let effective_ty = if place.projections.is_empty() {
                     let slot_idx = place.local.0 as usize;
@@ -2244,17 +2188,13 @@ impl<'a> FuncLowering<'a> {
                             }
                         }
                     }
-                    map_gir_type_with_structs(&gir_type, self.gir_types, Some(self.struct_reg))
+                    self.map_type(&gir_type)
                 };
                 let byte_size = match &effective_ty {
                     LirType::Struct(_) => c_sizeof_lir_type(&effective_ty, &self.module_structs) as i64,
                     _ => super::types::scalar_size(&effective_ty).unwrap_or(8) as i64,
                 };
-                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                    dst: size,
-                    ty: LirType::I64,
-                    value: byte_size,
-                });
+                let size = self.emit_i64_const(bb, byte_size);
                 self.lir_func.block_mut(bb).insts.push(Inst::Memset {
                     ptr: addr,
                     byte: zero,
@@ -2274,7 +2214,7 @@ impl<'a> FuncLowering<'a> {
                 let src_addr = self.lower_place_addr(src, bb);
                 let src_type = self.effective_place_type(src);
                 let pointee = self.resolve_deref_gir_type_id(src_type);
-                let field_ty = map_gir_type_with_structs(&pointee, self.gir_types, Some(self.struct_reg));
+                let field_ty = self.map_type(&pointee);
                 let deref_val = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::Load {
                     dst: deref_val,
@@ -2458,7 +2398,7 @@ impl<'a> FuncLowering<'a> {
     fn lower_terminator(&mut self, term: &Terminator, bb: BlockId) -> Term {
         match term {
             Terminator::Return(operand) => {
-                let ret_type = map_gir_type_with_structs(&self.gir_func.return_type, self.gir_types, Some(self.struct_reg));
+                let ret_type = self.map_type(&self.gir_func.return_type);
                 if ret_type == LirType::Void {
                     Term::RetVoid
                 } else {
@@ -2635,7 +2575,7 @@ impl<'a> FuncLowering<'a> {
                     // Determine the concrete inner type from the destination local.
                     let inner_ty = {
                         let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
-                        map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
+                        self.map_type(&gir_ty)
                     };
                     // Load the `ptr` field (field index 1: "ptr")
                     let ptr_val = self.lir_func.next_value();
@@ -2733,12 +2673,7 @@ impl<'a> FuncLowering<'a> {
             }
             if actual_emit_name.is_none() {
                 let elem_sz = elem_size_from_monomorphized(original_name, self.module_structs).unwrap_or(8) as i64;
-                let sz_val = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                    dst: sz_val,
-                    ty: LirType::I64,
-                    value: elem_sz,
-                });
+                let sz_val = self.emit_i64_const(bb, elem_sz);
                 lir_args.push(sz_val);
             }
         }
@@ -2753,26 +2688,11 @@ impl<'a> FuncLowering<'a> {
                 // Use _str variant for string keys.
                 let str_variant = if is_dict { "gorget_dict_new_str" } else { "gorget_map_new_str" };
                 actual_emit_name = Some(str_variant.into());
-                let v = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                    dst: v,
-                    ty: LirType::I64,
-                    value: val_sz as i64,
-                });
+                let v = self.emit_i64_const(bb, val_sz as i64);
                 lir_args.push(v);
             } else {
-                let k = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                    dst: k,
-                    ty: LirType::I64,
-                    value: key_sz as i64,
-                });
-                let v = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                    dst: v,
-                    ty: LirType::I64,
-                    value: val_sz as i64,
-                });
+                let k = self.emit_i64_const(bb, key_sz as i64);
+                let v = self.emit_i64_const(bb, val_sz as i64);
                 lir_args.push(k);
                 lir_args.push(v);
             }
@@ -2782,12 +2702,7 @@ impl<'a> FuncLowering<'a> {
         if emit_name == "gorget_array_contains" && args.len() >= 2 {
             let elem_lir_ty = self.operand_lir_type(&args[1]);
             let elem_sz = lir_type_sizeof(&elem_lir_ty) as i64;
-            let sz_val = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                dst: sz_val,
-                ty: LirType::I64,
-                value: elem_sz,
-            });
+            let sz_val = self.emit_i64_const(bb, elem_sz);
             lir_args.push(sz_val);
         }
 
@@ -2798,24 +2713,14 @@ impl<'a> FuncLowering<'a> {
             && lir_args.len() == 1
         {
             let elem_sz = concurrency_elem_size(original_name, self.module_structs).unwrap_or(8) as i64;
-            let sz_val = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                dst: sz_val,
-                ty: LirType::I64,
-                value: elem_sz,
-            });
+            let sz_val = self.emit_i64_const(bb, elem_sz);
             lir_args.insert(0, sz_val);
         }
 
         // gorget_channel_new(capacity, elem_size) — GIR passes (capacity).
         if emit_name == "gorget_channel_new" && lir_args.len() == 1 {
             let elem_sz = concurrency_elem_size(original_name, self.module_structs).unwrap_or(8) as i64;
-            let sz_val = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                dst: sz_val,
-                ty: LirType::I64,
-                value: elem_sz,
-            });
+            let sz_val = self.emit_i64_const(bb, elem_sz);
             lir_args.push(sz_val);
         }
 
@@ -2824,12 +2729,7 @@ impl<'a> FuncLowering<'a> {
             && lir_args.len() == 2
         {
             let elem_sz = concurrency_elem_size(original_name, self.module_structs).unwrap_or(8) as i64;
-            let sz_val = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                dst: sz_val,
-                ty: LirType::I64,
-                value: elem_sz,
-            });
+            let sz_val = self.emit_i64_const(bb, elem_sz);
             lir_args.push(sz_val);
         }
 
@@ -2873,7 +2773,7 @@ impl<'a> FuncLowering<'a> {
         };
         let ret_ty = dst.map(|d| {
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
-            map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
+            self.map_type(&gir_ty)
         }).unwrap_or(LirType::Void);
         // __callable_N and __gorget_closure_call_N use function-scoped local IDs.
         // Different functions can have __callable_3 with different return types.
@@ -2936,14 +2836,8 @@ impl<'a> FuncLowering<'a> {
                                     self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
                                         dst: addr, slot,
                                     });
-                                    let zero_val = self.lir_func.next_value();
-                                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                                        dst: zero_val, ty: LirType::I32, value: 0,
-                                    });
-                                    let size_val = self.lir_func.next_value();
-                                    self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-                                        dst: size_val, ty: LirType::I64, value: byte_size,
-                                    });
+                                    let zero_val = self.emit_i32_const(bb, 0);
+                                    let size_val = self.emit_i64_const(bb, byte_size);
                                     self.lir_func.block_mut(bb).insts.push(Inst::Memset {
                                         ptr: addr, byte: zero_val, size: size_val,
                                     });
@@ -3385,7 +3279,7 @@ impl<'a> FuncLowering<'a> {
     fn compute_place_byte_size(&self, place: &Place) -> usize {
         let local_idx = place.local.0 as usize;
         let type_id = self.gir_func.locals[local_idx].type_id;
-        let lir_ty = map_gir_type_with_structs(&type_id, self.gir_types, Some(self.struct_reg));
+        let lir_ty = self.map_type(&type_id);
         match &lir_ty {
             LirType::Struct(_) => c_sizeof_lir_type(&lir_ty, &self.module_structs),
             _ => super::types::scalar_size(&lir_ty).unwrap_or(8) as usize,
@@ -3626,7 +3520,7 @@ impl<'a> FuncLowering<'a> {
             Constant::Null => Inst::NullPtr { dst },
             Constant::Unit => Inst::IConst { dst, ty: LirType::I32, value: 0 }, // unit = zero
             Constant::SizeOf(type_id) => {
-                let ty = map_gir_type_with_structs(type_id, self.gir_types, Some(self.struct_reg));
+                let ty = self.map_type(type_id);
                 let size = c_sizeof_lir_type(&ty, self.module_structs);
                 Inst::IConst { dst, ty: LirType::I64, value: size as i64 }
             }
@@ -3689,7 +3583,7 @@ impl<'a> FuncLowering<'a> {
                 let idx = place.local.0 as usize;
                 if idx < self.gir_func.locals.len() {
                     let gir_ty = self.gir_func.locals[idx].type_id;
-                    map_gir_type_with_structs(&gir_ty, self.gir_types, Some(self.struct_reg))
+                    self.map_type(&gir_ty)
                 } else {
                     LirType::Ptr
                 }
@@ -3777,6 +3671,29 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
+    /// Emit an I64 constant and return its ValueId.
+    fn emit_i64_const(&mut self, bb: BlockId, value: i64) -> ValueId {
+        let val = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+            dst: val, ty: LirType::I64, value,
+        });
+        val
+    }
+
+    /// Emit an I32 constant and return its ValueId.
+    fn emit_i32_const(&mut self, bb: BlockId, value: i64) -> ValueId {
+        let val = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+            dst: val, ty: LirType::I32, value,
+        });
+        val
+    }
+
+    /// Map a GIR type ID to an LIR type, using the current type registry and struct registry.
+    fn map_type(&self, type_id: &crate::ir::types::TypeId) -> LirType {
+        map_gir_type_with_structs(type_id, self.gir_types, Some(self.struct_reg))
+    }
+
     // ── Type resolution helpers ─────────────────────────────────────────────
 
     fn resolve_struct_id(&self, gir_type_id: GirTypeId) -> StructId {
@@ -3829,7 +3746,7 @@ impl<'a> FuncLowering<'a> {
             if let Some(def) = self.gir_types.get_type_def(name) {
                 if let gir_types::TypeDefKind::Struct(sdef) = &def.kind {
                     if let Some(f) = sdef.fields.get(field as usize) {
-                        return map_gir_type_with_structs(&f.type_id, self.gir_types, Some(self.struct_reg));
+                        return self.map_type(&f.type_id);
                     }
                 }
             }
@@ -3910,7 +3827,7 @@ impl<'a> FuncLowering<'a> {
                     for v in &edef.variants {
                         if v.name == variant_name {
                             if let Some(f) = v.fields.get(field as usize) {
-                                return map_gir_type_with_structs(&f.type_id, self.gir_types, Some(self.struct_reg));
+                                return self.map_type(&f.type_id);
                             }
                         }
                     }
@@ -4191,12 +4108,7 @@ impl<'a> FuncLowering<'a> {
 
     /// Emit instructions to set the tag field of an enum at `base` address.
     fn emit_enum_tag_store(&mut self, base: ValueId, struct_id: StructId, tag_ordinal: usize, bb: BlockId) {
-        let tag_val = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-            dst: tag_val,
-            ty: LirType::I32,
-            value: tag_ordinal as i64,
-        });
+        let tag_val = self.emit_i32_const(bb, tag_ordinal as i64);
         let tag_ptr = self.lir_func.next_value();
         self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
             dst: tag_ptr, base, struct_id, field: 0,
@@ -4291,15 +4203,9 @@ impl<'a> FuncLowering<'a> {
         self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base, slot });
 
         // Zero-init the slot first (memset 0).
-        let zero = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-            dst: zero, ty: LirType::I32, value: 0,
-        });
+        let _zero = self.emit_i32_const(bb, 0);
         // Set the tag field to the null variant ordinal.
-        let tag_val = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
-            dst: tag_val, ty: LirType::I32, value: tag_ordinal as i64,
-        });
+        let tag_val = self.emit_i32_const(bb, tag_ordinal as i64);
         let tag_ptr = self.lir_func.next_value();
         self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
             dst: tag_ptr, base, struct_id, field: 0,
@@ -4347,7 +4253,7 @@ impl<'a> FuncLowering<'a> {
     fn resolve_place_type(&self, place: &Place) -> LirType {
         let local_type = self.gir_func.locals[place.local.0 as usize].type_id;
         if place.projections.is_empty() {
-            return map_gir_type_with_structs(&local_type, self.gir_types, Some(self.struct_reg));
+            return self.map_type(&local_type);
         }
 
         // Walk projections to determine final type.
@@ -4405,7 +4311,7 @@ impl<'a> FuncLowering<'a> {
             }
         }
 
-        map_gir_type_with_structs(&current_type, self.gir_types, Some(self.struct_reg))
+        self.map_type(&current_type)
     }
 }
 

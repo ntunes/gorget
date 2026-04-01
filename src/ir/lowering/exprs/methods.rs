@@ -8,7 +8,7 @@ use crate::span::Spanned;
 
 use super::super::context::LoweringContext;
 use super::{lower_expr, lower_call_arg, infer_operand_type_full, register_tuple_type,
-            is_resource_type_local,
+            is_resource_type_local, get_or_register_type,
             ensure_box_type_def, ensure_guard_type_def, ensure_shared_type_def, ensure_weak_type_def,
             index_expr_to_mangle_fragment, try_resolve_field_place};
 
@@ -445,15 +445,8 @@ pub(super) fn lower_method_call(
                     }
                     "downgrade" => {
                         let weak_name = format!("Weak__{elem_suffix}");
-                        let weak_type = if let Some(tid) = ctx.type_mapper.lookup_named(&weak_name) {
-                            tid
-                        } else {
-                            let inner_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
-                            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(weak_name.clone()));
-                            ctx.type_mapper.register_named(weak_name.clone(), tid);
-                            ensure_weak_type_def(ctx, &weak_name, inner_type);
-                            tid
-                        };
+                        let inner_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
+                        let weak_type = get_or_register_type(ctx, &weak_name, Some(&|c| ensure_weak_type_def(c, &weak_name, inner_type)));
                         let downgrade_fn = format!("{stn}__downgrade");
                         let dst = builder.call(&downgrade_fn, vec![recv], weak_type);
                         return FunctionBuilder::copy(dst);
@@ -495,23 +488,10 @@ pub(super) fn lower_method_call(
                     "upgrade" => {
                         // Returns Option[Shared[T]] — need to build the Option type
                         let shared_name = format!("Shared__{elem_suffix}");
-                        let _shared_type = if let Some(tid) = ctx.type_mapper.lookup_named(&shared_name) {
-                            tid
-                        } else {
-                            let inner_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
-                            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(shared_name.clone()));
-                            ctx.type_mapper.register_named(shared_name.clone(), tid);
-                            ensure_shared_type_def(ctx, &shared_name, inner_type);
-                            tid
-                        };
+                        let inner_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
+                        let _shared_type = get_or_register_type(ctx, &shared_name, Some(&|c| ensure_shared_type_def(c, &shared_name, inner_type)));
                         let option_name = format!("Option__{shared_name}");
-                        let option_type = if let Some(tid) = ctx.type_mapper.lookup_named(&option_name) {
-                            tid
-                        } else {
-                            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(option_name.clone()));
-                            ctx.type_mapper.register_named(option_name.clone(), tid);
-                            tid
-                        };
+                        let option_type = get_or_register_type(ctx, &option_name, None);
                         let upgrade_fn = format!("{stn}__upgrade");
                         let dst = builder.call(&upgrade_fn, vec![recv], option_type);
                         return FunctionBuilder::copy(dst);
@@ -530,15 +510,8 @@ pub(super) fn lower_method_call(
             if mtn.starts_with("Mutex__") {
                 let elem_suffix = mtn.strip_prefix("Mutex__").unwrap_or("int64_t");
                 let guard_name = format!("Guard__{elem_suffix}");
-                let guard_type = if let Some(tid) = ctx.type_mapper.lookup_named(&guard_name) {
-                    tid
-                } else {
-                    let inner_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
-                    let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(guard_name.clone()));
-                    ctx.type_mapper.register_named(guard_name.clone(), tid);
-                    ensure_guard_type_def(ctx, &guard_name, inner_type);
-                    tid
-                };
+                let inner_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
+                let guard_type = get_or_register_type(ctx, &guard_name, Some(&|c| ensure_guard_type_def(c, &guard_name, inner_type)));
                 if method_name == "lock" {
                     let lock_fn = format!("{mtn}__lock");
                     let dst = builder.call(&lock_fn, vec![recv], guard_type);

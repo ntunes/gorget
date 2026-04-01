@@ -11,7 +11,7 @@ use crate::span::Spanned;
 use super::super::context::{LoweringContext, ParamABI};
 use super::{lower_expr, infer_operand_type_full, is_resource_type_local,
             ensure_box_type_def, ensure_mutex_type_def, ensure_shared_type_def,
-            ensure_task_group_type_def,
+            ensure_task_group_type_def, get_or_register_type,
             resolve_option_result_variant, lower_string_interpolation};
 
 pub(super) fn lower_call_arg(
@@ -429,13 +429,7 @@ pub(super) fn lower_call(
                 if !type_args.is_empty() {
                     let mangled = super::super::types::mangle_generic_name(name, type_args);
                     let mangled = ctx.resolve_type_name(&mangled);
-                    let chan_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
-                        tid
-                    } else {
-                        let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
-                        ctx.type_mapper.register_named(mangled.clone(), tid);
-                        tid
-                    };
+                    let chan_type = get_or_register_type(ctx, &mangled, None);
                     let cap_op = if !args.is_empty() {
                         lower_expr(ctx, builder, &args[0].node.value)
                     } else {
@@ -460,14 +454,8 @@ pub(super) fn lower_call(
                     let val_type = infer_operand_type_full(ctx, &val_op, builder);
                     let mangled = super::super::types::mangle_generic_name(name, type_args);
                     let mangled = ctx.resolve_type_name(&mangled);
-                    let shared_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
-                        tid
-                    } else {
-                        let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
-                        ctx.type_mapper.register_named(mangled.clone(), tid);
-                        ensure_shared_type_def(ctx, &mangled, val_type);
-                        tid
-                    };
+                    let vt = val_type;
+                    let shared_type = get_or_register_type(ctx, &mangled, Some(&|c| ensure_shared_type_def(c, &mangled, vt)));
                     let new_fn = format!("{mangled}__new");
                     let dst = builder.call(&new_fn, vec![val_op.clone()], shared_type);
                     // Shared[T](v) takes ownership of v's data. Mark Move-type locals
@@ -498,14 +486,8 @@ pub(super) fn lower_call(
                     let val_type = infer_operand_type_full(ctx, &val_op, builder);
                     let mangled = super::super::types::mangle_generic_name(name, type_args);
                     let mangled = ctx.resolve_type_name(&mangled);
-                    let mutex_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
-                        tid
-                    } else {
-                        let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
-                        ctx.type_mapper.register_named(mangled.clone(), tid);
-                        ensure_mutex_type_def(ctx, &mangled, val_type);
-                        tid
-                    };
+                    let vt = val_type;
+                    let mutex_type = get_or_register_type(ctx, &mangled, Some(&|c| ensure_mutex_type_def(c, &mangled, vt)));
                     let new_fn = format!("{mangled}__new");
                     let dst = builder.call(&new_fn, vec![val_op], mutex_type);
                     return FunctionBuilder::copy(dst);
@@ -573,13 +555,7 @@ pub(super) fn lower_call(
                 if !type_args.is_empty() && !args.is_empty() {
                     let mangled = super::super::types::mangle_generic_name(name, type_args);
                     let mangled = ctx.resolve_type_name(&mangled);
-                    let rw_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
-                        tid
-                    } else {
-                        let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
-                        ctx.type_mapper.register_named(mangled.clone(), tid);
-                        tid
-                    };
+                    let rw_type = get_or_register_type(ctx, &mangled, None);
                     let val_op = lower_expr(ctx, builder, &args[0].node.value);
                     let new_fn = format!("{mangled}__new");
                     let dst = builder.call(&new_fn, vec![val_op], rw_type);
@@ -604,13 +580,7 @@ pub(super) fn lower_call(
                 } else {
                     format!("Thread__{ret_c}")
                 };
-                let thread_type = if let Some(tid) = ctx.type_mapper.lookup_named(&thread_name) {
-                    tid
-                } else {
-                    let tid = ctx.type_registry.insert(GirType::Named(thread_name.clone()));
-                    ctx.type_mapper.register_named(thread_name.clone(), tid);
-                    tid
-                };
+                let thread_type = get_or_register_type(ctx, &thread_name, None);
                 ctx.spawn.thread_fns.entry(fn_name.clone()).or_insert(fn_ret_type);
                 let spawn_fn = format!("__gorget_thread_spawn_{fn_name}");
                 let dst = builder.call(&spawn_fn, vec![], thread_type);
@@ -637,13 +607,7 @@ pub(super) fn lower_call(
                     let mangled = super::super::types::mangle_generic_name(name, type_args);
                     let mangled = ctx.resolve_type_name(&mangled);
                     // Register the collection type if not present
-                    let coll_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
-                        tid
-                    } else {
-                        let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
-                        ctx.type_mapper.register_named(mangled.clone(), tid);
-                        tid
-                    };
+                    let coll_type = get_or_register_type(ctx, &mangled, None);
                     // Check for alloc= named argument
                     let alloc_arg = args.iter().find(|a| {
                         a.node.name.as_ref().map_or(false, |n| n.node == "alloc")

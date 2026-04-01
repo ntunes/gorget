@@ -80,6 +80,24 @@ pub fn resolve_tuple_field_type(ctx: &LoweringContext, tuple_type_id: TypeId, in
     I64_TYPE // fallback
 }
 
+/// Look up a named type by its mangled name, or register it if absent.
+/// The optional `ensure_fn` callback runs only on first registration (to add TypeDefs).
+pub(crate) fn get_or_register_type(
+    ctx: &mut LoweringContext,
+    name: &str,
+    ensure_fn: Option<&dyn Fn(&mut LoweringContext)>,
+) -> TypeId {
+    if let Some(tid) = ctx.type_mapper.lookup_named(name) {
+        return tid;
+    }
+    let tid = ctx.type_registry.insert(GirType::Named(name.to_string()));
+    ctx.type_mapper.register_named(name.to_string(), tid);
+    if let Some(f) = ensure_fn {
+        f(ctx);
+    }
+    tid
+}
+
 /// Ensure a Box type has a TypeDef in the registry so the C backend can emit its typedef.
 pub fn ensure_box_type_def(ctx: &mut LoweringContext, box_type_name: &str, inner_type: TypeId) {
     use crate::ir::types::{CopySemantics, DropStrategy};

@@ -1226,15 +1226,7 @@ fn lower_struct_literal(
     // by generic struct init, so we route through a named constructor function.
     if effective_name.starts_with("Channel__") && args.len() == 1 {
         let cap = lower_expr(ctx, builder, &args[0]);
-        let chan_type = if let Some(tid) = ctx.type_mapper.lookup_named(&effective_name) {
-            tid
-        } else {
-            // Lazily register if not pre-registered by map_ast_type_mut (body-only usage).
-            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(effective_name.clone()));
-            ctx.type_mapper.register_named(effective_name.clone(), tid);
-            ensure_channel_type_def(ctx, &effective_name);
-            tid
-        };
+        let chan_type = get_or_register_type(ctx, &effective_name, Some(&|c| ensure_channel_type_def(c, &effective_name)));
         let new_fn = format!("{effective_name}__new");
         let dst = builder.call(&new_fn, vec![cap], chan_type);
         return FunctionBuilder::copy(dst);
@@ -1250,14 +1242,8 @@ fn lower_struct_literal(
             ctx.c_type_name_for_id(val_type)
         };
         let shared_mangled = format!("Shared__{inner_c}");
-        let shared_type = if let Some(tid) = ctx.type_mapper.lookup_named(&shared_mangled) {
-            tid
-        } else {
-            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(shared_mangled.clone()));
-            ctx.type_mapper.register_named(shared_mangled.clone(), tid);
-            ensure_shared_type_def(ctx, &shared_mangled, val_type);
-            tid
-        };
+        let vt = val_type;
+        let shared_type = get_or_register_type(ctx, &shared_mangled, Some(&|c| ensure_shared_type_def(c, &shared_mangled, vt)));
         let new_fn = format!("{shared_mangled}__new");
         let dst = builder.call(&new_fn, vec![val_op.clone()], shared_type);
         // Shared[T](v) takes ownership of v's data via a shallow memcpy into the shared
@@ -1284,14 +1270,8 @@ fn lower_struct_literal(
             ctx.c_type_name_for_id(val_type)
         };
         let mutex_mangled = format!("Mutex__{inner_c}");
-        let mutex_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mutex_mangled) {
-            tid
-        } else {
-            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(mutex_mangled.clone()));
-            ctx.type_mapper.register_named(mutex_mangled.clone(), tid);
-            ensure_mutex_type_def(ctx, &mutex_mangled, val_type);
-            tid
-        };
+        let vt = val_type;
+        let mutex_type = get_or_register_type(ctx, &mutex_mangled, Some(&|c| ensure_mutex_type_def(c, &mutex_mangled, vt)));
         let new_fn = format!("{mutex_mangled}__new");
         let dst = builder.call(&new_fn, vec![val_op], mutex_type);
         return FunctionBuilder::copy(dst);
@@ -1339,13 +1319,7 @@ fn lower_struct_literal(
                 ctx.c_type_name_for_id(val_type)
             };
             let rw_mangled = format!("RWLock__{inner_c}");
-            let rw_type = if let Some(tid) = ctx.type_mapper.lookup_named(&rw_mangled) {
-                tid
-            } else {
-                let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(rw_mangled.clone()));
-                ctx.type_mapper.register_named(rw_mangled.clone(), tid);
-                tid
-            };
+            let rw_type = get_or_register_type(ctx, &rw_mangled, None);
             let new_fn = format!("{rw_mangled}__new");
             let dst = builder.call(&new_fn, vec![val_op], rw_type);
             return FunctionBuilder::copy(dst);
@@ -1355,14 +1329,7 @@ fn lower_struct_literal(
     // Intercept TaskGroup.new() static constructor
     if effective_name == "TaskGroup" && args.is_empty() {
         let tg_mangled = "TaskGroup";
-        let tg_type = if let Some(tid) = ctx.type_mapper.lookup_named(tg_mangled) {
-            tid
-        } else {
-            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(tg_mangled.to_string()));
-            ctx.type_mapper.register_named(tg_mangled.to_string(), tid);
-            ensure_task_group_type_def(ctx, tg_mangled);
-            tid
-        };
+        let tg_type = get_or_register_type(ctx, tg_mangled, Some(&|c| ensure_task_group_type_def(c, tg_mangled)));
         let dst = builder.call("gorget_task_group_new", vec![], tg_type);
         return FunctionBuilder::copy(dst);
     }
