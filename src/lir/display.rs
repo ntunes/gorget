@@ -370,6 +370,7 @@ mod tests {
             params: vec![LirType::Ptr],
             return_type: LirType::I32,
             is_variadic: false,
+            param_abis: vec![],
         });
 
         let mut func = LirFunction::new("main".into(), vec![], LirType::I32);

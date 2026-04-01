@@ -137,6 +137,7 @@ impl<'a> LoweringContext<'a> {
                 params: ext.params.iter().map(|t| map_gir_type_with_structs(t, &self.gir.type_registry, Some(&self.struct_reg))).collect(),
                 return_type: ret_ty,
                 is_variadic: ext.is_variadic,
+                param_abis: ext.param_abis.clone(),
             });
         }
 
@@ -3625,6 +3626,7 @@ impl<'a> FuncLowering<'a> {
                     params: canon_params,
                     return_type: canon_ret,
                     is_variadic: false,
+                    param_abis: vec![],
                 });
             }
             return;
@@ -3658,6 +3660,7 @@ impl<'a> FuncLowering<'a> {
             params: arg_types.to_vec(),
             return_type: actual_ret,
             is_variadic: false,
+            param_abis: vec![],
         });
     }
 
@@ -5574,6 +5577,7 @@ mod tests {
             params: vec![],
             return_type: I32_TYPE,
             is_variadic: false,
+            param_abis: vec![],
         });
         module.functions.push(Function {
             name: "main".into(),

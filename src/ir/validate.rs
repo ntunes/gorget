@@ -890,6 +890,7 @@ mod tests {
             params: vec![],
             return_type: I32_TYPE,
             is_variadic: false,
+            param_abis: vec![],
         });
 
         let mut b = FunctionBuilder::new("main", I32_TYPE, &[]);

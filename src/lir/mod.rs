@@ -673,6 +673,8 @@ pub struct LirExtern {
     pub params: Vec<LirType>,
     pub return_type: LirType,
     pub is_variadic: bool,
+    /// Per-parameter ABI marshalling kind. Empty = all Auto.
+    pub param_abis: Vec<crate::ir::abi::AbiKind>,
 }
 
 // ── Module ──────────────────────────────────────────────────────────────────

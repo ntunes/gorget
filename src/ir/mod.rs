@@ -1,3 +1,4 @@
+pub mod abi;
 pub mod types;
 pub mod instructions;
 pub mod builder;
@@ -337,6 +338,8 @@ pub struct ExternDecl {
     pub params: Vec<TypeId>,
     pub return_type: TypeId,
     pub is_variadic: bool,
+    /// Per-parameter ABI marshalling kind. Empty = all Auto.
+    pub param_abis: Vec<abi::AbiKind>,
 }
 
 #[cfg(test)]
@@ -394,6 +397,7 @@ mod tests {
             params: vec![],
             return_type: UNIT_TYPE,
             is_variadic: true,
+            param_abis: vec![],
         });
         assert!(module.has_callable("printf"));
         assert!(!module.has_callable("missing"));

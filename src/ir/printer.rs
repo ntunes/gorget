@@ -815,6 +815,7 @@ mod tests {
             params: vec![],
             return_type: I32_TYPE,
             is_variadic: true,
+            param_abis: vec![],
         });
 
         // Function

@@ -488,6 +488,7 @@ pub fn lower_module(
         params: vec![], // variadic — actual params vary per call
         return_type: I32_TYPE,
         is_variadic: true,
+        param_abis: vec![],
     });
 
     // Move type_registry into LoweringContext for the lowering phase
@@ -1929,6 +1930,7 @@ fn auto_register_externs(module: &mut Module) {
             params: vec![],
             return_type: I32_TYPE,
             is_variadic: true,
+            param_abis: vec![],
         });
     }
 }
