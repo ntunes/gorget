@@ -7,3 +7,5 @@
 !.gitignore
 !self_host_*/
 !self_host_*/**
+!modules_pkg*/
+!modules_pkg*/**
