@@ -4943,19 +4943,21 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                         from_pointee || from_ext_params || from_callee
                                     });
                                 let needs_null_term = needs_null_terminated_cstr(emit_name);
+                                let is_ptr_val = matches!(arg_ty, Some(LirType::Ptr));
                                 if needs_cstr && is_str_lit {
                                     write!(out, "{}", v(*a)).unwrap();
                                 } else if needs_cstr && needs_null_term && arg_is_str {
                                     // Str → null-terminated const char*
                                     write!(out, "gorget_str_to_cstr({})", v(*a)).unwrap();
-                                } else if needs_cstr && needs_null_term && is_ptr_to_str {
-                                    write!(out, "gorget_str_to_cstr(*(Str*){})", v(*a)).unwrap();
+                                } else if needs_cstr && needs_null_term && is_ptr_val {
+                                    // Ptr → null-terminated const char* (NULL-safe)
+                                    write!(out, "({v} ? gorget_str_to_cstr(*(Str*){v}) : NULL)", v = v(*a)).unwrap();
                                 } else if needs_cstr && arg_is_str {
                                     // Str → const char*: extract .data field
                                     write!(out, "({}).data", v(*a)).unwrap();
-                                } else if needs_cstr && is_ptr_to_str {
-                                    // Ptr-to-Str → const char*: deref + extract .data
-                                    write!(out, "((Str*){})->data", v(*a)).unwrap();
+                                } else if needs_cstr && is_ptr_val {
+                                    // Ptr → const char*: deref + extract .data (NULL-safe)
+                                    write!(out, "({v} ? ((Str*){v})->data : NULL)", v = v(*a)).unwrap();
                                 } else if runtime_arg_by_ptr(emit_name, i) && matches!(arg_ty, Some(LirType::Struct(_))) {
                                     // Struct value → pointer: take address
                                     write!(out, "&{}", v(*a)).unwrap();
@@ -5557,9 +5559,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 if is_str_lit {
                                     write!(out, "{}", v(*a)).unwrap();
                                 } else if needs_null_term && is_ptr_val {
-                                    write!(out, "gorget_str_to_cstr(*(Str*){})", v(*a)).unwrap();
+                                    write!(out, "({v} ? gorget_str_to_cstr(*(Str*){v}) : NULL)", v = v(*a)).unwrap();
                                 } else if is_ptr_val {
-                                    write!(out, "((Str*){})->data", v(*a)).unwrap();
+                                    write!(out, "({v} ? ((Str*){v})->data : NULL)", v = v(*a)).unwrap();
                                 } else {
                                     write!(out, "{}", v(*a)).unwrap();
                                 }
@@ -5679,9 +5681,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 if is_str_lit {
                                     write!(out, "{}", v(*a)).unwrap();
                                 } else if needs_null_term && is_ptr_val {
-                                    write!(out, "gorget_str_to_cstr(*(Str*){})", v(*a)).unwrap();
+                                    write!(out, "({v} ? gorget_str_to_cstr(*(Str*){v}) : NULL)", v = v(*a)).unwrap();
                                 } else if is_ptr_val {
-                                    write!(out, "((Str*){})->data", v(*a)).unwrap();
+                                    write!(out, "({v} ? ((Str*){v})->data : NULL)", v = v(*a)).unwrap();
                                 } else {
                                     write!(out, "{}", v(*a)).unwrap();
                                 }
@@ -6140,11 +6142,11 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     } else if needs_null_term && arg_is_str {
                         write!(out, "gorget_str_to_cstr({})", v(*a)).unwrap();
                     } else if needs_null_term && is_ptr_val {
-                        write!(out, "gorget_str_to_cstr(*(Str*){})", v(*a)).unwrap();
+                        write!(out, "({v} ? gorget_str_to_cstr(*(Str*){v}) : NULL)", v = v(*a)).unwrap();
                     } else if arg_is_str {
                         write!(out, "({}).data", v(*a)).unwrap();
                     } else if is_ptr_val {
-                        write!(out, "((Str*){})->data", v(*a)).unwrap();
+                        write!(out, "({v} ? ((Str*){v})->data : NULL)", v = v(*a)).unwrap();
                     } else {
                         write!(out, "{}", v(*a)).unwrap();
                     }
