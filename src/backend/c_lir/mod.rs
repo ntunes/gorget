@@ -6004,7 +6004,17 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 // Also wrap for any extern function whose declared param at position i is Str
                 // (handles GL, SDL, and other runtime functions generically).
                 // Skip functions that actually take const char* at the C level (takes_cstr_for_str_param).
-                else if is_str_lit && (name.starts_with("gorget_str_") || force_str_coerce || trait_str_arg_positions.contains(&i)
+                else if is_str_lit && trait_str_arg_positions.contains(&i) {
+                    // StrLit to trait box method. Check wrapper param type:
+                    // Ptr (void*) → &(Str){} address. Struct(Str) → gorget_str_from_literal value.
+                    let wrapper_param_is_ptr = ext_params.and_then(|p| p.get(i)).map_or(false, |t| t.is_ptr());
+                    if wrapper_param_is_ptr {
+                        write!(out, "&(Str){{ .data = {v}, .len = strlen({v}), .cap = 0, .alloc = NULL }}", v = v(*a)).unwrap();
+                    } else {
+                        write!(out, "gorget_str_from_literal({}, strlen({}))", v(*a), v(*a)).unwrap();
+                    }
+                }
+                else if is_str_lit && (name.starts_with("gorget_str_") || force_str_coerce
                     || (ext_param_is_str(ext_params, i, &module.structs) && !takes_cstr_for_str_param(emit_name, i))
                     || runtime_fn_str_param(emit_name, i))
                     && !str_fn_non_str_arg(name, i) {
@@ -7805,7 +7815,10 @@ fn trait_box_str_arg_positions(module: &LirModule, name: &str) -> Vec<usize> {
         // Wrapper args 1..N map to impl args 1..N.
         // Return positions in the *call* args (which include self at position 0).
         f.params.iter().enumerate()
-            .filter(|(_, p)| matches!(p, LirType::Struct(sid) if sid.0 as usize == str_sid))
+            .filter(|(_, p)| {
+                matches!(p, LirType::Struct(sid) if sid.0 as usize == str_sid)
+                || matches!(p, LirType::PtrTo(sid) if sid.0 as usize == str_sid)
+            })
             .map(|(i, _)| i)  // i is the position in impl (0=self, 1=first arg, ...)
             .collect()
     } else {
