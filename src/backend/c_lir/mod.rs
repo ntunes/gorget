@@ -5552,8 +5552,25 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         write!(out, "{} = ({{ const char* __raw = {}(", v(*d), emit_name).unwrap();
                         for (i, a) in emit_args.iter().enumerate() {
                             if i > 0 { write!(out, ", ").unwrap(); }
-                            let ext_param = ext_params.and_then(|p| p.get(i));
-                            emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                            let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                            let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                            let needs_cstr = takes_cstr_for_str_param(emit_name, i);
+                            if needs_cstr {
+                                let is_ptr_val = matches!(arg_ty, Some(LirType::Ptr));
+                                let needs_null_term = needs_null_terminated_cstr(emit_name);
+                                if is_str_lit {
+                                    write!(out, "{}", v(*a)).unwrap();
+                                } else if needs_null_term && is_ptr_val {
+                                    write!(out, "gorget_str_to_cstr(*(Str*){})", v(*a)).unwrap();
+                                } else if is_ptr_val {
+                                    write!(out, "((Str*){})->data", v(*a)).unwrap();
+                                } else {
+                                    write!(out, "{}", v(*a)).unwrap();
+                                }
+                            } else {
+                                let ext_param = ext_params.and_then(|p| p.get(i));
+                                emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                            }
                         }
                         write!(out, "); {opt_ty} __opt; if (__raw) {{ __opt.tag = 0; __opt.Some_0 = gorget_str_from_cstr(__raw); }} else {{ __opt.tag = 1; }} __opt; }});").unwrap();
                         return;
@@ -5603,8 +5620,36 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         write!(out, "{} = ({{ GorgetRegexMatch __raw = {}(", v(*d), emit_name).unwrap();
                         for (i, a) in emit_args.iter().enumerate() {
                             if i > 0 { write!(out, ", ").unwrap(); }
-                            let ext_param = ext_params.and_then(|p| p.get(i));
-                            emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                            let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                            let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                            let needs_cstr = takes_cstr_for_str_param(emit_name, i);
+                            if needs_cstr {
+                                let is_ptr_val = matches!(arg_ty, Some(LirType::Ptr));
+                                let is_str_struct = matches!(arg_ty, Some(LirType::Struct(sid)) if {
+                                    module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView" || s.name == "GorgetString")
+                                });
+                                let is_ptr_str = is_ptr_val && ptr_pointee.get(a.0 as usize).and_then(|t| t.as_ref())
+                                    .map_or(false, |t| matches!(t, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView" || s.name == "GorgetString")));
+                                let needs_null_term = needs_null_terminated_cstr(emit_name);
+                                if is_str_lit {
+                                    write!(out, "{}", v(*a)).unwrap();
+                                } else if needs_null_term && is_str_struct {
+                                    write!(out, "gorget_str_to_cstr({})", v(*a)).unwrap();
+                                } else if needs_null_term && is_ptr_str {
+                                    write!(out, "gorget_str_to_cstr(*(Str*){})", v(*a)).unwrap();
+                                } else if needs_null_term && is_ptr_val {
+                                    write!(out, "gorget_str_to_cstr(*(Str*){})", v(*a)).unwrap();
+                                } else if is_str_struct {
+                                    write!(out, "({}).data", v(*a)).unwrap();
+                                } else if is_ptr_val {
+                                    write!(out, "((Str*){})->data", v(*a)).unwrap();
+                                } else {
+                                    write!(out, "{}", v(*a)).unwrap();
+                                }
+                            } else {
+                                let ext_param = ext_params.and_then(|p| p.get(i));
+                                emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                            }
                         }
                         write!(out, "); {opt_ty} __opt; if (__raw.start != -1) {{ __opt.tag = 0; __opt.Some_0 = __raw; }} else {{ __opt.tag = 1; }} __opt; }});").unwrap();
                         return;
@@ -5631,8 +5676,25 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         write!(out, "{} = ({{ {inner_c} __raw = {}(", v(*d), emit_name).unwrap();
                         for (i, a) in emit_args.iter().enumerate() {
                             if i > 0 { write!(out, ", ").unwrap(); }
-                            let ext_param = ext_params.and_then(|p| p.get(i));
-                            emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                            let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                            let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                            let needs_cstr = takes_cstr_for_str_param(emit_name, i);
+                            if needs_cstr {
+                                let is_ptr_val = matches!(arg_ty, Some(LirType::Ptr));
+                                let needs_null_term = needs_null_terminated_cstr(emit_name);
+                                if is_str_lit {
+                                    write!(out, "{}", v(*a)).unwrap();
+                                } else if needs_null_term && is_ptr_val {
+                                    write!(out, "gorget_str_to_cstr(*(Str*){})", v(*a)).unwrap();
+                                } else if is_ptr_val {
+                                    write!(out, "((Str*){})->data", v(*a)).unwrap();
+                                } else {
+                                    write!(out, "{}", v(*a)).unwrap();
+                                }
+                            } else {
+                                let ext_param = ext_params.and_then(|p| p.get(i));
+                                emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                            }
                         }
                         write!(out, "); {opt_ty} __opt; if (__raw) {{ __opt.tag = 0; __opt.Some_0 = __raw; }} else {{ __opt.tag = 1; }} __opt; }});").unwrap();
                         return;
@@ -6103,6 +6165,21 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     let cast_ty = if emit_name == "gorget_float_to_str" { "double" } else { "int64_t" };
                     write!(out, "({cast_ty}){}", v(*a)).unwrap();
                 }
+                // Ptr(Str) → Str by-value deref: when arg is a pointer to a Str
+                // (tracked by ptr_pointee) and no other handler matched, deref
+                // to pass Str by value. Handles functions like sqlite wrappers
+                // whose C declarations take Str, not const char*.
+                // Skip void* collection params and runtime-by-ptr params.
+                else if matches!(arg_ty, Some(LirType::Ptr)) && !is_str_lit
+                    && !runtime_arg_by_ptr(emit_name, i)
+                    && !void_params.contains(&i)
+                    && ptr_pointee.get(a.0 as usize).and_then(|t| t.as_ref())
+                        .map_or(false, |t| matches!(t, LirType::Struct(sid) if
+                            module.structs.get(sid.0 as usize).map_or(false, |s|
+                                s.name == "GorgetStringView" || s.name == "GorgetString")))
+                {
+                    write!(out, "*(Str*){}", v(*a)).unwrap();
+                }
                 // Use general coercion for extern params.
                 else {
                     let ext_param = ext_params.and_then(|p| p.get(i));
@@ -6565,7 +6642,7 @@ fn emit_coerced_arg(
         return;
     }
 
-    if param_ty.map_or(false, |t| t.is_aggregate()) && matches!(arg_ty, Some(LirType::Ptr)) {
+    if param_ty.map_or(false, |t| t.is_aggregate()) && arg_ty.map_or(false, |t| t.is_ptr()) {
         let ty_name = param_name.as_deref().unwrap_or("void");
         if is_str_lit && ty_name == "Str" {
             write!(out, "gorget_str_from_literal({v}, strlen({v}))", v = format!("__v{}", a.0)).unwrap();
@@ -8715,10 +8792,28 @@ fn takes_cstr_for_str_param(fn_name: &str, param_idx: usize) -> bool {
         | "gorget_exec" | "gorget_exec_capture"
         | "gorget_process_spawn" | "gorget_process_spawn_with_pipe"
         | "gorget_process_pipe_write" => param_idx == 0,
-        // regex_compile takes const char* for both pattern and flags
+        // regex functions take const char* for pattern/subject/replacement
         "gorget_regex_compile" => true,
-        // sqlite functions take const char* for SQL strings
-        "gorget_sqlite_open" | "gorget_sqlite_exec" | "gorget_sqlite_query" => true,
+        "gorget_regex_is_match" | "gorget_regex_find" | "gorget_regex_find_at"
+        | "gorget_regex_find_all" | "gorget_regex_split"
+        | "gorget_regex_fullmatch" => param_idx == 1,
+        "gorget_regex_replace" | "gorget_regex_replace_all" => param_idx == 1 || param_idx == 2,
+        // Convenience pattern-based regex functions and escape — all string args
+        "gorget_regex_escape" => param_idx == 0,
+        "gorget_regex_is_match_pat" | "gorget_regex_replace_pat"
+        | "gorget_regex_find_pat" | "gorget_regex_split_pat" => true,
+        // gorget_regex_match_group_by_name(match*, const char* name) — arg 1
+        "gorget_regex_match_group_by_name" => param_idx == 1,
+        // gorget_input(const char* prompt) — arg 0 is cstr
+        "gorget_input" => param_idx == 0,
+        // gorget_exec_output(const char* cmd) — arg 0 is cstr
+        "gorget_exec_output" => param_idx == 0,
+        // gorget_file_write(GorgetFile*, const char* s) — arg 1 is cstr
+        "gorget_file_write" => param_idx == 1,
+        // gorget_crypto_hmac(const char* algo, ...) — arg 0 is cstr
+        "gorget_crypto_hmac" => param_idx == 0,
+        // gorget_panic(const char* msg)
+        "gorget_panic" => param_idx == 0,
         // File I/O: const char* path (and content for write/append)
         "gorget_read_file" | "gorget_read_file_bytes" | "gorget_write_file_bytes"
         | "gorget_file_exists" | "gorget_delete_file"
@@ -8761,7 +8856,19 @@ fn needs_null_terminated_cstr(fn_name: &str) -> bool {
         | "gorget_append_file" | "gorget_rename" | "gorget_copy_file"
         | "gorget_getenv" | "gorget_setenv" | "gorget_unsetenv"
         | "gorget_regex_compile"
-        | "gorget_exec" | "gorget_exec_capture"
+        | "gorget_regex_is_match" | "gorget_regex_find" | "gorget_regex_find_at"
+        | "gorget_regex_find_all" | "gorget_regex_split"
+        | "gorget_regex_fullmatch"
+        | "gorget_regex_replace" | "gorget_regex_replace_all"
+        | "gorget_regex_escape"
+        | "gorget_regex_is_match_pat" | "gorget_regex_replace_pat"
+        | "gorget_regex_find_pat" | "gorget_regex_split_pat"
+        | "gorget_regex_match_group_by_name"
+        | "gorget_exec" | "gorget_exec_capture" | "gorget_exec_output"
+        | "gorget_input"
+        | "gorget_file_write"
+        | "gorget_crypto_hmac"
+        | "gorget_panic"
         | "gorget_socket_connect" | "gorget_server_socket_bind"
         | "gorget_tls_connect" | "gorget_tls_server_bind"
         | "gorget_udp_bind" | "gorget_udp_send_to" | "gorget_udp_sendto"
