@@ -132,7 +132,16 @@ pub(super) fn lower_call_arg(
             }
             // Materialize non-place values (constants, call results) into a temp local
             if let Some(pt) = callee_param_type {
-                let tmp = builder.add_local(pt, None);
+                // String constants need a Str-typed temp (32 bytes), not a Ptr-typed
+                // temp (8 bytes), even when callee_param_type is Ptr(Str).
+                let mat_type = if matches!(val, Operand::Constant(Constant::Str(_)))
+                    && ctx.pointee_type(pt).map_or(false, |inner| ctx.type_mapper.is_string_type(inner))
+                {
+                    ctx.pointee_type(pt).unwrap_or(pt)
+                } else {
+                    pt
+                };
+                let tmp = builder.add_local(mat_type, None);
                 builder.assign(Place::local(tmp), val);
                 if use_mut_ptr {
                     let ptr_type = ctx.register_mut_ptr_type(pt);
