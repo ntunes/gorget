@@ -4966,8 +4966,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 } else if runtime_arg_by_ptr(emit_name, i) && matches!(arg_ty, Some(LirType::Ptr)) {
                                     // Already a pointer, pass directly
                                     write!(out, "{}", v(*a)).unwrap();
-                                } else if !runtime_arg_by_ptr(emit_name, i) && (is_str_ptr_opt(arg_ty, module) || is_ptr_to_str) {
-                                    // PtrTo(Str) or Ptr with known Str pointee → Str: deref to pass by value.
+                                } else if !runtime_arg_by_ptr(emit_name, i)
+                                    && (is_str_ptr_opt(arg_ty, module) || is_ptr_to_str)
+                                    && !ext_params.and_then(|p| p.get(i)).map_or(false, |t| t.is_ptr())
+                                {
+                                    // PtrTo(Str) → Str: deref to pass by value.
+                                    // Skip if the extern param is Ptr (void*) — pass the pointer directly.
                                     write!(out, "*(Str*){}", v(*a)).unwrap();
                                 } else {
                                     let ext_param = ext_params.and_then(|p| p.get(i));
@@ -6545,6 +6549,11 @@ fn emit_coerced_arg(
     // take the address of the struct (not .data — that gives const char*, not const Str*).
     if param_ty.map_or(false, |t| t.is_ptr()) && (arg_name.as_deref() == Some("Str") || arg_name.as_deref() == Some("GorgetString")) {
         write!(out, "&__v{}", a.0).unwrap();
+        return;
+    }
+    // PtrTo(Str) → void* param: pass the pointer directly (it's already void*).
+    if param_ty.map_or(false, |t| t.is_ptr()) && arg_ty.map_or(false, |t| matches!(t, LirType::PtrTo(_))) {
+        write!(out, "__v{}", a.0).unwrap();
         return;
     }
 
