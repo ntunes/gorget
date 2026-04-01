@@ -7,13 +7,13 @@
 
 - **CoW Phase 1f: multi-use clone needs liveness analysis**: Single-use auto-move works for push/put/set and enum/struct constructors. Multi-use clone attempted but `is_single_use` over-counts across branches (50 failures). Needs per-path liveness analysis. Phase 2a Step 5 (unified Type__drop cleanup) blocked on this. [updated: 2026-03-30]
 
-- **Explicit clone roadmap (Phase 2 remaining)**: `.clone()` works on all types. `directive explicit-clone` promotes warnings to errors. Remaining: fix 5 false-positive implicit clone warnings in p2p.gg, add `Cloneable` trait to type system. [updated: 2026-03-25]
+- **Explicit clone roadmap (Phase 2 remaining)**: `.clone()` works on all types. `directive explicit-clone` to be deprecated (incompatible with CoW). Remaining: runtime clone counters for observability (`gg run --clone-stats`), `Cloneable` trait. [updated: 2026-04-01]
 
 - **Recursive/Custom elem_drop — 2 remaining fixes**: (1) Option[Ref_T].unwrap() must auto-clone Ptr→T. (2) C backend Option wrapping must CLONE for Recursive/Custom elements. Both needed for full self-cleaning collections. [updated: 2026-03-28]
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
-- **Extern module ABI declarations**: Compiler doesn't model the ABI boundary between Gorget and extern functions. Whitelists (takes_cstr_for_str_param, runtime_extern_sig, etc.) are incomplete, C-specific, and block LLVM/WASM backends. Proposal: `.ggi` interface files with ABI types (cstr, byteptr, String, OpaquePtr). See `docs/proposals/extern-modules.md`. [added: 2026-04-01]
+- **Extern module ABI declarations (Phase 1-2 DONE, Phase 3-5 remaining)**: AbiKind enum + pipeline complete. emit_abi_arg + resolve_param_abi replace 4 arg emission paths. ~50 stdlib functions annotated. needs_null_terminated_cstr deleted. Remaining: (1) Annotate equip methods with AbiKind::Ptr via decl_method_abi — enables deleting runtime_arg_by_ptr. (2) .ggi parser (Phase 3). (3) User-facing extern syntax (Phase 5). See `docs/internals/extern-modules.md`. [updated: 2026-04-01]
 
 - **Trait-bounded generic functions don't monomorphize**: `void print_sum[Summable T](T val)` — linker error. Core language feature gap. [added: 2026-03-23]
 
