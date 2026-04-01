@@ -4927,8 +4927,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 if i > 0 { write!(out, ", ").unwrap(); }
                                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                                 let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                                // Check ABI tag first.
-                                if let Some(abi) = ext_decl.and_then(|e| e.param_abis.get(i)).copied() {
+                                // ABI-driven marshalling: explicit tag or whitelist-derived.
+                                {
+                                    let abi = resolve_param_abi(ext_decl, emit_name, i);
                                     if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
                                         continue;
                                     }
@@ -5558,8 +5559,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                             if i > 0 { write!(out, ", ").unwrap(); }
                             let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                             let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                            // Check ABI tag first.
-                            if let Some(abi) = ext_decl.and_then(|e| e.param_abis.get(i)).copied() {
+                            // ABI-driven marshalling: explicit tag or whitelist-derived.
+                            {
+                                let abi = resolve_param_abi(ext_decl, emit_name, i);
                                 if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
                                     continue;
                                 }
@@ -5632,8 +5634,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                             if i > 0 { write!(out, ", ").unwrap(); }
                             let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                             let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                            // Check ABI tag first.
-                            if let Some(abi) = ext_decl.and_then(|e| e.param_abis.get(i)).copied() {
+                            // ABI-driven marshalling: explicit tag or whitelist-derived.
+                            {
+                                let abi = resolve_param_abi(ext_decl, emit_name, i);
                                 if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
                                     continue;
                                 }
@@ -5878,8 +5881,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 }
                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                // Check ABI tag first — if non-Auto, use data-driven marshalling.
-                if let Some(abi) = ext_decl.and_then(|e| e.param_abis.get(i)).copied() {
+                // ABI-driven marshalling: explicit tag or whitelist-derived.
+                {
+                    let abi = resolve_param_abi(ext_decl, emit_name, i);
                     if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
                         continue;
                     }
@@ -8934,6 +8938,38 @@ fn needs_null_terminated_cstr(fn_name: &str) -> bool {
         | "gorget_udp_join_multicast" | "gorget_udp_leave_multicast"
         | "gorget_bytes_from_str" | "gorget_bytes_from_hex"
     )
+}
+
+/// Derive ABI kind for a runtime function parameter from existing whitelists.
+/// This wraps takes_cstr_for_str_param, needs_null_terminated_cstr, and runtime_arg_by_ptr
+/// into a single AbiKind lookup. Returns Auto if no whitelist matches.
+fn runtime_param_abi(fn_name: &str, param_idx: usize) -> crate::ir::abi::AbiKind {
+    use crate::ir::abi::AbiKind;
+    if takes_cstr_for_str_param(fn_name, param_idx) {
+        AbiKind::CStr
+    } else {
+        // All other params (runtime_arg_by_ptr, collection void params, scalars)
+        // are handled by existing emit_coerced_arg logic.
+        AbiKind::Auto
+    }
+}
+
+/// Resolve the effective ABI kind for an extern param: explicit tag takes priority,
+/// then whitelist-derived, then Auto (existing emit_coerced_arg logic).
+fn resolve_param_abi(
+    ext_decl: Option<&LirExtern>,
+    fn_name: &str,
+    param_idx: usize,
+) -> crate::ir::abi::AbiKind {
+    use crate::ir::abi::AbiKind;
+    // Explicit tag from module declaration
+    if let Some(abi) = ext_decl.and_then(|e| e.param_abis.get(param_idx)).copied() {
+        if abi != AbiKind::Auto {
+            return abi;
+        }
+    }
+    // Whitelist-derived
+    runtime_param_abi(fn_name, param_idx)
 }
 
 /// Sanitize a field name for C.
