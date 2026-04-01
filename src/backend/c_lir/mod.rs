@@ -4968,10 +4968,10 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                     write!(out, "{}", v(*a)).unwrap();
                                 } else if !runtime_arg_by_ptr(emit_name, i)
                                     && (is_str_ptr_opt(arg_ty, module) || is_ptr_to_str)
-                                    && !ext_params.and_then(|p| p.get(i)).map_or(false, |t| t.is_ptr())
+                                    && ext_params.and_then(|p| p.get(i)).map_or(false, |t| t.is_aggregate())
                                 {
                                     // PtrTo(Str) → Str: deref to pass by value.
-                                    // Skip if the extern param is Ptr (void*) — pass the pointer directly.
+                                    // Only when the extern param is a Str struct (aggregate), not void*.
                                     write!(out, "*(Str*){}", v(*a)).unwrap();
                                 } else {
                                     let ext_param = ext_params.and_then(|p| p.get(i));
@@ -6037,9 +6037,17 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     write!(out, "gorget_str_from_literal({}, strlen({}))", v(*a), v(*a)).unwrap();
                 }
                 // Ptr arg to a trait box method or runtime function that expects Str → deref as *(Str*).
+                // Skip deref if the wrapper's param is void* (Box trait vtable dispatch).
                 else if (trait_str_arg_positions.contains(&i) || runtime_fn_str_param(emit_name, i))
                     && matches!(arg_ty, Some(LirType::Ptr)) && !is_str_lit {
-                    write!(out, "*(Str*){}", v(*a)).unwrap();
+                    let wrapper_param_is_ptr = ext_params.and_then(|p| p.get(i)).map_or(true, |t| t.is_ptr());
+                    if wrapper_param_is_ptr {
+                        // Wrapper takes void* — pass the pointer directly.
+                        write!(out, "{}", v(*a)).unwrap();
+                    } else {
+                        // Wrapper takes Str by value — deref the pointer.
+                        write!(out, "*(Str*){}", v(*a)).unwrap();
+                    }
                 }
                 // GorgetString arg to a gorget_str_* function → coerce to Str.
                 else if name.starts_with("gorget_str_") && is_gorget_string_type(arg_ty, sn)
