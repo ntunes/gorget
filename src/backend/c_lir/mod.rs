@@ -5622,7 +5622,13 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                             if i > 0 { write!(out, ", ").unwrap(); }
                             let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                             let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                            // CStr cases handled by resolve_param_abi above; fallback for non-CStr.
+                            // ABI-driven marshalling.
+                            {
+                                let abi = resolve_param_abi(ext_decl, emit_name, i);
+                                if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
+                                    continue;
+                                }
+                            }
                             let ext_param = ext_params.and_then(|p| p.get(i));
                             emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
                         }
@@ -8790,50 +8796,8 @@ fn takes_cstr_for_str_param(fn_name: &str, param_idx: usize) -> bool {
 }
 
 /// Returns true if a function that takes_cstr_for_str_param ALSO requires the
-/// string to be null-terminated (because it uses strtoll/strtod/strcmp internally).
-/// For these, we must use gorget_str_to_cstr() rather than just .data, since Str
-/// slices (e.g. from byte_slice) are NOT null-terminated.
-fn needs_null_terminated_cstr(fn_name: &str) -> bool {
-    matches!(fn_name,
-        "gorget_parse_int" | "gorget_parse_float"
-        | "gorget_parse_time"
-        | "gorget_file_open"
-        | "gorget_read_file" | "gorget_read_file_bytes"
-        | "gorget_write_file" | "gorget_write_file_bytes"
-        | "gorget_path_join" | "gorget_path_extension" | "gorget_path_dirname"
-        | "gorget_path_basename" | "gorget_path_exists" | "gorget_path_is_file"
-        | "gorget_path_is_dir" | "gorget_path_normalize"
-        | "gorget_file_exists" | "gorget_delete_file"
-        | "gorget_mkdir" | "gorget_rmdir" | "gorget_is_dir"
-        | "gorget_file_size" | "gorget_readdir"
-        | "gorget_path_parent" | "gorget_path_stem" | "gorget_path_absolute"
-        | "gorget_append_file" | "gorget_rename" | "gorget_copy_file"
-        | "gorget_getenv" | "gorget_setenv" | "gorget_unsetenv"
-        | "gorget_regex_compile"
-        | "gorget_regex_is_match" | "gorget_regex_find" | "gorget_regex_find_at"
-        | "gorget_regex_find_all" | "gorget_regex_split"
-        | "gorget_regex_fullmatch"
-        | "gorget_regex_replace" | "gorget_regex_replace_all"
-        | "gorget_regex_escape"
-        | "gorget_regex_is_match_pat" | "gorget_regex_replace_pat"
-        | "gorget_regex_find_pat" | "gorget_regex_split_pat"
-        | "gorget_regex_match_group_by_name"
-        | "gorget_exec" | "gorget_exec_capture" | "gorget_exec_output"
-        | "gorget_input"
-        | "gorget_file_write"
-        | "gorget_crypto_hmac"
-        | "gorget_panic"
-        | "gorget_socket_connect" | "gorget_server_socket_bind"
-        | "gorget_tls_connect" | "gorget_tls_server_bind"
-        | "gorget_udp_bind" | "gorget_udp_send_to" | "gorget_udp_sendto"
-        | "gorget_udp_join_multicast" | "gorget_udp_leave_multicast"
-        | "gorget_bytes_from_str" | "gorget_bytes_from_hex"
-    )
-}
-
 /// Derive ABI kind for a runtime function parameter from existing whitelists.
-/// This wraps takes_cstr_for_str_param, needs_null_terminated_cstr, and runtime_arg_by_ptr
-/// into a single AbiKind lookup. Returns Auto if no whitelist matches.
+/// Wraps takes_cstr_for_str_param into AbiKind. Returns Auto if no match.
 fn runtime_param_abi(fn_name: &str, param_idx: usize) -> crate::ir::abi::AbiKind {
     use crate::ir::abi::AbiKind;
     if takes_cstr_for_str_param(fn_name, param_idx) {
