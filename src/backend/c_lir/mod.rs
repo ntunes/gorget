@@ -2364,10 +2364,22 @@ fn emit_spawn_helpers(out: &mut String, module: &LirModule) {
         let call_args: Vec<String> = sf.params.iter().enumerate().map(|(i, (name, c_type))| {
             if sf.ref_param_indices.contains(&i) {
                 format!("&__ctx->__{name}")
-            } else if matches!(c_type.as_str(), "GorgetArray" | "GorgetMap" | "GorgetSet" | "Str" | "GorgetString" | "GorgetStringView") {
-                // Resource params are void* in the LIR function signature but stored
-                // as the actual struct in the spawn context.  Pass the address.
+            } else if matches!(c_type.as_str(), "GorgetArray" | "GorgetMap" | "GorgetSet") {
+                // Collection resource params are void* in the LIR function signature
+                // but stored as the actual struct in the spawn context.
                 format!("(void*)&__ctx->__{name}")
+            } else if matches!(c_type.as_str(), "Str" | "GorgetString" | "GorgetStringView") {
+                // String params: check if the target function takes void* (Ptr) or Str (by value).
+                // Find the target function's param type.
+                let target_fn = module.functions.iter().find(|f| f.name == sf.fn_name);
+                let target_param_is_ptr = target_fn
+                    .and_then(|f| f.params.get(i))
+                    .map_or(true, |p| p.is_ptr()); // default to Ptr if unknown
+                if target_param_is_ptr {
+                    format!("(void*)&__ctx->__{name}")
+                } else {
+                    format!("__ctx->__{name}")
+                }
             } else {
                 format!("__ctx->__{name}")
             }
@@ -2632,7 +2644,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             val_types[vid.0 as usize] = Some(norm(ty.clone()));
         }
         for inst in &block.insts {
-            if let Some(ty) = infer_inst_type(inst, module, &val_types, &ptr_pointee) {
+            if let Some(ty) = infer_inst_type(inst, module, &val_types, &ptr_pointee, func) {
                 if let Some(dst) = inst.dst() {
                     val_types[dst.0 as usize] = Some(norm(ty));
                 }
@@ -8882,10 +8894,18 @@ fn escape_c_string(s: &str) -> String {
 
 /// Infer the result type of an instruction (for variable declarations).
 /// `val_types` provides already-resolved types for operands (used for arithmetic propagation).
-fn infer_inst_type(inst: &Inst, module: &LirModule, val_types: &[Option<LirType>], ptr_pointee: &[Option<LirType>]) -> Option<LirType> {
+fn infer_inst_type(inst: &Inst, module: &LirModule, val_types: &[Option<LirType>], ptr_pointee: &[Option<LirType>], func: &LirFunction) -> Option<LirType> {
     match inst {
         Inst::SlotLoad { ty, .. } => Some(ty.clone()),
-        Inst::SlotAddr { .. } => Some(LirType::Ptr),
+        Inst::SlotAddr { slot, .. } => {
+            // Preserve PtrTo type from the slot for correct string deref downstream.
+            let slot_ty = &func.slots[slot.0 as usize].ty;
+            if let LirType::PtrTo(sid) = slot_ty {
+                Some(LirType::PtrTo(*sid))
+            } else {
+                Some(LirType::Ptr)
+            }
+        }
         Inst::IConst { ty, .. } => Some(ty.clone()),
         Inst::FConst { ty, .. } => Some(ty.clone()),
         Inst::BoolConst { .. } => Some(LirType::Bool),

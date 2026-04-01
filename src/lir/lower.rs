@@ -3521,8 +3521,9 @@ impl<'a> FuncLowering<'a> {
         // - Without Deref: use SlotLoad — directly provides the pointer value
         //   (needed for borrows, method calls, indexing on the Ptr variable)
         let is_ref_local = self.gir_func.ref_locals.contains(&place.local);
+        let is_ptr_to_slot = matches!(self.lir_func.slots[slot.0 as usize].ty, LirType::PtrTo(_));
         let has_deref = place.projections.first() == Some(&Projection::Deref);
-        if is_ref_local && !has_deref {
+        if (is_ref_local || is_ptr_to_slot) && !has_deref {
             self.lir_func
                 .block_mut(bb)
                 .insts
