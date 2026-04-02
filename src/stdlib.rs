@@ -83,7 +83,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
     match segments.first().map(|s| s.as_str()) {
         Some("std") => match segments.len() {
             2 => match segments[1].as_str() {
-                "fs" => Some(gen_fs_module()),
+                "fs" => None, // file-based — loaded via builtin_module_source()
                 "path" => Some(gen_path_module()),
                 "os" => Some(gen_os_module()),
                 "conv" => Some(gen_conv_module()),
@@ -151,24 +151,6 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
 
 // ─── Module Generators ──────────────────────────────────────
 
-fn gen_fs_module() -> Module {
-    use crate::ir::abi::AbiKind::{CStr, Ptr};
-    make_module(vec![
-        decl_fn_abi("read_file", &[("path", ty_str(), CStr)], ty_string()),
-        decl_fn_abi("read_file_bytes", &[("path", ty_str(), CStr)], ty_vector_uint8()),
-        decl_fn_abi("write_file", &[("path", ty_str(), CStr), ("content", ty_str(), CStr)], ty_void()),
-        decl_fn_abi("write_file_bytes", &[("path", ty_str(), CStr), ("data", ty_vector_uint8(), Ptr)], ty_void()),
-        decl_fn_abi("append_file", &[("path", ty_str(), CStr), ("content", ty_str(), CStr)], ty_void()),
-        decl_fn_abi("file_exists", &[("path", ty_str(), CStr)], ty_bool()),
-        decl_fn_abi("delete_file", &[("path", ty_str(), CStr)], ty_bool()),
-        decl_fn_abi("mkdir", &[("path", ty_str(), CStr)], ty_bool()),
-        decl_fn_abi("rmdir", &[("path", ty_str(), CStr)], ty_bool()),
-        decl_fn_abi("rename", &[("old_path", ty_str(), CStr), ("new_path", ty_str(), CStr)], ty_bool()),
-        decl_fn_abi("copy_file", &[("src", ty_str(), CStr), ("dst", ty_str(), CStr)], ty_bool()),
-        decl_fn_abi("file_size", &[("path", ty_str(), CStr)], ty_int()),
-        decl_fn_abi("is_dir", &[("path", ty_str(), CStr)], ty_bool()),
-    ])
-}
 
 fn gen_path_module() -> Module {
     use crate::ir::abi::AbiKind::CStr;
@@ -982,6 +964,7 @@ fn gen_sdl_module() -> Module {
 pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
     match segments.first().map(|s| s.as_str()) {
         Some("std") => match segments.get(1).map(|s| s.as_str()) {
+            Some("fs") => Some(include_str!("../lib/std/fs.gg")),
             Some("fmt") => Some(include_str!("../lib/std/fmt.gg")),
             Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
             Some("encoding") => Some(include_str!("../lib/std/encoding.gg")),
