@@ -1,0 +1,134 @@
+# xtd.crypto — Cryptographic operations (OpenSSL-backed)
+
+from std.collections import Vector
+
+# ── Opaque types ─────────────────────────────────────────────
+
+struct CipherContext:
+    int _handle
+
+struct BigNum:
+    int _handle
+
+struct RSAKey:
+    int _handle
+
+struct Ed25519KeyPair:
+    int _handle
+
+struct X25519KeyPair:
+    int _handle
+
+# ── Direct externs (no Result wrapping) ──────────────────────
+
+extern "C":
+    extern Vector[uint8] crypto_sha256(Vector[uint8] data) = "gorget_crypto_sha256"
+    extern Vector[uint8] crypto_sha1(Vector[uint8] data) = "gorget_crypto_sha1"
+    extern BigNum crypto_bn_from_bytes(Vector[uint8] data) = "gorget_crypto_bn_from_bytes"
+    extern Vector[uint8] crypto_bn_to_bytes(BigNum bn) = "gorget_crypto_bn_to_bytes"
+    extern BigNum crypto_bn_mod_exp(BigNum base, BigNum exp, BigNum modulus) = "gorget_crypto_bn_mod_exp"
+    extern bool crypto_rsa_verify(RSAKey key, Vector[uint8] data, Vector[uint8] sig) = "gorget_crypto_rsa_verify"
+    extern bool crypto_ed25519_verify(Vector[uint8] public_key, Vector[uint8] data, Vector[uint8] signature) = "gorget_crypto_ed25519_verify"
+
+# ── Raw externs + error check for Result wrapping ────────────
+
+extern "C":
+    extern cstr _crypto_last_error() = "gorget_crypto_last_error"
+    extern Vector[uint8] _crypto_hmac_raw(cstr algo, Vector[uint8] key, Vector[uint8] data) = "gorget_crypto_hmac"
+    extern int _crypto_rsa_load_public_raw(Vector[uint8] key_bytes) = "gorget_crypto_rsa_load_public"
+    extern Vector[uint8] _crypto_random_bytes_raw(int n) = "gorget_crypto_random_bytes"
+    extern Vector[uint8] _crypto_ed25519_sign_raw(Vector[uint8] private_key, Vector[uint8] data) = "gorget_crypto_ed25519_sign"
+    extern Vector[uint8] _crypto_x25519_shared_secret_raw(X25519KeyPair private_key, Vector[uint8] peer_public) = "gorget_crypto_x25519_shared_secret"
+    extern Vector[uint8] _crypto_x25519_dh_raw(Vector[uint8] private_key_bytes, Vector[uint8] peer_public) = "gorget_crypto_x25519_dh"
+    extern Vector[uint8] _crypto_hkdf_sha256_raw(Vector[uint8] salt, Vector[uint8] ikm, Vector[uint8] info, int length) = "gorget_crypto_hkdf_sha256"
+    extern Vector[uint8] _crypto_aes_gcm_encrypt_raw(Vector[uint8] key, Vector[uint8] nonce, Vector[uint8] plaintext) = "gorget_crypto_aes_gcm_encrypt"
+    extern Vector[uint8] _crypto_aes_gcm_decrypt_raw(Vector[uint8] key, Vector[uint8] ciphertext) = "gorget_crypto_aes_gcm_decrypt"
+
+# ── Gorget Result wrappers ───────────────────────────────────
+
+Result[Vector[uint8], String] crypto_hmac(String algo, Vector[uint8] key, Vector[uint8] data):
+    Vector[uint8] raw = _crypto_hmac_raw(algo, key, data)
+    String err = _crypto_last_error()
+    if err.len() > 0:
+        return Error(err)
+    return Ok(raw)
+
+# crypto_aes_ctr_new returns a struct — keep as Declaration body
+# (the C backend handles the Result wrapping via last_error_fn)
+Result[CipherContext, String] crypto_aes_ctr_new(Vector[uint8] key, Vector[uint8] iv)
+
+Result[RSAKey, String] crypto_rsa_load_public(Vector[uint8] key_bytes):
+    int raw = _crypto_rsa_load_public_raw(key_bytes)
+    String err = _crypto_last_error()
+    if err.len() > 0:
+        return Error(err)
+    return Ok(RSAKey(raw))
+
+Result[Vector[uint8], String] crypto_random_bytes(int n):
+    Vector[uint8] raw = _crypto_random_bytes_raw(n)
+    String err = _crypto_last_error()
+    if err.len() > 0:
+        return Error(err)
+    return Ok(raw)
+
+# Returns opaque struct — keep as Declaration body
+Result[Ed25519KeyPair, String] crypto_ed25519_keygen()
+
+Result[Vector[uint8], String] crypto_ed25519_sign(Vector[uint8] private_key, Vector[uint8] data):
+    Vector[uint8] raw = _crypto_ed25519_sign_raw(private_key, data)
+    String err = _crypto_last_error()
+    if err.len() > 0:
+        return Error(err)
+    return Ok(raw)
+
+# Returns opaque struct — keep as Declaration body
+Result[X25519KeyPair, String] crypto_x25519_keygen()
+
+Result[Vector[uint8], String] crypto_x25519_shared_secret(X25519KeyPair private_key, Vector[uint8] peer_public):
+    Vector[uint8] raw = _crypto_x25519_shared_secret_raw(private_key, peer_public)
+    String err = _crypto_last_error()
+    if err.len() > 0:
+        return Error(err)
+    return Ok(raw)
+
+Result[Vector[uint8], String] crypto_x25519_dh(Vector[uint8] private_key_bytes, Vector[uint8] peer_public):
+    Vector[uint8] raw = _crypto_x25519_dh_raw(private_key_bytes, peer_public)
+    String err = _crypto_last_error()
+    if err.len() > 0:
+        return Error(err)
+    return Ok(raw)
+
+Result[Vector[uint8], String] crypto_hkdf_sha256(Vector[uint8] salt, Vector[uint8] ikm, Vector[uint8] info, int length):
+    Vector[uint8] raw = _crypto_hkdf_sha256_raw(salt, ikm, info, length)
+    String err = _crypto_last_error()
+    if err.len() > 0:
+        return Error(err)
+    return Ok(raw)
+
+Result[Vector[uint8], String] crypto_aes_gcm_encrypt(Vector[uint8] key, Vector[uint8] nonce, Vector[uint8] plaintext):
+    Vector[uint8] raw = _crypto_aes_gcm_encrypt_raw(key, nonce, plaintext)
+    String err = _crypto_last_error()
+    if err.len() > 0:
+        return Error(err)
+    return Ok(raw)
+
+Result[Vector[uint8], String] crypto_aes_gcm_decrypt(Vector[uint8] key, Vector[uint8] ciphertext):
+    Vector[uint8] raw = _crypto_aes_gcm_decrypt_raw(key, ciphertext)
+    String err = _crypto_last_error()
+    if err.len() > 0:
+        return Error(err)
+    return Ok(raw)
+
+# ── Equip methods ────────────────────────────────────────────
+
+equip CipherContext:
+    extern Vector[uint8] encrypt(Vector[uint8] &data) = "gorget_cipher_encrypt"
+    extern Vector[uint8] decrypt(Vector[uint8] &data) = "gorget_cipher_decrypt"
+
+equip Ed25519KeyPair:
+    extern Vector[uint8] public_key() = "gorget_ed25519_public_key"
+    extern Vector[uint8] private_key() = "gorget_ed25519_private_key"
+
+equip X25519KeyPair:
+    extern Vector[uint8] public_key() = "gorget_crypto_x25519_public"
+    extern Vector[uint8] private_key() = "gorget_crypto_x25519_private"

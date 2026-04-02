@@ -114,7 +114,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
         },
         Some("xtd") if segments.len() == 2 => match segments[1].as_str() {
             "sdl" => None, // file-based module — loaded via builtin_module_source()
-            "crypto" => Some(gen_crypto_module()),
+            "crypto" => None, // file-based
             "regex" => Some(gen_regex_module()),
             "json" => None, // file-based module — loaded via builtin_module_source()
             "toml" => None, // file-based module — loaded via builtin_module_source()
@@ -593,6 +593,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("influx") => Some(include_str!("../lib/xtd/influx.gg")),
             Some("jsonpath") => Some(include_str!("../lib/xtd/jsonpath.gg")),
             Some("math3d") => Some(include_str!("../lib/xtd/math3d.gg")),
+            Some("crypto") => Some(include_str!("../lib/xtd/crypto.gg")),
             Some("sdl") => Some(include_str!("../lib/xtd/sdl.gg")),
             Some("gl") => Some(include_str!("../lib/xtd/gl.gg")),
             Some("metal") => Some(include_str!("../lib/xtd/metal.gg")),
@@ -755,99 +756,7 @@ fn opaque_struct(name: &str) -> Spanned<Item> {
 
 // ─── xtd.crypto ──────────────────────────────────────────────
 
-fn gen_crypto_module() -> Module {
-    let ty_cipher = || Type::Named {
-        name: Spanned::dummy("CipherContext".to_string()),
-        generic_args: vec![],
-    };
-    let ty_bignum = || Type::Named {
-        name: Spanned::dummy("BigNum".to_string()),
-        generic_args: vec![],
-    };
-    let ty_rsakey = || Type::Named {
-        name: Spanned::dummy("RSAKey".to_string()),
-        generic_args: vec![],
-    };
-    let ty_ed25519_keypair = || Type::Named {
-        name: Spanned::dummy("Ed25519KeyPair".to_string()),
-        generic_args: vec![],
-    };
-    let ty_x25519_keypair = || Type::Named {
-        name: Spanned::dummy("X25519KeyPair".to_string()),
-        generic_args: vec![],
-    };
-
-    let mut items: Vec<Spanned<Item>> = Vec::new();
-
-    // Opaque structs
-    items.push(opaque_struct("CipherContext"));
-    items.push(opaque_struct("BigNum"));
-    items.push(opaque_struct("RSAKey"));
-    items.push(opaque_struct("Ed25519KeyPair"));
-    items.push(opaque_struct("X25519KeyPair"));
-
-    // Free functions — extern bindings (except Result-wrapping functions which stay as Declaration)
-    let fns = vec![
-        // Hashing
-        extern_fn("crypto_sha256", &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_crypto_sha256"),
-        extern_fn("crypto_sha1", &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_crypto_sha1"),
-        // HMAC — Result wrapping in codegen
-        {
-            use crate::ir::abi::AbiKind::{CStr, Ptr};
-            decl_fn_abi("crypto_hmac", &[("algo", ty_str(), CStr), ("key", ty_vector_uint8(), Ptr), ("data", ty_vector_uint8(), Ptr)], ty_result(ty_vector_uint8(), ty_str()))
-        },
-        // AES-CTR — Result wrapping in codegen
-        decl_fn("crypto_aes_ctr_new", &[("key", ty_vector_uint8()), ("iv", ty_vector_uint8())], ty_result(ty_cipher(), ty_str())),
-        // BigNum
-        extern_fn("crypto_bn_from_bytes", &[("data", ty_vector_uint8())], ty_bignum(), "gorget_crypto_bn_from_bytes"),
-        extern_fn("crypto_bn_to_bytes", &[("bn", ty_bignum())], ty_vector_uint8(), "gorget_crypto_bn_to_bytes"),
-        extern_fn("crypto_bn_mod_exp", &[("base", ty_bignum()), ("exp", ty_bignum()), ("modulus", ty_bignum())], ty_bignum(), "gorget_crypto_bn_mod_exp"),
-        // RSA — crypto_rsa_load_public stays as Declaration (Result wrapping in codegen)
-        decl_fn("crypto_rsa_load_public", &[("key_bytes", ty_vector_uint8())], ty_result(ty_rsakey(), ty_str())),
-        extern_fn("crypto_rsa_verify", &[("key", ty_rsakey()), ("data", ty_vector_uint8()), ("sig", ty_vector_uint8())], ty_bool(), "gorget_crypto_rsa_verify"),
-        // Random — Result wrapping in codegen
-        decl_fn("crypto_random_bytes", &[("n", ty_int())], ty_result(ty_vector_uint8(), ty_str())),
-        // Ed25519 — keygen returns Result, sign returns Result, verify is direct
-        decl_fn("crypto_ed25519_keygen", &[], ty_result(ty_ed25519_keypair(), ty_str())),
-        decl_fn("crypto_ed25519_sign", &[("private_key", ty_vector_uint8()), ("data", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str())),
-        extern_fn("crypto_ed25519_verify", &[("public_key", ty_vector_uint8()), ("data", ty_vector_uint8()), ("signature", ty_vector_uint8())], ty_bool(), "gorget_crypto_ed25519_verify"),
-        // X25519 ECDH — keygen and shared_secret return Result
-        decl_fn("crypto_x25519_keygen", &[], ty_result(ty_x25519_keypair(), ty_str())),
-        decl_fn("crypto_x25519_shared_secret", &[("private_key", ty_x25519_keypair()), ("peer_public", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str())),
-        decl_fn("crypto_x25519_dh", &[("private_key_bytes", ty_vector_uint8()), ("peer_public", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str())),
-        // HKDF-SHA256 — returns Result
-        decl_fn("crypto_hkdf_sha256", &[("salt", ty_vector_uint8()), ("ikm", ty_vector_uint8()), ("info", ty_vector_uint8()), ("length", ty_int())], ty_result(ty_vector_uint8(), ty_str())),
-        // AES-256-GCM — encrypt/decrypt return Result
-        decl_fn("crypto_aes_gcm_encrypt", &[("key", ty_vector_uint8()), ("nonce", ty_vector_uint8()), ("plaintext", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str())),
-        decl_fn("crypto_aes_gcm_decrypt", &[("key", ty_vector_uint8()), ("ciphertext", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str())),
-    ];
-    for f in fns {
-        items.push(Spanned::dummy(Item::Function(f)));
-    }
-
-    // CipherContext methods — extern bindings
-    items.push(equip_block("CipherContext", vec![
-        extern_method("encrypt", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_cipher_encrypt"),
-        extern_method("decrypt", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_vector_uint8(), "gorget_cipher_decrypt"),
-    ]));
-
-    // Ed25519KeyPair methods — extern bindings
-    items.push(equip_block("Ed25519KeyPair", vec![
-        extern_method("public_key", Ownership::Borrow, &[], ty_vector_uint8(), "gorget_ed25519_public_key"),
-        extern_method("private_key", Ownership::Borrow, &[], ty_vector_uint8(), "gorget_ed25519_private_key"),
-    ]));
-
-    // X25519KeyPair methods — extern bindings
-    items.push(equip_block("X25519KeyPair", vec![
-        extern_method("public_key", Ownership::Borrow, &[], ty_vector_uint8(), "gorget_crypto_x25519_public"),
-        extern_method("private_key", Ownership::Borrow, &[], ty_vector_uint8(), "gorget_crypto_x25519_private"),
-    ]));
-
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
+// gen_crypto_module — migrated to lib/xtd/crypto.gg
 
 // ─── std.net.socket ─────────────────────────────────────────
 
