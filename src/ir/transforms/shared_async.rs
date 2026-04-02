@@ -479,6 +479,7 @@ fn is_yield_point(instr: &Instruction) -> bool {
         Instruction::Call { func, .. } | Instruction::CallExtern { func, .. } => {
             func.starts_with("__gorget_await_")
                 || func == "gorget_reactor_sleep_ms"
+                || func == "gorget_reactor_sleep_seconds"
                 || func == "async_sleep"
                 || func == "sleep"
                 || func == "gg_sleep"
