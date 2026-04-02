@@ -1,0 +1,38 @@
+# std.conv — Type conversion functions
+
+# ── C extern bindings (const char* convention) ───────────────
+
+extern "C":
+    extern int _parse_int_raw(cstr s) = "gorget_parse_int"
+    extern float _parse_float_raw(cstr s) = "gorget_parse_float"
+    extern cstr _parse_last_error() = "gorget_parse_last_error"
+
+# ── Gorget-aware extern bindings (Str by value) ─────────────
+
+extern "Gorget":
+    extern int ord(String s) = "gorget_str_ord"
+
+# ── Declaration body (codegen maps to gorget_* + handles adopt) ──
+
+String chr(int n)
+String codepoint_to_str(int cp)
+String int_to_str(int n)
+String float_to_str(float x)
+String bool_to_str(bool b)
+float int_to_float(int n)
+
+# ── Gorget wrappers for Result-returning functions ───────────
+
+Result[int, String] parse_int(String s):
+    int raw = _parse_int_raw(s)
+    String err = _parse_last_error()
+    if err.len() > 0:
+        return Error(err)
+    return Ok(raw)
+
+Result[float, String] parse_float(String s):
+    float raw = _parse_float_raw(s)
+    String err = _parse_last_error()
+    if err.len() > 0:
+        return Error(err)
+    return Ok(raw)

@@ -86,7 +86,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "fs" => None, // file-based — loaded via builtin_module_source()
                 "path" => None, // file-based
                 "os" => None, // file-based
-                "conv" => Some(gen_conv_module()),
+                "conv" => None,
                 "io" => Some(gen_io_module()),
                 "random" => None, // file-based
                 "time" => None, // file-based
@@ -154,20 +154,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
 
 
 
-fn gen_conv_module() -> Module {
-    use crate::ir::abi::AbiKind::CStr;
-    make_module(vec![
-        decl_fn_abi("ord", &[("s", ty_str(), CStr)], ty_int()),
-        decl_fn("chr", &[("n", ty_int())], ty_str()),
-        decl_fn_abi("parse_int", &[("s", ty_str(), CStr)], ty_result(ty_int(), ty_str())),
-        decl_fn_abi("parse_float", &[("s", ty_str(), CStr)], ty_result(ty_float(), ty_str())),
-        decl_fn("int_to_str", &[("n", ty_int())], ty_str()),
-        decl_fn("float_to_str", &[("x", ty_float())], ty_str()),
-        decl_fn("bool_to_str", &[("b", ty_bool())], ty_str()),
-        decl_fn("codepoint_to_str", &[("cp", ty_int())], ty_str()),
-        decl_fn("int_to_float", &[("n", ty_int())], ty_float()),
-    ])
-}
+// gen_conv_module — migrated to lib/std/conv.gg
 
 fn gen_io_module() -> Module {
     let file_type = Type::Named {
@@ -656,6 +643,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("path") => Some(include_str!("../lib/std/path.gg")),
             Some("random") => Some(include_str!("../lib/std/random.gg")),
             Some("time") => Some(include_str!("../lib/std/time.gg")),
+            Some("conv") => Some(include_str!("../lib/std/conv.gg")),
             Some("os") => Some(include_str!("../lib/std/os.gg")),
             Some("signal") => Some(include_str!("../lib/std/signal.gg")),
             Some("async") => Some(include_str!("../lib/std/async.gg")),

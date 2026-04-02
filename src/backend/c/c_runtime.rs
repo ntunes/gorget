@@ -6060,7 +6060,11 @@ static inline const char* gorget_float_to_str(double x) {
 }
 
 static inline const char* gorget_bool_to_str(bool b) {
-    return b ? "true" : "false";
+    const char* s = b ? "true" : "false";
+    size_t len = b ? 4 : 5;
+    char* out = (char*)GORGET_ALLOC(len + 1);
+    memcpy(out, s, len + 1);
+    return out;
 }
 
 static inline double gorget_int_to_float(int64_t n) { return (double)n; }
