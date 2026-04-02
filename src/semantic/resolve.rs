@@ -570,6 +570,15 @@ fn collect_item(
                             scopes,
                             types,
                         ).ok();
+                        // Async extern functions return Future[T] at call sites
+                        let ret_type = if func.node.qualifiers.is_async {
+                            ret_type.map(|inner_tid| {
+                                let future_def_id = scopes.lookup("Future").expect("Future not registered");
+                                types.intern_generic(future_def_id, vec![inner_tid])
+                            })
+                        } else {
+                            ret_type
+                        };
                         let param_ownerships: Vec<Ownership> =
                             func.node.params.iter().map(|p| p.node.ownership).collect();
                         let param_names: Vec<String> =
@@ -589,7 +598,7 @@ fn collect_item(
                             param_names,
                             param_defaults: vec![None; param_count],
                             throws: func.node.throws.is_some(),
-                            is_async: false,
+                            is_async: func.node.qualifiers.is_async,
                             scope_id: scopes.current_scope(),
                             generic_param_names,
                             trait_bounds: Vec::new(),

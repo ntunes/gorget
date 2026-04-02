@@ -7,7 +7,6 @@ extern "C":
     extern String format_time(int epoch, String fmt) = "gorget_format_time"
     extern int parse_time(String s, String fmt) = "gorget_parse_time"
 
-# async sleep — uses the reactor for non-blocking timer.
-# Declaration body (no = "symbol") lets the codegen dispatch
-# to gorget_reactor_sleep_ms via name-based rewrite.
-async void sleep(float seconds)
+# async sleep — reactor-based non-blocking timer.
+extern "C":
+    extern async void sleep(float seconds) = "gorget_reactor_sleep_seconds"

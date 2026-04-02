@@ -4218,6 +4218,11 @@ reactor_sleep_cleanup:
     pthread_cond_destroy(&waiter.cond);
 }
 
+/* Convenience wrapper: sleep for `seconds` (double) via the reactor. */
+static void gorget_reactor_sleep_seconds(double seconds) {
+    gorget_reactor_sleep_ms((int64_t)(seconds * 1000.0));
+}
+
 /* Non-blocking async sleep: register timer + fire waker when it expires.
  * Used by coroutine poll functions instead of the blocking gorget_reactor_sleep_ms. */
 static void gorget_reactor_sleep_async(int64_t ms, GorgetWaker waker) {

@@ -4,7 +4,7 @@
 # yield re-acquires the lock.
 # The warning is non-fatal — program still compiles and runs.
 
-from std.async import sleep
+from std.time import sleep
 
 async void worker(int &counter):
     counter = counter + 1
@@ -15,7 +15,7 @@ async void main():
     with x:
         if x == 0:
             print("was zero")
-            sleep(50)
+            sleep(0.05)
             print("after sleep")
     t.await()
     print(x)

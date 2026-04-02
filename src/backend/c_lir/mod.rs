@@ -325,7 +325,7 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
         // Interactive I/O, time, datetime, random, line input (depends on Array for dt_decompose)
         if has(&|n| n.starts_with("gorget_input") || n.starts_with("gorget_rand")
             || n.starts_with("gorget_seed") || n.starts_with("gorget_sleep_ms")
-            || n == "sleep" || n == "xtd_sleep" || n == "sleep_ms"
+            || n == "sleep_ms"
             || n.starts_with("gorget_time") || n.starts_with("gorget_format_time")
             || n.starts_with("gorget_parse_time") || n.starts_with("gorget_readline")
             || n.starts_with("gorget_dt_decompose") || n.starts_with("gorget_getchar")
@@ -4772,19 +4772,6 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 write!(out, "time(NULL);").unwrap();
                 return;
             }
-            // sleep(seconds) → gorget_sleep_ms(ms) with float→int conversion.
-            // This is an async primitive — the reactor dispatches it, not a plain C call.
-            // TODO: replace with proper async extern ABI when reactor integration is formalized.
-            if (name == "sleep" || name == "xtd_sleep") && args.len() == 1 {
-                let a = &args[0];
-                let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                if matches!(arg_ty, Some(LirType::F64) | Some(LirType::F32)) {
-                    write!(out, "gorget_sleep_ms((int64_t)({} * 1000));", v(*a)).unwrap();
-                } else {
-                    write!(out, "gorget_sleep_ms({});", v(*a)).unwrap();
-                }
-                return;
-            }
             // ── Monomorphized parse methods ────────────────────────────
             // int8_t__parse, uint16_t__parse, double__parse, bool__parse, etc.
             // These return Option[T] but the C runtime has gorget_try_parse_int/float.
@@ -8284,7 +8271,7 @@ fn is_std_header_fn(name: &str) -> bool {
             | "rand" | "srand"
             | "qsort" | "bsearch"
             // Gorget wrappers that collide with POSIX names — skip extern decls.
-            | "sleep" | "xtd_sleep"
+            | "sleep"
             | "mkdir" | "rename" | "remove" | "readdir"
             | "usleep"
     )

@@ -1,8 +1,8 @@
-from std.async import sleep
+from std.time import sleep
 
 # Spawned coroutine that sleeps (should yield, not block the worker).
 async int compute_after_sleep(int x):
-    sleep(50)
+    sleep(0.05)
     return x * x
 
 # Spawn 4 tasks that each sleep 50ms. If sleep blocks worker threads,
