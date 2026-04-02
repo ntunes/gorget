@@ -1,0 +1,13 @@
+# std.time — Time operations
+
+extern "C":
+    extern int time() = "gorget_time"
+    extern int time_ms() = "gorget_time_ms"
+    extern void sleep_ms(int ms) = "gorget_sleep_ms"
+    extern String format_time(int epoch, String fmt) = "gorget_format_time"
+    extern int parse_time(String s, String fmt) = "gorget_parse_time"
+
+# async sleep — uses the reactor for non-blocking timer.
+# Declaration body (no = "symbol") lets the codegen dispatch
+# to gorget_reactor_sleep_ms via name-based rewrite.
+async void sleep(float seconds)

@@ -89,7 +89,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "conv" => Some(gen_conv_module()),
                 "io" => Some(gen_io_module()),
                 "random" => None, // file-based
-                "time" => Some(gen_time_module()),
+                "time" => None, // file-based
                 "collections" => Some(gen_collections_module()),
                 "math" => Some(gen_math_module()),
                 "fmt" => None, // file-based module — loaded via builtin_module_source()
@@ -228,17 +228,6 @@ fn gen_io_module() -> Module {
     }
 }
 
-fn gen_time_module() -> Module {
-    use crate::ir::abi::AbiKind::{CStr, Scalar};
-    make_module(vec![
-        decl_fn("time", &[], ty_int()),
-        decl_fn("time_ms", &[], ty_int()),
-        decl_fn("sleep_ms", &[("ms", ty_int())], ty_void()),
-        decl_async_fn("sleep", &[("seconds", ty_float())], ty_void()),
-        decl_fn_abi("format_time", &[("epoch", ty_int(), Scalar), ("fmt", ty_str(), CStr)], ty_string()),
-        decl_fn_abi("parse_time", &[("s", ty_str(), CStr), ("fmt", ty_str(), CStr)], ty_int()),
-    ])
-}
 
 /// std.async — non-blocking I/O helpers backed by the GorgetReactor (timerfd/kqueue).
 /// async_sleep(ms: int) suspends the current task for `ms` milliseconds using the reactor.
@@ -911,6 +900,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("fs") => Some(include_str!("../lib/std/fs.gg")),
             Some("path") => Some(include_str!("../lib/std/path.gg")),
             Some("random") => Some(include_str!("../lib/std/random.gg")),
+            Some("time") => Some(include_str!("../lib/std/time.gg")),
             Some("signal") => Some(include_str!("../lib/std/signal.gg")),
             Some("fmt") => Some(include_str!("../lib/std/fmt.gg")),
             Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
