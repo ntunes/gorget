@@ -1,0 +1,576 @@
+# xtd.metal -- Apple Metal bindings (Metal 1 through Metal 3)
+#
+# Covers: device/queue/command buffer lifecycle, buffers, textures, samplers,
+# shaders, render/compute/blit encoders, synchronization (events/fences/semaphores),
+# ray tracing, mesh shaders, argument buffers, indirect drawing, and more.
+#
+# All functions delegate to gorget_metal_* C runtime wrappers.
+# All handles are opaque int (pointer-sized).
+
+from std.collections import Vector
+
+# ── Pixel Formats ──────────────────────────────────────────
+
+const int MTL_PIXEL_FORMAT_BGRA8_UNORM = 80
+const int MTL_PIXEL_FORMAT_RGBA8_UNORM = 70
+const int MTL_PIXEL_FORMAT_RGBA16_FLOAT = 115
+const int MTL_PIXEL_FORMAT_R8_UNORM = 10
+const int MTL_PIXEL_FORMAT_RG8_UNORM = 30
+const int MTL_PIXEL_FORMAT_DEPTH32_FLOAT = 252
+const int MTL_PIXEL_FORMAT_DEPTH32_FLOAT_STENCIL8 = 260
+const int MTL_PIXEL_FORMAT_STENCIL8 = 253
+
+# ── Primitive Types ────────────────────────────────────────
+
+const int MTL_PRIMITIVE_POINT = 0
+const int MTL_PRIMITIVE_LINE = 1
+const int MTL_PRIMITIVE_LINE_STRIP = 2
+const int MTL_PRIMITIVE_TRIANGLE = 3
+const int MTL_PRIMITIVE_TRIANGLE_STRIP = 4
+
+# ── Index Types ────────────────────────────────────────────
+
+const int MTL_INDEX_UINT16 = 0
+const int MTL_INDEX_UINT32 = 1
+
+# ── Load/Store Actions ─────────────────────────────────────
+
+const int MTL_LOAD_ACTION_DONT_CARE = 0
+const int MTL_LOAD_ACTION_LOAD = 1
+const int MTL_LOAD_ACTION_CLEAR = 2
+const int MTL_STORE_ACTION_DONT_CARE = 0
+const int MTL_STORE_ACTION_STORE = 1
+
+# ── Compare Functions ──────────────────────────────────────
+
+const int MTL_COMPARE_NEVER = 0
+const int MTL_COMPARE_LESS = 1
+const int MTL_COMPARE_EQUAL = 2
+const int MTL_COMPARE_LESS_EQUAL = 3
+const int MTL_COMPARE_GREATER = 4
+const int MTL_COMPARE_NOT_EQUAL = 5
+const int MTL_COMPARE_GREATER_EQUAL = 6
+const int MTL_COMPARE_ALWAYS = 7
+
+# ── Cull Modes ─────────────────────────────────────────────
+
+const int MTL_CULL_NONE = 0
+const int MTL_CULL_FRONT = 1
+const int MTL_CULL_BACK = 2
+
+# ── Winding Order ──────────────────────────────────────────
+
+const int MTL_WINDING_CLOCKWISE = 0
+const int MTL_WINDING_COUNTER_CLOCKWISE = 1
+
+# ── Triangle Fill Mode ─────────────────────────────────────
+
+const int MTL_FILL_MODE_FILL = 0
+const int MTL_FILL_MODE_LINES = 1
+
+# ── Blend Factors ──────────────────────────────────────────
+
+const int MTL_BLEND_ZERO = 0
+const int MTL_BLEND_ONE = 1
+const int MTL_BLEND_SRC_COLOR = 2
+const int MTL_BLEND_ONE_MINUS_SRC_COLOR = 3
+const int MTL_BLEND_SRC_ALPHA = 4
+const int MTL_BLEND_ONE_MINUS_SRC_ALPHA = 5
+const int MTL_BLEND_DST_COLOR = 6
+const int MTL_BLEND_ONE_MINUS_DST_COLOR = 7
+const int MTL_BLEND_DST_ALPHA = 8
+const int MTL_BLEND_ONE_MINUS_DST_ALPHA = 9
+
+# ── Blend Operations ───────────────────────────────────────
+
+const int MTL_BLEND_OP_ADD = 0
+const int MTL_BLEND_OP_SUBTRACT = 1
+const int MTL_BLEND_OP_REVERSE_SUBTRACT = 2
+const int MTL_BLEND_OP_MIN = 3
+const int MTL_BLEND_OP_MAX = 4
+
+# ── Sampler Address Modes ──────────────────────────────────
+
+const int MTL_ADDRESS_CLAMP_TO_EDGE = 0
+const int MTL_ADDRESS_MIRROR_CLAMP_TO_EDGE = 1
+const int MTL_ADDRESS_REPEAT = 2
+const int MTL_ADDRESS_MIRROR_REPEAT = 3
+const int MTL_ADDRESS_CLAMP_TO_ZERO = 4
+
+# ── Sampler Min/Mag Filter ─────────────────────────────────
+
+const int MTL_FILTER_NEAREST = 0
+const int MTL_FILTER_LINEAR = 1
+
+# ── Sampler Mip Filter ─────────────────────────────────────
+
+const int MTL_MIP_FILTER_NOT_MIPMAPPED = 0
+const int MTL_MIP_FILTER_NEAREST = 1
+const int MTL_MIP_FILTER_LINEAR = 2
+
+# ── Storage Mode ───────────────────────────────────────────
+
+const int MTL_STORAGE_MODE_SHARED = 0
+const int MTL_STORAGE_MODE_MANAGED = 1
+const int MTL_STORAGE_MODE_PRIVATE = 2
+
+# ── Texture Usage ──────────────────────────────────────────
+
+const int MTL_TEXTURE_USAGE_SHADER_READ = 1
+const int MTL_TEXTURE_USAGE_SHADER_WRITE = 2
+const int MTL_TEXTURE_USAGE_RENDER_TARGET = 4
+
+# ── Vertex Format ──────────────────────────────────────────
+
+const int MTL_VERTEX_FORMAT_FLOAT = 28
+const int MTL_VERTEX_FORMAT_FLOAT2 = 29
+const int MTL_VERTEX_FORMAT_FLOAT3 = 30
+const int MTL_VERTEX_FORMAT_FLOAT4 = 31
+const int MTL_VERTEX_FORMAT_UCHAR4 = 3
+const int MTL_VERTEX_FORMAT_SHORT2 = 16
+const int MTL_VERTEX_FORMAT_SHORT4 = 18
+
+# ── Vertex Step Function ───────────────────────────────────
+
+const int MTL_STEP_PER_VERTEX = 1
+const int MTL_STEP_PER_INSTANCE = 2
+
+# ── Barrier Scopes ─────────────────────────────────────────
+
+const int MTL_BARRIER_SCOPE_BUFFERS = 1
+const int MTL_BARRIER_SCOPE_TEXTURES = 2
+const int MTL_BARRIER_SCOPE_RENDER_TARGETS = 4
+
+# ── Texture Types ──────────────────────────────────────────
+
+const int MTL_TEXTURE_TYPE_1D = 0
+const int MTL_TEXTURE_TYPE_2D = 2
+const int MTL_TEXTURE_TYPE_2D_ARRAY = 4
+const int MTL_TEXTURE_TYPE_CUBE = 5
+const int MTL_TEXTURE_TYPE_3D = 7
+
+# ── Additional Pixel Formats ──────────────────────────────
+
+const int MTL_PIXEL_FORMAT_R32_FLOAT = 535
+const int MTL_PIXEL_FORMAT_RG32_FLOAT = 543
+const int MTL_PIXEL_FORMAT_RGBA32_FLOAT = 560
+const int MTL_PIXEL_FORMAT_R16_FLOAT = 105
+const int MTL_PIXEL_FORMAT_RG16_FLOAT = 111
+const int MTL_PIXEL_FORMAT_RG11B10_FLOAT = 92
+const int MTL_PIXEL_FORMAT_RGB10A2_UNORM = 90
+const int MTL_PIXEL_FORMAT_BGRA8_SRGB = 81
+const int MTL_PIXEL_FORMAT_RGBA8_SRGB = 71
+const int MTL_PIXEL_FORMAT_R32_UINT = 533
+const int MTL_PIXEL_FORMAT_R32_SINT = 534
+const int MTL_PIXEL_FORMAT_DEPTH16_UNORM = 250
+const int MTL_PIXEL_FORMAT_R16_UINT = 23
+const int MTL_PIXEL_FORMAT_RG16_UINT = 33
+const int MTL_PIXEL_FORMAT_RGBA16_UINT = 55
+const int MTL_PIXEL_FORMAT_R8_UINT = 13
+const int MTL_PIXEL_FORMAT_RGBA8_UINT = 43
+
+# ── Storage Modes (additional) ─────────────────────────────
+
+const int MTL_STORAGE_MODE_MEMORYLESS = 3
+
+# ── Resource Usage ─────────────────────────────────────────
+
+const int MTL_RESOURCE_USAGE_READ = 1
+const int MTL_RESOURCE_USAGE_WRITE = 2
+const int MTL_RESOURCE_USAGE_SAMPLE = 4
+
+# ── Visibility Result Mode ─────────────────────────────────
+
+const int MTL_VISIBILITY_RESULT_DISABLED = 0
+const int MTL_VISIBILITY_RESULT_BOOLEAN = 1
+const int MTL_VISIBILITY_RESULT_COUNTING = 2
+
+# ── Stencil Operations ────────────────────────────────────
+
+const int MTL_STENCIL_OP_KEEP = 0
+const int MTL_STENCIL_OP_ZERO = 1
+const int MTL_STENCIL_OP_REPLACE = 2
+const int MTL_STENCIL_OP_INCR_CLAMP = 3
+const int MTL_STENCIL_OP_DECR_CLAMP = 4
+const int MTL_STENCIL_OP_INVERT = 5
+const int MTL_STENCIL_OP_INCR_WRAP = 6
+const int MTL_STENCIL_OP_DECR_WRAP = 7
+
+# ── Heap Type ──────────────────────────────────────────────
+
+const int MTL_HEAP_TYPE_AUTOMATIC = 0
+const int MTL_HEAP_TYPE_PLACEMENT = 1
+
+# ── GPU Families ───────────────────────────────────────────
+
+const int MTL_GPU_FAMILY_APPLE1 = 1001
+const int MTL_GPU_FAMILY_APPLE2 = 1002
+const int MTL_GPU_FAMILY_APPLE3 = 1003
+const int MTL_GPU_FAMILY_APPLE4 = 1004
+const int MTL_GPU_FAMILY_APPLE5 = 1005
+const int MTL_GPU_FAMILY_APPLE6 = 1006
+const int MTL_GPU_FAMILY_APPLE7 = 1007
+const int MTL_GPU_FAMILY_APPLE8 = 1008
+const int MTL_GPU_FAMILY_APPLE9 = 1009
+const int MTL_GPU_FAMILY_COMMON1 = 3001
+const int MTL_GPU_FAMILY_COMMON2 = 3002
+const int MTL_GPU_FAMILY_COMMON3 = 3003
+const int MTL_GPU_FAMILY_MAC2 = 2002
+const int MTL_GPU_FAMILY_METAL3 = 5001
+
+# ── Command Buffer Status ─────────────────────────────────
+
+const int MTL_COMMAND_BUFFER_STATUS_NOT_ENQUEUED = 0
+const int MTL_COMMAND_BUFFER_STATUS_ENQUEUED = 1
+const int MTL_COMMAND_BUFFER_STATUS_COMMITTED = 2
+const int MTL_COMMAND_BUFFER_STATUS_SCHEDULED = 3
+const int MTL_COMMAND_BUFFER_STATUS_COMPLETED = 4
+const int MTL_COMMAND_BUFFER_STATUS_ERROR = 5
+
+# ── Acceleration Structure Types (Tier 3) ──────────────────
+
+const int MTL_ACCEL_STRUCT_PRIMITIVE = 0
+const int MTL_ACCEL_STRUCT_INSTANCE = 1
+
+# ── Index Types for Ray Tracing (Tier 3) ───────────────────
+
+const int MTL_INDEX_TYPE_UINT16 = 0
+const int MTL_INDEX_TYPE_UINT32 = 1
+const int MTL_INDEX_TYPE_NONE = 2
+
+# ── Render Stages (Tier 3) ─────────────────────────────────
+
+const int MTL_RENDER_STAGE_VERTEX = 1
+const int MTL_RENDER_STAGE_FRAGMENT = 2
+const int MTL_RENDER_STAGE_OBJECT = 4
+const int MTL_RENDER_STAGE_MESH = 8
+const int MTL_RENDER_STAGE_TILE = 16
+
+# ── Intersection Function Signature (Tier 3) ───────────────
+
+const int MTL_INTERSECTION_FN_SIGNATURE_NONE = 0
+const int MTL_INTERSECTION_FN_SIGNATURE_INSTANCING = 1
+const int MTL_INTERSECTION_FN_SIGNATURE_TRIANGLE_DATA = 2
+const int MTL_INTERSECTION_FN_SIGNATURE_WORLD_SPACE_DATA = 4
+
+# ── Acceleration Structure Usage (Tier 3) ──────────────────
+
+const int MTL_ACCEL_STRUCT_USAGE_NONE = 0
+const int MTL_ACCEL_STRUCT_USAGE_REFIT = 1
+const int MTL_ACCEL_STRUCT_USAGE_PREFER_FAST_BUILD = 2
+
+# ══════════════════════════════════════════════════════════════
+# Functions — all handles are opaque int (pointer-sized)
+# ══════════════════════════════════════════════════════════════
+
+extern "C":
+    # ── Device ─────────────────────────────────────────────
+    extern int metal_create_device() = "gorget_metal_create_device"
+    extern String metal_device_name(int device) = "gorget_metal_device_name"
+    extern bool metal_device_supports_family(int device, int family) = "gorget_metal_device_supports_family"
+
+    # ── Command Queue ──────────────────────────────────────
+    extern int metal_create_command_queue(int device) = "gorget_metal_create_command_queue"
+
+    # ── Command Buffer ─────────────────────────────────────
+    extern int metal_create_command_buffer(int queue) = "gorget_metal_create_command_buffer"
+    extern void metal_command_buffer_present(int cmd_buf, int drawable) = "gorget_metal_command_buffer_present"
+    extern void metal_command_buffer_commit(int cmd_buf) = "gorget_metal_command_buffer_commit"
+    extern void metal_command_buffer_wait(int cmd_buf) = "gorget_metal_command_buffer_wait"
+
+    # ── Buffers ────────────────────────────────────────────
+    extern int metal_create_buffer(int device, int length, int storage_mode) = "gorget_metal_create_buffer"
+    extern int metal_create_buffer_with_data(int device, Vector[uint8] data, int length, int storage_mode) = "gorget_metal_create_buffer_with_data"
+    extern int metal_buffer_contents(int buffer) = "gorget_metal_buffer_contents"
+    extern int metal_buffer_length(int buffer) = "gorget_metal_buffer_length"
+    extern void metal_buffer_did_modify_range(int buffer, int offset, int length) = "gorget_metal_buffer_did_modify_range"
+
+    # ── Textures ───────────────────────────────────────────
+    extern int metal_create_texture_2d(int device, int width, int height, int format, int usage, int storage_mode) = "gorget_metal_create_texture_2d"
+    extern int metal_create_texture_2d_mipmapped(int device, int width, int height, int format, int mip_levels, int usage, int storage_mode) = "gorget_metal_create_texture_2d_mipmapped"
+    extern void metal_texture_upload(int texture, int x, int y, int width, int height, Vector[uint8] data, int bytes_per_row) = "gorget_metal_texture_upload"
+    extern void metal_texture_upload_mip(int texture, int mip_level, int x, int y, int width, int height, Vector[uint8] data, int bytes_per_row) = "gorget_metal_texture_upload_mip"
+    extern int metal_texture_width(int texture) = "gorget_metal_texture_width"
+    extern int metal_texture_height(int texture) = "gorget_metal_texture_height"
+
+    # ── Samplers ───────────────────────────────────────────
+    extern int metal_create_sampler(int device, int min_filter, int mag_filter, int mip_filter, int address_s, int address_t) = "gorget_metal_create_sampler"
+
+    # ── Shaders / Library ──────────────────────────────────
+    extern int metal_create_library(int device, String source) = "gorget_metal_create_library"
+    extern int metal_create_library_from_data(int device, Vector[uint8] data) = "gorget_metal_create_library_from_data"
+    extern int metal_library_function(int library, String name) = "gorget_metal_library_function"
+
+    # ── Vertex Descriptor ──────────────────────────────────
+    extern int metal_create_vertex_descriptor() = "gorget_metal_create_vertex_descriptor"
+    extern void metal_vertex_desc_set_attribute(int desc, int index, int format, int offset, int buffer_index) = "gorget_metal_vertex_desc_set_attribute"
+    extern void metal_vertex_desc_set_layout(int desc, int index, int stride, int step_function) = "gorget_metal_vertex_desc_set_layout"
+
+    # ── Render Pipeline ────────────────────────────────────
+    extern int metal_create_render_pipeline(int device, int vertex_fn, int fragment_fn, int vertex_desc, int color_format, int depth_format) = "gorget_metal_create_render_pipeline"
+    extern int metal_create_render_pipeline_blended(int device, int vertex_fn, int fragment_fn, int vertex_desc, int color_format, int depth_format, int blend_src_rgb, int blend_dst_rgb, int blend_src_a, int blend_dst_a) = "gorget_metal_create_render_pipeline_blended"
+
+    # ── Depth/Stencil State ────────────────────────────────
+    extern int metal_create_depth_stencil(int device, int compare_fn, int depth_write) = "gorget_metal_create_depth_stencil"
+
+    # ── Render Pass Descriptor ─────────────────────────────
+    extern int metal_create_render_pass_desc() = "gorget_metal_create_render_pass_desc"
+    extern void metal_render_pass_set_color(int desc, int index, int texture, int load_action, int store_action, float r, float g, float b, float a) = "gorget_metal_render_pass_set_color"
+    extern void metal_render_pass_set_depth(int desc, int texture, int load_action, int store_action, float clear_depth) = "gorget_metal_render_pass_set_depth"
+
+    # ── Render Command Encoder ─────────────────────────────
+    extern int metal_create_render_encoder(int cmd_buf, int pass_desc) = "gorget_metal_create_render_encoder"
+    extern void metal_encoder_set_pipeline(int encoder, int pipeline) = "gorget_metal_encoder_set_pipeline"
+    extern void metal_encoder_set_vertex_buffer(int encoder, int buffer, int offset, int index) = "gorget_metal_encoder_set_vertex_buffer"
+    extern void metal_encoder_set_vertex_bytes(int encoder, Vector[uint8] data, int length, int index) = "gorget_metal_encoder_set_vertex_bytes"
+    extern void metal_encoder_set_fragment_buffer(int encoder, int buffer, int offset, int index) = "gorget_metal_encoder_set_fragment_buffer"
+    extern void metal_encoder_set_fragment_bytes(int encoder, Vector[uint8] data, int length, int index) = "gorget_metal_encoder_set_fragment_bytes"
+    extern void metal_encoder_set_fragment_texture(int encoder, int texture, int index) = "gorget_metal_encoder_set_fragment_texture"
+    extern void metal_encoder_set_fragment_sampler(int encoder, int sampler, int index) = "gorget_metal_encoder_set_fragment_sampler"
+    extern void metal_encoder_set_depth_stencil(int encoder, int state) = "gorget_metal_encoder_set_depth_stencil"
+    extern void metal_encoder_set_cull_mode(int encoder, int mode) = "gorget_metal_encoder_set_cull_mode"
+    extern void metal_encoder_set_front_facing(int encoder, int winding) = "gorget_metal_encoder_set_front_facing"
+    extern void metal_encoder_set_fill_mode(int encoder, int mode) = "gorget_metal_encoder_set_fill_mode"
+    extern void metal_encoder_set_viewport(int encoder, float x, float y, float w, float h, float near, float far) = "gorget_metal_encoder_set_viewport"
+    extern void metal_encoder_set_scissor(int encoder, int x, int y, int w, int h) = "gorget_metal_encoder_set_scissor"
+    extern void metal_encoder_set_blend_color(int encoder, float r, float g, float b, float a) = "gorget_metal_encoder_set_blend_color"
+    extern void metal_encoder_set_stencil_ref(int encoder, int ref_val) = "gorget_metal_encoder_set_stencil_ref"
+    extern void metal_encoder_draw_primitives(int encoder, int primitive_type, int start, int count) = "gorget_metal_encoder_draw_primitives"
+    extern void metal_encoder_draw_primitives_instanced(int encoder, int primitive_type, int start, int count, int instance_count) = "gorget_metal_encoder_draw_primitives_instanced"
+    extern void metal_encoder_draw_indexed(int encoder, int primitive_type, int index_count, int index_type, int index_buffer, int index_offset) = "gorget_metal_encoder_draw_indexed"
+    extern void metal_encoder_draw_indexed_instanced(int encoder, int primitive_type, int index_count, int index_type, int index_buffer, int index_offset, int instance_count) = "gorget_metal_encoder_draw_indexed_instanced"
+    extern void metal_encoder_end(int encoder) = "gorget_metal_encoder_end"
+
+    # ── Blit Command Encoder ───────────────────────────────
+    extern int metal_create_blit_encoder(int cmd_buf) = "gorget_metal_create_blit_encoder"
+    extern void metal_blit_generate_mipmaps(int encoder, int texture) = "gorget_metal_blit_generate_mipmaps"
+    extern void metal_blit_end(int encoder) = "gorget_metal_blit_end"
+    extern void metal_generate_mipmaps(int cmd_buf, int texture) = "gorget_metal_generate_mipmaps"
+
+    # ── SDL Metal Integration ──────────────────────────────
+    extern int sdl_metal_create_view(int window) = "gorget_sdl_metal_create_view"
+    extern int sdl_metal_get_layer(int view) = "gorget_sdl_metal_get_layer"
+    extern void metal_layer_set_device(int layer, int device) = "gorget_metal_layer_set_device"
+    extern void metal_layer_set_pixel_format(int layer, int format) = "gorget_metal_layer_set_pixel_format"
+    extern void metal_layer_set_drawable_size(int layer, int width, int height) = "gorget_metal_layer_set_drawable_size"
+    extern int metal_layer_next_drawable(int layer) = "gorget_metal_layer_next_drawable"
+    extern int metal_drawable_texture(int drawable) = "gorget_metal_drawable_texture"
+
+    # ── Release ────────────────────────────────────────────
+    extern void metal_release(int obj) = "gorget_metal_release"
+
+    # ── Convenience: begin_frame wraps drawable+pass creation
+    extern int metal_begin_frame(int layer) = "gorget_metal_begin_frame"
+
+    # ── Autorelease Pool (per-frame memory management) ────
+    extern int metal_autorelease_pool_push() = "gorget_metal_autorelease_pool_push"
+    extern void metal_autorelease_pool_pop(int pool) = "gorget_metal_autorelease_pool_pop"
+
+    # ── Triple Buffering (dispatch semaphore) ─────────────
+    extern int metal_semaphore_create(int value) = "gorget_metal_semaphore_create"
+    extern void metal_semaphore_wait(int sem) = "gorget_metal_semaphore_wait"
+    extern void metal_semaphore_signal(int sem) = "gorget_metal_semaphore_signal"
+    extern void metal_command_buffer_on_complete(int cmd_buf, int sem) = "gorget_metal_command_buffer_on_complete"
+
+    # ── Stencil Attachment ─────────────────────────────────
+    extern void metal_render_pass_set_stencil(int desc, int texture, int load_action, int store_action, int clear_stencil) = "gorget_metal_render_pass_set_stencil"
+    extern int metal_create_render_pipeline_with_stencil(int device, int vertex_fn, int fragment_fn, int vertex_desc, int color_format, int depth_format, int stencil_format) = "gorget_metal_create_render_pipeline_with_stencil"
+
+    # ── Depth Bias (shadow acne prevention) ────────────────
+    extern void metal_encoder_set_depth_bias(int encoder, float depth_bias, float slope_scale, float clamp) = "gorget_metal_encoder_set_depth_bias"
+
+    # ── Vertex-stage Texture/Sampler ───────────────────────
+    extern void metal_encoder_set_vertex_texture(int encoder, int texture, int index) = "gorget_metal_encoder_set_vertex_texture"
+    extern void metal_encoder_set_vertex_sampler(int encoder, int sampler, int index) = "gorget_metal_encoder_set_vertex_sampler"
+
+    # ── Command Buffer Status ──────────────────────────────
+    extern int metal_command_buffer_status(int cmd_buf) = "gorget_metal_command_buffer_status"
+    extern String metal_command_buffer_error(int cmd_buf) = "gorget_metal_command_buffer_error"
+
+    # ── MSAA Support ───────────────────────────────────────
+    extern int metal_create_render_pipeline_msaa(int device, int vertex_fn, int fragment_fn, int vertex_desc, int color_format, int depth_format, int sample_count) = "gorget_metal_create_render_pipeline_msaa"
+    extern int metal_create_texture_2d_msaa(int device, int width, int height, int format, int sample_count, int usage, int storage_mode) = "gorget_metal_create_texture_2d_msaa"
+
+    # ── Compute Pipeline ───────────────────────────────────
+    extern int metal_create_compute_pipeline(int device, int function_handle) = "gorget_metal_create_compute_pipeline"
+    extern int metal_create_compute_encoder(int cmd_buf) = "gorget_metal_create_compute_encoder"
+    extern void metal_compute_set_pipeline(int encoder, int pipeline) = "gorget_metal_compute_set_pipeline"
+    extern void metal_compute_set_buffer(int encoder, int buffer, int offset, int index) = "gorget_metal_compute_set_buffer"
+    extern void metal_compute_set_bytes(int encoder, Vector[uint8] data, int index) = "gorget_metal_compute_set_bytes"
+    extern void metal_compute_set_texture(int encoder, int texture, int index) = "gorget_metal_compute_set_texture"
+    extern void metal_compute_dispatch_threadgroups(int encoder, int gx, int gy, int gz, int tx, int ty_, int tz) = "gorget_metal_compute_dispatch_threadgroups"
+    extern void metal_compute_dispatch_threads(int encoder, int gx, int gy, int gz, int tx, int ty_, int tz) = "gorget_metal_compute_dispatch_threads"
+    extern void metal_compute_end(int encoder) = "gorget_metal_compute_end"
+    extern int metal_compute_thread_execution_width(int pipeline) = "gorget_metal_compute_thread_execution_width"
+    extern int metal_compute_max_threads_per_threadgroup(int pipeline) = "gorget_metal_compute_max_threads_per_threadgroup"
+    extern void metal_compute_set_sampler(int encoder, int sampler, int index) = "gorget_metal_compute_set_sampler"
+
+    # ── GPU Synchronization (Events + Fences) ──────────────
+    extern int metal_create_event(int device) = "gorget_metal_create_event"
+    extern void metal_command_buffer_encode_signal_event(int cmd_buf, int event, int value) = "gorget_metal_command_buffer_encode_signal_event"
+    extern void metal_command_buffer_encode_wait_event(int cmd_buf, int event, int value) = "gorget_metal_command_buffer_encode_wait_event"
+    extern int metal_create_shared_event(int device) = "gorget_metal_create_shared_event"
+    extern int metal_shared_event_signaled_value(int event) = "gorget_metal_shared_event_signaled_value"
+    extern int metal_create_fence(int device) = "gorget_metal_create_fence"
+    extern void metal_encoder_wait_for_fence(int encoder, int fence) = "gorget_metal_encoder_wait_for_fence"
+    extern void metal_encoder_update_fence(int encoder, int fence) = "gorget_metal_encoder_update_fence"
+    extern void metal_encoder_memory_barrier(int encoder, int scope) = "gorget_metal_encoder_memory_barrier"
+
+    # ── Blit Encoder Operations ────────────────────────────
+    extern void metal_blit_copy_buffer_to_buffer(int encoder, int src, int src_offset, int dst, int dst_offset, int size) = "gorget_metal_blit_copy_buffer_to_buffer"
+    extern void metal_blit_copy_texture_to_texture(int encoder, int src, int src_slice, int src_level, int dst, int dst_slice, int dst_level, int sx, int sy, int sw, int sh) = "gorget_metal_blit_copy_texture_to_texture"
+    extern void metal_blit_copy_buffer_to_texture(int encoder, int buffer, int buf_offset, int bytes_per_row, int bytes_per_image, int texture, int slice, int level, int w, int h, int d) = "gorget_metal_blit_copy_buffer_to_texture"
+    extern void metal_blit_copy_texture_to_buffer(int encoder, int texture, int slice, int level, int buffer, int buf_offset, int bytes_per_row, int bytes_per_image, int w, int h, int d) = "gorget_metal_blit_copy_texture_to_buffer"
+    extern void metal_blit_fill_buffer(int encoder, int buffer, int offset, int length, int value) = "gorget_metal_blit_fill_buffer"
+    extern void metal_blit_synchronize_resource(int encoder, int resource) = "gorget_metal_blit_synchronize_resource"
+
+    # ── Indirect Drawing ───────────────────────────────────
+    extern void metal_encoder_draw_primitives_indirect(int encoder, int prim_type, int indirect_buffer, int offset) = "gorget_metal_encoder_draw_primitives_indirect"
+    extern void metal_encoder_draw_indexed_indirect(int encoder, int prim_type, int index_count, int index_type, int index_buffer, int index_offset, int indirect_buffer, int indirect_offset) = "gorget_metal_encoder_draw_indexed_indirect"
+
+    # ── Additional Texture Types ───────────────────────────
+    extern int metal_create_texture_cube(int device, int format, int size, int mipmaps, int usage) = "gorget_metal_create_texture_cube"
+    extern int metal_create_texture_2d_array(int device, int format, int width, int height, int array_length, int mipmaps, int usage) = "gorget_metal_create_texture_2d_array"
+    extern int metal_create_texture_3d(int device, int format, int width, int height, int depth, int mipmaps, int usage) = "gorget_metal_create_texture_3d"
+    extern int metal_create_texture_view(int texture, int format, int tex_type, int mip_start, int mip_count, int slice_start, int slice_count) = "gorget_metal_create_texture_view"
+
+    # ── Resource Heaps ─────────────────────────────────────
+    extern int metal_create_heap(int device, int size, int storage_mode) = "gorget_metal_create_heap"
+    extern int metal_heap_create_buffer(int heap, int length, int storage_mode) = "gorget_metal_heap_create_buffer"
+    extern int metal_heap_create_texture(int heap, int width, int height, int format, int usage, int storage_mode) = "gorget_metal_heap_create_texture"
+    extern int metal_heap_used_size(int heap) = "gorget_metal_heap_used_size"
+    extern int metal_heap_current_allocated_size(int heap) = "gorget_metal_heap_current_allocated_size"
+    extern int metal_heap_max_available_size(int heap, int alignment) = "gorget_metal_heap_max_available_size"
+
+    # ── Argument Buffers (Bindless Resources) ──────────────
+    extern int metal_create_argument_encoder(int function_handle, int buffer_index) = "gorget_metal_create_argument_encoder"
+    extern int metal_argument_encoder_encoded_length(int encoder) = "gorget_metal_argument_encoder_encoded_length"
+    extern void metal_argument_encoder_set_argument_buffer(int encoder, int buffer, int offset) = "gorget_metal_argument_encoder_set_argument_buffer"
+    extern void metal_argument_encoder_set_buffer(int encoder, int buffer, int offset, int index) = "gorget_metal_argument_encoder_set_buffer"
+    extern void metal_argument_encoder_set_texture(int encoder, int texture, int index) = "gorget_metal_argument_encoder_set_texture"
+    extern void metal_argument_encoder_set_sampler(int encoder, int sampler, int index) = "gorget_metal_argument_encoder_set_sampler"
+    extern void metal_encoder_use_resource(int encoder, int resource, int usage) = "gorget_metal_encoder_use_resource"
+    extern void metal_encoder_use_heap(int encoder, int heap) = "gorget_metal_encoder_use_heap"
+
+    # ── Parallel Render Command Encoder ────────────────────
+    extern int metal_create_parallel_render_encoder(int cmd_buf, int pass_desc) = "gorget_metal_create_parallel_render_encoder"
+    extern int metal_parallel_encoder_make_render_encoder(int parallel_enc) = "gorget_metal_parallel_encoder_make_render_encoder"
+    extern void metal_parallel_encoder_end(int parallel_enc) = "gorget_metal_parallel_encoder_end"
+
+    # ── Visibility Result Buffer (Occlusion Queries) ───────
+    extern void metal_render_pass_set_visibility_result_buffer(int desc, int buffer) = "gorget_metal_render_pass_set_visibility_result_buffer"
+    extern void metal_encoder_set_visibility_result_mode(int encoder, int mode, int offset) = "gorget_metal_encoder_set_visibility_result_mode"
+
+    # ── Full Stencil State (Separate front/back) ──────────
+    extern int metal_create_depth_stencil_full(int device, int depth_compare, int depth_write, int front_stencil_compare, int front_read_mask, int front_write_mask, int front_sfail, int front_dfail, int front_dspass, int back_stencil_compare, int back_read_mask, int back_write_mask, int back_sfail, int back_dfail, int back_dspass) = "gorget_metal_create_depth_stencil_full"
+
+    # ── MRT Render Pipeline ────────────────────────────────
+    extern int metal_create_render_pipeline_mrt(int device, int vertex_fn, int fragment_fn, int vertex_desc, int num_color_attachments, Vector[uint8] color_formats, int depth_format) = "gorget_metal_create_render_pipeline_mrt"
+    extern void metal_render_pass_set_color_texture(int desc, int index, int texture) = "gorget_metal_render_pass_set_color_texture"
+
+    # ── Indirect Command Buffers (GPU-Driven Rendering) ────
+    extern int metal_create_indirect_command_buffer(int device, int max_commands, int inherit_pipeline, int inherit_buffers) = "gorget_metal_create_indirect_command_buffer"
+    extern int metal_icb_indirect_render_command(int icb, int index) = "gorget_metal_icb_indirect_render_command"
+    extern void metal_indirect_render_set_pipeline(int cmd, int pipeline) = "gorget_metal_indirect_render_set_pipeline"
+    extern void metal_indirect_render_set_vertex_buffer(int cmd, int buffer, int offset, int index) = "gorget_metal_indirect_render_set_vertex_buffer"
+    extern void metal_indirect_render_set_fragment_buffer(int cmd, int buffer, int offset, int index) = "gorget_metal_indirect_render_set_fragment_buffer"
+    extern void metal_indirect_render_draw_primitives(int cmd, int prim_type, int start, int count, int instance_count, int base_instance) = "gorget_metal_indirect_render_draw_primitives"
+    extern void metal_indirect_render_draw_indexed(int cmd, int prim_type, int index_count, int index_type, int index_buffer, int index_offset, int instance_count, int base_vertex, int base_instance) = "gorget_metal_indirect_render_draw_indexed"
+    extern void metal_indirect_render_reset(int cmd) = "gorget_metal_indirect_render_reset"
+    extern void metal_encoder_execute_commands_in_buffer(int encoder, int icb, int start, int count) = "gorget_metal_encoder_execute_commands_in_buffer"
+
+    # ── Sampler with LOD ───────────────────────────────────
+    extern int metal_create_sampler_with_lod(int device, int min_filter, int mag_filter, int mip_filter, int address_s, int address_t, float lod_min, float lod_max, int max_anisotropy) = "gorget_metal_create_sampler_with_lod"
+    extern int metal_create_sampler_with_compare(int device, int min_filter, int mag_filter, int address_s, int address_t, int compare_fn) = "gorget_metal_create_sampler_with_compare"
+
+    # ── Debug Groups ───────────────────────────────────────
+    extern void metal_encoder_push_debug_group(int encoder, String label) = "gorget_metal_encoder_push_debug_group"
+    extern void metal_encoder_pop_debug_group(int encoder) = "gorget_metal_encoder_pop_debug_group"
+    extern void metal_encoder_insert_debug_signpost(int encoder, String label) = "gorget_metal_encoder_insert_debug_signpost"
+    extern void metal_command_buffer_push_debug_group(int cmd_buf, String label) = "gorget_metal_cmd_buf_push_debug_group"
+    extern void metal_command_buffer_pop_debug_group(int cmd_buf) = "gorget_metal_cmd_buf_pop_debug_group"
+
+    # ── MRT (Multiple Render Target) Pipeline ──────────────
+    extern void metal_render_pass_set_color_attachment(int desc, int index, int texture, int load_action, int store_action, float clear_r, float clear_g, float clear_b, float clear_a) = "gorget_metal_render_pass_set_color_attachment"
+    extern void metal_pipeline_set_color_attachment_format(int desc, int index, int format) = "gorget_metal_pipeline_set_color_attachment_format"
+    extern void metal_pipeline_set_color_attachment_blending(int desc, int index, int enabled, int src_rgb, int dst_rgb, int src_alpha, int dst_alpha) = "gorget_metal_pipeline_set_color_attachment_blending"
+
+    # ── Device Feature Queries ─────────────────────────────
+    extern int metal_device_registry_id(int device) = "gorget_metal_device_registry_id"
+    extern int metal_device_current_allocated_size(int device) = "gorget_metal_device_current_allocated_size"
+
+    # ── Full Stencil Configuration ─────────────────────────
+    extern void metal_encoder_set_stencil_front_back_ref(int encoder, int front_ref, int back_ref) = "gorget_metal_encoder_set_stencil_front_back_ref"
+
+    # ── Texture Read-back ──────────────────────────────────
+    extern Vector[uint8] metal_texture_get_bytes(int texture, int x, int y, int width, int height, int bytes_per_row) = "gorget_metal_texture_get_bytes"
+
+    # ── Buffer Write from CPU ──────────────────────────────
+    extern void metal_buffer_write(int buffer, int offset, Vector[uint8] data) = "gorget_metal_buffer_write"
+
+    # ── Device Queries ─────────────────────────────────────
+    extern int metal_device_max_buffer_length(int device) = "gorget_metal_device_max_buffer_length"
+    extern int metal_device_max_threads_per_threadgroup(int device) = "gorget_metal_device_max_threads_per_threadgroup"
+    extern bool metal_device_has_unified_memory(int device) = "gorget_metal_device_has_unified_memory"
+    extern int metal_device_recommended_max_working_set_size(int device) = "gorget_metal_device_recommended_max_working_set_size"
+
+    # ── CAMetalLayer Configuration ─────────────────────────
+    extern void metal_layer_set_vsync(int layer, int enabled) = "gorget_metal_layer_set_vsync"
+    extern void metal_layer_set_maximum_drawable_count(int layer, int count) = "gorget_metal_layer_set_maximum_drawable_count"
+    extern void metal_layer_set_framebuffer_only(int layer, int flag) = "gorget_metal_layer_set_framebuffer_only"
+
+    # ══════════════════════════════════════════════════════════
+    # Metal Tier 3 — Advanced GPU features (Metal 3+)
+    # ══════════════════════════════════════════════════════════
+
+    # ── Ray Tracing (Metal 3, Apple7+) ─────────────────────
+    extern int metal_create_acceleration_structure_descriptor(int type_) = "gorget_metal_create_accel_struct_desc"
+    extern void metal_accel_desc_set_geometry(int desc, int geometry, int count) = "gorget_metal_accel_desc_set_geometry"
+    extern int metal_create_triangle_geometry_descriptor(int vertex_buffer, int vertex_offset, int vertex_stride, int triangle_count, int index_buffer, int index_type) = "gorget_metal_create_triangle_geom_desc"
+    extern int metal_accel_structure_sizes(int device, int desc) = "gorget_metal_accel_structure_sizes"
+    extern int metal_create_acceleration_structure(int device, int size) = "gorget_metal_create_accel_structure"
+    extern void metal_build_acceleration_structure(int encoder, int desc, int accel, int scratch_buffer, int scratch_offset) = "gorget_metal_build_accel_structure"
+    extern void metal_refit_acceleration_structure(int encoder, int desc, int source, int dest, int scratch_buffer, int scratch_offset) = "gorget_metal_refit_accel_structure"
+    extern int metal_create_instance_accel_desc(int instance_buffer, int instance_count) = "gorget_metal_create_instance_accel_desc"
+    extern int metal_create_intersection_function_table(int pipeline, int count) = "gorget_metal_create_intersection_fn_table"
+    extern void metal_intersection_fn_table_set_function(int table, int index, int pipeline, String function_name) = "gorget_metal_intersection_fn_table_set_fn"
+    extern int metal_command_buffer_acceleration_structure_encoder(int cmd_buf) = "gorget_metal_cmd_buf_accel_encoder"
+    extern void metal_accel_encoder_end(int encoder) = "gorget_metal_accel_encoder_end"
+    extern void metal_render_encoder_set_accel_structure(int encoder, int index, int accel) = "gorget_metal_render_enc_set_accel_struct"
+    extern void metal_render_encoder_set_intersection_fn_table(int encoder, int index, int table) = "gorget_metal_render_enc_set_intersection_fn_table"
+    extern void metal_compute_encoder_set_accel_structure(int encoder, int index, int accel) = "gorget_metal_compute_enc_set_accel_struct"
+
+    # ── Mesh Shaders (Metal 3) ─────────────────────────────
+    extern int metal_create_mesh_render_pipeline(int device, String object_fn, String mesh_fn, String frag_fn, int library, int pixel_format) = "gorget_metal_create_mesh_pipeline"
+    extern void metal_render_encoder_draw_mesh_threadgroups(int encoder, int mesh_tg_x, int mesh_tg_y, int mesh_tg_z, int mesh_threads_x, int mesh_threads_y, int mesh_threads_z, int object_threads_x, int object_threads_y, int object_threads_z) = "gorget_metal_render_enc_draw_mesh_tg"
+
+    # ── Binary Archives (Metal 2.3+) ───────────────────────
+    extern int metal_create_binary_archive(int device, String url) = "gorget_metal_create_binary_archive"
+    extern int metal_binary_archive_add_pipeline(int archive, int desc) = "gorget_metal_binary_archive_add_pipeline"
+    extern int metal_binary_archive_serialize(int archive, String url) = "gorget_metal_binary_archive_serialize"
+
+    # ── Visible Functions / Function Pointers (Metal 2.3+) ──
+    extern int metal_create_visible_function_table(int pipeline, int count) = "gorget_metal_create_visible_fn_table"
+    extern void metal_visible_fn_table_set_function(int table, int index, int pipeline, String function_name) = "gorget_metal_visible_fn_table_set_fn"
+    extern void metal_render_encoder_set_visible_fn_table(int encoder, int index, int table) = "gorget_metal_render_enc_set_visible_fn_table"
+    extern void metal_compute_encoder_set_visible_fn_table(int encoder, int index, int table) = "gorget_metal_compute_enc_set_visible_fn_table"
+
+    # ── Texture Views / Shared Resources (Metal 2+) ────────
+    extern int metal_texture_new_view(int texture, int pixel_format, int texture_type, int levels, int num_levels, int slices, int num_slices) = "gorget_metal_texture_new_view"
+    extern void metal_make_aliasable(int resource) = "gorget_metal_make_aliasable"
+
+    # ── Fence / Event Synchronization (Metal 2+) ──────────
+    extern void metal_render_encoder_update_fence(int encoder, int fence, int stages) = "gorget_metal_render_enc_update_fence"
+    extern void metal_render_encoder_wait_for_fence(int encoder, int fence, int stages) = "gorget_metal_render_enc_wait_fence"
+
+    # ── Timestamps & Counters (Metal 2.3+) ─────────────────
+    extern int metal_create_counter_sample_buffer(int device, int count) = "gorget_metal_create_counter_sample_buffer"
+    extern int metal_device_sample_timestamps(int device) = "gorget_metal_device_sample_timestamps"
+
+    # ── Dynamic Libraries (Metal 2.3+) ─────────────────────
+    extern int metal_create_dynamic_library(int device, int library) = "gorget_metal_create_dynamic_library"
+
+    # ── Residency Sets (Metal 3+) ──────────────────────────
+    extern int metal_create_residency_set(int device) = "gorget_metal_create_residency_set"
+    extern void metal_residency_set_add_allocation(int set, int resource) = "gorget_metal_residency_set_add"
+    extern void metal_residency_set_commit(int set) = "gorget_metal_residency_set_commit"
