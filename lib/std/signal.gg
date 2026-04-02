@@ -1,0 +1,22 @@
+# std.signal — POSIX signal handling
+
+# Signal constants (POSIX standard values)
+const int SIGHUP = 1
+const int SIGINT = 2
+const int SIGQUIT = 3
+const int SIGABRT = 6
+const int SIGKILL = 9
+const int SIGUSR1 = 10
+const int SIGUSR2 = 12
+const int SIGPIPE = 13
+const int SIGALRM = 14
+const int SIGTERM = 15
+const int SIGCHLD = 17
+
+extern "C":
+    extern void signal_trap(int sig) = "gorget_signal_trap"
+    extern bool signal_check(int sig) = "gorget_signal_check"
+    extern int signal_wait() = "gorget_signal_wait"
+    extern void signal_ignore(int sig) = "gorget_signal_ignore"
+    extern void signal_reset(int sig) = "gorget_signal_reset"
+    extern int signal_send(int pid, int sig) = "gorget_signal_send"

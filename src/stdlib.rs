@@ -101,7 +101,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "sync" => Some(gen_sync_module()),
                 "thread" => Some(gen_thread_module()),
                 "async" => Some(gen_async_module()),
-                "signal" => Some(gen_signal_module()),
+                "signal" => None, // file-based
                 "term" => None,     // file-based module — loaded via builtin_module_source()
                 "heap" => None,     // file-based module — loaded via builtin_module_source()
                 "datetime" => None, // file-based module — loaded via builtin_module_source()
@@ -371,42 +371,6 @@ fn gen_process_module() -> Module {
     }
 }
 
-fn gen_signal_module() -> Module {
-    let int_const = |name: &str, value: i64| -> Spanned<Item> {
-        Spanned::dummy(Item::ConstDecl(ConstDecl {
-            visibility: Visibility::Public,
-            type_: Spanned::dummy(ty_int()),
-            name: Spanned::dummy(name.to_string()),
-            value: Spanned::dummy(Expr::IntLiteral(value)),
-            span: Span::dummy(),
-        }))
-    };
-    let items = vec![
-        // Signal constants (POSIX standard values)
-        int_const("SIGHUP",  1),
-        int_const("SIGINT",  2),
-        int_const("SIGQUIT", 3),
-        int_const("SIGABRT", 6),
-        int_const("SIGKILL", 9),
-        int_const("SIGUSR1", 10),
-        int_const("SIGUSR2", 12),
-        int_const("SIGPIPE", 13),
-        int_const("SIGALRM", 14),
-        int_const("SIGTERM", 15),
-        int_const("SIGCHLD", 17),
-        // Functions
-        Spanned::dummy(Item::Function(decl_fn("signal_trap", &[("sig", ty_int())], ty_void()))),
-        Spanned::dummy(Item::Function(decl_fn("signal_check", &[("sig", ty_int())], ty_bool()))),
-        Spanned::dummy(Item::Function(decl_fn("signal_wait", &[], ty_int()))),
-        Spanned::dummy(Item::Function(decl_fn("signal_ignore", &[("sig", ty_int())], ty_void()))),
-        Spanned::dummy(Item::Function(decl_fn("signal_reset", &[("sig", ty_int())], ty_void()))),
-        Spanned::dummy(Item::Function(decl_fn("signal_send", &[("pid", ty_int()), ("sig", ty_int())], ty_int()))),
-    ];
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
 
 fn gen_sync_module() -> Module {
     let ty_t = || Type::Named {
@@ -947,6 +911,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("fs") => Some(include_str!("../lib/std/fs.gg")),
             Some("path") => Some(include_str!("../lib/std/path.gg")),
             Some("random") => Some(include_str!("../lib/std/random.gg")),
+            Some("signal") => Some(include_str!("../lib/std/signal.gg")),
             Some("fmt") => Some(include_str!("../lib/std/fmt.gg")),
             Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
             Some("encoding") => Some(include_str!("../lib/std/encoding.gg")),
