@@ -4934,18 +4934,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                         continue;
                                     }
                                 }
-                                // Remaining legacy handling for non-CStr params
-                                // (CStr cases already handled by resolve_param_abi above)
-                                if runtime_arg_by_ptr(emit_name, i) && matches!(arg_ty, Some(LirType::Struct(_))) {
-                                    // Struct value → pointer: take address
-                                    write!(out, "&{}", v(*a)).unwrap();
-                                } else if runtime_arg_by_ptr(emit_name, i) && matches!(arg_ty, Some(LirType::Ptr)) {
-                                    // Already a pointer, pass directly
-                                    write!(out, "{}", v(*a)).unwrap();
-                                } else {
-                                    let ext_param = ext_params.and_then(|p| p.get(i));
-                                    emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
-                                }
+                                // CStr and Ptr cases handled by resolve_param_abi above.
+                                let ext_param = ext_params.and_then(|p| p.get(i));
+                                emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
                             }
                             write!(out, ")").unwrap();
                             if wrap_cstr { write!(out, ")").unwrap(); }
@@ -5045,13 +5036,14 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     if i > 0 { write!(out, ", ").unwrap(); }
                     let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                     let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                    if runtime_arg_by_ptr(emit_name, i) && matches!(arg_ty, Some(LirType::Ptr) | Some(LirType::Struct(_))) {
-                        if matches!(arg_ty, Some(LirType::Struct(_))) {
-                            write!(out, "&{}", v(*a)).unwrap();
-                        } else {
-                            write!(out, "{}", v(*a)).unwrap();
+                    // ABI-driven marshalling.
+                    {
+                        let abi = resolve_param_abi(ext_decl, emit_name, i);
+                        if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
+                            continue;
                         }
-                    } else if is_str_lit && emit_name.starts_with("gorget_str_") {
+                    }
+                    if is_str_lit && emit_name.starts_with("gorget_str_") {
                         write!(out, "gorget_str_from_literal({}, strlen({}))", v(*a), v(*a)).unwrap();
                     } else if collection_void_param_indices(emit_name).contains(&i) && arg_ty.map_or(false, |t| !matches!(t, LirType::Ptr)) {
                         let ty_name = c_type_named(arg_ty.unwrap(), sn);
@@ -5923,15 +5915,6 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     write!(out, "(int)((Str*){v})->len, ((Str*){v})->data", v = v(*a)).unwrap();
                     continue;
                 }
-                // Runtime arg-by-pointer: the C prototype takes a pointer to the struct.
-                // If the LIR value is a Ptr, pass directly; if Struct, take address.
-                if runtime_arg_by_ptr(emit_name, i) && matches!(arg_ty, Some(LirType::Ptr) | Some(LirType::Struct(_))) {
-                    if matches!(arg_ty, Some(LirType::Struct(_))) {
-                        write!(out, "&{}", v(*a)).unwrap();
-                    } else {
-                        write!(out, "{}", v(*a)).unwrap();
-                    }
-                }
                 // For printf, wrap bool/int args with ? "true" : "false" when
                 // the corresponding format specifier is %s.
                 // This handles cases where GIR types `any()`/`all()` results as i64
@@ -6062,7 +6045,6 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 // Ptr arg to a gorget_str_* function that expects Str by value → deref to Str.
                 // Skip self-by-ptr methods (they take GorgetString*) and arg 0 of ptr methods.
                 else if name.starts_with("gorget_str_") && matches!(arg_ty, Some(LirType::Ptr))
-                    && !runtime_arg_by_ptr(emit_name, i)
                     && !str_fn_non_str_arg(name, i) {
                     write!(out, "*(Str*){}", v(*a)).unwrap();
                 }
@@ -6090,7 +6072,6 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 // whose C declarations take Str, not const char*.
                 // Skip void* collection params and runtime-by-ptr params.
                 else if matches!(arg_ty, Some(LirType::Ptr)) && !is_str_lit
-                    && !runtime_arg_by_ptr(emit_name, i)
                     && !void_params.contains(&i)
                     && ptr_pointee.get(a.0 as usize).and_then(|t| t.as_ref())
                         .map_or(false, |t| is_str_struct(t, module))
@@ -6570,7 +6551,16 @@ fn emit_abi_arg(
             }
             true
         }
-        AbiKind::Opaque | AbiKind::Ptr | AbiKind::Scalar => {
+        AbiKind::Ptr => {
+            // Callee expects a pointer. If arg is a struct, take its address.
+            if is_struct {
+                write!(out, "&{val}").unwrap();
+            } else {
+                write!(out, "{val}").unwrap();
+            }
+            true
+        }
+        AbiKind::Opaque | AbiKind::Scalar => {
             write!(out, "{val}").unwrap();
             true
         }
@@ -8802,9 +8792,9 @@ fn runtime_param_abi(fn_name: &str, param_idx: usize) -> crate::ir::abi::AbiKind
     use crate::ir::abi::AbiKind;
     if takes_cstr_for_str_param(fn_name, param_idx) {
         AbiKind::CStr
+    } else if runtime_arg_by_ptr(fn_name, param_idx) {
+        AbiKind::Ptr
     } else {
-        // All other params (runtime_arg_by_ptr, collection void params, scalars)
-        // are handled by existing emit_coerced_arg logic.
         AbiKind::Auto
     }
 }
