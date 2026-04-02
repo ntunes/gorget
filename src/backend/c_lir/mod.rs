@@ -6005,9 +6005,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 }
                 // String literal arg to a gorget_str_* or Dict/Set inline function → Str wrap.
                 // Skip if ext_params says this arg is not a Str type (e.g. gorget_str_join arg 1 = GorgetArray).
-                // Also wrap for any extern function whose declared param at position i is Str
-                // (handles GL, SDL, and other runtime functions generically).
-                // Skip functions that actually take const char* at the C level (takes_cstr_for_str_param).
+                // Also wrap for any extern function whose declared param at position i is Str.
                 else if is_str_lit && trait_str_arg_positions.contains(&i) {
                     // StrLit to trait box method. Check wrapper param type:
                     // Ptr (void*) → &(Str){} address. Struct(Str) → gorget_str_from_literal value.
@@ -6019,7 +6017,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     }
                 }
                 else if is_str_lit && (name.starts_with("gorget_str_") || force_str_coerce
-                    || (ext_param_is_str(ext_params, i, module) && !takes_cstr_for_str_param(emit_name, i))
+                    || ext_param_is_str(ext_params, i, module)
                     || runtime_fn_str_param(emit_name, i))
                     && !str_fn_non_str_arg(name, i) {
                     write!(out, "gorget_str_from_literal({}, strlen({}))", v(*a), v(*a)).unwrap();
