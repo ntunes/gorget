@@ -92,7 +92,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "io" => None, // file-based
                 "random" => None, // file-based
                 "time" => None, // file-based
-                "collections" => Some(gen_collections_module()),
+                "collections" => None, // file-based
                 "math" => None, // file-based
                 "fmt" => None, // file-based module — loaded via builtin_module_source()
                 "process" => None, // file-based
@@ -413,60 +413,6 @@ fn gen_thread_module() -> Module {
     }
 }
 
-fn gen_collections_module() -> Module {
-    let type_defs: Vec<(&str, usize)> = vec![
-        ("Vector", 1),   // [T]
-        ("Dict", 2), ("HashMap", 2),                   // [K, V]
-        ("Set", 1), ("HashSet", 1),                   // [T]
-        ("Box", 1),                                    // [T]
-        ("File", 0),                                   // no generics
-    ];
-    let mut items: Vec<Spanned<Item>> = type_defs
-        .into_iter()
-        .map(|(name, n_params)| {
-            Spanned::dummy(Item::Struct(StructDef {
-                attributes: vec![],
-                visibility: Visibility::Public,
-                name: Spanned::dummy(name.to_string()),
-                generic_params: if n_params > 0 {
-                    Some(Spanned::dummy(GenericParams {
-                        params: (0..n_params)
-                            .map(|i| {
-                                let param_name = if n_params == 2 && i == 0 {
-                                    "K"
-                                } else if n_params == 2 && i == 1 {
-                                    "V"
-                                } else {
-                                    "T"
-                                };
-                                Spanned::dummy(GenericParam::Type { name: Spanned::dummy(
-                                    param_name.to_string(),
-                                ), bounds: vec![] })
-                            })
-                            .collect(),
-                    }))
-                } else {
-                    None
-                },
-                fields: vec![],
-                doc_comment: None,
-                span: Span::dummy(),
-            }))
-        })
-        .collect();
-
-    // File instance methods — extern bindings (open/create stay hardcoded as static constructors)
-    items.push(equip_block("File", vec![
-        extern_method("read_all", Ownership::MutableBorrow, &[], ty_result(ty_string(), ty_str()), "gorget_file_read_all"),
-        extern_method("write", Ownership::MutableBorrow, &[("content", ty_str())], ty_void(), "gorget_file_write"),
-        extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_file_close"),
-    ]));
-
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
 
 // gen_sdl_module() removed — now file-based at lib/xtd/sdl.gg
 // Retained as comment for history. See git log for original synthetic module.
@@ -486,6 +432,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("conv") => Some(include_str!("../lib/std/conv.gg")),
             Some("process") => Some(include_str!("../lib/std/process.gg")),
             Some("alloc") => Some(include_str!("../lib/std/alloc.gg")),
+            Some("collections") => Some(include_str!("../lib/std/collections.gg")),
             Some("io") => Some(include_str!("../lib/std/io.gg")),
             Some("math") => Some(include_str!("../lib/std/math.gg")),
             Some("os") => Some(include_str!("../lib/std/os.gg")),

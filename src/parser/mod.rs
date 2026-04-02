@@ -908,6 +908,10 @@ impl Parser {
         self.expect_block_start()?;
 
         let mut fields = Vec::new();
+        // Allow `pass` for empty struct bodies (opaque types)
+        if self.match_keyword(Keyword::Pass) {
+            self.consume_newline();
+        }
         while !self.check(&Token::Dedent) && !self.at_end() && !self.at_error_limit() {
             if self.check(&Token::Newline) {
                 self.advance();

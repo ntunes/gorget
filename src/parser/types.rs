@@ -80,20 +80,8 @@ impl Parser {
                     return Ok(Spanned::new(Type::Inferred, start.merge(end)));
                 }
 
-                // Smart pointer types — parse as named types
-                if matches!(
-                    kw,
-                    Keyword::Box
-                        | Keyword::Rc
-                        | Keyword::Arc
-                        | Keyword::Weak
-                        | Keyword::Cell
-                        | Keyword::RefCell
-                        | Keyword::Mutex
-                        | Keyword::RwLock
-                ) {
-                    return self.parse_named_type();
-                }
+                // Smart pointer / concurrency types are now regular identifiers.
+                // They go through Token::Identifier branch below.
 
                 Err(self.error_unexpected("type"))
             }

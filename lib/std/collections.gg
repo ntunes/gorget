@@ -1,0 +1,27 @@
+# std.collections — Collection types and File
+
+struct Vector[T]:
+    pass
+
+struct Dict[K, V]:
+    pass
+
+struct HashMap[K, V]:
+    pass
+
+struct Set[T]:
+    pass
+
+struct HashSet[T]:
+    pass
+
+struct Box[T]:
+    pass
+
+struct File:
+    pass
+
+equip File:
+    extern Result[String, String] read_all() = "gorget_file_read_all"
+    extern void write(String &content) = "gorget_file_write"
+    extern void close() = "gorget_file_close"

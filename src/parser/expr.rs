@@ -516,8 +516,6 @@ impl Parser {
             Token::Keyword(
                 kw @ (Keyword::StringType
                 | Keyword::Some | Keyword::Ok | Keyword::Error
-                | Keyword::Box | Keyword::Rc | Keyword::Arc | Keyword::Weak
-                | Keyword::Cell | Keyword::RefCell | Keyword::Mutex | Keyword::RwLock
                 | Keyword::SelfUpper
                 | Keyword::Int | Keyword::Int8 | Keyword::Int16 | Keyword::Int32 | Keyword::Int64
                 | Keyword::Uint | Keyword::Uint8 | Keyword::Uint16 | Keyword::Uint32 | Keyword::Uint64

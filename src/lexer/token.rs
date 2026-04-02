@@ -310,15 +310,8 @@ pub enum Keyword {
     SelfLower,
     SelfUpper,
 
-    // Smart pointer types
-    Box,
-    Rc,
-    Arc,
-    Weak,
-    Cell,
-    RefCell,
-    Mutex,
-    RwLock,
+    // Smart pointer / concurrency types — demoted to identifiers.
+    // Box, Rc, Arc, Weak, Cell, RefCell, Mutex, RwLock are regular identifiers.
 
     // Error recovery
     Catch,
@@ -370,14 +363,6 @@ impl Keyword {
                 | Keyword::Void
                 | Keyword::Auto
                 | Keyword::SelfUpper
-                | Keyword::Box
-                | Keyword::Rc
-                | Keyword::Arc
-                | Keyword::Weak
-                | Keyword::Cell
-                | Keyword::RefCell
-                | Keyword::Mutex
-                | Keyword::RwLock
         )
     }
 
@@ -459,14 +444,6 @@ impl Keyword {
             Keyword::Extern => "extern",
             Keyword::SelfLower => "self",
             Keyword::SelfUpper => "Self",
-            Keyword::Box => "Box",
-            Keyword::Rc => "Rc",
-            Keyword::Arc => "Arc",
-            Keyword::Weak => "Weak",
-            Keyword::Cell => "Cell",
-            Keyword::RefCell => "RefCell",
-            Keyword::Mutex => "Mutex",
-            Keyword::RwLock => "RwLock",
             Keyword::Catch => "catch",
             Keyword::Move => "move",
             Keyword::Mutable => "mutable",
@@ -560,14 +537,6 @@ impl Keyword {
             "extern" => Some(Keyword::Extern),
             "self" => Some(Keyword::SelfLower),
             "Self" => Some(Keyword::SelfUpper),
-            "Box" => Some(Keyword::Box),
-            "Rc" => Some(Keyword::Rc),
-            "Arc" => Some(Keyword::Arc),
-            "Weak" => Some(Keyword::Weak),
-            "Cell" => Some(Keyword::Cell),
-            "RefCell" => Some(Keyword::RefCell),
-            "Mutex" => Some(Keyword::Mutex),
-            "RwLock" => Some(Keyword::RwLock),
             "catch" => Some(Keyword::Catch),
             "move" => Some(Keyword::Move),
             "mutable" => Some(Keyword::Mutable),
