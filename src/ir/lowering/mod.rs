@@ -721,6 +721,64 @@ pub fn lower_module(
                 }  // if let Some(ref mangled)
             }  // else if !Declaration
         }
+
+        // Handle extern blocks: register each function + derive ABI from block's ABI string.
+        // extern "C": → String params → CStr
+        // extern "Gorget": → String params → GorgetString
+        if let Item::ExternBlock(ext) = &item.node {
+            use crate::ir::abi::AbiKind;
+            let string_abi = match ext.abi.as_ref().map(|a| a.node.as_str()) {
+                Some("C") => AbiKind::CStr,
+                Some("Gorget") => AbiKind::GorgetString,
+                _ => AbiKind::Auto,
+            };
+
+            for func_spanned in &ext.items {
+                let func = &func_spanned.node;
+                let name = &func.name.node;
+
+                let ret_type = ctx.type_mapper.map_ast_type_mut(&func.return_type.node, &mut ctx.type_registry);
+                let param_types: Vec<TypeId> = func.params.iter()
+                    .map(|p| ctx.type_mapper.map_ast_type_mut(&p.node.type_.node, &mut ctx.type_registry))
+                    .collect();
+
+                ctx.fn_sigs.insert(name.clone(), (param_types.clone(), ret_type));
+
+                let param_names: Vec<String> = func.params.iter()
+                    .map(|p| p.node.name.node.clone()).collect();
+                ctx.fn_param_names.insert(name.clone(), param_names);
+
+                let param_ownerships: Vec<ast::Ownership> = func.params.iter()
+                    .map(|p| p.node.ownership.clone()).collect();
+                ctx.fn_param_ownerships.insert(name.clone(), param_ownerships.clone());
+
+                let param_abis: Vec<context::ParamABI> = param_types.iter().zip(param_ownerships.iter())
+                    .map(|(&base_type, ownership)| ctx.compute_param_abi(base_type, ownership.clone()))
+                    .collect();
+                ctx.fn_param_abis.insert(name.clone(), param_abis);
+
+                // Register extern binding: name → C symbol
+                if let FunctionBody::Extern(c_symbol) = &func.body {
+                    ctx.extern_bindings.insert(name.clone(), c_symbol.clone());
+                }
+
+                // Derive ABI kinds from block's ABI string
+                if string_abi != AbiKind::Auto {
+                    let abis: Vec<AbiKind> = param_types.iter().map(|&tid| {
+                        if ctx.type_mapper.is_string_type(tid) {
+                            string_abi
+                        } else {
+                            AbiKind::Auto
+                        }
+                    }).collect();
+                    // Store under both Gorget name and C symbol name
+                    ctx.fn_extern_abi_kinds.insert(name.clone(), abis.clone());
+                    if let FunctionBody::Extern(c_symbol) = &func.body {
+                        ctx.fn_extern_abi_kinds.insert(c_symbol.clone(), abis);
+                    }
+                }
+            }
+        }
     }
 
     // Register monomorphized function signatures
