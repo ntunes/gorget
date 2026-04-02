@@ -13,7 +13,7 @@
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
-- **Extern module ABI declarations — explicit FFI types**: AbiKind pipeline complete. 9 stdlib modules migrated to .gg files (~1750 lines of Rust deleted). blocking qualifier replaces BLOCKING_STDLIB_CALLS. Return ABI plumbed. **Next step**: parse `cstr` as an FFI type in extern blocks. Then: `cstr` params auto-extract .data+\0 from String, `cstr` returns auto-wrap with gorget_str_from_cstr. This replaces the current implicit `extern "C":` String→CStr derivation with explicit FFI types. Removes need for is_cstr_returning_fn whitelist. Enables Result wrappers in pure Gorget (extern returns raw + error-check fn). See `docs/internals/extern-modules.md`. [updated: 2026-04-02]
+- **Extern module ABI declarations — 13 modules migrated**: AbiKind pipeline complete. Explicit `cstr` FFI type for params AND returns. `blocking` qualifier replaces BLOCKING_STDLIB_CALLS. Return ABI (cstr → gorget_str_from_cstr) works. Gorget Result wrappers proven (std.conv parse_int). 13 modules migrated to .gg (-1614 lines from stdlib.rs). Remaining 14 modules blocked by: out-param codegen (compress, image, audio), complex equip blocks (sync, thread, collections, alloc, regex, socket, tls, udp, crypto, channel), or pointer-return Result pattern (process). See `docs/internals/extern-modules.md`. [updated: 2026-04-02]
 
 - **Trait-bounded generic functions don't monomorphize**: `void print_sum[Summable T](T val)` — linker error. Core language feature gap. [added: 2026-03-23]
 
