@@ -1,0 +1,162 @@
+# xtd.sdl -- SDL2 bindings (window, renderer, textures, fonts, events, timing)
+#
+# All functions delegate to gorget_sdl_* C runtime wrappers.
+
+# ── Opaque Handle Types ──────────────────────────────────
+
+struct SDLWindow:
+    int _handle
+
+struct SDLRenderer:
+    int _handle
+
+struct SDLTexture:
+    int _handle
+
+struct SDLFont:
+    int _handle
+
+# ── SDLEvent (user-visible fields) ───────────────────────
+
+struct SDLEvent:
+    int event_type
+    int key_code
+    int mouse_x
+    int mouse_y
+    int mouse_button
+
+# ── Constants ────────────────────────────────────────────
+
+# Init flags
+const int SDL_INIT_VIDEO = 32
+const int SDL_INIT_AUDIO = 16
+const int SDL_INIT_EVERYTHING = 29233
+
+# Event types
+const int SDL_QUIT = 256
+const int SDL_KEYDOWN = 768
+const int SDL_KEYUP = 769
+const int SDL_MOUSEMOTION = 1024
+const int SDL_MOUSEBUTTONDOWN = 1025
+const int SDL_MOUSEBUTTONUP = 1026
+
+# Key codes
+const int SDLK_ESCAPE = 27
+const int SDLK_SPACE = 32
+const int SDLK_RETURN = 13
+const int SDLK_LEFT = 1073741904
+const int SDLK_RIGHT = 1073741903
+const int SDLK_UP = 1073741906
+const int SDLK_DOWN = 1073741905
+const int SDLK_a = 97
+const int SDLK_b = 98
+const int SDLK_c = 99
+const int SDLK_d = 100
+const int SDLK_e = 101
+const int SDLK_f = 102
+const int SDLK_g = 103
+const int SDLK_h = 104
+const int SDLK_i = 105
+const int SDLK_j = 106
+const int SDLK_k = 107
+const int SDLK_l = 108
+const int SDLK_m = 109
+const int SDLK_n = 110
+const int SDLK_o = 111
+const int SDLK_p = 112
+const int SDLK_q = 113
+const int SDLK_r = 114
+const int SDLK_s = 115
+const int SDLK_t = 116
+const int SDLK_u = 117
+const int SDLK_v = 118
+const int SDLK_w = 119
+const int SDLK_x = 120
+const int SDLK_y = 121
+const int SDLK_z = 122
+
+# Window flags
+const int SDL_WINDOW_SHOWN = 4
+const int SDL_WINDOW_RESIZABLE = 32
+const int SDL_WINDOW_FULLSCREEN = 1
+const int SDL_WINDOW_OPENGL = 2
+const int SDL_WINDOW_BORDERLESS = 16
+const int SDL_WINDOW_INPUT_GRABBED = 256
+
+# Renderer flags
+const int SDL_RENDERER_ACCELERATED = 2
+const int SDL_RENDERER_PRESENTVSYNC = 4
+
+# ── SDL Functions (C ABI) ────────────────────────────────
+
+extern "C":
+    # Lifecycle
+    extern int sdl_init(int flags) = "gorget_sdl_init"
+    extern void sdl_quit() = "gorget_sdl_quit"
+
+    # Window
+    extern SDLWindow sdl_create_window(String title, int w, int h, int flags) = "gorget_sdl_create_window"
+    extern SDLWindow sdl_create_window_try(String title, int w, int h, int flags) = "gorget_sdl_create_window_try"
+    extern bool sdl_window_is_null(SDLWindow win) = "gorget_sdl_window_is_null"
+    extern int sdl_window_to_handle(SDLWindow win) = "gorget_sdl_window_to_handle"
+    extern String sdl_get_error() = "gorget_sdl_get_error"
+    extern void sdl_destroy_window(SDLWindow win) = "gorget_sdl_destroy_window"
+    extern int sdl_get_window_width(SDLWindow win) = "gorget_sdl_get_window_width"
+    extern int sdl_get_window_height(SDLWindow win) = "gorget_sdl_get_window_height"
+
+    # Renderer
+    extern SDLRenderer sdl_create_renderer(SDLWindow win, int flags) = "gorget_sdl_create_renderer"
+    extern SDLRenderer sdl_create_renderer_try(SDLWindow win, int flags) = "gorget_sdl_create_renderer_try"
+    extern bool sdl_renderer_is_null(SDLRenderer ren) = "gorget_sdl_renderer_is_null"
+    extern void sdl_destroy_renderer(SDLRenderer r) = "gorget_sdl_destroy_renderer"
+    extern void sdl_set_draw_color(SDLRenderer r, int red, int green, int blue, int alpha) = "gorget_sdl_set_draw_color"
+    extern void sdl_clear(SDLRenderer r) = "gorget_sdl_clear"
+    extern void sdl_present(SDLRenderer r) = "gorget_sdl_present"
+    extern void sdl_draw_rect(SDLRenderer r, int x, int y, int w, int h) = "gorget_sdl_draw_rect"
+    extern void sdl_fill_rect(SDLRenderer r, int x, int y, int w, int h) = "gorget_sdl_fill_rect"
+
+    # Drawing
+    extern void sdl_draw_line(SDLRenderer r, int x1, int y1, int x2, int y2) = "gorget_sdl_draw_line"
+    extern void sdl_draw_point(SDLRenderer r, int x, int y) = "gorget_sdl_draw_point"
+    extern void sdl_set_blend_mode(SDLRenderer r, int mode) = "gorget_sdl_set_blend_mode"
+
+    # Textures (SDL2_image)
+    extern SDLTexture sdl_load_texture(SDLRenderer r, String path) = "gorget_sdl_load_texture"
+    extern void sdl_destroy_texture(SDLTexture t) = "gorget_sdl_destroy_texture"
+    extern void sdl_render_texture(SDLRenderer r, SDLTexture t, int x, int y) = "gorget_sdl_render_texture"
+    extern void sdl_render_texture_sized(SDLRenderer r, SDLTexture t, int x, int y, int w, int h) = "gorget_sdl_render_texture_sized"
+    extern int sdl_texture_width(SDLTexture t) = "gorget_sdl_texture_width"
+    extern int sdl_texture_height(SDLTexture t) = "gorget_sdl_texture_height"
+    extern void sdl_set_texture_alpha(SDLTexture t, int alpha) = "gorget_sdl_set_texture_alpha"
+
+    # Text (SDL2_ttf)
+    extern SDLFont sdl_load_font(String path, int size) = "gorget_sdl_load_font"
+    extern void sdl_close_font(SDLFont f) = "gorget_sdl_close_font"
+    extern SDLTexture sdl_render_text(SDLRenderer r, SDLFont f, String text, int red, int green, int blue) = "gorget_sdl_render_text"
+    extern void sdl_draw_text(SDLRenderer r, SDLFont f, String text, int x, int y, int red, int green, int blue) = "gorget_sdl_draw_text"
+    extern int sdl_text_width(SDLFont f, String text) = "gorget_sdl_text_width"
+    extern int sdl_text_height(SDLFont f, String text) = "gorget_sdl_text_height"
+
+    # Events
+    extern SDLEvent sdl_poll_event() = "gorget_sdl_poll_event"
+    extern bool sdl_has_event() = "gorget_sdl_has_event"
+
+    # Timing
+    extern void sdl_delay(int ms) = "gorget_sdl_delay"
+    extern int sdl_get_ticks() = "gorget_sdl_get_ticks"
+    extern int sdl_get_performance_counter() = "gorget_sdl_get_performance_counter"
+
+    # Screen info
+    extern int sdl_get_display_width() = "gorget_sdl_get_display_width"
+    extern int sdl_get_display_height() = "gorget_sdl_get_display_height"
+
+    # Mouse capture and relative mode (for FPS controls)
+    extern void sdl_set_relative_mouse_mode(int enabled) = "gorget_sdl_set_relative_mouse_mode"
+    extern void sdl_show_cursor(int toggle) = "gorget_sdl_show_cursor"
+    extern SDLEvent sdl_get_relative_mouse_state() = "gorget_sdl_get_relative_mouse_state"
+    extern void sdl_warp_mouse_in_window(SDLWindow window, int x, int y) = "gorget_sdl_warp_mouse_in_window"
+    extern SDLEvent sdl_get_mouse_state() = "gorget_sdl_get_mouse_state"
+
+    # Text input mode (for console / chat)
+    extern void sdl_start_text_input() = "gorget_sdl_start_text_input"
+    extern void sdl_stop_text_input() = "gorget_sdl_stop_text_input"

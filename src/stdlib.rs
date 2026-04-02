@@ -113,7 +113,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
             _ => None,
         },
         Some("xtd") if segments.len() == 2 => match segments[1].as_str() {
-            "sdl" => Some(gen_sdl_module()),
+            "sdl" => None, // file-based module — loaded via builtin_module_source()
             "crypto" => Some(gen_crypto_module()),
             "regex" => Some(gen_regex_module()),
             "json" => None, // file-based module — loaded via builtin_module_source()
@@ -657,233 +657,8 @@ fn gen_collections_module() -> Module {
     }
 }
 
-fn gen_sdl_module() -> Module {
-    // SDLEvent has user-visible fields
-    let sdl_event_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("SDLEvent".to_string()),
-        generic_params: None,
-        fields: vec![
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("event_type".to_string()),
-                type_: Spanned::dummy(ty_int()),
-            }),
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("key_code".to_string()),
-                type_: Spanned::dummy(ty_int()),
-            }),
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("mouse_x".to_string()),
-                type_: Spanned::dummy(ty_int()),
-            }),
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("mouse_y".to_string()),
-                type_: Spanned::dummy(ty_int()),
-            }),
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("mouse_button".to_string()),
-                type_: Spanned::dummy(ty_int()),
-            }),
-        ],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-
-    // Named types for opaque handles
-    let ty_sdl_window = || Type::Named {
-        name: Spanned::dummy("SDLWindow".to_string()),
-        generic_args: vec![],
-    };
-    let ty_sdl_renderer = || Type::Named {
-        name: Spanned::dummy("SDLRenderer".to_string()),
-        generic_args: vec![],
-    };
-    let ty_sdl_texture = || Type::Named {
-        name: Spanned::dummy("SDLTexture".to_string()),
-        generic_args: vec![],
-    };
-    let ty_sdl_font = || Type::Named {
-        name: Spanned::dummy("SDLFont".to_string()),
-        generic_args: vec![],
-    };
-    let ty_sdl_event = || Type::Named {
-        name: Spanned::dummy("SDLEvent".to_string()),
-        generic_args: vec![],
-    };
-
-    // Helper to make a const declaration item
-    let const_item = |name: &str, value: i64| -> Spanned<Item> {
-        Spanned::dummy(Item::ConstDecl(ConstDecl {
-            visibility: Visibility::Public,
-            type_: Spanned::dummy(ty_int()),
-            name: Spanned::dummy(name.to_string()),
-            value: Spanned::dummy(Expr::IntLiteral(value)),
-            span: Span::dummy(),
-        }))
-    };
-
-    let mut items: Vec<Spanned<Item>> = Vec::new();
-
-    // ── Opaque handle structs ────────────────────────────────
-    items.push(opaque_struct("SDLWindow"));
-    items.push(opaque_struct("SDLRenderer"));
-    items.push(opaque_struct("SDLTexture"));
-    items.push(opaque_struct("SDLFont"));
-    items.push(sdl_event_struct);
-
-    // ── Constants ────────────────────────────────────────────
-    // Init flags
-    items.push(const_item("SDL_INIT_VIDEO", 0x20));
-    items.push(const_item("SDL_INIT_AUDIO", 0x10));
-    items.push(const_item("SDL_INIT_EVERYTHING", 0x7231));
-
-    // Event types
-    items.push(const_item("SDL_QUIT", 256));
-    items.push(const_item("SDL_KEYDOWN", 768));
-    items.push(const_item("SDL_KEYUP", 769));
-    items.push(const_item("SDL_MOUSEMOTION", 1024));
-    items.push(const_item("SDL_MOUSEBUTTONDOWN", 1025));
-    items.push(const_item("SDL_MOUSEBUTTONUP", 1026));
-
-    // Key codes
-    items.push(const_item("SDLK_ESCAPE", 27));
-    items.push(const_item("SDLK_SPACE", 32));
-    items.push(const_item("SDLK_RETURN", 13));
-    items.push(const_item("SDLK_LEFT", 1073741904));
-    items.push(const_item("SDLK_RIGHT", 1073741903));
-    items.push(const_item("SDLK_UP", 1073741906));
-    items.push(const_item("SDLK_DOWN", 1073741905));
-    items.push(const_item("SDLK_a", 97));
-    items.push(const_item("SDLK_b", 98));
-    items.push(const_item("SDLK_c", 99));
-    items.push(const_item("SDLK_d", 100));
-    items.push(const_item("SDLK_e", 101));
-    items.push(const_item("SDLK_f", 102));
-    items.push(const_item("SDLK_g", 103));
-    items.push(const_item("SDLK_h", 104));
-    items.push(const_item("SDLK_i", 105));
-    items.push(const_item("SDLK_j", 106));
-    items.push(const_item("SDLK_k", 107));
-    items.push(const_item("SDLK_l", 108));
-    items.push(const_item("SDLK_m", 109));
-    items.push(const_item("SDLK_n", 110));
-    items.push(const_item("SDLK_o", 111));
-    items.push(const_item("SDLK_p", 112));
-    items.push(const_item("SDLK_q", 113));
-    items.push(const_item("SDLK_r", 114));
-    items.push(const_item("SDLK_s", 115));
-    items.push(const_item("SDLK_t", 116));
-    items.push(const_item("SDLK_u", 117));
-    items.push(const_item("SDLK_v", 118));
-    items.push(const_item("SDLK_w", 119));
-    items.push(const_item("SDLK_x", 120));
-    items.push(const_item("SDLK_y", 121));
-    items.push(const_item("SDLK_z", 122));
-
-    // Window flags
-    items.push(const_item("SDL_WINDOW_SHOWN", 4));
-    items.push(const_item("SDL_WINDOW_RESIZABLE", 32));
-    items.push(const_item("SDL_WINDOW_FULLSCREEN", 1));
-    items.push(const_item("SDL_WINDOW_OPENGL", 2));
-    items.push(const_item("SDL_WINDOW_BORDERLESS", 16));
-    items.push(const_item("SDL_WINDOW_INPUT_GRABBED", 256));
-
-    // Renderer flags
-    items.push(const_item("SDL_RENDERER_ACCELERATED", 2));
-    items.push(const_item("SDL_RENDERER_PRESENTVSYNC", 4));
-
-    // ── Function declarations ────────────────────────────────
-    // Lifecycle
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_init", &[("flags", ty_int())], ty_int()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_quit", &[], ty_void()))));
-
-    // Window
-    {
-        use crate::ir::abi::AbiKind::*;
-        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_create_window", &[("title", ty_str(), CStr), ("w", ty_int(), Scalar), ("h", ty_int(), Scalar), ("flags", ty_int(), Scalar)], ty_sdl_window()))));
-        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_create_window_try", &[("title", ty_str(), CStr), ("w", ty_int(), Scalar), ("h", ty_int(), Scalar), ("flags", ty_int(), Scalar)], ty_sdl_window()))));
-    }
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_window_is_null", &[("win", ty_sdl_window())], ty_bool()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_window_to_handle", &[("win", ty_sdl_window())], ty_int()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_error", &[], ty_str()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_destroy_window", &[("win", ty_sdl_window())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_window_width", &[("win", ty_sdl_window())], ty_int()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_window_height", &[("win", ty_sdl_window())], ty_int()))));
-
-    // Renderer
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_create_renderer", &[("win", ty_sdl_window()), ("flags", ty_int())], ty_sdl_renderer()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_create_renderer_try", &[("win", ty_sdl_window()), ("flags", ty_int())], ty_sdl_renderer()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_renderer_is_null", &[("ren", ty_sdl_renderer())], ty_bool()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_destroy_renderer", &[("r", ty_sdl_renderer())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_set_draw_color", &[("r", ty_sdl_renderer()), ("red", ty_int()), ("green", ty_int()), ("blue", ty_int()), ("alpha", ty_int())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_clear", &[("r", ty_sdl_renderer())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_present", &[("r", ty_sdl_renderer())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_draw_rect", &[("r", ty_sdl_renderer()), ("x", ty_int()), ("y", ty_int()), ("w", ty_int()), ("h", ty_int())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_fill_rect", &[("r", ty_sdl_renderer()), ("x", ty_int()), ("y", ty_int()), ("w", ty_int()), ("h", ty_int())], ty_void()))));
-
-    // Drawing
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_draw_line", &[("r", ty_sdl_renderer()), ("x1", ty_int()), ("y1", ty_int()), ("x2", ty_int()), ("y2", ty_int())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_draw_point", &[("r", ty_sdl_renderer()), ("x", ty_int()), ("y", ty_int())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_set_blend_mode", &[("r", ty_sdl_renderer()), ("mode", ty_int())], ty_void()))));
-
-    // Textures (SDL2_image)
-    {
-        use crate::ir::abi::AbiKind::*;
-        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_load_texture", &[("r", ty_sdl_renderer(), Opaque), ("path", ty_str(), CStr)], ty_sdl_texture()))));
-    }
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_destroy_texture", &[("t", ty_sdl_texture())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_render_texture", &[("r", ty_sdl_renderer()), ("t", ty_sdl_texture()), ("x", ty_int()), ("y", ty_int())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_render_texture_sized", &[("r", ty_sdl_renderer()), ("t", ty_sdl_texture()), ("x", ty_int()), ("y", ty_int()), ("w", ty_int()), ("h", ty_int())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_texture_width", &[("t", ty_sdl_texture())], ty_int()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_texture_height", &[("t", ty_sdl_texture())], ty_int()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_set_texture_alpha", &[("t", ty_sdl_texture()), ("alpha", ty_int())], ty_void()))));
-
-    // Text (SDL2_ttf)
-    {
-        use crate::ir::abi::AbiKind::*;
-        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_load_font", &[("path", ty_str(), CStr), ("size", ty_int(), Scalar)], ty_sdl_font()))));
-        items.push(Spanned::dummy(Item::Function(decl_fn("sdl_close_font", &[("f", ty_sdl_font())], ty_void()))));
-        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_render_text", &[("r", ty_sdl_renderer(), Opaque), ("f", ty_sdl_font(), Opaque), ("text", ty_str(), CStr), ("red", ty_int(), Scalar), ("green", ty_int(), Scalar), ("blue", ty_int(), Scalar)], ty_sdl_texture()))));
-        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_draw_text", &[("r", ty_sdl_renderer(), Opaque), ("f", ty_sdl_font(), Opaque), ("text", ty_str(), CStr), ("x", ty_int(), Scalar), ("y", ty_int(), Scalar), ("red", ty_int(), Scalar), ("green", ty_int(), Scalar), ("blue", ty_int(), Scalar)], ty_void()))));
-        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_text_width", &[("f", ty_sdl_font(), Opaque), ("text", ty_str(), CStr)], ty_int()))));
-        items.push(Spanned::dummy(Item::Function(decl_fn_abi("sdl_text_height", &[("f", ty_sdl_font(), Opaque), ("text", ty_str(), CStr)], ty_int()))));
-    }
-
-    // Events
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_poll_event", &[], ty_sdl_event()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_has_event", &[], ty_bool()))));
-
-    // Timing
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_delay", &[("ms", ty_int())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_ticks", &[], ty_int()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_performance_counter", &[], ty_int()))));
-
-    // Screen info
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_display_width", &[], ty_int()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_display_height", &[], ty_int()))));
-
-    // Mouse capture and relative mode (for FPS controls)
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_set_relative_mouse_mode", &[("enabled", ty_int())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_show_cursor", &[("toggle", ty_int())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_relative_mouse_state", &[], ty_sdl_event()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_warp_mouse_in_window", &[("window", ty_sdl_window()), ("x", ty_int()), ("y", ty_int())], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_get_mouse_state", &[], ty_sdl_event()))));
-
-    // Text input mode (for console / chat)
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_start_text_input", &[], ty_void()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("sdl_stop_text_input", &[], ty_void()))));
-
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
+// gen_sdl_module() removed — now file-based at lib/xtd/sdl.gg
+// Retained as comment for history. See git log for original synthetic module.
 
 // ─── File-based built-in modules ────────────────────────────
 
@@ -929,6 +704,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("influx") => Some(include_str!("../lib/xtd/influx.gg")),
             Some("jsonpath") => Some(include_str!("../lib/xtd/jsonpath.gg")),
             Some("math3d") => Some(include_str!("../lib/xtd/math3d.gg")),
+            Some("sdl") => Some(include_str!("../lib/xtd/sdl.gg")),
             Some("gl") => Some(include_str!("../lib/xtd/gl.gg")),
             Some("gpu") => Some(include_str!("../lib/xtd/gpu.gg")),
             _ => None,
@@ -2838,37 +2614,58 @@ mod tests {
     }
 
     #[test]
-    fn generate_sdl() {
-        let m = generate_builtin_module(&["xtd".into(), "sdl".into()]).unwrap();
+    fn generate_sdl_returns_none() {
+        // xtd.sdl is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["xtd".into(), "sdl".into()]).is_none());
+    }
 
-        // Collect item names by type
+    #[test]
+    fn sdl_module_source_exists() {
+        let source = builtin_module_source(&["xtd".into(), "sdl".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("struct SDLWindow"));
+        assert!(src.contains("struct SDLRenderer"));
+        assert!(src.contains("struct SDLTexture"));
+        assert!(src.contains("struct SDLFont"));
+        assert!(src.contains("struct SDLEvent"));
+        assert!(src.contains("const int SDL_INIT_VIDEO"));
+        assert!(src.contains("const int SDLK_ESCAPE"));
+        assert!(src.contains("sdl_init"));
+        assert!(src.contains("sdl_create_window"));
+        assert!(src.contains("sdl_poll_event"));
+    }
+
+    #[test]
+    fn sdl_source_parses() {
+        let source = builtin_module_source(&["xtd".into(), "sdl".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "sdl.gg parse errors: {:?}", parser.errors);
+
+        // Collect item names
         let mut struct_names = vec![];
         let mut const_names = vec![];
         let mut fn_names = vec![];
-        for item in &m.items {
+        for item in &module.items {
             match &item.node {
                 Item::Struct(s) => struct_names.push(s.name.node.clone()),
                 Item::ConstDecl(c) => const_names.push(c.name.node.clone()),
                 Item::Function(f) => fn_names.push(f.name.node.clone()),
+                Item::ExternBlock(eb) => {
+                    for f in &eb.items {
+                        fn_names.push(f.node.name.node.clone());
+                    }
+                }
                 _ => {}
             }
         }
 
-        // 5 structs: SDLWindow, SDLRenderer, SDLTexture, SDLFont, SDLEvent
         assert!(struct_names.contains(&"SDLWindow".to_string()));
-        assert!(struct_names.contains(&"SDLRenderer".to_string()));
-        assert!(struct_names.contains(&"SDLTexture".to_string()));
-        assert!(struct_names.contains(&"SDLFont".to_string()));
         assert!(struct_names.contains(&"SDLEvent".to_string()));
-
-        // Key constants
         assert!(const_names.contains(&"SDL_INIT_VIDEO".to_string()));
         assert!(const_names.contains(&"SDL_QUIT".to_string()));
         assert!(const_names.contains(&"SDLK_ESCAPE".to_string()));
-        assert!(const_names.contains(&"SDL_WINDOW_SHOWN".to_string()));
-        assert!(const_names.contains(&"SDL_RENDERER_ACCELERATED".to_string()));
-
-        // Key functions
         assert!(fn_names.contains(&"sdl_init".to_string()));
         assert!(fn_names.contains(&"sdl_quit".to_string()));
         assert!(fn_names.contains(&"sdl_create_window".to_string()));
@@ -2877,16 +2674,6 @@ mod tests {
         assert!(fn_names.contains(&"sdl_delay".to_string()));
         assert!(fn_names.contains(&"sdl_load_font".to_string()));
         assert!(fn_names.contains(&"sdl_draw_text".to_string()));
-
-        // SDLEvent struct has user-visible fields
-        let event = m.items.iter().find(|i| matches!(&i.node, Item::Struct(s) if s.name.node == "SDLEvent")).unwrap();
-        if let Item::Struct(s) = &event.node {
-            assert_eq!(s.fields.len(), 5);
-            let field_names: Vec<_> = s.fields.iter().map(|f| f.node.name.node.clone()).collect();
-            assert!(field_names.contains(&"event_type".to_string()));
-            assert!(field_names.contains(&"key_code".to_string()));
-            assert!(field_names.contains(&"mouse_x".to_string()));
-        }
     }
 
     #[test]

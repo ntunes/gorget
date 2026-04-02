@@ -788,7 +788,8 @@ mod tests {
         let source = make_test_function(&mut reg);
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
+        let yield_fns = rustc_hash::FxHashSet::default();
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg, &yield_fns).func;
         assert_eq!(result.name, "__shared_async_process");
     }
 
@@ -799,7 +800,8 @@ mod tests {
         let specs = make_shared_arg_spec(&mut reg);
         let wrapper_type = specs[0].wrapper_type;
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
+        let yield_fns = rustc_hash::FxHashSet::default();
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg, &yield_fns).func;
 
         // param 0 should now be the wrapper type
         assert_eq!(result.params[0], wrapper_type);
@@ -816,7 +818,8 @@ mod tests {
         let orig_locals = source.locals.len();
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
+        let yield_fns = rustc_hash::FxHashSet::default();
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg, &yield_fns).func;
 
         // Should have 4 new locals: mutex_val, guard, guard_ptr, facade
         assert_eq!(result.locals.len(), orig_locals + 4);
@@ -828,7 +831,8 @@ mod tests {
         let source = make_test_function(&mut reg);
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
+        let yield_fns = rustc_hash::FxHashSet::default();
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg, &yield_fns).func;
 
         // Block 0 should start with preamble: get, lock, borrow, get_ptr (4 instructions)
         let bb0 = &result.blocks[0];
@@ -865,7 +869,8 @@ mod tests {
         let source = make_test_function(&mut reg);
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
+        let yield_fns = rustc_hash::FxHashSet::default();
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg, &yield_fns).func;
 
         let bb0 = &result.blocks[0];
 
@@ -897,7 +902,8 @@ mod tests {
         let source = make_test_function(&mut reg);
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
+        let yield_fns = rustc_hash::FxHashSet::default();
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg, &yield_fns).func;
 
         let bb0 = &result.blocks[0];
         assert!(matches!(&bb0.terminator, Some(Terminator::Return(_))));
@@ -917,7 +923,8 @@ mod tests {
         let source = make_test_function(&mut reg);
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
+        let yield_fns = rustc_hash::FxHashSet::default();
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg, &yield_fns).func;
 
         // The original body used LocalId(1) for counter. After remapping, all references
         // should point to the facade local instead. Verify that no instruction in the
@@ -941,7 +948,8 @@ mod tests {
         let source = make_test_function(&mut reg);
         let specs = make_shared_arg_spec(&mut reg);
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
+        let yield_fns = rustc_hash::FxHashSet::default();
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg, &yield_fns).func;
 
         for (i, block) in result.blocks.iter().enumerate() {
             assert_eq!(
@@ -991,7 +999,8 @@ mod tests {
             },
         ];
 
-        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg).func;
+        let yield_fns = rustc_hash::FxHashSet::default();
+        let result = inject_shared_token_management(&source, "__shared_async_process", &specs, &mut reg, &yield_fns).func;
 
         // Should have 8 new locals (4 per shared param)
         assert_eq!(result.locals.len(), source.locals.len() + 8);
