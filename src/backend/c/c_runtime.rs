@@ -6285,6 +6285,8 @@ static const double GORGET_E = 2.718281828459045;
 static const double GORGET_TAU = 6.283185307179586;
 #define GORGET_INFINITY INFINITY
 #define GORGET_NAN NAN
+static inline double gorget_math_infinity(void) { return INFINITY; }
+static inline double gorget_math_nan(void) { return NAN; }
 
 "#;
 

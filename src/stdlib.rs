@@ -91,7 +91,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "random" => None, // file-based
                 "time" => None, // file-based
                 "collections" => Some(gen_collections_module()),
-                "math" => Some(gen_math_module()),
+                "math" => None, // file-based
                 "fmt" => None, // file-based module — loaded via builtin_module_source()
                 "process" => Some(gen_process_module()),
                 "bytes" => None, // file-based module — loaded via builtin_module_source()
@@ -163,52 +163,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
 /// async_sleep(ms: int) suspends the current task for `ms` milliseconds using the reactor.
 // gen_async_module — migrated to lib/std/async.gg
 
-fn gen_math_module() -> Module {
-    let float_const = |name: &str, value: f64| -> Spanned<Item> {
-        Spanned::dummy(Item::ConstDecl(ConstDecl {
-            visibility: Visibility::Public,
-            type_: Spanned::dummy(ty_float()),
-            name: Spanned::dummy(name.to_string()),
-            value: Spanned::dummy(Expr::FloatLiteral(value)),
-            span: Span::dummy(),
-        }))
-    };
-    let fn_item = |f: FunctionDef| -> Spanned<Item> {
-        Spanned::dummy(Item::Function(f))
-    };
-    let items = vec![
-        // Constants
-        float_const("PI", std::f64::consts::PI),
-        float_const("E", std::f64::consts::E),
-        float_const("TAU", std::f64::consts::TAU),
-        float_const("INFINITY", f64::INFINITY),
-        float_const("NAN", f64::NAN),
-        // Integer math
-        fn_item(decl_fn("abs", &[("x", ty_int())], ty_int())),
-        fn_item(decl_fn("min", &[("a", ty_int()), ("b", ty_int())], ty_int())),
-        fn_item(decl_fn("max", &[("a", ty_int()), ("b", ty_int())], ty_int())),
-        // Float math
-        fn_item(decl_fn("sqrt", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("pow", &[("base", ty_float()), ("exp", ty_float())], ty_float())),
-        fn_item(decl_fn("floor", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("ceil", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("round", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("log", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("log2", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("log10", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("sin", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("cos", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("tan", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("asin", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("acos", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("atan", &[("x", ty_float())], ty_float())),
-        fn_item(decl_fn("atan2", &[("y", ty_float()), ("x", ty_float())], ty_float())),
-    ];
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
+// gen_math_module — migrated to lib/std/math.gg
 
 fn gen_process_module() -> Module {
     let exec_result_type = Type::Named {
@@ -604,6 +559,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("time") => Some(include_str!("../lib/std/time.gg")),
             Some("conv") => Some(include_str!("../lib/std/conv.gg")),
             Some("io") => Some(include_str!("../lib/std/io.gg")),
+            Some("math") => Some(include_str!("../lib/std/math.gg")),
             Some("os") => Some(include_str!("../lib/std/os.gg")),
             Some("signal") => Some(include_str!("../lib/std/signal.gg")),
             Some("async") => Some(include_str!("../lib/std/async.gg")),

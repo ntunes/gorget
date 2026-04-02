@@ -1,0 +1,39 @@
+# std.math — Mathematical constants and functions
+
+# ── Constants ────────────────────────────────────────────────
+
+const float PI = 3.141592653589793
+const float E = 2.718281828459045
+const float TAU = 6.283185307179586
+
+extern "C":
+    extern float _math_infinity() = "gorget_math_infinity"
+    extern float _math_nan() = "gorget_math_nan"
+
+# INFINITY and NAN are computed at init time from C math.h
+public float INFINITY = _math_infinity()
+public float NAN = _math_nan()
+
+# ── Integer math ─────────────────────────────────────────────
+
+int abs(int x)
+int min(int a, int b)
+int max(int a, int b)
+
+# ── Float math ───────────────────────────────────────────────
+
+float sqrt(float x)
+float pow(float base, float exp)
+float floor(float x)
+float ceil(float x)
+float round(float x)
+float log(float x)
+float log2(float x)
+float log10(float x)
+float sin(float x)
+float cos(float x)
+float tan(float x)
+float asin(float x)
+float acos(float x)
+float atan(float x)
+float atan2(float y, float x)
