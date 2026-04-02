@@ -442,6 +442,8 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
         // Regex
         if has(&|n| n.starts_with("gorget_regex_") || n.starts_with("gorget_match_")) {
             out.push_str(crate::backend::c::c_runtime::REGEX_RUNTIME);
+            // Forward-declare gorget_array_new for regex_split_pat.
+            out.push_str("static inline GorgetArray gorget_array_new(size_t elem_size);\n");
             // Convenience wrappers for pattern-based regex operations.
             out.push_str(r#"
 static GorgetRegexMatch gorget_regex_find_pat(const char* pattern, const char* subject) {

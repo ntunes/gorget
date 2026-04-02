@@ -1,0 +1,63 @@
+# xtd.regex — Regular expressions (PCRE2)
+
+from std.collections import Vector
+
+struct Regex:
+    pass
+
+struct Match:
+    pass
+
+# ── Raw C externs ────────────────────────────────────────────
+
+extern "C":
+    extern Result[Regex, String] _regex_compile_raw(cstr pattern, cstr flags) = "gorget_regex_compile"
+    extern cstr _regex_last_error() = "gorget_regex_last_error"
+    extern String regex_escape(cstr s) = "gorget_regex_escape"
+
+    # Convenience _pat functions (compile + operate + free in one call)
+    extern bool regex_is_match(cstr pattern, cstr subject) = "gorget_regex_is_match_pat"
+    extern Result[Match, String] regex_find(cstr pattern, cstr subject) = "gorget_regex_find_pat"
+    extern String regex_replace(cstr pattern, cstr subject, cstr replacement) = "gorget_regex_replace_pat"
+
+# ── Gorget wrappers ──────────────────────────────────────────
+
+Result[Regex, String] regex_compile(String pattern):
+    return _regex_compile_raw(pattern, "")
+
+Result[Regex, String] regex_compile_with(String pattern, String flags):
+    return _regex_compile_raw(pattern, flags)
+
+# ── Regex methods (equip with explicit extern symbols) ───────
+
+equip Regex:
+    extern bool is_match(String subject) = "gorget_regex_is_match"
+    extern String replace_all(String subject, String replacement) = "gorget_regex_replace_all"
+    extern int capture_count() = "gorget_regex_capture_count"
+    extern String pattern_str() = "gorget_regex_pattern_str"
+    extern Vector[String] group_names() = "gorget_regex_group_names"
+    # Option/sentinel wrapping handled by codegen (Declaration body)
+    Option[Match] find_at(String subject, int pos)
+    Vector[Match] find_all(String subject)
+    String replace(String subject, String replacement)
+    Vector[String] splitn(String subject, int limit)
+    Option[Match] fullmatch(String subject)
+
+    # Gorget wrappers that provide default args
+    Option[Match] find(self, String subject):
+        return self.find_at(subject, 0)
+
+    Vector[String] split(self, String subject):
+        return self.splitn(subject, 0)
+
+# ── Match methods ────────────────────────────────────────────
+
+equip Match:
+    extern String text() = "gorget_regex_match_text"
+    extern int start() = "gorget_regex_match_start"
+    extern int end_pos() = "gorget_regex_match_end"
+    extern int group_count() = "gorget_regex_match_group_count"
+    extern Vector[String] groups() = "gorget_regex_match_groups"
+    # Option-returning methods (codegen intercepts)
+    Option[String] group(int n)
+    Option[String] group_by_name(String name)

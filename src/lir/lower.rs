@@ -1332,13 +1332,7 @@ impl<'a> FuncLowering<'a> {
                             }
                         } else { emit_name }
                     } else { emit_name };
-                    // regex_compile (without flags) needs a NULL second arg
                     let mut lir_args = lir_args;
-                    if emit_name == "gorget_regex_compile" && !func.contains("compile_with") {
-                        let null_val = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_val });
-                        lir_args.push(null_val);
-                    }
                     // Type-aware dispatch for bare `len` free function
                     let mut len_handled = false;
                     let emit_name = if func == "len" && args.len() == 1 {
@@ -1422,10 +1416,6 @@ impl<'a> FuncLowering<'a> {
                         };
                     }
                 }
-                // regex_compile (without flags) needs a NULL second arg
-                let regex_compile_needs_null = emit_name == "gorget_regex_compile"
-                    && !func.contains("compile_with");
-
                 let is_printf_like = emit_name == "printf" || emit_name == "fprintf_stderr"
                     || emit_name == "gorget_string_format" || emit_name == "gorget_string_format_alloc"
                     || emit_name == "snprintf" || emit_name == "sprintf";
@@ -1462,18 +1452,7 @@ impl<'a> FuncLowering<'a> {
                     }).collect()
                     }
                 };
-                // Inject NULL flags for regex_compile (not compile_with)
                 let mut lir_args = lir_args;
-                if regex_compile_needs_null {
-                    let null_val = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_val });
-                    lir_args.push(null_val);
-                }
-                // gorget_regex_find/split take 3 args but GIR only passes 2 — inject default 0
-                if (emit_name == "gorget_regex_find" || emit_name == "gorget_regex_split") && lir_args.len() == 2 {
-                    let zero_val = self.emit_i64_const(bb, 0);
-                    lir_args.push(zero_val);
-                }
                 self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
                 }
             }
@@ -3617,14 +3596,14 @@ impl<'a> FuncLowering<'a> {
     /// by preferring more specific types (e.g., Struct over Ptr).
     fn ensure_extern(&mut self, name: &str, arg_types: &[LirType], ret_ty: &LirType) {
         // Look up extern ABI kinds from module declarations.
-        // Try both the C name and the Gorget name (strip gorget_ prefix).
+        // Look up extern ABI by exact name only (no prefix stripping —
+        // it causes collisions, e.g. gorget_regex_is_match → regex_is_match
+        // which is a different function).
         let abi_tags: Vec<crate::ir::abi::AbiKind> = self.extern_abi_kinds.get(name)
-            .or_else(|| name.strip_prefix("gorget_").and_then(|stripped| self.extern_abi_kinds.get(stripped)))
             .cloned()
             .unwrap_or_default();
 
         let ret_abi: crate::ir::abi::AbiKind = self.return_abi_kinds.get(name)
-            .or_else(|| name.strip_prefix("gorget_").and_then(|stripped| self.return_abi_kinds.get(stripped)))
             .copied()
             .unwrap_or_default();
 

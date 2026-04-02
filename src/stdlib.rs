@@ -117,7 +117,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
         Some("xtd") if segments.len() == 2 => match segments[1].as_str() {
             "sdl" => None, // file-based module — loaded via builtin_module_source()
             "crypto" => None, // file-based
-            "regex" => Some(gen_regex_module()),
+            "regex" => None, // file-based
             "json" => None, // file-based module — loaded via builtin_module_source()
             "toml" => None, // file-based module — loaded via builtin_module_source()
             "xml" => None,  // file-based module — loaded via builtin_module_source()
@@ -478,6 +478,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("image") => Some(include_str!("../lib/xtd/image.gg")),
             Some("compress") => Some(include_str!("../lib/xtd/compress.gg")),
             Some("crypto") => Some(include_str!("../lib/xtd/crypto.gg")),
+            Some("regex") => Some(include_str!("../lib/xtd/regex.gg")),
             Some("sdl") => Some(include_str!("../lib/xtd/sdl.gg")),
             Some("gl") => Some(include_str!("../lib/xtd/gl.gg")),
             Some("metal") => Some(include_str!("../lib/xtd/metal.gg")),
@@ -655,62 +656,6 @@ fn opaque_struct(name: &str) -> Spanned<Item> {
 
 // gen_tls_socket_module — migrated to lib/std/tls.gg
 
-fn gen_regex_module() -> Module {
-    let ty_regex = || Type::Named {
-        name: Spanned::dummy("Regex".to_string()),
-        generic_args: vec![],
-    };
-    let ty_match = || Type::Named {
-        name: Spanned::dummy("Match".to_string()),
-        generic_args: vec![],
-    };
-    let ty_vector_match = || Type::Named {
-        name: Spanned::dummy("Vector".to_string()),
-        generic_args: vec![Spanned::dummy(ty_match())],
-    };
-
-    let mut items: Vec<Spanned<Item>> = Vec::new();
-
-    items.push(opaque_struct("Regex"));
-    items.push(opaque_struct("Match"));
-
-    items.push(Spanned::dummy(Item::Function(decl_fn("regex_compile", &[("pattern", ty_str())], ty_result(ty_regex(), ty_str())))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("regex_compile_with", &[("pattern", ty_str()), ("flags", ty_str())], ty_result(ty_regex(), ty_str())))));
-    items.push(Spanned::dummy(Item::Function(extern_fn("regex_escape", &[("s", ty_str())], ty_string(), "gorget_regex_escape"))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("regex_is_match", &[("pattern", ty_str()), ("subject", ty_str())], ty_bool()))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("regex_find", &[("pattern", ty_str()), ("subject", ty_str())], ty_option(ty_match())))));
-    items.push(Spanned::dummy(Item::Function(decl_fn("regex_replace", &[("pattern", ty_str()), ("subject", ty_str()), ("repl", ty_str())], ty_string()))));
-
-    items.push(equip_block("Regex", vec![
-        extern_method("is_match", Ownership::Borrow, &[("subject", ty_str())], ty_bool(), "gorget_regex_is_match"),
-        extern_method("replace_all", Ownership::Borrow, &[("subject", ty_str()), ("replacement", ty_str())], ty_string(), "gorget_regex_replace_all"),
-        extern_method("capture_count", Ownership::Borrow, &[], ty_int(), "gorget_regex_capture_count"),
-        extern_method("pattern_str", Ownership::Borrow, &[], ty_str(), "gorget_regex_pattern_str"),
-        extern_method("group_names", Ownership::Borrow, &[], ty_vector_str(), "gorget_regex_group_names"),
-        decl_method("find", Ownership::Borrow, &[("subject", ty_str())], ty_option(ty_match())),
-        decl_method("find_at", Ownership::Borrow, &[("subject", ty_str()), ("pos", ty_int())], ty_option(ty_match())),
-        decl_method("find_all", Ownership::Borrow, &[("subject", ty_str())], ty_vector_match()),
-        decl_method("replace", Ownership::Borrow, &[("subject", ty_str()), ("replacement", ty_str())], ty_string()),
-        decl_method("split", Ownership::Borrow, &[("subject", ty_str())], ty_vector_str()),
-        decl_method("splitn", Ownership::Borrow, &[("subject", ty_str()), ("limit", ty_int())], ty_vector_str()),
-        decl_method("fullmatch", Ownership::Borrow, &[("subject", ty_str())], ty_option(ty_match())),
-    ]));
-
-    items.push(equip_block("Match", vec![
-        extern_method("text", Ownership::Borrow, &[], ty_str(), "gorget_regex_match_text"),
-        extern_method("start", Ownership::Borrow, &[], ty_int(), "gorget_regex_match_start"),
-        extern_method("end_pos", Ownership::Borrow, &[], ty_int(), "gorget_regex_match_end"),
-        extern_method("group_count", Ownership::Borrow, &[], ty_int(), "gorget_regex_match_group_count"),
-        extern_method("groups", Ownership::Borrow, &[], ty_vector_str(), "gorget_regex_match_groups"),
-        decl_method("group", Ownership::Borrow, &[("n", ty_int())], ty_option(ty_str())),
-        decl_method("group_by_name", Ownership::Borrow, &[("name", ty_str())], ty_option(ty_str())),
-    ]));
-
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
 
 // ─── Helpers ────────────────────────────────────────────────
 
