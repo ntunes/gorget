@@ -1,0 +1,28 @@
+# xtd.image — Image loading and manipulation (stb_image)
+
+from std.collections import Vector
+
+struct Image:
+    int width
+    int height
+    int channels
+    Vector[uint8] data
+
+# ── Load/info functions (Result via out-param codegen) ────────
+
+extern "Gorget":
+    extern Result[Image, String] image_load(String path) = "gorget_image_load"
+    extern Result[Image, String] image_load_rgba(String path) = "gorget_image_load_rgba"
+    extern Result[Image, String] image_load_from_memory(Vector[uint8] data) = "gorget_image_load_from_memory"
+    extern Result[Image, String] image_info(String path) = "gorget_image_info"
+    extern Result[Image, String] image_info_from_memory(Vector[uint8] data) = "gorget_image_info_from_memory"
+    extern Result[Image, String] image_load_rgba_from_memory(Vector[uint8] data) = "gorget_image_load_rgba_from_memory"
+    extern Result[Image, String] image_resize(Image img, int new_width, int new_height) = "gorget_image_resize"
+    extern Result[int, String] image_write_png(String path, Image img) = "gorget_image_write_png"
+    extern Result[int, String] image_write_jpg(String path, Image img, int quality) = "gorget_image_write_jpg"
+    extern Result[Vector[uint8], String] image_encode_png(Image img) = "gorget_image_encode_png"
+
+# ── Simple functions ─────────────────────────────────────────
+
+extern "C":
+    extern Image image_flip_vertically(Image img) = "gorget_image_flip_vertically"

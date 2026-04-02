@@ -53,9 +53,9 @@ Result[Vector[uint8], String] crypto_hmac(String algo, Vector[uint8] key, Vector
         return Error(err)
     return Ok(raw)
 
-# crypto_aes_ctr_new returns a struct — keep as Declaration body
-# (the C backend handles the Result wrapping via last_error_fn)
-Result[CipherContext, String] crypto_aes_ctr_new(Vector[uint8] key, Vector[uint8] iv)
+# Returns opaque struct — uses last_error_fn codegen
+extern "Gorget":
+    extern Result[CipherContext, String] crypto_aes_ctr_new(Vector[uint8] key, Vector[uint8] iv) = "gorget_crypto_aes_ctr_new"
 
 Result[RSAKey, String] crypto_rsa_load_public(Vector[uint8] key_bytes):
     int raw = _crypto_rsa_load_public_raw(key_bytes)
@@ -71,8 +71,8 @@ Result[Vector[uint8], String] crypto_random_bytes(int n):
         return Error(err)
     return Ok(raw)
 
-# Returns opaque struct — keep as Declaration body
-Result[Ed25519KeyPair, String] crypto_ed25519_keygen()
+extern "Gorget":
+    extern Result[Ed25519KeyPair, String] crypto_ed25519_keygen() = "gorget_crypto_ed25519_keygen"
 
 Result[Vector[uint8], String] crypto_ed25519_sign(Vector[uint8] private_key, Vector[uint8] data):
     Vector[uint8] raw = _crypto_ed25519_sign_raw(private_key, data)
@@ -81,8 +81,8 @@ Result[Vector[uint8], String] crypto_ed25519_sign(Vector[uint8] private_key, Vec
         return Error(err)
     return Ok(raw)
 
-# Returns opaque struct — keep as Declaration body
-Result[X25519KeyPair, String] crypto_x25519_keygen()
+extern "Gorget":
+    extern Result[X25519KeyPair, String] crypto_x25519_keygen() = "gorget_crypto_x25519_keygen"
 
 Result[Vector[uint8], String] crypto_x25519_shared_secret(X25519KeyPair private_key, Vector[uint8] peer_public):
     Vector[uint8] raw = _crypto_x25519_shared_secret_raw(private_key, peer_public)

@@ -12,14 +12,17 @@ extern "C":
 extern "Gorget":
     extern int ord(String s) = "gorget_str_ord"
 
-# ── Declaration body (codegen maps to gorget_* + handles adopt) ──
+# ── Gorget-aware externs (Str return — adopted by codegen) ───
 
-String chr(int n)
-String codepoint_to_str(int cp)
-String int_to_str(int n)
-String float_to_str(float x)
-String bool_to_str(bool b)
-float int_to_float(int n)
+extern "Gorget":
+    extern String chr(int n) = "gorget_char_chr"
+    extern String codepoint_to_str(int cp) = "gorget_codepoint_to_utf8"
+    extern String int_to_str(int n) = "gorget_int_to_str"
+    extern String float_to_str(float x) = "gorget_float_to_str"
+    extern String bool_to_str(bool b) = "gorget_bool_to_str"
+
+extern "C":
+    extern float int_to_float(int n) = "gorget_int_to_float"
 
 # ── Gorget wrappers for Result-returning functions ───────────
 

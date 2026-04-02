@@ -138,9 +138,9 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
             "jsonpath" => None,  // file-based module — loaded via builtin_module_source()
             "math3d" => None,    // file-based module — loaded via builtin_module_source()
             "gl" => None, // file-based module — loaded via builtin_module_source()
-            "image" => Some(gen_image_module()),
-            "audio" => Some(gen_audio_module()),
-            "compress" => Some(gen_compress_module()),
+            "image" => None, // file-based
+            "audio" => None, // file-based
+            "compress" => None, // file-based
             "metal" => None, // file-based module — loaded via builtin_module_source()
             "gpu" => None, // file-based module — loaded via builtin_module_source()
             _ => None,
@@ -593,6 +593,9 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("influx") => Some(include_str!("../lib/xtd/influx.gg")),
             Some("jsonpath") => Some(include_str!("../lib/xtd/jsonpath.gg")),
             Some("math3d") => Some(include_str!("../lib/xtd/math3d.gg")),
+            Some("audio") => Some(include_str!("../lib/xtd/audio.gg")),
+            Some("image") => Some(include_str!("../lib/xtd/image.gg")),
+            Some("compress") => Some(include_str!("../lib/xtd/compress.gg")),
             Some("crypto") => Some(include_str!("../lib/xtd/crypto.gg")),
             Some("sdl") => Some(include_str!("../lib/xtd/sdl.gg")),
             Some("gl") => Some(include_str!("../lib/xtd/gl.gg")),
@@ -1391,187 +1394,7 @@ fn equip_block(type_name: &str, methods: Vec<FunctionDef>) -> Spanned<Item> {
 
 // gen_gl_module() removed — now file-based at lib/xtd/gl.gg
 // Retained as comment for history. See git log for original synthetic module.
-// ─── xtd.image — Image Loading (stb_image) ─────────────────────
 
-fn gen_image_module() -> Module {
-    // Image struct with user-visible fields
-    let image_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("Image".to_string()),
-        generic_params: None,
-        fields: vec![
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("width".to_string()),
-                type_: Spanned::dummy(ty_int()),
-            }),
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("height".to_string()),
-                type_: Spanned::dummy(ty_int()),
-            }),
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("channels".to_string()),
-                type_: Spanned::dummy(ty_int()),
-            }),
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("data".to_string()),
-                type_: Spanned::dummy(ty_vector_uint8()),
-            }),
-        ],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-
-    let ty_image = || Type::Named {
-        name: Spanned::dummy("Image".to_string()),
-        generic_args: vec![],
-    };
-
-    let fn_item = |f: FunctionDef| -> Spanned<Item> {
-        Spanned::dummy(Item::Function(f))
-    };
-
-    let mut items = vec![image_struct];
-    {
-        use crate::ir::abi::AbiKind::{CStr, Ptr, Scalar};
-        items.push(fn_item(extern_fn_abi("image_load", &[("path", ty_str(), CStr)], ty_result(ty_image(), ty_str()), "gorget_image_load")));
-        items.push(fn_item(extern_fn_abi("image_load_rgba", &[("path", ty_str(), CStr)], ty_result(ty_image(), ty_str()), "gorget_image_load_rgba")));
-        items.push(fn_item(extern_fn("image_load_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_load_from_memory")));
-        items.push(fn_item(extern_fn("image_flip_vertically", &[("img", ty_image())], ty_image(), "gorget_image_flip_vertically")));
-
-        // ── Enhanced Image Functions ─────────────────────────────
-        // Query image info without full decode
-        items.push(fn_item(extern_fn_abi("image_info", &[("path", ty_str(), CStr)], ty_result(ty_image(), ty_str()), "gorget_image_info")));
-        items.push(fn_item(extern_fn("image_info_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_info_from_memory")));
-        // Load from memory with forced RGBA
-        items.push(fn_item(extern_fn("image_load_rgba_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_image(), ty_str()), "gorget_image_load_rgba_from_memory")));
-        // Resize
-        items.push(fn_item(extern_fn("image_resize", &[("img", ty_image()), ("new_width", ty_int()), ("new_height", ty_int())], ty_result(ty_image(), ty_str()), "gorget_image_resize")));
-        // Write (stb_image_write — PNG and JPG)
-        items.push(fn_item(extern_fn_abi("image_write_png", &[("path", ty_str(), CStr), ("img", ty_image(), Ptr)], ty_result(ty_int(), ty_str()), "gorget_image_write_png")));
-        items.push(fn_item(extern_fn_abi("image_write_jpg", &[("path", ty_str(), CStr), ("img", ty_image(), Ptr), ("quality", ty_int(), Scalar)], ty_result(ty_int(), ty_str()), "gorget_image_write_jpg")));
-        // Encode to memory
-        items.push(fn_item(extern_fn("image_encode_png", &[("img", ty_image())], ty_result(ty_vector_uint8(), ty_str()), "gorget_image_encode_png")));
-    }
-
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
-
-// ─── gg.audio — Audio (SDL2_mixer) ────────────────────────────
-
-fn gen_audio_module() -> Module {
-    let mut items: Vec<Spanned<Item>> = Vec::new();
-
-    // Opaque handle types
-    items.push(opaque_struct("AudioChunk"));
-    items.push(opaque_struct("AudioMusic"));
-
-    let ty_chunk = || Type::Named {
-        name: Spanned::dummy("AudioChunk".to_string()),
-        generic_args: vec![],
-    };
-    let ty_music = || Type::Named {
-        name: Spanned::dummy("AudioMusic".to_string()),
-        generic_args: vec![],
-    };
-
-    let fn_item = |f: FunctionDef| -> Spanned<Item> {
-        Spanned::dummy(Item::Function(f))
-    };
-
-    // Init/Quit
-    items.push(fn_item(extern_fn("audio_init", &[("frequency", ty_int()), ("channels", ty_int()), ("chunk_size", ty_int())], ty_int(), "gorget_audio_init")));
-    items.push(fn_item(extern_fn("audio_quit", &[], ty_void(), "gorget_audio_quit")));
-    items.push(fn_item(extern_fn("audio_allocate_channels", &[("num_channels", ty_int())], ty_void(), "gorget_audio_allocate_channels")));
-
-    // Sound effects
-    items.push(fn_item({
-        use crate::ir::abi::AbiKind::CStr;
-        extern_fn_abi("audio_load_wav", &[("path", ty_str(), CStr)], ty_result(ty_chunk(), ty_str()), "gorget_audio_load_wav")
-    }));
-    items.push(fn_item(extern_fn("audio_free_chunk", &[("chunk", ty_chunk())], ty_void(), "gorget_audio_free_chunk")));
-    items.push(fn_item(extern_fn("audio_play_channel", &[("channel", ty_int()), ("chunk", ty_chunk()), ("loops", ty_int())], ty_int(), "gorget_audio_play_channel")));
-    items.push(fn_item(extern_fn("audio_halt_channel", &[("channel", ty_int())], ty_void(), "gorget_audio_halt_channel")));
-    items.push(fn_item(extern_fn("audio_set_channel_volume", &[("channel", ty_int()), ("volume", ty_int())], ty_void(), "gorget_audio_set_channel_volume")));
-    items.push(fn_item(extern_fn("audio_set_channel_position", &[("channel", ty_int()), ("angle", ty_int()), ("distance", ty_int())], ty_void(), "gorget_audio_set_channel_position")));
-    items.push(fn_item(extern_fn("audio_set_channel_panning", &[("channel", ty_int()), ("left", ty_int()), ("right", ty_int())], ty_void(), "gorget_audio_set_channel_panning")));
-
-    // Music
-    items.push(fn_item({
-        use crate::ir::abi::AbiKind::CStr;
-        extern_fn_abi("audio_load_music", &[("path", ty_str(), CStr)], ty_result(ty_music(), ty_str()), "gorget_audio_load_music")
-    }));
-    items.push(fn_item(extern_fn("audio_free_music", &[("music", ty_music())], ty_void(), "gorget_audio_free_music")));
-    items.push(fn_item(extern_fn("audio_play_music", &[("music", ty_music()), ("loops", ty_int())], ty_void(), "gorget_audio_play_music")));
-    items.push(fn_item(extern_fn("audio_halt_music", &[], ty_void(), "gorget_audio_halt_music")));
-    items.push(fn_item(extern_fn("audio_set_music_volume", &[("volume", ty_int())], ty_void(), "gorget_audio_set_music_volume")));
-    items.push(fn_item(extern_fn("audio_pause_music", &[], ty_void(), "gorget_audio_pause_music")));
-    items.push(fn_item(extern_fn("audio_resume_music", &[], ty_void(), "gorget_audio_resume_music")));
-
-    // ── Enhanced Audio Functions ─────────────────────────────
-    // Channel query
-    items.push(fn_item(extern_fn("audio_channel_playing", &[("channel", ty_int())], ty_bool(), "gorget_audio_channel_playing")));
-    items.push(fn_item(extern_fn("audio_channel_paused", &[("channel", ty_int())], ty_bool(), "gorget_audio_channel_paused")));
-    items.push(fn_item(extern_fn("audio_pause_channel", &[("channel", ty_int())], ty_void(), "gorget_audio_pause_channel")));
-    items.push(fn_item(extern_fn("audio_resume_channel", &[("channel", ty_int())], ty_void(), "gorget_audio_resume_channel")));
-    items.push(fn_item(extern_fn("audio_playing_count", &[], ty_int(), "gorget_audio_playing_count")));
-    items.push(fn_item(extern_fn("audio_paused_count", &[], ty_int(), "gorget_audio_paused_count")));
-    // Fade in/out
-    items.push(fn_item(extern_fn("audio_fade_in_channel", &[("channel", ty_int()), ("chunk", ty_chunk()), ("loops", ty_int()), ("ms", ty_int())], ty_int(), "gorget_audio_fade_in_channel")));
-    items.push(fn_item(extern_fn("audio_fade_out_channel", &[("channel", ty_int()), ("ms", ty_int())], ty_void(), "gorget_audio_fade_out_channel")));
-    items.push(fn_item(extern_fn("audio_fade_in_music", &[("music", ty_music()), ("loops", ty_int()), ("ms", ty_int())], ty_void(), "gorget_audio_fade_in_music")));
-    items.push(fn_item(extern_fn("audio_fade_out_music", &[("ms", ty_int())], ty_void(), "gorget_audio_fade_out_music")));
-    // Music state
-    items.push(fn_item(extern_fn("audio_music_playing", &[], ty_bool(), "gorget_audio_music_playing")));
-    items.push(fn_item(extern_fn("audio_music_paused", &[], ty_bool(), "gorget_audio_music_paused")));
-    items.push(fn_item(extern_fn("audio_set_music_position", &[("position", ty_float())], ty_void(), "gorget_audio_set_music_position")));
-    // Channel expiration
-    items.push(fn_item(extern_fn("audio_expire_channel", &[("channel", ty_int()), ("ms", ty_int())], ty_void(), "gorget_audio_expire_channel")));
-    // Master volume
-    items.push(fn_item(extern_fn("audio_get_music_volume", &[], ty_int(), "gorget_audio_get_music_volume")));
-    items.push(fn_item(extern_fn("audio_get_channel_volume", &[("channel", ty_int())], ty_int(), "gorget_audio_get_channel_volume")));
-    // Channel distance (without angle)
-    items.push(fn_item(extern_fn("audio_set_channel_distance", &[("channel", ty_int()), ("distance", ty_int())], ty_void(), "gorget_audio_set_channel_distance")));
-    // Sound effects from memory
-    items.push(fn_item(extern_fn("audio_load_wav_from_memory", &[("data", ty_vector_uint8())], ty_result(ty_chunk(), ty_str()), "gorget_audio_load_wav_from_memory")));
-
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
-
-// ─── gg.compress — Zlib/Deflate (miniz) ──────────────────────
-
-fn gen_compress_module() -> Module {
-    let fn_item = |f: FunctionDef| -> Spanned<Item> {
-        Spanned::dummy(Item::Function(f))
-    };
-
-    let items = vec![
-        fn_item(extern_fn("zlib_decompress", &[("data", ty_vector_uint8()), ("uncompressed_size", ty_int())], ty_result(ty_vector_uint8(), ty_str()), "gorget_zlib_decompress")),
-        fn_item(extern_fn("zlib_compress", &[("data", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str()), "gorget_zlib_compress")),
-        // Compress with level (0=none, 1=fastest, 9=best)
-        fn_item(extern_fn("zlib_compress_level", &[("data", ty_vector_uint8()), ("level", ty_int())], ty_result(ty_vector_uint8(), ty_str()), "gorget_zlib_compress_level")),
-        // Raw deflate (no zlib header — for custom formats)
-        fn_item(extern_fn("deflate_compress", &[("data", ty_vector_uint8())], ty_result(ty_vector_uint8(), ty_str()), "gorget_deflate_compress")),
-        fn_item(extern_fn("deflate_decompress", &[("data", ty_vector_uint8()), ("uncompressed_size", ty_int())], ty_result(ty_vector_uint8(), ty_str()), "gorget_deflate_decompress")),
-        // CRC32 (useful for ZIP/PK3 verification)
-        fn_item(extern_fn("crc32_compute", &[("data", ty_vector_uint8())], ty_int(), "gorget_crc32_compute")),
-    ];
-
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
 
 
 #[cfg(test)]

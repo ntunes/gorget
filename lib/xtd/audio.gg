@@ -1,0 +1,66 @@
+# xtd.audio — Audio playback (SDL2_mixer)
+
+from std.collections import Vector
+
+struct AudioChunk:
+    int _handle
+
+struct AudioMusic:
+    int _handle
+
+# ── Init/Quit ────────────────────────────────────────────────
+
+extern "C":
+    extern int audio_init(int frequency, int channels, int chunk_size) = "gorget_audio_init"
+    extern void audio_quit() = "gorget_audio_quit"
+    extern void audio_allocate_channels(int num_channels) = "gorget_audio_allocate_channels"
+
+# ── Sound effects ────────────────────────────────────────────
+
+# Load functions return Result via out-param codegen
+extern "Gorget":
+    extern Result[AudioChunk, String] audio_load_wav(String path) = "gorget_audio_load_wav"
+    extern Result[AudioChunk, String] audio_load_wav_from_memory(Vector[uint8] data) = "gorget_audio_load_wav_from_memory"
+
+extern "C":
+    extern void audio_free_chunk(AudioChunk chunk) = "gorget_audio_free_chunk"
+    extern int audio_play_channel(int channel, AudioChunk chunk, int loops) = "gorget_audio_play_channel"
+    extern void audio_halt_channel(int channel) = "gorget_audio_halt_channel"
+    extern void audio_set_channel_volume(int channel, int volume) = "gorget_audio_set_channel_volume"
+    extern void audio_set_channel_position(int channel, int angle, int distance) = "gorget_audio_set_channel_position"
+    extern void audio_set_channel_panning(int channel, int left, int right) = "gorget_audio_set_channel_panning"
+
+# ── Music ────────────────────────────────────────────────────
+
+# Load function returns Result via out-param codegen
+extern "Gorget":
+    extern Result[AudioMusic, String] audio_load_music(String path) = "gorget_audio_load_music"
+
+extern "C":
+    extern void audio_free_music(AudioMusic music) = "gorget_audio_free_music"
+    extern void audio_play_music(AudioMusic music, int loops) = "gorget_audio_play_music"
+    extern void audio_halt_music() = "gorget_audio_halt_music"
+    extern void audio_set_music_volume(int volume) = "gorget_audio_set_music_volume"
+    extern void audio_pause_music() = "gorget_audio_pause_music"
+    extern void audio_resume_music() = "gorget_audio_resume_music"
+
+# ── Enhanced functions ───────────────────────────────────────
+
+extern "C":
+    extern bool audio_channel_playing(int channel) = "gorget_audio_channel_playing"
+    extern bool audio_channel_paused(int channel) = "gorget_audio_channel_paused"
+    extern void audio_pause_channel(int channel) = "gorget_audio_pause_channel"
+    extern void audio_resume_channel(int channel) = "gorget_audio_resume_channel"
+    extern int audio_playing_count() = "gorget_audio_playing_count"
+    extern int audio_paused_count() = "gorget_audio_paused_count"
+    extern int audio_fade_in_channel(int channel, AudioChunk chunk, int loops, int ms) = "gorget_audio_fade_in_channel"
+    extern void audio_fade_out_channel(int channel, int ms) = "gorget_audio_fade_out_channel"
+    extern void audio_fade_in_music(AudioMusic music, int loops, int ms) = "gorget_audio_fade_in_music"
+    extern void audio_fade_out_music(int ms) = "gorget_audio_fade_out_music"
+    extern bool audio_music_playing() = "gorget_audio_music_playing"
+    extern bool audio_music_paused() = "gorget_audio_music_paused"
+    extern void audio_set_music_position(float position) = "gorget_audio_set_music_position"
+    extern void audio_expire_channel(int channel, int ms) = "gorget_audio_expire_channel"
+    extern int audio_get_music_volume() = "gorget_audio_get_music_volume"
+    extern int audio_get_channel_volume(int channel) = "gorget_audio_get_channel_volume"
+    extern void audio_set_channel_distance(int channel, int distance) = "gorget_audio_set_channel_distance"

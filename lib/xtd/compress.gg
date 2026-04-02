@@ -1,0 +1,15 @@
+# xtd.compress — Zlib/Deflate compression (miniz)
+
+from std.collections import Vector
+
+# All compress/decompress functions return Result (out-param codegen)
+
+extern "Gorget":
+    extern Result[Vector[uint8], String] zlib_decompress(Vector[uint8] data, int uncompressed_size) = "gorget_zlib_decompress"
+    extern Result[Vector[uint8], String] zlib_compress(Vector[uint8] data) = "gorget_zlib_compress"
+    extern Result[Vector[uint8], String] zlib_compress_level(Vector[uint8] data, int level) = "gorget_zlib_compress_level"
+    extern Result[Vector[uint8], String] deflate_compress(Vector[uint8] data) = "gorget_deflate_compress"
+    extern Result[Vector[uint8], String] deflate_decompress(Vector[uint8] data, int uncompressed_size) = "gorget_deflate_decompress"
+
+extern "C":
+    extern int crc32_compute(Vector[uint8] data) = "gorget_crc32_compute"
