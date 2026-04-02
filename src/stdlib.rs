@@ -93,7 +93,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "collections" => Some(gen_collections_module()),
                 "math" => None, // file-based
                 "fmt" => None, // file-based module — loaded via builtin_module_source()
-                "process" => Some(gen_process_module()),
+                "process" => None, // file-based
                 "bytes" => None, // file-based module — loaded via builtin_module_source()
                 "encoding" => None, // file-based module — loaded via builtin_module_source()
                 "channel" => Some(gen_channel_module()),
@@ -164,82 +164,6 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
 // gen_async_module — migrated to lib/std/async.gg
 
 // gen_math_module — migrated to lib/std/math.gg
-
-fn gen_process_module() -> Module {
-    let exec_result_type = Type::Named {
-        name: Spanned::dummy("ExecResult".to_string()),
-        generic_args: vec![],
-    };
-    let ty_process = || Type::Named {
-        name: Spanned::dummy("Process".to_string()),
-        generic_args: vec![],
-    };
-    let struct_def = StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("ExecResult".to_string()),
-        generic_params: None,
-        fields: vec![
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("output".to_string()),
-                type_: Spanned::dummy(ty_str()),
-            }),
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("errors".to_string()),
-                type_: Spanned::dummy(ty_str()),
-            }),
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("exit_code".to_string()),
-                type_: Spanned::dummy(ty_int()),
-            }),
-        ],
-        doc_comment: None,
-        span: Span::dummy(),
-    };
-    // Process is an opaque struct wrapping pid + pipe fds.
-    let process_struct = opaque_struct("Process");
-    let process_equip = equip_block("Process", vec![
-        decl_method("wait", Ownership::Borrow, &[], ty_int()),
-        decl_method("wait_timeout", Ownership::Borrow, &[("timeout_ms", ty_int())], ty_int()),
-        decl_method("kill", Ownership::Borrow, &[], ty_void()),
-        decl_method("pid", Ownership::Borrow, &[], ty_int()),
-        decl_method("write_stdin", Ownership::Borrow, &[("data", ty_str())], ty_void()),
-        decl_method("close_stdin", Ownership::Borrow, &[], ty_void()),
-        decl_method("read_stdout", Ownership::Borrow, &[], ty_string()),
-        decl_method("read_stderr", Ownership::Borrow, &[], ty_string()),
-        decl_method("read_all", Ownership::Borrow, &[], exec_result_type.clone()),
-        decl_method("read_all_timeout", Ownership::Borrow, &[("timeout_ms", ty_int())], exec_result_type.clone()),
-    ]);
-    let items = vec![
-        Spanned::dummy(Item::Struct(struct_def)),
-        process_struct,
-        process_equip,
-        Spanned::dummy(Item::Function({
-            use crate::ir::abi::AbiKind::CStr;
-            decl_blocking_fn_abi("exec", &[("cmd", ty_str(), CStr)], ty_int())
-        })),
-        Spanned::dummy(Item::Function({
-            use crate::ir::abi::AbiKind::CStr;
-            decl_blocking_fn_abi("exec_output", &[("cmd", ty_str(), CStr)], exec_result_type)
-        })),
-        Spanned::dummy(Item::Function({
-            use crate::ir::abi::AbiKind::{CStr, Ptr};
-            decl_fn_abi(
-                "process_spawn",
-                &[("program", ty_str(), CStr), ("args", ty_vector_str(), Ptr)],
-                ty_result(ty_process(), ty_str()),
-            )
-        })),
-        Spanned::dummy(Item::Function(decl_fn("getpid", &[], ty_int()))),
-    ];
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
 
 
 fn gen_sync_module() -> Module {
@@ -558,6 +482,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("random") => Some(include_str!("../lib/std/random.gg")),
             Some("time") => Some(include_str!("../lib/std/time.gg")),
             Some("conv") => Some(include_str!("../lib/std/conv.gg")),
+            Some("process") => Some(include_str!("../lib/std/process.gg")),
             Some("io") => Some(include_str!("../lib/std/io.gg")),
             Some("math") => Some(include_str!("../lib/std/math.gg")),
             Some("os") => Some(include_str!("../lib/std/os.gg")),

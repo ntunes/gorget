@@ -1,0 +1,35 @@
+# std.process — Process management
+
+from std.collections import Vector
+
+struct ExecResult:
+    String output
+    String errors
+    int exit_code
+
+struct Process:
+    int _handle
+
+equip Process:
+    extern blocking int wait() = "gorget_process_wait"
+    extern blocking int wait_timeout(int timeout_ms) = "gorget_process_wait_timeout"
+    extern void kill() = "gorget_process_kill"
+    extern int pid() = "gorget_process_pid"
+    extern void write_stdin(String data) = "gorget_process_write_stdin"
+    extern void close_stdin() = "gorget_process_close_stdin"
+    extern blocking String read_stdout() = "gorget_process_read_stdout"
+    extern blocking String read_stderr() = "gorget_process_read_stderr"
+    extern blocking ExecResult read_all() = "gorget_process_read_all"
+    extern blocking ExecResult read_all_timeout(int timeout_ms) = "gorget_process_read_all_timeout"
+
+extern "C":
+    extern blocking int exec(cstr cmd) = "gorget_exec"
+
+extern "C":
+    extern blocking ExecResult exec_output(cstr cmd) = "gorget_exec_output"
+
+extern "C":
+    extern Result[Process, String] process_spawn(cstr program, Vector[String] args) = "gorget_process_spawn"
+
+extern "C":
+    extern int getpid() = "gorget_getpid"
