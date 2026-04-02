@@ -338,11 +338,11 @@ fn gen_process_module() -> Module {
         process_equip,
         Spanned::dummy(Item::Function({
             use crate::ir::abi::AbiKind::CStr;
-            decl_fn_abi("exec", &[("cmd", ty_str(), CStr)], ty_int())
+            decl_blocking_fn_abi("exec", &[("cmd", ty_str(), CStr)], ty_int())
         })),
         Spanned::dummy(Item::Function({
             use crate::ir::abi::AbiKind::CStr;
-            decl_fn_abi("exec_output", &[("cmd", ty_str(), CStr)], exec_result_type)
+            decl_blocking_fn_abi("exec_output", &[("cmd", ty_str(), CStr)], exec_result_type)
         })),
         Spanned::dummy(Item::Function({
             use crate::ir::abi::AbiKind::{CStr, Ptr};
@@ -1005,6 +1005,19 @@ fn decl_fn_abi(name: &str, params: &[(&str, Type, crate::ir::abi::AbiKind)], ret
 fn decl_async_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
     let mut f = decl_fn(name, params, ret);
     f.qualifiers.is_async = true;
+    f
+}
+
+/// Declare a blocking extern function — yields shared variable locks during call.
+fn decl_blocking_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
+    let mut f = decl_fn(name, params, ret);
+    f.qualifiers.is_blocking = true;
+    f
+}
+
+fn decl_blocking_fn_abi(name: &str, params: &[(&str, Type, crate::ir::abi::AbiKind)], ret: Type) -> FunctionDef {
+    let mut f = decl_fn_abi(name, params, ret);
+    f.qualifiers.is_blocking = true;
     f
 }
 

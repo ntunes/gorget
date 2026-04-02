@@ -196,6 +196,8 @@ pub struct LoweringContext<'a> {
     /// Extern ABI marshalling kinds: fn_name → Vec<AbiKind>.
     /// Populated from FunctionDef.param_abis for Declaration-body functions.
     pub fn_extern_abi_kinds: FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
+    /// Functions that are yield points (async or blocking qualifiers).
+    pub yield_point_fns: rustc_hash::FxHashSet<String>,
     /// If current function uses `throws`, the Result TypeId for wrapping return/throw.
     pub current_throws_result_type: Option<TypeId>,
     /// Target type hint for the current expression being lowered.
@@ -307,6 +309,7 @@ impl<'a> LoweringContext<'a> {
             fn_param_ownerships: FxHashMap::default(),
             fn_param_abis: FxHashMap::default(),
             fn_extern_abi_kinds: FxHashMap::default(),
+            yield_point_fns: rustc_hash::FxHashSet::default(),
             current_throws_result_type: None,
             expected_type: None,
             closure_param_type_hints: Vec::new(),

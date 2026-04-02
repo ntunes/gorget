@@ -196,6 +196,10 @@ pub struct Module {
     /// Per-function extern ABI kinds: fn_name → Vec<AbiKind>.
     /// Populated from FunctionDef.param_abis for Declaration-body functions.
     pub fn_extern_abi_kinds: rustc_hash::FxHashMap<String, Vec<abi::AbiKind>>,
+    /// Functions that are yield points (async or blocking). The shared_async
+    /// transform uses this to release/reacquire mutex locks around calls.
+    /// Populated from is_async and is_blocking qualifiers during pre-scan.
+    pub yield_point_fns: rustc_hash::FxHashSet<String>,
 }
 
 impl Module {
@@ -214,6 +218,7 @@ impl Module {
             implicit_clone_warnings: Vec::new(),
             runtime_callees: rustc_hash::FxHashMap::default(),
             fn_extern_abi_kinds: rustc_hash::FxHashMap::default(),
+            yield_point_fns: rustc_hash::FxHashSet::default(),
         }
     }
 

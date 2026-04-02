@@ -701,6 +701,15 @@ pub fn lower_module(
                 ctx.shared.fn_ast_bodies.insert(name.clone(), func.clone());
             }
 
+            // Track yield points (async or blocking functions).
+            if func.qualifiers.is_async || func.qualifiers.is_blocking {
+                ctx.yield_point_fns.insert(name.clone());
+                // Also register C symbol name for extern functions
+                if let FunctionBody::Extern(c_symbol) = &func.body {
+                    ctx.yield_point_fns.insert(c_symbol.clone());
+                }
+            }
+
             // Record extern binding: Gorget name → C symbol (takes priority over mangling).
             // Declaration functions are C-runtime inline implementations; do not rename them.
             if let FunctionBody::Extern(c_symbol) = &func.body {
@@ -756,6 +765,14 @@ pub fn lower_module(
                     .map(|(&base_type, ownership)| ctx.compute_param_abi(base_type, ownership.clone()))
                     .collect();
                 ctx.fn_param_abis.insert(name.clone(), param_abis);
+
+                // Track yield points (async or blocking functions)
+                if func.qualifiers.is_async || func.qualifiers.is_blocking {
+                    ctx.yield_point_fns.insert(name.clone());
+                    if let FunctionBody::Extern(c_symbol) = &func.body {
+                        ctx.yield_point_fns.insert(c_symbol.clone());
+                    }
+                }
 
                 // Register extern binding: name → C symbol
                 if let FunctionBody::Extern(c_symbol) = &func.body {
@@ -1102,6 +1119,7 @@ pub fn lower_module(
             &pending.variant_name,
             &pending.shared_args,
             &mut ctx.type_registry,
+            &ctx.yield_point_fns,
         );
         module.functions.push(result.func);
         all_inner_rewrites.extend(result.inner_rewrites);
@@ -1128,6 +1146,7 @@ pub fn lower_module(
                     &rewrite.wrapper_name,
                     &rewrite.shared_args,
                     &mut ctx.type_registry,
+                    &ctx.yield_point_fns,
                 );
                 module.functions.push(inner_result.func);
                 // Note: we don't recurse further for simplicity.
@@ -1225,6 +1244,7 @@ pub fn lower_module(
 
     // Thread extern ABI kinds to the module
     module.fn_extern_abi_kinds = ctx.fn_extern_abi_kinds.clone();
+    module.yield_point_fns = ctx.yield_point_fns.clone();
 
     // Thread purity data to the module
     module.fn_purity = ctx.analysis.fn_purity.clone();

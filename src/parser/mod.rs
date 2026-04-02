@@ -1551,6 +1551,8 @@ impl Parser {
                 qualifiers.is_static = true;
             } else if self.match_keyword(Keyword::Unsafe) {
                 qualifiers.is_unsafe = true;
+            } else if self.match_keyword(Keyword::Blocking) {
+                qualifiers.is_blocking = true;
             } else {
                 break;
             }

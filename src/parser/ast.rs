@@ -141,6 +141,9 @@ pub struct FunctionQualifiers {
     pub is_const: bool,
     pub is_static: bool,
     pub is_unsafe: bool,
+    /// True for `blocking` extern functions — the call may block the thread.
+    /// Used by the shared_async transform to release/reacquire locks.
+    pub is_blocking: bool,
 }
 
 #[derive(Debug, Clone)]
