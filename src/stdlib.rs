@@ -228,7 +228,6 @@ fn gen_io_module() -> Module {
     }
 }
 
-
 fn gen_time_module() -> Module {
     use crate::ir::abi::AbiKind::{CStr, Scalar};
     make_module(vec![
