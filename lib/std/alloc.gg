@@ -1,0 +1,67 @@
+# std.alloc — Custom allocators
+
+struct Arena:
+    int _handle
+
+struct ArenaCheckpoint:
+    int _handle
+
+equip Arena:
+    extern int bytes_used() = "gorget_arena_bytes_used"
+    extern ArenaCheckpoint checkpoint() = "gorget_arena_checkpoint"
+    extern void restore(ArenaCheckpoint cp) = "gorget_arena_restore"
+    extern void reset() = "gorget_arena_reset"
+    extern void destroy() = "gorget_arena_destroy"
+
+struct TrackingAllocator:
+    int _handle
+
+equip TrackingAllocator:
+    extern int alloc_count() = "gorget_tracking_alloc_count"
+    extern int free_count() = "gorget_tracking_free_count"
+    extern int bytes_allocated() = "gorget_tracking_bytes_allocated"
+    extern int bytes_freed() = "gorget_tracking_bytes_freed"
+    extern int current_bytes() = "gorget_tracking_current_bytes"
+    extern int peak_bytes() = "gorget_tracking_peak_bytes"
+    extern int realloc_count() = "gorget_tracking_realloc_count"
+    extern void report() = "gorget_tracking_report"
+    extern void reset() = "gorget_tracking_reset"
+    extern void destroy() = "gorget_tracking_destroy"
+
+struct PoolAllocator:
+    int _handle
+
+equip PoolAllocator:
+    extern int used_blocks() = "gorget_pool_used_blocks"
+    extern int free_blocks() = "gorget_pool_free_blocks"
+    extern int total_blocks() = "gorget_pool_total_blocks"
+    extern int block_size() = "gorget_pool_block_size"
+    extern void reset() = "gorget_pool_reset"
+    extern void destroy() = "gorget_pool_destroy"
+
+struct TlsfAllocator:
+    int _handle
+
+equip TlsfAllocator:
+    extern int bytes_used() = "gorget_tlsf_bytes_used"
+    extern int peak_bytes() = "gorget_tlsf_peak_bytes"
+    extern int pool_size() = "gorget_tlsf_pool_size"
+    extern void reset() = "gorget_tlsf_reset"
+    extern void destroy() = "gorget_tlsf_destroy"
+
+struct FixedBufferAllocator:
+    int _handle
+
+equip FixedBufferAllocator:
+    extern int bytes_used() = "gorget_fba_bytes_used"
+    extern int capacity() = "gorget_fba_capacity"
+    extern void reset() = "gorget_fba_reset"
+    extern void destroy() = "gorget_fba_destroy"
+
+struct FallbackAllocator:
+    int _handle
+
+equip FallbackAllocator:
+    extern int primary_count() = "gorget_fallback_primary_count"
+    extern int fallback_count() = "gorget_fallback_fallback_count"
+    extern void destroy() = "gorget_fallback_destroy"

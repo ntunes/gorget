@@ -99,7 +99,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "bytes" => None, // file-based module — loaded via builtin_module_source()
                 "encoding" => None, // file-based module — loaded via builtin_module_source()
                 "channel" => Some(gen_channel_module()),
-                "alloc" => Some(gen_alloc_module()),
+                "alloc" => None, // file-based
                 "sync" => Some(gen_sync_module()),
                 "thread" => Some(gen_thread_module()),
                 "async" => None, // file-based
@@ -485,6 +485,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("time") => Some(include_str!("../lib/std/time.gg")),
             Some("conv") => Some(include_str!("../lib/std/conv.gg")),
             Some("process") => Some(include_str!("../lib/std/process.gg")),
+            Some("alloc") => Some(include_str!("../lib/std/alloc.gg")),
             Some("io") => Some(include_str!("../lib/std/io.gg")),
             Some("math") => Some(include_str!("../lib/std/math.gg")),
             Some("os") => Some(include_str!("../lib/std/os.gg")),
@@ -851,198 +852,6 @@ fn decl_method(
         doc_comment: None,
         span: Span::dummy(),
         param_abis: vec![],
-    }
-}
-
-fn gen_alloc_module() -> Module {
-    let ty_checkpoint = || Type::Named {
-        name: Spanned::dummy("ArenaCheckpoint".to_string()),
-        generic_args: vec![],
-    };
-    let arena_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("Arena".to_string()),
-        generic_params: None,
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-    let checkpoint_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("ArenaCheckpoint".to_string()),
-        generic_params: None,
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-    let arena_equip = Spanned::dummy(Item::Equip(EquipBlock {
-        generic_params: None,
-        trait_: None,
-        type_: Spanned::dummy(Type::Named {
-            name: Spanned::dummy("Arena".to_string()),
-            generic_args: vec![],
-        }),
-        via_field: None,
-        where_clause: None,
-        items: vec![
-            Spanned::dummy(decl_method("bytes_used", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("checkpoint", Ownership::Borrow, &[], ty_checkpoint())),
-            Spanned::dummy(decl_method("restore", Ownership::Borrow, &[("cp", ty_checkpoint())], ty_void())),
-            Spanned::dummy(decl_method("reset", Ownership::Borrow, &[], ty_void())),
-            Spanned::dummy(decl_method("destroy", Ownership::Borrow, &[], ty_void())),
-        ],
-        span: Span::dummy(),
-    }));
-    let tracking_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("TrackingAllocator".to_string()),
-        generic_params: None,
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-    let tracking_equip = Spanned::dummy(Item::Equip(EquipBlock {
-        generic_params: None,
-        trait_: None,
-        type_: Spanned::dummy(Type::Named {
-            name: Spanned::dummy("TrackingAllocator".to_string()),
-            generic_args: vec![],
-        }),
-        via_field: None,
-        where_clause: None,
-        items: vec![
-            Spanned::dummy(decl_method("alloc_count", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("free_count", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("bytes_allocated", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("bytes_freed", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("current_bytes", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("peak_bytes", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("realloc_count", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("report", Ownership::Borrow, &[], ty_void())),
-            Spanned::dummy(decl_method("reset", Ownership::Borrow, &[], ty_void())),
-            Spanned::dummy(decl_method("destroy", Ownership::Borrow, &[], ty_void())),
-        ],
-        span: Span::dummy(),
-    }));
-    let pool_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("PoolAllocator".to_string()),
-        generic_params: None,
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-    let pool_equip = Spanned::dummy(Item::Equip(EquipBlock {
-        generic_params: None,
-        trait_: None,
-        type_: Spanned::dummy(Type::Named {
-            name: Spanned::dummy("PoolAllocator".to_string()),
-            generic_args: vec![],
-        }),
-        via_field: None,
-        where_clause: None,
-        items: vec![
-            Spanned::dummy(decl_method("used_blocks", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("free_blocks", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("total_blocks", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("block_size", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("reset", Ownership::Borrow, &[], ty_void())),
-            Spanned::dummy(decl_method("destroy", Ownership::Borrow, &[], ty_void())),
-        ],
-        span: Span::dummy(),
-    }));
-    let tlsf_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("TlsfAllocator".to_string()),
-        generic_params: None,
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-    let tlsf_equip = Spanned::dummy(Item::Equip(EquipBlock {
-        generic_params: None,
-        trait_: None,
-        type_: Spanned::dummy(Type::Named {
-            name: Spanned::dummy("TlsfAllocator".to_string()),
-            generic_args: vec![],
-        }),
-        via_field: None,
-        where_clause: None,
-        items: vec![
-            Spanned::dummy(decl_method("bytes_used", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("peak_bytes", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("pool_size", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("reset", Ownership::Borrow, &[], ty_void())),
-            Spanned::dummy(decl_method("destroy", Ownership::Borrow, &[], ty_void())),
-        ],
-        span: Span::dummy(),
-    }));
-    let fba_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("FixedBufferAllocator".to_string()),
-        generic_params: None,
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-    let fba_equip = Spanned::dummy(Item::Equip(EquipBlock {
-        generic_params: None,
-        trait_: None,
-        type_: Spanned::dummy(Type::Named {
-            name: Spanned::dummy("FixedBufferAllocator".to_string()),
-            generic_args: vec![],
-        }),
-        via_field: None,
-        where_clause: None,
-        items: vec![
-            Spanned::dummy(decl_method("bytes_used", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("capacity", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("reset", Ownership::Borrow, &[], ty_void())),
-            Spanned::dummy(decl_method("destroy", Ownership::Borrow, &[], ty_void())),
-        ],
-        span: Span::dummy(),
-    }));
-    let fallback_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("FallbackAllocator".to_string()),
-        generic_params: None,
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-    let fallback_equip = Spanned::dummy(Item::Equip(EquipBlock {
-        generic_params: None,
-        trait_: None,
-        type_: Spanned::dummy(Type::Named {
-            name: Spanned::dummy("FallbackAllocator".to_string()),
-            generic_args: vec![],
-        }),
-        via_field: None,
-        where_clause: None,
-        items: vec![
-            Spanned::dummy(decl_method("primary_count", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("fallback_count", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("destroy", Ownership::Borrow, &[], ty_void())),
-        ],
-        span: Span::dummy(),
-    }));
-    Module {
-        items: vec![
-            arena_struct, checkpoint_struct, arena_equip,
-            tracking_struct, tracking_equip,
-            pool_struct, pool_equip,
-            tlsf_struct, tlsf_equip,
-            fba_struct, fba_equip,
-            fallback_struct, fallback_equip,
-        ],
-        span: Span::dummy(),
     }
 }
 
