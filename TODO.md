@@ -13,7 +13,7 @@
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
-- **Extern module ABI declarations — 13 modules migrated**: AbiKind pipeline complete. Explicit `cstr` FFI type for params AND returns. `blocking` qualifier replaces BLOCKING_STDLIB_CALLS. Return ABI (cstr → gorget_str_from_cstr) works. Gorget Result wrappers proven (std.conv parse_int). 13 modules migrated to .gg (-1614 lines from stdlib.rs). Remaining 14 modules blocked by: out-param codegen (compress, image, audio), complex equip blocks (sync, thread, collections, alloc, regex, socket, tls, udp, crypto, channel), or pointer-return Result pattern (process). See `docs/internals/extern-modules.md`. [updated: 2026-04-02]
+- **Extern module ABI declarations — 21/27 modules migrated**: AbiKind pipeline complete. Explicit `cstr` FFI type for params AND returns. `blocking` qualifier. Return ABI. Gorget Result wrappers (conv, crypto). 21 modules migrated to .gg (-2267 lines from stdlib.rs). Remaining 6: collections (Box is keyword), regex (C backend NULL injection + inline pat functions), sync/thread/channel (generic types), alloc (7 allocator equip blocks). See `docs/internals/extern-modules.md`. [updated: 2026-04-02]
 
 - **Trait-bounded generic functions don't monomorphize**: `void print_sum[Summable T](T val)` — linker error. Core language feature gap. [added: 2026-03-23]
 
