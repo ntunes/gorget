@@ -4,8 +4,8 @@ extern "C":
     extern int time() = "gorget_time"
     extern int time_ms() = "gorget_time_ms"
     extern void sleep_ms(int ms) = "gorget_sleep_ms"
-    extern String format_time(int epoch, String fmt) = "gorget_format_time"
-    extern int parse_time(String s, String fmt) = "gorget_parse_time"
+    extern cstr format_time(int epoch, cstr fmt) = "gorget_format_time"
+    extern int parse_time(cstr s, cstr fmt) = "gorget_parse_time"
 
 # async sleep — reactor-based non-blocking timer.
 extern "C":

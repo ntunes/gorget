@@ -780,22 +780,32 @@ pub fn lower_module(
                 }
 
                 // Derive ABI kinds from block's ABI string
-                if string_abi != AbiKind::Auto {
-                    // Param ABI: String params → CStr or GorgetString
-                    let abis: Vec<AbiKind> = param_types.iter().map(|&tid| {
-                        if ctx.type_mapper.is_string_type(tid) {
+                // Param ABI: derive from explicit cstr type in declaration.
+                // cstr param → CStr ABI. String param in extern "Gorget" → GorgetString.
+                // String param in extern "C" → CStr (backward compat until all migrated to explicit cstr).
+                {
+                    let abis: Vec<AbiKind> = func.params.iter().zip(param_types.iter()).map(|(p, &tid)| {
+                        if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
+                            AbiKind::CStr
+                        } else if string_abi != AbiKind::Auto && ctx.type_mapper.is_string_type(tid) {
                             string_abi
                         } else {
                             AbiKind::Auto
                         }
                     }).collect();
-                    ctx.fn_extern_abi_kinds.insert(name.clone(), abis.clone());
-                    if let FunctionBody::Extern(c_symbol) = &func.body {
-                        ctx.fn_extern_abi_kinds.insert(c_symbol.clone(), abis);
+                    if abis.iter().any(|a| *a != AbiKind::Auto) {
+                        ctx.fn_extern_abi_kinds.insert(name.clone(), abis.clone());
+                        if let FunctionBody::Extern(c_symbol) = &func.body {
+                            ctx.fn_extern_abi_kinds.insert(c_symbol.clone(), abis);
+                        }
                     }
-                    // Return ABI: NOT auto-derived from block ABI string.
-                    // Most C functions return GorgetString (Str struct), not const char*.
-                    // Functions returning const char* need explicit annotation (future).
+                }
+                // Return ABI: derive from explicit cstr return type.
+                if matches!(func.return_type.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
+                    ctx.fn_return_abis.insert(name.clone(), AbiKind::CStr);
+                    if let FunctionBody::Extern(c_symbol) = &func.body {
+                        ctx.fn_return_abis.insert(c_symbol.clone(), AbiKind::CStr);
+                    }
                 }
             }
         }

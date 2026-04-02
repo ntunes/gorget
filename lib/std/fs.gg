@@ -1,22 +1,19 @@
 # std.fs — File system operations
-#
-# All functions take file paths as null-terminated C strings.
-# The extern "C" block derives CStr ABI for String params automatically.
 
 from std.collections import Vector
 
 extern "C":
-    extern blocking String read_file(String path) = "gorget_read_file"
-    extern blocking Vector[uint8] read_file_bytes(String path) = "gorget_read_file_bytes"
-    extern blocking void write_file(String path, String content) = "gorget_write_file"
-    extern blocking void write_file_bytes(String path, Vector[uint8] data) = "gorget_write_file_bytes"
-    extern blocking void append_file(String path, String content) = "gorget_append_file"
-    extern bool file_exists(String path) = "gorget_file_exists"
-    extern bool delete_file(String path) = "gorget_delete_file"
-    extern bool mkdir(String path) = "gorget_mkdir"
-    extern bool rmdir(String path) = "gorget_rmdir"
-    extern blocking bool rename(String old_path, String new_path) = "gorget_rename"
-    extern blocking bool copy_file(String src, String dst) = "gorget_copy_file"
-    extern int file_size(String path) = "gorget_file_size"
-    extern bool is_dir(String path) = "gorget_is_dir"
-    extern blocking Vector[String] readdir(String path) = "gorget_readdir"
+    extern blocking String read_file(cstr path) = "gorget_read_file"
+    extern blocking Vector[uint8] read_file_bytes(cstr path) = "gorget_read_file_bytes"
+    extern blocking void write_file(cstr path, cstr content) = "gorget_write_file"
+    extern blocking void write_file_bytes(cstr path, Vector[uint8] data) = "gorget_write_file_bytes"
+    extern blocking void append_file(cstr path, cstr content) = "gorget_append_file"
+    extern bool file_exists(cstr path) = "gorget_file_exists"
+    extern bool delete_file(cstr path) = "gorget_delete_file"
+    extern bool mkdir(cstr path) = "gorget_mkdir"
+    extern bool rmdir(cstr path) = "gorget_rmdir"
+    extern blocking bool rename(cstr old_path, cstr new_path) = "gorget_rename"
+    extern blocking bool copy_file(cstr src, cstr dst) = "gorget_copy_file"
+    extern int file_size(cstr path) = "gorget_file_size"
+    extern bool is_dir(cstr path) = "gorget_is_dir"
+    extern blocking Vector[String] readdir(cstr path) = "gorget_readdir"
