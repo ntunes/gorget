@@ -1,0 +1,16 @@
+# std.os — Operating system interface
+
+from std.collections import Vector
+
+extern "C":
+    extern void exit(int code) = "gorget_exit"
+    extern cstr getenv(cstr name) = "gorget_getenv"
+    extern void setenv(cstr name, cstr value) = "gorget_setenv"
+    extern cstr getcwd() = "gorget_getcwd"
+    extern cstr platform() = "gorget_platform"
+    extern Vector[String] args() = "gorget_args"
+    extern blocking Vector[String] readdir(cstr path) = "gorget_readdir"
+    extern int mem_allocated() = "gorget_mem_allocated"
+    extern int mem_freed() = "gorget_mem_freed"
+    extern int mem_live() = "gorget_mem_live"
+    extern int mem_alloc_count() = "gorget_mem_alloc_count"

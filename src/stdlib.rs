@@ -85,7 +85,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
             2 => match segments[1].as_str() {
                 "fs" => None, // file-based — loaded via builtin_module_source()
                 "path" => None, // file-based
-                "os" => Some(gen_os_module()),
+                "os" => None, // file-based
                 "conv" => Some(gen_conv_module()),
                 "io" => Some(gen_io_module()),
                 "random" => None, // file-based
@@ -153,22 +153,6 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
 
 
 
-fn gen_os_module() -> Module {
-    use crate::ir::abi::AbiKind::CStr;
-    make_module(vec![
-        decl_fn("exit", &[("code", ty_int())], ty_void()),
-        decl_fn_abi("getenv", &[("name", ty_str(), CStr)], ty_str()),
-        decl_fn_abi("setenv", &[("name", ty_str(), CStr), ("value", ty_str(), CStr)], ty_void()),
-        decl_fn("getcwd", &[], ty_string()),
-        decl_fn("platform", &[], ty_str()),
-        decl_fn("args", &[], ty_vector_str()),
-        decl_fn_abi("readdir", &[("path", ty_str(), CStr)], ty_vector_str()),
-        decl_fn("mem_allocated", &[], ty_int()),
-        decl_fn("mem_freed", &[], ty_int()),
-        decl_fn("mem_live", &[], ty_int()),
-        decl_fn("mem_alloc_count", &[], ty_int()),
-    ])
-}
 
 fn gen_conv_module() -> Module {
     use crate::ir::abi::AbiKind::CStr;
@@ -672,6 +656,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("path") => Some(include_str!("../lib/std/path.gg")),
             Some("random") => Some(include_str!("../lib/std/random.gg")),
             Some("time") => Some(include_str!("../lib/std/time.gg")),
+            Some("os") => Some(include_str!("../lib/std/os.gg")),
             Some("signal") => Some(include_str!("../lib/std/signal.gg")),
             Some("async") => Some(include_str!("../lib/std/async.gg")),
             Some("fmt") => Some(include_str!("../lib/std/fmt.gg")),
