@@ -1205,7 +1205,7 @@ fn gen_socket_module() -> Module {
     // Free function: socket_connect(host, port) -> Result[Socket, str]
     items.push(Spanned::dummy(Item::Function({
         use crate::ir::abi::AbiKind::{CStr, Scalar};
-        decl_fn_abi("socket_connect", &[("host", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_socket(), ty_str()))
+        decl_blocking_fn_abi("socket_connect", &[("host", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_socket(), ty_str()))
     })));
 
     // NOTE: async_socket_connect deferred — connect is rarely the hot path in servers.
@@ -1213,11 +1213,11 @@ fn gen_socket_module() -> Module {
 
     // Socket methods — extern bindings
     items.push(equip_block("Socket", vec![
-        extern_method("read", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_socket_read"),
-        extern_method("read_exact", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_socket_read_exact"),
-        extern_method("write", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_int(), "gorget_socket_write"),
-        extern_method("write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_socket_write_str"),
-        extern_method("read_line", Ownership::MutableBorrow, &[], ty_result(ty_string(), ty_str()), "gorget_socket_read_line"),
+        extern_blocking_method("read", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_socket_read"),
+        extern_blocking_method("read_exact", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_socket_read_exact"),
+        extern_blocking_method("write", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_int(), "gorget_socket_write"),
+        extern_blocking_method("write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_socket_write_str"),
+        extern_blocking_method("read_line", Ownership::MutableBorrow, &[], ty_result(ty_string(), ty_str()), "gorget_socket_read_line"),
         extern_method("set_timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void(), "gorget_socket_set_timeout"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_socket_close"),
         // Non-blocking socket methods — for use in spawned/coroutine context
@@ -1232,13 +1232,13 @@ fn gen_socket_module() -> Module {
     // Free function: server_socket_bind(host, port) -> Result[ServerSocket, str]
     items.push(Spanned::dummy(Item::Function({
         use crate::ir::abi::AbiKind::{CStr, Scalar};
-        decl_fn_abi("server_socket_bind", &[("host", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_server_socket(), ty_str()))
+        decl_blocking_fn_abi("server_socket_bind", &[("host", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_server_socket(), ty_str()))
     })));
 
     // ServerSocket methods — extern bindings
     // accept() returns a Result[Socket, str]: the accepted client reuses all Socket methods.
     items.push(equip_block("ServerSocket", vec![
-        extern_method("accept", Ownership::MutableBorrow, &[], ty_result(ty_socket(), ty_str()), "gorget_server_socket_accept"),
+        extern_blocking_method("accept", Ownership::MutableBorrow, &[], ty_result(ty_socket(), ty_str()), "gorget_server_socket_accept"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_server_socket_close"),
         extern_method("local_port", Ownership::Borrow, &[], ty_int(), "gorget_server_socket_local_port"),
         // Non-blocking accept — for use in spawned/coroutine context
@@ -1371,13 +1371,13 @@ fn gen_tls_socket_module() -> Module {
     // Free function: tls_connect(host, port) -> Result[TlsSocket, str]
     items.push(Spanned::dummy(Item::Function({
         use crate::ir::abi::AbiKind::{CStr, Scalar};
-        decl_fn_abi("tls_connect", &[("host", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_tls_socket(), ty_str()))
+        decl_blocking_fn_abi("tls_connect", &[("host", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_tls_socket(), ty_str()))
     })));
 
     // Free function: tls_server_bind(host, port, cert_path, key_path) -> Result[TlsServerSocket, str]
     items.push(Spanned::dummy(Item::Function({
         use crate::ir::abi::AbiKind::{CStr, Scalar};
-        decl_fn_abi("tls_server_bind", &[
+        decl_blocking_fn_abi("tls_server_bind", &[
             ("host", ty_str(), CStr),
             ("port", ty_int(), Scalar),
             ("cert_path", ty_str(), CStr),
@@ -1387,18 +1387,18 @@ fn gen_tls_socket_module() -> Module {
 
     // TlsSocket methods — extern bindings
     items.push(equip_block("TlsSocket", vec![
-        extern_method("read", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_tls_read"),
-        extern_method("read_exact", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_tls_read_exact"),
-        extern_method("write", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_int(), "gorget_tls_write"),
-        extern_method("write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_tls_write_str"),
-        extern_method("read_line", Ownership::MutableBorrow, &[], ty_result(ty_string(), ty_str()), "gorget_tls_read_line"),
+        extern_blocking_method("read", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_tls_read"),
+        extern_blocking_method("read_exact", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_tls_read_exact"),
+        extern_blocking_method("write", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_int(), "gorget_tls_write"),
+        extern_blocking_method("write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_tls_write_str"),
+        extern_blocking_method("read_line", Ownership::MutableBorrow, &[], ty_result(ty_string(), ty_str()), "gorget_tls_read_line"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_tls_close"),
         extern_method("set_timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void(), "gorget_tls_set_timeout"),
     ]));
 
     // TlsServerSocket methods — extern bindings
     items.push(equip_block("TlsServerSocket", vec![
-        extern_method("accept", Ownership::MutableBorrow, &[], ty_result(ty_tls_socket(), ty_str()), "gorget_tls_server_accept"),
+        extern_blocking_method("accept", Ownership::MutableBorrow, &[], ty_result(ty_tls_socket(), ty_str()), "gorget_tls_server_accept"),
         extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_tls_server_close"),
     ]));
 
@@ -1504,6 +1504,18 @@ fn extern_method(
 ) -> FunctionDef {
     let mut f = decl_method(name, self_ownership, extra_params, ret);
     f.body = FunctionBody::Extern(c_symbol.to_string());
+    f
+}
+
+fn extern_blocking_method(
+    name: &str,
+    self_ownership: Ownership,
+    extra_params: &[(&str, Type)],
+    ret: Type,
+    c_symbol: &str,
+) -> FunctionDef {
+    let mut f = extern_method(name, self_ownership, extra_params, ret, c_symbol);
+    f.qualifiers.is_blocking = true;
     f
 }
 

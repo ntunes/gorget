@@ -27,7 +27,7 @@ struct SqliteConn:
 
 # ── Low-level C extern bindings ───────────────────────────────
 
-extern int _gorget_sqlite_open(String path) = "gorget_sqlite_open"
+extern blocking int _gorget_sqlite_open(String path) = "gorget_sqlite_open"
 extern String _gorget_sqlite_errmsg(int db) = "gorget_sqlite_errmsg"
 extern void _gorget_sqlite_close(int db) = "gorget_sqlite_close"
 
@@ -36,12 +36,12 @@ extern void _gorget_sqlite_bind_int(int stmt, int idx, int val) = "gorget_sqlite
 extern void _gorget_sqlite_bind_float(int stmt, int idx, float val) = "gorget_sqlite_bind_float"
 extern void _gorget_sqlite_bind_str(int stmt, int idx, String val) = "gorget_sqlite_bind_str"
 extern void _gorget_sqlite_bind_null(int stmt, int idx) = "gorget_sqlite_bind_null"
-extern int _gorget_sqlite_step(int stmt) = "gorget_sqlite_step"
+extern blocking int _gorget_sqlite_step(int stmt) = "gorget_sqlite_step"
 extern int _gorget_sqlite_column_count(int stmt) = "gorget_sqlite_column_count"
 extern String _gorget_sqlite_column_name(int stmt, int col) = "gorget_sqlite_column_name"
 extern String _gorget_sqlite_column_text(int stmt, int col) = "gorget_sqlite_column_text"
 extern void _gorget_sqlite_finalize(int stmt) = "gorget_sqlite_finalize"
-extern int _gorget_sqlite_exec_simple(int db, String sql) = "gorget_sqlite_exec_simple"
+extern blocking int _gorget_sqlite_exec_simple(int db, String sql) = "gorget_sqlite_exec_simple"
 extern int _gorget_sqlite_changes(int db) = "gorget_sqlite_changes"
 
 # ── Helper: bind a Param at position idx (1-indexed) ──────────
