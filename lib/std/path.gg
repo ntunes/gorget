@@ -1,0 +1,12 @@
+# std.path — Path manipulation operations
+#
+# All functions take file paths as null-terminated C strings.
+
+extern "C":
+    extern String path_join(String a, String b) = "gorget_path_join"
+    extern String path_parent(String path) = "gorget_path_parent"
+    extern String path_basename(String path) = "gorget_path_basename"
+    extern String path_extension(String path) = "gorget_path_extension"
+    extern String path_stem(String path) = "gorget_path_stem"
+    extern String path_normalize(String path) = "gorget_path_normalize"
+    extern String path_absolute(String path) = "gorget_path_absolute"

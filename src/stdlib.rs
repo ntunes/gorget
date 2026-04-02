@@ -84,11 +84,11 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
         Some("std") => match segments.len() {
             2 => match segments[1].as_str() {
                 "fs" => None, // file-based — loaded via builtin_module_source()
-                "path" => Some(gen_path_module()),
+                "path" => None, // file-based
                 "os" => Some(gen_os_module()),
                 "conv" => Some(gen_conv_module()),
                 "io" => Some(gen_io_module()),
-                "random" => Some(gen_random_module()),
+                "random" => None, // file-based
                 "time" => Some(gen_time_module()),
                 "collections" => Some(gen_collections_module()),
                 "math" => Some(gen_math_module()),
@@ -152,18 +152,6 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
 // ─── Module Generators ──────────────────────────────────────
 
 
-fn gen_path_module() -> Module {
-    use crate::ir::abi::AbiKind::CStr;
-    make_module(vec![
-        decl_fn_abi("path_join", &[("a", ty_str(), CStr), ("b", ty_str(), CStr)], ty_string()),
-        decl_fn_abi("path_parent", &[("path", ty_str(), CStr)], ty_string()),
-        decl_fn_abi("path_basename", &[("path", ty_str(), CStr)], ty_string()),
-        decl_fn_abi("path_extension", &[("path", ty_str(), CStr)], ty_string()),
-        decl_fn_abi("path_stem", &[("path", ty_str(), CStr)], ty_string()),
-        decl_fn_abi("path_normalize", &[("path", ty_str(), CStr)], ty_string()),
-        decl_fn_abi("path_absolute", &[("path", ty_str(), CStr)], ty_string()),
-    ])
-}
 
 fn gen_os_module() -> Module {
     use crate::ir::abi::AbiKind::CStr;
@@ -240,13 +228,6 @@ fn gen_io_module() -> Module {
     }
 }
 
-fn gen_random_module() -> Module {
-    make_module(vec![
-        decl_fn("rand", &[], ty_int()),
-        decl_fn("seed", &[("n", ty_int())], ty_void()),
-        decl_fn("rand_range", &[("lo", ty_int()), ("hi", ty_int())], ty_int()),
-    ])
-}
 
 fn gen_time_module() -> Module {
     use crate::ir::abi::AbiKind::{CStr, Scalar};
@@ -965,6 +946,8 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
     match segments.first().map(|s| s.as_str()) {
         Some("std") => match segments.get(1).map(|s| s.as_str()) {
             Some("fs") => Some(include_str!("../lib/std/fs.gg")),
+            Some("path") => Some(include_str!("../lib/std/path.gg")),
+            Some("random") => Some(include_str!("../lib/std/random.gg")),
             Some("fmt") => Some(include_str!("../lib/std/fmt.gg")),
             Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
             Some("encoding") => Some(include_str!("../lib/std/encoding.gg")),

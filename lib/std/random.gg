@@ -1,0 +1,6 @@
+# std.random — Random number generation
+
+extern "C":
+    extern int rand() = "gorget_rand"
+    extern void seed(int n) = "gorget_seed"
+    extern int rand_range(int lo, int hi) = "gorget_rand_range"
