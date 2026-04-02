@@ -1,0 +1,15 @@
+# std.io — Input/output functions
+
+from std.collections import File
+
+# Standard file handles (codegen special-cases these)
+public static File stderr = File(0)
+public static File stdout = File(0)
+
+extern "C":
+    extern int getchar() = "gorget_getchar"
+    extern int term_cols() = "gorget_term_cols"
+    extern int term_rows() = "gorget_term_rows"
+    extern blocking cstr input(cstr prompt) = "gorget_input"
+    extern cstr readline() = "gorget_readline"
+    extern bool stdin_eof() = "gorget_stdin_eof"

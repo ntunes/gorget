@@ -87,7 +87,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "path" => None, // file-based
                 "os" => None, // file-based
                 "conv" => None,
-                "io" => Some(gen_io_module()),
+                "io" => None, // file-based
                 "random" => None, // file-based
                 "time" => None, // file-based
                 "collections" => Some(gen_collections_module()),
@@ -156,48 +156,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
 
 // gen_conv_module — migrated to lib/std/conv.gg
 
-fn gen_io_module() -> Module {
-    let file_type = Type::Named {
-        name: Spanned::dummy("File".to_string()),
-        generic_args: vec![],
-    };
-    let mut items = vec![
-        Spanned::dummy(Item::StaticDecl(StaticDecl {
-            visibility: Visibility::Public,
-            name: Spanned::dummy("stderr".to_string()),
-            type_: Spanned::dummy(file_type.clone()),
-            value: Spanned::dummy(Expr::IntLiteral(0)), // placeholder — codegen special-cases
-            span: Span::dummy(),
-        })),
-        Spanned::dummy(Item::StaticDecl(StaticDecl {
-            visibility: Visibility::Public,
-            name: Spanned::dummy("stdout".to_string()),
-            type_: Spanned::dummy(file_type),
-            value: Spanned::dummy(Expr::IntLiteral(0)), // placeholder
-            span: Span::dummy(),
-        })),
-    ];
-    // Add functions
-    for name in &["getchar", "term_cols", "term_rows"] {
-        items.push(Spanned::dummy(Item::Function(
-            decl_fn(name, &[], ty_int()),
-        )));
-    }
-    items.push(Spanned::dummy(Item::Function({
-        use crate::ir::abi::AbiKind::CStr;
-        decl_fn_abi("input", &[("prompt", ty_str(), CStr)], ty_string())
-    })));
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("readline", &[], ty_string()),
-    )));
-    items.push(Spanned::dummy(Item::Function(
-        decl_fn("stdin_eof", &[], ty_bool()),
-    )));
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
+// gen_io_module — migrated to lib/std/io.gg
 
 
 /// std.async — non-blocking I/O helpers backed by the GorgetReactor (timerfd/kqueue).
@@ -644,6 +603,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("random") => Some(include_str!("../lib/std/random.gg")),
             Some("time") => Some(include_str!("../lib/std/time.gg")),
             Some("conv") => Some(include_str!("../lib/std/conv.gg")),
+            Some("io") => Some(include_str!("../lib/std/io.gg")),
             Some("os") => Some(include_str!("../lib/std/os.gg")),
             Some("signal") => Some(include_str!("../lib/std/signal.gg")),
             Some("async") => Some(include_str!("../lib/std/async.gg")),
