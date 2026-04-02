@@ -1,0 +1,4 @@
+# std.async — Non-blocking I/O helpers backed by the GorgetReactor
+
+extern "C":
+    extern blocking void async_sleep(int ms) = "gorget_reactor_sleep_ms"
