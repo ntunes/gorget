@@ -111,7 +111,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
             },
             3 if segments[1] == "net" && segments[2] == "socket" => None, // file-based
             3 if segments[1] == "net" && segments[2] == "tls" => None, // file-based
-            3 if segments[1] == "net" && segments[2] == "udp" => Some(gen_udp_socket_module()),
+            3 if segments[1] == "net" && segments[2] == "udp" => None, // file-based
             _ => None,
         },
         Some("xtd") if segments.len() == 2 => match segments[1].as_str() {
@@ -499,6 +499,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("net") => match segments.get(2).map(|s| s.as_str()) {
                 Some("socket") => Some(include_str!("../lib/std/socket.gg")),
                 Some("tls") => Some(include_str!("../lib/std/tls.gg")),
+                Some("udp") => Some(include_str!("../lib/std/udp.gg")),
                 _ => None,
             },
             _ => None,
@@ -702,104 +703,7 @@ fn opaque_struct(name: &str) -> Spanned<Item> {
 
 // gen_socket_module — migrated to lib/std/socket.gg
 
-// ─── std.net.udp ────────────────────────────────────────────
-
-fn gen_udp_socket_module() -> Module {
-    let ty_udp_socket = || Type::Named {
-        name: Spanned::dummy("UdpSocket".to_string()),
-        generic_args: vec![],
-    };
-    let ty_udp_addr = || Type::Named {
-        name: Spanned::dummy("UdpAddr".to_string()),
-        generic_args: vec![],
-    };
-    let ty_udp_packet = || Type::Named {
-        name: Spanned::dummy("UdpPacket".to_string()),
-        generic_args: vec![],
-    };
-
-    let mut items: Vec<Spanned<Item>> = Vec::new();
-
-    // Opaque struct: UdpSocket
-    items.push(opaque_struct("UdpSocket"));
-
-    // Struct with visible fields: UdpAddr { host: str, port: int }
-    items.push(Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("UdpAddr".to_string()),
-        generic_params: None,
-        fields: vec![
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("host".to_string()),
-                type_: Spanned::dummy(ty_str()),
-            }),
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("port".to_string()),
-                type_: Spanned::dummy(ty_int()),
-            }),
-        ],
-        doc_comment: None,
-        span: Span::dummy(),
-    })));
-
-    // Struct with visible fields: UdpPacket { data: Vector[uint8], sender: UdpAddr }
-    items.push(Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("UdpPacket".to_string()),
-        generic_params: None,
-        fields: vec![
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("data".to_string()),
-                type_: Spanned::dummy(ty_vector_uint8()),
-            }),
-            Spanned::dummy(FieldDef {
-                visibility: Visibility::Public,
-                name: Spanned::dummy("sender".to_string()),
-                type_: Spanned::dummy(ty_udp_addr()),
-            }),
-        ],
-        doc_comment: None,
-        span: Span::dummy(),
-    })));
-
-    // Free function: udp_bind(addr, port) -> Result[UdpSocket, str]
-    items.push(Spanned::dummy(Item::Function({
-        use crate::ir::abi::AbiKind::{CStr, Scalar};
-        decl_fn_abi("udp_bind", &[("addr", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_udp_socket(), ty_str()))
-    })));
-
-    // UdpSocket methods
-    items.push(equip_block("UdpSocket", vec![
-        // sendto(&self, data, host, port) -> Result[int, str]
-        decl_method("sendto", Ownership::MutableBorrow, &[("data", ty_vector_uint8()), ("host", ty_str()), ("port", ty_int())], ty_result(ty_int(), ty_str())),
-        // recvfrom(&self, max_bytes) -> Result[UdpPacket, str]
-        decl_method("recvfrom", Ownership::MutableBorrow, &[("max_bytes", ty_int())], ty_result(ty_udp_packet(), ty_str())),
-        // poll(&self, timeout_ms) -> bool
-        extern_method("poll", Ownership::MutableBorrow, &[("timeout_ms", ty_int())], ty_bool(), "gorget_udp_poll"),
-        // set_nonblocking(&self, enabled)
-        extern_method("set_nonblocking", Ownership::MutableBorrow, &[("enabled", ty_bool())], ty_void(), "gorget_udp_set_nonblocking"),
-        // join_multicast(&self, group_addr) -> Result[bool, str]
-        decl_method("join_multicast", Ownership::MutableBorrow, &[("group_addr", ty_str())], ty_result(ty_bool(), ty_str())),
-        // leave_multicast(&self, group_addr)
-        extern_method("leave_multicast", Ownership::MutableBorrow, &[("group_addr", ty_str())], ty_void(), "gorget_udp_leave_multicast"),
-        // set_multicast_loopback(&self, enabled)
-        extern_method("set_multicast_loopback", Ownership::MutableBorrow, &[("enabled", ty_bool())], ty_void(), "gorget_udp_set_multicast_loopback"),
-        // local_addr(self) -> UdpAddr
-        extern_method("local_addr", Ownership::Borrow, &[], ty_udp_addr(), "gorget_udp_local_addr"),
-        // close(&self)
-        extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_udp_close"),
-    ]));
-
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
+// gen_udp_socket_module — migrated to lib/std/udp.gg
 
 // gen_tls_socket_module — migrated to lib/std/tls.gg
 
