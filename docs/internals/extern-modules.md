@@ -54,61 +54,75 @@ The ABI boundary knowledge must live in a backend-agnostic layer that all backen
 
 ### Core idea
 
-Extern functions are declared in **module interface files** (`.ggi`) that specify both the Gorget-level types and the ABI-level marshalling for each parameter. The compiler reads these declarations and generates the correct boundary code for any backend.
+Extern blocks declare functions using **FFI types** — types that describe how values cross the ABI boundary. FFI types are only valid inside `extern` blocks, not in regular `.gg` code. The compiler marshals between Gorget types and FFI types automatically at call sites.
 
-### Extern module declaration syntax
+This is how Rust (`*const c_char`), Zig (`[*:0]const u8`), and Swift (`UnsafePointer<CChar>`) handle FFI — explicit boundary types, automatic conversion.
+
+### Extern block syntax (using existing parser)
 
 ```gorget
-extern module regex:
-    version 1.0.0
-    link "pcre2"
-    platform "macos", "linux", "windows"
+# Regex — C runtime takes const char* for strings
+extern "C":
+    extern cstr regex_last_error() = "gorget_regex_last_error"
+    extern int regex_compile_raw(cstr pattern, cstr flags) = "gorget_regex_compile"
+    extern void regex_free(int rx) = "gorget_regex_free"
+    extern int regex_find_raw(int rx, cstr subject, int offset) = "gorget_regex_find"
+    extern bool regex_is_match_raw(int rx, cstr subject) = "gorget_regex_is_match"
 
-    type Regex = OpaquePtr
-    type Match = OpaquePtr
-
-    Regex compile(cstr pattern, cstr flags)
-    void free(Regex rx)
-    Match find(Regex rx, cstr subject, int offset)
-    bool is_match(Regex rx, cstr subject)
-    Vector[Match] find_all(Regex rx, cstr subject)
-    String replace(Regex rx, cstr subject, cstr replacement)
-    String escape(cstr text)
-    cstr last_error()
+# Gorget wrapper — constructs Result from raw + errno
+Result[Regex, String] regex_compile(String pattern):
+    int raw = regex_compile_raw(pattern, "")
+    String err = regex_last_error()
+    if err.len() > 0:
+        return Error(err)
+    return Ok(Regex(raw))
 ```
 
 ```gorget
-extern module sdl:
-    version 2.0.0
-    link "SDL2"
-    platform "macos", "linux", "windows"
+# SDL — C runtime takes const char* for window title
+extern "C":
+    extern int sdl_create_window(cstr title, int w, int h, int flags) = "gorget_sdl_create_window"
+    extern cstr sdl_get_error() = "gorget_sdl_get_error"
 
-    type Window = OpaquePtr
-    type Renderer = OpaquePtr
-    type Texture = OpaquePtr
+# SQLite — Gorget-aware wrappers take Str struct by value
+extern "Gorget":
+    extern int sqlite_open(String path) = "gorget_sqlite_open"
+    extern int sqlite_prepare(int db, String sql) = "gorget_sqlite_prepare"
 
-    Window create_window(cstr title, int x, int y, int w, int h, uint32 flags)
-    Renderer create_renderer(Window win, int index, uint32 flags)
-    void destroy_window(Window win)
-    void set_window_title(Window win, cstr title)
-    cstr last_error()
+# OS — some functions return const char*, some return Gorget strings
+extern "C":
+    extern cstr getenv(cstr name) = "gorget_getenv"
+    extern cstr getcwd() = "gorget_getcwd"
+    extern cstr platform() = "gorget_platform"
+    extern void exit(int code) = "gorget_exit"
+    extern void setenv(cstr name, cstr value) = "gorget_setenv"
 ```
 
-```gorget
-extern module sqlite:
-    version 3.0.0
-    link "sqlite3"
+### FFI type vocabulary
 
-    type Database = OpaquePtr
-    type Statement = OpaquePtr
+FFI types are only valid inside `extern` blocks. The compiler automatically marshals between Gorget types and FFI types at call boundaries:
 
-    # These wrappers accept full Gorget strings (they handle cstr
-    # conversion internally)
-    Database open(String path)
-    Statement prepare(Database db, String sql)
-    void bind_str(Statement stmt, int idx, String val)
-    void close(Database db)
-```
+| FFI type | Meaning | Gorget type at call site | C | LLVM | WASM |
+|---|---|---|---|---|---|
+| `cstr` | Null-terminated byte pointer | `String` (auto-extract `.data` + `\0`) | `const char*` | `i8*` | `i32` offset |
+| `byteptr` | Raw byte pointer (no `\0`) | `String` (auto-extract `.data`) | `const char*` | `i8*` | `i32` offset |
+| `String` | Full Gorget string struct | `String` (no conversion) | `Str` (32-byte) | `%Str` | struct |
+| `int`, `float`, `bool` | Gorget scalars | same | `int64_t`, `double`, `bool` | `i64`, `double`, `i1` | `i64`, `f64`, `i32` |
+| `ptr[T]` | Typed pointer to T | pass by reference | `T*` | `%T*` | `i32` |
+| Named opaque | Declared opaque type | opaque handle | `int64_t` | `i64` | `i32` |
+
+Return marshalling:
+- `cstr` return → compiler wraps with `gorget_str_from_cstr()` → Gorget `String`
+- `String` return → no conversion (already Gorget `String`)
+- Scalar returns → no conversion
+
+### Key design principle: explicit over implicit
+
+The `extern "C"` block does NOT implicitly convert String to `cstr`. The developer writes `cstr` where the C function expects `const char*`, and `String` where it expects `Str`. This is:
+- **Explicit**: you see the ABI contract in the declaration
+- **Correct**: no asymmetry between params and returns
+- **Extensible**: other ABIs (Rust, WASM) add their own FFI types
+- **Backend-agnostic**: each backend reads the FFI types and emits its own marshalling
 
 ### ABI type vocabulary
 

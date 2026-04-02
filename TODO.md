@@ -13,7 +13,7 @@
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
-- **Extern module ABI declarations (Phase 1-2 DONE, Phase 3-5 remaining)**: AbiKind enum + pipeline complete. emit_abi_arg + resolve_param_abi replace 4 arg emission paths. ~50 stdlib functions annotated. needs_null_terminated_cstr deleted. Remaining: (1) Annotate equip methods with AbiKind::Ptr via decl_method_abi — enables deleting runtime_arg_by_ptr. (2) .ggi parser (Phase 3). (3) User-facing extern syntax (Phase 5). See `docs/internals/extern-modules.md`. [updated: 2026-04-01]
+- **Extern module ABI declarations — explicit FFI types**: AbiKind pipeline complete. 9 stdlib modules migrated to .gg files (~1750 lines of Rust deleted). blocking qualifier replaces BLOCKING_STDLIB_CALLS. Return ABI plumbed. **Next step**: parse `cstr` as an FFI type in extern blocks. Then: `cstr` params auto-extract .data+\0 from String, `cstr` returns auto-wrap with gorget_str_from_cstr. This replaces the current implicit `extern "C":` String→CStr derivation with explicit FFI types. Removes need for is_cstr_returning_fn whitelist. Enables Result wrappers in pure Gorget (extern returns raw + error-check fn). See `docs/internals/extern-modules.md`. [updated: 2026-04-02]
 
 - **Trait-bounded generic functions don't monomorphize**: `void print_sum[Summable T](T val)` — linker error. Core language feature gap. [added: 2026-03-23]
 
