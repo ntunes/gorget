@@ -19,8 +19,8 @@
 /// already exist in the runtime — the Gorget source would just be boilerplate
 /// `extern` declarations with no real logic.
 ///
-/// Examples: `std.fs`, `std.os`, `std.conv`, `std.math`, `xtd.crypto`,
-/// `std.net.socket`, `xtd.sdl`, `xtd.regex`.
+/// Examples: `std.collections`, `std.channel`, `std.alloc`,
+/// `std.sync`, `std.thread`, `std.net.udp`.
 ///
 /// ## File-based modules (`builtin_module_source` returns `Some`)
 ///
@@ -36,8 +36,10 @@
 /// tested in the language itself. File-based modules can import other built-in
 /// modules and use all language features.
 ///
-/// Examples: `xtd.json`, `xtd.toml`, `xtd.xml`, `xtd.yaml`, `xtd.csv`,
-/// `std.bytes`, `std.encoding`, `xtd.gfx`, `xtd.ecs`, `xtd.ssh`, `xtd.http`.
+/// Examples: `std.fs`, `std.os`, `std.conv`, `std.math`, `std.net.socket`,
+/// `std.net.tls`, `xtd.crypto`, `xtd.regex`, `xtd.json`, `xtd.toml`,
+/// `xtd.xml`, `xtd.yaml`, `xtd.csv`, `std.bytes`, `std.encoding`,
+/// `xtd.gfx`, `xtd.ecs`, `xtd.ssh`, `xtd.http`.
 ///
 /// ## Adding a new module
 ///
@@ -107,8 +109,8 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "datetime" => None, // file-based module — loaded via builtin_module_source()
                 _ => None,
             },
-            3 if segments[1] == "net" && segments[2] == "socket" => Some(gen_socket_module()),
-            3 if segments[1] == "net" && segments[2] == "tls" => Some(gen_tls_socket_module()),
+            3 if segments[1] == "net" && segments[2] == "socket" => None, // file-based
+            3 if segments[1] == "net" && segments[2] == "tls" => None, // file-based
             3 if segments[1] == "net" && segments[2] == "udp" => Some(gen_udp_socket_module()),
             _ => None,
         },
@@ -494,6 +496,11 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("term") => Some(include_str!("../lib/std/term.gg")),
             Some("heap") => Some(include_str!("../lib/std/heap.gg")),
             Some("datetime") => Some(include_str!("../lib/std/datetime.gg")),
+            Some("net") => match segments.get(2).map(|s| s.as_str()) {
+                Some("socket") => Some(include_str!("../lib/std/socket.gg")),
+                Some("tls") => Some(include_str!("../lib/std/tls.gg")),
+                _ => None,
+            },
             _ => None,
         },
         Some("xtd") => match segments.get(1).map(|s| s.as_str()) {
@@ -534,6 +541,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
 
 // ─── Helpers ────────────────────────────────────────────────
 
+#[allow(dead_code)]
 fn make_module(fns: Vec<FunctionDef>) -> Module {
     let items: Vec<Spanned<Item>> = fns
         .into_iter()
@@ -595,6 +603,7 @@ fn decl_fn_abi(name: &str, params: &[(&str, Type, crate::ir::abi::AbiKind)], ret
     f
 }
 
+#[allow(dead_code)]
 fn decl_async_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
     let mut f = decl_fn(name, params, ret);
     f.qualifiers.is_async = true;
@@ -602,12 +611,14 @@ fn decl_async_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef 
 }
 
 /// Declare a blocking extern function — yields shared variable locks during call.
+#[allow(dead_code)]
 fn decl_blocking_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
     let mut f = decl_fn(name, params, ret);
     f.qualifiers.is_blocking = true;
     f
 }
 
+#[allow(dead_code)]
 fn decl_blocking_fn_abi(name: &str, params: &[(&str, Type, crate::ir::abi::AbiKind)], ret: Type) -> FunctionDef {
     let mut f = decl_fn_abi(name, params, ret);
     f.qualifiers.is_blocking = true;
@@ -630,6 +641,7 @@ fn ty_bool() -> Type {
     Type::Primitive(PrimitiveType::Bool)
 }
 
+#[allow(dead_code)]
 fn ty_float() -> Type {
     Type::Primitive(PrimitiveType::Float)
 }
@@ -638,6 +650,7 @@ fn ty_void() -> Type {
     Type::Primitive(PrimitiveType::Void)
 }
 
+#[allow(dead_code)]
 fn ty_vector_str() -> Type {
     Type::Named {
         name: Spanned::dummy("Vector".to_string()),
@@ -663,6 +676,7 @@ fn ty_result(ok: Type, err: Type) -> Type {
     }
 }
 
+#[allow(dead_code)]
 fn ty_option(inner: Type) -> Type {
     Type::Named {
         name: Spanned::dummy("Option".to_string()),
@@ -686,71 +700,7 @@ fn opaque_struct(name: &str) -> Spanned<Item> {
 
 // gen_crypto_module — migrated to lib/xtd/crypto.gg
 
-// ─── std.net.socket ─────────────────────────────────────────
-
-fn gen_socket_module() -> Module {
-    let ty_socket = || Type::Named {
-        name: Spanned::dummy("Socket".to_string()),
-        generic_args: vec![],
-    };
-    let ty_server_socket = || Type::Named {
-        name: Spanned::dummy("ServerSocket".to_string()),
-        generic_args: vec![],
-    };
-
-    let mut items: Vec<Spanned<Item>> = Vec::new();
-
-    // Opaque struct: Socket
-    items.push(opaque_struct("Socket"));
-
-    // Free function: socket_connect(host, port) -> Result[Socket, str]
-    items.push(Spanned::dummy(Item::Function({
-        use crate::ir::abi::AbiKind::{CStr, Scalar};
-        decl_blocking_fn_abi("socket_connect", &[("host", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_socket(), ty_str()))
-    })));
-
-    // NOTE: async_socket_connect deferred — connect is rarely the hot path in servers.
-    // The important async ops are async_accept, async_read, async_write for server loops.
-
-    // Socket methods — extern bindings
-    items.push(equip_block("Socket", vec![
-        extern_blocking_method("read", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_socket_read"),
-        extern_blocking_method("read_exact", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_socket_read_exact"),
-        extern_blocking_method("write", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_int(), "gorget_socket_write"),
-        extern_blocking_method("write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_socket_write_str"),
-        extern_blocking_method("read_line", Ownership::MutableBorrow, &[], ty_result(ty_string(), ty_str()), "gorget_socket_read_line"),
-        extern_method("set_timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void(), "gorget_socket_set_timeout"),
-        extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_socket_close"),
-        // Non-blocking socket methods — for use in spawned/coroutine context
-        extern_method("nb_read", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_socket_async_read"),
-        extern_method("nb_write", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_int(), "gorget_socket_async_write"),
-        extern_method("nb_write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_socket_async_write_str"),
-    ]));
-
-    // Opaque struct: ServerSocket
-    items.push(opaque_struct("ServerSocket"));
-
-    // Free function: server_socket_bind(host, port) -> Result[ServerSocket, str]
-    items.push(Spanned::dummy(Item::Function({
-        use crate::ir::abi::AbiKind::{CStr, Scalar};
-        decl_blocking_fn_abi("server_socket_bind", &[("host", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_server_socket(), ty_str()))
-    })));
-
-    // ServerSocket methods — extern bindings
-    // accept() returns a Result[Socket, str]: the accepted client reuses all Socket methods.
-    items.push(equip_block("ServerSocket", vec![
-        extern_blocking_method("accept", Ownership::MutableBorrow, &[], ty_result(ty_socket(), ty_str()), "gorget_server_socket_accept"),
-        extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_server_socket_close"),
-        extern_method("local_port", Ownership::Borrow, &[], ty_int(), "gorget_server_socket_local_port"),
-        // Non-blocking accept — for use in spawned/coroutine context
-        extern_method("nb_accept", Ownership::MutableBorrow, &[], ty_result(ty_socket(), ty_str()), "gorget_socket_async_accept"),
-    ]));
-
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
+// gen_socket_module — migrated to lib/std/socket.gg
 
 // ─── std.net.udp ────────────────────────────────────────────
 
@@ -851,65 +801,7 @@ fn gen_udp_socket_module() -> Module {
     }
 }
 
-// ─── std.net.tls ────────────────────────────────────────────
-
-fn gen_tls_socket_module() -> Module {
-    let ty_tls_socket = || Type::Named {
-        name: Spanned::dummy("TlsSocket".to_string()),
-        generic_args: vec![],
-    };
-    let ty_tls_server_socket = || Type::Named {
-        name: Spanned::dummy("TlsServerSocket".to_string()),
-        generic_args: vec![],
-    };
-
-    let mut items: Vec<Spanned<Item>> = Vec::new();
-
-    // Opaque structs
-    items.push(opaque_struct("TlsSocket"));
-    items.push(opaque_struct("TlsServerSocket"));
-
-    // Free function: tls_connect(host, port) -> Result[TlsSocket, str]
-    items.push(Spanned::dummy(Item::Function({
-        use crate::ir::abi::AbiKind::{CStr, Scalar};
-        decl_blocking_fn_abi("tls_connect", &[("host", ty_str(), CStr), ("port", ty_int(), Scalar)], ty_result(ty_tls_socket(), ty_str()))
-    })));
-
-    // Free function: tls_server_bind(host, port, cert_path, key_path) -> Result[TlsServerSocket, str]
-    items.push(Spanned::dummy(Item::Function({
-        use crate::ir::abi::AbiKind::{CStr, Scalar};
-        decl_blocking_fn_abi("tls_server_bind", &[
-            ("host", ty_str(), CStr),
-            ("port", ty_int(), Scalar),
-            ("cert_path", ty_str(), CStr),
-            ("key_path", ty_str(), CStr),
-        ], ty_result(ty_tls_server_socket(), ty_str()))
-    })));
-
-    // TlsSocket methods — extern bindings
-    items.push(equip_block("TlsSocket", vec![
-        extern_blocking_method("read", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_tls_read"),
-        extern_blocking_method("read_exact", Ownership::MutableBorrow, &[("n", ty_int())], ty_vector_uint8(), "gorget_tls_read_exact"),
-        extern_blocking_method("write", Ownership::MutableBorrow, &[("data", ty_vector_uint8())], ty_int(), "gorget_tls_write"),
-        extern_blocking_method("write_str", Ownership::MutableBorrow, &[("s", ty_str())], ty_int(), "gorget_tls_write_str"),
-        extern_blocking_method("read_line", Ownership::MutableBorrow, &[], ty_result(ty_string(), ty_str()), "gorget_tls_read_line"),
-        extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_tls_close"),
-        extern_method("set_timeout", Ownership::MutableBorrow, &[("ms", ty_int())], ty_void(), "gorget_tls_set_timeout"),
-    ]));
-
-    // TlsServerSocket methods — extern bindings
-    items.push(equip_block("TlsServerSocket", vec![
-        extern_blocking_method("accept", Ownership::MutableBorrow, &[], ty_result(ty_tls_socket(), ty_str()), "gorget_tls_server_accept"),
-        extern_method("close", Ownership::MutableBorrow, &[], ty_void(), "gorget_tls_server_close"),
-    ]));
-
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
-
-// ─── xtd.regex ───────────────────────────────────────────────
+// gen_tls_socket_module — migrated to lib/std/tls.gg
 
 fn gen_regex_module() -> Module {
     let ty_regex = || Type::Named {
@@ -927,12 +819,9 @@ fn gen_regex_module() -> Module {
 
     let mut items: Vec<Spanned<Item>> = Vec::new();
 
-    // Opaque structs
     items.push(opaque_struct("Regex"));
     items.push(opaque_struct("Match"));
 
-    // Free functions (handled by takes_cstr_for_str_param whitelists — ABI tags
-    // don't reach the C dispatch names like gorget_regex_is_match_pat)
     items.push(Spanned::dummy(Item::Function(decl_fn("regex_compile", &[("pattern", ty_str())], ty_result(ty_regex(), ty_str())))));
     items.push(Spanned::dummy(Item::Function(decl_fn("regex_compile_with", &[("pattern", ty_str()), ("flags", ty_str())], ty_result(ty_regex(), ty_str())))));
     items.push(Spanned::dummy(Item::Function(extern_fn("regex_escape", &[("s", ty_str())], ty_string(), "gorget_regex_escape"))));
@@ -940,15 +829,12 @@ fn gen_regex_module() -> Module {
     items.push(Spanned::dummy(Item::Function(decl_fn("regex_find", &[("pattern", ty_str()), ("subject", ty_str())], ty_option(ty_match())))));
     items.push(Spanned::dummy(Item::Function(decl_fn("regex_replace", &[("pattern", ty_str()), ("subject", ty_str()), ("repl", ty_str())], ty_string()))));
 
-    // Regex methods
     items.push(equip_block("Regex", vec![
-        // Direct extern bindings (no Result/Option wrapping)
         extern_method("is_match", Ownership::Borrow, &[("subject", ty_str())], ty_bool(), "gorget_regex_is_match"),
         extern_method("replace_all", Ownership::Borrow, &[("subject", ty_str()), ("replacement", ty_str())], ty_string(), "gorget_regex_replace_all"),
         extern_method("capture_count", Ownership::Borrow, &[], ty_int(), "gorget_regex_capture_count"),
         extern_method("pattern_str", Ownership::Borrow, &[], ty_str(), "gorget_regex_pattern_str"),
         extern_method("group_names", Ownership::Borrow, &[], ty_vector_str(), "gorget_regex_group_names"),
-        // Result/Option-wrapping methods (hardcoded dispatch)
         decl_method("find", Ownership::Borrow, &[("subject", ty_str())], ty_option(ty_match())),
         decl_method("find_at", Ownership::Borrow, &[("subject", ty_str()), ("pos", ty_int())], ty_option(ty_match())),
         decl_method("find_all", Ownership::Borrow, &[("subject", ty_str())], ty_vector_match()),
@@ -958,14 +844,12 @@ fn gen_regex_module() -> Module {
         decl_method("fullmatch", Ownership::Borrow, &[("subject", ty_str())], ty_option(ty_match())),
     ]));
 
-    // Match methods (all extern — simple accessors)
     items.push(equip_block("Match", vec![
         extern_method("text", Ownership::Borrow, &[], ty_str(), "gorget_regex_match_text"),
         extern_method("start", Ownership::Borrow, &[], ty_int(), "gorget_regex_match_start"),
         extern_method("end_pos", Ownership::Borrow, &[], ty_int(), "gorget_regex_match_end"),
         extern_method("group_count", Ownership::Borrow, &[], ty_int(), "gorget_regex_match_group_count"),
         extern_method("groups", Ownership::Borrow, &[], ty_vector_str(), "gorget_regex_match_groups"),
-        // group(n) → Option[str], group_by_name(name) → Option[str] (hardcoded dispatch)
         decl_method("group", Ownership::Borrow, &[("n", ty_int())], ty_option(ty_str())),
         decl_method("group_by_name", Ownership::Borrow, &[("name", ty_str())], ty_option(ty_str())),
     ]));
@@ -980,6 +864,7 @@ fn gen_regex_module() -> Module {
 
 /// Build an extern free function declaration.
 /// The C symbol is called directly instead of going through hardcoded dispatch.
+#[allow(dead_code)]
 fn extern_fn(name: &str, params: &[(&str, Type)], ret: Type, c_symbol: &str) -> FunctionDef {
     let mut f = decl_fn(name, params, ret);
     f.body = FunctionBody::Extern(c_symbol.to_string());
@@ -1008,6 +893,7 @@ fn extern_method(
     f
 }
 
+#[allow(dead_code)]
 fn extern_blocking_method(
     name: &str,
     self_ownership: Ownership,
@@ -1373,92 +1259,40 @@ mod tests {
     }
 
     #[test]
-    fn generate_fs() {
-        let m = generate_builtin_module(&["std".into(), "fs".into()]).unwrap();
-        assert_eq!(m.items.len(), 13);
-        let names: Vec<_> = m.items.iter().map(|i| match &i.node {
-            Item::Function(f) => f.name.node.clone(),
-            _ => panic!("expected function"),
-        }).collect();
-        assert!(names.contains(&"read_file".to_string()));
-        assert!(names.contains(&"read_file_bytes".to_string()));
-        assert!(names.contains(&"write_file".to_string()));
-        assert!(names.contains(&"write_file_bytes".to_string()));
-        assert!(names.contains(&"append_file".to_string()));
-        assert!(names.contains(&"file_exists".to_string()));
-        assert!(names.contains(&"delete_file".to_string()));
-        assert!(names.contains(&"mkdir".to_string()));
-        assert!(names.contains(&"rmdir".to_string()));
-        assert!(names.contains(&"rename".to_string()));
-        assert!(names.contains(&"copy_file".to_string()));
-        assert!(names.contains(&"file_size".to_string()));
-        assert!(names.contains(&"is_dir".to_string()));
+    fn generate_fs_returns_none() {
+        // std.fs is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["std".into(), "fs".into()]).is_none());
+        assert!(builtin_module_source(&["std".into(), "fs".into()]).is_some());
     }
 
     #[test]
-    fn generate_conv() {
-        let m = generate_builtin_module(&["std".into(), "conv".into()]).unwrap();
-        assert_eq!(m.items.len(), 9); // +1 for int_to_float
+    fn generate_conv_returns_none() {
+        assert!(generate_builtin_module(&["std".into(), "conv".into()]).is_none());
+        assert!(builtin_module_source(&["std".into(), "conv".into()]).is_some());
     }
 
     #[test]
-    fn generate_io() {
-        let m = generate_builtin_module(&["std".into(), "io".into()]).unwrap();
-        assert_eq!(m.items.len(), 8); // stderr, stdout, getchar, term_cols, term_rows, input, readline, stdin_eof
+    fn generate_io_returns_none() {
+        assert!(generate_builtin_module(&["std".into(), "io".into()]).is_none());
+        assert!(builtin_module_source(&["std".into(), "io".into()]).is_some());
     }
 
     #[test]
-    fn generate_random() {
-        let m = generate_builtin_module(&["std".into(), "random".into()]).unwrap();
-        assert_eq!(m.items.len(), 3);
-        let names: Vec<_> = m.items.iter().map(|i| match &i.node {
-            Item::Function(f) => f.name.node.clone(),
-            _ => panic!("expected function"),
-        }).collect();
-        assert!(names.contains(&"rand".to_string()));
-        assert!(names.contains(&"seed".to_string()));
-        assert!(names.contains(&"rand_range".to_string()));
+    fn generate_random_returns_none() {
+        assert!(generate_builtin_module(&["std".into(), "random".into()]).is_none());
+        assert!(builtin_module_source(&["std".into(), "random".into()]).is_some());
     }
 
     #[test]
-    fn generate_time() {
-        let m = generate_builtin_module(&["std".into(), "time".into()]).unwrap();
-        assert_eq!(m.items.len(), 6);
-        let names: Vec<_> = m.items.iter().map(|i| match &i.node {
-            Item::Function(f) => f.name.node.clone(),
-            _ => panic!("expected function"),
-        }).collect();
-        assert!(names.contains(&"time".to_string()));
-        assert!(names.contains(&"sleep_ms".to_string()));
-        assert!(names.contains(&"sleep".to_string()));
-        assert!(names.contains(&"time_ms".to_string()));
-        assert!(names.contains(&"format_time".to_string()));
-        assert!(names.contains(&"parse_time".to_string()));
+    fn generate_time_returns_none() {
+        assert!(generate_builtin_module(&["std".into(), "time".into()]).is_none());
+        assert!(builtin_module_source(&["std".into(), "time".into()]).is_some());
     }
 
     #[test]
-    fn generate_math() {
-        let m = generate_builtin_module(&["std".into(), "math".into()]).unwrap();
-        assert_eq!(m.items.len(), 23); // 5 constants + 18 functions
-        let mut const_names = vec![];
-        let mut fn_names = vec![];
-        for item in &m.items {
-            match &item.node {
-                Item::ConstDecl(c) => const_names.push(c.name.node.clone()),
-                Item::Function(f) => fn_names.push(f.name.node.clone()),
-                _ => panic!("unexpected item type"),
-            }
-        }
-        assert!(const_names.contains(&"PI".to_string()));
-        assert!(const_names.contains(&"E".to_string()));
-        assert!(const_names.contains(&"TAU".to_string()));
-        assert!(const_names.contains(&"INFINITY".to_string()));
-        assert!(const_names.contains(&"NAN".to_string()));
-        assert!(fn_names.contains(&"abs".to_string()));
-        assert!(fn_names.contains(&"sqrt".to_string()));
-        assert!(fn_names.contains(&"sin".to_string()));
-        assert!(fn_names.contains(&"atan2".to_string()));
-        assert!(fn_names.contains(&"pow".to_string()));
+    fn generate_math_returns_none() {
+        assert!(generate_builtin_module(&["std".into(), "math".into()]).is_none());
+        assert!(builtin_module_source(&["std".into(), "math".into()]).is_some());
     }
 
     #[test]
@@ -1701,30 +1535,19 @@ mod tests {
     }
 
     #[test]
-    fn generate_crypto() {
-        let m = generate_builtin_module(&["xtd".into(), "crypto".into()]).unwrap();
-        let mut struct_names = vec![];
-        let mut fn_names = vec![];
-        for item in &m.items {
-            match &item.node {
-                Item::Struct(s) => struct_names.push(s.name.node.clone()),
-                Item::Function(f) => fn_names.push(f.name.node.clone()),
-                _ => {}
-            }
-        }
-        assert!(struct_names.contains(&"CipherContext".to_string()));
-        assert!(struct_names.contains(&"BigNum".to_string()));
-        assert!(struct_names.contains(&"RSAKey".to_string()));
-        assert!(fn_names.contains(&"crypto_sha256".to_string()));
-        assert!(fn_names.contains(&"crypto_sha1".to_string()));
-        assert!(fn_names.contains(&"crypto_hmac".to_string()));
-        assert!(fn_names.contains(&"crypto_aes_ctr_new".to_string()));
-        assert!(fn_names.contains(&"crypto_bn_from_bytes".to_string()));
-        assert!(fn_names.contains(&"crypto_bn_to_bytes".to_string()));
-        assert!(fn_names.contains(&"crypto_bn_mod_exp".to_string()));
-        assert!(fn_names.contains(&"crypto_rsa_load_public".to_string()));
-        assert!(fn_names.contains(&"crypto_rsa_verify".to_string()));
-        assert!(fn_names.contains(&"crypto_random_bytes".to_string()));
+    fn generate_crypto_returns_none() {
+        // xtd.crypto is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["xtd".into(), "crypto".into()]).is_none());
+    }
+
+    #[test]
+    fn crypto_module_source_exists() {
+        let source = builtin_module_source(&["xtd".into(), "crypto".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("crypto_sha256"));
+        assert!(src.contains("crypto_sha1"));
+        assert!(src.contains("equip CipherContext"));
     }
 
     #[test]
@@ -1733,34 +1556,41 @@ mod tests {
     }
 
     #[test]
-    fn generate_socket() {
-        let m = generate_builtin_module(&["std".into(), "net".into(), "socket".into()]).unwrap();
+    fn generate_socket_returns_none() {
+        // std.net.socket is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["std".into(), "net".into(), "socket".into()]).is_none());
+    }
+
+    #[test]
+    fn socket_module_source_exists() {
+        let source = builtin_module_source(&["std".into(), "net".into(), "socket".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("socket_connect"));
+        assert!(src.contains("server_socket_bind"));
+        assert!(src.contains("equip Socket"));
+        assert!(src.contains("equip ServerSocket"));
+    }
+
+    #[test]
+    fn socket_source_parses() {
+        let source = builtin_module_source(&["std".into(), "net".into(), "socket".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "socket.gg parse errors: {:?}", parser.errors);
+
         let mut struct_names = vec![];
-        let mut fn_names = vec![];
         let mut equip_count = 0;
-        let mut equip_method_names: Vec<String> = vec![];
-        for item in &m.items {
+        for item in &module.items {
             match &item.node {
                 Item::Struct(s) => struct_names.push(s.name.node.clone()),
-                Item::Function(f) => fn_names.push(f.name.node.clone()),
-                Item::Equip(e) => {
-                    equip_count += 1;
-                    for method in &e.items {
-                        equip_method_names.push(method.node.name.node.clone());
-                    }
-                }
+                Item::Equip(_) => equip_count += 1,
                 _ => {}
             }
         }
         assert!(struct_names.contains(&"Socket".to_string()));
         assert!(struct_names.contains(&"ServerSocket".to_string()));
-        assert!(fn_names.contains(&"socket_connect".to_string()));
-        assert!(fn_names.contains(&"server_socket_bind".to_string()));
         assert_eq!(equip_count, 2); // Socket + ServerSocket
-        assert!(equip_method_names.contains(&"read".to_string()));
-        assert!(equip_method_names.contains(&"write".to_string()));
-        assert!(equip_method_names.contains(&"close".to_string()));
-        assert!(equip_method_names.contains(&"accept".to_string()));
     }
 
     #[test]
@@ -2075,60 +1905,41 @@ mod tests {
     }
 
     #[test]
-    fn generate_tls_socket() {
-        let m = generate_builtin_module(&["std".into(), "net".into(), "tls".into()]).unwrap();
+    fn generate_tls_returns_none() {
+        // std.net.tls is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["std".into(), "net".into(), "tls".into()]).is_none());
+    }
+
+    #[test]
+    fn tls_module_source_exists() {
+        let source = builtin_module_source(&["std".into(), "net".into(), "tls".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("tls_connect"));
+        assert!(src.contains("tls_server_bind"));
+        assert!(src.contains("equip TlsSocket"));
+        assert!(src.contains("equip TlsServerSocket"));
+    }
+
+    #[test]
+    fn tls_source_parses() {
+        let source = builtin_module_source(&["std".into(), "net".into(), "tls".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "tls.gg parse errors: {:?}", parser.errors);
+
         let mut struct_names = vec![];
-        let mut fn_names = vec![];
         let mut equip_count = 0;
-        for item in &m.items {
+        for item in &module.items {
             match &item.node {
                 Item::Struct(s) => struct_names.push(s.name.node.clone()),
-                Item::Function(f) => fn_names.push(f.name.node.clone()),
                 Item::Equip(_) => equip_count += 1,
                 _ => {}
             }
         }
         assert!(struct_names.contains(&"TlsSocket".to_string()));
         assert!(struct_names.contains(&"TlsServerSocket".to_string()));
-        assert!(fn_names.contains(&"tls_connect".to_string()));
-        assert!(fn_names.contains(&"tls_server_bind".to_string()));
         assert_eq!(equip_count, 2); // TlsSocket + TlsServerSocket
-    }
-
-    #[test]
-    fn tls_socket_methods_are_extern() {
-        let m = generate_builtin_module(&["std".into(), "net".into(), "tls".into()]).unwrap();
-        for item in &m.items {
-            if let Item::Equip(eq) = &item.node {
-                if let Type::Named { name, .. } = &eq.type_.node {
-                    if name.node == "TlsSocket" {
-                        let names: Vec<&str> =
-                            eq.items.iter().map(|m| m.node.name.node.as_str()).collect();
-                        assert_eq!(
-                            names,
-                            vec![
-                                "read",
-                                "read_exact",
-                                "write",
-                                "write_str",
-                                "read_line",
-                                "close",
-                                "set_timeout"
-                            ]
-                        );
-                        for method in &eq.items {
-                            assert!(
-                                matches!(method.node.body, FunctionBody::Extern(_)),
-                                "TlsSocket.{} should be FunctionBody::Extern",
-                                method.node.name.node
-                            );
-                        }
-                        return;
-                    }
-                }
-            }
-        }
-        panic!("TlsSocket equip block not found");
     }
 
     #[test]
@@ -2140,67 +1951,77 @@ mod tests {
     }
 
     #[test]
-    fn socket_methods_are_extern() {
-        let m = generate_builtin_module(&["std".into(), "net".into(), "socket".into()]).unwrap();
-        for item in &m.items {
-            if let Item::Equip(eq) = &item.node {
-                if let Type::Named { name, .. } = &eq.type_.node {
-                    if name.node == "Socket" {
-                        let names: Vec<&str> =
-                            eq.items.iter().map(|m| m.node.name.node.as_str()).collect();
-                        assert_eq!(
-                            names,
-                            vec![
-                                "read",
-                                "read_exact",
-                                "write",
-                                "write_str",
-                                "read_line",
-                                "set_timeout",
-                                "close",
-                                "nb_read",
-                                "nb_write",
-                                "nb_write_str",
-                            ]
-                        );
-                        for method in &eq.items {
-                            assert!(
-                                matches!(method.node.body, FunctionBody::Extern(_)),
-                                "Socket.{} should be FunctionBody::Extern",
-                                method.node.name.node
-                            );
-                        }
-                        return;
-                    }
-                }
-            }
-        }
-        panic!("Socket equip block not found");
+    fn generate_regex_returns_none() {
+        // xtd.regex is file-based, not synthetic — generate returns None
+        assert!(generate_builtin_module(&["xtd".into(), "regex".into()]).is_none());
     }
 
     #[test]
-    fn cipher_methods_are_extern() {
-        let m = generate_builtin_module(&["xtd".into(), "crypto".into()]).unwrap();
-        for item in &m.items {
-            if let Item::Equip(eq) = &item.node {
-                if let Type::Named { name, .. } = &eq.type_.node {
-                    if name.node == "CipherContext" {
-                        let names: Vec<&str> =
-                            eq.items.iter().map(|m| m.node.name.node.as_str()).collect();
-                        assert_eq!(names, vec!["encrypt", "decrypt"]);
-                        for method in &eq.items {
-                            assert!(
-                                matches!(method.node.body, FunctionBody::Extern(_)),
-                                "CipherContext.{} should be FunctionBody::Extern",
-                                method.node.name.node
-                            );
-                        }
-                        return;
+    fn regex_module_source_exists() {
+        let source = builtin_module_source(&["xtd".into(), "regex".into()]);
+        assert!(source.is_some());
+        let src = source.unwrap();
+        assert!(src.contains("regex_compile"));
+        assert!(src.contains("regex_escape"));
+        assert!(src.contains("regex_is_match"));
+        assert!(src.contains("equip Regex"));
+        assert!(src.contains("equip Match"));
+    }
+
+    #[test]
+    fn regex_source_parses() {
+        let source = builtin_module_source(&["xtd".into(), "regex".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "regex.gg parse errors: {:?}", parser.errors);
+
+        let mut struct_names = vec![];
+        let mut fn_names = vec![];
+        let mut equip_count = 0;
+        for item in &module.items {
+            match &item.node {
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Function(f) => fn_names.push(f.name.node.clone()),
+                Item::ExternBlock(eb) => {
+                    for f in &eb.items {
+                        fn_names.push(f.node.name.node.clone());
                     }
                 }
+                Item::Equip(_) => equip_count += 1,
+                _ => {}
             }
         }
-        panic!("CipherContext equip block not found");
+        assert!(struct_names.contains(&"Regex".to_string()));
+        assert!(struct_names.contains(&"Match".to_string()));
+        assert!(fn_names.contains(&"regex_compile".to_string()));
+        assert!(fn_names.contains(&"regex_compile_with".to_string()));
+        assert!(fn_names.contains(&"regex_escape".to_string()));
+        assert!(fn_names.contains(&"regex_is_match".to_string()));
+        assert!(fn_names.contains(&"regex_find".to_string()));
+        assert!(fn_names.contains(&"regex_replace".to_string()));
+        assert_eq!(equip_count, 2); // Regex + Match
+    }
+
+    #[test]
+    fn crypto_source_parses() {
+        let source = builtin_module_source(&["xtd".into(), "crypto".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let module = parser.parse_module();
+        assert!(parser.errors.is_empty(), "crypto.gg parse errors: {:?}", parser.errors);
+
+        let mut struct_names = vec![];
+        let mut equip_count = 0;
+        for item in &module.items {
+            match &item.node {
+                Item::Struct(s) => struct_names.push(s.name.node.clone()),
+                Item::Equip(_) => equip_count += 1,
+                _ => {}
+            }
+        }
+        assert!(struct_names.contains(&"CipherContext".to_string()));
+        assert!(struct_names.contains(&"BigNum".to_string()));
+        assert!(struct_names.contains(&"RSAKey".to_string()));
+        assert!(equip_count >= 3); // CipherContext + Ed25519KeyPair + X25519KeyPair
     }
 
     #[test]
@@ -2226,41 +2047,6 @@ mod tests {
             }
         }
         panic!("File equip block not found");
-    }
-
-    #[test]
-    fn crypto_free_functions_are_extern() {
-        let m = generate_builtin_module(&["xtd".into(), "crypto".into()]).unwrap();
-        let extern_expected = [
-            "crypto_sha256",
-            "crypto_sha1",
-            "crypto_bn_from_bytes",
-            "crypto_bn_to_bytes",
-            "crypto_bn_mod_exp",
-            "crypto_rsa_verify",
-        ];
-        let decl_expected = [
-            "crypto_rsa_load_public",
-            "crypto_hmac",
-            "crypto_aes_ctr_new",
-            "crypto_random_bytes",
-        ];
-        for item in &m.items {
-            if let Item::Function(f) = &item.node {
-                let name = f.name.node.as_str();
-                if extern_expected.contains(&name) {
-                    assert!(
-                        matches!(f.body, FunctionBody::Extern(_)),
-                        "{name} should be FunctionBody::Extern"
-                    );
-                } else if decl_expected.contains(&name) {
-                    assert!(
-                        matches!(f.body, FunctionBody::Declaration),
-                        "{name} should be FunctionBody::Declaration (Result wrapping)"
-                    );
-                }
-            }
-        }
     }
 
     // ─── xtd.csv ───────────────────────────────────────────────────

@@ -1,0 +1,34 @@
+# std.net.tls — TLS socket operations
+
+from std.collections import Vector
+
+# ── Opaque types ─────────────────────────────────────────────
+
+struct TlsSocket:
+    int _handle
+
+struct TlsServerSocket:
+    int _handle
+
+# ── Free functions ───────────────────────────────────────────
+
+extern "C":
+    extern blocking Result[TlsSocket, String] tls_connect(cstr host, int port) = "gorget_tls_connect"
+    extern blocking Result[TlsServerSocket, String] tls_server_bind(cstr host, int port, cstr cert_path, cstr key_path) = "gorget_tls_server_bind"
+
+# ── TlsSocket methods ───────────────────────────────────────
+
+equip TlsSocket:
+    extern blocking Vector[uint8] read(int n) = "gorget_tls_read"
+    extern blocking Vector[uint8] read_exact(int n) = "gorget_tls_read_exact"
+    extern blocking int write(Vector[uint8] data) = "gorget_tls_write"
+    extern blocking int write_str(String s) = "gorget_tls_write_str"
+    extern blocking Result[String, String] read_line() = "gorget_tls_read_line"
+    extern void close() = "gorget_tls_close"
+    extern void set_timeout(int ms) = "gorget_tls_set_timeout"
+
+# ── TlsServerSocket methods ─────────────────────────────────
+
+equip TlsServerSocket:
+    extern blocking Result[TlsSocket, String] accept() = "gorget_tls_server_accept"
+    extern void close() = "gorget_tls_server_close"
