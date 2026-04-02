@@ -1,8 +1,8 @@
-//! ABI marshalling kinds for extern function parameters.
+//! ABI marshalling kinds for extern function parameters and return values.
 //!
-//! When Gorget code calls an external function, each parameter must be
-//! marshalled from the Gorget internal representation to the extern ABI.
-//! `AbiKind` describes how each parameter crosses that boundary.
+//! When Gorget code calls an external function, each parameter and the
+//! return value must be marshalled across the extern ABI boundary.
+//! `AbiKind` describes how each value crosses that boundary.
 //!
 //! This is backend-agnostic: the C backend, a future LLVM backend, and
 //! a WASM backend all read the same `AbiKind` tags and emit their own

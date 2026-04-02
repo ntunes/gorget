@@ -200,6 +200,9 @@ pub struct Module {
     /// transform uses this to release/reacquire mutex locks around calls.
     /// Populated from is_async and is_blocking qualifiers during pre-scan.
     pub yield_point_fns: rustc_hash::FxHashSet<String>,
+    /// Per-function return ABI kind: fn_name → AbiKind.
+    /// Populated from extern block ABI string + return type during pre-scan.
+    pub fn_return_abis: rustc_hash::FxHashMap<String, abi::AbiKind>,
 }
 
 impl Module {
@@ -219,6 +222,7 @@ impl Module {
             runtime_callees: rustc_hash::FxHashMap::default(),
             fn_extern_abi_kinds: rustc_hash::FxHashMap::default(),
             yield_point_fns: rustc_hash::FxHashSet::default(),
+            fn_return_abis: rustc_hash::FxHashMap::default(),
         }
     }
 

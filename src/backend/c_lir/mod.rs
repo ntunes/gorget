@@ -2615,6 +2615,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     // Track which values are raw C strings (const char*) from runtime functions.
     // Only these should be wrapped with gorget_str_from_literal when stored to Str slots.
     let mut cstr_vals: Vec<bool> = vec![false; max_val as usize];
+    let mut extern_cstr_return_vals: Vec<bool> = vec![false; max_val as usize];
     // Track which values are NullPtr (so we can avoid memcpy from NULL).
     let mut null_vals: Vec<bool> = vec![false; max_val as usize];
     // Track which values are FuncAddr — maps value → FuncId for adapter generation.
@@ -2667,7 +2668,15 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             // Mark CallExtern results that return const char* (not struct pointers).
             // Also override their value type to Ptr so they're declared as void* in C.
             if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
-                if is_cstr_returning_fn(name) {
+                let ret_abi = module.externs.iter().find(|e| &e.name == name)
+                    .map(|e| e.return_abi).unwrap_or_default();
+                if ret_abi == crate::ir::abi::AbiKind::CStr {
+                    // Extern "C" return — may be static or heap, use safe copy.
+                    cstr_vals[d.0 as usize] = true;
+                    extern_cstr_return_vals[d.0 as usize] = true;
+                    val_types[d.0 as usize] = Some(LirType::Ptr);
+                } else if is_cstr_returning_fn(name) {
+                    // Whitelist: runtime functions return heap-allocated strings.
                     cstr_vals[d.0 as usize] = true;
                     val_types[d.0 as usize] = Some(LirType::Ptr);
                 }
@@ -3310,7 +3319,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         // Instructions
         for inst in &block.insts {
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &null_vals, &ptr_pointee, &func_addr_targets, &spawn_source_fn, &_collection_get_vals, &view_method_vals);
+            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &extern_cstr_return_vals, &null_vals, &ptr_pointee, &func_addr_targets, &spawn_source_fn, &_collection_get_vals, &view_method_vals);
             writeln!(out).unwrap();
 
             // In test functions, register droppable user-named slots on the cleanup stack
@@ -3354,7 +3363,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>], spawn_source_fn: &[Option<String>], _collection_get_vals: &[bool], view_method_vals: &[bool]) {
+fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], extern_cstr_return_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>], spawn_source_fn: &[Option<String>], _collection_get_vals: &[bool], view_method_vals: &[bool]) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -3474,16 +3483,24 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 // String literal (const char*) → Str slot: wrap with gorget_str_from_literal.
                 write!(out, "{} = gorget_str_from_literal({}, strlen({}));", s(*slot), v(*value), v(*value)).unwrap();
             } else if slot_is_str && is_cstr {
-                // Known const char* value (from gorget_int_to_str etc.) → Str slot:
-                // adopt the heap-allocated cstr into an owned GorgetString.
-                // gorget_string_adopt takes ownership of the char* — no leak.
-                write!(out, "{} = gorget_string_adopt((char*){});", s(*slot), v(*value)).unwrap();
+                let is_extern_ret = extern_cstr_return_vals.get(value.0 as usize).copied().unwrap_or(false);
+                if is_extern_ret {
+                    // Extern "C" return — may be static or heap, use safe copy.
+                    write!(out, "{} = gorget_str_from_cstr({});", s(*slot), v(*value)).unwrap();
+                } else {
+                    // Runtime function — returns heap-allocated string, adopt (no leak).
+                    write!(out, "{} = gorget_string_adopt((char*){});", s(*slot), v(*value)).unwrap();
+                }
             } else if slot_is_gs && is_str_lit_val {
                 // String literal → GorgetString slot: wrap with gorget_string_new.
                 write!(out, "{} = gorget_string_new({});", s(*slot), v(*value)).unwrap();
             } else if slot_is_gs && is_cstr {
-                // Known const char* → GorgetString slot: adopt (takes ownership).
-                write!(out, "{} = gorget_string_adopt((char*){});", s(*slot), v(*value)).unwrap();
+                let is_extern_ret = extern_cstr_return_vals.get(value.0 as usize).copied().unwrap_or(false);
+                if is_extern_ret {
+                    write!(out, "{} = gorget_str_from_cstr({});", s(*slot), v(*value)).unwrap();
+                } else {
+                    write!(out, "{} = gorget_string_adopt((char*){});", s(*slot), v(*value)).unwrap();
+                }
             } else if slot_ty.is_aggregate() {
                 // Aggregate store: source may be a pointer (SlotAddr) or a struct value (ParamRef, Call result).
                 let val_is_ptr = matches!(val_ty, Some(LirType::Ptr));

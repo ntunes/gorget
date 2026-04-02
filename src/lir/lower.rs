@@ -69,6 +69,8 @@ struct FuncLowering<'a> {
     type_drop_fns: &'a std::collections::HashMap<String, crate::lir::TypeDropInfo>,
     /// Extern ABI kinds from module declarations (fn_name → Vec<AbiKind>).
     extern_abi_kinds: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
+    /// Extern return ABI kinds (fn_name → AbiKind).
+    return_abi_kinds: &'a rustc_hash::FxHashMap<String, crate::ir::abi::AbiKind>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -140,6 +142,7 @@ impl<'a> LoweringContext<'a> {
                 return_type: ret_ty,
                 is_variadic: ext.is_variadic,
                 param_abis: ext.param_abis.clone(),
+                return_abi: Default::default(),
             });
         }
 
@@ -181,6 +184,7 @@ impl<'a> LoweringContext<'a> {
                     &self.module.recursive_drop_structs,
                     &self.module.type_drop_fns,
                     &self.gir.fn_extern_abi_kinds,
+                    &self.gir.fn_return_abis,
                 );
                 fl.lower();
                 all_pending_externs.extend(fl.pending_externs.drain(..));
@@ -924,6 +928,7 @@ impl<'a> FuncLowering<'a> {
         recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String, String)>>,
         type_drop_fns: &'a std::collections::HashMap<String, crate::lir::TypeDropInfo>,
         extern_abi_kinds: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
+        return_abi_kinds: &'a rustc_hash::FxHashMap<String, crate::ir::abi::AbiKind>,
     ) -> Self {
         let params: Vec<LirType> = gir_func
             .params
@@ -979,6 +984,7 @@ impl<'a> FuncLowering<'a> {
             recursive_drop_structs,
             type_drop_fns,
             extern_abi_kinds,
+            return_abi_kinds,
         }
     }
 
@@ -3617,6 +3623,11 @@ impl<'a> FuncLowering<'a> {
             .cloned()
             .unwrap_or_default();
 
+        let ret_abi: crate::ir::abi::AbiKind = self.return_abi_kinds.get(name)
+            .or_else(|| name.strip_prefix("gorget_").and_then(|stripped| self.return_abi_kinds.get(stripped)))
+            .copied()
+            .unwrap_or_default();
+
         // For known runtime functions, use canonical signatures instead of call-site inference.
         if let Some((canon_params, canon_ret)) = runtime_extern_sig(name, self.struct_reg) {
             if let Some(existing) = self.pending_externs.iter_mut().find(|e| e.name == name) {
@@ -3629,6 +3640,7 @@ impl<'a> FuncLowering<'a> {
                     return_type: canon_ret,
                     is_variadic: false,
                     param_abis: abi_tags.clone(),
+                    return_abi: ret_abi,
                 });
             }
             return;
@@ -3663,6 +3675,7 @@ impl<'a> FuncLowering<'a> {
             return_type: actual_ret,
             is_variadic: false,
             param_abis: abi_tags,
+            return_abi: ret_abi,
         });
     }
 

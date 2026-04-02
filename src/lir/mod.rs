@@ -675,6 +675,8 @@ pub struct LirExtern {
     pub is_variadic: bool,
     /// Per-parameter ABI marshalling kind. Empty = all Auto.
     pub param_abis: Vec<crate::ir::abi::AbiKind>,
+    /// Return value ABI marshalling kind. Auto = no conversion.
+    pub return_abi: crate::ir::abi::AbiKind,
 }
 
 // ── Module ──────────────────────────────────────────────────────────────────

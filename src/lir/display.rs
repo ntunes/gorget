@@ -371,6 +371,7 @@ mod tests {
             return_type: LirType::I32,
             is_variadic: false,
             param_abis: vec![],
+            return_abi: Default::default(),
         });
 
         let mut func = LirFunction::new("main".into(), vec![], LirType::I32);

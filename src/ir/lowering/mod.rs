@@ -781,6 +781,7 @@ pub fn lower_module(
 
                 // Derive ABI kinds from block's ABI string
                 if string_abi != AbiKind::Auto {
+                    // Param ABI: String params → CStr or GorgetString
                     let abis: Vec<AbiKind> = param_types.iter().map(|&tid| {
                         if ctx.type_mapper.is_string_type(tid) {
                             string_abi
@@ -788,11 +789,13 @@ pub fn lower_module(
                             AbiKind::Auto
                         }
                     }).collect();
-                    // Store under both Gorget name and C symbol name
                     ctx.fn_extern_abi_kinds.insert(name.clone(), abis.clone());
                     if let FunctionBody::Extern(c_symbol) = &func.body {
                         ctx.fn_extern_abi_kinds.insert(c_symbol.clone(), abis);
                     }
+                    // Return ABI: NOT auto-derived from block ABI string.
+                    // Most C functions return GorgetString (Str struct), not const char*.
+                    // Functions returning const char* need explicit annotation (future).
                 }
             }
         }
@@ -1245,6 +1248,7 @@ pub fn lower_module(
     // Thread extern ABI kinds to the module
     module.fn_extern_abi_kinds = ctx.fn_extern_abi_kinds.clone();
     module.yield_point_fns = ctx.yield_point_fns.clone();
+    module.fn_return_abis = ctx.fn_return_abis.clone();
 
     // Thread purity data to the module
     module.fn_purity = ctx.analysis.fn_purity.clone();
