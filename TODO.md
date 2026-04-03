@@ -15,7 +15,7 @@
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
-- **Extern module ABI — remaining whitelists (~15 entries)**: `takes_cstr_for_str_param` down to ~15 entries (Declaration-body name-mapped methods only). `runtime_arg_by_ptr` (~15 entries) still needed. `runtime_fn_str_param` and 30+ redundant entries deleted. `is_cstr_returning_fn` (~20 entries) for Cast-path functions at LIR level. See `docs/internals/extern-modules.md`. [updated: 2026-04-03]
+- **Extern module ABI — remaining whitelists**: `is_cstr_returning_fn` eliminated (returns false). `takes_cstr_for_str_param` down to 7 entries (internal runtime only — gorget_file_open, exec_capture, process_spawn_with_pipe, panic, path helpers, unsetenv). `runtime_arg_by_ptr` (~15 entries) still needed. See `docs/internals/extern-modules.md`. [updated: 2026-04-03]
 
 - **Trait-bounded generic functions don't monomorphize**: `void print_sum[Summable T](T val)` — linker error. Core language feature gap. [added: 2026-03-23]
 
