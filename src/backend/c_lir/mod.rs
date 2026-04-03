@@ -8136,9 +8136,10 @@ fn emit_collection_constructor(
 /// Returns true if the runtime function expects arg at `idx` to be passed by pointer
 /// (i.e. the C prototype uses `const GorgetArray*`, `const GorgetX25519KeyPair*`, etc.)
 /// but LIR passes it as a Struct value. The codegen must emit `&(val)` or pass the pointer directly.
-/// Identifies internal runtime functions whose args need pass-by-pointer.
-/// Only structural: compiler-emitted string clone/free and collection self-by-ptr.
-/// User-facing functions use T* syntax or auto-derived AbiKind::Ptr for resources.
+/// Identifies runtime functions whose self arg (idx 0) is passed by pointer.
+/// This is structural: the C backend emits `*(T*)ptr` deref for these calls
+/// (different from AbiKind::Ptr which emits `&val`). Collection/string methods
+/// always receive self as a pointer because the GIR passes objects by reference.
 fn runtime_arg_by_ptr(name: &str, idx: usize) -> bool {
     // String clone/free take Str by pointer (compiler-emitted)
     if name == "gorget_string_clone_to_owned" || name == "gorget_string_clone" || name == "gorget_string_free" {
