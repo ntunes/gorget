@@ -1229,9 +1229,9 @@ impl<'a> FuncLowering<'a> {
                         args: vec![val],
                         original_name: None,
                     });
-                    self.ensure_extern(conv_fn, &[if is_float { LirType::F64 } else if is_bool { LirType::Bool } else { LirType::I64 }], &LirType::Ptr);
-                    // The result is a const char* (Ptr) — the SlotStore Ptr→Str path in c_lir
-                    // will wrap it with gorget_str_from_literal since it's a cstr_val.
+                    let str_ty = if let Some(sid) = self.struct_reg.lookup("Str") { LirType::Struct(sid) } else { LirType::Ptr };
+                    self.ensure_extern(conv_fn, &[if is_float { LirType::F64 } else if is_bool { LirType::Bool } else { LirType::I64 }], &str_ty);
+                    // The result is a Str struct (returned by gorget_string_adopt in the C runtime).
                     self.store_to_local(*dst, cstr_result, bb);
                     } // close else (non-ptr) branch
                 } else if matches!(to, LirType::Void) {
@@ -4675,12 +4675,10 @@ fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<(Vec<LirType>, 
         "gorget_char_chr" => Some((vec![LirType::I64], s())),
         "gorget_str_ord" => Some((vec![s()], LirType::I64)),
         // Conversion helpers
-        "gorget_int_to_str" => Some((vec![LirType::I64], LirType::Ptr)),
-        "gorget_float_to_str" => Some((vec![LirType::F64], LirType::Ptr)),
-        "gorget_bool_to_str" => {
-            Some((vec![LirType::Bool], LirType::Ptr))
-        }
-        "gorget_codepoint_to_utf8" => Some((vec![LirType::I64], LirType::Ptr)),
+        "gorget_int_to_str" => Some((vec![LirType::I64], s())),
+        "gorget_float_to_str" => Some((vec![LirType::F64], s())),
+        "gorget_bool_to_str" => Some((vec![LirType::Bool], s())),
+        "gorget_codepoint_to_utf8" => Some((vec![LirType::I64], s())),
         "gorget_int_to_float" => Some((vec![LirType::I64], LirType::F64)),
         // I/O
         "gorget_read_file" => Some((vec![LirType::Ptr], g())),

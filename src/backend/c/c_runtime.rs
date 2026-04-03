@@ -6041,48 +6041,48 @@ static inline GorgetParseFloatResult gorget_try_parse_float(const char* s, size_
 /// Type-to-string conversions (int_to_str, float_to_str, etc.).
 pub const RUNTIME_TOSTR: &str = r#"
 // ── to_str conversions ──────────────────────────────────────
-static inline const char* gorget_int_to_str(int64_t n) {
+static inline Str gorget_int_to_str(int64_t n) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%" PRId64, n);
     size_t len = strlen(buf);
     char* out = (char*)GORGET_ALLOC(len + 1);
     memcpy(out, buf, len + 1);
-    return out;
+    return gorget_string_adopt(out);
 }
 
-static inline const char* gorget_float_to_str(double x) {
+static inline Str gorget_float_to_str(double x) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", x);
     size_t len = strlen(buf);
     char* out = (char*)GORGET_ALLOC(len + 1);
     memcpy(out, buf, len + 1);
-    return out;
+    return gorget_string_adopt(out);
 }
 
-static inline const char* gorget_bool_to_str(bool b) {
+static inline Str gorget_bool_to_str(bool b) {
     const char* s = b ? "true" : "false";
     size_t len = b ? 4 : 5;
     char* out = (char*)GORGET_ALLOC(len + 1);
     memcpy(out, s, len + 1);
-    return out;
+    return gorget_string_adopt(out);
 }
 
 static inline double gorget_int_to_float(int64_t n) { return (double)n; }
 
-static inline const char* gorget_char_to_str(char c) {
+static inline Str gorget_char_to_str(char c) {
     char* out = (char*)GORGET_ALLOC(2);
     out[0] = c;
     out[1] = '\0';
-    return out;
+    return gorget_string_adopt(out);
 }
 
-static inline const char* gorget_codepoint_to_utf8(int64_t cp) {
+static inline Str gorget_codepoint_to_utf8(int64_t cp) {
     char* out;
     if (cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
         out = (char*)GORGET_ALLOC(4);
         out[0] = (char)0xEF; out[1] = (char)0xBF; out[2] = (char)0xBD;
         out[3] = '\0';
-        return out;
+        return gorget_string_adopt(out);
     }
     if (cp <= 0x7F) {
         out = (char*)GORGET_ALLOC(2);
@@ -6107,7 +6107,7 @@ static inline const char* gorget_codepoint_to_utf8(int64_t cp) {
         out[3] = (char)(0x80 | (cp & 0x3F));
         out[4] = '\0';
     }
-    return out;
+    return gorget_string_adopt(out);
 }
 
 

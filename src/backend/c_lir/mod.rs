@@ -617,7 +617,7 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         // LIR-specific helper functions not emitted by the old C backend preamble.
         writeln!(out, "// ── LIR helpers ──").unwrap();
         if has(&|n| n == "gorget_char_chr") {
-            writeln!(out, "static inline Str gorget_char_chr(int64_t code) {{ return gorget_str_from_cstr(gorget_codepoint_to_utf8(code)); }}").unwrap();
+            writeln!(out, "static inline Str gorget_char_chr(int64_t code) {{ return gorget_codepoint_to_utf8(code); }}").unwrap();
         }
         if has(&|n| n == "gorget_str_ord") {
             writeln!(out, "static inline int64_t gorget_str_ord(Str s) {{ size_t pos = 0; return (int64_t)gorget_utf8_decode(s.data, s.len, &pos); }}").unwrap();
@@ -1062,7 +1062,7 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
         }
         // codepoint_to_str: used by encoding/toml fixtures
         if has_extern("codepoint_to_str") {
-            writeln!(out, "static inline Str codepoint_to_str(int64_t code) {{ return gorget_str_from_cstr(gorget_codepoint_to_utf8(code)); }}").unwrap();
+            writeln!(out, "static inline Str codepoint_to_str(int64_t code) {{ return gorget_codepoint_to_utf8(code); }}").unwrap();
         }
 
     }
@@ -4750,9 +4750,8 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         else if is_arg1_float { "gorget_float_to_str" }
                         else { "gorget_bool_to_str" };
                     if let Some(d) = dst {
-                        // gorget_str_cat returns GorgetString — the conversion returns const char*,
-                        // so wrap with gorget_string_new for GorgetString result.
-                        write!(out, "{} = gorget_string_new({}({}));", v(*d), conv_fn, v(args[1])).unwrap();
+                        // Conversion functions return Str (owned via gorget_string_adopt).
+                        write!(out, "{} = {}({});", v(*d), conv_fn, v(args[1])).unwrap();
                     }
                     return;
                 }
@@ -7803,31 +7802,11 @@ fn ext_param_is_str(ext_params: Option<&[LirType]>, i: usize, module: &LirModule
 /// Returns true if the runtime function returns a raw `const char*` that needs wrapping
 /// when stored to a Str/GorgetString slot. Other Ptr-returning functions return struct
 /// pointers or void* that should be handled by the aggregate (memcpy) path instead.
-fn is_cstr_returning_fn(name: &str) -> bool {
-    matches!(
-        name,
-        "gorget_int_to_str"
-            | "gorget_float_to_str"
-            | "gorget_bool_to_str"
-            | "gorget_char_to_str"
-            | "gorget_codepoint_to_utf8"
-            | "gorget_format"
-            | "gorget_format_time"
-            | "gorget_getcwd"
-            | "gorget_getenv"
-            | "gorget_input"
-            | "gorget_readline"
-            | "gorget_memmem"
-            | "gorget_path_absolute"
-            | "gorget_path_basename"
-            | "gorget_path_extension"
-            | "gorget_path_join"
-            | "gorget_path_normalize"
-            | "gorget_path_parent"
-            | "gorget_path_stem"
-            | "gorget_platform"
-            | "gorget_str_concat"
-    )
+/// Returns true if the runtime function returns a raw `const char*` that needs wrapping
+/// when stored to a Str/GorgetString slot. This whitelist is shrinking as C runtime
+/// functions are migrated to return Str directly via gorget_string_adopt().
+fn is_cstr_returning_fn(_name: &str) -> bool {
+    false // All former entries now return Str directly or are covered by fn_return_abis
 }
 
 /// For a Box__Trait__method call, return the argument positions (0-based, where 0 = self)
