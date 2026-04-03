@@ -714,6 +714,7 @@ pub fn lower_module(
             // Declaration functions are C-runtime inline implementations; do not rename them.
             if let FunctionBody::Extern(c_symbol) = &func.body {
                 ctx.extern_bindings.insert(name.clone(), c_symbol.clone());
+                ctx.extern_body_fns.insert(name.clone());
             } else if !matches!(func.body, FunctionBody::Declaration) {
                 if let Some(ref mangled) = mangled_name {
                 // Phase 5: also register the mangled name so fn_sigs lookups using the
@@ -777,6 +778,7 @@ pub fn lower_module(
                 // Register extern binding: name → C symbol
                 if let FunctionBody::Extern(c_symbol) = &func.body {
                     ctx.extern_bindings.insert(name.clone(), c_symbol.clone());
+                    ctx.extern_body_fns.insert(name.clone());
                 }
 
                 // Derive ABI kinds from block's ABI string
@@ -891,7 +893,8 @@ pub fn lower_module(
 
                     // Register extern binding for equip methods (e.g., UdpSocket__local_addr → gorget_udp_local_addr)
                     if let FunctionBody::Extern(c_symbol) = &method_def.body {
-                        ctx.extern_bindings.insert(mangled, c_symbol.clone());
+                        ctx.extern_bindings.insert(mangled.clone(), c_symbol.clone());
+                        ctx.extern_body_fns.insert(mangled);
                     }
                 }
             }

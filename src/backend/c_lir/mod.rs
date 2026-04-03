@@ -7831,8 +7831,6 @@ fn is_cstr_returning_fn(name: &str) -> bool {
             | "gorget_float_to_str"
             | "gorget_bool_to_str"
             | "gorget_char_to_str"
-            | "gorget_bytes_to_hex"
-            | "gorget_bytes_to_str"
             | "gorget_codepoint_to_utf8"
             | "gorget_format"
             | "gorget_format_time"
@@ -7849,9 +7847,6 @@ fn is_cstr_returning_fn(name: &str) -> bool {
             | "gorget_path_parent"
             | "gorget_path_stem"
             | "gorget_platform"
-            | "gorget_regex_match_text"
-            | "gorget_regex_pattern_str"
-            | "gorget_sdl_get_error"
             | "gorget_str_concat"
     )
 }

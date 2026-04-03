@@ -222,6 +222,9 @@ pub struct LoweringContext<'a> {
     /// Set of equip method names that are GIR-lowered (not extern/C-runtime).
     /// Used by lower_method_call to decide whether to pass resource-type args by pointer.
     pub gir_equip_methods: rustc_hash::FxHashSet<String>,
+    /// Functions with FunctionBody::Extern — their call results are always owned.
+    /// A C function cannot return a view into Gorget-managed memory.
+    pub extern_body_fns: rustc_hash::FxHashSet<String>,
     /// Active `with shared_var:` auto-refresh bindings.
     /// Maps the with-binding local → the shared facade local it mirrors.
     /// After each await, the shared var is re-read into the binding local.
@@ -320,6 +323,7 @@ impl<'a> LoweringContext<'a> {
             global_names: rustc_hash::FxHashSet::default(),
             global_type_names: FxHashMap::default(),
             gir_equip_methods: rustc_hash::FxHashSet::default(),
+            extern_body_fns: rustc_hash::FxHashSet::default(),
             with_shared_refresh: Vec::new(),
             on_error_blocks: Vec::new(),
             postconditions: Vec::new(),
@@ -767,11 +771,20 @@ impl<'a> LoweringContext<'a> {
             builder.locals[local.0 as usize].type_id = owned;
             self.drops.register_local(local, owned, &self.type_registry);
         }
-        // Runtime functions that return heap-allocated const char* (wrapped by
-        // gorget_string_adopt in the C backend) produce owned strings, not views.
-        // Mark them as owned so ensure_owned_string skips the redundant clone.
+        // Extern functions (FunctionBody::Extern) always return owned data —
+        // a C function cannot return a view into Gorget-managed memory.
+        // Upgrade StringView returns to owned GorgetString and register for drop.
         else if return_type == self.type_mapper.string_view_type
-            && self.runtime_callee_returns_owned_string(&func_name)
+            && self.extern_body_fns.contains(func_name.as_str())
+        {
+            let owned = self.type_mapper.owned_string_type;
+            builder.locals[local.0 as usize].type_id = owned;
+            self.drops.register_local(local, owned, &self.type_registry);
+        }
+        // Functions with cstr return ABI (extern "C": blocks with explicit cstr return
+        // type) also return owned data — the C backend wraps with gorget_string_adopt.
+        else if return_type == self.type_mapper.string_view_type
+            && self.fn_return_abis.get(func_name.as_str()) == Some(&crate::ir::abi::AbiKind::CStr)
         {
             let owned = self.type_mapper.owned_string_type;
             builder.locals[local.0 as usize].type_id = owned;
@@ -1265,19 +1278,6 @@ impl<'a> LoweringContext<'a> {
             }
         }
         operand
-    }
-
-    /// Check if a GIR function name returns a heap-allocated `const char*`
-    /// (owned string, not a view). Driven by `fn_return_abis` metadata populated
-    /// from `cstr` return type annotations in `.gg` extern declarations.
-    ///
-    /// Assumption: all Gorget runtime functions returning `cstr` return
-    /// heap-allocated strings (the caller takes ownership). If we ever wrap
-    /// a C library function that returns a *borrowed* `const char*` (e.g.,
-    /// SDL_GetError's internal buffer), we'll need to distinguish owned vs
-    /// borrowed cstr returns — likely via a `cstr_view` type or annotation.
-    fn runtime_callee_returns_owned_string(&self, func_name: &str) -> bool {
-        self.fn_return_abis.get(func_name) == Some(&crate::ir::abi::AbiKind::CStr)
     }
 
     // ── Copy-on-Write alias management ────────────────────────────────

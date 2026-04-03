@@ -6516,8 +6516,8 @@ static inline bool gorget_sdl_window_is_null(GorgetSDLWindow win) {
     return win.ptr == NULL;
 }
 
-static inline const char* gorget_sdl_get_error(void) {
-    return SDL_GetError();
+static inline Str gorget_sdl_get_error(void) {
+    return gorget_str_from_cstr(SDL_GetError());
 }
 
 static inline int64_t gorget_sdl_window_to_handle(GorgetSDLWindow win) {
@@ -8422,12 +8422,12 @@ static inline GorgetArray gorget_bytes_from_str(const char* s) {
 }
 
 // Convert Vector[uint8] to a null-terminated str
-static inline const char* gorget_bytes_to_str(const GorgetArray* arr) {
+static inline Str gorget_bytes_to_str(const GorgetArray* arr) {
     size_t len = arr->len;
     char* s = (char*)GORGET_ALLOC(len + 1);
     if (len > 0) memcpy(s, arr->data, len);
     s[len] = '\0';
-    return s;
+    return gorget_string_adopt(s);
 }
 
 // Validate that a Vector[uint8] contains well-formed UTF-8.
@@ -8627,14 +8627,14 @@ static inline int64_t gorget_bytes_read_u16_le(const GorgetArray* arr, int64_t o
 }
 
 // Convert Vector[uint8] to hex string
-static inline const char* gorget_bytes_to_hex(const GorgetArray* arr) {
+static inline Str gorget_bytes_to_hex(const GorgetArray* arr) {
     size_t len = arr->len;
     char* s = (char*)GORGET_ALLOC(len * 2 + 1);
     for (size_t i = 0; i < len; i++) {
         sprintf(s + i * 2, "%02x", ((uint8_t*)arr->data)[i]);
     }
     s[len * 2] = '\0';
-    return s;
+    return gorget_string_adopt(s);
 }
 
 "#;
@@ -9002,14 +9002,14 @@ static GorgetArray gorget_regex_group_names(GorgetRegex* rx) {
 
 // ── Pattern string ──────────────────────────────────────────────
 
-static const char* gorget_regex_pattern_str(GorgetRegex* rx) {
-    return rx->pattern_str ? rx->pattern_str : "";
+static Str gorget_regex_pattern_str(GorgetRegex* rx) {
+    return gorget_str_from_cstr(rx->pattern_str ? rx->pattern_str : "");
 }
 
 // ── Match accessors ─────────────────────────────────────────────
 
-static const char* gorget_regex_match_text(GorgetRegexMatch* m) {
-    return m->text ? m->text : "";
+static Str gorget_regex_match_text(GorgetRegexMatch* m) {
+    return gorget_str_from_cstr(m->text ? m->text : "");
 }
 
 static int64_t gorget_regex_match_start(GorgetRegexMatch* m) { return m->start; }
