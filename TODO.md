@@ -2,7 +2,7 @@
 
 ## High
 
-- **118 leaks in yaml_parse (14KB)**: Down from 374 (-68%). Root cause identified: String param clones stored in void* slots — the LIR types the clone local as Ptr (inherited from the pointer param) instead of GorgetString, so scope-exit drop doesn't free it. This causes ~52 leaks in parse() alone (redundant clone of yaml_input param). Also: 12 from anchor_get Yaml__clone, 7 from parse_block_scalar, 7 from anchor_put. Fix: ensure VarDecl locals for cloned String params are typed as GorgetString, not Ptr. [updated: 2026-04-03]
+- **118 leaks in yaml_parse (14KB)**: Down from 374 (-68%). Root cause: VarDecl auto-clone of Ptr(StringView) params produces a local typed as StringView (→ Ptr → void* in C). gorget_string_clone_to_owned returns owned GorgetString but the GIR types it as StringView. Scope-exit drop skips void* slots → leak. Attempted fix: change clone result GIR type to owned_string_type — causes fmt_basic/fmt_edge corruption (cascading type interaction). Needs careful investigation of GIR string type upgrade path. [updated: 2026-04-03]
 
 
 - **CoW Phase 1f: multi-use clone needs liveness analysis**: Single-use auto-move works for push/put/set and enum/struct constructors. Multi-use clone attempted but `is_single_use` over-counts across branches (50 failures). Needs per-path liveness analysis. Phase 2a Step 5 (unified Type__drop cleanup) blocked on this. [updated: 2026-03-30]
