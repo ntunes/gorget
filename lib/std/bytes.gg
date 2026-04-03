@@ -8,7 +8,7 @@ from std.collections import Vector
 # ── C-backed extern functions ────────────────────────────────
 
 extern Vector[uint8] bytes_from_str(String b64_src) = "gorget_bytes_from_str"
-extern String __bytes_to_str_raw(Vector[uint8] b64_buf) = "gorget_bytes_to_str"
+extern cstr __bytes_to_str_raw(Vector[uint8] b64_buf) = "gorget_bytes_to_str"
 extern bool __bytes_utf8_valid(Vector[uint8] b64_buf) = "gorget_bytes_utf8_valid"
 
 # Convert byte buffer to String with UTF-8 validation.
@@ -20,7 +20,7 @@ Result[String, String] bytes_to_str(Vector[uint8] b64_buf):
     return Ok(raw_str)
 
 extern Vector[uint8] bytes_from_hex(String b64_hex) = "gorget_bytes_from_hex"
-extern String bytes_to_hex(Vector[uint8] b64_buf) = "gorget_bytes_to_hex"
+extern cstr bytes_to_hex(Vector[uint8] b64_buf) = "gorget_bytes_to_hex"
 extern void bytes_write_u32_be(Vector[uint8] &b64_buf, int b64_off, int b64_val) = "gorget_bytes_write_u32_be"
 extern int bytes_read_u32_be(Vector[uint8] b64_buf, int b64_off) = "gorget_bytes_read_u32_be"
 extern void bytes_write_u16_be(Vector[uint8] &b64_buf, int b64_off, int b64_val) = "gorget_bytes_write_u16_be"

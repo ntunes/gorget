@@ -34,7 +34,7 @@ equip Regex:
     extern bool is_match(String subject) = "gorget_regex_is_match"
     extern String replace_all(String subject, String replacement) = "gorget_regex_replace_all"
     extern int capture_count() = "gorget_regex_capture_count"
-    extern String pattern_str() = "gorget_regex_pattern_str"
+    extern cstr pattern_str() = "gorget_regex_pattern_str"
     extern Vector[String] group_names() = "gorget_regex_group_names"
     # Option/sentinel wrapping handled by codegen (Declaration body)
     Option[Match] find_at(String subject, int pos)
@@ -53,7 +53,7 @@ equip Regex:
 # ── Match methods ────────────────────────────────────────────
 
 equip Match:
-    extern String text() = "gorget_regex_match_text"
+    extern cstr text() = "gorget_regex_match_text"
     extern int start() = "gorget_regex_match_start"
     extern int end_pos() = "gorget_regex_match_end"
     extern int group_count() = "gorget_regex_match_group_count"

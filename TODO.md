@@ -2,7 +2,7 @@
 
 ## High
 
-- **Remaining 50 leaks in yaml_parse**: Down from 374→50 (-87%). `unregister_gorget_string_args` removed entirely (99 lines deleted, zero impact on leaks). Remaining leaks from: (1) Yaml anchor merge intermediates (8 leaks) — merge_into shallow copies into target Dict. (2) cstr-returning functions (10 leaks) — gorget_string_adopt wraps correctly but GIR type is still StringView → return path adds redundant clone. (3) Remaining ~32: str_cat, string_clone in library functions. [updated: 2026-03-30]
+- **Remaining ~40 leaks in yaml_parse**: Down from 374→~40 (-89%). Category 2 (cstr-return leaks) fixed by upgrading runtime callee returns to owned in call_tracked. Remaining: (1) Yaml anchor merge intermediates (~8 leaks) — merge_into shallow copies into target Dict. (3) Remaining ~32: str_cat, string_clone in library functions — likely needs Phase 1f liveness analysis. [updated: 2026-04-03]
 
 
 - **CoW Phase 1f: multi-use clone needs liveness analysis**: Single-use auto-move works for push/put/set and enum/struct constructors. Multi-use clone attempted but `is_single_use` over-counts across branches (50 failures). Needs per-path liveness analysis. Phase 2a Step 5 (unified Type__drop cleanup) blocked on this. [updated: 2026-03-30]

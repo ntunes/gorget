@@ -767,6 +767,16 @@ impl<'a> LoweringContext<'a> {
             builder.locals[local.0 as usize].type_id = owned;
             self.drops.register_local(local, owned, &self.type_registry);
         }
+        // Runtime functions that return heap-allocated const char* (wrapped by
+        // gorget_string_adopt in the C backend) produce owned strings, not views.
+        // Mark them as owned so ensure_owned_string skips the redundant clone.
+        else if return_type == self.type_mapper.string_view_type
+            && self.runtime_callee_returns_owned_string(&func_name)
+        {
+            let owned = self.type_mapper.owned_string_type;
+            builder.locals[local.0 as usize].type_id = owned;
+            self.drops.register_local(local, owned, &self.type_registry);
+        }
         // Function call results own their data — safe to Move on return.
         // Exception: StringView returns may be views (byte_slice, char_at) —
         // don't mark as owned so constructors will clone them.
@@ -1255,6 +1265,19 @@ impl<'a> LoweringContext<'a> {
             }
         }
         operand
+    }
+
+    /// Check if a GIR function name returns a heap-allocated `const char*`
+    /// (owned string, not a view). Driven by `fn_return_abis` metadata populated
+    /// from `cstr` return type annotations in `.gg` extern declarations.
+    ///
+    /// Assumption: all Gorget runtime functions returning `cstr` return
+    /// heap-allocated strings (the caller takes ownership). If we ever wrap
+    /// a C library function that returns a *borrowed* `const char*` (e.g.,
+    /// SDL_GetError's internal buffer), we'll need to distinguish owned vs
+    /// borrowed cstr returns — likely via a `cstr_view` type or annotation.
+    fn runtime_callee_returns_owned_string(&self, func_name: &str) -> bool {
+        self.fn_return_abis.get(func_name) == Some(&crate::ir::abi::AbiKind::CStr)
     }
 
     // ── Copy-on-Write alias management ────────────────────────────────

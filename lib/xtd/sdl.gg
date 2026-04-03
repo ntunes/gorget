@@ -99,7 +99,7 @@ extern "C":
     extern SDLWindow sdl_create_window_try(String title, int w, int h, int flags) = "gorget_sdl_create_window_try"
     extern bool sdl_window_is_null(SDLWindow win) = "gorget_sdl_window_is_null"
     extern int sdl_window_to_handle(SDLWindow win) = "gorget_sdl_window_to_handle"
-    extern String sdl_get_error() = "gorget_sdl_get_error"
+    extern cstr sdl_get_error() = "gorget_sdl_get_error"
     extern void sdl_destroy_window(SDLWindow win) = "gorget_sdl_destroy_window"
     extern int sdl_get_window_width(SDLWindow win) = "gorget_sdl_get_window_width"
     extern int sdl_get_window_height(SDLWindow win) = "gorget_sdl_get_window_height"
