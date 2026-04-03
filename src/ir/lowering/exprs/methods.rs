@@ -1178,7 +1178,7 @@ pub(super) fn lower_method_call(
             let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
             let inner_type = resolve_inner_type(ctx, elem_type_name);
             let is_borrowing = matches!(method_name, "get" | "first" | "last");
-            let is_resource_elem = ctx.type_registry.is_resource_type(inner_type);
+            let is_resource_elem = ctx.type_registry.has_resource_fields(inner_type);
             if is_borrowing && is_resource_elem {
                 let option_name = format!("Option__Ref_{elem_type_name}");
                 if ctx.lookup_type_by_name(&option_name).is_none() {
@@ -1227,7 +1227,7 @@ pub(super) fn lower_method_call(
                 let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
                 let inner_type = resolve_inner_type(ctx, elem_type_name);
                 let is_borrowing = matches!(method_name, "get" | "first" | "last");
-                let is_resource_elem = ctx.type_registry.is_resource_type(inner_type);
+                let is_resource_elem = ctx.type_registry.has_resource_fields(inner_type);
                 let option_name = if is_borrowing && is_resource_elem {
                     format!("Option__Ref_{elem_type_name}")
                 } else {

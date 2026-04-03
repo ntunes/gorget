@@ -520,6 +520,29 @@ impl TypeRegistry {
         false
     }
 
+    /// Check if a type (struct or enum) contains resource-type fields.
+    /// Used by collection .get() to determine if element reads need borrow semantics.
+    /// Unlike is_resource_type, this checks enum variant fields too.
+    pub fn has_resource_fields(&self, type_id: TypeId) -> bool {
+        if self.is_resource_type(type_id) { return true; }
+        if let Some(GirType::Named(name)) = self.get(type_id) {
+            if let Some(type_def) = self.get_type_def(name) {
+                if let TypeDefKind::Enum(ref edef) = type_def.kind {
+                    for v in &edef.variants {
+                        for f in &v.fields {
+                            if let Some(GirType::Named(field_name)) = self.get(f.type_id) {
+                                if field_name != name && self.is_resource_name(field_name) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Get the enum category (Option/Result) for a named type, if any.
     pub fn enum_category(&self, type_id: TypeId) -> Option<EnumCategory> {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return None; }
