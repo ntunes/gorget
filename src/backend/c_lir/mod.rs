@@ -8137,10 +8137,10 @@ fn emit_collection_constructor(
 /// (i.e. the C prototype uses `const GorgetArray*`, `const GorgetX25519KeyPair*`, etc.)
 /// but LIR passes it as a Struct value. The codegen must emit `&(val)` or pass the pointer directly.
 /// Identifies runtime functions whose args need pass-by-pointer.
-/// Covers: compiler-emitted calls (string clone/free), structural collection
-/// self-by-ptr, and C library wrappers that take opaque struct params by pointer.
-/// Resource-type params (Vector, Dict) in extern "C" blocks get AbiKind::Ptr
-/// automatically; this whitelist covers non-resource opaque structs.
+/// Structural: compiler-emitted string clone/free, collection self-by-ptr.
+/// Crypto: opaque struct params (BigNum, KeyPair) that C takes by const pointer.
+/// Cannot use `&` in .gg (it means mutable borrow). Needs a future `const &` or
+/// auto-derivation for non-resource struct params in extern blocks.
 fn runtime_arg_by_ptr(name: &str, idx: usize) -> bool {
     // String clone/free take Str by pointer (compiler-emitted)
     if name == "gorget_string_clone_to_owned" || name == "gorget_string_clone" || name == "gorget_string_free" {
@@ -8150,7 +8150,8 @@ fn runtime_arg_by_ptr(name: &str, idx: usize) -> bool {
     if idx == 0 && collection_self_by_ptr(name) {
         return true;
     }
-    // Crypto functions take opaque struct args (BigNum, KeyPair) by pointer
+    // Crypto functions take opaque struct args by const pointer.
+    // Cannot use & (mutable borrow) in .gg — these are read-only.
     if name.starts_with("gorget_crypto_") || name == "gorget_cipher_encrypt" || name == "gorget_cipher_decrypt" {
         return true;
     }
