@@ -696,20 +696,20 @@ extern "C":
     extern bool gl_is_program(int program) = "gorget_gl_is_program"
     extern bool gl_is_framebuffer(int framebuffer) = "gorget_gl_is_framebuffer"
 
-# ── GL Functions (Gorget String ABI) ──────────────────────
+# ── GL Functions (C string params) ────────────────────────
 
-extern "Gorget":
-    # Shaders (string params)
+extern "C":
+    # Shaders (string params → const char*)
     extern void gl_shader_source(int shader, String source) = "gorget_gl_shader_source"
 
-    # Uniforms (string params)
+    # Uniforms (string params → const char*)
     extern int gl_get_uniform_location(int program, String name) = "gorget_gl_get_uniform_location"
 
-    # Shader Introspection (string params)
+    # Shader Introspection (string params → const char*)
     extern void gl_bind_attrib_location(int program, int index, String name) = "gorget_gl_bind_attrib_location"
     extern int gl_get_attrib_location(int program, String name) = "gorget_gl_get_attrib_location"
 
-    # UBO (string params)
+    # UBO (string params → const char*)
     extern int gl_get_uniform_block_index(int program, String name) = "gorget_gl_get_uniform_block_index"
 
 # ── GL 3.2+ Functions (not available on macOS) ────────────
