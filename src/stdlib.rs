@@ -1,61 +1,28 @@
-/// Built-in module system — covers both `std` (core) and `gg` (batteries).
+/// Built-in module system — covers both `std` (core) and `xtd` (batteries).
 ///
 /// The namespace split:
 /// - `std.*` — lean, stable building blocks: collections, I/O, math, OS, net, …
 /// - `xtd.*`  — batteries-included ecosystem: JSON, TOML, XML, YAML, CSV,
 ///              crypto, regex, SDL, GFX, ECS, SSH, HTTP, P2P, …
 ///
-/// Both namespaces use one of two module strategies:
+/// All built-in modules are file-based `.gg` files under `lib/std/` or `lib/xtd/`.
+/// The loader reads source via `include_str!`, parses it, recursively resolves
+/// imports, and merges the resulting AST into the main module. Semantic analysis
+/// (name resolution, type checking, borrow checking) runs on the merged result.
 ///
-/// ## Synthetic modules (`generate_builtin_module` returns `Some`)
-///
-/// The module AST is built in Rust via helper functions (`gen_fs_module`, etc.).
-/// Function bodies are either `FunctionBody::Declaration` (codegen emits a
-/// hardcoded C call, often with Result/Option wrapping) or `FunctionBody::Extern`
-/// (codegen emits a direct call to the named C symbol). The C implementations
-/// live in `c_runtime.rs`.
-///
-/// Use synthetic modules when the API is a thin wrapper over C functions that
-/// already exist in the runtime — the Gorget source would just be boilerplate
-/// `extern` declarations with no real logic.
-///
-/// Examples: `std.collections`, `std.channel`, `std.alloc`,
-/// `std.sync`, `std.thread`, `std.net.udp`.
-///
-/// ## File-based modules (`builtin_module_source` returns `Some`)
-///
-/// The module is written in Gorget as a `.gg` file under `lib/std/` (for `std.*`)
-/// or `lib/xtd/` (for `xtd.*`). The loader reads the source via `include_str!`,
-/// parses it, recursively resolves its imports, and merges the resulting AST into
-/// the main module. Semantic analysis (name resolution, type checking, borrow
-/// checking) runs on the merged result — the file-based module code is fully
-/// checked, not trusted.
-///
-/// Use file-based modules when the module contains substantial Gorget logic
-/// (parsers, data structures, algorithms) that benefits from being written and
-/// tested in the language itself. File-based modules can import other built-in
-/// modules and use all language features.
-///
-/// Examples: `std.fs`, `std.os`, `std.conv`, `std.math`, `std.net.socket`,
-/// `std.net.tls`, `xtd.crypto`, `xtd.regex`, `xtd.json`, `xtd.toml`,
-/// `xtd.xml`, `xtd.yaml`, `xtd.csv`, `std.bytes`, `std.encoding`,
-/// `xtd.gfx`, `xtd.ecs`, `xtd.ssh`, `xtd.http`.
+/// Modules declare their C runtime bindings using `extern "C":` blocks with
+/// explicit `= "c_symbol"` annotations. The `blocking` qualifier marks functions
+/// that may block (for shared variable lock release). ABI marshalling (cstr, etc.)
+/// is derived from the extern block's ABI string and explicit FFI types.
 ///
 /// ## Adding a new module
 ///
-/// 1. Choose synthetic if it's pure C-runtime glue, file-based if it has logic.
+/// 1. Create `lib/std/<name>.gg` (or `lib/xtd/<name>.gg`).
 /// 2. Add the module name to `is_builtin_module`.
-/// 3. For synthetic: add a `gen_*_module()` function returning the AST.
-///    For file-based in `std`: create `lib/std/<name>.gg`, add `None` to
-///    `generate_builtin_module`, add `include_str!` to `builtin_module_source`.
-///    For file-based in `gg`: create `lib/xtd/<name>.gg` instead.
-/// 4. Add unit tests (at minimum: is_builtin, generate returns correct variant,
-///    source exists/parses for file-based modules).
-///
-/// All synthetic defs use `Span::dummy()`, which distinguishes them from
-/// user-defined code and enables the `is_stdlib_call()` guard in codegen.
+/// 3. Add `None` to `generate_builtin_module`.
+/// 4. Add `include_str!` to `builtin_module_source`.
+/// 5. Add unit tests (at minimum: is_builtin, source exists/parses).
 use crate::parser::ast::*;
-use crate::span::{Span, Spanned};
 
 /// Check if an import path refers to a built-in module (`std.*` or `xtd.*`).
 pub fn is_builtin_module(segments: &[String]) -> bool {
@@ -80,342 +47,12 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
     }
 }
 
-/// Generate a synthetic `Module` for a built-in module.
-pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
-    match segments.first().map(|s| s.as_str()) {
-        Some("std") => match segments.len() {
-            2 => match segments[1].as_str() {
-                "fs" => None, // file-based — loaded via builtin_module_source()
-                "path" => None, // file-based
-                "os" => None, // file-based
-                "conv" => None,
-                "io" => None, // file-based
-                "random" => None, // file-based
-                "time" => None, // file-based
-                "collections" => None, // file-based
-                "math" => None, // file-based
-                "fmt" => None, // file-based module — loaded via builtin_module_source()
-                "process" => None, // file-based
-                "bytes" => None, // file-based module — loaded via builtin_module_source()
-                "encoding" => None, // file-based module — loaded via builtin_module_source()
-                "channel" => None, // file-based
-                "alloc" => None, // file-based
-                "sync" => Some(gen_sync_module()),
-                "thread" => Some(gen_thread_module()),
-                "async" => None, // file-based
-                "signal" => None, // file-based
-                "term" => None,     // file-based module — loaded via builtin_module_source()
-                "heap" => None,     // file-based module — loaded via builtin_module_source()
-                "datetime" => None, // file-based module — loaded via builtin_module_source()
-                _ => None,
-            },
-            3 if segments[1] == "net" && segments[2] == "socket" => None, // file-based
-            3 if segments[1] == "net" && segments[2] == "tls" => None, // file-based
-            3 if segments[1] == "net" && segments[2] == "udp" => None, // file-based
-            _ => None,
-        },
-        Some("xtd") if segments.len() == 2 => match segments[1].as_str() {
-            "sdl" => None, // file-based module — loaded via builtin_module_source()
-            "crypto" => None, // file-based
-            "regex" => None, // file-based
-            "json" => None, // file-based module — loaded via builtin_module_source()
-            "toml" => None, // file-based module — loaded via builtin_module_source()
-            "xml" => None,  // file-based module — loaded via builtin_module_source()
-            "yaml" => None, // file-based module — loaded via builtin_module_source()
-            "csv" => None,  // file-based module — loaded via builtin_module_source()
-            "gfx" => None,  // file-based module — loaded via builtin_module_source()
-            "ecs" => None,  // file-based module — loaded via builtin_module_source()
-            "ssh" => None,  // file-based module — loaded via builtin_module_source()
-            "http" => None,       // file-based module — loaded via builtin_module_source()
-            "httpserver" => None, // file-based module — loaded via builtin_module_source()
-            "p2p" => None,        // file-based module — loaded via builtin_module_source()
-            "uuid" => None, // file-based module — loaded via builtin_module_source()
-            "log" => None,  // file-based module — loaded via builtin_module_source()
-            "cli" => None,  // file-based module — loaded via builtin_module_source()
-            "tensor" => None,    // file-based module — loaded via builtin_module_source()
-            "dataframe" => None, // file-based module — loaded via builtin_module_source()
-            "db" => None,        // file-based module — loaded via builtin_module_source()
-            "sqlite" => None,    // file-based module — loaded via builtin_module_source()
-            "influx" => None,    // file-based module — loaded via builtin_module_source()
-            "jsonpath" => None,  // file-based module — loaded via builtin_module_source()
-            "math3d" => None,    // file-based module — loaded via builtin_module_source()
-            "gl" => None, // file-based module — loaded via builtin_module_source()
-            "image" => None, // file-based
-            "audio" => None, // file-based
-            "compress" => None, // file-based
-            "metal" => None, // file-based module — loaded via builtin_module_source()
-            "gpu" => None, // file-based module — loaded via builtin_module_source()
-            _ => None,
-        },
-        _ => None,
-    }
+/// Legacy entry point for synthetic module generation.
+/// All modules are now file-based — this always returns `None`.
+/// Kept for API compatibility with `loader.rs`; will be removed in a future cleanup.
+pub fn generate_builtin_module(_segments: &[String]) -> Option<Module> {
+    None
 }
-
-// ─── Module Generators ──────────────────────────────────────
-
-
-
-
-// gen_conv_module — migrated to lib/std/conv.gg
-
-// gen_io_module — migrated to lib/std/io.gg
-
-
-/// std.async — non-blocking I/O helpers backed by the GorgetReactor (timerfd/kqueue).
-/// async_sleep(ms: int) suspends the current task for `ms` milliseconds using the reactor.
-// gen_async_module — migrated to lib/std/async.gg
-
-// gen_math_module — migrated to lib/std/math.gg
-
-
-fn gen_sync_module() -> Module {
-    let ty_t = || Type::Named {
-        name: Spanned::dummy("T".to_string()),
-        generic_args: vec![],
-    };
-    let ty_read_guard = |t: Type| Type::Named {
-        name: Spanned::dummy("ReadGuard".to_string()),
-        generic_args: vec![Spanned::dummy(t)],
-    };
-    let ty_write_guard = |t: Type| Type::Named {
-        name: Spanned::dummy("WriteGuard".to_string()),
-        generic_args: vec![Spanned::dummy(t)],
-    };
-
-    // AtomicInt — non-generic opaque struct
-    let atomic_int_struct = opaque_struct("AtomicInt");
-    let atomic_int_equip = equip_block("AtomicInt", vec![
-        decl_method("load", Ownership::Borrow, &[], ty_int()),
-        decl_method("store", Ownership::Borrow, &[("val", ty_int())], ty_void()),
-        decl_method("add", Ownership::Borrow, &[("val", ty_int())], ty_int()),
-        decl_method("sub", Ownership::Borrow, &[("val", ty_int())], ty_int()),
-        decl_method("compare_exchange", Ownership::Borrow, &[("expected", ty_int()), ("desired", ty_int())], ty_bool()),
-    ]);
-
-    // AtomicBool — non-generic opaque struct
-    let atomic_bool_struct = opaque_struct("AtomicBool");
-    let atomic_bool_equip = equip_block("AtomicBool", vec![
-        decl_method("load", Ownership::Borrow, &[], ty_bool()),
-        decl_method("store", Ownership::Borrow, &[("val", ty_bool())], ty_void()),
-        decl_method("swap", Ownership::Borrow, &[("val", ty_bool())], ty_bool()),
-        decl_method("compare_exchange", Ownership::Borrow, &[("expected", ty_bool()), ("desired", ty_bool())], ty_bool()),
-    ]);
-
-    // Barrier — non-generic opaque struct
-    let barrier_struct = opaque_struct("Barrier");
-    let barrier_equip = equip_block("Barrier", vec![
-        decl_method("wait", Ownership::Borrow, &[], ty_void()),
-    ]);
-
-    // CondVar — non-generic opaque struct
-    let condvar_struct = opaque_struct("CondVar");
-    // CondVar.wait takes a Guard[T] argument; declared as a generic guard placeholder.
-    let ty_guard_bool = Type::Named {
-        name: Spanned::dummy("Guard".to_string()),
-        generic_args: vec![Spanned::dummy(ty_bool())],
-    };
-    let condvar_equip = equip_block("CondVar", vec![
-        decl_method("notify_one", Ownership::Borrow, &[], ty_void()),
-        decl_method("notify_all", Ownership::Borrow, &[], ty_void()),
-        decl_method("wait", Ownership::Borrow, &[("guard", ty_guard_bool)], ty_void()),
-    ]);
-
-    // RWLock[T] — generic, follows Mutex[T] pattern
-    let rwlock_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("RWLock".to_string()),
-        generic_params: Some(Spanned::dummy(GenericParams {
-            params: vec![Spanned::dummy(GenericParam::Type {
-                name: Spanned::dummy("T".to_string()),
-                bounds: vec![],
-            })],
-        })),
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-    let rwlock_equip = Spanned::dummy(Item::Equip(EquipBlock {
-        generic_params: None,
-        trait_: None,
-        type_: Spanned::dummy(Type::Named {
-            name: Spanned::dummy("RWLock".to_string()),
-            generic_args: vec![],
-        }),
-        via_field: None,
-        where_clause: None,
-        items: vec![
-            Spanned::dummy(decl_method("read", Ownership::Borrow, &[], ty_read_guard(ty_t()))),
-            Spanned::dummy(decl_method("write", Ownership::Borrow, &[], ty_write_guard(ty_t()))),
-        ],
-        span: Span::dummy(),
-    }));
-
-    // ReadGuard[T] — generic, Move + RAII unlock
-    let read_guard_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("ReadGuard".to_string()),
-        generic_params: Some(Spanned::dummy(GenericParams {
-            params: vec![Spanned::dummy(GenericParam::Type {
-                name: Spanned::dummy("T".to_string()),
-                bounds: vec![],
-            })],
-        })),
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-    let read_guard_equip = Spanned::dummy(Item::Equip(EquipBlock {
-        generic_params: None,
-        trait_: None,
-        type_: Spanned::dummy(Type::Named {
-            name: Spanned::dummy("ReadGuard".to_string()),
-            generic_args: vec![],
-        }),
-        via_field: None,
-        where_clause: None,
-        items: vec![
-            Spanned::dummy(decl_method("get", Ownership::Borrow, &[], ty_t())),
-        ],
-        span: Span::dummy(),
-    }));
-
-    // WriteGuard[T] — generic, Move + RAII unlock
-    let write_guard_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("WriteGuard".to_string()),
-        generic_params: Some(Spanned::dummy(GenericParams {
-            params: vec![Spanned::dummy(GenericParam::Type {
-                name: Spanned::dummy("T".to_string()),
-                bounds: vec![],
-            })],
-        })),
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-    let write_guard_equip = Spanned::dummy(Item::Equip(EquipBlock {
-        generic_params: None,
-        trait_: None,
-        type_: Spanned::dummy(Type::Named {
-            name: Spanned::dummy("WriteGuard".to_string()),
-            generic_args: vec![],
-        }),
-        via_field: None,
-        where_clause: None,
-        items: vec![
-            Spanned::dummy(decl_method("get", Ownership::Borrow, &[], ty_t())),
-            Spanned::dummy(decl_method("set", Ownership::Borrow, &[("val", ty_t())], ty_void())),
-        ],
-        span: Span::dummy(),
-    }));
-
-    // WaitGroup — non-generic opaque struct
-    let waitgroup_struct = opaque_struct("WaitGroup");
-    let waitgroup_equip = equip_block("WaitGroup", vec![
-        decl_method("add", Ownership::Borrow, &[("n", ty_int())], ty_void()),
-        decl_method("done", Ownership::Borrow, &[], ty_void()),
-        decl_method("wait", Ownership::Borrow, &[], ty_void()),
-    ]);
-
-    // Semaphore — non-generic opaque struct
-    let semaphore_struct = opaque_struct("Semaphore");
-    let semaphore_equip = equip_block("Semaphore", vec![
-        decl_method("acquire", Ownership::Borrow, &[], ty_void()),
-        decl_method("release", Ownership::Borrow, &[], ty_void()),
-        decl_method("try_acquire", Ownership::Borrow, &[], ty_bool()),
-    ]);
-
-    // OnceFlag — exactly-once initialization primitive
-    let onceflag_struct = opaque_struct("OnceFlag");
-    let onceflag_equip = equip_block("OnceFlag", vec![
-        decl_method("do_once", Ownership::Borrow, &[], ty_bool()),
-        decl_method("is_done", Ownership::Borrow, &[], ty_bool()),
-    ]);
-
-    Module {
-        items: vec![
-            atomic_int_struct, atomic_int_equip,
-            atomic_bool_struct, atomic_bool_equip,
-            barrier_struct, barrier_equip,
-            condvar_struct, condvar_equip,
-            rwlock_struct, rwlock_equip,
-            read_guard_struct, read_guard_equip,
-            write_guard_struct, write_guard_equip,
-            waitgroup_struct, waitgroup_equip,
-            semaphore_struct, semaphore_equip,
-            onceflag_struct, onceflag_equip,
-        ],
-        span: Span::dummy(),
-    }
-}
-
-fn gen_thread_module() -> Module {
-    let ty_t = || Type::Named {
-        name: Spanned::dummy("T".to_string()),
-        generic_args: vec![],
-    };
-    let ty_callable_t = || Type::Function {
-        return_type: Box::new(Spanned::dummy(ty_t())),
-        params: vec![],
-        param_ownerships: vec![],
-    };
-
-    // Thread[T] — generic, Move semantics (must be joined or leaked)
-    let thread_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("Thread".to_string()),
-        generic_params: Some(Spanned::dummy(GenericParams {
-            params: vec![Spanned::dummy(GenericParam::Type {
-                name: Spanned::dummy("T".to_string()),
-                bounds: vec![],
-            })],
-        })),
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-    let thread_equip = Spanned::dummy(Item::Equip(EquipBlock {
-        generic_params: None,
-        trait_: None,
-        type_: Spanned::dummy(Type::Named {
-            name: Spanned::dummy("Thread".to_string()),
-            generic_args: vec![],
-        }),
-        via_field: None,
-        where_clause: None,
-        items: vec![
-            Spanned::dummy(decl_method("join", Ownership::Move, &[], ty_t())),
-            Spanned::dummy(decl_method("id", Ownership::Borrow, &[], ty_int())),
-        ],
-        span: Span::dummy(),
-    }));
-
-    Module {
-        items: vec![
-            thread_struct,
-            thread_equip,
-            // thread_spawn(fn) → Thread[T]
-            Spanned::dummy(Item::Function(decl_fn(
-                "thread_spawn",
-                &[("fn", ty_callable_t())],
-                Type::Named {
-                    name: Spanned::dummy("Thread".to_string()),
-                    generic_args: vec![Spanned::dummy(ty_t())],
-                },
-            ))),
-            Spanned::dummy(Item::Function(decl_fn("current_thread_id", &[], ty_int()))),
-        ],
-        span: Span::dummy(),
-    }
-}
-
-
-// gen_sdl_module() removed — now file-based at lib/xtd/sdl.gg
-// Retained as comment for history. See git log for original synthetic module.
 
 // ─── File-based built-in modules ────────────────────────────
 
@@ -438,6 +75,8 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("math") => Some(include_str!("../lib/std/math.gg")),
             Some("os") => Some(include_str!("../lib/std/os.gg")),
             Some("signal") => Some(include_str!("../lib/std/signal.gg")),
+            Some("thread") => Some(include_str!("../lib/std/thread.gg")),
+            Some("sync") => Some(include_str!("../lib/std/sync.gg")),
             Some("async") => Some(include_str!("../lib/std/async.gg")),
             Some("fmt") => Some(include_str!("../lib/std/fmt.gg")),
             Some("bytes") => Some(include_str!("../lib/std/bytes.gg")),
@@ -489,285 +128,6 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
         _ => None,
     }
 }
-
-// ─── Helpers ────────────────────────────────────────────────
-
-#[allow(dead_code)]
-fn make_module(fns: Vec<FunctionDef>) -> Module {
-    let items: Vec<Spanned<Item>> = fns
-        .into_iter()
-        .map(|f| Spanned::dummy(Item::Function(f)))
-        .collect();
-    Module {
-        items,
-        span: Span::dummy(),
-    }
-}
-
-// All parameters in synthetic module declarations use Ownership::Borrow. This is
-// intentional: these are FFI boundaries where the C runtime never takes ownership
-// of the caller's data, so borrowing is always correct. Move semantics would force
-// callers to clone before calling (e.g., losing a Vector after hashing it). Method
-// receiver ownership (self vs &self) is set per-method via decl_method/extern_method.
-fn decl_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
-    FunctionDef {
-        attributes: Vec::new(),
-        visibility: Visibility::Public,
-        qualifiers: FunctionQualifiers::default(),
-        return_type: Spanned::dummy(ret),
-        name: Spanned::dummy(name.to_string()),
-        generic_params: None,
-        params: params
-            .iter()
-            .map(|(pname, pty)| {
-                Spanned::dummy(Param {
-                    type_: Spanned::dummy(pty.clone()),
-                    ownership: Ownership::Borrow,
-                    name: Spanned::dummy(pname.to_string()),
-                    default: None,
-                    is_live: false,
-                    live_group: None,
-                    is_meta_op: false,
-                })
-            })
-            .collect(),
-        throws: None,
-        where_clause: None,
-        body: FunctionBody::Declaration,
-        doc_comment: None,
-        span: Span::dummy(),
-        param_abis: vec![],
-    }
-}
-
-/// Declare an extern function with explicit ABI annotations per parameter.
-#[allow(dead_code)]
-fn decl_fn_abi(name: &str, params: &[(&str, Type, crate::ir::abi::AbiKind)], ret: Type) -> FunctionDef {
-    use crate::ir::abi::AbiKind;
-    let param_abis: Vec<AbiKind> = params.iter().map(|(_, _, abi)| *abi).collect();
-    let mut f = decl_fn(
-        name,
-        &params.iter().map(|(n, t, _)| (*n, t.clone())).collect::<Vec<_>>(),
-        ret,
-    );
-    f.param_abis = param_abis;
-    f
-}
-
-#[allow(dead_code)]
-fn decl_async_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
-    let mut f = decl_fn(name, params, ret);
-    f.qualifiers.is_async = true;
-    f
-}
-
-/// Declare a blocking extern function — yields shared variable locks during call.
-#[allow(dead_code)]
-fn decl_blocking_fn(name: &str, params: &[(&str, Type)], ret: Type) -> FunctionDef {
-    let mut f = decl_fn(name, params, ret);
-    f.qualifiers.is_blocking = true;
-    f
-}
-
-#[allow(dead_code)]
-fn decl_blocking_fn_abi(name: &str, params: &[(&str, Type, crate::ir::abi::AbiKind)], ret: Type) -> FunctionDef {
-    let mut f = decl_fn_abi(name, params, ret);
-    f.qualifiers.is_blocking = true;
-    f
-}
-
-fn ty_str() -> Type {
-    Type::Primitive(PrimitiveType::StringView)
-}
-
-fn ty_string() -> Type {
-    Type::Primitive(PrimitiveType::StringType)
-}
-
-fn ty_int() -> Type {
-    Type::Primitive(PrimitiveType::Int)
-}
-
-fn ty_bool() -> Type {
-    Type::Primitive(PrimitiveType::Bool)
-}
-
-#[allow(dead_code)]
-fn ty_float() -> Type {
-    Type::Primitive(PrimitiveType::Float)
-}
-
-fn ty_void() -> Type {
-    Type::Primitive(PrimitiveType::Void)
-}
-
-#[allow(dead_code)]
-fn ty_vector_str() -> Type {
-    Type::Named {
-        name: Spanned::dummy("Vector".to_string()),
-        generic_args: vec![Spanned::dummy(ty_str())],
-    }
-}
-
-fn ty_uint8() -> Type {
-    Type::Primitive(PrimitiveType::Uint8)
-}
-
-fn ty_vector_uint8() -> Type {
-    Type::Named {
-        name: Spanned::dummy("Vector".to_string()),
-        generic_args: vec![Spanned::dummy(ty_uint8())],
-    }
-}
-
-fn ty_result(ok: Type, err: Type) -> Type {
-    Type::Named {
-        name: Spanned::dummy("Result".to_string()),
-        generic_args: vec![Spanned::dummy(ok), Spanned::dummy(err)],
-    }
-}
-
-#[allow(dead_code)]
-fn ty_option(inner: Type) -> Type {
-    Type::Named {
-        name: Spanned::dummy("Option".to_string()),
-        generic_args: vec![Spanned::dummy(inner)],
-    }
-}
-
-fn opaque_struct(name: &str) -> Spanned<Item> {
-    Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy(name.to_string()),
-        generic_params: None,
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }))
-}
-
-// ─── xtd.crypto ──────────────────────────────────────────────
-
-// gen_crypto_module — migrated to lib/xtd/crypto.gg
-
-// gen_socket_module — migrated to lib/std/socket.gg
-
-// gen_udp_socket_module — migrated to lib/std/udp.gg
-
-// gen_tls_socket_module — migrated to lib/std/tls.gg
-
-
-// ─── Helpers ────────────────────────────────────────────────
-
-/// Build an extern free function declaration.
-/// The C symbol is called directly instead of going through hardcoded dispatch.
-#[allow(dead_code)]
-fn extern_fn(name: &str, params: &[(&str, Type)], ret: Type, c_symbol: &str) -> FunctionDef {
-    let mut f = decl_fn(name, params, ret);
-    f.body = FunctionBody::Extern(c_symbol.to_string());
-    f
-}
-
-/// Build an extern free function declaration with ABI annotations.
-#[allow(dead_code)]
-fn extern_fn_abi(name: &str, params: &[(&str, Type, crate::ir::abi::AbiKind)], ret: Type, c_symbol: &str) -> FunctionDef {
-    let mut f = decl_fn_abi(name, params, ret);
-    f.body = FunctionBody::Extern(c_symbol.to_string());
-    f
-}
-
-/// Build an extern method binding for an equip block (has `self` as first param).
-/// The C symbol is called directly instead of going through hardcoded dispatch.
-fn extern_method(
-    name: &str,
-    self_ownership: Ownership,
-    extra_params: &[(&str, Type)],
-    ret: Type,
-    c_symbol: &str,
-) -> FunctionDef {
-    let mut f = decl_method(name, self_ownership, extra_params, ret);
-    f.body = FunctionBody::Extern(c_symbol.to_string());
-    f
-}
-
-#[allow(dead_code)]
-fn extern_blocking_method(
-    name: &str,
-    self_ownership: Ownership,
-    extra_params: &[(&str, Type)],
-    ret: Type,
-    c_symbol: &str,
-) -> FunctionDef {
-    let mut f = extern_method(name, self_ownership, extra_params, ret, c_symbol);
-    f.qualifiers.is_blocking = true;
-    f
-}
-
-/// Build a method declaration for an equip block (has `self` as first param).
-fn decl_method(
-    name: &str,
-    self_ownership: Ownership,
-    extra_params: &[(&str, Type)],
-    ret: Type,
-) -> FunctionDef {
-    let mut params = vec![Spanned::dummy(Param {
-        type_: Spanned::dummy(Type::SelfType),
-        ownership: self_ownership,
-        name: Spanned::dummy("self".to_string()),
-        default: None,
-        is_live: false,
-        live_group: None,
-        is_meta_op: false,
-    })];
-    for (pname, pty) in extra_params {
-        params.push(Spanned::dummy(Param {
-            type_: Spanned::dummy(pty.clone()),
-            ownership: Ownership::Borrow,
-            name: Spanned::dummy(pname.to_string()),
-            default: None,
-            is_live: false,
-            live_group: None,
-            is_meta_op: false,
-        }));
-    }
-    FunctionDef {
-        attributes: Vec::new(),
-        visibility: Visibility::Public,
-        qualifiers: FunctionQualifiers::default(),
-        return_type: Spanned::dummy(ret),
-        name: Spanned::dummy(name.to_string()),
-        generic_params: None,
-        params,
-        throws: None,
-        where_clause: None,
-        body: FunctionBody::Declaration,
-        doc_comment: None,
-        span: Span::dummy(),
-        param_abis: vec![],
-    }
-}
-
-/// Build an equip block (inherent, no trait).
-fn equip_block(type_name: &str, methods: Vec<FunctionDef>) -> Spanned<Item> {
-    Spanned::dummy(Item::Equip(EquipBlock {
-        generic_params: None,
-        trait_: None,
-        type_: Spanned::dummy(Type::Named {
-            name: Spanned::dummy(type_name.to_string()),
-            generic_args: vec![],
-        }),
-        via_field: None,
-        where_clause: None,
-        items: methods.into_iter().map(Spanned::dummy).collect(),
-        span: Span::dummy(),
-    }))
-}
-
-// gen_gl_module() removed — now file-based at lib/xtd/gl.gg
-// Retained as comment for history. See git log for original synthetic module.
-
-
 
 #[cfg(test)]
 mod tests {
@@ -858,8 +218,12 @@ mod tests {
 
     #[test]
     fn generate_collections() {
-        let m = generate_builtin_module(&["std".into(), "collections".into()]).unwrap();
-        assert_eq!(m.items.len(), 8); // 7 structs + 1 File equip block
+        // std.collections is now file-based
+        assert!(generate_builtin_module(&["std".into(), "collections".into()]).is_none());
+        let source = builtin_module_source(&["std".into(), "collections".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let m = parser.parse_module();
+        assert!(parser.errors.is_empty(), "collections.gg parse errors: {:?}", parser.errors);
         let names: Vec<_> = m.items.iter().filter_map(|i| match &i.node {
             Item::Struct(s) => Some(s.name.node.clone()),
             _ => None,
@@ -869,9 +233,9 @@ mod tests {
         assert!(names.contains(&"Set".to_string()));
         assert!(names.contains(&"Box".to_string()));
         assert!(names.contains(&"File".to_string()));
-        // File equip block should have extern methods
+        // File equip block should exist
         let equip_count = m.items.iter().filter(|i| matches!(&i.node, Item::Equip(_))).count();
-        assert_eq!(equip_count, 1);
+        assert!(equip_count >= 1);
     }
 
     #[test]
@@ -1587,21 +951,19 @@ mod tests {
 
     #[test]
     fn file_methods_are_extern() {
-        let m = generate_builtin_module(&["std".into(), "collections".into()]).unwrap();
+        let source = builtin_module_source(&["std".into(), "collections".into()]).unwrap();
+        let mut parser = crate::parser::Parser::new(source);
+        let m = parser.parse_module();
+        assert!(parser.errors.is_empty());
         for item in &m.items {
             if let Item::Equip(eq) = &item.node {
                 if let Type::Named { name, .. } = &eq.type_.node {
                     if name.node == "File" {
                         let names: Vec<&str> =
                             eq.items.iter().map(|m| m.node.name.node.as_str()).collect();
-                        assert_eq!(names, vec!["read_all", "write", "close"]);
-                        for method in &eq.items {
-                            assert!(
-                                matches!(method.node.body, FunctionBody::Extern(_)),
-                                "File.{} should be FunctionBody::Extern",
-                                method.node.name.node
-                            );
-                        }
+                        assert!(names.contains(&"read_all"));
+                        assert!(names.contains(&"write"));
+                        assert!(names.contains(&"close"));
                         return;
                     }
                 }

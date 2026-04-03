@@ -1,0 +1,13 @@
+# std.thread — Thread management
+
+struct Thread[T]:
+    pass
+
+equip Thread:
+    T join(!self)
+    int id()
+
+Thread[T] thread_spawn(T() fn)
+
+extern "C":
+    extern int current_thread_id() = "gorget_current_thread_id"

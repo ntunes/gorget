@@ -1,0 +1,77 @@
+# std.sync — Synchronization primitives
+
+struct AtomicInt:
+    pass
+
+equip AtomicInt:
+    int load()
+    void store(int val)
+    int add(int val)
+    int sub(int val)
+    bool compare_exchange(int expected, int desired)
+
+struct AtomicBool:
+    pass
+
+equip AtomicBool:
+    bool load()
+    void store(bool val)
+    bool swap(bool val)
+    bool compare_exchange(bool expected, bool desired)
+
+struct Barrier:
+    pass
+
+equip Barrier:
+    void wait()
+
+struct CondVar:
+    pass
+
+equip CondVar:
+    void notify_one()
+    void notify_all()
+    void wait(Guard[bool] guard)
+
+struct RWLock[T]:
+    pass
+
+equip RWLock:
+    ReadGuard[T] read()
+    WriteGuard[T] write()
+
+struct ReadGuard[T]:
+    pass
+
+equip ReadGuard:
+    T get()
+
+struct WriteGuard[T]:
+    pass
+
+equip WriteGuard:
+    T get()
+    void set(T val)
+
+struct WaitGroup:
+    pass
+
+equip WaitGroup:
+    void add(int n)
+    void done()
+    void wait()
+
+struct Semaphore:
+    pass
+
+equip Semaphore:
+    void acquire()
+    void release()
+    bool try_acquire()
+
+struct OnceFlag:
+    pass
+
+equip OnceFlag:
+    bool do_once()
+    bool is_done()
