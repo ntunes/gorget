@@ -98,7 +98,7 @@ pub fn generate_builtin_module(segments: &[String]) -> Option<Module> {
                 "process" => None, // file-based
                 "bytes" => None, // file-based module — loaded via builtin_module_source()
                 "encoding" => None, // file-based module — loaded via builtin_module_source()
-                "channel" => Some(gen_channel_module()),
+                "channel" => None, // file-based
                 "alloc" => None, // file-based
                 "sync" => Some(gen_sync_module()),
                 "thread" => Some(gen_thread_module()),
@@ -432,6 +432,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("conv") => Some(include_str!("../lib/std/conv.gg")),
             Some("process") => Some(include_str!("../lib/std/process.gg")),
             Some("alloc") => Some(include_str!("../lib/std/alloc.gg")),
+            Some("channel") => Some(include_str!("../lib/std/channel.gg")),
             Some("collections") => Some(include_str!("../lib/std/collections.gg")),
             Some("io") => Some(include_str!("../lib/std/io.gg")),
             Some("math") => Some(include_str!("../lib/std/math.gg")),
@@ -744,51 +745,6 @@ fn decl_method(
         doc_comment: None,
         span: Span::dummy(),
         param_abis: vec![],
-    }
-}
-
-fn gen_channel_module() -> Module {
-    let ty_t = || Type::Named {
-        name: Spanned::dummy("T".to_string()),
-        generic_args: vec![],
-    };
-    let channel_struct = Spanned::dummy(Item::Struct(StructDef {
-        attributes: vec![],
-        visibility: Visibility::Public,
-        name: Spanned::dummy("Channel".to_string()),
-        generic_params: Some(Spanned::dummy(GenericParams {
-            params: vec![Spanned::dummy(GenericParam::Type { name: Spanned::dummy("T".to_string()), bounds: vec![] })],
-        })),
-        fields: vec![],
-        doc_comment: None,
-        span: Span::dummy(),
-    }));
-    let channel_equip = Spanned::dummy(Item::Equip(EquipBlock {
-        generic_params: None,
-        trait_: None,
-        type_: Spanned::dummy(Type::Named {
-            name: Spanned::dummy("Channel".to_string()),
-            generic_args: vec![],
-        }),
-        via_field: None,
-        where_clause: None,
-        items: vec![
-            Spanned::dummy(decl_method("send", Ownership::Borrow, &[("value", ty_t())], ty_void())),
-            Spanned::dummy(decl_method("recv", Ownership::Borrow, &[], ty_t())),
-            Spanned::dummy(decl_method("close", Ownership::Borrow, &[], ty_void())),
-            Spanned::dummy(decl_method("len", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("capacity", Ownership::Borrow, &[], ty_int())),
-            Spanned::dummy(decl_method("is_closed", Ownership::Borrow, &[], ty_bool())),
-            Spanned::dummy(decl_method("recv_timeout", Ownership::Borrow, &[("ms", ty_int())], Type::Named {
-                name: Spanned::dummy("Option".to_string()),
-                generic_args: vec![Spanned::dummy(ty_t())],
-            })),
-        ],
-        span: Span::dummy(),
-    }));
-    Module {
-        items: vec![channel_struct, channel_equip],
-        span: Span::dummy(),
     }
 }
 

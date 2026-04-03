@@ -1,0 +1,13 @@
+# std.channel — MPSC channels
+
+struct Channel[T]:
+    pass
+
+equip Channel:
+    void send(T value)
+    T recv()
+    void close()
+    int len()
+    int capacity()
+    bool is_closed()
+    Option[T] recv_timeout(int ms)
