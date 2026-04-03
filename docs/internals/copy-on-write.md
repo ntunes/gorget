@@ -1,7 +1,7 @@
 # Copy-on-Write Ownership Model
 
 > **Status:** Phases 1a–1e, 2b implemented. Phase 1f in progress.
-> **Date:** 2026-03-27
+> **Date:** 2026-04-03 (collection borrow semantics revised)
 > **Supersedes:** Implicit clone warnings, `directive explicit-clone`, LIR per-element drop recipes.
 
 ## Core Principle
@@ -43,30 +43,49 @@ print(s)                       # still "hello"
 
 ### Collection reads
 
-```gorget
-auto entry = v[i]              # pointer into v's storage
-print(entry.name)              # read — zero cost
-entry.name = "new"             # mutation on entry → clone v[i] into entry, mutate
-```
+Collection reads (`.get()`, `v[i]`) return a mutable borrow (`&T`) into the
+collection's storage. Both `auto` and typed bindings produce borrows — there is
+no implicit clone:
 
 ```gorget
-auto entry = cache.get("key")  # pointer into cache's storage
-print(entry.len())             # read — zero cost, no clone
+auto entry = v.get(i).unwrap() # &Entry — mutable borrow into v's storage
+Entry entry = v.get(i).unwrap() # &Entry — also a borrow, NOT a clone
+print(entry.name)              # read through borrow — zero cost
+entry.name = "new"             # mutation in place through & — modifies v[i] directly
 ```
 
-### Collection mutation while alias exists
+Borrows propagate through field access and destructuring:
 
 ```gorget
-auto entry = v[i]              # pointer into v's storage
-v.push(something)              # mutation on v → clone entry out first
-                               # (v's buffer may relocate, entry would dangle)
+auto ev = events.get(i).unwrap()  # &GameEvent
+match ev:
+    case .ItemPickup(cat, name, pos):  # name is &String (borrow propagates)
+        hud.pickup_text = name          # ERROR: cannot store borrow in owned field
+        hud.pickup_text = name.clone()  # ✓ explicit clone for ownership
 ```
+
+To get an owned copy, use `.clone()`:
+
+```gorget
+Entry owned = v.get(i).unwrap().clone()  # deep clone — caller owns the copy
+```
+
+### Collection mutation while borrow exists
+
+```gorget
+auto entry = v.get(i).unwrap() # &Entry — borrow into v's storage
+v.push(something)              # ERROR: cannot mutate v while entry borrows from it
+```
+
+The borrow checker rejects this — `v.push()` may reallocate the buffer,
+invalidating the borrow.
 
 ### No difference between `auto` and explicit type
 
 ```gorget
-auto x = v[i]                  # pointer — same behavior
-String x = v[i]                # pointer — same behavior
+auto x = v.get(i).unwrap()    # &T — borrow
+String x = v.get(i).unwrap()  # &T — also a borrow (no auto-clone)
+String x = v.get(i).unwrap().clone()  # T — owned copy (explicit)
 ```
 
 ## Ownership Transfer (push, put, struct constructors)
@@ -123,7 +142,6 @@ No reference counting. No runtime checks. The compiler makes all decisions at co
 
 1. **Smarter escape analysis:** Reduce conservative clones by proving more cases statically.
 2. **Field-granularity CoW:** When only one field of a struct is mutated, clone only that field's container, not the entire struct.
-3. **Runtime refcount fallback:** For cases where static analysis is too conservative, add optional refcount on collection/string headers to defer clones until they're truly needed. This is an optimization, not a correctness requirement.
 
 ## What This Replaces
 

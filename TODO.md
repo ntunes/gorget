@@ -9,6 +9,8 @@
 
 - **Explicit clone roadmap (Phase 2 remaining)**: `.clone()` works on all types. `directive explicit-clone` to be deprecated (incompatible with CoW). Remaining: runtime clone counters for observability (`gg run --clone-stats`), `Cloneable` trait. [updated: 2026-04-01]
 
+- **Collection .get() must return mutable borrow, not shallow copy**: `.get()` currently returns a shallow memcpy of the element — double-free for enums/structs with String fields (gorget-arena crash in HudState.show_pickup). Design decision: `.get()` returns `&T` (mutable borrow). Both `auto` and typed bindings produce borrows. `.clone()` required for ownership. Borrow checker rejects storing borrows in owned fields. CoW is the only implicit clone (compile-time, no refcounting). [added: 2026-04-03]
+
 - **Recursive/Custom elem_drop — 2 remaining fixes**: (1) Option[Ref_T].unwrap() must auto-clone Ptr→T. (2) C backend Option wrapping must CLONE for Recursive/Custom elements. Both needed for full self-cleaning collections. [updated: 2026-03-28]
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
@@ -27,7 +29,7 @@
 
 - **Box.new should enforce `!` at borrow checker level**: Currently Box.new implicitly MoveZeros the source. [added: 2026-03-26]
 
-- **IndexLoad reference semantics (target design)**: `v[i]` should return `&T`, auto-clone at `T` boundaries. Enables zero-cost reads and in-place mutation. [added: 2026-03-22]
+- **IndexLoad reference semantics**: `v[i]` / `.get()` returns `&T` (mutable borrow). Borrows propagate through fields and destructuring. `.clone()` for ownership. Subsumes the collection double-free fix. [updated: 2026-04-03]
 
 - **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
 
