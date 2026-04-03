@@ -730,6 +730,8 @@ pub fn lower_module(
                             AbiKind::CStr
                         } else if string_abi != AbiKind::Auto && ctx.type_mapper.is_string_type(tid) {
                             string_abi
+                        } else if ctx.type_registry.is_resource_type(tid) && !ctx.type_mapper.is_string_type(tid) {
+                            AbiKind::Ptr
                         } else {
                             AbiKind::Auto
                         }
@@ -820,6 +822,9 @@ pub fn lower_module(
                             AbiKind::CStr
                         } else if string_abi != AbiKind::Auto && ctx.type_mapper.is_string_type(tid) {
                             string_abi
+                        } else if !ctx.type_mapper.is_string_type(tid) && ctx.type_registry.is_resource_type(tid) {
+                            // Resource types (collections, opaque handles) are passed by pointer in C
+                            AbiKind::Ptr
                         } else {
                             AbiKind::Auto
                         }
@@ -953,6 +958,8 @@ pub fn lower_module(
                                 AbiKind::CStr
                             } else if string_abi != AbiKind::Auto && ctx.type_mapper.is_string_type(tid) {
                                 string_abi
+                            } else if ctx.type_registry.is_resource_type(tid) && !ctx.type_mapper.is_string_type(tid) {
+                                AbiKind::Ptr
                             } else {
                                 AbiKind::Auto
                             }

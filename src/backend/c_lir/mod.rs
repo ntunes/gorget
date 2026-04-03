@@ -8136,8 +8136,13 @@ fn emit_collection_constructor(
 /// Returns true if the runtime function expects arg at `idx` to be passed by pointer
 /// (i.e. the C prototype uses `const GorgetArray*`, `const GorgetX25519KeyPair*`, etc.)
 /// but LIR passes it as a Struct value. The codegen must emit `&(val)` or pass the pointer directly.
+/// Identifies runtime functions whose args need pass-by-pointer.
+/// Covers: compiler-emitted calls (string clone/free), structural collection
+/// self-by-ptr, and C library wrappers that take opaque struct params by pointer.
+/// Resource-type params (Vector, Dict) in extern "C" blocks get AbiKind::Ptr
+/// automatically; this whitelist covers non-resource opaque structs.
 fn runtime_arg_by_ptr(name: &str, idx: usize) -> bool {
-    // String clone functions take Str by pointer
+    // String clone/free take Str by pointer (compiler-emitted)
     if name == "gorget_string_clone_to_owned" || name == "gorget_string_clone" || name == "gorget_string_free" {
         return true;
     }
@@ -8145,17 +8150,8 @@ fn runtime_arg_by_ptr(name: &str, idx: usize) -> bool {
     if idx == 0 && collection_self_by_ptr(name) {
         return true;
     }
-    // gorget_crypto_* functions take most struct args (GorgetArray, KeyPair) by pointer
-    if name.starts_with("gorget_crypto_") {
-        // All args except simple scalars are by-pointer for crypto functions
-        return true;
-    }
-    // gorget_cipher_encrypt/decrypt(ctx*, const GorgetArray* data)
-    if name == "gorget_cipher_encrypt" || name == "gorget_cipher_decrypt" { return true; }
-    // gorget_bytes_concat(const GorgetArray* a, const GorgetArray* b) — all args
-    if name == "gorget_bytes_concat" { return true; }
-    // gorget_udp_* functions take GorgetUdpSocket* and often GorgetArray* args
-    if name.starts_with("gorget_udp_") && !name.ends_with("_new") && !name.ends_with("_bind") {
+    // Crypto functions take opaque struct args (BigNum, KeyPair) by pointer
+    if name.starts_with("gorget_crypto_") || name == "gorget_cipher_encrypt" || name == "gorget_cipher_decrypt" {
         return true;
     }
     false
