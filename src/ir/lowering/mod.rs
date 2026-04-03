@@ -715,22 +715,34 @@ pub fn lower_module(
             if let FunctionBody::Extern(c_symbol) = &func.body {
                 ctx.extern_bindings.insert(name.clone(), c_symbol.clone());
                 ctx.extern_body_fns.insert(name.clone());
-                // Derive param ABI kinds from explicit cstr types on standalone externs.
-                let abis: Vec<crate::ir::abi::AbiKind> = func.params.iter().map(|p| {
-                    if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
-                        crate::ir::abi::AbiKind::CStr
-                    } else {
-                        crate::ir::abi::AbiKind::Auto
+                // Derive param ABI from inline extern's language tag or explicit cstr types.
+                // extern "C" → String params become CStr (same as extern "C": blocks).
+                {
+                    use crate::ir::abi::AbiKind;
+                    let string_abi = match func.extern_abi.as_deref() {
+                        Some("C") => AbiKind::CStr,
+                        Some("Gorget") => AbiKind::GorgetString,
+                        _ => AbiKind::Auto,
+                    };
+                    let abis: Vec<AbiKind> = func.params.iter().map(|p| {
+                        let tid = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+                        if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
+                            AbiKind::CStr
+                        } else if string_abi != AbiKind::Auto && ctx.type_mapper.is_string_type(tid) {
+                            string_abi
+                        } else {
+                            AbiKind::Auto
+                        }
+                    }).collect();
+                    if abis.iter().any(|a| *a != AbiKind::Auto) {
+                        ctx.fn_extern_abi_kinds.insert(name.clone(), abis.clone());
+                        ctx.fn_extern_abi_kinds.insert(c_symbol.clone(), abis);
                     }
-                }).collect();
-                if abis.iter().any(|a| *a != crate::ir::abi::AbiKind::Auto) {
-                    ctx.fn_extern_abi_kinds.insert(name.clone(), abis.clone());
-                    ctx.fn_extern_abi_kinds.insert(c_symbol.clone(), abis);
-                }
-                // Derive return ABI from explicit cstr return type.
-                if matches!(func.return_type.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
-                    ctx.fn_return_abis.insert(name.clone(), crate::ir::abi::AbiKind::CStr);
-                    ctx.fn_return_abis.insert(c_symbol.clone(), crate::ir::abi::AbiKind::CStr);
+                    // Derive return ABI from explicit cstr return type.
+                    if matches!(func.return_type.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
+                        ctx.fn_return_abis.insert(name.clone(), AbiKind::CStr);
+                        ctx.fn_return_abis.insert(c_symbol.clone(), AbiKind::CStr);
+                    }
                 }
             } else if !matches!(func.body, FunctionBody::Declaration) {
                 if let Some(ref mangled) = mangled_name {
@@ -913,21 +925,29 @@ pub fn lower_module(
                         ctx.extern_bindings.insert(mangled.clone(), c_symbol.clone());
                         ctx.extern_body_fns.insert(mangled.clone());
 
-                        // Derive param ABI kinds from explicit cstr types on equip extern methods.
-                        // This mirrors the ExternBlock handler's ABI derivation.
+                        // Derive param ABI from inline extern's language tag or explicit cstr types.
                         // Prepend Auto for implicit self (always position 0 in C call).
-                        let mut abis: Vec<crate::ir::abi::AbiKind> = Vec::new();
+                        use crate::ir::abi::AbiKind;
+                        let string_abi = match method_def.extern_abi.as_deref() {
+                            Some("C") => AbiKind::CStr,
+                            Some("Gorget") => AbiKind::GorgetString,
+                            _ => AbiKind::Auto,
+                        };
+                        let mut abis: Vec<AbiKind> = Vec::new();
                         if has_self {
                             // Explicit self — included in the loop below
                         } else {
                             // Implicit self — not in method_def.params but present in C call
-                            abis.push(crate::ir::abi::AbiKind::Auto);
+                            abis.push(AbiKind::Auto);
                         }
                         abis.extend(method_def.params.iter().map(|p| {
+                            let tid = ctx.type_mapper.map_ast_type(&p.node.type_.node);
                             if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
-                                crate::ir::abi::AbiKind::CStr
+                                AbiKind::CStr
+                            } else if string_abi != AbiKind::Auto && ctx.type_mapper.is_string_type(tid) {
+                                string_abi
                             } else {
-                                crate::ir::abi::AbiKind::Auto
+                                AbiKind::Auto
                             }
                         }));
                         if abis.iter().any(|a| *a != crate::ir::abi::AbiKind::Auto) {

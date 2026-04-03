@@ -8700,12 +8700,10 @@ fn deep_clone_resource_fields(
     if ops.is_empty() { None } else { Some(ops) }
 }
 
-/// These are C runtime functions where the signature uses `const char*` but the GIR
-/// passes Gorget's `str` type.
 /// Fallback whitelist for C runtime functions where the signature uses `const char*`
 /// but the GIR passes Gorget's `str` type. Only needed for Declaration-body methods
 /// (name-mapped at LIR level, no .gg declaration) and internal runtime functions.
-/// Functions declared as extern in .gg files use explicit `cstr` param types instead.
+/// Functions declared as `extern "C"` in .gg files get ABI tags automatically.
 fn takes_cstr_for_str_param(fn_name: &str, param_idx: usize) -> bool {
     match fn_name {
         // Declaration-body methods (name-mapped, no .gg declaration)

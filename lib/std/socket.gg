@@ -22,14 +22,14 @@ equip Socket:
     extern blocking Vector[uint8] read(int n) = "gorget_socket_read"
     extern blocking Vector[uint8] read_exact(int n) = "gorget_socket_read_exact"
     extern blocking int write(Vector[uint8] data) = "gorget_socket_write"
-    extern blocking int write_str(cstr s) = "gorget_socket_write_str"
+    extern "C" blocking int write_str(String s) = "gorget_socket_write_str"
     extern blocking Result[String, String] read_line() = "gorget_socket_read_line"
     extern void set_timeout(int ms) = "gorget_socket_set_timeout"
     extern void close() = "gorget_socket_close"
     # Non-blocking socket methods — for use in spawned/coroutine context
     extern Vector[uint8] nb_read(int n) = "gorget_socket_async_read"
     extern int nb_write(Vector[uint8] data) = "gorget_socket_async_write"
-    extern int nb_write_str(cstr s) = "gorget_socket_async_write_str"
+    extern "C" int nb_write_str(String s) = "gorget_socket_async_write_str"
 
 # ── ServerSocket methods ─────────────────────────────────────
 

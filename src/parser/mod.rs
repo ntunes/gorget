@@ -527,9 +527,12 @@ impl Parser {
                 Ok(Spanned::new(Item::Newtype(nt), span))
             }
             Token::Keyword(Keyword::Extern) => {
-                // Peek ahead: if next token is a string literal, this is `extern "C": ...` block.
-                // Otherwise it's an `extern` function definition like `extern int abs(int x) = "abs"`.
-                if matches!(self.peek_ahead(1), Token::StringLiteral(_)) {
+                // Disambiguate: `extern "C":` (block) vs `extern "C" int foo()` (inline) vs `extern int foo()` (no abi).
+                // Block form: extern + string literal + colon/newline → ExternBlock
+                // Inline form: extern + optional string literal + type → FunctionDef
+                let is_block = matches!(self.peek_ahead(1), Token::StringLiteral(_))
+                    && matches!(self.peek_ahead(2), Token::Colon | Token::Newline);
+                if is_block {
                     let ext = self.parse_extern_block()?;
                     let span = start.merge(ext.span);
                     Ok(Spanned::new(Item::ExternBlock(ext), span))
@@ -1511,6 +1514,7 @@ impl Parser {
                 doc_comment,
                 start,
                 false,
+                None,
             )?;
             Ok(Item::Function(func))
         } else {
@@ -1541,7 +1545,21 @@ impl Parser {
         let start = self.peek_span();
 
         // Check for `extern` qualifier (extern function binding)
+        // Supports optional ABI tag: `extern "C" int foo() = "symbol"`
         let is_extern = self.match_keyword(Keyword::Extern);
+        let extern_abi = if is_extern {
+            if let Token::StringLiteral(_) = self.peek() {
+                if let Token::StringLiteral(s) = self.advance().node {
+                    Some(s.as_plain_text())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         let mut qualifiers = FunctionQualifiers::default();
 
@@ -1582,7 +1600,7 @@ impl Parser {
         let name = self.expect_name()?;
 
         self.finish_function_def(
-            attributes, visibility, qualifiers, return_type, name, doc_comment, start, is_extern,
+            attributes, visibility, qualifiers, return_type, name, doc_comment, start, is_extern, extern_abi,
         )
     }
 
@@ -1598,6 +1616,7 @@ impl Parser {
         doc_comment: Option<String>,
         start: Span,
         is_extern: bool,
+        extern_abi: Option<String>,
     ) -> Result<FunctionDef, ParseError> {
         let generic_params = self.try_parse_generic_params()?;
 
@@ -1661,6 +1680,7 @@ impl Parser {
             doc_comment,
             span: start.merge(end),
             param_abis: vec![],
+            extern_abi,
         })
     }
 

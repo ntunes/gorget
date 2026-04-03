@@ -31,8 +31,8 @@ Result[Regex, String] regex_compile_with(String pattern, String flags):
 # ── Regex methods (equip with explicit extern symbols) ───────
 
 equip Regex:
-    extern bool is_match(cstr subject) = "gorget_regex_is_match"
-    extern String replace_all(cstr subject, cstr replacement) = "gorget_regex_replace_all"
+    extern "C" bool is_match(String subject) = "gorget_regex_is_match"
+    extern "C" String replace_all(String subject, String replacement) = "gorget_regex_replace_all"
     extern int capture_count() = "gorget_regex_capture_count"
     extern String pattern_str() = "gorget_regex_pattern_str"
     extern Vector[String] group_names() = "gorget_regex_group_names"

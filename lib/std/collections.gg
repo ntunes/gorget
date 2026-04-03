@@ -23,5 +23,5 @@ struct File:
 
 equip File:
     extern Result[String, String] read_all() = "gorget_file_read_all"
-    extern void write(cstr content) = "gorget_file_write"
+    extern "C" void write(String content) = "gorget_file_write"
     extern void close() = "gorget_file_close"

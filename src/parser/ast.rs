@@ -133,6 +133,9 @@ pub struct FunctionDef {
     pub span: Span,
     /// Per-parameter ABI marshalling for extern functions. Empty = all Auto.
     pub param_abis: Vec<crate::ir::abi::AbiKind>,
+    /// ABI language tag for inline extern declarations: `extern "C" int foo() = "symbol"`.
+    /// Determines string param marshalling (Some("C") → String params become CStr).
+    pub extern_abi: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

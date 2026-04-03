@@ -22,7 +22,7 @@ equip TlsSocket:
     extern blocking Vector[uint8] read(int n) = "gorget_tls_read"
     extern blocking Vector[uint8] read_exact(int n) = "gorget_tls_read_exact"
     extern blocking int write(Vector[uint8] data) = "gorget_tls_write"
-    extern blocking int write_str(cstr s) = "gorget_tls_write_str"
+    extern "C" blocking int write_str(String s) = "gorget_tls_write_str"
     extern blocking Result[String, String] read_line() = "gorget_tls_read_line"
     extern void close() = "gorget_tls_close"
     extern void set_timeout(int ms) = "gorget_tls_set_timeout"
