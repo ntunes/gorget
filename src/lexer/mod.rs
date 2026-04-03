@@ -1590,8 +1590,9 @@ void main():
     }
 
     #[test]
-    fn cstr_keyword() {
+    fn cstr_is_identifier() {
         let tokens = lex("cstr");
-        assert_eq!(tokens[0], Token::Keyword(Keyword::CStr));
+        assert!(matches!(&tokens[0], Token::Identifier(_)),
+            "expected identifier, got {:?}", tokens[0]);
     }
 }

@@ -224,7 +224,6 @@ pub enum Keyword {
     Float32,
     Float64,
     Bool,
-    CStr,
     StringType,
     Void,
     Auto,
@@ -358,7 +357,6 @@ impl Keyword {
                 | Keyword::Float32
                 | Keyword::Float64
                 | Keyword::Bool
-                | Keyword::CStr
                 | Keyword::StringType
                 | Keyword::Void
                 | Keyword::Auto
@@ -383,7 +381,6 @@ impl Keyword {
             Keyword::Float32 => "float32",
             Keyword::Float64 => "float64",
             Keyword::Bool => "bool",
-            Keyword::CStr => "cstr",
             Keyword::StringType => "String",
             Keyword::Void => "void",
             Keyword::Auto => "auto",
@@ -476,7 +473,6 @@ impl Keyword {
             "float64" => Some(Keyword::Float64),
             "bool" => Some(Keyword::Bool),
             "byte" => Some(Keyword::Uint8), // `byte` is a user-facing alias for `uint8`
-            "cstr" => Some(Keyword::CStr),
             "String" => Some(Keyword::StringType),
             "void" => Some(Keyword::Void),
             "auto" => Some(Keyword::Auto),

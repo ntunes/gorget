@@ -1,8 +1,8 @@
-void show(cstr s):
+void show(String s):
     print(s)
 
 void main():
-    cstr greeting = c"Hello from C"
+    String greeting = c"Hello from C"
     print(greeting)
 
     show(c"via function")
@@ -10,5 +10,5 @@ void main():
     String view = c"coerced to str"
     print(view)
 
-    cstr raw_val = "str to cstr"
+    String raw_val = "str to cstr"
     print(raw_val)

@@ -54,7 +54,6 @@ impl Parser {
                     Keyword::Float32 => Some(PrimitiveType::Float32),
                     Keyword::Float64 => Some(PrimitiveType::Float64),
                     Keyword::Bool => Some(PrimitiveType::Bool),
-                    Keyword::CStr => Some(PrimitiveType::CStr),
                     Keyword::StringType => Some(PrimitiveType::StringType),
                     Keyword::Void => Some(PrimitiveType::Void),
                     _ => None,
@@ -87,6 +86,16 @@ impl Parser {
             }
 
             // Named type (user-defined): Vector, HashMap, etc.
+            // `cstr` is a contextual type — only valid inside extern "C" contexts.
+            Token::Identifier(ref name) if name == "cstr" => {
+                if self.in_extern_c {
+                    self.advance();
+                    let end = self.previous_span();
+                    Ok(Spanned::new(Type::Primitive(PrimitiveType::CStr), start.merge(end)))
+                } else {
+                    Err(self.error_unexpected("type (`cstr` is only valid inside `extern \"C\"` declarations)"))
+                }
+            }
             Token::Identifier(_) => self.parse_named_type(),
 
             // Tuple type: (int, String)

@@ -47,6 +47,9 @@ pub struct Parser {
     call_arg_depth: usize,
     /// Comments extracted from the token stream, for use by the formatter.
     pub comments: Vec<Spanned<String>>,
+    /// True when parsing inside an `extern "C":` block or `extern "C"` inline declaration.
+    /// Controls whether `cstr` is accepted as a type.
+    in_extern_c: bool,
 }
 
 impl Parser {
@@ -82,6 +85,7 @@ impl Parser {
             errors: Vec::new(),
             warnings: Vec::new(),
             call_arg_depth: 0,
+            in_extern_c: false,
             comments,
         }
     }
@@ -1393,6 +1397,10 @@ impl Parser {
 
         self.expect_block_start()?;
 
+        let is_c_abi = abi.as_ref().map_or(false, |a| a.node == "C");
+        let prev_extern_c = self.in_extern_c;
+        if is_c_abi { self.in_extern_c = true; }
+
         let mut items = Vec::new();
         while !self.check(&Token::Dedent) && !self.at_end() {
             if self.check(&Token::Newline) {
@@ -1404,6 +1412,7 @@ impl Parser {
             items.push(Spanned::new(func, span));
         }
 
+        self.in_extern_c = prev_extern_c;
         self.expect(&Token::Dedent)?;
         let end = self.previous_span();
 
@@ -1561,6 +1570,10 @@ impl Parser {
             None
         };
 
+        // Set extern "C" context for type parsing (enables cstr type)
+        let prev_extern_c = self.in_extern_c;
+        if extern_abi.as_deref() == Some("C") { self.in_extern_c = true; }
+
         let mut qualifiers = FunctionQualifiers::default();
 
         // Parse qualifiers
@@ -1599,9 +1612,11 @@ impl Parser {
         // (e.g., `from` in `equip Celsius with From[float]`).
         let name = self.expect_name()?;
 
-        self.finish_function_def(
+        let result = self.finish_function_def(
             attributes, visibility, qualifiers, return_type, name, doc_comment, start, is_extern, extern_abi,
-        )
+        );
+        self.in_extern_c = prev_extern_c;
+        result
     }
 
     /// Shared suffix for function definition parsing. Handles generic params,

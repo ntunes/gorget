@@ -22,9 +22,9 @@ extern "C":
 
 equip UdpSocket:
     # Result via last_error codegen
-    extern Result[int, String] sendto(Vector[uint8] &data, cstr host, int port) = "gorget_udp_sendto"
+    extern "C" Result[int, String] sendto(Vector[uint8] &data, String host, int port) = "gorget_udp_sendto"
     extern Result[UdpPacket, String] recvfrom(int &max_bytes) = "gorget_udp_recvfrom"
-    extern Result[bool, String] join_multicast(cstr &group_addr) = "gorget_udp_join_multicast"
+    extern "C" Result[bool, String] join_multicast(String &group_addr) = "gorget_udp_join_multicast"
 
     # Direct externs
     extern bool poll(int &timeout_ms) = "gorget_udp_poll"
