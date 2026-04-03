@@ -2,7 +2,7 @@
 
 ## High
 
-- **Remaining ~40 leaks in yaml_parse**: Down from 374→~40 (-89%). Category 2 (cstr-return leaks) fixed by upgrading runtime callee returns to owned in call_tracked. Remaining: (1) Yaml anchor merge intermediates (~8 leaks) — merge_into shallow copies into target Dict. (3) Remaining ~32: str_cat, string_clone in library functions — likely needs Phase 1f liveness analysis. [updated: 2026-04-03]
+- **118 leaks in yaml_parse (14KB)**: Down from 374 (-68%). ASan breakdown: 52 from xtd__yaml___parse (intermediate values not dropped), 12 from Yaml__clone via anchor_get, 7 from parse_block_scalar, 7 from anchor_put, 4 from gorget_str_cat, 4 from parse_double_quoted. All library-level — the compiler's drop elaboration is sound. Needs per-function analysis of yaml.gg to fix. [updated: 2026-04-03]
 
 
 - **CoW Phase 1f: multi-use clone needs liveness analysis**: Single-use auto-move works for push/put/set and enum/struct constructors. Multi-use clone attempted but `is_single_use` over-counts across branches (50 failures). Needs per-path liveness analysis. Phase 2a Step 5 (unified Type__drop cleanup) blocked on this. [updated: 2026-03-30]
