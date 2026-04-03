@@ -10133,10 +10133,9 @@ static inline void gorget_gl_disable_vertex_attrib_array(int64_t index) { glDisa
 // ── Shaders ─────────────────────────────────────────────────
 
 static inline int64_t gorget_gl_create_shader(int64_t type) { return (int64_t)glCreateShader((GLenum)type); }
-static inline void gorget_gl_shader_source(int64_t shader, Str source) {
-    const char* src = source.data;
-    GLint len = (GLint)source.len;
-    glShaderSource((GLuint)shader, 1, &src, &len);
+static inline void gorget_gl_shader_source(int64_t shader, const char* source) {
+    GLint len = (GLint)strlen(source);
+    glShaderSource((GLuint)shader, 1, &source, &len);
 }
 static inline void gorget_gl_compile_shader(int64_t shader) { glCompileShader((GLuint)shader); }
 static inline int64_t gorget_gl_create_program(void) { return (int64_t)glCreateProgram(); }
@@ -10172,12 +10171,8 @@ static inline Str gorget_gl_get_program_info_log(int64_t program) {
 
 // ── Uniforms ────────────────────────────────────────────────
 
-static inline int64_t gorget_gl_get_uniform_location(int64_t program, Str name) {
-    char cname[256];
-    size_t n = name.len < 255 ? name.len : 255;
-    memcpy(cname, name.data, n);
-    cname[n] = '\0';
-    return (int64_t)glGetUniformLocation((GLuint)program, cname);
+static inline int64_t gorget_gl_get_uniform_location(int64_t program, const char* name) {
+    return (int64_t)glGetUniformLocation((GLuint)program, name);
 }
 static inline void gorget_gl_uniform_1i(int64_t loc, int64_t v0) { glUniform1i((GLint)loc, (GLint)v0); }
 static inline void gorget_gl_uniform_1f(int64_t loc, double v0) { glUniform1f((GLint)loc, (GLfloat)v0); }
@@ -10326,19 +10321,11 @@ static inline int64_t gorget_gl_get_program_iv(int64_t program, int64_t pname) {
 }
 static inline void gorget_gl_validate_program(int64_t program) { glValidateProgram((GLuint)program); }
 static inline void gorget_gl_detach_shader(int64_t program, int64_t shader) { glDetachShader((GLuint)program, (GLuint)shader); }
-static inline void gorget_gl_bind_attrib_location(int64_t program, int64_t index, Str name) {
-    char cname[256];
-    size_t n = name.len < 255 ? name.len : 255;
-    memcpy(cname, name.data, n);
-    cname[n] = '\0';
-    glBindAttribLocation((GLuint)program, (GLuint)index, cname);
+static inline void gorget_gl_bind_attrib_location(int64_t program, int64_t index, const char* name) {
+    glBindAttribLocation((GLuint)program, (GLuint)index, name);
 }
-static inline int64_t gorget_gl_get_attrib_location(int64_t program, Str name) {
-    char cname[256];
-    size_t n = name.len < 255 ? name.len : 255;
-    memcpy(cname, name.data, n);
-    cname[n] = '\0';
-    return (int64_t)glGetAttribLocation((GLuint)program, cname);
+static inline int64_t gorget_gl_get_attrib_location(int64_t program, const char* name) {
+    return (int64_t)glGetAttribLocation((GLuint)program, name);
 }
 
 // ── Framebuffer Objects ─────────────────────────────────
@@ -10467,12 +10454,8 @@ static inline void gorget_gl_bind_buffer_range(int64_t target, int64_t index, in
     glBindBufferRange((GLenum)target, (GLuint)index, (GLuint)buffer, (GLintptr)offset, (GLsizeiptr)size);
 }
 
-static inline int64_t gorget_gl_get_uniform_block_index(int64_t program, Str name) {
-    char tmp[256];
-    size_t len = name.len < 255 ? name.len : 255;
-    memcpy(tmp, name.data, len);
-    tmp[len] = '\0';
-    return (int64_t)glGetUniformBlockIndex((GLuint)program, tmp);
+static inline int64_t gorget_gl_get_uniform_block_index(int64_t program, const char* name) {
+    return (int64_t)glGetUniformBlockIndex((GLuint)program, name);
 }
 
 static inline void gorget_gl_uniform_block_binding(int64_t program, int64_t block_index, int64_t binding_point) {
@@ -11902,17 +11885,14 @@ static int64_t gorget_metal_create_sampler(int64_t device_h, int64_t min_filter,
 
 // ── Shaders / Library ───────────────────────────────────────
 
-static int64_t gorget_metal_create_library(int64_t device_h, Str source) {
+static int64_t gorget_metal_create_library(int64_t device_h, const char* source) {
     @autoreleasepool {
         id<MTLDevice> device = (__bridge id<MTLDevice>)(void*)(intptr_t)device_h;
-        NSString* src = [[NSString alloc] initWithBytes:source.data
-                                                 length:source.len
-                                               encoding:NSUTF8StringEncoding];
+        NSString* src = [NSString stringWithUTF8String:source];
         NSError* error = nil;
         MTLCompileOptions* opts = [[MTLCompileOptions alloc] init];
         id<MTLLibrary> lib = [device newLibraryWithSource:src options:opts error:&error];
         [opts release];
-        [src release];
         if (error && !lib) {
             fprintf(stderr, "Metal shader compile error: %s\n",
                     [[error localizedDescription] UTF8String]);
@@ -11943,21 +11923,13 @@ static int64_t gorget_metal_create_library_from_data(int64_t device_h, const Gor
     }
 }
 
-static int64_t gorget_metal_library_function(int64_t library_h, Str name) {
+static int64_t gorget_metal_library_function(int64_t library_h, const char* name) {
     @autoreleasepool {
         id<MTLLibrary> lib = (__bridge id<MTLLibrary>)(void*)(intptr_t)library_h;
-        NSString* fn_name = [[NSString alloc] initWithBytes:name.data
-                                                     length:name.len
-                                                   encoding:NSUTF8StringEncoding];
+        NSString* fn_name = [NSString stringWithUTF8String:name];
         id<MTLFunction> func = [lib newFunctionWithName:fn_name];
-        [fn_name release];
         if (!func) {
-            // Copy name for error message
-            char tmp[256];
-            size_t copylen = name.len < 255 ? name.len : 255;
-            memcpy(tmp, name.data, copylen);
-            tmp[copylen] = '\0';
-            fprintf(stderr, "Metal: function '%s' not found in library\n", tmp);
+            fprintf(stderr, "Metal: function '%s' not found in library\n", name);
         }
         return (int64_t)(intptr_t)func;
     }
@@ -13768,10 +13740,10 @@ static int64_t gorget_metal_create_sampler_with_compare(int64_t device_h, int64_
 
 // ── Debug Groups ────────────────────────────────────────────
 
-static void gorget_metal_encoder_push_debug_group(int64_t encoder_h, Str label) {
+static void gorget_metal_encoder_push_debug_group(int64_t encoder_h, const char* label) {
     @autoreleasepool {
         id<MTLCommandEncoder> enc = (__bridge id<MTLCommandEncoder>)(void*)(intptr_t)encoder_h;
-        NSString* ns_label = [[NSString alloc] initWithBytes:label.data length:label.len encoding:NSUTF8StringEncoding];
+        NSString* ns_label = [NSString stringWithUTF8String:label];
         [enc pushDebugGroup:ns_label];
     }
 }
@@ -13781,17 +13753,17 @@ static void gorget_metal_encoder_pop_debug_group(int64_t encoder_h) {
         [enc popDebugGroup];
     }
 }
-static void gorget_metal_encoder_insert_debug_signpost(int64_t encoder_h, Str label) {
+static void gorget_metal_encoder_insert_debug_signpost(int64_t encoder_h, const char* label) {
     @autoreleasepool {
         id<MTLCommandEncoder> enc = (__bridge id<MTLCommandEncoder>)(void*)(intptr_t)encoder_h;
-        NSString* ns_label = [[NSString alloc] initWithBytes:label.data length:label.len encoding:NSUTF8StringEncoding];
+        NSString* ns_label = [NSString stringWithUTF8String:label];
         [enc insertDebugSignpost:ns_label];
     }
 }
-static void gorget_metal_cmd_buf_push_debug_group(int64_t cmd_buf_h, Str label) {
+static void gorget_metal_cmd_buf_push_debug_group(int64_t cmd_buf_h, const char* label) {
     @autoreleasepool {
         id<MTLCommandBuffer> buf = (__bridge id<MTLCommandBuffer>)(void*)(intptr_t)cmd_buf_h;
-        NSString* ns_label = [[NSString alloc] initWithBytes:label.data length:label.len encoding:NSUTF8StringEncoding];
+        NSString* ns_label = [NSString stringWithUTF8String:label];
         [buf pushDebugGroup:ns_label];
     }
 }
