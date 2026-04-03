@@ -6025,14 +6025,13 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     }
                 }
                 else if is_str_lit && (name.starts_with("gorget_str_") || force_str_coerce
-                    || ext_param_is_str(ext_params, i, module)
-                    || runtime_fn_str_param(emit_name, i))
+                    || ext_param_is_str(ext_params, i, module))
                     && !str_fn_non_str_arg(name, i) {
                     write!(out, "gorget_str_from_literal({}, strlen({}))", v(*a), v(*a)).unwrap();
                 }
                 // Ptr arg to a trait box method or runtime function that expects Str → deref as *(Str*).
                 // Skip deref if the wrapper's param is void* (Box trait vtable dispatch).
-                else if (trait_str_arg_positions.contains(&i) || runtime_fn_str_param(emit_name, i))
+                else if trait_str_arg_positions.contains(&i)
                     && matches!(arg_ty, Some(LirType::Ptr)) && !is_str_lit {
                     let wrapper_param_is_ptr = ext_params.and_then(|p| p.get(i)).map_or(true, |t| t.is_ptr());
                     if wrapper_param_is_ptr {
@@ -7801,26 +7800,6 @@ fn ext_param_is_str(ext_params: Option<&[LirType]>, i: usize, module: &LirModule
     ext_params.and_then(|p| p.get(i)).map_or(false, |ty| is_str_struct(ty, module))
 }
 
-/// Returns true if a runtime function takes `Str` at the given parameter position.
-/// This covers GL/Metal/SDL runtime wrappers whose C definitions use `Str` by value,
-/// but whose LIR extern declarations may have `Ptr` (inferred from string literal call sites).
-fn runtime_fn_str_param(fn_name: &str, _param_idx: usize) -> bool {
-    // GL runtime wrappers that take Str params
-    matches!(fn_name,
-        "gorget_gl_get_uniform_location"
-        | "gorget_gl_get_attrib_location"
-        | "gorget_gl_get_uniform_block_index"
-        | "gorget_gl_bind_attrib_location"
-        | "gorget_gl_shader_source"
-        // Metal runtime wrappers that take Str params
-        | "gorget_metal_create_library"
-        | "gorget_metal_library_function"
-        | "gorget_metal_cmd_buf_push_debug_group"
-        | "gorget_metal_encoder_push_debug_group"
-        | "gorget_metal_encoder_insert_debug_signpost"
-    )
-}
-
 /// Returns true if the runtime function returns a raw `const char*` that needs wrapping
 /// when stored to a Str/GorgetString slot. Other Ptr-returning functions return struct
 /// pointers or void* that should be handled by the aggregate (memcpy) path instead.
@@ -8723,64 +8702,39 @@ fn deep_clone_resource_fields(
 
 /// These are C runtime functions where the signature uses `const char*` but the GIR
 /// passes Gorget's `str` type.
+/// Fallback whitelist for C runtime functions where the signature uses `const char*`
+/// but the GIR passes Gorget's `str` type. Only needed for functions NOT declared in
+/// `extern "C":` blocks in `.gg` files (those get ABI tags automatically via
+/// `fn_extern_abi_kinds`). This list covers Declaration-body equip methods and
+/// internal name-mapped runtime functions.
 fn takes_cstr_for_str_param(fn_name: &str, param_idx: usize) -> bool {
     match fn_name {
+        // Equip extern methods (not in extern "C": blocks)
         "gorget_socket_write_str" | "gorget_tls_write_str"
         | "gorget_socket_async_write_str" | "gorget_tls_async_write_str"
         | "gorget_udp_send_str" => param_idx == 1,
-        // parse functions: single arg is const char* (at index 0)
-        "gorget_parse_int" | "gorget_parse_float" => param_idx == 0,
-        "gorget_setenv" | "gorget_file_open" | "gorget_path_join" => param_idx == 0 || param_idx == 1,
-        // Functions that take const char* as first arg
-        "gorget_udp_bind" | "gorget_udp_send_to"
-        | "gorget_socket_connect" | "gorget_server_socket_bind"
-        | "gorget_tls_connect" | "gorget_tls_server_bind"
-        | "gorget_path_extension" | "gorget_path_dirname" | "gorget_path_basename"
-        | "gorget_path_exists" | "gorget_path_is_file" | "gorget_path_is_dir"
-        | "gorget_path_normalize"
-        | "gorget_getenv" | "gorget_unsetenv"
-        | "gorget_exec" | "gorget_exec_capture"
-        | "gorget_process_spawn" | "gorget_process_spawn_with_pipe"
-        | "gorget_process_pipe_write" => param_idx == 0,
-        // regex functions take const char* for pattern/subject/replacement
-        "gorget_regex_compile" => true,
-        "gorget_regex_is_match" | "gorget_regex_find" | "gorget_regex_find_at"
+        "gorget_file_write" => param_idx == 1,
+        "gorget_regex_is_match" => param_idx == 1,
+        "gorget_regex_replace_all" => param_idx == 1 || param_idx == 2,
+        // Module-level externs not in extern "C": blocks
+        "gorget_bytes_from_str" | "gorget_bytes_from_hex" => param_idx == 0,
+        "gorget_udp_sendto" => param_idx == 2,
+        "gorget_udp_join_multicast" | "gorget_udp_leave_multicast" => param_idx == 1,
+        // Declaration-body methods (name-mapped, no .gg declaration)
+        "gorget_regex_find" | "gorget_regex_find_at"
         | "gorget_regex_find_all" | "gorget_regex_split"
         | "gorget_regex_fullmatch" => param_idx == 1,
-        "gorget_regex_replace" | "gorget_regex_replace_all" => param_idx == 1 || param_idx == 2,
-        // Convenience pattern-based regex functions and escape — all string args
-        "gorget_regex_escape" => param_idx == 0,
-        "gorget_regex_is_match_pat" | "gorget_regex_replace_pat"
-        | "gorget_regex_find_pat" | "gorget_regex_split_pat" => true,
-        // gorget_regex_match_group_by_name(match*, const char* name) — arg 1
+        "gorget_regex_replace" => param_idx == 1 || param_idx == 2,
         "gorget_regex_match_group_by_name" => param_idx == 1,
-        // gorget_input(const char* prompt) — arg 0 is cstr
-        "gorget_input" => param_idx == 0,
-        // gorget_exec_output(const char* cmd) — arg 0 is cstr
-        "gorget_exec_output" => param_idx == 0,
-        // gorget_file_write(GorgetFile*, const char* s) — arg 1 is cstr
-        "gorget_file_write" => param_idx == 1,
-        // gorget_crypto_hmac(const char* algo, ...) — arg 0 is cstr
-        "gorget_crypto_hmac" => param_idx == 0,
-        // gorget_panic(const char* msg)
+        "gorget_regex_split_pat" => true,
+        // Internal runtime (no .gg declaration)
+        "gorget_file_open" => param_idx == 0 || param_idx == 1,
+        "gorget_exec_capture" => param_idx == 0,
+        "gorget_process_spawn_with_pipe" | "gorget_process_pipe_write" => param_idx == 0,
         "gorget_panic" => param_idx == 0,
-        // File I/O: const char* path (and content for write/append)
-        "gorget_read_file" | "gorget_read_file_bytes" | "gorget_write_file_bytes"
-        | "gorget_file_exists" | "gorget_delete_file"
-        | "gorget_mkdir" | "gorget_rmdir" | "gorget_is_dir"
-        | "gorget_file_size" | "gorget_readdir"
-        | "gorget_path_parent" | "gorget_path_stem" | "gorget_path_absolute" => param_idx == 0,
-        "gorget_write_file" | "gorget_append_file" | "gorget_rename" | "gorget_copy_file" => param_idx == 0 || param_idx == 1,
-        // gorget_format_time(int64_t epoch, const char* fmt) — arg 1 is cstr
-        "gorget_format_time" => param_idx == 1,
-        // gorget_parse_time(const char* s, const char* fmt) — both args are cstr
-        "gorget_parse_time" => param_idx == 0 || param_idx == 1,
-        // gorget_udp_sendto(sock*, data*, const char* host, int port) — arg 2 is cstr
-        "gorget_udp_sendto" => param_idx == 2,
-        // gorget_udp_join/leave_multicast(sock*, const char* group) — arg 1 is cstr
-        "gorget_udp_join_multicast" | "gorget_udp_leave_multicast" => param_idx == 1,
-        // Byte conversion functions that take const char*
-        "gorget_bytes_from_str" | "gorget_bytes_from_hex" => param_idx == 0,
+        "gorget_path_dirname" | "gorget_path_exists"
+        | "gorget_path_is_file" | "gorget_path_is_dir"
+        | "gorget_unsetenv" | "gorget_udp_send_to" => param_idx == 0,
         _ => false,
     }
 }
