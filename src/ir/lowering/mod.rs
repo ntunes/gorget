@@ -715,6 +715,23 @@ pub fn lower_module(
             if let FunctionBody::Extern(c_symbol) = &func.body {
                 ctx.extern_bindings.insert(name.clone(), c_symbol.clone());
                 ctx.extern_body_fns.insert(name.clone());
+                // Derive param ABI kinds from explicit cstr types on standalone externs.
+                let abis: Vec<crate::ir::abi::AbiKind> = func.params.iter().map(|p| {
+                    if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
+                        crate::ir::abi::AbiKind::CStr
+                    } else {
+                        crate::ir::abi::AbiKind::Auto
+                    }
+                }).collect();
+                if abis.iter().any(|a| *a != crate::ir::abi::AbiKind::Auto) {
+                    ctx.fn_extern_abi_kinds.insert(name.clone(), abis.clone());
+                    ctx.fn_extern_abi_kinds.insert(c_symbol.clone(), abis);
+                }
+                // Derive return ABI from explicit cstr return type.
+                if matches!(func.return_type.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
+                    ctx.fn_return_abis.insert(name.clone(), crate::ir::abi::AbiKind::CStr);
+                    ctx.fn_return_abis.insert(c_symbol.clone(), crate::ir::abi::AbiKind::CStr);
+                }
             } else if !matches!(func.body, FunctionBody::Declaration) {
                 if let Some(ref mangled) = mangled_name {
                 // Phase 5: also register the mangled name so fn_sigs lookups using the
@@ -894,7 +911,34 @@ pub fn lower_module(
                     // Register extern binding for equip methods (e.g., UdpSocket__local_addr → gorget_udp_local_addr)
                     if let FunctionBody::Extern(c_symbol) = &method_def.body {
                         ctx.extern_bindings.insert(mangled.clone(), c_symbol.clone());
-                        ctx.extern_body_fns.insert(mangled);
+                        ctx.extern_body_fns.insert(mangled.clone());
+
+                        // Derive param ABI kinds from explicit cstr types on equip extern methods.
+                        // This mirrors the ExternBlock handler's ABI derivation.
+                        // Prepend Auto for implicit self (always position 0 in C call).
+                        let mut abis: Vec<crate::ir::abi::AbiKind> = Vec::new();
+                        if has_self {
+                            // Explicit self — included in the loop below
+                        } else {
+                            // Implicit self — not in method_def.params but present in C call
+                            abis.push(crate::ir::abi::AbiKind::Auto);
+                        }
+                        abis.extend(method_def.params.iter().map(|p| {
+                            if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
+                                crate::ir::abi::AbiKind::CStr
+                            } else {
+                                crate::ir::abi::AbiKind::Auto
+                            }
+                        }));
+                        if abis.iter().any(|a| *a != crate::ir::abi::AbiKind::Auto) {
+                            ctx.fn_extern_abi_kinds.insert(mangled.clone(), abis.clone());
+                            ctx.fn_extern_abi_kinds.insert(c_symbol.clone(), abis);
+                        }
+                        // Derive return ABI from explicit cstr return type.
+                        if matches!(method_def.return_type.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
+                            ctx.fn_return_abis.insert(mangled.clone(), crate::ir::abi::AbiKind::CStr);
+                            ctx.fn_return_abis.insert(c_symbol.clone(), crate::ir::abi::AbiKind::CStr);
+                        }
                     }
                 }
             }

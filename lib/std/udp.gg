@@ -29,7 +29,7 @@ equip UdpSocket:
     # Direct externs
     extern bool poll(int &timeout_ms) = "gorget_udp_poll"
     extern void set_nonblocking(bool &enabled) = "gorget_udp_set_nonblocking"
-    extern void leave_multicast(String &group_addr) = "gorget_udp_leave_multicast"
+    extern void leave_multicast(cstr group_addr) = "gorget_udp_leave_multicast"
     extern void set_multicast_loopback(bool &enabled) = "gorget_udp_set_multicast_loopback"
     extern UdpAddr local_addr() = "gorget_udp_local_addr"
     extern void close() = "gorget_udp_close"

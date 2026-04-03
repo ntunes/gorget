@@ -8703,23 +8703,11 @@ fn deep_clone_resource_fields(
 /// These are C runtime functions where the signature uses `const char*` but the GIR
 /// passes Gorget's `str` type.
 /// Fallback whitelist for C runtime functions where the signature uses `const char*`
-/// but the GIR passes Gorget's `str` type. Only needed for functions NOT declared in
-/// `extern "C":` blocks in `.gg` files (those get ABI tags automatically via
-/// `fn_extern_abi_kinds`). This list covers Declaration-body equip methods and
-/// internal name-mapped runtime functions.
+/// but the GIR passes Gorget's `str` type. Only needed for Declaration-body methods
+/// (name-mapped at LIR level, no .gg declaration) and internal runtime functions.
+/// Functions declared as extern in .gg files use explicit `cstr` param types instead.
 fn takes_cstr_for_str_param(fn_name: &str, param_idx: usize) -> bool {
     match fn_name {
-        // Equip extern methods (not in extern "C": blocks)
-        "gorget_socket_write_str" | "gorget_tls_write_str"
-        | "gorget_socket_async_write_str" | "gorget_tls_async_write_str"
-        | "gorget_udp_send_str" => param_idx == 1,
-        "gorget_file_write" => param_idx == 1,
-        "gorget_regex_is_match" => param_idx == 1,
-        "gorget_regex_replace_all" => param_idx == 1 || param_idx == 2,
-        // Module-level externs not in extern "C": blocks
-        "gorget_bytes_from_str" | "gorget_bytes_from_hex" => param_idx == 0,
-        "gorget_udp_sendto" => param_idx == 2,
-        "gorget_udp_join_multicast" | "gorget_udp_leave_multicast" => param_idx == 1,
         // Declaration-body methods (name-mapped, no .gg declaration)
         "gorget_regex_find" | "gorget_regex_find_at"
         | "gorget_regex_find_all" | "gorget_regex_split"
