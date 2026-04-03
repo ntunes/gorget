@@ -2677,10 +2677,6 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                     cstr_vals[d.0 as usize] = true;
                     extern_cstr_return_vals[d.0 as usize] = true;
                     val_types[d.0 as usize] = Some(LirType::Ptr);
-                } else if is_cstr_returning_fn(name) {
-                    // Whitelist: runtime functions return heap-allocated strings.
-                    cstr_vals[d.0 as usize] = true;
-                    val_types[d.0 as usize] = Some(LirType::Ptr);
                 }
             }
             if let Inst::NullPtr { dst } = inst {
@@ -2891,7 +2887,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     for block in &func.blocks {
         let insts = &block.insts;
         for (i, inst) in insts.iter().enumerate() {
-            if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
+            if let Inst::CallExtern { dst: Some(d), .. } = inst {
                 if let Some(Inst::SlotStore { slot, value, .. }) = insts.get(i + 1) {
                     if *value == *d {
                         let slot_ty = norm(func.slots[slot.0 as usize].ty.clone());
@@ -2901,8 +2897,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                                 let raw_slot_ty = &func.slots[slot.0 as usize].ty;
                                 is_str_struct(raw_slot_ty, module) || is_str_ptr(raw_slot_ty, module)
                             };
-                            let is_cstr_fn = is_cstr_returning_fn(name);
-                            if !is_ptr_to_str && !is_cstr_fn && current != Some(&slot_ty) {
+                            if !is_ptr_to_str && current != Some(&slot_ty) {
                                 val_types[d.0 as usize] = Some(slot_ty);
                             }
                         }
@@ -7802,13 +7797,6 @@ fn ext_param_is_str(ext_params: Option<&[LirType]>, i: usize, module: &LirModule
 /// Returns true if the runtime function returns a raw `const char*` that needs wrapping
 /// when stored to a Str/GorgetString slot. Other Ptr-returning functions return struct
 /// pointers or void* that should be handled by the aggregate (memcpy) path instead.
-/// Returns true if the runtime function returns a raw `const char*` that needs wrapping
-/// when stored to a Str/GorgetString slot. This whitelist is shrinking as C runtime
-/// functions are migrated to return Str directly via gorget_string_adopt().
-fn is_cstr_returning_fn(_name: &str) -> bool {
-    false // All former entries now return Str directly or are covered by fn_return_abis
-}
-
 /// For a Box__Trait__method call, return the argument positions (0-based, where 0 = self)
 /// that should be coerced to Str. Returns empty vec for non-trait calls.
 fn trait_box_str_arg_positions(module: &LirModule, name: &str) -> Vec<usize> {
@@ -8674,42 +8662,25 @@ fn deep_clone_resource_fields(
 /// but the GIR passes Gorget's `str` type. Only needed for Declaration-body methods
 /// (name-mapped at LIR level, no .gg declaration) and internal runtime functions.
 /// Functions declared as `extern "C"` in .gg files get ABI tags automatically.
-/// Legacy whitelist — all entries eliminated. Kept as fallback return point
-/// for runtime_param_abi; will be deleted once runtime_arg_by_ptr is also eliminated.
-fn takes_cstr_for_str_param(_fn_name: &str, _param_idx: usize) -> bool {
-    false
-}
-
-/// Returns true if a function that takes_cstr_for_str_param ALSO requires the
-/// Derive ABI kind for a runtime function parameter from existing whitelists.
-/// Wraps takes_cstr_for_str_param into AbiKind. Returns Auto if no match.
-fn runtime_param_abi(fn_name: &str, param_idx: usize) -> crate::ir::abi::AbiKind {
-    use crate::ir::abi::AbiKind;
-    if takes_cstr_for_str_param(fn_name, param_idx) {
-        AbiKind::CStr
-    } else if runtime_arg_by_ptr(fn_name, param_idx) {
-        AbiKind::Ptr
-    } else {
-        AbiKind::Auto
-    }
-}
-
 /// Resolve the effective ABI kind for an extern param: explicit tag takes priority,
-/// then whitelist-derived, then Auto (existing emit_coerced_arg logic).
+/// then structural runtime_arg_by_ptr fallback, then Auto.
 fn resolve_param_abi(
     ext_decl: Option<&LirExtern>,
     fn_name: &str,
     param_idx: usize,
 ) -> crate::ir::abi::AbiKind {
     use crate::ir::abi::AbiKind;
-    // Explicit tag from module declaration
+    // Explicit tag from module declaration (extern "C" blocks, T* syntax, etc.)
     if let Some(abi) = ext_decl.and_then(|e| e.param_abis.get(param_idx)).copied() {
         if abi != AbiKind::Auto {
             return abi;
         }
     }
-    // Whitelist-derived
-    runtime_param_abi(fn_name, param_idx)
+    // Structural: collection/string self-by-ptr
+    if runtime_arg_by_ptr(fn_name, param_idx) {
+        return AbiKind::Ptr;
+    }
+    AbiKind::Auto
 }
 
 /// Sanitize a field name for C.
