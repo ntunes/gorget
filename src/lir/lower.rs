@@ -1452,7 +1452,6 @@ impl<'a> FuncLowering<'a> {
                     }).collect()
                     }
                 };
-                let mut lir_args = lir_args;
                 self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
                 }
             }
