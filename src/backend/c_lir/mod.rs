@@ -8683,16 +8683,10 @@ fn deep_clone_resource_fields(
 /// but the GIR passes Gorget's `str` type. Only needed for Declaration-body methods
 /// (name-mapped at LIR level, no .gg declaration) and internal runtime functions.
 /// Functions declared as `extern "C"` in .gg files get ABI tags automatically.
+/// Fallback whitelist for internal runtime functions that take const char*
+/// but receive Gorget strings. Only for functions with no .gg declaration.
 fn takes_cstr_for_str_param(fn_name: &str, param_idx: usize) -> bool {
     match fn_name {
-        // Declaration-body methods (name-mapped, no .gg declaration)
-        "gorget_regex_find" | "gorget_regex_find_at"
-        | "gorget_regex_find_all" | "gorget_regex_split"
-        | "gorget_regex_fullmatch" => param_idx == 1,
-        "gorget_regex_replace" => param_idx == 1 || param_idx == 2,
-        "gorget_regex_match_group_by_name" => param_idx == 1,
-        "gorget_regex_split_pat" => true,
-        // Internal runtime (no .gg declaration)
         "gorget_file_open" => param_idx == 0 || param_idx == 1,
         "gorget_exec_capture" => param_idx == 0,
         "gorget_process_spawn_with_pipe" | "gorget_process_pipe_write" => param_idx == 0,

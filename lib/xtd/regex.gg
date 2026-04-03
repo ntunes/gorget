@@ -36,14 +36,26 @@ equip Regex:
     extern int capture_count() = "gorget_regex_capture_count"
     extern String pattern_str() = "gorget_regex_pattern_str"
     extern Vector[String] group_names() = "gorget_regex_group_names"
-    # Option/sentinel wrapping handled by codegen (Declaration body)
-    Option[Match] find_at(String subject, int pos)
-    Vector[Match] find_all(String subject)
-    String replace(String subject, String replacement)
-    Vector[String] splitn(String subject, int limit)
-    Option[Match] fullmatch(String subject)
+    # Raw extern methods — sentinel values, wrapped by Gorget methods below
+    extern "C" Match _find_at_raw(String subject, int pos) = "gorget_regex_find_at"
+    extern "C" Vector[Match] find_all(String subject) = "gorget_regex_find_all"
+    extern "C" String replace(String subject, String replacement) = "gorget_regex_replace"
+    extern "C" Vector[String] splitn(String subject, int limit) = "gorget_regex_split"
+    extern "C" Match _fullmatch_raw(String subject) = "gorget_regex_fullmatch"
 
-    # Gorget wrappers that provide default args
+    # Gorget wrappers: sentinel → Option conversion
+    Option[Match] find_at(self, String subject, int pos):
+        Match m = self._find_at_raw(subject, pos)
+        if m.start() < 0:
+            return None
+        return Some(m)
+
+    Option[Match] fullmatch(self, String subject):
+        Match m = self._fullmatch_raw(subject)
+        if m.start() < 0:
+            return None
+        return Some(m)
+
     Option[Match] find(self, String subject):
         return self.find_at(subject, 0)
 
@@ -58,6 +70,17 @@ equip Match:
     extern int end_pos() = "gorget_regex_match_end"
     extern int group_count() = "gorget_regex_match_group_count"
     extern Vector[String] groups() = "gorget_regex_match_groups"
-    # Option-returning methods (codegen intercepts)
-    Option[String] group(int n)
-    Option[String] group_by_name(String name)
+    extern "C" String _group_raw(int n) = "gorget_regex_match_group"
+    extern "C" String _group_by_name_raw(String name) = "gorget_regex_match_group_by_name"
+
+    Option[String] group(self, int n):
+        String val = self._group_raw(n)
+        if val.byte_len() == 0 and n > 0:
+            return None
+        return Some(val)
+
+    Option[String] group_by_name(self, String name):
+        String val = self._group_by_name_raw(name)
+        if val.byte_len() == 0:
+            return None
+        return Some(val)

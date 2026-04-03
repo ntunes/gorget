@@ -9017,20 +9017,22 @@ static int64_t gorget_regex_match_end(GorgetRegexMatch* m) { return m->end_pos; 
 static int64_t gorget_regex_match_group_count(GorgetRegexMatch* m) { return m->group_count; }
 
 // group(n) → returns NULL if out of range or unmatched
-static const char* gorget_regex_match_group(GorgetRegexMatch* m, int64_t n) {
-    if (n < 0 || n >= m->group_count || !m->groups) return NULL;
-    return m->groups[n];
+static Str gorget_regex_match_group(GorgetRegexMatch* m, int64_t n) {
+    if (n < 0 || n >= m->group_count || !m->groups || !m->groups[n])
+        return gorget_str_empty();
+    return gorget_str_from_cstr(m->groups[n]);
 }
 
-// group_by_name(name) → returns NULL if not found
-static const char* gorget_regex_match_group_by_name(GorgetRegexMatch* m, const char* name) {
-    if (!m->group_names || !m->groups) return NULL;
+// group_by_name(name) → returns empty Str if not found
+static Str gorget_regex_match_group_by_name(GorgetRegexMatch* m, const char* name) {
+    if (!m->group_names || !m->groups) return gorget_str_empty();
     for (int64_t i = 0; i < m->names_len; i++) {
         if (m->group_names[i] && strcmp(m->group_names[i], name) == 0) {
-            if (i < m->group_count) return m->groups[i];
+            if (i < m->group_count && m->groups[i])
+                return gorget_str_from_cstr(m->groups[i]);
         }
     }
-    return NULL;
+    return gorget_str_empty();
 }
 
 // groups() → Vector[str] of all group values
