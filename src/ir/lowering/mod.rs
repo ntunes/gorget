@@ -845,6 +845,13 @@ pub fn lower_module(
     // Register monomorphized function signatures
     generic_collector.register_fn_sigs(&ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_ownerships, &mut ctx.fn_param_abis);
 
+    // Register ABI tags for compiler-emitted runtime calls (not declared in .gg files).
+    // gorget_panic takes const char* — needs CStr marshalling when called with String arg.
+    {
+        use crate::ir::abi::AbiKind;
+        ctx.fn_extern_abi_kinds.insert("gorget_panic".to_string(), vec![AbiKind::CStr]);
+    }
+
     // Pre-scan: register non-generic equip method signatures
     for item in &ast_module.items {
         if let Item::Equip(equip) = &item.node {
