@@ -98,6 +98,11 @@ impl TypeMapper {
                 // Type ! → just the inner type (ownership annotation only)
                 self.try_map_ast_type(&inner.node)
             }
+            Type::Pointer(inner) => {
+                // T* in extern "C" — map to the inner type. The Ptr ABI is handled
+                // by AbiKind::Ptr at the call site, not by the type system.
+                self.try_map_ast_type(&inner.node)
+            }
             Type::SelfType => None,
             Type::Array { .. } | Type::Slice { .. } => None,
         }

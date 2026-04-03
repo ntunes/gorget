@@ -149,6 +149,21 @@ impl Parser {
         base: Spanned<Type>,
         start: Span,
     ) -> Result<Spanned<Type>, ParseError> {
+        // T* — pointer type, only valid inside extern "C" context.
+        // Means "pass as const T* in C" (take address of struct value).
+        if self.check(&Token::Star) {
+            if self.in_extern_c {
+                self.advance();
+                let end = self.previous_span();
+                return Ok(Spanned::new(
+                    Type::Pointer(Box::new(base)),
+                    start.merge(end),
+                ));
+            } else {
+                // * outside extern "C" — don't consume, let it be parsed as multiplication
+            }
+        }
+
         // Check for array/slice suffix: int[5] or int[]
         // Only applies to primitive types — for named types, [] was already parsed as generics
         if matches!(base.node, Type::Primitive(_)) && self.check(&Token::LBracket) {

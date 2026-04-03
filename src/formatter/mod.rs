@@ -1548,6 +1548,10 @@ impl Formatter {
                 self.format_type(inner);
                 self.emitter.write(" !");
             }
+            Type::Pointer(inner) => {
+                self.format_type(inner);
+                self.emitter.write("*");
+            }
             Type::SelfType => self.emitter.write("Self"),
             Type::Inferred => self.emitter.write("auto"),
         }

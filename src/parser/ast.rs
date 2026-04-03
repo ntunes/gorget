@@ -435,6 +435,10 @@ pub enum Type {
     /// Owned/moved value: `Type !`
     Owned(Box<Spanned<Type>>),
 
+    /// Pointer type: `T*` — only valid in extern "C" context.
+    /// Means "pass as const T* in C" (take address of struct value).
+    Pointer(Box<Spanned<Type>>),
+
     /// Self type
     SelfType,
 

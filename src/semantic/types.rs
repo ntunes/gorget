@@ -512,6 +512,11 @@ pub fn ast_type_to_resolved(
             Ok(types.insert(ResolvedType::Owned(inner_id)))
         }
 
+        ast::Type::Pointer(inner) => {
+            // T* in extern "C" — resolve as the inner type. Ptr ABI handled by AbiKind.
+            ast_type_to_resolved(&inner.node, inner.span, scopes, types)
+        }
+
         ast::Type::Inferred => {
             // auto — will be inferred during type checking
             Err(SemanticError {

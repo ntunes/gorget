@@ -818,7 +818,9 @@ pub fn lower_module(
                 // String param in extern "C" → CStr (backward compat until all migrated to explicit cstr).
                 {
                     let abis: Vec<AbiKind> = func.params.iter().zip(param_types.iter()).map(|(p, &tid)| {
-                        if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
+                        if matches!(p.node.type_.node, ast::Type::Pointer(_)) {
+                            AbiKind::Ptr
+                        } else if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
                             AbiKind::CStr
                         } else if string_abi != AbiKind::Auto && ctx.type_mapper.is_string_type(tid) {
                             string_abi

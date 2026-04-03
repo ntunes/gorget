@@ -362,6 +362,9 @@ fn expand_generic_alias_in_type(
         Type::Ref(inner) | Type::Owned(inner) => {
             expand_generic_alias_in_type(inner, generic);
         }
+        Type::Pointer(inner) => {
+            expand_generic_alias_in_type(inner, generic);
+        }
         Type::Primitive(_) | Type::SelfType | Type::Inferred => {}
     }
 }
@@ -1839,7 +1842,7 @@ fn substitute_type(ty: &mut Spanned<Type>, type_env: &FxHashMap<String, Type>) {
                 substitute_type(p, type_env);
             }
         }
-        Type::Ref(inner) | Type::Owned(inner) => {
+        Type::Ref(inner) | Type::Owned(inner) | Type::Pointer(inner) => {
             substitute_type(inner, type_env);
         }
         Type::Primitive(_) | Type::SelfType | Type::Inferred => {}

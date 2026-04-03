@@ -7111,6 +7111,7 @@ fn format_type_canonical(ty: &Type) -> String {
         }
         Type::Ref(inner) => format!("{} &", format_type_canonical(&inner.node)),
         Type::Owned(inner) => format!("{} !", format_type_canonical(&inner.node)),
+        Type::Pointer(inner) => format!("{}*", format_type_canonical(&inner.node)),
         Type::SelfType => "Self".to_string(),
         Type::Inferred => "auto".to_string(),
     }

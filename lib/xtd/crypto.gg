@@ -25,9 +25,9 @@ extern "C":
     extern Vector[uint8] crypto_sha256(Vector[uint8] data) = "gorget_crypto_sha256"
     extern Vector[uint8] crypto_sha1(Vector[uint8] data) = "gorget_crypto_sha1"
     extern BigNum crypto_bn_from_bytes(Vector[uint8] data) = "gorget_crypto_bn_from_bytes"
-    extern Vector[uint8] crypto_bn_to_bytes(BigNum bn) = "gorget_crypto_bn_to_bytes"
-    extern BigNum crypto_bn_mod_exp(BigNum base, BigNum exp, BigNum modulus) = "gorget_crypto_bn_mod_exp"
-    extern bool crypto_rsa_verify(RSAKey key, Vector[uint8] data, Vector[uint8] sig) = "gorget_crypto_rsa_verify"
+    extern Vector[uint8] crypto_bn_to_bytes(BigNum* bn) = "gorget_crypto_bn_to_bytes"
+    extern BigNum crypto_bn_mod_exp(BigNum* base, BigNum* exp, BigNum* modulus) = "gorget_crypto_bn_mod_exp"
+    extern bool crypto_rsa_verify(RSAKey* key, Vector[uint8] data, Vector[uint8] sig) = "gorget_crypto_rsa_verify"
     extern bool crypto_ed25519_verify(Vector[uint8] public_key, Vector[uint8] data, Vector[uint8] signature) = "gorget_crypto_ed25519_verify"
 
 # ── Raw externs + error check for Result wrapping ────────────
@@ -38,7 +38,7 @@ extern "C":
     extern int _crypto_rsa_load_public_raw(Vector[uint8] key_bytes) = "gorget_crypto_rsa_load_public"
     extern Vector[uint8] _crypto_random_bytes_raw(int n) = "gorget_crypto_random_bytes"
     extern Vector[uint8] _crypto_ed25519_sign_raw(Vector[uint8] private_key, Vector[uint8] data) = "gorget_crypto_ed25519_sign"
-    extern Vector[uint8] _crypto_x25519_shared_secret_raw(X25519KeyPair private_key, Vector[uint8] peer_public) = "gorget_crypto_x25519_shared_secret"
+    extern Vector[uint8] _crypto_x25519_shared_secret_raw(X25519KeyPair* private_key, Vector[uint8] peer_public) = "gorget_crypto_x25519_shared_secret"
     extern Vector[uint8] _crypto_x25519_dh_raw(Vector[uint8] private_key_bytes, Vector[uint8] peer_public) = "gorget_crypto_x25519_dh"
     extern Vector[uint8] _crypto_hkdf_sha256_raw(Vector[uint8] salt, Vector[uint8] ikm, Vector[uint8] info, int length) = "gorget_crypto_hkdf_sha256"
     extern Vector[uint8] _crypto_aes_gcm_encrypt_raw(Vector[uint8] key, Vector[uint8] nonce, Vector[uint8] plaintext) = "gorget_crypto_aes_gcm_encrypt"
