@@ -380,8 +380,8 @@ fn lower_var_decl(
                         let ptr_local = builder.add_local(ptr_type, None);
                         builder.emit_borrow(ptr_local, place.clone());
                         // Use the TARGET type (actual_var_type) as clone return type,
-                        // not the source type. E.g., gorget_string_clone_to_owned
-                        // returns GorgetString, not GorgetStringView.
+                        // not the source type. The clone function may return a
+                        // different (owned) type than the source (view) type.
                         let clone_ret_type = actual_var_type;
                         let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], clone_ret_type);
                         ctx.owned_locals.insert(cloned); // clone result owns its data
@@ -791,20 +791,18 @@ fn lower_return(
                     if place.projections.is_empty() {
                         let rhs_type = builder.local_type(place.local);
                         if rhs_type == ctx.type_mapper.string_view_type {
+                            let clone_fn = ctx.clone_fn_for_ptr(rhs_type)
+                                .unwrap_or_else(|| "gorget_string_from_str".to_string());
                             let clone_result = builder.call(
-                                "gorget_string_from_str",
+                                &clone_fn,
                                 vec![operand.clone()],
                                 ret_type,
                             );
-                            // Move (not Copy) to the return slot — avoids
-                            // redundant gorget_string_clone. from_str already
-                            // allocated an owned copy; Move transfers it.
                             builder.assign_mode(
                                 crate::ir::instructions::AssignMode::Move,
                                 Place::local(LocalId(0)),
                                 FunctionBuilder::copy(clone_result),
                             );
-                            // Zero the temp so scope-exit DropIfAlive is a no-op.
                             ctx.move_zero_and_mark(builder, clone_result);
                             did_clone_return = true;
                         }

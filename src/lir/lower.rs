@@ -1627,25 +1627,22 @@ impl<'a> FuncLowering<'a> {
                         self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
                             dst: dst_addr, slot: dst_slot,
                         });
+                        // Clone to sever alias. Use gorget_string_clone (preserves
+                        // view/owned status) — the CoW ownership boundary clone
+                        // (clone_to_owned) is handled at the GIR level instead.
                         let clone_fn_name = "gorget_string_clone";
-                        let gs_sid = self.module_structs.iter().position(|s| s.name == "GorgetString")
-                            .map(|i| StructId(i as u32));
-                        if let Some(sid) = gs_sid {
-                            let gs_ty = LirType::Struct(sid);
-                            let cloned = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                                dst: Some(cloned),
-                                name: clone_fn_name.to_string(),
-                                args: vec![dst_addr],
-                                original_name: None,
-                            });
-                            self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
-                                slot: dst_slot,
-                                value: cloned,
-                                is_move: false,
-                            });
-                            let _ = gs_ty; // type tracked implicitly by CallExtern result
-                        }
+                        let cloned = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: Some(cloned),
+                            name: clone_fn_name.to_string(),
+                            args: vec![dst_addr],
+                            original_name: None,
+                        });
+                        self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                            slot: dst_slot,
+                            value: cloned,
+                            is_move: false,
+                        });
                     }
                 }
             }
@@ -2100,25 +2097,22 @@ impl<'a> FuncLowering<'a> {
                         self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
                             dst: dst_addr, slot: dst_slot,
                         });
+                        // Clone to sever alias. Use gorget_string_clone (preserves
+                        // view/owned status) — the CoW ownership boundary clone
+                        // (clone_to_owned) is handled at the GIR level instead.
                         let clone_fn_name = "gorget_string_clone";
-                        let gs_sid = self.module_structs.iter().position(|s| s.name == "GorgetString")
-                            .map(|i| StructId(i as u32));
-                        if let Some(sid) = gs_sid {
-                            let gs_ty = LirType::Struct(sid);
-                            let cloned = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                                dst: Some(cloned),
-                                name: clone_fn_name.to_string(),
-                                args: vec![dst_addr],
-                                original_name: None,
-                            });
-                            self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
-                                slot: dst_slot,
-                                value: cloned,
-                                is_move: false,
-                            });
-                            let _ = gs_ty; // type tracked implicitly by CallExtern result
-                        }
+                        let cloned = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: Some(cloned),
+                            name: clone_fn_name.to_string(),
+                            args: vec![dst_addr],
+                            original_name: None,
+                        });
+                        self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                            slot: dst_slot,
+                            value: cloned,
+                            is_move: false,
+                        });
                     }
                 }
             }
