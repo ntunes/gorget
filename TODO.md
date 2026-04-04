@@ -2,7 +2,7 @@
 
 ## High
 
-- **118 leaks in yaml_parse (14KB)**: Down from 374 (-68%). Root cause: VarDecl auto-clone of Ptr(StringView) params produces a local typed as StringView (→ Ptr → void* in C). gorget_string_clone_to_owned returns owned GorgetString but the GIR types it as StringView. Scope-exit drop skips void* slots → leak. Attempted fix: change clone result GIR type to owned_string_type — causes fmt_basic/fmt_edge corruption (cascading type interaction). Needs careful investigation of GIR string type upgrade path. [updated: 2026-04-03]
+- **118 leaks in yaml_parse (14KB)**: Down from 374 (-68%). Root cause: VarDecl clone typed as StringView→void* (not dropped). Fix attempt: upgrade clone result to GorgetString. The StringView→GorgetString upgrade at VarDecl works, BUT causes use-after-free: `x = x[0..1]` frees old x (now droppable) before the slice (which references x's data) is materialized. The assign codegen does free-then-assign when it should clone-then-free for self-referencing reassignment. Fix: the reassign path must detect when RHS depends on LHS and defer the free. [updated: 2026-04-04]
 
 
 - **CoW Phase 1f: DONE — liveness analysis implemented**: Full-function span-based reverse walk with branch union and two-pass loops. is_last_use_at(name, span) provides precise per-use last-use queries. Integrated at push/put and struct-init call sites. 905/905 tests pass. Phase 2a Step 5 (unified Type__drop) already partially done (emit_type_drop_fns exists, Type__drop called at scope exit). [updated: 2026-04-04]
