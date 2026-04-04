@@ -5435,7 +5435,7 @@ static inline GorgetArray gorget_map_keys(const GorgetMap* m) {
             // Clone the key so the result owns an independent copy
             if (m->key_drop) {
                 Str* key = (Str*)gorget_array_get(&result, result.len - 1);
-                if (key->cap > 0 && key->data) *key = gorget_string_clone(key);
+                if (key->data) *key = gorget_string_clone(key);
             }
         }
     } else {
@@ -5444,7 +5444,7 @@ static inline GorgetArray gorget_map_keys(const GorgetMap* m) {
                 gorget_array_push(&result, (char*)m->keys + i * m->key_size);
                 if (m->key_drop) {
                     Str* key = (Str*)gorget_array_get(&result, result.len - 1);
-                    if (key->cap > 0 && key->data) *key = gorget_string_clone(key);
+                    if (key->data) *key = gorget_string_clone(key);
                 }
             }
         }
