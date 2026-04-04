@@ -295,17 +295,13 @@ fn lower_var_decl(
                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
                 if let Some(GirType::Ptr(_inner)) = ctx.type_registry.get(inferred).cloned() {
                     if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
-                        // Check: is the source actually a borrow?
+                        // Check: is the source a borrowed PARAM (safe to propagate)?
+                        // Only cow_ptr_params — NOT ref_locals. Collection element borrows
+                        // can become stale when the collection is mutated.
                         let source_is_borrow = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                            p.projections.is_empty() && (
-                                ctx.cow_ptr_params.contains(&p.local)
-                                || ctx.ref_locals.contains(&p.local)
-                            )
+                            p.projections.is_empty() && ctx.cow_ptr_params.contains(&p.local)
                         } else { false };
 
-                        // Don't propagate borrows in loop bodies — the void* local
-                        // persists across iterations with NULL init. A Str {0} is safe
-                        // (empty string), but void* = 0 crashes on deref.
                         let in_loop = ctx.current_loop().is_some();
                         if source_is_borrow && !in_loop {
                             // Propagate borrow
