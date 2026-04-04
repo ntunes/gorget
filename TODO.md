@@ -9,7 +9,7 @@
 
 - **Explicit clone roadmap (Phase 2 remaining)**: `.clone()` works on all types. `directive explicit-clone` to be deprecated (incompatible with CoW). Remaining: runtime clone counters for observability (`gg run --clone-stats`), `Cloneable` trait. [updated: 2026-04-01]
 
-- **CoW borrow semantics — 1 test remaining (904/905)**: csv_basic fails from CoW materialization producing StringView-typed (void*) clone — 32-byte GorgetString stored in 8-byte slot. Fix requires 3 coordinated changes: (1) deferred-drop at reassignment, (2) owned_string_type in cow_materialize_alias, (3) disable provenance cap/alloc zeroing. Each individually causes regressions (fmt double-free, extra leaks) but together they should work. [updated: 2026-04-04]
+- **CoW materialization points 5-6 remaining**: Points 3-4 (struct/enum init) fixed — Ptr(resource) always cloned, LIR FieldLoad clones instead of zeroing cap/alloc. Points 5 (return) and 6 (move transfer) still need implementation. 905/905 tests pass. [updated: 2026-04-04]
 
 - **Recursive/Custom elem_drop — 2 remaining fixes**: (1) Option[Ref_T].unwrap() must auto-clone Ptr→T. (2) C backend Option wrapping must CLONE for Recursive/Custom elements. Both needed for full self-cleaning collections. [updated: 2026-03-28]
 

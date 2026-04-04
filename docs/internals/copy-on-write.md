@@ -180,8 +180,8 @@ independent copy. These are the SIX points where materialization occurs:
 |-------|---------|--------|
 | 1. Assignment | `x = expr` where x is borrowed | Done (assign handler) |
 | 2. Mutating method | `x.push(val)` where x is borrowed | Done (cow_before_mutation) |
-| 3. Struct/enum init | `Foo(x)` where x is borrowed | TODO |
-| 4. Collection put | `v.push(x)` where x is borrowed | TODO |
+| 3. Struct/enum init | `Foo(x)` where x is borrowed | Done (emit_enum_init_owned + LIR FieldLoad clone) |
+| 4. Collection put | `v.push(x)` where x is borrowed | Done (clone_multi_use_resource_args) |
 | 5. Return | `return x` where x is borrowed | TODO |
 | 6. Move transfer | `consume(!x)` where x is borrowed | TODO |
 
