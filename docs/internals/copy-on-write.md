@@ -182,8 +182,8 @@ independent copy. These are the SIX points where materialization occurs:
 | 2. Mutating method | `x.push(val)` where x is borrowed | Done (cow_before_mutation) |
 | 3. Struct/enum init | `Foo(x)` where x is borrowed | Done (emit_enum_init_owned + LIR FieldLoad clone) |
 | 4. Collection put | `v.push(x)` where x is borrowed | Done (clone_multi_use_resource_args) |
-| 5. Return | `return x` where x is borrowed | TODO |
-| 6. Move transfer | `consume(!x)` where x is borrowed | TODO |
+| 5. Return | `return x` where x is borrowed | Done (lower_return Ptr→T auto-clone) |
+| 6. Move transfer | `consume(!x)` where x is borrowed | Done (Ownership::Move Ptr→clone) |
 
 Once all 6 points are implemented, `ensure_owned_string` can be deleted —
 it's a pre-CoW workaround for the string dual-type problem.

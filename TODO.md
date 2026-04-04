@@ -9,7 +9,7 @@
 
 - **Explicit clone roadmap (Phase 2 remaining)**: `.clone()` works on all types. `directive explicit-clone` to be deprecated (incompatible with CoW). Remaining: runtime clone counters for observability (`gg run --clone-stats`), `Cloneable` trait. [updated: 2026-04-01]
 
-- **CoW materialization points 5-6 remaining**: Points 3-4 (struct/enum init) fixed — Ptr(resource) always cloned, LIR FieldLoad clones instead of zeroing cap/alloc. Points 5 (return) and 6 (move transfer) still need implementation. 905/905 tests pass. [updated: 2026-04-04]
+- **CoW materialization: all 6 points DONE**: Points 1-2 (assign, mutation) were done earlier. Points 3-4 (struct/enum init, collection put) fixed this session. Points 5-6 (return, move transfer) were already implemented in lower_return and Ownership::Move handlers. `ensure_owned_string` can now be deleted — all materialization is handled by the generic CoW path. [updated: 2026-04-04]
 
 - **Recursive/Custom elem_drop — 2 remaining fixes**: (1) Option[Ref_T].unwrap() must auto-clone Ptr→T. (2) C backend Option wrapping must CLONE for Recursive/Custom elements. Both needed for full self-cleaning collections. [updated: 2026-03-28]
 
