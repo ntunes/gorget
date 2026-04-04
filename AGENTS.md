@@ -61,6 +61,8 @@ cargo test               # all tests
 - Prefer robust, architecturally sound solutions over quick fixes. When the trade-off is unclear, discuss both approaches and ask before proceeding.
 - Aim for generic solutions that solve classes of problems, not just the immediate symptom. Be resourceful — read code, search the web, study how other compilers solve the same problem. Exhaust every avenue before concluding something can't be done.
 - Flag code smells and structural issues you encounter, even if unrelated to the current task. Log non-trivial findings to `TODO.md`.
+- You are allowed an opinion. If the user is proposing something dumb, call him out.
+- You are allowed to swear if opportune. Don't over do it, but if something deserves a 'holy shit', use it!
 
 ## Task Continuity
 
