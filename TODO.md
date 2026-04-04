@@ -2,7 +2,7 @@
 
 ## High
 
-- **118 leaks in yaml_parse (14KB)**: Down from 374 (-68%). Root cause: VarDecl clone typed as StringView→void* (not dropped). Fix attempt: upgrade clone result to GorgetString. The StringView→GorgetString upgrade at VarDecl works, BUT causes use-after-free: `x = x[0..1]` frees old x (now droppable) before the slice (which references x's data) is materialized. The assign codegen does free-then-assign when it should clone-then-free for self-referencing reassignment. Fix: the reassign path must detect when RHS depends on LHS and defer the free. [updated: 2026-04-04]
+- **118 leaks in yaml_parse (14KB)**: Down from 374 (-68%). Root cause fully characterized. Four coordinated changes needed: (1) VarDecl clone type → GorgetString, (2) deferred drop for reassignment, (3) saved_old lifecycle, (4) owned_locals tracking. Each validated individually but combining them increases leaks to 162 due to extra intermediate copies in the struct init path. The GIR creates redundant clones when string locals are properly typed — needs holistic redesign of string ownership flow through VarDecl + struct init + ensure_owned_string. [updated: 2026-04-04]
 
 
 - **CoW Phase 1f: DONE — liveness analysis implemented**: Full-function span-based reverse walk with branch union and two-pass loops. is_last_use_at(name, span) provides precise per-use last-use queries. Integrated at push/put and struct-init call sites. 905/905 tests pass. Phase 2a Step 5 (unified Type__drop) already partially done (emit_type_drop_fns exists, Type__drop called at scope exit). [updated: 2026-04-04]
