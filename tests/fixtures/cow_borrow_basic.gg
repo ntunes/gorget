@@ -1,0 +1,50 @@
+from std.collections import Vector
+
+# CoW borrow semantics: binding a borrowed value does NOT clone.
+# Mutation (reassignment) triggers the clone.
+
+void main():
+    # 1. Bare param binding — borrow, no clone
+    String greeting = "hello"
+    String x = greeting       # x borrows greeting (zero-cost)
+    print(x)                  # read through borrow — ok
+
+    # 2. Mutation triggers CoW clone
+    String y = greeting       # borrow
+    y = y + " world"          # mutation → CoW clone, then concat
+    print(y)                  # "hello world"
+    print(greeting)           # still "hello" — original unchanged
+
+    # 3. Collection element read — borrow
+    Vector[String] names = Vector[String]()
+    names.push("Alice")
+    names.push("Bob")
+    auto first = names.get(0).unwrap()   # borrow into collection
+    print(first)                          # "Alice"
+
+    # 4. Typed binding from collection — also borrow
+    String second = names.get(1).unwrap() # borrow (no clone)
+    print(second)                          # "Bob"
+
+    # 5. Mutation of collection-borrowed value — CoW
+    String item = names.get(0).unwrap()   # borrow
+    item = item + "!"                     # CoW clone, then concat
+    print(item)                           # "Alice!"
+    print(names.get(0).unwrap())          # "Alice" — collection unchanged
+
+    # 6. Mutable borrow (&) — mutation passes through
+    Vector[int] nums = Vector[int]()
+    nums.push(1)
+    nums.push(2)
+    add_ten(&nums)
+    print(nums.get(0).unwrap())   # 11
+    print(nums.get(1).unwrap())   # 12
+
+    print("done")
+
+void add_ten(Vector[int] &v):
+    int i = 0
+    while i < v.len():
+        int val = v.get(i).unwrap()
+        v.set(i, val + 10)
+        i = i + 1
