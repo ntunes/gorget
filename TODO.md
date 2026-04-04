@@ -9,7 +9,7 @@
 
 - **Explicit clone roadmap (Phase 2 remaining)**: `.clone()` works on all types. `directive explicit-clone` to be deprecated (incompatible with CoW). Remaining: runtime clone counters for observability (`gg run --clone-stats`), `Cloneable` trait. [updated: 2026-04-01]
 
-- **Collection .get() must return mutable borrow, not shallow copy**: `.get()` currently returns a shallow memcpy of the element — double-free for enums/structs with String fields (gorget-arena crash in HudState.show_pickup). Design decision: `.get()` returns `&T` (mutable borrow). Both `auto` and typed bindings produce borrows. `.clone()` required for ownership. Borrow checker rejects storing borrows in owned fields. CoW is the only implicit clone (compile-time, no refcounting). [added: 2026-04-03]
+- **CoW borrow semantics — in progress**: `.get()` returns `&T` for resource-type elements (has_resource_fields). Option__Ref_ unwrap marks result as ref_local. Next: remove VarDecl auto-clone for ALL Ptr(T) bindings (both auto and typed produce borrows). The 29 test failures from this change are code that mutates borrowed values — these need CoW clone-on-mutate at the reassignment point, not at the binding. The assign handler must detect `x = f(x)` patterns on borrowed locals and emit a clone before the mutation. [updated: 2026-04-04]
 
 - **Recursive/Custom elem_drop — 2 remaining fixes**: (1) Option[Ref_T].unwrap() must auto-clone Ptr→T. (2) C backend Option wrapping must CLONE for Recursive/Custom elements. Both needed for full self-cleaning collections. [updated: 2026-03-28]
 
