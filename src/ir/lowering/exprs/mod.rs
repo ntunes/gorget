@@ -2352,7 +2352,7 @@ fn clone_multi_use_resource_args(
                         .unwrap_or(false);
                     let is_multi_use = ast_args.get(i)
                         .and_then(|arg| if let Expr::Identifier(name) = &arg.node {
-                            Some(!ctx.is_single_use(name))
+                            Some(!ctx.is_last_use_at(name, arg.span))
                         } else { None })
                         .unwrap_or(false);
                     // In a loop body, named locals are effectively multi-use

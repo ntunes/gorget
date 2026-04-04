@@ -273,10 +273,9 @@ pub struct LoweringContext<'a> {
     /// Phase 1f: name → use count in the function body. Names with count=1 are
     /// single-use (dead after their one use) → auto-move at push/constructor.
     pub name_use_counts: rustc_hash::FxHashMap<String, u32>,
-    /// Current function body statements (for liveness queries).
-    pub current_body: Vec<crate::span::Spanned<crate::parser::ast::Stmt>>,
-    /// Index of the statement currently being lowered (for liveness queries).
-    pub current_stmt_idx: usize,
+    /// Full-function liveness analysis result. Contains span positions of
+    /// identifier uses that are the last use on all reachable paths.
+    pub liveness: super::liveness::LivenessResult,
     /// Locals that definitely own their data (created by function calls, constructors,
     /// or operators). Safe to Move on return — no shared/borrowed data.
     pub owned_locals: rustc_hash::FxHashSet<LocalId>,
@@ -343,8 +342,7 @@ impl<'a> LoweringContext<'a> {
             cow_collection_refs: FxHashMap::default(),
             cow_ptr_params: rustc_hash::FxHashSet::default(),
             name_use_counts: rustc_hash::FxHashMap::default(),
-            current_body: Vec::new(),
-            current_stmt_idx: 0,
+            liveness: super::liveness::LivenessResult { last_use_spans: Default::default() },
             owned_locals: rustc_hash::FxHashSet::default(),
             pending_move_zeros: Vec::new(),
         }
@@ -729,28 +727,18 @@ impl<'a> LoweringContext<'a> {
     /// Dead variables can be auto-moved at push/constructor instead of cloned.
     /// Uses liveness analysis (reverse walk with branch union).
     pub fn is_single_use(&self, name: &str) -> bool {
-        if self.current_body.is_empty() {
-            return matches!(self.name_use_counts.get(name), Some(1));
-        }
-        // Phase 1f: liveness-based last-use analysis.
-        //
-        // Per-block liveness (reverse walk with branch union) determines if a
-        // variable is used after the current statement within the current block.
-        // Combined with the global use count as a safety net for uses in
-        // parent/sibling blocks that per-block liveness doesn't see.
-        //
-        // Conservative rule: auto-move only when BOTH agree:
-        // - Liveness: dead after current statement in current block
-        // - Global count: single use in entire function
-        // This handles the common case (single-use local pushed once) while
-        // avoiding the branch over-counting bug of the old count-only approach.
-        let live = super::liveness::is_live_after(&self.current_body, self.current_stmt_idx, name);
-        if live {
-            return false; // Used later in this block → clone
-        }
-        // Dead in this block. Safe to move only if globally single-use
-        // (no uses in parent/sibling blocks).
+        // Fallback for call sites that don't have span info.
         matches!(self.name_use_counts.get(name), Some(1))
+    }
+
+    /// Phase 1f: check if a specific use of a variable (at the given span) is
+    /// the last use on all reachable execution paths. If yes, the value can be
+    /// moved instead of cloned. Uses full-function liveness analysis.
+    pub fn is_last_use_at(&self, _name: &str, span: crate::span::Span) -> bool {
+        if self.liveness.last_use_spans.is_empty() {
+            return false; // No liveness data → conservative (don't move)
+        }
+        self.liveness.last_use_spans.contains(&span.start)
     }
 
     /// Check if a local is a named variable (vs an anonymous temp).

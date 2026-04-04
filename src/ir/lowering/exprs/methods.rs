@@ -1425,7 +1425,7 @@ pub(super) fn lower_method_call(
                     if let Some((local_id, _)) = ctx.lookup_local(name) {
                         if ctx.is_named_local(local_id)
                             && is_resource_type_local(local_id, builder, &ctx.type_registry)
-                            && ctx.is_single_use(name)
+                            && ctx.is_last_use_at(name, ast_arg.node.value.span)
                         {
                             // Single-use: auto-move (zero-cost transfer)
                             ctx.move_zero_and_mark(builder, local_id);

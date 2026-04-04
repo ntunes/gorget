@@ -35,19 +35,13 @@ pub fn lower_block(
     builder: &mut FunctionBuilder,
     block: &Block,
 ) {
-    // Set current body for liveness queries (Phase 1f).
-    let prev_body = std::mem::replace(&mut ctx.current_body, block.stmts.clone());
-    let prev_idx = ctx.current_stmt_idx;
-    for (i, stmt) in block.stmts.iter().enumerate() {
-        ctx.current_stmt_idx = i;
+    for stmt in &block.stmts {
         lower_stmt(ctx, builder, stmt);
         // Clear unconsumed field_load_origins. Only VarDecl/Assign consume them
         // via maybe_emit_field_move_zero. Field loads used as method receivers
         // (e.g., h.data.push(x)) create dead temps that should not trigger zeroing.
         ctx.field_load_origins.clear();
     }
-    ctx.current_body = prev_body;
-    ctx.current_stmt_idx = prev_idx;
 }
 
 /// Lower a block of statements in a new lexical scope (saves/restores locals).

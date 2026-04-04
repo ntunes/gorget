@@ -335,10 +335,11 @@ pub fn lower_function(
     }
 
     // Pre-scan: find variables unsafe for CoW (reassigned, !-moved).
-    // Also count name uses for auto-move-when-dead (Phase 1f).
+    // Also count name uses and compute liveness for auto-move (Phase 1f).
     if let FunctionBody::Block(block) = &func.body {
         ctx.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
         ctx.name_use_counts = prescan_name_use_counts(&block.stmts);
+        ctx.liveness = super::liveness::compute_function_liveness(&block.stmts);
     }
 
     // Lower the body
@@ -595,10 +596,11 @@ pub fn lower_equip_method(
         ctx.fn_sigs.insert(mangled_name.clone(), (base_param_types, return_type));
     }
 
-    // Pre-scan: find variables unsafe for CoW + count name uses for auto-move.
+    // Pre-scan: find variables unsafe for CoW + count name uses + liveness for auto-move.
     if let FunctionBody::Block(block) = &method.body {
         ctx.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
         ctx.name_use_counts = prescan_name_use_counts(&block.stmts);
+        ctx.liveness = super::liveness::compute_function_liveness(&block.stmts);
     }
 
     // Lower the body
