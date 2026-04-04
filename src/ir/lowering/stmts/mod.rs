@@ -303,7 +303,11 @@ fn lower_var_decl(
                             )
                         } else { false };
 
-                        if source_is_borrow {
+                        // Don't propagate borrows in loop bodies — the void* local
+                        // persists across iterations with NULL init. A Str {0} is safe
+                        // (empty string), but void* = 0 crashes on deref.
+                        let in_loop = ctx.current_loop().is_some();
+                        if source_is_borrow && !in_loop {
                             // Propagate borrow
                             builder.locals[local_id.0 as usize].type_id = inferred;
                             ctx.register_local(name, local_id, inferred);
