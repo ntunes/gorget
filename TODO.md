@@ -2,7 +2,7 @@
 
 ## High
 
-- **118 leaks in yaml_parse (14KB)**: Down from 374 (-68%). Root cause fully characterized. Four coordinated changes needed: (1) VarDecl clone type → GorgetString, (2) deferred drop for reassignment, (3) saved_old lifecycle, (4) owned_locals tracking. Each validated individually but combining them increases leaks to 162 due to extra intermediate copies in the struct init path. The GIR creates redundant clones when string locals are properly typed — needs holistic redesign of string ownership flow through VarDecl + struct init + ensure_owned_string. [updated: 2026-04-04]
+- **Memory leaks from CoW materialization clones**: CoW materialization (all 6 points done) correctly clones at ownership boundaries, preventing UAF. But the extra clones introduce leaks — the cloned values aren't always registered for drop. Visible in yaml_parse (118+ leaks), likely affects other fixtures too. Root cause: clone_resource_args_for_init and the LIR FieldLoad clone create owned copies that may not be tracked by the drop elaborator when the destination is a struct field or enum variant. Needs: audit clone→drop registration in all 6 materialization points. [updated: 2026-04-04]
 
 
 - **CoW Phase 1f: DONE — liveness analysis implemented**: Full-function span-based reverse walk with branch union and two-pass loops. is_last_use_at(name, span) provides precise per-use last-use queries. Integrated at push/put and struct-init call sites. 905/905 tests pass. Phase 2a Step 5 (unified Type__drop) already partially done (emit_type_drop_fns exists, Type__drop called at scope exit). [updated: 2026-04-04]
