@@ -1133,7 +1133,7 @@ pub(super) fn lower_method_call(
             }
         }
 
-        let lowered_method_args: Vec<Operand> = args.iter()
+        let mut lowered_method_args: Vec<Operand> = args.iter()
             .enumerate()
             .map(|(i, arg)| {
                 let callee_pt = method_param_types.get(i).copied();
@@ -1426,7 +1426,20 @@ pub(super) fn lower_method_call(
             if let Some(ast_arg) = args.get(value_idx) {
                 if let Expr::Identifier(name) = &ast_arg.node.value.node {
                     if let Some((local_id, _)) = ctx.lookup_local(name) {
-                        if ctx.is_named_local(local_id)
+                        // CoW: if the arg is a borrowed local, materialize before consuming
+                        if ctx.cow_ptr_params.contains(&local_id) {
+                            ctx.cow_before_mutation(builder, local_id);
+                            // Re-resolve after materialization
+                            if let Some((new_id, _)) = ctx.lookup_local(name) {
+                                if new_id != local_id {
+                                    // Update the lowered arg to use the materialized local
+                                    if let Some(arg) = lowered_method_args.get_mut(value_idx) {
+                                        *arg = FunctionBuilder::copy(new_id);
+                                    }
+                                }
+                            }
+                        }
+                        else if ctx.is_named_local(local_id)
                             && is_resource_type_local(local_id, builder, &ctx.type_registry)
                             && ctx.is_last_use_at(name, ast_arg.node.value.span)
                         {

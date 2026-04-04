@@ -185,6 +185,14 @@ fn lower_expr_inner(
 
         // -- P2.6: Move/Borrow --
         Expr::Move { expr: inner } => {
+            // CoW: if moving a borrowed local, materialize first
+            if let Expr::Identifier(name) = &inner.node {
+                if let Some((local_id, _)) = ctx.lookup_local(name) {
+                    if ctx.cow_ptr_params.contains(&local_id) {
+                        ctx.cow_before_mutation(builder, local_id);
+                    }
+                }
+            }
             let val = lower_expr(ctx, builder, inner);
             // Copy value to a temp BEFORE zeroing the source, so we don't read zeroed data
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
