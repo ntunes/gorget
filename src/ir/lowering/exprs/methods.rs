@@ -1142,6 +1142,38 @@ pub(super) fn lower_method_call(
                 lower_call_arg(ctx, builder, arg, callee_pt, &effective_name, i + 1)
             })
             .collect();
+        // CoW: materialize borrowed args at consuming positions BEFORE building call_args.
+        {
+            use crate::ir::types::GirType;
+            let consuming: Vec<usize> = match method_name {
+                "push" | "add" | "extend" | "send" | "push_back" | "push_front" => vec![0],
+                "put" | "set" | "insert" => {
+                    let mut p = vec![];
+                    if lowered_method_args.len() >= 1 { p.push(0); }
+                    if lowered_method_args.len() >= 2 { p.push(1); }
+                    p
+                }
+                _ => vec![],
+            };
+            for &idx in &consuming {
+                let arg_local = lowered_method_args.get(idx).and_then(|op| {
+                    match op {
+                        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
+                        _ => None,
+                    }
+                });
+                if let Some(local) = arg_local {
+                    let arg_type = builder.local_type(local);
+                    if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(arg_type).cloned() {
+                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                            let cloned = builder.call(&clone_fn,
+                                vec![FunctionBuilder::copy(local)], inner);
+                            lowered_method_args[idx] = FunctionBuilder::copy(cloned);
+                        }
+                    }
+                }
+            }
+        }
         call_args.extend(lowered_method_args.iter().cloned());
 
         // Restore previous hints and expected type
@@ -1418,13 +1450,13 @@ pub(super) fn lower_method_call(
         // TODO: multi-use locals need clone BEFORE push. Requires proper liveness
         // analysis — is_single_use over-counts across branches.
         // All positions that consume their argument (take ownership)
+        // Single-use auto-move at consuming positions
         let consuming_positions: Vec<usize> = match method_name {
             "push" | "add" | "extend" | "send" | "push_back" | "push_front" => vec![0],
             "put" | "set" | "insert" => {
-                // Dict put(key, value) — BOTH key and value are consumed
                 let mut pos = vec![];
-                if lowered_method_args.len() >= 1 { pos.push(0); } // key
-                if lowered_method_args.len() >= 2 { pos.push(1); } // value
+                if lowered_method_args.len() >= 1 { pos.push(0); }
+                if lowered_method_args.len() >= 2 { pos.push(1); }
                 pos
             }
             _ => vec![],
@@ -1433,23 +1465,11 @@ pub(super) fn lower_method_call(
             if let Some(ast_arg) = args.get(value_idx) {
                 if let Expr::Identifier(name) = &ast_arg.node.value.node {
                     if let Some((local_id, _)) = ctx.lookup_local(name) {
-                        // CoW: if the arg is a borrowed local, materialize before consuming
-                        if ctx.cow_ptr_params.contains(&local_id) {
-                            ctx.cow_before_mutation(builder, local_id);
-                            // Re-resolve after materialization
-                            if let Some((new_id, _)) = ctx.lookup_local(name) {
-                                if new_id != local_id {
-                                    if let Some(arg) = lowered_method_args.get_mut(value_idx) {
-                                        *arg = FunctionBuilder::copy(new_id);
-                                    }
-                                }
-                            }
-                        }
-                        else if ctx.is_named_local(local_id)
+                        if ctx.is_named_local(local_id)
                             && is_resource_type_local(local_id, builder, &ctx.type_registry)
+                            && !ctx.cow_ptr_params.contains(&local_id)
                             && ctx.is_last_use_at(name, ast_arg.node.value.span)
                         {
-                            // Single-use: auto-move (zero-cost transfer)
                             ctx.move_zero_and_mark(builder, local_id);
                         }
                     }
