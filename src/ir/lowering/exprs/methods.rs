@@ -407,8 +407,11 @@ pub(super) fn lower_method_call(
                     if is_resource_type_local(dst, builder, &ctx.type_registry) {
                         ctx.move_zero_and_mark(builder, place.local);
                     }
-                    // CoW: return Ptr as-is. Clone happens at mutation/store/return
-                    // boundaries, not at read. Zero-cost for read-only access.
+                    // CoW: if inner is Ptr(T) (from Option__Ref_), mark as ref_local.
+                    // Prevents scope-exit drop and signals borrow semantics.
+                    if matches!(ctx.type_registry.get(inner_type), Some(GirType::Ptr(_))) {
+                        ctx.ref_locals.insert(dst);
+                    }
                     return FunctionBuilder::copy(dst);
                 }
             }
