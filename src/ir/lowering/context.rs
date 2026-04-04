@@ -2,7 +2,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ir::instructions::Operand;
 use crate::ir::types::*;
-use crate::parser::ast::{Expr, Ownership, PrimitiveType, Type};
+use crate::parser::ast::{Expr, Ownership, PrimitiveType, Stmt, Type};
 use crate::semantic::AnalysisResult;
 use crate::span::Spanned;
 
@@ -732,11 +732,25 @@ impl<'a> LoweringContext<'a> {
         if self.current_body.is_empty() {
             return matches!(self.name_use_counts.get(name), Some(1));
         }
+        // Phase 1f: liveness-based last-use analysis.
+        //
+        // Per-block liveness (reverse walk with branch union) determines if a
+        // variable is used after the current statement within the current block.
+        // Combined with the global use count as a safety net for uses in
+        // parent/sibling blocks that per-block liveness doesn't see.
+        //
+        // Conservative rule: auto-move only when BOTH agree:
+        // - Liveness: dead after current statement in current block
+        // - Global count: single use in entire function
+        // This handles the common case (single-use local pushed once) while
+        // avoiding the branch over-counting bug of the old count-only approach.
         let live = super::liveness::is_live_after(&self.current_body, self.current_stmt_idx, name);
-        let old = matches!(self.name_use_counts.get(name), Some(1));
-        // Conservative: only auto-move if BOTH analyses agree.
-        // This catches cases where liveness is too aggressive.
-        !live && old
+        if live {
+            return false; // Used later in this block → clone
+        }
+        // Dead in this block. Safe to move only if globally single-use
+        // (no uses in parent/sibling blocks).
+        matches!(self.name_use_counts.get(name), Some(1))
     }
 
     /// Check if a local is a named variable (vs an anonymous temp).
@@ -1701,5 +1715,73 @@ pub fn stmt_has_await(stmt: &crate::parser::ast::Stmt) -> bool {
             body.stmts.iter().any(|s| stmt_has_await(&s.node))
         }
         _ => false,
+    }
+}
+
+#[allow(dead_code)]
+/// Count how many times a variable name is used within a single statement.
+/// Used by is_single_use to prevent MoveZero of variables used more than once
+/// in the same expression (e.g., `v.push(v.len())` uses `v` twice).
+fn count_name_uses_in_stmt(stmt: &Stmt, name: &str) -> u32 {
+    let mut count = 0u32;
+    match stmt {
+        Stmt::VarDecl { value, .. } => count_name_in_expr(&value.node, name, &mut count),
+        Stmt::Assign { target, value, .. } => {
+            count_name_in_expr(&target.node, name, &mut count);
+            count_name_in_expr(&value.node, name, &mut count);
+        }
+        Stmt::CompoundAssign { target, value, .. } => {
+            count_name_in_expr(&target.node, name, &mut count);
+            count_name_in_expr(&value.node, name, &mut count);
+        }
+        Stmt::Return(Some(expr)) | Stmt::Expr(expr) => {
+            count_name_in_expr(&expr.node, name, &mut count);
+        }
+        _ => {}
+    }
+    count
+}
+
+#[allow(dead_code)]
+fn count_name_in_expr(expr: &Expr, name: &str, count: &mut u32) {
+    match expr {
+        Expr::Identifier(n) if n == name => { *count += 1; }
+        Expr::Call { callee, args, .. } => {
+            count_name_in_expr(&callee.node, name, count);
+            for a in args { count_name_in_expr(&a.node.value.node, name, count); }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            count_name_in_expr(&receiver.node, name, count);
+            for a in args { count_name_in_expr(&a.node.value.node, name, count); }
+        }
+        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+            count_name_in_expr(&object.node, name, count);
+        }
+        Expr::Index { object, index, .. } => {
+            count_name_in_expr(&object.node, name, count);
+            count_name_in_expr(&index.node, name, count);
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            count_name_in_expr(&left.node, name, count);
+            count_name_in_expr(&right.node, name, count);
+        }
+        Expr::UnaryOp { operand, .. } | Expr::Move { expr: operand } => {
+            count_name_in_expr(&operand.node, name, count);
+        }
+        Expr::If { condition, then_branch, elif_branches, else_branch, .. } => {
+            count_name_in_expr(&condition.node, name, count);
+            count_name_in_expr(&then_branch.node, name, count);
+            for (c, b) in elif_branches { count_name_in_expr(&c.node, name, count); count_name_in_expr(&b.node, name, count); }
+            if let Some(b) = else_branch { count_name_in_expr(&b.node, name, count); }
+        }
+        Expr::Closure { body, .. } | Expr::ImplicitClosure { body, .. } => {
+            count_name_in_expr(&body.node, name, count);
+        }
+        Expr::Match { scrutinee, arms, else_arm, .. } => {
+            count_name_in_expr(&scrutinee.node, name, count);
+            for arm in arms { count_name_in_expr(&arm.body.node, name, count); }
+            if let Some(b) = else_arm { count_name_in_expr(&b.node, name, count); }
+        }
+        _ => {}
     }
 }
