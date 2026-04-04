@@ -1412,21 +1412,28 @@ impl<'a> LoweringContext<'a> {
         if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
             // The alias local already holds a Ptr(T) to the source data.
             // Clone it to produce an owned T.
+            // String clones return GorgetString (owned), not StringView.
+            let result_type = if self.type_mapper.is_string_type(inner_type) {
+                self.type_mapper.owned_string_type
+            } else {
+                inner_type
+            };
             let cloned = builder.call(&clone_fn,
-                vec![crate::ir::builder::FunctionBuilder::copy(alias_local)], inner_type);
+                vec![crate::ir::builder::FunctionBuilder::copy(alias_local)], result_type);
             // Create a NEW local for the owned copy (can't reuse alias_local because
             // ref_locals is static per-function in the LIR — changing type mid-function breaks).
             let name_hint = builder.local_name(alias_local).map(|s| s.to_string());
-            let owned_local = builder.add_local(inner_type,
+            let owned_local = builder.add_local(result_type,
                 name_hint.as_deref());
             builder.assign(crate::ir::instructions::Place::local(owned_local),
                           crate::ir::builder::FunctionBuilder::copy(cloned));
             // Register the owned local for drop
-            self.drops.register_local(owned_local, inner_type, &self.type_registry);
+            self.drops.register_local(owned_local, result_type, &self.type_registry);
+            self.owned_locals.insert(owned_local);
             // Update context: redirect the variable name to the new owned local
             if let Some(ref hint) = builder.local_name(alias_local).map(|s| s.to_string()) {
                 let name = hint.clone();
-                self.register_local(&name, owned_local, inner_type);
+                self.register_local(&name, owned_local, result_type);
                 self.named_locals.insert(owned_local);
             }
             // The old alias_local stays as Ptr in ref_locals (dead — no more references).

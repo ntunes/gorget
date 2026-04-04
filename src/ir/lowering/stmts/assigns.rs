@@ -84,11 +84,17 @@ pub(super) fn lower_assign(
                     if !is_mut {
                         if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(type_id).cloned() {
                             if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                                let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(local_id)], inner);
+                                // String clones return GorgetString, not StringView
+                                let result_type = if ctx.type_mapper.is_string_type(inner) {
+                                    ctx.type_mapper.owned_string_type
+                                } else {
+                                    inner
+                                };
+                                let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(local_id)], result_type);
                                 builder.assign(Place::local(local_id), FunctionBuilder::copy(cloned));
-                                builder.locals[local_id.0 as usize].type_id = inner;
-                                ctx.register_local(name, local_id, inner);
-                                ctx.drops.update_or_register_type(local_id, inner, &ctx.type_registry);
+                                builder.locals[local_id.0 as usize].type_id = result_type;
+                                ctx.register_local(name, local_id, result_type);
+                                ctx.drops.update_or_register_type(local_id, result_type, &ctx.type_registry);
                                 ctx.ref_locals.remove(&local_id);
                                 ctx.cow_ptr_params.remove(&local_id);
                                 ctx.owned_locals.insert(local_id);
