@@ -778,7 +778,7 @@ impl<'a> LoweringContext<'a> {
         // User-defined functions that return StringView actually return owned
         // data at runtime (IR clones/materializes on return). Upgrade to
         // GorgetString, register for drop, and mark as owned (prevents
-        // ensure_owned_string from redundantly cloning).
+        // clone_resource_args_for_init from redundantly cloning).
         else if return_type == self.type_mapper.string_view_type
             && self.gir_equip_methods.contains(func_name.as_str())
         {
@@ -843,45 +843,67 @@ impl<'a> LoweringContext<'a> {
         type_id: TypeId,
         mut args: Vec<Operand>,
     ) -> LocalId {
-        // Clone borrow-param resource args (they can't be moved — caller owns them).
-        // TODO Phase 1f: also clone multi-use named locals (alive after constructor).
-        // Needs proper liveness analysis — is_single_use over-counts across branches.
+        // Clone resource args that can't be moved into the enum variant.
+        // Uses the same logic as clone_multi_use_resource_args (struct init path).
+        self.clone_resource_args_for_init(builder, &mut args);
+        let dst = builder.enum_init(enum_name, variant_name, type_id, args.clone());
+        self.owned_locals.insert(dst);
+        // MoveZero single-use/temp resource args after init — transfers ownership.
+        for op in &args {
+            if let Operand::Copy(place) = op {
+                if place.projections.is_empty() {
+                    let local_type = builder.local_type(place.local);
+                    let is_resource = self.type_registry.is_resource_type(local_type);
+                    let skip = self.is_named_local(place.local) && self.current_loop().is_some();
+                    if is_resource && !self.drops.is_moved(place.local) && !skip {
+                        builder.move_zero(place.clone());
+                        self.drops.mark_moved(place.local);
+                    }
+                }
+            }
+        }
+        dst
+    }
+
+    /// Clone resource-type args that can't be stored by move into a struct/enum.
+    /// Shared by both struct literal init and enum variant init paths.
+    /// Clones: Ptr(resource), non-owned string views, borrow param resources.
+    pub fn clone_resource_args_for_init(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        args: &mut Vec<Operand>,
+    ) {
         for op in args.iter_mut() {
             if let Operand::Copy(place) = op {
                 if place.projections.is_empty() {
                     let local = place.local;
                     let local_type = builder.local_type(local);
-                    let is_resource = self.type_registry.is_resource_type(local_type);
-                    let is_ptr_resource = self.pointee_type(local_type)
-                        .map(|inner| self.type_registry.is_resource_type(inner))
-                        .unwrap_or(false);
-                    let is_borrow_param = self.cow_ptr_params.contains(&local);
-                    // Non-owned string views always need clone for enum variant storage.
-                    let is_non_owned_string = self.is_string_type(local_type)
-                        && !self.owned_locals.contains(&local);
-                    // Ptr(Resource) ALWAYS needs clone — it borrows from someone else's
-                    // storage (field access, collection get, etc.) and can't be stored
-                    // in an owned slot without cloning.
-                    let needs_clone = is_ptr_resource
-                        || is_non_owned_string
-                        || (is_resource && is_borrow_param);
-                    if needs_clone {
-                        // For Ptr(T) params: clone the pointed-to data via T's clone fn.
-                        // The local IS already a pointer — pass it directly to clone.
-                        let clone_type = if is_ptr_resource {
-                            self.pointee_type(local_type).unwrap_or(local_type)
-                        } else {
-                            local_type
-                        };
-                        if let Some(clone_fn) = self.clone_fn_for_ptr(clone_type) {
-                            if is_ptr_resource {
-                                // Local is Ptr(T) — pass directly as clone arg
+
+                    // Ptr(resource) — always clone (borrows from someone else's storage)
+                    if let Some(inner) = self.pointee_type(local_type) {
+                        if self.type_registry.is_resource_type(inner) {
+                            if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
                                 let cloned = builder.call(&clone_fn,
-                                    vec![crate::ir::builder::FunctionBuilder::copy(local)], clone_type);
-                                self.drops.register_local(cloned, clone_type, &self.type_registry);
+                                    vec![crate::ir::builder::FunctionBuilder::copy(local)], inner);
+                                self.drops.register_local(cloned, inner, &self.type_registry);
                                 *op = crate::ir::builder::FunctionBuilder::copy(cloned);
-                            } else {
-                                // Local is T — borrow then clone
+                            }
+                            continue;
+                        }
+                    }
+
+                    if self.type_registry.is_resource_type(local_type) {
+                        // Already owned — skip
+                        if self.owned_locals.contains(&local) && !self.is_named_local(local) {
+                            continue;
+                        }
+                        // Non-owned string views — always clone
+                        let is_non_owned_string = self.is_string_type(local_type)
+                            && !self.owned_locals.contains(&local);
+                        // Borrow params — always clone
+                        let is_borrow_param = self.cow_ptr_params.contains(&local);
+                        if is_non_owned_string || is_borrow_param {
+                            if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
                                 let ptr_type = self.register_ptr_type(local_type);
                                 let ptr = builder.add_local(ptr_type, None);
                                 builder.emit_borrow(ptr, crate::ir::instructions::Place::local(local));
@@ -895,28 +917,6 @@ impl<'a> LoweringContext<'a> {
                 }
             }
         }
-        let dst = builder.enum_init(enum_name, variant_name, type_id, args.clone());
-        self.owned_locals.insert(dst);
-        // MoveZero single-use/temp resource and string param args after init.
-        // Transfers ownership — the struct/enum now owns the data.
-        for op in &args {
-            if let Operand::Copy(place) = op {
-                if place.projections.is_empty() {
-                    let local_type = builder.local_type(place.local);
-                    let is_resource = self.type_registry.is_resource_type(local_type);
-                    let is_string_view = local_type == self.type_mapper.string_view_type;
-                    // Skip MoveZero for named locals in loops — they're used
-                    // each iteration. The clone at ensure_owned_string produces
-                    // a temp that gets MoveZero'd instead.
-                    let skip = self.is_named_local(place.local) && self.current_loop().is_some();
-                    if (is_resource || is_string_view) && !self.drops.is_moved(place.local) && !skip {
-                        builder.move_zero(place.clone());
-                        self.drops.mark_moved(place.local);
-                    }
-                }
-            }
-        }
-        dst
     }
 
     /// Look up a variable by name.
@@ -1236,7 +1236,7 @@ impl<'a> LoweringContext<'a> {
                 if let Some(inner) = self.pointee_type(local_type) {
                     // String Ptr params: read-through without clone.
                     // Strings are immutable — no clone needed on access.
-                    // Cloning only at ownership boundaries (ensure_owned_string).
+                    // Cloning only at ownership boundaries (CoW materialization).
                     if self.type_mapper.is_string_type(inner) {
                         return operand;
                     }

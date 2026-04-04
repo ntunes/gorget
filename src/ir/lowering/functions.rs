@@ -303,7 +303,7 @@ pub fn lower_function(
             ctx.mut_capture_locals.insert(local_id, base_type);
         }
         // ! string params: caller transfers ownership — mark as owned
-        // so ensure_owned_string skips the clone in constructors.
+        // so clone_resource_args_for_init skips the clone.
         if ctx.type_mapper.is_string_type(base_type)
             && matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
         {
