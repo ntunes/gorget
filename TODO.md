@@ -9,7 +9,7 @@
 
 - **Explicit clone roadmap (Phase 2 remaining)**: `.clone()` works on all types. `directive explicit-clone` to be deprecated (incompatible with CoW). Remaining: runtime clone counters for observability (`gg run --clone-stats`), `Cloneable` trait. [updated: 2026-04-01]
 
-- **CoW borrow semantics — 4 tests remaining (901/905)**: All 6 materialization points implemented + push/put Ptr arg clone. Remaining: csv_basic (string corruption), heap_advanced (stale borrow from pop), toml_stringify (null deref), type_comparison (timeout in sub-test). All from borrowed values becoming dangling. [updated: 2026-04-04]
+- **CoW borrow semantics — 4 tests remaining (901/905)**: Core CoW mechanism working. Remaining edge cases: heap_advanced (C runtime pop returns stale pointer after sift-down), csv_basic (error string corruption in specific parse path), toml_stringify (null deref from void* borrow slot uninitialized in recursive call), type_comparison (self-host driver hangs on test_enum_match). Leaks: 374→108 (-71%). [updated: 2026-04-04]
 
 - **Recursive/Custom elem_drop — 2 remaining fixes**: (1) Option[Ref_T].unwrap() must auto-clone Ptr→T. (2) C backend Option wrapping must CLONE for Recursive/Custom elements. Both needed for full self-cleaning collections. [updated: 2026-03-28]
 
