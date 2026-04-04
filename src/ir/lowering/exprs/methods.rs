@@ -1417,12 +1417,19 @@ pub(super) fn lower_method_call(
         // Single-use named locals: MoveZero after push (zero-cost transfer).
         // TODO: multi-use locals need clone BEFORE push. Requires proper liveness
         // analysis — is_single_use over-counts across branches.
-        let consuming_value_pos: Option<usize> = match method_name {
-            "push" | "add" | "extend" | "send" | "push_back" | "push_front" => Some(0),
-            "put" | "set" | "insert" => if lowered_method_args.len() >= 2 { Some(1) } else { None },
-            _ => None,
+        // All positions that consume their argument (take ownership)
+        let consuming_positions: Vec<usize> = match method_name {
+            "push" | "add" | "extend" | "send" | "push_back" | "push_front" => vec![0],
+            "put" | "set" | "insert" => {
+                // Dict put(key, value) — BOTH key and value are consumed
+                let mut pos = vec![];
+                if lowered_method_args.len() >= 1 { pos.push(0); } // key
+                if lowered_method_args.len() >= 2 { pos.push(1); } // value
+                pos
+            }
+            _ => vec![],
         };
-        if let Some(value_idx) = consuming_value_pos {
+        for &value_idx in &consuming_positions {
             if let Some(ast_arg) = args.get(value_idx) {
                 if let Expr::Identifier(name) = &ast_arg.node.value.node {
                     if let Some((local_id, _)) = ctx.lookup_local(name) {
@@ -1432,7 +1439,6 @@ pub(super) fn lower_method_call(
                             // Re-resolve after materialization
                             if let Some((new_id, _)) = ctx.lookup_local(name) {
                                 if new_id != local_id {
-                                    // Update the lowered arg to use the materialized local
                                     if let Some(arg) = lowered_method_args.get_mut(value_idx) {
                                         *arg = FunctionBuilder::copy(new_id);
                                     }

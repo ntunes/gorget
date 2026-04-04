@@ -288,18 +288,40 @@ fn lower_var_decl(
                     ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
                 }
             }
-            // CoW: Ptr(T) bindings stay as borrows (both auto and typed).
-            // Clone happens at mutation (assign handler) or explicit .clone().
+            // CoW: Ptr(T) bindings from BORROWED sources stay as borrows.
+            // Only propagate Ptr for operands that are actually borrowed
+            // (from cow_ptr_params or ref_locals), not from owned function returns.
             if !needs_reinfer {
                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
-                if let Some(GirType::Ptr(_)) = ctx.type_registry.get(inferred).cloned() {
+                if let Some(GirType::Ptr(_inner)) = ctx.type_registry.get(inferred).cloned() {
                     if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
-                        builder.locals[local_id.0 as usize].type_id = inferred;
-                        ctx.register_local(name, local_id, inferred);
-                        ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
-                        ctx.ref_locals.insert(local_id);
-                        // Register as CoW param so cow_before_mutation clones on mutate
-                        ctx.cow_ptr_params.insert(local_id);
+                        // Check: is the source actually a borrow?
+                        let source_is_borrow = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                            p.projections.is_empty() && (
+                                ctx.cow_ptr_params.contains(&p.local)
+                                || ctx.ref_locals.contains(&p.local)
+                            )
+                        } else { false };
+
+                        if source_is_borrow {
+                            // Propagate borrow
+                            builder.locals[local_id.0 as usize].type_id = inferred;
+                            ctx.register_local(name, local_id, inferred);
+                            ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
+                            ctx.ref_locals.insert(local_id);
+                            ctx.cow_ptr_params.insert(local_id);
+                        } else if let Some(clone_fn) = ctx.clone_fn_for_ptr(_inner) {
+                            // Owned Ptr source (function return, etc.) → auto-clone
+                            ctx.warn_implicit_clone(value.span, _inner, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
+                            let cloned = builder.call(&clone_fn, vec![operand.clone()], _inner);
+                            operand = FunctionBuilder::copy(cloned);
+                        } else {
+                            // No clone fn — propagate as Ptr
+                            builder.locals[local_id.0 as usize].type_id = inferred;
+                            ctx.register_local(name, local_id, inferred);
+                            ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
+                            ctx.ref_locals.insert(local_id);
+                        }
                     }
                 }
             }
