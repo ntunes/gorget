@@ -9,7 +9,7 @@
 
 - **Explicit clone roadmap (Phase 2 remaining)**: `.clone()` works on all types. `directive explicit-clone` to be deprecated (incompatible with CoW). Remaining: runtime clone counters for observability (`gg run --clone-stats`), `Cloneable` trait. [updated: 2026-04-01]
 
-- **CoW materialization: COMPLETE**: All 6 points done. `ensure_owned_string` deleted — replaced by generic `is_non_owned_string` check in resource clone paths. Phase 2c/2d done. [updated: 2026-04-04]
+- **StringView removal — the ONE fix for all remaining issues**: Unify StringView + GorgetString into a single String type. This eliminates: void* slot mismatch (leaks), provenance cap/alloc zeroing (csv_basic), ensure_owned_string workaround, deferred-drop complexity. Attempted: type unification alone causes 20 regressions because ensure_owned_string and other code paths depend on the type distinction. Needs coordinated update of ALL StringView consumers in one commit. [updated: 2026-04-04]
 
 - **Recursive/Custom elem_drop — 2 remaining fixes**: (1) Option[Ref_T].unwrap() must auto-clone Ptr→T. (2) C backend Option wrapping must CLONE for Recursive/Custom elements. Both needed for full self-cleaning collections. [updated: 2026-03-28]
 
