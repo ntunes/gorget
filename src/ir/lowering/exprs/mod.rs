@@ -1395,19 +1395,7 @@ fn lower_struct_literal(
         }
     }
 
-    // Clone string param locals before struct init — params hold views of
-    // caller's data; structs must own their fields.
-    for op in field_operands.iter_mut() {
-        if let Operand::Copy(place) | Operand::Move(place) = op {
-            if place.projections.is_empty() {
-                if let Some(owned_op) = ctx.ensure_owned_string(builder, place.local) {
-                    *op = owned_op;
-                }
-            }
-        }
-    }
-
-    // Phase 1f: clone multi-use resource args BEFORE struct init.
+    // Phase 1f: clone Ptr(resource) and multi-use resource args BEFORE struct init.
     clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
 
     let type_id = ctx.type_mapper.lookup_named(&effective_name).unwrap_or(UNIT_TYPE);
@@ -2364,13 +2352,18 @@ fn clone_multi_use_resource_args(
                 }
 
                 if is_resource_type_local(local, builder, &ctx.type_registry) {
-                    // Skip if already cloned by ensure_owned_string
+                    // Already owned (call results, cloned temps) — skip
                     if ctx.owned_locals.contains(&local) && !ctx.is_named_local(local) {
                         continue;
                     }
+                    // String views (non-owned) ALWAYS need clone for struct/enum storage.
+                    // They may be views into data that the parent struct/function owns;
+                    // storing a view in a new struct would create a dangling reference
+                    // when the source is freed.
+                    let is_non_owned_string = ctx.is_string_type(local_type)
+                        && !ctx.owned_locals.contains(&local);
                     // Must clone if: bare borrow param, multi-use named local,
-                    // or field access on a struct (the parent owns the field data,
-                    // MoveZero on the temp doesn't zero the parent's field).
+                    // field access on a struct, or non-owned string view.
                     let is_borrow_param = ctx.cow_ptr_params.contains(&local);
                     let is_field_access = ast_args.get(i)
                         .map(|arg| matches!(&arg.node, Expr::FieldAccess { .. }))
@@ -2384,7 +2377,7 @@ fn clone_multi_use_resource_args(
                     // (each iteration reads the same local). Force clone.
                     let in_loop = ctx.current_loop().is_some();
                     let is_named_in_loop = in_loop && ctx.is_named_local(local);
-                    if is_borrow_param || is_multi_use || is_field_access || is_named_in_loop {
+                    if is_borrow_param || is_multi_use || is_field_access || is_named_in_loop || is_non_owned_string {
                         let inner_type = ctx.pointee_type(local_type).unwrap_or(local_type);
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
                             let clone_arg = if ctx.pointee_type(local_type).is_some() {

@@ -855,16 +855,15 @@ impl<'a> LoweringContext<'a> {
                     let is_ptr_resource = self.pointee_type(local_type)
                         .map(|inner| self.type_registry.is_resource_type(inner))
                         .unwrap_or(false);
-                    // String views: clone to owned for constructor storage.
-                    if let Some(owned_op) = self.ensure_owned_string(builder, local) {
-                        *op = owned_op;
-                        continue;
-                    }
                     let is_borrow_param = self.cow_ptr_params.contains(&local);
+                    // Non-owned string views always need clone for enum variant storage.
+                    let is_non_owned_string = self.is_string_type(local_type)
+                        && !self.owned_locals.contains(&local);
                     // Ptr(Resource) ALWAYS needs clone — it borrows from someone else's
                     // storage (field access, collection get, etc.) and can't be stored
                     // in an owned slot without cloning.
                     let needs_clone = is_ptr_resource
+                        || is_non_owned_string
                         || (is_resource && is_borrow_param);
                     if needs_clone {
                         // For Ptr(T) params: clone the pointed-to data via T's clone fn.
@@ -1168,50 +1167,6 @@ impl<'a> LoweringContext<'a> {
         let resolved = self.pointee_type(type_id).unwrap_or(type_id);
         resolved == self.type_mapper.string_view_type
             || resolved == self.type_mapper.owned_string_type
-    }
-
-    /// Ensure a string local stored in a constructor is owned (not a view).
-    /// StringView locals (cap=0) are cloned to produce an owned GorgetString.
-    /// Already-owned locals (GorgetString, call results) are left as-is.
-    ///
-    /// Returns Some(owned_operand) if a clone was needed, None if already owned.
-    pub fn ensure_owned_string(
-        &mut self,
-        builder: &mut crate::ir::builder::FunctionBuilder,
-        local: LocalId,
-    ) -> Option<Operand> {
-        let local_type = builder.local_type(local);
-        // Only handle string types
-        if !self.is_string_type(local_type) {
-            return None;
-        }
-        // Already owned: call results (gorget_str_cat, gorget_string_new, etc.),
-        // move params (!), and MutPtr locals — all own their data.
-        if self.owned_locals.contains(&local)
-            || self.mut_capture_locals.contains_key(&local)
-        {
-            return None;
-        }
-        // String params, byte_slice results, and other non-owned string locals:
-        // clone to produce an owned copy. The struct/enum owns its fields.
-        let resolved = self.pointee_type(local_type).unwrap_or(local_type);
-        let clone_fn = self.clone_fn_for_ptr(resolved)?;
-        // If the local is already a Ptr (e.g., string borrow param), use it directly.
-        // If it's a Str value, take its address.
-        let clone_arg = if self.pointee_type(local_type).is_some() {
-            // Already a pointer — use directly as the clone arg.
-            crate::ir::builder::FunctionBuilder::copy(local)
-        } else {
-            let ptr_type = self.register_ptr_type(local_type);
-            let ptr = builder.add_local(ptr_type, None);
-            builder.emit_borrow(ptr, crate::ir::instructions::Place::local(local));
-            crate::ir::builder::FunctionBuilder::copy(ptr)
-        };
-        let owned_type = self.type_mapper.owned_string_type;
-        let cloned = builder.call(&clone_fn, vec![clone_arg], owned_type);
-        self.drops.register_local(cloned, owned_type, &self.type_registry);
-        self.owned_locals.insert(cloned);
-        Some(crate::ir::builder::FunctionBuilder::copy(cloned))
     }
 
     /// Return the clone function name for deep-cloning a resource type.
