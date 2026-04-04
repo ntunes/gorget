@@ -2346,6 +2346,23 @@ fn clone_multi_use_resource_args(
         if let Operand::Copy(place) = op {
             if place.projections.is_empty() {
                 let local = place.local;
+                let local_type = builder.local_type(local);
+
+                // Materialization point #3: Ptr(Resource) args MUST be cloned —
+                // they borrow from someone else's storage and can't be stored
+                // in an owned slot (struct field, enum variant) without cloning.
+                if let Some(inner) = ctx.pointee_type(local_type) {
+                    if ctx.type_registry.is_resource_type(inner) {
+                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                            let cloned = builder.call(&clone_fn,
+                                vec![FunctionBuilder::copy(local)], inner);
+                            ctx.drops.register_local(cloned, inner, &ctx.type_registry);
+                            *op = FunctionBuilder::copy(cloned);
+                        }
+                        continue;
+                    }
+                }
+
                 if is_resource_type_local(local, builder, &ctx.type_registry) {
                     // Skip if already cloned by ensure_owned_string
                     if ctx.owned_locals.contains(&local) && !ctx.is_named_local(local) {
@@ -2368,7 +2385,6 @@ fn clone_multi_use_resource_args(
                     let in_loop = ctx.current_loop().is_some();
                     let is_named_in_loop = in_loop && ctx.is_named_local(local);
                     if is_borrow_param || is_multi_use || is_field_access || is_named_in_loop {
-                        let local_type = builder.local_type(local);
                         let inner_type = ctx.pointee_type(local_type).unwrap_or(local_type);
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
                             let clone_arg = if ctx.pointee_type(local_type).is_some() {

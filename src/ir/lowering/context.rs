@@ -861,7 +861,11 @@ impl<'a> LoweringContext<'a> {
                         continue;
                     }
                     let is_borrow_param = self.cow_ptr_params.contains(&local);
-                    let needs_clone = (is_resource || is_ptr_resource) && is_borrow_param;
+                    // Ptr(Resource) ALWAYS needs clone — it borrows from someone else's
+                    // storage (field access, collection get, etc.) and can't be stored
+                    // in an owned slot without cloning.
+                    let needs_clone = is_ptr_resource
+                        || (is_resource && is_borrow_param);
                     if needs_clone {
                         // For Ptr(T) params: clone the pointed-to data via T's clone fn.
                         // The local IS already a pointer — pass it directly to clone.
