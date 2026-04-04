@@ -185,8 +185,9 @@ independent copy. These are the SIX points where materialization occurs:
 | 5. Return | `return x` where x is borrowed | Done (lower_return Ptr→T auto-clone) |
 | 6. Move transfer | `consume(!x)` where x is borrowed | Done (Ownership::Move Ptr→clone) |
 
-Once all 6 points are implemented, `ensure_owned_string` can be deleted —
-it's a pre-CoW workaround for the string dual-type problem.
+All 6 points are implemented. `ensure_owned_string` has been deleted —
+its role is now handled by the generic `is_non_owned_string` check in
+the resource clone paths.
 
 ## Implementation Phases
 
@@ -201,5 +202,5 @@ it's a pre-CoW workaround for the string dual-type problem.
 | 1g | VarDecl borrow propagation — typed bindings keep Ptr, no auto-clone | Done (34 tests need materialization points 3-6) |
 | 2a | Unified `Type__drop` — one drop function per type, eliminate inline field walks | Done (emit_type_drop_fns) |
 | 2b | Self-cleaning collections — elem_drop/val_drop/key_drop | Done |
-| 2c | CoW materialization points 3-6 | TODO |
-| 2d | Delete `ensure_owned_string` — replaced by CoW materialization | TODO |
+| 2c | CoW materialization points 3-6 | Done |
+| 2d | Delete `ensure_owned_string` — replaced by CoW materialization | Done |
