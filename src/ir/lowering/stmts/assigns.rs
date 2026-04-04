@@ -74,6 +74,29 @@ pub(super) fn lower_assign(
                 if ctx.cow_collection_refs.contains_key(&local_id) {
                     ctx.cow_before_mutation(builder, local_id);
                 }
+                // CoW clone-on-mutate: if LHS is an immutable borrow (Ptr, not MutPtr),
+                // materialize to owned before computing RHS. This is the CoW clone.
+                // MutPtr (& params) and mut_capture locals pass through without cloning.
+                {
+                    use crate::ir::types::GirType;
+                    let is_mut = ctx.mut_capture_locals.contains_key(&local_id)
+                        || matches!(ctx.type_registry.get(type_id), Some(GirType::MutPtr(_)));
+                    if !is_mut {
+                        if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(type_id).cloned() {
+                            if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                                let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(local_id)], inner);
+                                builder.assign(Place::local(local_id), FunctionBuilder::copy(cloned));
+                                builder.locals[local_id.0 as usize].type_id = inner;
+                                ctx.register_local(name, local_id, inner);
+                                ctx.drops.update_or_register_type(local_id, inner, &ctx.type_registry);
+                                ctx.ref_locals.remove(&local_id);
+                                ctx.cow_ptr_params.remove(&local_id);
+                                ctx.owned_locals.insert(local_id);
+                            }
+                        }
+                    }
+                }
+                let type_id = builder.local_type(local_id); // re-read after possible CoW upgrade
                 // Check if old value needs dropping before reassignment.
                 let needs_drop = {
                     use crate::ir::types::GirType;
@@ -86,7 +109,7 @@ pub(super) fn lower_assign(
                         }
                     } else { false }
                 };
-                // Compute new value FIRST (it may reference the old value, e.g. s = s + x)
+                // Compute new value (now operating on owned copy if CoW upgraded)
                 let prev_expected = ctx.expected_type;
                 ctx.expected_type = Some(type_id);
                 let operand = lower_expr(ctx, builder, value);

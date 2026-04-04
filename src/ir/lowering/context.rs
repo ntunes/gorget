@@ -1341,8 +1341,6 @@ impl<'a> LoweringContext<'a> {
         // so the caller's data is not modified.
         if self.cow_ptr_params.remove(&local) {
             self.cow_materialize_alias(builder, local, local);
-            // After materialization, fall through to check other CoW relationships
-            // (the new owned local might itself be a source).
         }
 
         // Early exit: if local has no CoW relationships, nothing to do.

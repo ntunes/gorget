@@ -288,26 +288,18 @@ fn lower_var_decl(
                     ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
                 }
             }
-            // Ptr(T) → T auto-clone: if the operand is Ptr(T) (from an index read
-            // or borrowed param) and the declared type is T (explicit annotation),
-            // auto-clone to produce an owned value. If the type is inferred (auto),
-            // the Ptr propagation in needs_reinfer already keeps it as Ptr(T).
+            // CoW: Ptr(T) bindings stay as borrows (both auto and typed).
+            // Clone happens at mutation (assign handler) or explicit .clone().
             if !needs_reinfer {
                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
-                if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(inferred).cloned() {
+                if let Some(GirType::Ptr(_)) = ctx.type_registry.get(inferred).cloned() {
                     if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
-                        // Explicit T declaration, operand is Ptr(T) → auto-clone
-                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                            ctx.warn_implicit_clone(value.span, inner, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
-                            let cloned = builder.call(&clone_fn, vec![operand.clone()], inner);
-                            operand = FunctionBuilder::copy(cloned);
-                        } else {
-                            // No clone function — fall back to Ptr propagation
-                            builder.locals[local_id.0 as usize].type_id = inferred;
-                            ctx.register_local(name, local_id, inferred);
-                            ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
-                            ctx.ref_locals.insert(local_id);
-                        }
+                        builder.locals[local_id.0 as usize].type_id = inferred;
+                        ctx.register_local(name, local_id, inferred);
+                        ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
+                        ctx.ref_locals.insert(local_id);
+                        // Register as CoW param so cow_before_mutation clones on mutate
+                        ctx.cow_ptr_params.insert(local_id);
                     }
                 }
             }
