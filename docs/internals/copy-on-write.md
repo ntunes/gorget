@@ -170,6 +170,24 @@ Once CoW eliminates shallow copies, collections become self-cleaning:
 
 This is safe because CoW guarantees every collection element is solely owned by that collection. No other variable holds a shallow reference to the element's inner data.
 
+## CoW Materialization Points
+
+When a borrowed value (Ptr) crosses an ownership boundary, the compiler
+materializes it — clones the borrowed data so the new owner has an
+independent copy. These are the SIX points where materialization occurs:
+
+| Point | Trigger | Status |
+|-------|---------|--------|
+| 1. Assignment | `x = expr` where x is borrowed | Done (assign handler) |
+| 2. Mutating method | `x.push(val)` where x is borrowed | Done (cow_before_mutation) |
+| 3. Struct/enum init | `Foo(x)` where x is borrowed | TODO |
+| 4. Collection put | `v.push(x)` where x is borrowed | TODO |
+| 5. Return | `return x` where x is borrowed | TODO |
+| 6. Move transfer | `consume(!x)` where x is borrowed | TODO |
+
+Once all 6 points are implemented, `ensure_owned_string` can be deleted —
+it's a pre-CoW workaround for the string dual-type problem.
+
 ## Implementation Phases
 
 | Phase | What | Status |
@@ -179,6 +197,9 @@ This is safe because CoW guarantees every collection element is solely owned by 
 | 1c | Pointer semantics for function params — bare params clone on mutation | Done |
 | 1d | Pointer semantics for collection reads — IndexLoad returns pointer, clone on mutation | Done (cow_collection_refs wired up) |
 | 1e | `!` optional for push/put/set | Done |
-| 1f | Auto-move-when-dead at push/constructor — move if source dead, clone if alive | In progress |
-| 2a | Unified `Type__drop` — one drop function per type, eliminate inline field walks | Steps 1-4 done, Step 5 blocked on 1f |
+| 1f | Liveness analysis — full-function reverse walk for last-use detection | Done |
+| 1g | VarDecl borrow propagation — typed bindings keep Ptr, no auto-clone | Done (34 tests need materialization points 3-6) |
+| 2a | Unified `Type__drop` — one drop function per type, eliminate inline field walks | Done (emit_type_drop_fns) |
 | 2b | Self-cleaning collections — elem_drop/val_drop/key_drop | Done |
+| 2c | CoW materialization points 3-6 | TODO |
+| 2d | Delete `ensure_owned_string` — replaced by CoW materialization | TODO |
