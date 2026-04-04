@@ -5,6 +5,7 @@ pub mod drops;
 pub mod exprs;
 pub mod functions;
 pub mod generics;
+pub mod liveness;
 pub mod stmts;
 pub mod traits;
 pub mod types;

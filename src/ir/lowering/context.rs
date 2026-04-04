@@ -273,6 +273,10 @@ pub struct LoweringContext<'a> {
     /// Phase 1f: name → use count in the function body. Names with count=1 are
     /// single-use (dead after their one use) → auto-move at push/constructor.
     pub name_use_counts: rustc_hash::FxHashMap<String, u32>,
+    /// Current function body statements (for liveness queries).
+    pub current_body: Vec<crate::span::Spanned<crate::parser::ast::Stmt>>,
+    /// Index of the statement currently being lowered (for liveness queries).
+    pub current_stmt_idx: usize,
     /// Locals that definitely own their data (created by function calls, constructors,
     /// or operators). Safe to Move on return — no shared/borrowed data.
     pub owned_locals: rustc_hash::FxHashSet<LocalId>,
@@ -339,6 +343,8 @@ impl<'a> LoweringContext<'a> {
             cow_collection_refs: FxHashMap::default(),
             cow_ptr_params: rustc_hash::FxHashSet::default(),
             name_use_counts: rustc_hash::FxHashMap::default(),
+            current_body: Vec::new(),
+            current_stmt_idx: 0,
             owned_locals: rustc_hash::FxHashSet::default(),
             pending_move_zeros: Vec::new(),
         }
@@ -719,11 +725,18 @@ impl<'a> LoweringContext<'a> {
         self.named_locals.insert(local_id);
     }
 
-    /// Phase 1f: check if a named variable is single-use (dead after its one use).
-    /// Single-use variables can be auto-moved at push/constructor instead of cloned.
-    /// Conservative: if the name wasn't found in the pre-scan (count=0), assume multi-use.
+    /// Phase 1f: check if a named variable is dead after the current statement.
+    /// Dead variables can be auto-moved at push/constructor instead of cloned.
+    /// Uses liveness analysis (reverse walk with branch union).
     pub fn is_single_use(&self, name: &str) -> bool {
-        matches!(self.name_use_counts.get(name), Some(1))
+        if self.current_body.is_empty() {
+            return matches!(self.name_use_counts.get(name), Some(1));
+        }
+        let live = super::liveness::is_live_after(&self.current_body, self.current_stmt_idx, name);
+        let old = matches!(self.name_use_counts.get(name), Some(1));
+        // Conservative: only auto-move if BOTH analyses agree.
+        // This catches cases where liveness is too aggressive.
+        !live && old
     }
 
     /// Check if a local is a named variable (vs an anonymous temp).
