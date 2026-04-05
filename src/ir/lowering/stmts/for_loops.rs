@@ -846,7 +846,7 @@ fn find_kv_split(s: &str) -> Option<usize> {
     // Known primitive suffixes to try splitting on
     let primitives = ["int64_t", "int32_t", "int16_t", "int8_t",
                       "uint64_t", "uint32_t", "uint16_t", "uint8_t",
-                      "double", "float", "bool", "GorgetStringView", "GorgetString"];
+                      "double", "float", "bool", "GorgetString"];
     for prim in &primitives {
         if s.starts_with(prim) && s[prim.len()..].starts_with("__") {
             return Some(prim.len());
@@ -865,10 +865,10 @@ fn find_kv_split(s: &str) -> Option<usize> {
 }
 
 /// Map a GIR/mangled type name to its C runtime type name for inline C codegen.
-/// GorgetStringView is an internal name; the C runtime uses "Str".
+/// Map GIR/mangled type names to C runtime type names for inline C codegen.
 fn to_c_type_name(gir_name: &str) -> String {
     match gir_name {
-        "GorgetStringView" => "Str".to_string(),
+        "GorgetString" => "Str".to_string(),
         _ => gir_name.to_string(),
     }
 }

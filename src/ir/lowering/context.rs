@@ -357,7 +357,7 @@ impl<'a> LoweringContext<'a> {
         use crate::ir::types::GirType;
 
         // Helper: resolve a C type name fragment to a TypeId.
-        // Handles both primitives (int64_t, bool, double) and named types (GorgetStringView, Point).
+        // Handles both primitives (int64_t, bool, double) and named types (GorgetString, Point).
         let resolve_type_name = |name: &str, mapper: &super::types::TypeMapper| -> TypeId {
             match name {
                 "bool" => BOOL_TYPE,
@@ -372,8 +372,7 @@ impl<'a> LoweringContext<'a> {
                 "uint16_t" => crate::ir::types::U16_TYPE,
                 "uint8_t" => crate::ir::types::U8_TYPE,
                 "void" => UNIT_TYPE,
-                "GorgetStringView" | "Str" => mapper.string_view_type,
-                "GorgetString" => mapper.owned_string_type,
+                "GorgetString" | "Str" => mapper.string_view_type,
                 other => mapper.lookup_named(other).unwrap_or(I64_TYPE),
             }
         };
@@ -513,8 +512,7 @@ impl<'a> LoweringContext<'a> {
                 "uint32_t" => crate::ir::types::U32_TYPE,
                 "uint64_t" => crate::ir::types::U64_TYPE,
                 "void" => UNIT_TYPE,
-                "GorgetStringView" | "Str" => self.type_mapper.string_view_type,
-                "GorgetString" => self.type_mapper.owned_string_type,
+                "GorgetString" | "Str" => self.type_mapper.string_view_type,
                 other => self.type_mapper.lookup_named(other).unwrap_or(I64_TYPE),
             }
         };
@@ -624,7 +622,6 @@ fn demangle_type_name(name: &str) -> String {
             "uint8_t" => "uint8",
             "float" => "float32",
             "GorgetString" => "String",
-            "GorgetStringView" => "String",
             _ => s,
         }
     }
@@ -767,27 +764,11 @@ impl<'a> LoweringContext<'a> {
     ) -> crate::ir::types::LocalId {
         let func_name: String = func.into();
         let local = builder.call(&func_name, args, return_type);
-        if return_type == self.type_mapper.string_view_type {
-            // StringView call results: all function calls produce owned data at
-            // runtime (the callee clones/materializes on return). Upgrade to
-            // GorgetString so the allocation is properly tracked and freed.
-            // Exception: known view-returning string methods (trim, substring, etc.)
-            // that return pointers into the receiver — keep as StringView.
-            let is_view_method = crate::semantic::provenance::VIEW_METHODS.iter()
-                .any(|m| func_name.ends_with(&format!("__{m}")));
-            if !is_view_method {
-                let owned = self.type_mapper.owned_string_type;
-                builder.locals[local.0 as usize].type_id = owned;
-                self.drops.register_local(local, owned, &self.type_registry);
-                self.owned_locals.insert(local);
-            }
-        } else if self.type_registry.needs_drop(return_type) {
+        if self.type_registry.needs_drop(return_type) {
             self.drops.register_local(local, return_type, &self.type_registry);
         }
         // Function call results own their data — safe to Move on return.
-        if return_type != self.type_mapper.string_view_type {
-            self.owned_locals.insert(local);
-        }
+        self.owned_locals.insert(local);
         local
     }
 
@@ -1158,7 +1139,7 @@ impl<'a> LoweringContext<'a> {
             }
 
             // GorgetString → gorget_string_clone_to_owned (always produces owned copy).
-            if name == "GorgetString" || name == "GorgetStringView" {
+            if name == "GorgetString" {
                 return Some("gorget_string_clone_to_owned".to_string());
             }
 

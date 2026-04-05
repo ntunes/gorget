@@ -158,12 +158,9 @@ pub(super) fn lower_method_spawn(
     ctx.spawn.fn_names.insert(wrapper_name.clone(), true);
 
     // 9. Register Task type (same boilerplate as direct-fn spawn).
-    // Normalize GorgetString→Str so the task type matches user annotations
-    // like `Task[str]` which mangle to Task__Str.
     let ret_c = ctx.type_name_for_id(fn_ret_type)
         .unwrap_or("int64_t")
         .to_string();
-    let ret_c = if ret_c == "GorgetString" { "GorgetStringView".to_string() } else { ret_c };
     let task_name = if fn_ret_type == UNIT_TYPE {
         "Task__void".to_string()
     } else {
@@ -392,12 +389,9 @@ pub(super) fn lower_closure_spawn(
     ctx.spawn.fn_names.insert(wrapper_name.clone(), true);
 
     // Register the Task type (same logic as direct-fn spawn).
-    // Normalize GorgetString→Str so the task type matches user annotations
-    // like `Task[str]` which mangle to Task__Str.
     let ret_c = ctx.type_name_for_id(fn_ret_type)
         .unwrap_or("int64_t")
         .to_string();
-    let ret_c = if ret_c == "GorgetString" { "GorgetStringView".to_string() } else { ret_c };
     let task_name = if fn_ret_type == UNIT_TYPE {
         "Task__void".to_string()
     } else {

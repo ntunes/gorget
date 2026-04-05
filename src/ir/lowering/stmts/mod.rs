@@ -325,21 +325,6 @@ fn lower_var_decl(
                     }
                 }
             }
-            // StringView → GorgetString upgrade: if provenance downgraded the type to
-            // StringView but the RHS is an owned GorgetString (from char_at, to_upper, etc.),
-            // upgrade the local to GorgetString so the allocation is properly tracked and freed.
-            {
-                let actual_var_type = builder.local_type(local_id);
-                if actual_var_type == ctx.type_mapper.string_view_type {
-                    let rhs_type = infer_operand_type_with_builder(ctx, &operand, builder);
-                    if rhs_type == ctx.type_mapper.owned_string_type {
-                        let owned = ctx.type_mapper.owned_string_type;
-                        builder.locals[local_id.0 as usize].type_id = owned;
-                        ctx.register_local(name, local_id, owned);
-                        ctx.drops.update_or_register_type(local_id, owned, &ctx.type_registry);
-                    }
-                }
-            }
             // Also mark auto-reinferred locals that got Ptr type
             if needs_reinfer {
                 let actual = builder.local_type(local_id);

@@ -336,9 +336,8 @@ pub fn lower_module(
     }
 
     // Register runtime types needed by expression lowering
-    // Str and GorgetString: register in named_types so method dispatch can find them
-    type_mapper.register_named("GorgetStringView".to_string(), type_mapper.string_view_type);
-    type_mapper.register_named("GorgetString".to_string(), type_mapper.owned_string_type);
+    // GorgetString: register in named_types so method dispatch can find them
+    type_mapper.register_named("GorgetString".to_string(), type_mapper.string_view_type);
 
     // GorgetArray: opaque runtime array (element_size, data, len, cap)
     {
@@ -1367,36 +1366,36 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
     let str_str = vec![string_view_type, string_view_type];
 
     // Methods returning typed Vector
-    // Ensure Vector__GorgetStringView is registered early so split() etc. return the correct type.
-    let vec_str_type = ctx.type_mapper.named_types.get("Vector__GorgetStringView").copied()
+    // Ensure Vector__GorgetString is registered early so split() etc. return the correct type.
+    let vec_str_type = ctx.type_mapper.named_types.get("Vector__GorgetString").copied()
         .unwrap_or_else(|| {
-            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named("Vector__GorgetStringView".to_string()));
-            ctx.type_mapper.register_named("Vector__GorgetStringView".to_string(), tid);
+            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named("Vector__GorgetString".to_string()));
+            ctx.type_mapper.register_named("Vector__GorgetString".to_string(), tid);
             tid
         });
     let vec_u8_type = ctx.type_mapper.named_types.get("Vector__uint8_t").copied()
         .unwrap_or(array_type);
     let vec_i64_type = ctx.type_mapper.named_types.get("Vector__int64_t").copied()
         .unwrap_or(array_type);
-    ctx.fn_sigs.insert("GorgetStringView__bytes".to_string(), (str_self.clone(), vec_u8_type));
-    ctx.fn_sigs.insert("GorgetStringView__codepoints".to_string(), (str_self.clone(), vec_i64_type));
-    ctx.fn_sigs.insert("GorgetStringView__chars".to_string(), (str_self.clone(), vec_str_type));
-    ctx.fn_sigs.insert("GorgetStringView__split".to_string(), (str_str.clone(), vec_str_type));
+    ctx.fn_sigs.insert("GorgetString__bytes".to_string(), (str_self.clone(), vec_u8_type));
+    ctx.fn_sigs.insert("GorgetString__codepoints".to_string(), (str_self.clone(), vec_i64_type));
+    ctx.fn_sigs.insert("GorgetString__chars".to_string(), (str_self.clone(), vec_str_type));
+    ctx.fn_sigs.insert("GorgetString__split".to_string(), (str_str.clone(), vec_str_type));
     // Methods returning Str
     for m in &["trim", "strip", "lstrip", "rstrip", "removeprefix", "removesuffix"] {
-        ctx.fn_sigs.insert(format!("GorgetStringView__{m}"), (str_self.clone(), string_view_type));
+        ctx.fn_sigs.insert(format!("GorgetString__{m}"), (str_self.clone(), string_view_type));
     }
-    ctx.fn_sigs.insert("GorgetStringView__byte_slice".to_string(), (vec![string_view_type, I64_TYPE, I64_TYPE], string_view_type));
-    ctx.fn_sigs.insert("GorgetStringView__byte_at".to_string(), (vec![string_view_type, I64_TYPE], U8_TYPE));
-    ctx.fn_sigs.insert("GorgetStringView__char_at".to_string(), (vec![string_view_type, I64_TYPE], string_view_type));
+    ctx.fn_sigs.insert("GorgetString__byte_slice".to_string(), (vec![string_view_type, I64_TYPE, I64_TYPE], string_view_type));
+    ctx.fn_sigs.insert("GorgetString__byte_at".to_string(), (vec![string_view_type, I64_TYPE], U8_TYPE));
+    ctx.fn_sigs.insert("GorgetString__char_at".to_string(), (vec![string_view_type, I64_TYPE], string_view_type));
     // Methods returning GorgetString
     for m in &["to_upper", "to_lower"] {
-        ctx.fn_sigs.insert(format!("GorgetStringView__{m}"), (str_self.clone(), owned_str_type));
+        ctx.fn_sigs.insert(format!("GorgetString__{m}"), (str_self.clone(), owned_str_type));
     }
-    ctx.fn_sigs.insert("GorgetStringView__replace".to_string(), (vec![string_view_type, string_view_type, string_view_type], owned_str_type));
-    ctx.fn_sigs.insert("GorgetStringView__repeat".to_string(), (vec![string_view_type, I64_TYPE], owned_str_type));
-    ctx.fn_sigs.insert("GorgetStringView__pad_left".to_string(), (vec![string_view_type, I64_TYPE, string_view_type], owned_str_type));
-    ctx.fn_sigs.insert("GorgetStringView__pad_right".to_string(), (vec![string_view_type, I64_TYPE, string_view_type], owned_str_type));
+    ctx.fn_sigs.insert("GorgetString__replace".to_string(), (vec![string_view_type, string_view_type, string_view_type], owned_str_type));
+    ctx.fn_sigs.insert("GorgetString__repeat".to_string(), (vec![string_view_type, I64_TYPE], owned_str_type));
+    ctx.fn_sigs.insert("GorgetString__pad_left".to_string(), (vec![string_view_type, I64_TYPE, string_view_type], owned_str_type));
+    ctx.fn_sigs.insert("GorgetString__pad_right".to_string(), (vec![string_view_type, I64_TYPE, string_view_type], owned_str_type));
     // Methods returning int64_t
     for m in &["len", "byte_len", "index_of", "count", "find"] {
         let params = if *m == "len" || *m == "byte_len" {
@@ -1404,7 +1403,7 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
         } else {
             str_str.clone()
         };
-        ctx.fn_sigs.insert(format!("GorgetStringView__{m}"), (params, I64_TYPE));
+        ctx.fn_sigs.insert(format!("GorgetString__{m}"), (params, I64_TYPE));
     }
     // Methods returning bool
     for m in &["contains", "starts_with", "ends_with", "is_empty",
@@ -1413,10 +1412,10 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
         let params = if m.starts_with("is_") && *m != "is_empty" { str_self.clone() }
                      else if *m == "is_empty" { str_self.clone() }
                      else { str_str.clone() };
-        ctx.fn_sigs.insert(format!("GorgetStringView__{m}"), (params, BOOL_TYPE));
+        ctx.fn_sigs.insert(format!("GorgetString__{m}"), (params, BOOL_TYPE));
     }
-    ctx.fn_sigs.insert("GorgetStringView__eq".to_string(), (str_str.clone(), BOOL_TYPE));
-    ctx.fn_sigs.insert("GorgetStringView__join".to_string(), (vec![string_view_type, array_type], owned_str_type));
+    ctx.fn_sigs.insert("GorgetString__eq".to_string(), (str_str.clone(), BOOL_TYPE));
+    ctx.fn_sigs.insert("GorgetString__join".to_string(), (vec![string_view_type, array_type], owned_str_type));
 
     // uint8_t (byte) method signatures
     for m in &["is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
@@ -1697,7 +1696,7 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
         // Collections: Dict, HashMap, Vector need runtime heap allocation.
         "Dict" if callee_name == "Dict" => {
             let key_c = generic_elem_c_type(ty);
-            if key_c == "GorgetStringView" {
+            if key_c == "GorgetString" {
                 // String-keyed dict uses the optimized str constructor
                 let val_c = generic_nth_c_type(ty, 1);
                 format!("gorget_dict_new_str(sizeof({val_c}))")
@@ -1708,7 +1707,7 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
         }
         "HashMap" if callee_name == "HashMap" => {
             let key_c = generic_elem_c_type(ty);
-            if key_c == "GorgetStringView" {
+            if key_c == "GorgetString" {
                 let val_c = generic_nth_c_type(ty, 1);
                 format!("gorget_map_new_str(sizeof({val_c}))")
             } else {
@@ -1785,8 +1784,8 @@ fn generic_nth_c_type(ty: &crate::parser::ast::Type, n: usize) -> String {
                     PrimitiveType::Int | PrimitiveType::Int64 => "int64_t".to_string(),
                     PrimitiveType::Float | PrimitiveType::Float64 => "double".to_string(),
                     PrimitiveType::Bool  => "bool".to_string(),
-                    PrimitiveType::StringView   => "GorgetStringView".to_string(),
-                    PrimitiveType::StringType => "GorgetStringView".to_string(),
+                    PrimitiveType::StringView   => "GorgetString".to_string(),
+                    PrimitiveType::StringType => "GorgetString".to_string(),
                     PrimitiveType::Uint8 => "uint8_t".to_string(),
                     _ => "int64_t".to_string(),
                 },
@@ -1808,8 +1807,8 @@ fn generic_elem_c_type(ty: &crate::parser::ast::Type) -> String {
                     PrimitiveType::Int | PrimitiveType::Int64 => "int64_t".to_string(),
                     PrimitiveType::Float | PrimitiveType::Float64 => "double".to_string(),
                     PrimitiveType::Bool  => "bool".to_string(),
-                    PrimitiveType::StringView   => "GorgetStringView".to_string(),
-                    PrimitiveType::StringType => "GorgetStringView".to_string(),
+                    PrimitiveType::StringView   => "GorgetString".to_string(),
+                    PrimitiveType::StringType => "GorgetString".to_string(),
                     PrimitiveType::Uint8 => "uint8_t".to_string(),
                     _ => "int64_t".to_string(),
                 },
@@ -2357,7 +2356,7 @@ fn register_collection_method_sigs(
     }
 
     // Register sentinel-to-Option for Str/Bytes/GorgetString/GorgetBytes/GorgetArray builtins
-    for base in &["GorgetStringView", "GorgetString", "Bytes", "GorgetBytes", "GorgetArray"] {
+    for base in &["GorgetString", "Bytes", "GorgetBytes", "GorgetArray"] {
         ctx.sentinel_to_option_methods.insert(format!("{base}__find"));
         ctx.sentinel_to_option_methods.insert(format!("{base}__index_of"));
     }

@@ -116,6 +116,26 @@ pub(super) fn lower_assign(
                 // Auto-propagate: if RHS is Result-typed but target is not, unwrap
                 let mut operand = maybe_auto_propagate(ctx, builder, operand);
                 ctx.expected_type = prev_expected;
+                // String self-referential reassignment fix: if the RHS might be a
+                // view into the old LHS (e.g., `s = s.trim()` or `s = s[0..1]`),
+                // clone-to-owned before dropping. gorget_string_clone_to_owned is
+                // a no-op for already-owned values (memcpy), and allocates for views.
+                if needs_drop && ctx.type_mapper.is_string_type(type_id) {
+                    if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                        let src_type = builder.local_type(place.local);
+                        if ctx.type_mapper.is_string_type(src_type) {
+                            let owned = ctx.type_mapper.owned_string_type;
+                            let cloned = builder.call(
+                                "gorget_string_clone_to_owned",
+                                vec![FunctionBuilder::copy(place.local)],
+                                owned,
+                            );
+                            ctx.drops.register_local(cloned, owned, &ctx.type_registry);
+                            ctx.owned_locals.insert(cloned);
+                            operand = FunctionBuilder::copy(cloned);
+                        }
+                    }
+                }
                 // P2.6: Drop old value AFTER computing new value, BEFORE assigning
                 if needs_drop {
                     // For enums with resource payloads but no DropStrategy,

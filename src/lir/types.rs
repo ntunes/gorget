@@ -46,19 +46,8 @@ impl Default for StructRegistry {
 /// Well-known struct layouts for Gorget runtime types.
 pub fn builtin_struct_defs() -> Vec<StructDef> {
     vec![
-        // GorgetStringView — non-owning string view (cap==0, alloc==NULL).
-        // Identical layout to GorgetString. The C runtime typedef is "Str".
-        StructDef {
-            name: "GorgetStringView".into(),
-            fields: vec![
-                ("data".into(), LirType::Ptr),
-                ("len".into(), LirType::I64),
-                ("cap".into(), LirType::I64),
-                ("alloc".into(), LirType::Ptr),
-            ],
-            is_enum: false,
-                      },
-        // GorgetString — 32-byte string struct (cap==0 ⟺ view, cap>0 ⟺ owned)
+        // GorgetString — 32-byte unified string struct (cap==0 ⟺ view, cap>0 ⟺ owned).
+        // The C runtime typedef is "Str". gorget_string_free checks cap before freeing.
         StructDef {
             name: "GorgetString".into(),
             fields: vec![
@@ -180,21 +169,21 @@ mod tests {
         let mut reg = StructRegistry::new();
         assert!(reg.is_empty());
 
-        assert!(reg.register("GorgetStringView", StructId(0)).is_none());
-        assert_eq!(reg.lookup("GorgetStringView"), Some(StructId(0)));
+        assert!(reg.register("GorgetString", StructId(0)).is_none());
+        assert_eq!(reg.lookup("GorgetString"), Some(StructId(0)));
         assert_eq!(reg.len(), 1);
 
         // Re-registering returns old ID
-        assert_eq!(reg.register("GorgetStringView", StructId(5)), Some(StructId(0)));
+        assert_eq!(reg.register("GorgetString", StructId(5)), Some(StructId(0)));
     }
 
     #[test]
     fn builtin_structs() {
         let defs = builtin_struct_defs();
-        assert!(defs.len() >= 9);
-        assert_eq!(defs[0].name, "GorgetStringView");
+        assert!(defs.len() >= 8);
+        assert_eq!(defs[0].name, "GorgetString");
         assert_eq!(defs[0].fields.len(), 4);
-        assert_eq!(defs[1].name, "GorgetString");
+        assert_eq!(defs[1].name, "GorgetArray");
         assert_eq!(defs[1].fields.len(), 4);
     }
 

@@ -413,12 +413,12 @@ pub fn emit_pattern_bindings(
                 // fields should be references, not owned copies.
                 // Same conversion as struct field loads:
                 // - Collections → Ptr(T) (reference into the enum)
-                // - GorgetString → StringView (non-owning view)
+                // - GorgetString → Ptr(GorgetString) (reference into the enum)
                 if scrut_is_ptr {
-                    if ctx.type_registry.is_collection_type(field_type) {
+                    if ctx.type_registry.is_collection_type(field_type)
+                        || field_type == ctx.type_mapper.owned_string_type
+                    {
                         field_type = ctx.type_registry.insert(GirType::Ptr(field_type));
-                    } else if field_type == ctx.type_mapper.owned_string_type {
-                        field_type = ctx.type_mapper.string_view_type;
                     }
                 }
 

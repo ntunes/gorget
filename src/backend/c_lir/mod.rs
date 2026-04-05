@@ -11,7 +11,7 @@ use std::fmt::Write;
 /// Names of structs provided by the Gorget C runtime — these should NOT
 /// be re-defined by the LIR backend.
 const RUNTIME_STRUCTS: &[&str] = &[
-    "Str", "GorgetStringView", "GorgetString", "GorgetArray", "GorgetClosure",
+    "Str", "GorgetString", "GorgetArray", "GorgetClosure",
     "TraitObj",
     "GorgetMap", "GorgetSet",
 ];
@@ -30,7 +30,7 @@ const LIR_NAMED_STRUCTS: &[&str] = &[
 /// Maps LIR struct names to their runtime C names when they differ.
 fn lir_to_runtime_name(name: &str) -> Option<&'static str> {
     match name {
-        "GorgetStringView" => Some("Str"),
+        "GorgetString" => Some("Str"),
         "ArenaCheckpoint" => Some("GorgetArenaCheckpoint"),
         "Socket" => Some("GorgetSocket"),
         "ServerSocket" => Some("GorgetServerSocket"),
@@ -1278,7 +1278,7 @@ fn parse_dict_higher_order(name: &str) -> Option<(&str, &str, &str)> {
     if !DICT_INLINE_METHODS.contains(&method) {
         return None;
     }
-    // Remaining type part: "GorgetStringView__int64_t" → key="GorgetStringView", val="int64_t"
+    // Remaining type part: "GorgetString__int64_t" → key="GorgetString", val="int64_t"
     let type_part = &rest[..sep_pos];
     // Find the FIRST `__` to split key from value type.
     let key_sep = type_part.find("__")?;
@@ -1978,11 +1978,9 @@ fn find_struct_c_name_by_prefix(prefix: &str, module: &LirModule, sn: &HashMap<u
 
 /// Map a C type name back to its monomorphized form for struct lookup.
 fn type_name_to_monomorphized(c_type: &str) -> &str {
-    // Struct names use mangled type names (e.g., "GorgetStringView"), but c_type_named()
-    // returns C type names (e.g., "GorgetString"). Normalize to mangled form.
+    // Normalize C type names to monomorphized struct names.
     match c_type {
-        "GorgetString" => "GorgetStringView",
-        "Str" => "GorgetStringView",
+        "Str" => "GorgetString",
         _ => c_type,
     }
 }
@@ -2285,7 +2283,7 @@ fn elem_type_to_c_with_sn(elem: &str, orig_to_c: &HashMap<String, String>) -> St
         "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t" => elem.to_string(),
         "bool" => "bool".to_string(),
         "float" | "double" => elem.to_string(),
-        "Str" | "GorgetStringView" => "Str".to_string(),
+        "Str" | "GorgetString" => "Str".to_string(),
         _ => {
             // Try to resolve through struct name map.
             if let Some(cname) = orig_to_c.get(elem) {
@@ -2370,7 +2368,7 @@ fn emit_spawn_helpers(out: &mut String, module: &LirModule) {
                 // Collection resource params are void* in the LIR function signature
                 // but stored as the actual struct in the spawn context.
                 format!("(void*)&__ctx->__{name}")
-            } else if matches!(c_type.as_str(), "Str" | "GorgetString" | "GorgetStringView") {
+            } else if matches!(c_type.as_str(), "Str" | "GorgetString") {
                 // String params: check if the target function takes void* (Ptr) or Str (by value).
                 // Find the target function's param type.
                 let target_fn = module.functions.iter().find(|f| f.name == sf.fn_name);
@@ -2691,7 +2689,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             // Track Option unwrap results that produce Str pointers.
             if let Inst::CallExtern { dst: Some(d), name, args, .. } = inst {
                 if is_option_result_unwrap(name) && !args.is_empty() {
-                    let str_sid = module.structs.iter().position(|s| s.name == "GorgetStringView" || s.name == "GorgetString");
+                    let str_sid = module.structs.iter().position(|s| s.name == "GorgetString");
                     if let Some(sid) = str_sid {
                         let str_ty = LirType::Struct(crate::lir::StructId(sid as u32));
                         let arg0 = args[0].0 as usize;
@@ -2699,7 +2697,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                         let is_str_option = ptr_pointee.get(arg0).and_then(|t| t.as_ref()).map_or(false, |pt| {
                             if let LirType::Struct(opt_sid) = pt {
                                 module.structs.get(opt_sid.0 as usize).map_or(false, |sd| {
-                                    (sd.name.contains("GorgetStringView") || sd.name.contains("GorgetString") || sd.name.contains("__Str"))
+                                    (sd.name.contains("GorgetString") || sd.name.contains("__Str"))
                                     && sd.fields.get(1).map_or(false, |(_, ft)| ft.is_ptr())
                                 })
                             } else { false }
@@ -2771,7 +2769,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     // Propagate this info through SlotStore→SlotLoad chains so the C backend
     // can deref Ptr(Str) args in printf, CmpOp, and CallExtern.
     {
-        let str_struct_id = module.structs.iter().position(|s| s.name == "GorgetStringView" || s.name == "GorgetString");
+        let str_struct_id = module.structs.iter().position(|s| s.name == "GorgetString");
         if let Some(sid) = str_struct_id {
             let str_ty = LirType::Struct(crate::lir::StructId(sid as u32));
             // Seed ptr_pointee from LIR's str_ptr_values
@@ -3773,16 +3771,16 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
 
         // Type conversions
         Inst::IntCast { dst, value, to } => {
-            // GorgetStringView → int: extract the first byte (ASCII codepoint), not cast the pointer.
+            // GorgetString → int: extract the first byte (ASCII codepoint), not cast the pointer.
             let src_is_str_ptr = ptr_pointee.get(value.0 as usize)
                 .and_then(|t| t.as_ref())
                 .map_or(false, |t| matches!(t, LirType::Struct(sid) if {
-                    module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView")
+                    module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString")
                 }));
             let src_is_str_val = !src_is_str_ptr && val_types.get(value.0 as usize)
                 .and_then(|t| t.as_ref())
                 .map_or(false, |t| matches!(t, LirType::Struct(sid) if {
-                    module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView")
+                    module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString")
                 }));
             if src_is_str_ptr {
                 // Value is a pointer to Str — cast to Str* and extract first byte.
@@ -5730,9 +5728,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     let spawn_c_ty = spawn_param_c_types.get(i).map(|s| s.as_str());
                     let arg_is_ptr = matches!(val_types.get(a.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
                     let is_str_lit_arg = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                    if arg_is_ptr && is_str_lit_arg && matches!(spawn_c_ty, Some("Str" | "GorgetString" | "GorgetStringView")) {
+                    if arg_is_ptr && is_str_lit_arg && matches!(spawn_c_ty, Some("Str" | "GorgetString")) {
                         write!(out, "gorget_str_from_literal({v}, strlen({v}))", v = v(*a)).unwrap();
-                    } else if arg_is_ptr && matches!(spawn_c_ty, Some("Str" | "GorgetString" | "GorgetStringView" | "GorgetArray" | "GorgetMap" | "GorgetSet")) {
+                    } else if arg_is_ptr && matches!(spawn_c_ty, Some("Str" | "GorgetString" | "GorgetArray" | "GorgetMap" | "GorgetSet")) {
                         write!(out, "*({}*){}", spawn_c_ty.unwrap(), v(*a)).unwrap();
                     } else {
                         let ext_param = ext_params.and_then(|p| p.get(i));
@@ -5764,7 +5762,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         .and_then(|p| p.as_ref())
                         .map_or(false, |p| is_str_struct(p, module)));
                 matches!(ty, Some(LirType::F32 | LirType::F64))
-                || matches!(ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView"))
+                || matches!(ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"))
                 || ptr_to_str
             });
 
@@ -5849,12 +5847,12 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                         .and_then(|sf| sf.params.get(i))
                         .map(|(_, ct)| ct.as_str());
                     let is_str_lit_arg = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                    if matches!(spawn_c_ty, Some("Str" | "GorgetString" | "GorgetStringView")) && is_str_lit_arg {
+                    if matches!(spawn_c_ty, Some("Str" | "GorgetString")) && is_str_lit_arg {
                         // String literal → Str param: wrap
                         write!(out, "gorget_str_from_literal({v}, strlen({v}))", v = v(*a)).unwrap();
                         continue;
                     }
-                    if matches!(spawn_c_ty, Some("GorgetArray" | "GorgetMap" | "GorgetSet" | "Str" | "GorgetString" | "GorgetStringView")) {
+                    if matches!(spawn_c_ty, Some("GorgetArray" | "GorgetMap" | "GorgetSet" | "Str" | "GorgetString")) {
                         write!(out, "*({}*){}", spawn_c_ty.unwrap(), v(*a)).unwrap();
                         continue;
                     }
@@ -5886,7 +5884,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                     PrintfArgKind::Float
                                 } else if ea_str_ptr {
                                     PrintfArgKind::Str
-                                } else if matches!(ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView")) {
+                                } else if matches!(ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString")) {
                                     PrintfArgKind::Str
                                 } else {
                                     PrintfArgKind::Int
@@ -5902,9 +5900,9 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                     }
                     continue;
                 }
-                // For printf, decompose GorgetStringView args into (int)len, data for %.*s format.
+                // For printf, decompose GorgetString args into (int)len, data for %.*s format.
                 if need_fmt_fix && is_printf && i > 0
-                    && matches!(arg_ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView"))
+                    && matches!(arg_ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"))
                 {
                     write!(out, "(int)({v}).len, ({v}).data", v = v(*a)).unwrap();
                     continue;
@@ -5996,7 +5994,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 }
                 // Box[Str] alloc: StrLit arg → wrap with gorget_str_from_literal.
                 // Ptr arg (from a Str variable) → deref as *(Str*).
-                else if name == "__gorget_box_alloc_Str" || name == "__gorget_box_alloc_GorgetStringView" {
+                else if name == "__gorget_box_alloc_Str" || name == "__gorget_box_alloc_GorgetString" {
                     if is_str_lit {
                         write!(out, "gorget_str_from_literal({}, strlen({}))", v(*a), v(*a)).unwrap();
                     } else if matches!(arg_ty, Some(LirType::Ptr)) {
@@ -7374,7 +7372,7 @@ fn resolve_elem_type(name: &str, orig_to_c: &HashMap<String, String>) -> String 
 /// If not a Shared__Vector pattern, returns `elem` unchanged (fallback).
 fn shared_vector_inner_elem(type_name: &str, elem: &str) -> String {
     if let Some(rest) = type_name.strip_prefix("Shared__Vector__") {
-        // rest is e.g. "int64_t", "double", "bool", "GorgetStringView"
+        // rest is e.g. "int64_t", "double", "bool", "GorgetString"
         rest.to_string()
     } else {
         elem.to_string()
@@ -7812,12 +7810,12 @@ fn trait_box_str_arg_positions(module: &LirModule, name: &str) -> Vec<usize> {
     if !module.structs.iter().any(|s| s.name == format!("{trait_name}_VTable")) {
         return vec![];
     }
-    let str_sid = module.structs.iter().position(|s| s.name == "GorgetStringView");
+    let str_sid = module.structs.iter().position(|s| s.name == "GorgetString");
     if str_sid.is_none() { return vec![]; }
     let str_sid = str_sid.unwrap();
     let prefix = format!("{trait_name}_for_");
     let suffix = format!("__{method}");
-    // Find the impl function and check which params are GorgetStringView
+    // Find the impl function and check which params are GorgetString
     if let Some(f) = module.functions.iter().find(|f| f.name.starts_with(&prefix) && f.name.ends_with(&suffix)) {
         // The wrapper's arg 0 = self, impl's arg 0 = self.data (void*).
         // Wrapper args 1..N map to impl args 1..N.
@@ -8016,7 +8014,7 @@ fn str_fn_non_str_arg(name: &str, i: usize) -> bool {
 fn is_collection_type_constructor(last_part: &str) -> bool {
     matches!(last_part, "int64_t" | "int32_t" | "int16_t" | "int8_t"
         | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t"
-        | "double" | "float" | "bool" | "GorgetStringView" | "GorgetString"
+        | "double" | "float" | "bool" | "GorgetString"
         | "GorgetArray" | "GorgetMap" | "GorgetSet" | "void"
         | "T" | "U" | "V")
 }
@@ -8046,7 +8044,7 @@ fn elem_clone_fn_for_c_type(c_type: &str) -> Option<String> {
         Some("gorget_map_clone_inplace".into())
     } else if c_type.starts_with("GorgetSet") || c_type.starts_with("Set__") || c_type.starts_with("HashSet__") {
         Some("gorget_set_clone_inplace".into())
-    } else if c_type == "GorgetString" || c_type == "GorgetStringView" {
+    } else if c_type == "GorgetString" {
         Some("gorget_string_clone_inplace".into())
     } else {
         // User struct/enum clone functions are set via dv.elem_clone = ...
@@ -8185,7 +8183,7 @@ fn last_error_returns_cstr(name: &str) -> bool {
 
 /// Returns true if the given struct ID refers to a string struct.
 fn is_str_struct_id(sid: &StructId, module: &LirModule) -> bool {
-    module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetStringView" || s.name == "GorgetString")
+    module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString")
 }
 
 /// Returns true if the type is a Str or GorgetString struct.
@@ -8239,11 +8237,11 @@ fn compare_fn_for_elem(elem_c: &str) -> &'static str {
 }
 
 /// Map a `__gorget_box_alloc_<suffix>` suffix to the correct C type.
-/// Some types (like GorgetStringView) are represented as LirType::Ptr in LIR
+/// Some types (like GorgetString) are represented as LirType::Ptr in LIR
 /// but need their real C struct type for proper sizeof/copy semantics.
 fn box_alloc_suffix_to_c_type(suffix: &str) -> String {
     match suffix {
-        "Str" | "GorgetStringView" => "Str".into(),
+        "Str" | "GorgetString" => "Str".into(),
         "int64_t" => "int64_t".into(),
         "int32_t" => "int32_t".into(),
         "int16_t" => "int16_t".into(),
@@ -8261,8 +8259,8 @@ fn box_alloc_suffix_to_c_type(suffix: &str) -> String {
 
 /// Like `box_alloc_suffix_to_c_type` but with fallback to the LIR param type.
 fn box_alloc_inner_c_type(suffix: &str, lir_ty: &LirType, struct_names: &HashMap<u32, String>) -> String {
-    // For GorgetStringView: LIR type is Ptr (void*) but real C type is Str
-    if suffix == "Str" || suffix == "GorgetStringView" {
+    // For GorgetString: LIR type is Ptr (void*) but real C type is Str
+    if suffix == "Str" || suffix == "GorgetString" {
         return "Str".into();
     }
     // For struct types, use the suffix (which is the monomorphized struct name)
@@ -9024,7 +9022,7 @@ fn collect_clone_ops_lir(
                     "GorgetMap" => ops.push(format!("{field_path} = gorget_map_clone(&{field_path});")),
                     "GorgetSet" => ops.push(format!("{field_path} = gorget_set_clone(&{field_path});")),
                     "GorgetString" => ops.push(format!("{field_path} = gorget_string_clone(&{field_path});")),
-                    // Str (GorgetStringView) is a borrowed view (data ptr + len), not owned — no clone needed.
+                    // Str (GorgetString) is a borrowed view (data ptr + len), not owned — no clone needed.
                     "Str" => {}
                     _ => {
                         // Recurse into nested structs.

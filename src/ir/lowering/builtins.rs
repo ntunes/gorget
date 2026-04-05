@@ -50,7 +50,7 @@ pub struct LookupCtx<'a> {
     pub is_resource: &'a dyn Fn(TypeId) -> bool,
     /// Ensure an Option[T] type is registered, returning its TypeId.
     pub ensure_option: &'a dyn Fn(&str, TypeId) -> TypeId,
-    /// Mangled name fragment for the elem type (e.g., "int64_t", "GorgetStringView").
+    /// Mangled name fragment for the elem type (e.g., "int64_t", "GorgetString", "uint8_t").
     /// Stored here because BuiltinTypeArgs.elem is a TypeId, but Option wrapping
     /// needs the mangled name to construct "Option__Ref_int64_t".
     pub elem_name: String,
@@ -518,7 +518,7 @@ pub static HEAP: BuiltinTypeProtocol = BuiltinTypeProtocol {
 };
 
 pub static GORGET_STRING_VIEW: BuiltinTypeProtocol = BuiltinTypeProtocol {
-    base_name: "GorgetStringView",
+    base_name: "GorgetString",
     type_arity: 0,
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,

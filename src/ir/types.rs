@@ -356,8 +356,8 @@ impl TypeRegistry {
             if self.is_collection_type_name(name) {
                 return true;
             }
-            // All string types are droppable — gorget_string_free handles cap=0 views.
-            if name == "GorgetString" || name == "GorgetStringView" { return true; }
+            // GorgetString is droppable — gorget_string_free handles cap=0 views.
+            if name == "GorgetString" { return true; }
             if let Some(type_def) = self.get_type_def(name) {
                 if type_def.metadata.copy_semantics == CopySemantics::Resource
                     || type_def.metadata.drop_strategy != DropStrategy::None
@@ -492,7 +492,7 @@ impl TypeRegistry {
         }
         // All string types are Resource — uniform CoW treatment with collections.
         // String Borrow params go into ref_locals (read-through without clone).
-        if name == "GorgetString" || name == "GorgetStringView" {
+        if name == "GorgetString" {
             return true;
         }
         // Fallback for types without TypeDefs (migration safety)

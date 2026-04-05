@@ -1657,6 +1657,8 @@ static inline Str gorget_str_index(Str s, int64_t idx) {
 }
 
 // Return owned copy of codepoint range [start, end). Supports negative indices.
+// Returns an owned copy (not a view) because the source string may be freed
+// before the result is used (e.g., `s = s[0..1]` frees old s before using the slice).
 static inline Str gorget_str_slice(Str s, int64_t start, int64_t end) {
     int64_t cp_count = gorget_str_codepoint_count(s);
     if (start < 0) start += cp_count;

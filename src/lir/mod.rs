@@ -95,7 +95,7 @@ pub enum LirType {
     Bool,
     /// Opaque pointer (like LLVM's `ptr`). Pointed-to type carried by load/store.
     Ptr,
-    /// Typed pointer — known to point at a specific struct (e.g. `*GorgetStringView`).
+    /// Typed pointer — known to point at a specific struct (e.g. `*GorgetString`).
     /// Semantically identical to `Ptr` at runtime (8 bytes, scalar), but carries
     /// the pointee identity so the C backend can emit correct dereferences.
     PtrTo(StructId),
@@ -546,7 +546,7 @@ pub struct LirFunction {
     pub param_names: Vec<Option<String>>,
     /// Which pointer params are const (came from `GirType::Ptr`, i.e. bare borrow, not `&`/`!`).
     pub const_params: Vec<bool>,
-    /// Values that are Ptr to GorgetStringView/GorgetString.
+    /// Values that are Ptr to GorgetString.
     /// The C backend uses this to deref Ptr(Str) args in printf, CmpOp, and CallExtern.
     pub str_ptr_values: rustc_hash::FxHashSet<ValueId>,
 }

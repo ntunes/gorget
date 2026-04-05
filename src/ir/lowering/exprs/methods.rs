@@ -121,7 +121,7 @@ pub(super) fn lower_method_call(
                     "int" => "int64_t",
                     "float" => "double",
                     "bool" => "bool",
-                    "str" | "String" => "GorgetStringView",
+                    "str" | "String" => "GorgetString",
                     "char" => "char",
                     "byte" | "uint8" => "uint8_t",
                     "uint16" => "uint16_t",
@@ -793,10 +793,6 @@ pub(super) fn lower_method_call(
 
     // Determine the receiver type and mangle the method name
     let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
-
-    // After String/str unification, owned strings (GorgetString) use the same
-    // methods as view strings (Str). Normalize type name for method mangling.
-    let type_name = type_name.map(|n| if n == "GorgetString" { "GorgetStringView".to_string() } else { n });
 
     if let Some(type_name) = type_name {
         // Box[T].get() → call Box__T__get(b) passing value directly (not borrow)
@@ -1957,7 +1953,6 @@ fn resolve_type_name_to_id(ctx: &LoweringContext, name: &str) -> TypeId {
         "double" => F64_TYPE,
         "float" => F32_TYPE,
         "bool" => BOOL_TYPE,
-        "GorgetStringView" => ctx.type_mapper.string_view_type,
         "GorgetString" => ctx.type_mapper.owned_string_type,
         _ => {
             // Try named type lookup
@@ -1997,7 +1992,7 @@ pub(super) fn infer_type_name_from_operand_full(
             tid?
         }
         Operand::Constant(c) => match c {
-            Constant::Str(_) => return Some("GorgetStringView".to_string()),
+            Constant::Str(_) => return Some("GorgetString".to_string()),
             Constant::Bool(_) => return Some("bool".to_string()),
             Constant::I64(_) => return Some("int64_t".to_string()),
             Constant::F64(_) => return Some("double".to_string()),
@@ -2011,7 +2006,7 @@ pub(super) fn infer_type_name_from_operand_full(
 
     // Check primitive types
     if effective_tid == ctx.type_mapper.string_view_type {
-        return Some("GorgetStringView".to_string());
+        return Some("GorgetString".to_string());
     }
     if effective_tid == ctx.type_mapper.owned_string_type {
         return Some("GorgetString".to_string());
@@ -2040,7 +2035,6 @@ fn resolve_inner_type(ctx: &mut LoweringContext, inner_name: &str) -> TypeId {
         "uint64_t" => U64_TYPE,
         "int8_t" => I8_TYPE,
         "int16_t" => I16_TYPE,
-        "GorgetStringView" => ctx.type_mapper.string_view_type,
         "GorgetString" => ctx.type_mapper.owned_string_type,
         name => {
             if let Some(id) = ctx.type_mapper.lookup_named(name) {
@@ -2084,7 +2078,7 @@ fn extract_elem_type_id_from_type_name(ctx: &LoweringContext, type_name: &str) -
             "int64_t" => Some(I64_TYPE),
             "double" => Some(F64_TYPE),
             "bool" => Some(BOOL_TYPE),
-            "GorgetStringView" => Some(ctx.type_mapper.string_view_type),
+            "GorgetString" => Some(ctx.type_mapper.string_view_type),
             _ => ctx.lookup_type_by_name(elem)
                 .or_else(|| ctx.type_mapper.lookup_named(elem)),
         }
