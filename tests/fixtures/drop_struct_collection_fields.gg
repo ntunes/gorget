@@ -34,7 +34,7 @@ void main():
 
     print(f"len {items.len()}")
 
-    # .get().unwrap() returns a Ptr reference (not a copy)
+    # .get().unwrap() clones resource-type elements (owned copy)
     auto got = items.get(0).unwrap()
     print(f"got {got.label} len={got.data.len()}")
 

@@ -407,9 +407,22 @@ pub(super) fn lower_method_call(
                     if is_resource_type_local(dst, builder, &ctx.type_registry) {
                         ctx.move_zero_and_mark(builder, place.local);
                     }
-                    // CoW: if inner is Ptr(T) (from Option__Ref_), mark as ref_local.
-                    // Prevents scope-exit drop and signals borrow semantics.
-                    if matches!(ctx.type_registry.get(inner_type), Some(GirType::Ptr(_))) {
+                    // Ptr(T) from Option__Ref_ (collection .get().unwrap()):
+                    // clone resource-type pointees to produce owned T.
+                    // Non-resource Ptr stays as ref_local (zero-cost borrow).
+                    if let Some(GirType::Ptr(pointee)) = ctx.type_registry.get(inner_type).cloned() {
+                        if ctx.type_registry.is_resource_type(pointee) {
+                            if let Some(clone_fn) = ctx.clone_fn_for_ptr(pointee) {
+                                let cloned = builder.call(
+                                    &clone_fn,
+                                    vec![FunctionBuilder::copy(dst)],
+                                    pointee,
+                                );
+                                ctx.drops.register_local(cloned, pointee, &ctx.type_registry);
+                                ctx.owned_locals.insert(cloned);
+                                return FunctionBuilder::copy(cloned);
+                            }
+                        }
                         ctx.ref_locals.insert(dst);
                     }
                     return FunctionBuilder::copy(dst);

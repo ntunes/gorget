@@ -11,7 +11,7 @@
 
 - **StringView removal — the ONE fix for all remaining issues**: Unify StringView + GorgetString into a single String type. This eliminates: void* slot mismatch (leaks), provenance cap/alloc zeroing (csv_basic), ensure_owned_string workaround, deferred-drop complexity. Attempted: type unification alone causes 20 regressions because ensure_owned_string and other code paths depend on the type distinction. Needs coordinated update of ALL StringView consumers in one commit. [updated: 2026-04-04]
 
-- **Recursive/Custom elem_drop — 2 remaining fixes**: (1) Option[Ref_T].unwrap() must auto-clone Ptr→T. (2) C backend Option wrapping must CLONE for Recursive/Custom elements. Both needed for full self-cleaning collections. [updated: 2026-03-28]
+- **Recursive/Custom elem_drop — 1 remaining fix**: Option[Ref_T].unwrap() auto-clone DONE. Remaining: C backend Option wrapping must CLONE for Recursive/Custom elements when payload is NOT Ptr (non-borrow collection reads like gorget_array_safe_pop). The fragile struct-name lookup (c_lir:5080-5089) may miss types. [updated: 2026-04-05]
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
