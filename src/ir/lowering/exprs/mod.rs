@@ -205,6 +205,9 @@ fn lower_expr_inner(
                 let tmp = builder.add_local(local_type, None);
                 builder.assign(Place::local(tmp), val);
                 ctx.move_zero_and_mark(builder, place_clone.local);
+                // Clean up CoW tracking — moved local's data is zeroed, so
+                // any collection refs keyed on it are stale.
+                ctx.cow_collection_refs.remove(&place_clone.local);
                 FunctionBuilder::copy(tmp)
             } else {
                 val

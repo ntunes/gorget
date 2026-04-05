@@ -343,6 +343,7 @@ impl<'a> BorrowChecker<'a> {
                     if is_mutating_collection_method {
                         if let Some(recv_def_id) = self.find_root_def_id(receiver) {
                             let recv_name = self.scopes.get_def(recv_def_id).name.clone();
+                            // Check explicit T & borrows
                             for (&var_id, origin) in self.var_origins.iter() {
                                 if origin.references_def(recv_def_id) {
                                     // Only flag explicit T & borrows, not legacy str views
@@ -367,6 +368,19 @@ impl<'a> BorrowChecker<'a> {
                                         break;
                                     }
                                 }
+                            }
+                            // Check for-loop iterator invalidation: mutating a collection
+                            // currently being iterated over is always an error, regardless
+                            // of element type (the for-loop shallow-copies the array struct,
+                            // so reallocation from push/insert dangles the iterator).
+                            if self.for_loop_iterables.contains(&recv_def_id) {
+                                self.error(
+                                    SemanticErrorKind::MutationWhileBorrowed {
+                                        source: recv_name.clone(),
+                                        borrow: format!("for-loop over `{}`", recv_name),
+                                    },
+                                    expr.span,
+                                );
                             }
                         }
                     }

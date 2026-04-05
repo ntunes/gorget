@@ -15053,6 +15053,26 @@ done",
 }
 
 #[test]
+fn cow_set_string_clone() {
+    run_gg(
+        "cow_set_string_clone.gg",
+        "\
+3
+3
+4
+done",
+    );
+}
+
+#[test]
+fn for_loop_mutate_error() {
+    check_gg_fails(
+        "for_loop_mutate_error.gg",
+        "cannot mutate `nums` while `for-loop over `nums`` borrows from it",
+    );
+}
+
+#[test]
 fn move_and_reinit() {
     run_gg(
         "move_and_reinit.gg",

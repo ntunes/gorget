@@ -752,6 +752,13 @@ impl<'a> BorrowChecker<'a> {
                     self.with_guarded_conditions.push(guard.clone());
                 }
 
+                // Track the iterable's DefId so that mutating collection
+                // methods inside the loop body are rejected (iterator invalidation).
+                let iter_def_id = self.find_root_def_id(iterable);
+                if let Some(did) = iter_def_id {
+                    self.for_loop_iterables.insert(did);
+                }
+
                 let before = self.save_branch_state();
                 let saved_in_return = self.in_return_expr;
                 self.in_return_expr = false;
@@ -761,6 +768,10 @@ impl<'a> BorrowChecker<'a> {
                 self.loop_local_defs.pop();
                 self.loop_depth -= 1;
                 self.in_return_expr = saved_in_return;
+
+                if let Some(did) = iter_def_id {
+                    self.for_loop_iterables.remove(&did);
+                }
 
                 if iter_guard.is_some() {
                     self.with_guarded_conditions.pop();

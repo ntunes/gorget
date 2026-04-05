@@ -1,0 +1,14 @@
+from std.collections import Vector
+
+# Error: mutating a collection while iterating over it.
+# The borrow checker must reject this — for-loop shallow-copies
+# the array struct, so push/pop could dangle the iterator.
+
+void main():
+    Vector[int] nums = Vector[int]()
+    nums.push(1)
+    nums.push(2)
+    nums.push(3)
+    for n in nums:
+        nums.push(n * 10)
+    print("unreachable")

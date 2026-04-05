@@ -5574,9 +5574,23 @@ static inline GorgetSet gorget_set_clone(const GorgetSet* src) {
     }
     dst.keys = a->alloc(a->ctx, src->cap * src->key_size);
     memcpy(dst.keys, src->keys, src->cap * src->key_size);
+    dst.key_drop = src->key_drop;
     dst.values = NULL;
     dst.states = (uint8_t*)a->alloc(a->ctx, src->cap);
     memcpy(dst.states, src->states, src->cap);
+    // Deep-clone resource-type keys (e.g., owned strings) so the copy is independent.
+    // Without this, both src and dst share key buffers → double-free on drop.
+    if (dst.key_drop) {
+        for (size_t i = 0; i < dst.cap; i++) {
+            if (dst.states[i] == 1) {
+                Str* key = (Str*)((char*)dst.keys + i * dst.key_size);
+                if (key->cap > 0 && key->data) {
+                    Str cloned = gorget_string_clone(key);
+                    *key = cloned;
+                }
+            }
+        }
+    }
     return dst;
 }
 

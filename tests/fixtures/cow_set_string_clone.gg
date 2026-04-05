@@ -1,0 +1,20 @@
+from std.collections import Set
+
+# Verify Set[String] clone produces independent copy.
+# Previously gorget_set_clone did shallow memcpy of string keys,
+# causing double-free on drop. Now deep-clones keys.
+
+void main():
+    Set[String] s1 = Set[String]()
+    s1.add("hello")
+    s1.add("world")
+    s1.add("gorget")
+    print(s1.len())                # 3
+
+    Set[String] s2 = s1.clone()    # deep clone — independent copy
+    s2.add("extra")
+    print(s1.len())                # 3 — original unchanged
+    print(s2.len())                # 4 — clone has extra
+
+    # Both s1 and s2 dropped here — no double-free
+    print("done")

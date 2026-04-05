@@ -243,6 +243,9 @@ pub(super) struct BorrowChecker<'a> {
     /// and can safely be moved. Only variables from OUTSIDE the innermost
     /// loop are rejected.
     pub(super) loop_local_defs: Vec<FxHashSet<DefId>>,
+    /// DefIds of collections currently being iterated over by for-loops.
+    /// Mutating these collections inside the loop body is an error (iterator invalidation).
+    pub(super) for_loop_iterables: FxHashSet<DefId>,
     /// Nesting depth inside arena `with` blocks (for escape detection).
     pub(super) arena_depth: usize,
     /// Variables declared while arena_depth > 0 that hold non-Copy types.
@@ -411,6 +414,7 @@ impl<'a> BorrowChecker<'a> {
             var_states: FxHashMap::default(),
             loop_depth: 0,
             loop_local_defs: Vec::new(),
+            for_loop_iterables: FxHashSet::default(),
             arena_depth: 0,
             arena_scoped_vars: FxHashSet::default(),
             expr_types: expr_types,
