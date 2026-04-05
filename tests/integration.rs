@@ -2150,7 +2150,7 @@ done");
 #[test]
 fn stress_alloc_vectors() {
     run_gg("stress_alloc_vectors.gg", "\
-leaked=true
+leaked=false
 done");
 }
 

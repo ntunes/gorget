@@ -1296,7 +1296,7 @@ static inline GorgetString gorget_string_clone(const GorgetString* src) {
         memcpy(buf, src->data, src->len + 1);
         dst.data = (const char*)buf;
     } else {
-        dst.data = src->data;  // preserve view pointer
+        dst.data = src->data;  // view — not owned
     }
     return dst;
 }

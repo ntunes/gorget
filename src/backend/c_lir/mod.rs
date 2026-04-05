@@ -6690,6 +6690,9 @@ fn emit_recursive_struct_clones(out: &mut String, module: &LirModule, sn: &HashM
         for (field_name, drop_fn, _field_type_name) in drop_info {
             // Map drop function → clone function
             let clone_fn = match drop_fn.as_str() {
+                // Use gorget_string_clone (view-preserving) for structs: some code paths
+                // have pre-existing ownership bugs where the clone source isn't move-zeroed
+                // after transfer, causing double-free with owned clones.
                 "gorget_string_free" => "gorget_string_clone",
                 "gorget_array_free" => "gorget_array_clone",
                 "gorget_map_free" => "gorget_map_clone",
@@ -6755,7 +6758,9 @@ fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, sn: &HashMap
         // Map drop function → clone function
         fn drop_to_clone(drop_fn: &str) -> String {
             match drop_fn {
-                "gorget_string_free" => "gorget_string_clone".into(),
+                // Always use clone_to_owned: enum clones must independently own all
+                // string data because gorget_string_free is called on drop.
+                "gorget_string_free" => "gorget_string_clone_to_owned".into(),
                 "gorget_array_free" => "gorget_array_clone".into(),
                 "gorget_map_free" => "gorget_map_clone".into(),
                 "gorget_set_free" => "gorget_set_clone".into(),
@@ -6969,7 +6974,7 @@ fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &HashMap<u32, St
         if !already_has_clone {
             fn drop_to_clone_fn(drop_fn: &str) -> Option<String> {
                 match drop_fn {
-                    "gorget_string_free" => Some("gorget_string_clone".into()),
+                    "gorget_string_free" => Some("gorget_string_clone_to_owned".into()),
                     "gorget_array_free" => Some("gorget_array_clone".into()),
                     "gorget_map_free" => Some("gorget_map_clone".into()),
                     "gorget_set_free" => Some("gorget_set_clone".into()),
@@ -8176,9 +8181,11 @@ fn last_error_fn(name: &str) -> Option<&'static str> {
 
 /// Returns true if the runtime function returns a raw `const char*` result
 /// that should be wrapped with `gorget_str_from_cstr` when the Result Ok payload is Str.
-fn last_error_returns_cstr(name: &str) -> bool {
-    name.starts_with("gorget_socket_") || name.starts_with("gorget_tls_")
-        || name.starts_with("gorget_udp_") || name.starts_with("gorget_server_socket_")
+/// NOTE: socket/tls/udp/server_socket functions return GorgetString (via gorget_string_adopt),
+/// not const char*. The error path functions (gorget_*_last_error) return const char* but
+/// those are handled separately in the error branch of the Result wrapping codegen.
+fn last_error_returns_cstr(_name: &str) -> bool {
+    false
 }
 
 /// Returns true if the given struct ID refers to a string struct.
