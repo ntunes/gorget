@@ -2,7 +2,7 @@
 
 ## High
 
-- **Remaining leaks from LIR FieldLoad**: MoveZero-aware zeroing reduced leaks 58% (csv_basic: 750→133 allocs). Remaining 133 come from read-only field loads where binding outlives source. Also: `resolve_option_result_variant` Error path bypasses `emit_enum_init_owned` — csv_basic needs GIR-level clone for `Error(p.err)` where p.err is a view field. Attempted fix via `clone_resource_args_for_init` caused 23 regressions (over-MoveZero). Needs targeted clone for Error variant field ops. [updated: 2026-04-05]
+- **Remaining leaks from FieldLoad zeroing + match bindings**: Error path fixed (emit_enum_init_owned). StringView call results upgraded to GorgetString in call_tracked. Remaining: (1) FieldLoad cap/alloc zeroing creates unfreed views — needs clone-instead-of-zero at GIR level (not LIR, because LIR clones wouldn't be registered for drop). (2) Match pattern bindings from value scrutinees are not registered for drop — attempted fix caused 16 regressions (likely flat enum layout conflicts: extracted field shares memory with other variant fields; dropping extracted field corrupts the struct). Needs per-field selective registration or union-based extraction. [updated: 2026-04-05]
 
 
 - **CoW Phase 1f: DONE — liveness analysis implemented**: Full-function span-based reverse walk with branch union and two-pass loops. is_last_use_at(name, span) provides precise per-use last-use queries. Integrated at push/put and struct-init call sites. 905/905 tests pass. Phase 2a Step 5 (unified Type__drop) already partially done (emit_type_drop_fns exists, Type__drop called at scope exit). [updated: 2026-04-04]

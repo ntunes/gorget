@@ -772,44 +772,24 @@ impl<'a> LoweringContext<'a> {
     ) -> crate::ir::types::LocalId {
         let func_name: String = func.into();
         let local = builder.call(&func_name, args, return_type);
-        if self.type_registry.needs_drop(return_type) {
+        if return_type == self.type_mapper.string_view_type {
+            // StringView call results: all function calls produce owned data at
+            // runtime (the callee clones/materializes on return). Upgrade to
+            // GorgetString so the allocation is properly tracked and freed.
+            // Exception: known view-returning string methods (trim, substring, etc.)
+            // that return pointers into the receiver — keep as StringView.
+            let is_view_method = crate::semantic::provenance::VIEW_METHODS.iter()
+                .any(|m| func_name.ends_with(&format!("__{m}")));
+            if !is_view_method {
+                let owned = self.type_mapper.owned_string_type;
+                builder.locals[local.0 as usize].type_id = owned;
+                self.drops.register_local(local, owned, &self.type_registry);
+                self.owned_locals.insert(local);
+            }
+        } else if self.type_registry.needs_drop(return_type) {
             self.drops.register_local(local, return_type, &self.type_registry);
         }
-        // User-defined functions that return StringView actually return owned
-        // data at runtime (IR clones/materializes on return). Upgrade to
-        // GorgetString, register for drop, and mark as owned (prevents
-        // clone_resource_args_for_init from redundantly cloning).
-        else if return_type == self.type_mapper.string_view_type
-            && self.gir_equip_methods.contains(func_name.as_str())
-        {
-            let owned = self.type_mapper.owned_string_type;
-            builder.locals[local.0 as usize].type_id = owned;
-            self.drops.register_local(local, owned, &self.type_registry);
-            self.owned_locals.insert(local);
-        }
-        // Extern functions (FunctionBody::Extern) always return owned data —
-        // a C function cannot return a view into Gorget-managed memory.
-        else if return_type == self.type_mapper.string_view_type
-            && self.extern_body_fns.contains(func_name.as_str())
-        {
-            let owned = self.type_mapper.owned_string_type;
-            builder.locals[local.0 as usize].type_id = owned;
-            self.drops.register_local(local, owned, &self.type_registry);
-            self.owned_locals.insert(local);
-        }
-        // Functions with cstr return ABI (extern "C": blocks with explicit cstr return
-        // type) also return owned data — the C backend wraps with gorget_string_adopt.
-        else if return_type == self.type_mapper.string_view_type
-            && self.fn_return_abis.get(func_name.as_str()) == Some(&crate::ir::abi::AbiKind::CStr)
-        {
-            let owned = self.type_mapper.owned_string_type;
-            builder.locals[local.0 as usize].type_id = owned;
-            self.drops.register_local(local, owned, &self.type_registry);
-            self.owned_locals.insert(local);
-        }
         // Function call results own their data — safe to Move on return.
-        // Exception: StringView returns may be views (byte_slice, char_at) —
-        // don't mark as owned so constructors will clone them.
         if return_type != self.type_mapper.string_view_type {
             self.owned_locals.insert(local);
         }

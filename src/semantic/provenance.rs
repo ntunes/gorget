@@ -36,7 +36,7 @@ enum StringProvenance {
 }
 
 /// View-returning string methods (return a pointer into the receiver, no allocation).
-const VIEW_METHODS: &[&str] = &[
+pub const VIEW_METHODS: &[&str] = &[
     "trim", "strip", "lstrip", "rstrip",
     "removeprefix", "removesuffix",
     "byte_slice", "substring", "char_at", "as_str", "slice",

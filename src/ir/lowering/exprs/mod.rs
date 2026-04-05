@@ -1101,15 +1101,16 @@ fn resolve_option_result_variant(
             None // Fall through to generic enum_variants
         }
         "Error" if args.len() == 1 => {
-            // Error(value) — determine Result type from context
+            // Error(value) — determine Result type from context.
+            // Use emit_enum_init_owned to clone non-owned string views and
+            // MoveZero consumed args — matches Ok/Some/EnumConstructor paths.
             if let Some(et) = ctx.expected_type {
                 let name = ctx.type_registry.type_name(et).unwrap_or_default();
                 let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
                     || name.starts_with("Result__");
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
-                    let dst = builder.enum_init(&name, "Error", et, vec![field_op]);
-                    ctx.owned_locals.insert(dst);
+                    let dst = ctx.emit_enum_init_owned(builder, &name, "Error", et, vec![field_op]);
                     return Some(FunctionBuilder::copy(dst));
                 }
             }
@@ -1119,8 +1120,7 @@ fn resolve_option_result_variant(
                     || name.starts_with("Result__");
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
-                    let dst = builder.enum_init(&name, "Error", rt, vec![field_op]);
-                    ctx.owned_locals.insert(dst);
+                    let dst = ctx.emit_enum_init_owned(builder, &name, "Error", rt, vec![field_op]);
                     return Some(FunctionBuilder::copy(dst));
                 }
             }
