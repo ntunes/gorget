@@ -408,21 +408,9 @@ pub(super) fn lower_method_call(
                         ctx.move_zero_and_mark(builder, place.local);
                     }
                     // Ptr(T) from Option__Ref_ (collection .get().unwrap()):
-                    // clone resource-type pointees to produce owned T.
-                    // Non-resource Ptr stays as ref_local (zero-cost borrow).
-                    if let Some(GirType::Ptr(pointee)) = ctx.type_registry.get(inner_type).cloned() {
-                        if ctx.type_registry.is_resource_type(pointee) {
-                            if let Some(clone_fn) = ctx.clone_fn_for_ptr(pointee) {
-                                let cloned = builder.call(
-                                    &clone_fn,
-                                    vec![FunctionBuilder::copy(dst)],
-                                    pointee,
-                                );
-                                ctx.drops.register_local(cloned, pointee, &ctx.type_registry);
-                                ctx.owned_locals.insert(cloned);
-                                return FunctionBuilder::copy(cloned);
-                            }
-                        }
+                    // return as ref_local (borrow). CoW handles cloning at
+                    // ownership boundaries (VarDecl, struct init, function args).
+                    if matches!(ctx.type_registry.get(inner_type), Some(GirType::Ptr(_))) {
                         ctx.ref_locals.insert(dst);
                     }
                     return FunctionBuilder::copy(dst);

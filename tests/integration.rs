@@ -2054,8 +2054,6 @@ drop elem-b",
 
 #[test]
 fn drop_struct_collection_fields() {
-    // Extra drops from unwrap clones: got (first), after (new), w (wrapped)
-    // are now owned clones that get dropped alongside the collection's copies.
     run_gg(
         "drop_struct_collection_fields.gg",
         "\
@@ -2070,10 +2068,7 @@ after nested container set
 done
 drop new-inner len=0
 drop wrapped len=1
-drop wrapped len=1
 drop new len=1
-drop new len=1
-drop first len=2
 drop first len=2
 drop second len=1
 drop third len=1",

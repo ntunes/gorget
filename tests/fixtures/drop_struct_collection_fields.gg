@@ -34,7 +34,7 @@ void main():
 
     print(f"len {items.len()}")
 
-    # .get().unwrap() clones resource-type elements (owned copy)
+    # .get().unwrap() returns a Ptr reference — CoW clones at ownership boundaries
     auto got = items.get(0).unwrap()
     print(f"got {got.label} len={got.data.len()}")
 
