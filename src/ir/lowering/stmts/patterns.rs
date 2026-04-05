@@ -436,8 +436,11 @@ pub fn emit_pattern_bindings(
                 // Value scrutinee + owned string field: clone to create an
                 // independent copy that can be safely freed at scope exit.
                 // Pattern extraction is a shallow memcpy — the binding and the
-                // scrutinee share the same heap buffer. Cloning breaks the
-                // shared-pointer problem so the binding owns its data.
+                // scrutinee share the same heap buffer. If the arm body uses the
+                // scrutinee after extraction (e.g., child_list.push(child_nd) in
+                // xml.gg), the push does a shallow copy sharing the buffer. The
+                // clone ensures the binding's drop doesn't corrupt the pushed copy.
+                // TODO: skip clone when liveness shows scrutinee is dead in arm body.
                 else if !scrut_is_ptr
                     && field_type == ctx.type_mapper.owned_string_type
                 {
