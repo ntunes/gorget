@@ -71,6 +71,10 @@ struct FuncLowering<'a> {
     extern_abi_kinds: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
     /// Extern return ABI kinds (fn_name → AbiKind).
     return_abi_kinds: &'a rustc_hash::FxHashMap<String, crate::ir::abi::AbiKind>,
+    /// Locals that will be MoveZero'd in the current block (pre-scanned).
+    /// Used to distinguish read-only field loads (→ zero cap/alloc for view)
+    /// from destructuring moves (→ preserve ownership).
+    block_move_zero_targets: rustc_hash::FxHashSet<ir::types::LocalId>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -985,6 +989,7 @@ impl<'a> FuncLowering<'a> {
             type_drop_fns,
             extern_abi_kinds,
             return_abi_kinds,
+            block_move_zero_targets: rustc_hash::FxHashSet::default(),
         }
     }
 
@@ -1027,6 +1032,18 @@ impl<'a> FuncLowering<'a> {
 
         for (i, gir_block) in self.gir_func.blocks.iter().enumerate() {
             let lir_bb = self.block_map[i];
+
+            // Pre-scan: collect locals that will be MoveZero'd in this block.
+            // Used by FieldLoad to decide whether to zero cap/alloc (read-only borrow)
+            // or preserve ownership (destructuring move).
+            self.block_move_zero_targets.clear();
+            for inst in &gir_block.instructions {
+                if let Instruction::MoveZero { place } = inst {
+                    if place.projections.is_empty() {
+                        self.block_move_zero_targets.insert(place.local);
+                    }
+                }
+            }
 
             // Lower instructions.
             for inst in &gir_block.instructions {
@@ -1611,37 +1628,30 @@ impl<'a> FuncLowering<'a> {
                         self.store_to_local(*dst, result, bb);
                     }
 
-                    // GorgetString field → Str destination: clone the field to create
-                    // an independent owned copy. The shallow memcpy from FieldLoad
-                    // aliases the parent's buffer; cloning severs the alias safely.
+                    // GorgetString field → Str destination: zero cap+alloc to create
+                    // a non-owning view UNLESS the source struct is being MoveZero'd
+                    // (match destructuring — ownership transfers to the binding).
                     let is_str_dst = matches!(self.gir_types.get(dst_gir_type), Some(GirType::Named(n)) if n == "GorgetStringView");
                     let is_gs_field = matches!(field_ty_clone, LirType::Struct(sid) if {
                         self.module_structs.get(sid.0 as usize)
                             .map_or(false, |s| s.name == "GorgetString")
                     });
-                    if is_str_dst && is_gs_field {
-                        // Clone: take address of dst (which has the shallow copy),
-                        // call gorget_string_clone, store result back.
+                    let source_will_be_moved = self.block_move_zero_targets.contains(&base.local);
+                    if is_str_dst && is_gs_field && !source_will_be_moved {
                         let dst_slot = self.local_to_slot[dst.0 as usize];
                         let dst_addr = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
                             dst: dst_addr, slot: dst_slot,
                         });
-                        // Clone to sever alias. Use gorget_string_clone (preserves
-                        // view/owned status) — the CoW ownership boundary clone
-                        // (clone_to_owned) is handled at the GIR level instead.
-                        let clone_fn_name = "gorget_string_clone";
-                        let cloned = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                            dst: Some(cloned),
-                            name: clone_fn_name.to_string(),
-                            args: vec![dst_addr],
-                            original_name: None,
+                        let offset = self.emit_i64_const(bb, 16);
+                        let cap_ptr = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
+                            dst: cap_ptr, base: dst_addr, index: offset, elem_size: 1,
                         });
-                        self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
-                            slot: dst_slot,
-                            value: cloned,
-                            is_move: false,
+                        let zero = self.emit_i32_const(bb, 0);
+                        let sixteen = self.emit_i64_const(bb, 16);
+                        self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+                            ptr: cap_ptr, byte: zero, size: sixteen,
                         });
                     }
                 }
@@ -2084,34 +2094,31 @@ impl<'a> FuncLowering<'a> {
                     });
                     self.store_to_local(*dst, result, bb);
 
-                    // GorgetString field → StringView destination: clone to create
-                    // an independent owned copy instead of zeroing cap/alloc.
+                    // GorgetString field → StringView destination: zero cap+alloc
+                    // for non-owning view UNLESS source is MoveZero'd.
                     let is_str_dst = matches!(self.gir_types.get(dst_gir_type), Some(GirType::Named(n)) if n == "GorgetStringView");
                     let is_gs_field = matches!(field_ty_clone, LirType::Struct(sid) if {
                         self.module_structs.get(sid.0 as usize)
                             .map_or(false, |s| s.name == "GorgetString")
                     });
-                    if is_str_dst && is_gs_field {
+                    let source_will_be_moved = self.block_move_zero_targets.contains(&base.local);
+                    if is_str_dst && is_gs_field && !source_will_be_moved {
                         let dst_slot = self.local_to_slot[dst.0 as usize];
                         let dst_addr = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
                             dst: dst_addr, slot: dst_slot,
                         });
-                        // Clone to sever alias. Use gorget_string_clone (preserves
-                        // view/owned status) — the CoW ownership boundary clone
-                        // (clone_to_owned) is handled at the GIR level instead.
-                        let clone_fn_name = "gorget_string_clone";
-                        let cloned = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                            dst: Some(cloned),
-                            name: clone_fn_name.to_string(),
-                            args: vec![dst_addr],
-                            original_name: None,
+                        // Zero cap+alloc to create non-owning view. Ownership
+                        // transfer is handled at the GIR level (materialization points).
+                        let offset = self.emit_i64_const(bb, 16);
+                        let cap_ptr = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
+                            dst: cap_ptr, base: dst_addr, index: offset, elem_size: 1,
                         });
-                        self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
-                            slot: dst_slot,
-                            value: cloned,
-                            is_move: false,
+                        let zero = self.emit_i32_const(bb, 0);
+                        let sixteen = self.emit_i64_const(bb, 16);
+                        self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+                            ptr: cap_ptr, byte: zero, size: sixteen,
                         });
                     }
                 }
