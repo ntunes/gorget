@@ -15073,6 +15073,32 @@ fn for_loop_mutate_error() {
 }
 
 #[test]
+fn cow_scope_exit_alias() {
+    run_gg(
+        "cow_scope_exit_alias.gg",
+        "\
+2
+3
+hello
+hello world
+done",
+    );
+}
+
+#[test]
+fn cow_closure_capture() {
+    run_gg(
+        "cow_closure_capture.gg",
+        "\
+hello
+hello
+2
+3
+done",
+    );
+}
+
+#[test]
 fn move_and_reinit() {
     run_gg(
         "move_and_reinit.gg",

@@ -1,0 +1,29 @@
+from std.collections import Vector
+
+# CoW alias created in inner scope, source mutated in outer scope.
+# Verifies no crash from stale alias maps after scope exit.
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+
+    if true:
+        Vector[int] alias = v    # CoW alias (Ptr) in inner scope
+        print(alias.len())       # 2
+
+    # alias is out of scope. v's cow_alias_targets still has it.
+    # Mutating v triggers materialization of dead alias — should not crash.
+    v.push(3)
+    print(v.len())               # 3
+
+    # String version
+    String s = "hello"
+    if true:
+        String ref_s = s         # CoW alias
+        print(ref_s)             # hello
+
+    s = s + " world"             # source mutation → materializes dead alias
+    print(s)                     # hello world
+
+    print("done")

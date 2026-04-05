@@ -1,0 +1,22 @@
+from std.collections import Vector
+
+# CoW values captured by closure remain valid.
+
+void main():
+    # String capture — closure sees snapshot
+    String s = "hello"
+    auto f = (): print(s)
+    f()                               # "hello"
+    print(s)                          # "hello"
+
+    # Collection clone capture — closure independent
+    Vector[int] nums = Vector[int]()
+    nums.push(1)
+    nums.push(2)
+    Vector[int] snap = nums.clone()   # explicit clone
+    auto g = (): print(snap.len())
+    nums.push(3)
+    g()                               # 2 (independent clone)
+    print(nums.len())                # 3
+
+    print("done")
