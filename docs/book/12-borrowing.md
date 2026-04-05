@@ -197,6 +197,60 @@ The compiler tracks that `View.name` borrows from the argument passed to
 
 ---
 
+## Collection Element Borrowing
+
+Reading an element from a collection returns a **mutable borrow** — a reference
+into the collection's storage:
+
+```gorget
+Vector[Player] players = get_players()
+auto p = players.get(0).unwrap()  # p is &Player — borrows from players
+print(p.name)                     # read through borrow — zero cost
+p.score += 10                     # mutates in place through borrow
+```
+
+The borrow propagates through field access and destructuring:
+
+```gorget
+auto ev = events.get(i).unwrap()   # &GameEvent
+match ev:
+    case .ItemPickup(cat, name, pos):
+        # name is &String — borrow propagates from ev
+        hud.pickup_text = name.clone()  # .clone() for ownership
+```
+
+To get an owned copy, use `.clone()`:
+
+```gorget
+Player owned = players.get(0).unwrap().clone()  # deep clone
+```
+
+### MutationWhileBorrowed
+
+You cannot mutate a collection while a borrow into it exists:
+
+```gorget
+auto entry = v.get(0).unwrap()  # borrows from v
+v.push(42)                       # ERROR: cannot mutate v while entry borrows it
+```
+
+The push might reallocate the buffer, invalidating the borrow. The compiler catches
+this at compile time.
+
+### For-Loop Iteration
+
+A for-loop creates an implicit read-only borrow of the collection:
+
+```gorget
+for item in items:
+    print(item)
+    items.push(new_item)   # ERROR: cannot mutate during iteration
+```
+
+This applies to all mutating methods — push, pop, remove, clear, etc.
+
+---
+
 ## Branch Merging
 
 When control flow branches, the compiler is conservative:

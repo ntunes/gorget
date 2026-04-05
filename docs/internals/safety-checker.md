@@ -150,6 +150,16 @@ Move-in-loop is allowed for variables declared inside the loop body
 - Unions `mut_captured_vars`, `shared_derived`
 - Fallible states: unchecked in any branch = unchecked
 
+### For-Loop Iterator Safety
+
+- `for_loop_iterables: Set<DefId>` — variables currently being iterated over
+- Set on entry to a for-loop body, cleared on exit
+- Any mutating method call on a variable in this set triggers
+  `MutationWhileBorrowed` — the for-loop creates an implicit read-only
+  borrow of the collection, and mutation would invalidate the iterator
+- Applies to all mutating methods (push, pop, remove, clear, set, etc.),
+  regardless of element type
+
 ### Async Safety
 
 - `await_invalidated: Set<DefId>` — variables with non-static origins that

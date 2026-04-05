@@ -470,11 +470,12 @@ Braun et al. algorithm in `src/lir/ssa.rs`.
 - Legacy GIR→C backend retired (13,261 lines deleted)
 - 843 integration tests, 970 unit tests pass
 
-### Phase 4: LIR Optimizations — **In progress**
+### Phase 4: LIR Optimizations — **Partial**
 
-- Dead function elimination, constant folding implemented
-- Copy propagation blocked on Str/GorgetString TypeId aliasing (see TODO.md)
-- Function inlining, LICM not yet started
+- Dead function elimination — implemented
+- Constant folding — implemented
+- Copy propagation — blocked on Str/GorgetString TypeId aliasing (StringView removal will unblock)
+- Function inlining, LICM — not yet started
 
 ### Phase 5: LLVM Backend — **Planned**
 

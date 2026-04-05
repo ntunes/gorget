@@ -416,19 +416,12 @@ fn try_build_ir(
     // Lower AST to GIR
     let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
 
-    // Display implicit clone warnings/errors
+    // Display implicit clone warnings
     if !gir_module.implicit_clone_warnings.is_empty() {
         let reporter = ErrorReporter::new_multi(file_infos.clone());
-        let mut clone_errors = 0;
         let mut shown = std::collections::HashSet::new();
         let mut lib_warning_count = 0usize;
         for warn in &gir_module.implicit_clone_warnings {
-            // Errors always shown (directive explicit-clone)
-            if warn.is_error {
-                reporter.report_implicit_clone_warning(warn);
-                clone_errors += 1;
-                continue;
-            }
             // Warnings from imported libraries: count but don't show by default.
             // Set GORGET_SHOW_LIB_CLONE_WARNINGS=1 to display them.
             if !reporter.is_entry_file(warn.span) {
@@ -446,9 +439,6 @@ fn try_build_ir(
         }
         if lib_warning_count > 0 {
             eprintln!("  ... and {lib_warning_count} implicit clone warning(s) in imported libraries");
-        }
-        if clone_errors > 0 {
-            return Err(format!("{clone_errors} implicit clone error(s) — use .clone() for explicit copy or ! for move"));
         }
     }
 

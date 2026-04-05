@@ -31,11 +31,10 @@ pub enum AssignMode {
 **Key rule:** `Copy` mode is ONLY for trivial types (int, bool, float, simple structs without resource fields). Resource types MUST use Move, Clone, or Borrow. No implicit shallow copies.
 
 **Decision tree** (at emission time):
-1. Source is GorgetString, dest is StringView → **Borrow** (unregister source)
-2. Source is named variable with `.clone()` call → **Clone** (via Cloneable trait)
-3. Source is drop-registered temp → **Move** (transfer ownership)
-4. Source is unregistered droppable temp → **Move**
-5. Otherwise → **Copy**
+1. Source is named variable with `.clone()` call → **Clone** (via Cloneable trait)
+2. Source is drop-registered temp → **Move** (transfer ownership)
+3. Source is unregistered droppable temp → **Move**
+4. Otherwise → **Copy**
 
 ## Field Load Modes (`FieldLoadMode`)
 
@@ -98,7 +97,7 @@ Structs **own** their resource-type fields. Field **loads** return non-owning re
 
 | Field type | Stored as (TypeDef) | Loaded as (FieldLoad result) |
 |-----------|--------------------|-----------------------------|
-| `String` | `GorgetString` (owned) | `Str` (non-owning view) |
+| `String` | `GorgetString` (owned) | `Ptr(GorgetString)` (reference) |
 | `Vector[T]` | `Vector__T` (owned) | `Ptr(Vector__T)` (reference) |
 | `Dict[K,V]` | `Dict__K__V` (owned) | `Ptr(Dict__K__V)` (reference) |
 | `int`, `bool` | Trivial | Trivial (copy) |
@@ -107,15 +106,30 @@ Structs **own** their resource-type fields. Field **loads** return non-owning re
 
 **Why not Str views in the TypeDef?** If struct fields stored `Str` (non-owning), the struct wouldn't own its string data. The strings would point to external GorgetString temps, requiring the caller to keep those alive — leading to the `should_unregister_string_args` leak heuristic. With owned fields, the struct is self-contained and recursive drop frees everything.
 
-**Why not Ptr(GorgetString) for string fields?** Unlike collections, strings have a natural non-owning representation (`Str`) that all consumers already handle (operators, methods, print, format). `Ptr(GorgetString)` would require every string consumer to unwrap the pointer.
+**Uniform Ptr(T) for all resource fields.** All resource-type fields — strings, collections, user structs — return `Ptr(T)` on load. This unified approach means CoW materialization works identically for all field types. The old model returned `Str` (non-owning view) for string fields, but this created a special case that complicated CoW logic.
 
-Auto-clone fires when a loaded reference/view is assigned to an explicitly-typed owned variable:
+Auto-clone fires when a `Ptr(T)` reference crosses an ownership boundary (CoW materialization):
 ```gorget
-String x = obj.name        # Str→GorgetString auto-clone (gorget_string_clone)
-Vector[int] v = obj.items  # Ptr→Vector auto-clone (gorget_array_clone)
-auto y = obj.name           # Stays as Str view (zero cost)
-auto w = obj.items          # Stays as Ptr reference (zero cost)
+String x = obj.name.clone()   # Ptr→GorgetString explicit clone
+Vector[int] v = obj.items.clone()  # Ptr→Vector explicit clone
+auto y = obj.name              # Stays as Ptr reference (zero cost)
+auto w = obj.items             # Stays as Ptr reference (zero cost)
 ```
+
+## CoW Materialization Points
+
+When a borrowed value (`Ptr(T)`) must become owned, the compiler materializes it — cloning the data so the new owner has an independent copy. There are SIX materialization points:
+
+| Point | Trigger | GIR Mechanism |
+|-------|---------|---------------|
+| 1. Assignment | `x = expr` where x is a CoW alias | `cow_before_mutation` in assign handler |
+| 2. Mutating method | `x.push(val)` where x is a CoW alias | `cow_before_mutation` before method dispatch |
+| 3. Struct/enum init | `Foo(x)` where x is borrowed | `emit_enum_init_owned` + LIR FieldLoad clone |
+| 4. Collection put | `v.push(x)` where x is borrowed | `clone_multi_use_resource_args` |
+| 5. Return | `return x` where x is borrowed | `lower_return` Ptr→T auto-clone |
+| 6. Move transfer | `consume(!x)` where x is borrowed | Ownership::Move Ptr→clone |
+
+**`cow_before_mutation()`** is the single entry point for CoW severance at points 1 and 2. It checks `cow_alias_sources` for the local, and if an alias relationship exists, emits a clone of the source data into the alias, then removes the alias tracking. All mutation sites (assignment, mutating method calls) route through this gate.
 
 ## Call Result Drop Registration
 

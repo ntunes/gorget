@@ -223,6 +223,40 @@ If any branch moves a variable, the compiler treats it as moved after the branch
 
 ---
 
+## Copy-on-Write
+
+For resource types (String, Vector, Dict, etc.), Gorget uses copy-on-write semantics.
+Assignments create **borrows** (pointers to the original data), not copies. A clone
+only happens when someone mutates:
+
+```gorget
+Vector[int] a = [1, 2, 3]
+auto b = a                 # b borrows from a — zero cost
+print(b.len())             # read through borrow — zero cost
+b.push(4)                  # mutation → compiler clones a into b first
+                           # a is still [1, 2, 3], b is [1, 2, 3, 4]
+```
+
+### `auto` vs Explicit Type
+
+`auto` preserves the borrow — zero cost, but the variable is a reference:
+
+```gorget
+auto x = obj.name          # x is a reference to obj's name field
+print(x)                   # read — zero cost
+```
+
+To get an owned copy, use `.clone()`:
+
+```gorget
+String x = obj.name.clone()  # x is an independent owned copy
+```
+
+The compiler handles all of this automatically. You don't need to think about
+when clones happen — the rule is simple: borrows are free, ownership costs a clone.
+
+---
+
 ## Summary
 
 | Concept | Syntax | Meaning |

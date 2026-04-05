@@ -1,8 +1,8 @@
 # Copy-on-Write Ownership Model
 
-> **Status:** Phases 1a–1e, 2b implemented. Phase 1f in progress.
-> **Date:** 2026-04-03 (collection borrow semantics revised)
-> **Supersedes:** Implicit clone warnings, `directive explicit-clone`, LIR per-element drop recipes.
+> **Status:** All phases implemented (1a–1g, 2a–2d).
+> **Date:** 2026-04-05 (closure Ptr capture + for-loop iterator safety)
+> **Supersedes:** Implicit clone warnings, LIR per-element drop recipes.
 
 ## Core Principle
 
@@ -146,10 +146,10 @@ No reference counting. No runtime checks. The compiler makes all decisions at co
 ## What This Replaces
 
 - Implicit clone warnings (no longer needed — clones are always correct and intentional)
-- The `directive explicit-clone` model (superseded — clones happen automatically at the right time)
 - Shallow copy bugs (eliminated — all copies are either pointers or deep clones)
 - LIR per-element drop recipes (eliminated — collections with CoW are self-cleaning)
-- The distinction between "view" and "owned" string types (a String is always CoW)
+- The `should_unregister_string_args` leak heuristic (eliminated — struct fields are self-contained)
+- String field `Str` views (replaced by `Ptr(GorgetString)` — uniform with collection fields)
 
 ## What Stays the Same
 
@@ -188,6 +188,42 @@ independent copy. These are the SIX points where materialization occurs:
 All 6 points are implemented. `ensure_owned_string` has been deleted —
 its role is now handled by the generic `is_non_owned_string` check in
 the resource clone paths.
+
+## Additional Safety Checks
+
+### Closure Ptr capture
+
+Closures capturing CoW alias variables (`Ptr(T)`) clone through the Ptr at capture
+time, producing an independent owned `T` in the closure struct. Without this, the
+raw Ptr copy would become stale if the source is mutated after capture.
+
+```gorget
+Vector[int] nums = Vector[int]()
+nums.push(1)
+nums.push(2)
+auto snap = nums              # snap is Ptr alias of nums
+auto f = (): print(snap.len())  # closure captures snap → clones
+nums.push(3)                  # mutates nums — snap's clone unaffected
+f()                           # prints 2, not 3
+```
+
+### For-loop iterator invalidation
+
+The borrow checker rejects mutations on a collection during iteration,
+regardless of element type:
+
+```gorget
+for item in items:
+    items.push(new_item)    # ERROR: cannot mutate collection during iteration
+```
+
+Tracked via `for_loop_iterables` in the safety checker. The restriction applies
+to all mutating methods (push, pop, remove, clear, etc.).
+
+### Set deep-clone
+
+`gorget_set_clone` deep-clones resource-type keys (strings). Previously it did
+a shallow `memcpy`, causing double-free on `Set[String]` drop.
 
 ## Implementation Phases
 

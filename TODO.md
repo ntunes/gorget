@@ -5,13 +5,11 @@
 - **Leak reduction — status**: Error path fixed (emit_enum_init_owned). StringView call results upgraded to GorgetString in call_tracked. Match pattern strings clone-on-extract. Struct field strings now Ptr(GorgetString) references (matching collection pattern). LIR FieldLoad cap/alloc zeroing blocks (lir/lower.rs:1631-1656, 2097-2123) are now dead code for GorgetString fields — `is_str_dst` matches GorgetStringView but field loads produce Ptr(GorgetString). Safe to remove once verified no other path produces StringView dst. [updated: 2026-04-05]
 
 
-- **CoW Phase 1f: DONE — liveness analysis implemented**: Full-function span-based reverse walk with branch union and two-pass loops. is_last_use_at(name, span) provides precise per-use last-use queries. Integrated at push/put and struct-init call sites. 905/905 tests pass. Phase 2a Step 5 (unified Type__drop) already partially done (emit_type_drop_fns exists, Type__drop called at scope exit). [updated: 2026-04-04]
-
-- **Clone observability + Cloneable trait**: `.clone()` works on all types. Remaining: runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure, `Cloneable` trait for generic bounds (`T: Cloneable`). `directive explicit-clone` to be removed (incompatible with CoW). [updated: 2026-04-05]
+- **Clone observability + Cloneable trait**: `.clone()` works on all types. Remaining: `gg build --show-clones` structured report (JSON/human-readable) of all CoW materialization points with source line, type, reason. `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
 
 - **StringView removal — the ONE fix for all remaining issues**: Unify StringView + GorgetString into a single String type. This eliminates: void* slot mismatch (leaks), provenance cap/alloc zeroing (csv_basic), ensure_owned_string workaround, deferred-drop complexity. Attempted: type unification alone causes 20 regressions because ensure_owned_string and other code paths depend on the type distinction. Needs coordinated update of ALL StringView consumers in one commit. [updated: 2026-04-04]
 
-- **Recursive/Custom elem_drop — 1 remaining fix**: C backend Option wrapping must CLONE for Recursive/Custom elements when payload is NOT Ptr (consuming methods like gorget_array_safe_pop). The fragile struct-name lookup (c_lir:5080-5089) may miss types. Option[Ref_T].unwrap() returns Ptr (CoW borrow) — clone fires at VarDecl/arg ownership boundaries. [updated: 2026-04-05]
+- **Recursive/Custom elem_drop — 1 remaining fix**: C backend Option wrapping must CLONE for Recursive/Custom elements when payload is NOT Ptr (consuming methods like gorget_array_safe_pop). The fragile struct-name lookup may miss types. Option[Ref_T].unwrap() returns Ptr (CoW borrow) — clone fires at ownership boundaries. [updated: 2026-04-05]
 
 - **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
@@ -24,6 +22,12 @@
 ## Medium
 
 - **LoweringContext per-function state isolation**: `LoweringContext` is a god struct shared across all function lowering. Per-function transients (`expected_type`, `current_throws_result_type`, `closure_param_type_hints`, `loop_stack`, `pattern_must_clone_strings`, etc.) leak across function boundaries when arm body lowering triggers monomorphization. Fix: split into `FunctionLoweringState` struct pushed/popped on a stack at function entry/exit. Module-wide state (`fn_sigs`, `type_registry`, `enum_variants`, `runtime_callees`) stays on LoweringContext. Unblocks: conditional match-pattern clone optimization (skip clone when scrutinee is dead in arm body). [added: 2026-04-05]
+
+- **CoW map consolidation**: Replace 8 tracking maps (`cow_alias_sources`, `cow_alias_targets`, `cow_ptr_params`, `cow_collection_refs`, `ref_locals`, `owned_locals`, etc.) with unified `LocalOwnershipState` enum per local. ~40% conditional reduction. The reverse map (`cow_alias_targets`) becomes a derived query, not stored state. [added: 2026-04-05]
+
+- **Flow-sensitive prescan**: Track which basic blocks reassign each name, not just function-wide. Reduces conservative clones when only one branch mutates. [added: 2026-04-05]
+
+- **Mutation trait on method declarations**: Replace hardcoded `is_mutating_collection_method` name list with `mutates_self` flag on `BuiltinMethodDecl`. Derive the check from the protocol table instead of hardcoding method names. [added: 2026-04-05]
 
 - **CoW: nested field mutation gap**: `s.v.push(x)` goes through `field_place_info` path in `methods.rs:1030` which skips `cow_before_mutation`. If `s.v[0]` previously created a `cow_collection_refs` entry keyed on a FieldLoad temp, the ref won't be cloned out before the push. Only affects resource-type elements (e.g., `Vector[Vector[int]]` inside a struct), not strings or primitives. The borrow checker only catches explicit `T &` refs, not implicit CoW borrows. Fix requires tracking FieldLoad provenance through to `cow_collection_refs` — non-trivial. [added: 2026-04-05]
 

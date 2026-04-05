@@ -167,8 +167,6 @@ pub struct LoweringContext<'a> {
     pub snapshot_mode: bool,
     /// Whether `directive overflow wrap` is active (integer overflow wraps).
     pub overflow_wrap: bool,
-    /// Whether `directive explicit-clone` is active (auto-clone is an error, not a warning).
-    pub explicit_clone: bool,
     /// LocalIds that are mutable capture pointers (need deref on read/write in closure bodies).
     /// Tracks `&` (MutableBorrow) and `!` (Move) struct params, which are MutPtr in GIR.
     pub mut_capture_locals: FxHashMap<LocalId, TypeId>,
@@ -307,7 +305,6 @@ impl<'a> LoweringContext<'a> {
             strip_asserts: false,
             snapshot_mode: false,
             overflow_wrap: false,
-            explicit_clone: false,
             mut_capture_locals: FxHashMap::default(),
             ref_locals: FxHashSet::default(),
             named_locals: FxHashSet::default(),
@@ -600,12 +597,10 @@ impl<'a> LoweringContext<'a> {
         let type_name = self.type_registry.type_name(type_id)
             .map(|n| demangle_type_name(&n))
             .unwrap_or_else(|| "unknown".to_string());
-        let is_error = self.explicit_clone;
         self.implicit_clone_warnings.push(crate::ir::ImplicitCloneWarning {
             span,
             type_name,
             reason,
-            is_error,
         });
     }
 

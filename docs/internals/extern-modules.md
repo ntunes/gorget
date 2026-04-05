@@ -186,20 +186,27 @@ extern "C":
 1. **Explicit `cstr` type** in `extern "C"` declaration → `AbiKind::CStr`
 2. **Block ABI string** — `extern "C":` auto-derives CStr for `String` params
 3. **Inline ABI tag** — `extern "C"` on individual function, same effect
-4. **Fallback whitelist** — `takes_cstr_for_str_param()` for Declaration-body
-   methods with no `.gg` declaration (~15 remaining entries)
+
+No fallback whitelist remains for ABI derivation — all extern functions are now
+declared in `.gg` files with explicit ABI tags.
 
 ## Remaining whitelists
 
-These whitelists in `src/backend/c_lir/mod.rs` are fallbacks for functions not yet
-declared in `.gg` files. Each can be eliminated by adding explicit `.gg` declarations:
+`is_cstr_returning_fn` and `takes_cstr_for_str_param` have been **deleted** — all
+entries were eliminated by migrating to explicit `.gg` declarations with `extern "C"`
+ABI tags and `cstr` return types.
 
-| Whitelist | Entries | Covers |
-|-----------|---------|--------|
-| `takes_cstr_for_str_param` | ~15 | Declaration-body regex methods, internal runtime |
-| `runtime_arg_by_ptr` | ~15 | Functions taking struct args by pointer |
-| `is_cstr_returning_fn` | ~20 | Cast-path functions (int→str, format) at LIR level |
-| `last_error_fn` | ~9 | Thread-local error check functions |
+`runtime_arg_by_ptr` is **structural** — it covers collection/string self-deref and
+string clone/free functions that take struct args by pointer. This cannot be removed
+without changing how the LIR represents method dispatch (currently name-based
+`CallExtern`, not typed method calls).
+
+| Whitelist | Status | Notes |
+|-----------|--------|-------|
+| `takes_cstr_for_str_param` | **Deleted** | All entries covered by `.gg` ABI declarations |
+| `is_cstr_returning_fn` | **Deleted** | All entries covered by `cstr` return types |
+| `runtime_arg_by_ptr` | ~15 entries | Structural — collection/string self-deref + clone/free |
+| `last_error_fn` | ~9 entries | Thread-local error check functions |
 
 ## File layout
 

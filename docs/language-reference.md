@@ -1535,15 +1535,16 @@ arr[0]              # borrows element at index 0
 map["key"]          # borrows value for "key"
 ```
 
-For resource types (Vector, Dict, Set, String), assigning the result to an owned variable auto-clones:
+For resource types (Vector, Dict, Set, String), the subscript returns a **mutable borrow** — a reference into the collection's storage. Use `.clone()` for an owned copy:
 
 ```gorget
 Vector[Vector[int]] matrix = [[1, 2], [3, 4]]
-Vector[int] row = matrix[0]       # auto-clones — matrix keeps original
-matrix[0].push(5)                 # mutates in place — no clone
+auto row = matrix[0]              # &Vector[int] — borrow into matrix
+matrix[0].push(5)                 # mutates in place through borrow
+Vector[int] owned = matrix[0].clone()  # deep clone — independent copy
 ```
 
-To take ownership (move out without cloning), use consuming methods:
+To take ownership (remove from collection), use consuming methods:
 
 ```gorget
 Vector[int] row = matrix.remove(0)   # removes element, returns owned
@@ -2175,7 +2176,37 @@ else:
 print(s)  # ERROR: use after move
 ```
 
-### 9.6 Lifetime Inference and `live` Annotations
+### 9.6 Copy-on-Write Semantics
+
+Resource types use **copy-on-write** (CoW): assignments, parameters, and field reads produce pointers (borrows) to the source data. The first mutation triggers a clone, giving the mutator its own copy. If no mutation occurs, no clone happens.
+
+**Materialization points** — the compiler materializes (clones) a borrowed value when it crosses an ownership boundary:
+
+1. **Reassignment** — writing to a variable that borrows from another
+2. **Mutating method** — calling a mutating method (push, pop, etc.) on a borrowed variable
+3. **Struct/enum construction** — passing a borrowed value into a constructor
+4. **Collection store** — pushing/putting a borrowed value into a collection
+5. **Return** — returning a borrowed value from a function
+6. **Move transfer** — using `!` on a borrowed value
+
+**`.clone()` works on all types.** Explicit `.clone()` calls route to the correct clone function: collections use `gorget_array_clone`/`gorget_map_clone`/etc., user structs use generated `{Name}__clone`, copy types return the value unchanged.
+
+**Collection `.get()` returns a mutable borrow.** Both `auto` and typed bindings produce borrows — there is no implicit clone on read:
+
+```gorget
+auto entry = v.get(i).unwrap()    # &Entry — borrow into v's storage
+Entry entry = v.get(i).unwrap()   # &Entry — also a borrow
+Entry owned = v.get(i).unwrap().clone()  # Entry — owned copy (explicit)
+```
+
+**For-loop iteration creates a read-only borrow.** Mutating the collection during iteration is a compile error:
+
+```gorget
+for item in items:
+    items.push(new_item)    # ERROR: cannot mutate during iteration
+```
+
+### 9.7 Lifetime Inference and `live` Annotations
 
 The compiler automatically infers which parameters' data flows into a function's return value. Most code needs no lifetime annotations at all. The `live` keyword exists for the small number of cases where inference cannot determine the relationship on its own.
 
