@@ -71,6 +71,8 @@
 
 - **`shared static` support**: Thread-safe module-level statics. Workaround: explicit `Mutex[int]`. [added: 2026-03-10]
 
+- **Remove PrimitiveType::StringView + provenance pass**: The provenance pass (Pass 4.5/4.6) rewrites AST types from StringType→StringView for string borrows. The safety checker uses StringView to identify borrows — without it, 112 integration tests fail ("cannot mutate bare parameter"). Removing StringView requires making the safety checker derive borrow status from parameter convention (all string params are borrows) rather than from the AST type. ~26 files, ~183 references. [added: 2026-04-05]
+
 - **C backend: `compute_type_overrides` should use TypeIds**: Fragile string-matching. [added: 2026-03-14]
 
 - **C backend: uninitialized return variable**: `_0` used uninitialized in some functions. [added: 2026-03-13]
