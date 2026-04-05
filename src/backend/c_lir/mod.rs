@@ -3122,68 +3122,6 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         }
     }
 
-    // Pre-pass: identify CallExtern results from view-eligible string methods whose
-    // destination slot is Str-typed (view) AND whose value never escapes to a
-    // non-Str destination (struct field, function arg, return). Views are only safe
-    // when they don't outlive their source — storing a view into a struct field that
-    // outlives the source causes use-after-free.
-    let mut view_method_vals: Vec<bool> = vec![false; max_val as usize];
-    {
-        let view_eligible = |name: &str| -> bool {
-            matches!(name,
-                "gorget_str_trim" | "gorget_str_byte_slice" | "gorget_str_char_at"
-                | "gorget_str_strip" | "gorget_str_lstrip" | "gorget_str_rstrip"
-                | "gorget_str_lstrip_ws" | "gorget_str_rstrip_ws"
-                | "gorget_str_removeprefix" | "gorget_str_removesuffix"
-                | "gorget_str_slice"
-            )
-        };
-        // Build set of Str slots that are only stored to and then consumed by
-        // print/comparison — never loaded for reuse. A slot is safe for _view
-        // only if it's never read back (SlotLoad). If it IS loaded, the value
-        // could flow into a struct field, function arg, or return that outlives
-        // the source string.
-        let mut loaded_str_slots: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        for block in &func.blocks {
-            for inst in &block.insts {
-                if let Inst::SlotLoad { slot, .. } = inst {
-                    let slot_ty = &func.slots[slot.0 as usize].ty;
-                    let is_str = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
-                    if is_str {
-                        loaded_str_slots.insert(slot.0);
-                    }
-                }
-                // SlotAddr also escapes — pointer to the slot could be used anywhere
-                if let Inst::SlotAddr { slot, .. } = inst {
-                    let slot_ty = &func.slots[slot.0 as usize].ty;
-                    let is_str = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
-                    if is_str {
-                        loaded_str_slots.insert(slot.0);
-                    }
-                }
-            }
-        }
-        for block in &func.blocks {
-            let insts = &block.insts;
-            for (i, inst) in insts.iter().enumerate() {
-                if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
-                    if view_eligible(name) {
-                        // Check if the next instruction stores this val to a Str-typed slot.
-                        if let Some(Inst::SlotStore { slot, value, .. }) = insts.get(i + 1) {
-                            if *value == *d {
-                                let slot_ty = &func.slots[slot.0 as usize].ty;
-                                let is_str = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
-                                if is_str && !loaded_str_slots.contains(&slot.0) {
-                                    view_method_vals[d.0 as usize] = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // Slot declarations (emitted after cross-type fix-ups so slot_overrides are applied).
     for (i, slot) in func.slots.iter().enumerate() {
         let effective_ty = slot_overrides.get(&(i as u32)).unwrap_or(&slot.ty);
@@ -3314,7 +3252,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         // Instructions
         for inst in &block.insts {
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &extern_cstr_return_vals, &null_vals, &ptr_pointee, &func_addr_targets, &spawn_source_fn, &_collection_get_vals, &view_method_vals);
+            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &extern_cstr_return_vals, &null_vals, &ptr_pointee, &func_addr_targets, &spawn_source_fn, &_collection_get_vals);
             writeln!(out).unwrap();
 
             // In test functions, register droppable user-named slots on the cleanup stack
@@ -3358,7 +3296,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], extern_cstr_return_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>], spawn_source_fn: &[Option<String>], _collection_get_vals: &[bool], view_method_vals: &[bool]) {
+fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], extern_cstr_return_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>], spawn_source_fn: &[Option<String>], _collection_get_vals: &[bool]) {
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -4639,7 +4577,6 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 || name == "gorget_string_format" || name == "gorget_string_format_alloc"
                 || name == "snprintf" || name == "sprintf";
             let strip_ws_name: String;
-            let view_name: String;
             // Route user print() through capture layer; test runner uses raw printf.
             let emit_name = if name == "printf" { "__gorget_printf" }
             else if is_stderr_print { "fprintf" }
@@ -4652,13 +4589,6 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                 }
             }
             else { name.as_str() };
-            // Apply _view suffix for view-eligible string methods whose destination is Str-typed.
-            let emit_name = if let Some(d) = dst {
-                if view_method_vals.get(d.0 as usize).copied().unwrap_or(false) {
-                    view_name = format!("{emit_name}_view");
-                    view_name.as_str()
-                } else { emit_name }
-            } else { emit_name };
 
             // ── Out-parameter functions (image_load, audio_load, deflate_decompress) ──
             // These C runtime functions use void+out-param ABI but GIR calls them
@@ -4917,11 +4847,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                             let ok_ty_c = c_type_named(&sdef.fields[1].1, sn);
                             // Error payload: field[2]
                             let err_fname = c_field_name(&sdef.fields[2].0);
-                            // Only wrap with gorget_str_from_cstr if BOTH the function
-                            // is a cstr-returning category AND the Ok payload is Str.
-                            let wrap_cstr = last_error_returns_cstr(emit_name) && ok_ty_c == "Str";
                             write!(out, "{dv} = ({{ {ok_ty_c} __raw = ", dv = v(*d)).unwrap();
-                            if wrap_cstr { write!(out, "gorget_str_from_cstr(").unwrap(); }
                             write!(out, "{}(", emit_name).unwrap();
                             for (i, a) in emit_args.iter().enumerate() {
                                 if i > 0 { write!(out, ", ").unwrap(); }
@@ -4939,7 +4865,6 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
                                 emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
                             }
                             write!(out, ")").unwrap();
-                            if wrap_cstr { write!(out, ")").unwrap(); }
                             write!(out, "; const char* __err = {err_fn}(); \
                                 {result_c} __wr; if (__err) {{ __wr.tag = 1; __wr.{err_fname} = gorget_str_from_cstr(__err); }} \
                                 else {{ __wr.tag = 0; __wr.{ok_fname} = __raw; }} __wr; }});").unwrap();
@@ -8177,15 +8102,6 @@ fn last_error_fn(name: &str) -> Option<&'static str> {
         return Some("gorget_parse_last_error");
     }
     None
-}
-
-/// Returns true if the runtime function returns a raw `const char*` result
-/// that should be wrapped with `gorget_str_from_cstr` when the Result Ok payload is Str.
-/// NOTE: socket/tls/udp/server_socket functions return GorgetString (via gorget_string_adopt),
-/// not const char*. The error path functions (gorget_*_last_error) return const char* but
-/// those are handled separately in the error branch of the Result wrapping codegen.
-fn last_error_returns_cstr(_name: &str) -> bool {
-    false
 }
 
 /// Returns true if the given struct ID refers to a string struct.

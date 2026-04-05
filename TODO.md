@@ -2,7 +2,7 @@
 
 ## High
 
-- **Leak reduction — status**: Error path fixed (emit_enum_init_owned). StringView call results upgraded to GorgetString in call_tracked. Match pattern strings clone-on-extract. Struct field strings now Ptr(GorgetString) references (matching collection pattern). LIR FieldLoad cap/alloc zeroing blocks (lir/lower.rs:1631-1656, 2097-2123) are now dead code for GorgetString fields — `is_str_dst` matches GorgetStringView but field loads produce Ptr(GorgetString). Safe to remove once verified no other path produces StringView dst. [updated: 2026-04-05]
+- **Leak reduction — status**: Error path fixed (emit_enum_init_owned). StringView call results upgraded to GorgetString in call_tracked. Match pattern strings clone-on-extract. Struct field strings now Ptr(GorgetString) references (matching collection pattern). LIR FieldLoad cap/alloc zeroing blocks deleted. [updated: 2026-04-05]
 
 
 - **Clone observability + Cloneable trait**: `.clone()` works on all types. Remaining: `gg build --show-clones` structured report (JSON/human-readable) of all CoW materialization points with source line, type, reason. `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]

@@ -71,10 +71,6 @@ struct FuncLowering<'a> {
     extern_abi_kinds: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
     /// Extern return ABI kinds (fn_name → AbiKind).
     return_abi_kinds: &'a rustc_hash::FxHashMap<String, crate::ir::abi::AbiKind>,
-    /// Locals that will be MoveZero'd in the current block (pre-scanned).
-    /// Used to distinguish read-only field loads (→ zero cap/alloc for view)
-    /// from destructuring moves (→ preserve ownership).
-    block_move_zero_targets: rustc_hash::FxHashSet<ir::types::LocalId>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -982,7 +978,6 @@ impl<'a> FuncLowering<'a> {
             type_drop_fns,
             extern_abi_kinds,
             return_abi_kinds,
-            block_move_zero_targets: rustc_hash::FxHashSet::default(),
         }
     }
 
@@ -1025,18 +1020,6 @@ impl<'a> FuncLowering<'a> {
 
         for (i, gir_block) in self.gir_func.blocks.iter().enumerate() {
             let lir_bb = self.block_map[i];
-
-            // Pre-scan: collect locals that will be MoveZero'd in this block.
-            // Used by FieldLoad to decide whether to zero cap/alloc (read-only borrow)
-            // or preserve ownership (destructuring move).
-            self.block_move_zero_targets.clear();
-            for inst in &gir_block.instructions {
-                if let Instruction::MoveZero { place } = inst {
-                    if place.projections.is_empty() {
-                        self.block_move_zero_targets.insert(place.local);
-                    }
-                }
-            }
 
             // Lower instructions.
             for inst in &gir_block.instructions {
@@ -1596,7 +1579,6 @@ impl<'a> FuncLowering<'a> {
                     self.store_to_local(*dst, fptr, bb);
                 } else {
                     let field_ty = self.resolve_field_type(effective_type, *field);
-                    let field_ty_clone = field_ty.clone();
                     // If field is Ptr but dst is a value type (Str), double-deref:
                     // load Ptr from field, then load Str value through Ptr.
                     let dst_slot = self.local_to_slot[dst.0 as usize];
@@ -1619,33 +1601,6 @@ impl<'a> FuncLowering<'a> {
                             ty: field_ty,
                         });
                         self.store_to_local(*dst, result, bb);
-                    }
-
-                    // GorgetString field → Str destination: zero cap+alloc to create
-                    // a non-owning view UNLESS the source struct is being MoveZero'd
-                    // (match destructuring — ownership transfers to the binding).
-                    let is_str_dst = matches!(self.gir_types.get(dst_gir_type), Some(GirType::Named(n)) if n == "GorgetString");
-                    let is_gs_field = matches!(field_ty_clone, LirType::Struct(sid) if {
-                        self.module_structs.get(sid.0 as usize)
-                            .map_or(false, |s| s.name == "GorgetString")
-                    });
-                    let source_will_be_moved = self.block_move_zero_targets.contains(&base.local);
-                    if is_str_dst && is_gs_field && !source_will_be_moved {
-                        let dst_slot = self.local_to_slot[dst.0 as usize];
-                        let dst_addr = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
-                            dst: dst_addr, slot: dst_slot,
-                        });
-                        let offset = self.emit_i64_const(bb, 16);
-                        let cap_ptr = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
-                            dst: cap_ptr, base: dst_addr, index: offset, elem_size: 1,
-                        });
-                        let zero = self.emit_i32_const(bb, 0);
-                        let sixteen = self.emit_i64_const(bb, 16);
-                        self.lir_func.block_mut(bb).insts.push(Inst::Memset {
-                            ptr: cap_ptr, byte: zero, size: sixteen,
-                        });
                     }
                 }
             }
@@ -2079,41 +2034,12 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     let result = self.lir_func.next_value();
                     let field_ty = self.resolve_enum_field_type(gir_type_id, variant, *field);
-                    let field_ty_clone = field_ty.clone();
                     self.lir_func.block_mut(bb).insts.push(Inst::Load {
                         dst: result,
                         ptr: fptr,
                         ty: field_ty,
                     });
                     self.store_to_local(*dst, result, bb);
-
-                    // GorgetString field → StringView destination: zero cap+alloc
-                    // for non-owning view UNLESS source is MoveZero'd.
-                    let is_str_dst = matches!(self.gir_types.get(dst_gir_type), Some(GirType::Named(n)) if n == "GorgetString");
-                    let is_gs_field = matches!(field_ty_clone, LirType::Struct(sid) if {
-                        self.module_structs.get(sid.0 as usize)
-                            .map_or(false, |s| s.name == "GorgetString")
-                    });
-                    let source_will_be_moved = self.block_move_zero_targets.contains(&base.local);
-                    if is_str_dst && is_gs_field && !source_will_be_moved {
-                        let dst_slot = self.local_to_slot[dst.0 as usize];
-                        let dst_addr = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
-                            dst: dst_addr, slot: dst_slot,
-                        });
-                        // Zero cap+alloc to create non-owning view. Ownership
-                        // transfer is handled at the GIR level (materialization points).
-                        let offset = self.emit_i64_const(bb, 16);
-                        let cap_ptr = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
-                            dst: cap_ptr, base: dst_addr, index: offset, elem_size: 1,
-                        });
-                        let zero = self.emit_i32_const(bb, 0);
-                        let sixteen = self.emit_i64_const(bb, 16);
-                        self.lir_func.block_mut(bb).insts.push(Inst::Memset {
-                            ptr: cap_ptr, byte: zero, size: sixteen,
-                        });
-                    }
                 }
             }
 
@@ -4526,9 +4452,9 @@ fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<(Vec<LirType>, 
         "gorget_str_to_cstr" => Some((vec![s()], LirType::Ptr)),
         "gorget_str_empty" => Some((vec![], s())),
         "gorget_str_index" => Some((vec![s(), LirType::I64], s())),
-        "gorget_str_slice" | "gorget_str_slice_view" => Some((vec![s(), LirType::I64, LirType::I64], s())),
-        "gorget_str_byte_slice" | "gorget_str_byte_slice_view" => Some((vec![s(), LirType::I64, LirType::I64], s())),
-        "gorget_str_char_at" | "gorget_str_char_at_view" => Some((vec![s(), LirType::I64], s())),
+        "gorget_str_slice" => Some((vec![s(), LirType::I64, LirType::I64], s())),
+        "gorget_str_byte_slice" => Some((vec![s(), LirType::I64, LirType::I64], s())),
+        "gorget_str_char_at" => Some((vec![s(), LirType::I64], s())),
         "gorget_str_codepoint_at" => Some((vec![s(), LirType::I64], s())),
         "gorget_utf8_codepoint_len_at" => Some((vec![s(), LirType::I64], LirType::I64)),
         "gorget_str_byte_at" => Some((vec![s(), LirType::I64], LirType::U8)),
@@ -4541,12 +4467,9 @@ fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<(Vec<LirType>, 
         "gorget_str_find" => Some((vec![s(), s()], LirType::I64)),
         "gorget_str_index_of" => Some((vec![s(), s()], LirType::I64)),
         "gorget_str_count" => Some((vec![s(), s()], LirType::I64)),
-        "gorget_str_trim" | "gorget_str_lstrip_ws" | "gorget_str_rstrip_ws"
-        | "gorget_str_trim_view" | "gorget_str_lstrip_ws_view" | "gorget_str_rstrip_ws_view" => Some((vec![s()], s())),
-        "gorget_str_strip" | "gorget_str_lstrip" | "gorget_str_rstrip"
-        | "gorget_str_strip_view" | "gorget_str_lstrip_view" | "gorget_str_rstrip_view" => Some((vec![s(), s()], s())),
-        "gorget_str_removeprefix" | "gorget_str_removesuffix"
-        | "gorget_str_removeprefix_view" | "gorget_str_removesuffix_view" => Some((vec![s(), s()], s())),
+        "gorget_str_trim" | "gorget_str_lstrip_ws" | "gorget_str_rstrip_ws" => Some((vec![s()], s())),
+        "gorget_str_strip" | "gorget_str_lstrip" | "gorget_str_rstrip" => Some((vec![s(), s()], s())),
+        "gorget_str_removeprefix" | "gorget_str_removesuffix" => Some((vec![s(), s()], s())),
         "gorget_str_to_upper" | "gorget_str_to_lower" => Some((vec![s()], g())),
         "gorget_str_replace" => Some((vec![s(), s(), s()], g())),
         "gorget_str_repeat" => Some((vec![s(), LirType::I64], g())),

@@ -1681,28 +1681,6 @@ static inline Str gorget_str_slice(Str s, int64_t start, int64_t end) {
     }
     return gorget_str_view_region(s.data + start_byte, end_byte - start_byte);
 }
-// Zero-copy view variant of gorget_str_slice (substring).
-static inline Str gorget_str_slice_view(Str s, int64_t start, int64_t end) {
-    int64_t cp_count = gorget_str_codepoint_count(s);
-    if (start < 0) start += cp_count;
-    if (end < 0) end += cp_count;
-    if (start < 0) start = 0;
-    if (end > cp_count) end = cp_count;
-    if (start >= end) return gorget_str_empty();
-    if (start > cp_count || end < 0) {
-        gorget_panic("str slice out of bounds");
-    }
-    size_t start_byte = 0;
-    for (int64_t i = 0; i < start; i++) {
-        start_byte += (size_t)gorget_utf8_codepoint_len((unsigned char)s.data[start_byte]);
-    }
-    size_t end_byte = start_byte;
-    for (int64_t i = start; i < end; i++) {
-        end_byte += (size_t)gorget_utf8_codepoint_len((unsigned char)s.data[end_byte]);
-    }
-    return gorget_str_view_region(s.data + start_byte, end_byte - start_byte);
-}
-
 // Return a zero-copy view into existing data (cap=0, no allocation).
 static inline Str gorget_str_view_region(const char* data, size_t len) {
     if (len == 0) return gorget_str_empty();
@@ -1727,15 +1705,6 @@ static inline Str gorget_str_byte_slice(Str s, int64_t start, int64_t end) {
     }
     return gorget_str_view_region(s.data + start, (size_t)(end - start));
 }
-// Zero-copy view variant of byte_slice.
-static inline Str gorget_str_byte_slice_view(Str s, int64_t start, int64_t end) {
-    if (start < 0 || end < 0 || (size_t)start > s.len || (size_t)end > s.len || start > end) {
-        fprintf(stderr, "gorget: panic: string byte_slice out of bounds: [%" PRId64 "..%" PRId64 "], byte length %zu\n", start, end, s.len);
-        exit(1);
-    }
-    return gorget_str_view_region(s.data + start, (size_t)(end - start));
-}
-
 // Return a zero-copy view of the character at the given byte index.
 // The view is valid as long as the source string is alive.
 static inline Str gorget_str_char_at(Str s, int64_t index) {
@@ -1744,11 +1713,6 @@ static inline Str gorget_str_char_at(Str s, int64_t index) {
     }
     return gorget_str_view_region(s.data + index, 1);
 }
-// Backwards-compat alias for C backend view promotion.
-static inline Str gorget_str_char_at_view(Str s, int64_t index) {
-    return gorget_str_char_at(s, index);
-}
-
 // Return the byte at index (byte-level). Bounds-checked against byte length.
 static inline uint8_t gorget_str_byte_at(Str s, int64_t index) {
     if (index < 0 || (size_t)index >= s.len) {
@@ -2062,26 +2026,6 @@ static inline Str gorget_str_trim(Str s) {
     }
     return gorget_str_view_region(s.data + start, end - start);
 }
-// Zero-copy view variant of trim.
-static inline Str gorget_str_trim_view(Str s) {
-    size_t start = 0;
-    while (start < s.len) {
-        size_t pos = start;
-        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
-        if (!gorget_is_unicode_whitespace(cp)) break;
-        start = pos;
-    }
-    size_t end = start;
-    size_t pos = start;
-    while (pos < s.len) {
-        size_t cp_start = pos;
-        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
-        if (!gorget_is_unicode_whitespace(cp)) end = pos;
-        (void)cp_start;
-    }
-    return gorget_str_view_region(s.data + start, end - start);
-}
-
 static inline Str gorget_str_lstrip_ws(Str s) {
     size_t start = 0;
     while (start < s.len) {
@@ -2092,18 +2036,6 @@ static inline Str gorget_str_lstrip_ws(Str s) {
     }
     return gorget_str_view_region(s.data + start, s.len - start);
 }
-// Zero-copy view variant of lstrip_ws.
-static inline Str gorget_str_lstrip_ws_view(Str s) {
-    size_t start = 0;
-    while (start < s.len) {
-        size_t pos = start;
-        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
-        if (!gorget_is_unicode_whitespace(cp)) break;
-        start = pos;
-    }
-    return gorget_str_view_region(s.data + start, s.len - start);
-}
-
 static inline Str gorget_str_rstrip_ws(Str s) {
     size_t end = 0;
     size_t pos = 0;
@@ -2115,19 +2047,6 @@ static inline Str gorget_str_rstrip_ws(Str s) {
     }
     return gorget_str_view_region(s.data, end);
 }
-// Zero-copy view variant of rstrip_ws.
-static inline Str gorget_str_rstrip_ws_view(Str s) {
-    size_t end = 0;
-    size_t pos = 0;
-    while (pos < s.len) {
-        size_t cp_start = pos;
-        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
-        if (!gorget_is_unicode_whitespace(cp)) end = pos;
-        (void)cp_start;
-    }
-    return gorget_str_view_region(s.data, end);
-}
-
 // Check if a codepoint is in a set of codepoints given as a Str.
 static inline bool gorget_cp_in_str(int64_t cp, Str chars) {
     size_t pos = 0;
@@ -2156,26 +2075,6 @@ static inline Str gorget_str_strip(Str s, Str chars) {
     }
     return gorget_str_view_region(s.data + start, end - start);
 }
-// Zero-copy view variant of strip.
-static inline Str gorget_str_strip_view(Str s, Str chars) {
-    size_t start = 0;
-    while (start < s.len) {
-        size_t pos = start;
-        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
-        if (!gorget_cp_in_str(cp, chars)) break;
-        start = pos;
-    }
-    size_t end = start;
-    size_t pos = start;
-    while (pos < s.len) {
-        size_t cp_start = pos;
-        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
-        if (!gorget_cp_in_str(cp, chars)) end = pos;
-        (void)cp_start;
-    }
-    return gorget_str_view_region(s.data + start, end - start);
-}
-
 static inline Str gorget_str_lstrip(Str s, Str chars) {
     size_t start = 0;
     while (start < s.len) {
@@ -2186,18 +2085,6 @@ static inline Str gorget_str_lstrip(Str s, Str chars) {
     }
     return gorget_str_view_region(s.data + start, s.len - start);
 }
-// Zero-copy view variant of lstrip.
-static inline Str gorget_str_lstrip_view(Str s, Str chars) {
-    size_t start = 0;
-    while (start < s.len) {
-        size_t pos = start;
-        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
-        if (!gorget_cp_in_str(cp, chars)) break;
-        start = pos;
-    }
-    return gorget_str_view_region(s.data + start, s.len - start);
-}
-
 static inline Str gorget_str_rstrip(Str s, Str chars) {
     size_t end = 0;
     size_t pos = 0;
@@ -2209,43 +2096,16 @@ static inline Str gorget_str_rstrip(Str s, Str chars) {
     }
     return gorget_str_view_region(s.data, end);
 }
-// Zero-copy view variant of rstrip.
-static inline Str gorget_str_rstrip_view(Str s, Str chars) {
-    size_t end = 0;
-    size_t pos = 0;
-    while (pos < s.len) {
-        size_t cp_start = pos;
-        int64_t cp = gorget_utf8_decode(s.data, s.len, &pos);
-        if (!gorget_cp_in_str(cp, chars)) end = pos;
-        (void)cp_start;
-    }
-    return gorget_str_view_region(s.data, end);
-}
-
 static inline Str gorget_str_removeprefix(Str s, Str prefix) {
     if (gorget_str_starts_with(s, prefix))
         return gorget_str_view_region(s.data + prefix.len, s.len - prefix.len);
     return gorget_str_view_region(s.data, s.len);
 }
-// Zero-copy view variant of removeprefix.
-static inline Str gorget_str_removeprefix_view(Str s, Str prefix) {
-    if (gorget_str_starts_with(s, prefix))
-        return gorget_str_view_region(s.data + prefix.len, s.len - prefix.len);
-    return gorget_str_view_region(s.data, s.len);
-}
-
 static inline Str gorget_str_removesuffix(Str s, Str suffix) {
     if (gorget_str_ends_with(s, suffix))
         return gorget_str_view_region(s.data, s.len - suffix.len);
     return gorget_str_view_region(s.data, s.len);
 }
-// Zero-copy view variant of removesuffix.
-static inline Str gorget_str_removesuffix_view(Str s, Str suffix) {
-    if (gorget_str_ends_with(s, suffix))
-        return gorget_str_view_region(s.data, s.len - suffix.len);
-    return gorget_str_view_region(s.data, s.len);
-}
-
 // Group B: Allocating returns — return String.
 
 static inline GorgetString gorget_str_to_upper(Str s) {
