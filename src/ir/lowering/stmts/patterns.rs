@@ -433,6 +433,28 @@ pub fn emit_pattern_bindings(
                 if matches!(ctx.type_registry.get(field_type), Some(GirType::Ptr(_))) {
                     ctx.ref_locals.insert(dst);
                 }
+                // Value scrutinee + owned string field: clone to create an
+                // independent copy that can be safely freed at scope exit.
+                // Pattern extraction is a shallow memcpy — the binding and the
+                // scrutinee share the same heap buffer. Cloning breaks the
+                // shared-pointer problem so the binding owns its data.
+                else if !scrut_is_ptr
+                    && field_type == ctx.type_mapper.owned_string_type
+                {
+                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(field_type) {
+                        let ptr_type = ctx.register_ptr_type(field_type);
+                        let ptr = builder.add_local(ptr_type, None);
+                        builder.emit_borrow(ptr, Place::local(dst));
+                        let cloned = builder.call(
+                            &clone_fn,
+                            vec![FunctionBuilder::copy(ptr)],
+                            field_type,
+                        );
+                        builder.assign(Place::local(dst), FunctionBuilder::copy(cloned));
+                        ctx.drops.register_local(dst, field_type, &ctx.type_registry);
+                        ctx.owned_locals.insert(dst);
+                    }
+                }
 
                 // Recurse on sub-pattern
                 emit_pattern_bindings(ctx, builder, field_pat, dst, field_type);
