@@ -23,6 +23,8 @@
 
 ## Medium
 
+- **LoweringContext per-function state isolation**: `LoweringContext` is a god struct shared across all function lowering. Per-function transients (`expected_type`, `current_throws_result_type`, `closure_param_type_hints`, `loop_stack`, `pattern_must_clone_strings`, etc.) leak across function boundaries when arm body lowering triggers monomorphization. Fix: split into `FunctionLoweringState` struct pushed/popped on a stack at function entry/exit. Module-wide state (`fn_sigs`, `type_registry`, `enum_variants`, `runtime_callees`) stays on LoweringContext. Unblocks: conditional match-pattern clone optimization (skip clone when scrutinee is dead in arm body). [added: 2026-04-05]
+
 - **CoW: nested field mutation gap**: `s.v.push(x)` goes through `field_place_info` path in `methods.rs:1030` which skips `cow_before_mutation`. If `s.v[0]` previously created a `cow_collection_refs` entry keyed on a FieldLoad temp, the ref won't be cloned out before the push. Only affects resource-type elements (e.g., `Vector[Vector[int]]` inside a struct), not strings or primitives. The borrow checker only catches explicit `T &` refs, not implicit CoW borrows. Fix requires tracking FieldLoad provenance through to `cow_collection_refs` — non-trivial. [added: 2026-04-05]
 
 - **MutationWhileBorrowed: extend to implicit CoW borrows**: The `is_ref_type` filter at `check_expr.rs:353` skips non-Ref-type origins. This means `auto x = vec.get(0).unwrap()` followed by `vec.push(y)` is not caught for non-Ref element types. The GIR CoW system handles this via `cow_collection_refs`, but extending the borrow checker to also catch it would add defense-in-depth. [added: 2026-04-05]
