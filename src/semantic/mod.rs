@@ -94,7 +94,7 @@ pub fn analyze_with_source_dir(
     for item in &module.items {
         if let Item::Directive(d) = &item.node {
             match d.name.as_str() {
-                "strip-asserts" | "trace" | "hot-reload" => {
+                "strip-asserts" | "trace" | "hot-reload" | "explicit-clone" => {
                     if let Some(val) = d.value.as_deref() {
                         errors.push(SemanticError {
                             kind: SemanticErrorKind::UnknownDirective {

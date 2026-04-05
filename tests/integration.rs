@@ -15099,6 +15099,20 @@ done",
 }
 
 #[test]
+fn cow_closure_ptr_capture() {
+    run_gg(
+        "cow_closure_ptr_capture.gg",
+        "\
+2
+3
+hello
+1 1
+2
+done",
+    );
+}
+
+#[test]
 fn move_and_reinit() {
     run_gg(
         "move_and_reinit.gg",

@@ -2,7 +2,7 @@
 
 > **Status:** Phases 1a–1e, 2b implemented. Phase 1f in progress.
 > **Date:** 2026-04-03 (collection borrow semantics revised)
-> **Supersedes:** `directive explicit-clone` (removed), LIR per-element drop recipes.
+> **Supersedes:** Implicit clone warnings, `directive explicit-clone`, LIR per-element drop recipes.
 
 ## Core Principle
 
@@ -145,7 +145,8 @@ No reference counting. No runtime checks. The compiler makes all decisions at co
 
 ## What This Replaces
 
-- The `directive explicit-clone` model (removed — clones happen automatically at the right time)
+- Implicit clone warnings (no longer needed — clones are always correct and intentional)
+- The `directive explicit-clone` model (superseded — clones happen automatically at the right time)
 - Shallow copy bugs (eliminated — all copies are either pointers or deep clones)
 - LIR per-element drop recipes (eliminated — collections with CoW are self-cleaning)
 - The distinction between "view" and "owned" string types (a String is always CoW)

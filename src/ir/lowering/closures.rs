@@ -116,11 +116,17 @@ impl ClosureLowering {
             })
             .collect();
 
-        // Create the closure struct TypeDef
+        // Create the closure struct TypeDef.
+        // CoW Ptr(T) aliases are materialized to owned T — the closure must
+        // capture an independent snapshot, not a raw pointer that can dangle
+        // if the source is later mutated and the alias is severed.
         let fields: Vec<StructField> = captures.iter()
             .map(|cap| {
                 let field_type = match cap.mode {
-                    CaptureMode::ByValue => cap.type_id,
+                    CaptureMode::ByValue => {
+                        // Resolve Ptr(T) → T for CoW aliases
+                        ctx.pointee_type(cap.type_id).unwrap_or(cap.type_id)
+                    }
                     CaptureMode::ByMutRef => ctx.type_registry.insert(GirType::MutPtr(cap.type_id)),
                 };
                 StructField {
@@ -172,7 +178,11 @@ impl ClosureLowering {
         let spawn_captures: Vec<(String, TypeId, u32)> = captures.iter()
             .enumerate()
             .filter(|(_, c)| c.mode == CaptureMode::ByValue)
-            .map(|(i, c)| (c.name.clone(), c.type_id, i as u32))
+            .map(|(i, c)| {
+                // Resolve Ptr(T) → T for CoW aliases (matches struct field type)
+                let ty = ctx.pointee_type(c.type_id).unwrap_or(c.type_id);
+                (c.name.clone(), ty, i as u32)
+            })
             .collect();
         ctx.register_closure_info(
             struct_name.clone(),
@@ -194,11 +204,24 @@ impl ClosureLowering {
             expected_type: ctx.expected_type,
         });
 
-        // Emit the creation-site StructInit
+        // Emit the creation-site StructInit.
+        // CoW Ptr(T) captures are cloned to produce an independent owned T,
+        // preventing stale pointers if the source is mutated after capture.
         let field_operands: Vec<Operand> = captures.iter()
             .map(|cap| {
                 match cap.mode {
-                    CaptureMode::ByValue => FunctionBuilder::copy(cap.local_id),
+                    CaptureMode::ByValue => {
+                        // If this capture is a CoW Ptr(T) alias, clone through
+                        // the Ptr to produce an owned T for the closure struct.
+                        if let Some(inner) = ctx.pointee_type(cap.type_id) {
+                            if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                                let cloned = builder.call(&clone_fn,
+                                    vec![FunctionBuilder::copy(cap.local_id)], inner);
+                                return FunctionBuilder::copy(cloned);
+                            }
+                        }
+                        FunctionBuilder::copy(cap.local_id)
+                    }
                     CaptureMode::ByMutRef => {
                         // Borrow the captured variable
                         let ptr_type = ctx.type_registry.insert(GirType::MutPtr(cap.type_id));

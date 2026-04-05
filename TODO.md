@@ -29,8 +29,6 @@
 
 - **MutationWhileBorrowed: extend to implicit CoW borrows**: The `is_ref_type` filter at `check_expr.rs:353` skips non-Ref-type origins. This means `auto x = vec.get(0).unwrap()` followed by `vec.push(y)` is not caught for non-Ref element types. The GIR CoW system handles this via `cow_collection_refs`, but extending the borrow checker to also catch it would add defense-in-depth. [added: 2026-04-05]
 
-- **Closure capture of CoW Ptr aliases**: When a closure captures a variable that is a CoW alias (Ptr(T)), it captures the raw Ptr. If the source is later mutated (triggering materialization of the alias into a new owned local), the closure still holds the old Ptr. For collection types this produces incorrect results (`snap.len()` returns 0 instead of expected snapshot). Strings are safe (borrow checker catches source consumption). Fix: materialize Ptr captures at closure creation time, or track captured Ptrs as aliases. [added: 2026-04-05]
-
 - **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation. Needs `is_storing_method` flag on BuiltinMethodDecl. [updated: 2026-03-28]
 
 - **Borrow checker: reject multi-use `!` on strings**: After string unification, `!` on a string triggers real MoveZero (ownership transfer). Library code uses `!key` in loops — borrow checker should catch this as use-after-move. Currently `!` on named string locals is pragmatically skipped (no-op, matches pre-unification). [added: 2026-03-30]

@@ -1,0 +1,34 @@
+from std.collections import Vector
+
+# CoW Ptr alias captured by closure: the closure must see a snapshot
+# of the source at capture time, not a dangling Ptr.
+# Previously returned 0 (stale Ptr); now clones at capture time.
+
+void main():
+    # 1. Collection alias captured, source mutated after capture
+    Vector[int] nums = Vector[int]()
+    nums.push(1)
+    nums.push(2)
+    Vector[int] snap = nums           # CoW alias (Ptr)
+    auto f = (): print(snap.len())
+    nums.push(3)                      # mutate source
+    f()                               # should print 2 (snapshot)
+    print(nums.len())                 # 3
+
+    # 2. String alias captured, no mutation
+    String greeting = "hello"
+    String alias = greeting
+    auto g = (): print(alias)
+    g()                               # "hello"
+
+    # 3. Multiple aliases captured
+    Vector[int] a = Vector[int]()
+    a.push(10)
+    Vector[int] b = a                 # CoW alias
+    Vector[int] c = a                 # CoW alias
+    auto h = (): print(f"{b.len()} {c.len()}")
+    a.push(20)
+    h()                               # "1 1" (both snapshots)
+    print(a.len())                    # 2
+
+    print("done")
