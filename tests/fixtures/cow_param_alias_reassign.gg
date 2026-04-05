@@ -1,0 +1,46 @@
+from std.collections import Vector
+
+# CoW: bare Ptr param with alias, then alias mutated.
+# Ensures param aliasing and subsequent CoW materialization work correctly.
+
+void test_vec_alias(Vector[int] v):
+    # alias borrows from v (bare Ptr param)
+    Vector[int] alias = v
+    # mutation of alias triggers CoW clone — alias becomes independent
+    alias.push(99)
+    print(v.len())              # original unchanged
+    print(alias.len())          # alias got the push
+
+void test_string_alias(String s):
+    # alias borrows from s (bare Ptr param)
+    String alias = s
+    # mutation of alias triggers CoW clone
+    alias = alias + " world"
+    print(s)                    # original unchanged
+    print(alias)                # alias mutated
+
+void test_multi_alias(Vector[int] v):
+    # multiple aliases from same param
+    Vector[int] a = v
+    Vector[int] b = v
+    # mutating source (via mutable method) should sever all aliases
+    # But v is bare borrow (immutable) — so mutate an alias instead
+    a.push(42)                  # CoW clone of a, b still borrows v
+    print(v.len())              # 3
+    print(a.len())              # 4
+    print(b.len())              # 3
+
+void main():
+    Vector[int] nums = Vector[int]()
+    nums.push(1)
+    nums.push(2)
+    nums.push(3)
+    test_vec_alias(nums)
+    print(nums.len())           # caller's data unchanged
+
+    test_string_alias("hello")
+
+    test_multi_alias(nums)
+    print(nums.len())           # still 3
+
+    print("done")

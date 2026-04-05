@@ -1352,6 +1352,10 @@ impl<'a> LoweringContext<'a> {
                 self.cow_materialize_alias(builder, alias, source_local);
             }
         }
+        // Clean up other CoW tracking for the reassigned source — it's about
+        // to get a new value, so stale entries would cause incorrect clones.
+        self.cow_ptr_params.remove(&source_local);
+        self.cow_collection_refs.remove(&source_local);
     }
 
     /// Materialize an alias: clone the source's data into the alias local.
@@ -1394,6 +1398,9 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Materialize a collection ref: clone the pointed-to element into an owned local.
+    /// Creates a NEW local for the owned copy (same pattern as `cow_materialize_alias`)
+    /// to avoid changing a local's type mid-function, which would violate the LIR
+    /// invariant that ref_locals and slot types are static per-function.
     fn cow_materialize_collection_ref(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
@@ -1405,12 +1412,24 @@ impl<'a> LoweringContext<'a> {
             // The ref_local already holds a Ptr — use it directly as the clone arg
             let cloned = builder.call(&clone_fn,
                 vec![crate::ir::builder::FunctionBuilder::copy(ref_local)], inner_type);
-            // Update type, store clone, register for drop
-            builder.locals[ref_local.0 as usize].type_id = inner_type;
-            builder.assign(crate::ir::instructions::Place::local(ref_local),
+            // Create a NEW local for the owned copy (can't reuse ref_local because
+            // ref_locals is static per-function in the LIR — changing type mid-function breaks).
+            let name_hint = builder.local_name(ref_local).map(|s| s.to_string());
+            let owned_local = builder.add_local(inner_type,
+                name_hint.as_deref());
+            builder.assign(crate::ir::instructions::Place::local(owned_local),
                           crate::ir::builder::FunctionBuilder::copy(cloned));
+            // Register the owned local for drop
+            self.drops.register_local(owned_local, inner_type, &self.type_registry);
+            self.owned_locals.insert(owned_local);
+            // Update context: redirect the variable name to the new owned local
+            if let Some(ref hint) = builder.local_name(ref_local).map(|s| s.to_string()) {
+                let name = hint.clone();
+                self.register_local(&name, owned_local, inner_type);
+                self.named_locals.insert(owned_local);
+            }
+            // The old ref_local stays as Ptr in ref_locals (dead — no more references).
             self.ref_locals.remove(&ref_local);
-            self.drops.register_local(ref_local, inner_type, &self.type_registry);
         }
     }
 

@@ -14985,6 +14985,74 @@ done",
 }
 
 #[test]
+fn cow_borrow_basic() {
+    run_gg(
+        "cow_borrow_basic.gg",
+        "\
+hello
+hello world
+hello
+Alice
+Bob
+Alice!
+Alice
+11
+12
+done",
+    );
+}
+
+#[test]
+fn cow_transitive_alias() {
+    run_gg(
+        "cow_transitive_alias.gg",
+        "\
+hello
+hello
+hello
+hello!
+2
+2
+3
+2
+1
+1
+done",
+    );
+}
+
+#[test]
+fn cow_collection_element_mutate() {
+    run_gg(
+        "cow_collection_element_mutate.gg",
+        "\
+2
+2
+3
+100
+done",
+    );
+}
+
+#[test]
+fn cow_param_alias_reassign() {
+    run_gg(
+        "cow_param_alias_reassign.gg",
+        "\
+3
+4
+3
+hello
+hello world
+3
+4
+3
+3
+done",
+    );
+}
+
+#[test]
 fn move_and_reinit() {
     run_gg(
         "move_and_reinit.gg",

@@ -1,0 +1,39 @@
+from std.collections import Vector
+
+# CoW: borrow element from collection, mutate collection, use element.
+# The element should be a snapshot from before the mutation.
+
+void main():
+    # 1. Vector[Vector[int]] — borrow inner, push to outer
+    Vector[Vector[int]] matrix = Vector[Vector[int]]()
+    Vector[int] row1 = Vector[int]()
+    row1.push(10)
+    row1.push(20)
+    matrix.push(!row1)
+    Vector[int] row2 = Vector[int]()
+    row2.push(30)
+    row2.push(40)
+    matrix.push(!row2)
+
+    auto elem = matrix[0]     # borrows first row (Ptr)
+    print(elem.len())         # 2
+
+    # Mutate the collection — should trigger CoW for elem
+    Vector[int] row3 = Vector[int]()
+    row3.push(50)
+    matrix.push(!row3)
+
+    # elem should still be valid (snapshot of original row)
+    print(elem.len())         # 2
+    print(matrix.len())       # 3
+
+    # 2. Simple element read after mutation
+    Vector[int] nums = Vector[int]()
+    nums.push(100)
+    nums.push(200)
+    nums.push(300)
+    auto first = nums[0]      # borrow element
+    nums.push(400)             # mutate collection
+    print(first)               # 100 — snapshot preserved
+
+    print("done")

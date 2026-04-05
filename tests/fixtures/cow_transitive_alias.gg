@@ -1,0 +1,39 @@
+from std.collections import Vector
+
+# CoW transitive aliasing: x → y → z chain.
+# Mutation of z should clone, leaving x and y unchanged.
+
+void main():
+    # 1. Three-level string alias chain — leaf mutation
+    String src = "hello"
+    String x = src        # borrows src
+    String y = x          # borrows src (transitively)
+    String z = y          # borrows src (transitively)
+    z = z + "!"           # mutation → CoW clone of z only
+    print(src)            # "hello"
+    print(x)              # "hello"
+    print(y)              # "hello"
+    print(z)              # "hello!"
+
+    # 2. Three-level collection alias chain — leaf mutation
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+    Vector[int] a = v     # borrows v
+    Vector[int] b = a     # borrows v (transitively)
+    b.push(3)             # mutation → CoW clone of b only
+    print(v.len())        # 2
+    print(a.len())        # 2
+    print(b.len())        # 3
+
+    # 3. Source mutation severs collection aliases
+    Vector[int] cv = Vector[int]()
+    cv.push(10)
+    Vector[int] ca = cv
+    Vector[int] cb = ca   # borrows cv transitively
+    cv.push(20)           # source mutation → materializes ca and cb
+    print(cv.len())       # 2
+    print(ca.len())       # 1 (snapshot before push)
+    print(cb.len())       # 1 (snapshot before push)
+
+    print("done")
