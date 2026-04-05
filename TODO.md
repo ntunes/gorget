@@ -7,7 +7,7 @@
 
 - **CoW Phase 1f: DONE — liveness analysis implemented**: Full-function span-based reverse walk with branch union and two-pass loops. is_last_use_at(name, span) provides precise per-use last-use queries. Integrated at push/put and struct-init call sites. 905/905 tests pass. Phase 2a Step 5 (unified Type__drop) already partially done (emit_type_drop_fns exists, Type__drop called at scope exit). [updated: 2026-04-04]
 
-- **Explicit clone roadmap (Phase 2 remaining)**: `.clone()` works on all types. `directive explicit-clone` to be deprecated (incompatible with CoW). Remaining: runtime clone counters for observability (`gg run --clone-stats`), `Cloneable` trait. [updated: 2026-04-01]
+- **Clone observability + Cloneable trait**: `.clone()` works on all types. Remaining: runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure, `Cloneable` trait for generic bounds (`T: Cloneable`). `directive explicit-clone` to be removed (incompatible with CoW). [updated: 2026-04-05]
 
 - **StringView removal — the ONE fix for all remaining issues**: Unify StringView + GorgetString into a single String type. This eliminates: void* slot mismatch (leaks), provenance cap/alloc zeroing (csv_basic), ensure_owned_string workaround, deferred-drop complexity. Attempted: type unification alone causes 20 regressions because ensure_owned_string and other code paths depend on the type distinction. Needs coordinated update of ALL StringView consumers in one commit. [updated: 2026-04-04]
 

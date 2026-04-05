@@ -423,12 +423,6 @@ fn try_build_ir(
         let mut shown = std::collections::HashSet::new();
         let mut lib_warning_count = 0usize;
         for warn in &gir_module.implicit_clone_warnings {
-            // Errors always shown (directive explicit-clone)
-            if warn.is_error {
-                reporter.report_implicit_clone_warning(warn);
-                clone_errors += 1;
-                continue;
-            }
             // Warnings from imported libraries: count but don't show by default.
             // Set GORGET_SHOW_LIB_CLONE_WARNINGS=1 to display them.
             if !reporter.is_entry_file(warn.span) {

@@ -130,7 +130,6 @@ pub struct RuntimeFeatures {
 }
 
 /// Warning emitted when the compiler auto-clones a resource type.
-/// Phase 1 of the explicit-clone roadmap: make hidden allocations visible.
 #[derive(Debug, Clone)]
 pub struct ImplicitCloneWarning {
     /// Source span of the expression that triggers the clone.
@@ -139,8 +138,6 @@ pub struct ImplicitCloneWarning {
     pub type_name: String,
     /// What triggered the clone.
     pub reason: ImplicitCloneReason,
-    /// When true, this is an error (directive explicit-clone), not a warning.
-    pub is_error: bool,
 }
 
 /// Why the compiler inserted an implicit clone.
