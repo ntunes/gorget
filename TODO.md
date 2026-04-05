@@ -2,7 +2,7 @@
 
 ## High
 
-- **Remaining leaks from FieldLoad zeroing**: Error path fixed (emit_enum_init_owned). StringView call results upgraded to GorgetString in call_tracked. Match pattern string bindings now clone-on-extract (independent copy, registered for drop). Remaining: FieldLoad cap/alloc zeroing on struct field access (`s.name`) creates unfreed views — needs clone-instead-of-zero at GIR level for non-Ptr struct field loads. [updated: 2026-04-05]
+- **Leak reduction — status**: Error path fixed (emit_enum_init_owned). StringView call results upgraded to GorgetString in call_tracked. Match pattern strings clone-on-extract. Struct field strings now Ptr(GorgetString) references (matching collection pattern). LIR FieldLoad cap/alloc zeroing blocks (lir/lower.rs:1631-1656, 2097-2123) are now dead code for GorgetString fields — `is_str_dst` matches GorgetStringView but field loads produce Ptr(GorgetString). Safe to remove once verified no other path produces StringView dst. [updated: 2026-04-05]
 
 
 - **CoW Phase 1f: DONE — liveness analysis implemented**: Full-function span-based reverse walk with branch union and two-pass loops. is_last_use_at(name, span) provides precise per-use last-use queries. Integrated at push/put and struct-init call sites. 905/905 tests pass. Phase 2a Step 5 (unified Type__drop) already partially done (emit_type_drop_fns exists, Type__drop called at scope exit). [updated: 2026-04-04]

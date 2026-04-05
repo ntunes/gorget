@@ -1470,30 +1470,35 @@ fn lower_field_access(
                     if let Some(inner_type_name) = ctx.type_name_for_id(inner_type) {
                         let inner_type_name = inner_type_name.to_string();
                         if let Some((field_idx, field_type)) = ctx.lookup_field(&inner_type_name, field_name) {
-                            // Same resource-type field conversion as the non-Ptr path:
-                            // collections → Ptr(T), GorgetString → Str view.
-                            let result_type = if ctx.type_registry.is_collection_type(field_type) {
+                            // Resource-type fields → Ptr(T) reference (same as non-Guard path).
+                            let result_type = if ctx.type_registry.is_collection_type(field_type)
+                                || field_type == ctx.type_mapper.owned_string_type
+                            {
                                 ctx.type_registry.insert(GirType::Ptr(field_type))
-                            } else if field_type == ctx.type_mapper.owned_string_type {
-                                ctx.type_mapper.string_view_type
                             } else {
                                 field_type
                             };
                             let dst = builder.field_load(deref_place, field_idx, result_type);
+                            if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
+                                ctx.ref_locals.insert(dst);
+                            }
                             return FunctionBuilder::copy(dst);
                         }
                         if let Some(type_def) = ctx.type_registry.get_type_def(&inner_type_name) {
                             if let TypeDefKind::Struct(ref s) = type_def.kind {
                                 for (i, field) in s.fields.iter().enumerate() {
                                     if field.name == field_name {
-                                        let result_type = if ctx.type_registry.is_collection_type(field.type_id) {
+                                        let result_type = if ctx.type_registry.is_collection_type(field.type_id)
+                                            || field.type_id == ctx.type_mapper.owned_string_type
+                                        {
                                             ctx.type_registry.insert(GirType::Ptr(field.type_id))
-                                        } else if field.type_id == ctx.type_mapper.owned_string_type {
-                                            ctx.type_mapper.string_view_type
                                         } else {
                                             field.type_id
                                         };
                                         let dst = builder.field_load(deref_place, i as u32, result_type);
+                                        if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
+                                            ctx.ref_locals.insert(dst);
+                                        }
                                         return FunctionBuilder::copy(dst);
                                     }
                                 }
@@ -1526,18 +1531,21 @@ fn lower_field_access(
                 }
                 // First try the struct_fields cache
                 if let Some((field_idx, field_type)) = ctx.lookup_field(type_name, field_name) {
-                    // Resource-type fields: return a reference/view instead of a shallow copy.
-                    // - Collections: Ptr(T) — prevents shared heap buffer double-free
-                    // - GorgetString: Str (view) — same layout, non-owning, all consumers handle Str
-                    // Auto-clone fires when assigned to an explicit-type variable.
-                    let result_type = if ctx.type_registry.is_collection_type(field_type) {
+                    // Resource-type fields: return a Ptr(T) reference instead of
+                    // a shallow copy. Prevents shared heap buffer double-free.
+                    // Auto-clone fires when assigned to an explicit-type variable
+                    // or passed to a function that takes ownership.
+                    let result_type = if ctx.type_registry.is_collection_type(field_type)
+                        || field_type == ctx.type_mapper.owned_string_type
+                    {
                         ctx.type_registry.insert(GirType::Ptr(field_type))
-                    } else if field_type == ctx.type_mapper.owned_string_type {
-                        ctx.type_mapper.string_view_type
                     } else {
                         field_type
                     };
                     let dst = builder.field_load(base_place.clone(), field_idx, result_type);
+                    if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
+                        ctx.ref_locals.insert(dst);
+                    }
                     return FunctionBuilder::copy(dst);
                 }
                 // Fallback: read directly from TypeDef
@@ -1545,14 +1553,17 @@ fn lower_field_access(
                     if let TypeDefKind::Struct(ref s) = type_def.kind {
                         for (i, field) in s.fields.iter().enumerate() {
                             if field.name == field_name {
-                                let result_type = if ctx.type_registry.is_collection_type(field.type_id) {
+                                let result_type = if ctx.type_registry.is_collection_type(field.type_id)
+                                    || field.type_id == ctx.type_mapper.owned_string_type
+                                {
                                     ctx.type_registry.insert(GirType::Ptr(field.type_id))
-                                } else if field.type_id == ctx.type_mapper.owned_string_type {
-                                    ctx.type_mapper.string_view_type
                                 } else {
                                     field.type_id
                                 };
                                 let dst = builder.field_load(base_place.clone(), i as u32, result_type);
+                                if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
+                                    ctx.ref_locals.insert(dst);
+                                }
                                 return FunctionBuilder::copy(dst);
                             }
                         }
