@@ -411,8 +411,12 @@ pub(super) fn lower_method_call(
                     // Mark as CowBorrow so typed bindings defer the clone to
                     // ownership boundaries instead of cloning at VarDecl.
                     // Uses insert to override Owned from call_extern_tracked.
+                    // Propagate collection provenance from the Option local.
                     if matches!(ctx.type_registry.get(inner_type), Some(GirType::Ptr(_))) {
                         ctx.set_cow_borrow(dst);
+                        if let Some(collection) = ctx.cow_borrow_source(place.local) {
+                            ctx.set_cow_borrow_source(dst, collection);
+                        }
                     }
                     return FunctionBuilder::copy(dst);
                 }
@@ -1447,6 +1451,18 @@ pub(super) fn lower_method_call(
             Operand::Constant(Constant::Unit)
         } else {
             let dst = ctx.call_tracked(builder, call_name, call_args, ret_type);
+            // Track collection provenance for Option__Ref_ results (from .get(), .first(), etc.).
+            // Only for named-local receivers (direct variables like `entries`), not
+            // field-access temps (`self.data`) — those have unstable LocalIds.
+            if let Some(recv_local) = recv_local_for_move_zero {
+                if ctx.is_named_local(recv_local) {
+                    if let Some(ret_name) = ctx.type_name_for_id(ret_type) {
+                        if ret_name.starts_with("Option__Ref_") {
+                            ctx.set_cow_borrow_source(dst, recv_local);
+                        }
+                    }
+                }
+            }
             FunctionBuilder::copy(dst)
         };
 

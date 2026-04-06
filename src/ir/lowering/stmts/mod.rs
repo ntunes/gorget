@@ -306,28 +306,43 @@ fn lower_var_decl(
                 }
                 if let Some(GirType::Ptr(_inner)) = ctx.type_registry.get(inferred).cloned() {
                     if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
-                        // Check: is the source a borrowed PARAM (safe to propagate)?
-                        // BareParam borrows from the caller — lifetime guaranteed for
-                        // the whole function. CowBorrow (from .get().unwrap()) requires
-                        // collection provenance tracking to propagate safely (the
-                        // collection can be mutated, invalidating the borrow). For now,
-                        // CowBorrow sources fall through to the clone path. The `auto`
-                        // path still gets zero-cost borrows via type inference.
-                        let source_is_borrow = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                            p.projections.is_empty() && ctx.is_bare_param(p.local)
-                        } else { false };
+                        // Check: is the source a Ptr borrow safe to propagate?
+                        // - BareParam: borrows from caller, lifetime = function scope.
+                        // - CowBorrow with provenance: borrows from a collection via
+                        //   .get().unwrap(). Tracked as CollectionRef so
+                        //   cow_before_mutation materializes when the collection is mutated.
+                        let (source_is_bare_param, source_is_cow_borrow) = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                            if p.projections.is_empty() {
+                                let cow = ctx.is_cow_borrow(p.local) && ctx.cow_borrow_source(p.local).is_some();
+                                (ctx.is_bare_param(p.local), cow)
+                            } else {
+                                (false, false)
+                            }
+                        } else { (false, false) };
 
                         let in_loop = ctx.current_loop().is_some();
                         // Allow borrow propagation in loops when the variable is
                         // never reassigned. cow_before_mutation handles mutation-
                         // through-method-call (e.g. v.push(x)) correctly on BareParam.
                         let safe_in_loop = !ctx.func_state.cow_reassigned_names.contains(name);
-                        if source_is_borrow && (!in_loop || safe_in_loop) {
-                            // Propagate borrow — typed binding gets same Ptr(T) as auto
+                        if source_is_bare_param && (!in_loop || safe_in_loop) {
+                            // Propagate bare param borrow
                             builder.locals[local_id.0 as usize].type_id = inferred;
                             ctx.register_local(name, local_id, inferred);
                             ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
                             ctx.set_bare_param(local_id);
+                        } else if source_is_cow_borrow && (!in_loop || safe_in_loop) {
+                            // Propagate CowBorrow as CollectionRef — typed binding
+                            // behaves identically to `auto`. cow_before_mutation on the
+                            // collection materializes this local before collection mutation.
+                            let collection = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                                ctx.cow_borrow_source(p.local).unwrap()
+                            } else { unreachable!() };
+                            builder.locals[local_id.0 as usize].type_id = inferred;
+                            ctx.register_local(name, local_id, inferred);
+                            ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
+                            ctx.set_collection_ref(local_id, collection);
+                            ctx.drops.unregister(local_id);
                         } else if let Some(clone_fn) = ctx.clone_fn_for_ptr(_inner) {
                             // Owned Ptr source (function return, etc.) → auto-clone
                             ctx.warn_implicit_clone(value.span, _inner, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);

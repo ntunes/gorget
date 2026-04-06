@@ -221,6 +221,10 @@ pub struct FunctionState {
     /// TupleInit element origins: tuple_local → Vec<element_local_ids>.
     /// Used by the return path to MoveZero element locals when returning a tuple.
     pub tuple_element_locals: FxHashMap<LocalId, Vec<LocalId>>,
+    /// CoW borrow provenance: maps a CowBorrow local to the collection it
+    /// borrows from. Propagated through .get() → Option → .unwrap() chain.
+    /// Used by VarDecl to set CollectionRef with the correct source.
+    pub cow_borrow_sources: FxHashMap<LocalId, LocalId>,
     /// CoW: variable names that are reassigned in the current function body.
     /// Pre-scanned before lowering. Locals in this set skip CoW aliasing.
     pub cow_reassigned_names: rustc_hash::FxHashSet<String>,
@@ -1235,6 +1239,16 @@ impl<'a> LoweringContext<'a> {
     /// Check if a local is a CoW borrow (deferred clone).
     pub fn is_cow_borrow(&self, local: LocalId) -> bool {
         matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::CowBorrow))
+    }
+
+    /// Record the source collection for a CowBorrow local.
+    pub fn set_cow_borrow_source(&mut self, local: LocalId, collection: LocalId) {
+        self.func_state.cow_borrow_sources.insert(local, collection);
+    }
+
+    /// Look up the source collection for a CowBorrow local.
+    pub fn cow_borrow_source(&self, local: LocalId) -> Option<LocalId> {
+        self.func_state.cow_borrow_sources.get(&local).copied()
     }
 
     /// Mark a local as a collection element reference.
