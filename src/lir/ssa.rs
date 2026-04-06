@@ -25,6 +25,16 @@ pub fn construct_ssa(func: &mut LirFunction) {
     let preds = compute_predecessors(func);
     let mut ctx = SsaBuilder::new(func, &promotable, &preds);
     ctx.run();
+
+    // Debug-only dominance validation after SSA construction.
+    #[cfg(debug_assertions)]
+    {
+        let errors = super::validate::validate_ssa_dominance(func);
+        debug_assert!(errors.is_empty(),
+            "SSA dominance violation in @{}: {}",
+            func.name,
+            errors.iter().map(|e| e.message.as_str()).collect::<Vec<_>>().join("; "));
+    }
 }
 
 /// A slot is promotable if:

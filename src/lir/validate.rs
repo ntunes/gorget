@@ -232,53 +232,183 @@ fn validate_terminator(
 }
 
 /// Validate SSA dominance: every value use is dominated by its definition.
-/// This is a post-SSA check — call after SSA construction.
+/// Uses Cooper-Harvey-Kennedy iterative dominator algorithm.
 pub fn validate_ssa_dominance(func: &LirFunction) -> Vec<LirError> {
     let mut errors = Vec::new();
+    let n = func.blocks.len();
+    if n == 0 { return errors; }
 
-    // Build a set of values defined "above" each block using a simple
-    // forward-walk dominance approximation. For a proper check we'd need
-    // a dominator tree, but for now we check the weaker property that
-    // every used value is defined somewhere in the function.
-    let mut all_defined: HashSet<ValueId> = HashSet::new();
-
+    // Build predecessor lists
+    let mut preds: Vec<Vec<usize>> = vec![vec![]; n];
     for block in &func.blocks {
-        for (vid, _) in &block.params {
-            all_defined.insert(*vid);
-        }
-        for inst in &block.insts {
-            if let Some(dst) = inst.dst() {
-                all_defined.insert(dst);
+        let idx = block.id.0 as usize;
+        for succ in block.terminator.successors() {
+            let s = succ.0 as usize;
+            if s < n {
+                preds[s].push(idx);
             }
         }
     }
 
-    // Check all uses reference defined values
+    // Compute RPO (reverse postorder)
+    let rpo = compute_rpo(n, &func.blocks);
+
+    // Iterative dominator computation (Cooper-Harvey-Kennedy 2001)
+    // idom[i] = immediate dominator of block i (in RPO numbering)
+    let mut rpo_order: Vec<usize> = vec![usize::MAX; n]; // block_idx → RPO position
+    for (pos, &block_idx) in rpo.iter().enumerate() {
+        rpo_order[block_idx] = pos;
+    }
+
+    let mut idom: Vec<usize> = vec![usize::MAX; n];
+    idom[rpo[0]] = rpo[0]; // entry dominates itself
+
+    let intersect = |mut a: usize, mut b: usize, idom: &[usize], rpo_order: &[usize]| -> usize {
+        while a != b {
+            while rpo_order[a] > rpo_order[b] { a = idom[a]; }
+            while rpo_order[b] > rpo_order[a] { b = idom[b]; }
+        }
+        a
+    };
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &b in &rpo[1..] { // skip entry
+            let mut new_idom = usize::MAX;
+            for &p in &preds[b] {
+                if idom[p] != usize::MAX {
+                    new_idom = if new_idom == usize::MAX { p } else { intersect(new_idom, p, &idom, &rpo_order) };
+                }
+            }
+            if new_idom != usize::MAX && idom[b] != new_idom {
+                idom[b] = new_idom;
+                changed = true;
+            }
+        }
+    }
+
+    // Build dominance set for each block: which blocks dominate block b?
+    // A block d dominates b if d is on the path from entry to b via idom chain.
+    let dominates = |d: usize, b: usize| -> bool {
+        let mut cur = b;
+        loop {
+            if cur == d { return true; }
+            if idom[cur] == cur || idom[cur] == usize::MAX { return false; }
+            cur = idom[cur];
+        }
+    };
+
+    // Collect where each value is defined
+    let mut def_block: HashMap<ValueId, usize> = HashMap::new();
     for block in &func.blocks {
+        let idx = block.id.0 as usize;
+        for (vid, _) in &block.params {
+            def_block.insert(*vid, idx);
+        }
+        for inst in &block.insts {
+            if let Some(dst) = inst.dst() {
+                def_block.insert(dst, idx);
+            }
+        }
+    }
+
+    // Check: every use must be in a block dominated by the definition block.
+    // For uses within the same block as the definition, verify instruction ordering.
+    for block in &func.blocks {
+        let use_idx = block.id.0 as usize;
+        // Track which values have been defined so far in this block (for intra-block ordering)
+        let mut defined_before: HashSet<ValueId> = HashSet::new();
+        for (vid, _) in &block.params {
+            defined_before.insert(*vid);
+        }
+
         for inst in &block.insts {
             for used in inst.uses() {
-                if !all_defined.contains(&used) {
-                    errors.push(LirError {
-                        func: func.name.clone(),
-                        block: Some(block.id),
-                        message: format!("use of undefined value {used}"),
-                    });
+                match def_block.get(&used) {
+                    None => {
+                        errors.push(LirError {
+                            func: func.name.clone(),
+                            block: Some(block.id),
+                            message: format!("use of undefined value {used}"),
+                        });
+                    }
+                    Some(&def_b) => {
+                        if def_b == use_idx {
+                            // Same block: must be defined before this instruction
+                            if !defined_before.contains(&used) {
+                                errors.push(LirError {
+                                    func: func.name.clone(),
+                                    block: Some(block.id),
+                                    message: format!("use of {used} before its definition in same block"),
+                                });
+                            }
+                        } else if !dominates(def_b, use_idx) {
+                            errors.push(LirError {
+                                func: func.name.clone(),
+                                block: Some(block.id),
+                                message: format!("{used} defined in bb{def_b} which does not dominate bb{use_idx}"),
+                            });
+                        }
+                    }
                 }
+            }
+            if let Some(dst) = inst.dst() {
+                defined_before.insert(dst);
             }
         }
 
+        // Check terminator uses
         for used in block.terminator.uses() {
-            if !all_defined.contains(&used) {
-                errors.push(LirError {
-                    func: func.name.clone(),
-                    block: Some(block.id),
-                    message: format!("use of undefined value {used} in terminator"),
-                });
+            match def_block.get(&used) {
+                None => {
+                    errors.push(LirError {
+                        func: func.name.clone(),
+                        block: Some(block.id),
+                        message: format!("use of undefined value {used} in terminator"),
+                    });
+                }
+                Some(&def_b) => {
+                    if def_b == use_idx {
+                        if !defined_before.contains(&used) {
+                            errors.push(LirError {
+                                func: func.name.clone(),
+                                block: Some(block.id),
+                                message: format!("use of {used} before its definition in terminator"),
+                            });
+                        }
+                    } else if !dominates(def_b, use_idx) {
+                        errors.push(LirError {
+                            func: func.name.clone(),
+                            block: Some(block.id),
+                            message: format!("{used} defined in bb{def_b} which does not dominate bb{use_idx} (terminator)"),
+                        });
+                    }
+                }
             }
         }
     }
 
     errors
+}
+
+/// Compute reverse postorder of blocks via DFS from block 0.
+fn compute_rpo(n: usize, blocks: &[Block]) -> Vec<usize> {
+    let mut visited = vec![false; n];
+    let mut postorder = Vec::with_capacity(n);
+
+    fn dfs(b: usize, blocks: &[Block], visited: &mut Vec<bool>, postorder: &mut Vec<usize>) {
+        if b >= blocks.len() || visited[b] { return; }
+        visited[b] = true;
+        for succ in blocks[b].terminator.successors() {
+            dfs(succ.0 as usize, blocks, visited, postorder);
+        }
+        postorder.push(b);
+    }
+
+    dfs(0, blocks, &mut visited, &mut postorder);
+    postorder.reverse();
+    postorder
 }
 
 #[cfg(test)]
@@ -470,6 +600,69 @@ mod tests {
             operand: v0,
         });
         func.block_mut(bb).terminator = Term::Ret(v1);
+
+        let errors = validate_ssa_dominance(&func);
+        assert!(errors.is_empty(), "errors: {errors:?}");
+    }
+
+    #[test]
+    fn ssa_dominance_detects_use_before_def_same_block() {
+        let mut func = LirFunction::new("bad".into(), vec![], LirType::I64);
+        let bb = func.add_block();
+
+        let v0 = func.next_value();
+        let v1 = func.next_value();
+        // Use v1 before it's defined
+        func.block_mut(bb).insts.push(Inst::Neg {
+            dst: v0,
+            ty: LirType::I64,
+            operand: v1,
+        });
+        func.block_mut(bb).insts.push(Inst::IConst {
+            dst: v1,
+            ty: LirType::I64,
+            value: 42,
+        });
+        func.block_mut(bb).terminator = Term::Ret(v0);
+
+        let errors = validate_ssa_dominance(&func);
+        assert!(errors.iter().any(|e| e.message.contains("before its definition")),
+            "expected use-before-def error, got: {errors:?}");
+    }
+
+    #[test]
+    fn ssa_dominance_passes_diamond_cfg() {
+        // bb0 → bb1, bb2 → bb3 (diamond)
+        let mut func = LirFunction::new("diamond".into(), vec![], LirType::I64);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block();
+        let bb3 = func.add_block();
+
+        let v_cond = func.next_value();
+        let v_one = func.next_value();
+        let v_two = func.next_value();
+        let v_result = func.next_value();
+
+        // bb0: define cond, branch
+        func.block_mut(bb0).insts.push(Inst::BoolConst { dst: v_cond, value: true });
+        func.block_mut(bb0).terminator = Term::Branch {
+            cond: v_cond,
+            then_block: bb1, then_args: vec![],
+            else_block: bb2, else_args: vec![],
+        };
+
+        // bb1: define v_one, jump to bb3
+        func.block_mut(bb1).insts.push(Inst::IConst { dst: v_one, ty: LirType::I64, value: 1 });
+        func.block_mut(bb1).terminator = Term::Jump(bb3, vec![v_one]);
+
+        // bb2: define v_two, jump to bb3
+        func.block_mut(bb2).insts.push(Inst::IConst { dst: v_two, ty: LirType::I64, value: 2 });
+        func.block_mut(bb2).terminator = Term::Jump(bb3, vec![v_two]);
+
+        // bb3: receive via block param, return
+        func.block_mut(bb3).params.push((v_result, LirType::I64));
+        func.block_mut(bb3).terminator = Term::Ret(v_result);
 
         let errors = validate_ssa_dominance(&func);
         assert!(errors.is_empty(), "errors: {errors:?}");
