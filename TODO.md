@@ -2,10 +2,6 @@
 
 ## High
 
-- **Sort comparator thread race** (`c_lir/mod.rs:1028-1030`): `static size_t __gorget_sort_elem_size` is a file-scope global — two concurrent sorts corrupt it. Fix: `_Thread_local` or `qsort_r`. [added: 2026-04-06]
-
-- **Array zip buffer overflow** (`c_lir/mod.rs:1056`): `char __buf[256]` for zip tuple construction. If `__a_sz + __b_sz > 256`, stack buffer overflow. Fix: heap-allocate or `alloca(__tuple_sz)`. [added: 2026-04-06]
-
 - **Leak reduction — status**: Error path fixed (emit_enum_init_owned). StringView call results upgraded to GorgetString in call_tracked. Match pattern strings clone-on-extract. Struct field strings now Ptr(GorgetString) references (matching collection pattern). LIR FieldLoad cap/alloc zeroing blocks deleted. [updated: 2026-04-05]
 
 
@@ -45,15 +41,9 @@
 
 - **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
 
-- **DSE may leak droppable values** (`ir/transforms/optimize.rs`): Dead store elimination removes `_1 = Copy(resource_local)` when `_1` is overwritten later, but the first value may need dropping. Fix: skip DSE for locals with `needs_drop == true`. [added: 2026-04-06]
+- **DSE may leak droppable values** (`ir/transforms/optimize.rs`): Dead store elimination removes `_1 = Copy(resource_local)` when `_1` is overwritten later, but the first value may need dropping. Investigated: DSE runs post-drop-insertion so scope-exit drops already cover this. Added safety comment. Still worth auditing for edge cases where DropElaborator doesn't insert intermediate drops at overwrites. [updated: 2026-04-06]
 
-- **SSA resolve_value band-aid** (`lir/ssa.rs:161`): `if steps > 100 { break; }` instead of proper cycle detection — silently produces wrong value on long chains. Fix: visited-set cycle detection. [added: 2026-04-06]
-
-- **Monolithic `emit_inst()` — 2,941 lines** (`c_lir/mod.rs:3299-6240`): Single match statement with 13 parallel-array parameters. CallExtern arm alone is ~1,165 lines. Split into `InstEmitter` struct with domain methods. [added: 2026-04-06]
-
-- **Monolithic `lir/lower.rs` — 5,589 lines, 47 methods**: Mixes instruction lowering, operand handling, drop dispatch, type sizing, runtime name mapping. Split into `lower/` directory with domain files. [added: 2026-04-06]
-
-- **Hardcoded type size database** (`lir/lower.rs:5004-5056`): 50+ lines of magic numbers (`GorgetString=32`, `GorgetArray=56`, `GorgetMap=128`). Not target-aware. Fix: attach `computed_size` to StructDef during type lowering. [added: 2026-04-06]
+- **Hardcoded type size database** (`lir/lower/types.rs`): 50+ lines of magic numbers (`GorgetString=32`, `GorgetArray=56`, `GorgetMap=128`). Not target-aware. Fix: attach `computed_size` to StructDef during type lowering. [added: 2026-04-06]
 
 - **InlineC instruction — IR escape hatch**: 15 occurrences across 5 LIR files. Opaque to optimization and validation. Each needs replacement with proper LIR instructions. [added: 2026-04-06]
 
