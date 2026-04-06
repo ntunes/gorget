@@ -103,7 +103,9 @@ fn run_pass(func: &mut Function, name: &'static str, pass_fn: fn(&mut Function),
 }
 
 fn optimize_function_once(func: &mut Function, stats: &mut Vec<(&'static str, PassStats)>) {
-    // Phase 1: simplify values
+    // Phase 0: inter-block constant propagation (across block boundaries)
+    run_pass(func, "global_const_prop", propagate_constants_global, stats);
+    // Phase 1: simplify values (intra-block)
     run_pass(func, "const_prop", propagate_constants, stats);
     run_pass(func, "const_fold", constant_fold, stats);
     // Re-propagate after folding: constant_fold can turn computed
@@ -189,6 +191,157 @@ fn propagate_constants(func: &mut Function) {
         if !known.is_empty() {
             if let Some(ref mut term) = bb.terminator {
                 substitute_terminator_operands(term, &known);
+            }
+        }
+    }
+}
+
+// ── Global (Inter-Block) Constant Propagation ──────────────────────
+
+/// Inter-block constant propagation: propagate constants across block
+/// boundaries. For blocks with a single predecessor, inherit the
+/// predecessor's exit-state constants. For multi-predecessor blocks,
+/// keep only constants that agree across all predecessors.
+///
+/// Processes blocks in RPO order for correct forward propagation.
+fn propagate_constants_global(func: &mut Function) {
+    use std::collections::HashMap;
+
+    let n = func.blocks.len();
+    if n <= 1 {
+        // Single block — nothing to propagate across
+        return;
+    }
+
+    // Build predecessor lists
+    let mut preds: Vec<Vec<u32>> = vec![vec![]; n];
+    for (i, bb) in func.blocks.iter().enumerate() {
+        for succ in successors(bb) {
+            if (succ as usize) < n {
+                preds[succ as usize].push(i as u32);
+            }
+        }
+    }
+
+    // Compute RPO via DFS from block 0
+    let rpo = {
+        let mut visited = vec![false; n];
+        let mut postorder = Vec::with_capacity(n);
+        fn dfs(b: usize, n: usize, blocks: &[BasicBlock], visited: &mut Vec<bool>, po: &mut Vec<usize>) {
+            if b >= n || visited[b] { return; }
+            visited[b] = true;
+            for s in successors(&blocks[b]) {
+                dfs(s as usize, n, blocks, visited, po);
+            }
+            po.push(b);
+        }
+        dfs(0, n, &func.blocks, &mut visited, &mut postorder);
+        postorder.reverse();
+        postorder
+    };
+
+    // Phase 1: simulate each block to compute exit constants.
+    // exit_state[block_idx] = map of local → constant at block exit.
+    let mut exit_state: Vec<HashMap<u32, Constant>> = vec![HashMap::new(); n];
+
+    for &b in &rpo {
+        // Compute entry state from predecessors
+        let entry: HashMap<u32, Constant> = if preds[b].is_empty() {
+            // Entry block — no constants known
+            HashMap::new()
+        } else if preds[b].len() == 1 {
+            // Single predecessor — inherit its exit state
+            exit_state[preds[b][0] as usize].clone()
+        } else {
+            // Multiple predecessors — intersect (keep constants that agree)
+            let first = &exit_state[preds[b][0] as usize];
+            let mut merged = first.clone();
+            for &p in &preds[b][1..] {
+                let other = &exit_state[p as usize];
+                merged.retain(|k, v| other.get(k) == Some(v));
+            }
+            merged
+        };
+
+        // Simulate block: start with entry constants, process instructions
+        let mut known = entry;
+        for inst in &func.blocks[b].instructions {
+            match inst {
+                Instruction::Assign { dst, value, .. } if dst.projections.is_empty() => {
+                    if let Operand::Constant(c) = value {
+                        if is_propagatable_constant(c) {
+                            known.insert(dst.local.0, c.clone());
+                        } else {
+                            known.remove(&dst.local.0);
+                        }
+                    } else {
+                        known.remove(&dst.local.0);
+                    }
+                }
+                Instruction::Call { .. } | Instruction::CallExtern { .. } | Instruction::CallIndirect { .. } => {
+                    known.clear();
+                }
+                _ => {
+                    if let Some(written) = instruction_dst(inst) {
+                        known.remove(&written);
+                    }
+                }
+            }
+        }
+        exit_state[b] = known;
+    }
+
+    // Phase 2: apply — substitute constants using the entry state of each block.
+    for &b in &rpo {
+        let entry: HashMap<u32, Constant> = if preds[b].is_empty() {
+            HashMap::new()
+        } else if preds[b].len() == 1 {
+            exit_state[preds[b][0] as usize].clone()
+        } else {
+            let first = &exit_state[preds[b][0] as usize];
+            let mut merged = first.clone();
+            for &p in &preds[b][1..] {
+                let other = &exit_state[p as usize];
+                merged.retain(|k, v| other.get(k) == Some(v));
+            }
+            merged
+        };
+
+        if entry.is_empty() { continue; }
+
+        // Substitute entry constants into instructions (only before the local is written)
+        let mut active = entry;
+        for inst in &mut func.blocks[b].instructions {
+            substitute_operands(inst, &active);
+
+            // Update active set based on writes
+            match inst {
+                Instruction::Assign { dst, value, .. } if dst.projections.is_empty() => {
+                    if let Operand::Constant(c) = value {
+                        if is_propagatable_constant(c) {
+                            active.insert(dst.local.0, c.clone());
+                        } else {
+                            active.remove(&dst.local.0);
+                        }
+                    } else {
+                        active.remove(&dst.local.0);
+                    }
+                }
+                Instruction::Call { .. } | Instruction::CallExtern { .. } | Instruction::CallIndirect { .. } => {
+                    active.clear();
+                }
+                _ => {
+                    if let Some(written) = instruction_dst(inst) {
+                        active.remove(&written);
+                    }
+                }
+            }
+        }
+
+        // Also substitute into the terminator
+        if !active.is_empty() {
+            if let Some(ref mut term) = func.blocks[b].terminator {
+                substitute_terminator_operands(term, &active);
             }
         }
     }
