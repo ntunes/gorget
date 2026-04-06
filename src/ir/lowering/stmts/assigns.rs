@@ -177,7 +177,7 @@ pub(super) fn lower_assign(
                                 && type_id == ctx.type_mapper.owned_string_type
                             {
                                 ctx.drops.unregister(place.local);
-                                assign_mode = AssignMode::Borrow;
+                                assign_mode = AssignMode::Move;
                             } else if ctx.is_named_local(place.local) {
                                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
                                     ctx.warn_implicit_clone(value.span, rhs_type, crate::ir::ImplicitCloneReason::NamedToNamed);

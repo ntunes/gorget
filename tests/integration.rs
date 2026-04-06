@@ -2143,7 +2143,7 @@ fn move_type_unwrap() {
 #[test]
 fn stress_alloc_strings() {
     run_gg("stress_alloc_strings.gg", "\
-leaked=true
+leaked=false
 done");
 }
 
@@ -2157,7 +2157,7 @@ done");
 #[test]
 fn stress_alloc_dicts() {
     run_gg("stress_alloc_dicts.gg", "\
-leaked=true
+leaked=false
 done");
 }
 
@@ -2173,7 +2173,7 @@ done");
 #[test]
 fn stress_alloc_closures() {
     run_gg("stress_alloc_closures.gg", "\
-leaked=true
+leaked=false
 done");
 }
 

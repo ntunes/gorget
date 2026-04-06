@@ -261,6 +261,12 @@ pub fn emit_closure_call_function(
 
     ctx.clear_locals();
 
+    // Save the outer function's drop state and push a fresh Function scope
+    // for the closure body. Without this, locals registered during closure
+    // lowering would land in the outer function's scope and not be dropped.
+    let saved_drops = std::mem::replace(&mut ctx.drops, super::drops::DropElaborator::new());
+    ctx.drops.push_scope(super::drops::DropScopeKind::Function);
+
     // _1 = __env (pointer to closure struct)
     let env_local = LocalId(1);
     ctx.register_local("__env", env_local, env_ptr_type);
@@ -337,12 +343,46 @@ pub fn emit_closure_call_function(
             if should_override {
                 builder.locals[0].type_id = actual_type;
             }
-            builder.assign(Place::local(LocalId(0)), result);
+            // Identify the returned local (to exclude from scope-exit drops).
+            let returned_local = match &result {
+                Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
+                _ => None,
+            };
+            // Use Move for resource types: transfers ownership to the return slot
+            // without cloning. The source is zeroed, so scope-exit drops are no-ops.
+            // Copy would shallow-copy collections (sharing the buffer), and then
+            // scope-exit drops would free the shared buffer → use-after-free.
+            let use_move = if let Some(local) = returned_local {
+                ctx.type_registry.needs_drop(builder.local_type(local))
+            } else { false };
+            if use_move {
+                builder.assign_mode(
+                    crate::ir::instructions::AssignMode::Move,
+                    Place::local(LocalId(0)),
+                    result.clone(),
+                );
+                if let Some(local) = returned_local {
+                    ctx.move_zero_and_mark(&mut builder, local);
+                }
+            } else {
+                builder.assign(Place::local(LocalId(0)), result);
+            }
+            // Emit cleanup drops for all locals before returning.
+            // The returned local is excluded — its data was moved to the return slot.
+            ctx.drops.emit_early_exit_drops(
+                &mut builder,
+                &ctx.type_registry,
+                super::drops::DropScopeKind::Function,
+                returned_local,
+            );
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
     }
 
     ctx.func_state.expected_type = prev_expected;
+
+    // Restore the outer function's drop state
+    ctx.drops = saved_drops;
 
     let mut func = builder.build();
     // Update the function's return_type to match the actual local[0] type

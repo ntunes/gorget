@@ -2,16 +2,13 @@
 
 ## High
 
-- **Leak reduction — status**: Error path fixed (emit_enum_init_owned). StringView call results upgraded to GorgetString in call_tracked. Match pattern strings clone-on-extract. Struct field strings now Ptr(GorgetString) references (matching collection pattern). LIR FieldLoad cap/alloc zeroing blocks deleted. [updated: 2026-04-05]
-
+- **Leak reduction — 2 remaining patterns**: Strings, Dicts, Closures, Vectors all leak-free (5/6 stress tests pass). Remaining: (1) **Option/enum scope-exit drop doesn't free resource payloads** — `Option[Vector[int]]` leaks 128 bytes per `Some` (the inner Vector is not freed). Enum types have `drop: None`. (2) **Collection reassignment skips drop** — `v = !new_v` doesn't free old `v`. Fix blocked on self-referential detection (naively dropping before assign causes UAF for `v = v.slice(...)`). [updated: 2026-04-06]
 
 - **Clone observability + Cloneable trait**: `.clone()` works on all types. `gg build --show-clones` done. Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
 
 - **Struct clone ownership masking**: `emit_recursive_struct_clones` uses `gorget_string_clone` (view-preserving) which masks ownership bugs in code paths where struct values are passed to functions without move-zeroing the source. Example: `TaskStore__add` takes a Task by pointer, memcpys it into an array, but the caller's copy isn't zeroed — both copies share the title pointer. With `gorget_string_clone_to_owned` this manifests as double-free. Root cause: LIR doesn't emit move-zero after passing struct values to consuming functions. Fix: ensure consuming function calls zero the source, then upgrade all clone generators to `gorget_string_clone_to_owned`. [added: 2026-04-05]
 
 - **Recursive/Custom elem_drop — 1 remaining fix**: C backend Option wrapping must CLONE for Recursive/Custom elements when payload is NOT Ptr (consuming methods like gorget_array_safe_pop). The fragile struct-name lookup may miss types. Option[Ref_T].unwrap() returns Ptr (CoW borrow) — clone fires at ownership boundaries. [updated: 2026-04-05]
-
-- **LIR backend: Phase 3 — multi-file project support (gorget-arena)**: 0 C compilation errors, 0 linker errors, 0 C warnings. Phase 4 stdlib name mapping and cross-module type registration complete. [updated: 2026-03-21]
 
 - **Extern module ABI — remaining structural whitelist**: `is_cstr_returning_fn` and `takes_cstr_for_str_param` deleted (all entries eliminated). `runtime_arg_by_ptr` is structural (collection/string self-deref + string clone/free) — cannot be removed without changing how the LIR represents method dispatch. See `docs/internals/extern-modules.md`. [updated: 2026-04-03]
 
@@ -47,7 +44,7 @@
 
 - **InlineC instruction — remaining 13**: 5 in for_loops.rs (typed key/value extraction needing C pointer cast), 8 in stmts/mod.rs (snapshot writes + assert formatting needing C globals/formatting). The 8 scalar iterator accessors (cap, states, order) now use proper CallExtern via runtime functions. [updated: 2026-04-06]
 
-- **Closure return type inference**: Multi-line closures with `return` typed as void. Need to propagate return type in typecheck.rs. [added: 2026-03-21]
+- **Closure return type inference**: Multi-line closures with `return` typed as void (`Expr::Block(_) => UNIT_TYPE` hardcoded). Need to propagate return type in typecheck.rs. [added: 2026-03-21]
 
 - **`@[no_alloc]` function annotation**: Compiler error on allocating operations. [added: 2026-03-21]
 
@@ -61,15 +58,13 @@
 
 - **`char` type backend bugs**: `char as int` gives garbage, char `==`/`!=` uses `gorget_str_eq`. [added: 2026-03-21]
 
-- **Self-host comparison (858 fixtures)**: Parser 761 matched / 3 mismatch / 94 crash. Remaining 3 mismatches all unfixable: null byte (chars.gg), float precision (fstring_format.gg), catch-do-block (error_catch_in_loop.gg). 94 crashes from unsupported AST nodes (traits/generics/meta). Resolver 35 matched / 729 mismatch / 94 crash — builtin/keyword DEF ID shift. [updated: 2026-03-30]
+- **Self-host comparison — stale numbers**: Last measured at 797 fixtures (2026-03-21): parser 99.6% (3 unfixable mismatches), resolver 100%, type checker 99.2%. Needs re-measurement at current fixture count (~890). [updated: 2026-04-06]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
 - **If-expression `elif` branches**: Parser limitation. Workaround: nested `else: if`. [updated: 2026-03-11]
 
 - **`shared_stress_yield` flaky deadlock**: Timing-dependent contention. [added: 2026-03-11]
-
-- **Multi-line closures with return typed as void**: `Expr::Block(_) => UNIT_TYPE` hardcoded. [added: 2026-03-11]
 
 - **Inline `None()` without typed variable**: Produces garbage. Workaround: bind to typed `Option[T]` first. [added: 2026-03-11]
 

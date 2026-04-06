@@ -5177,6 +5177,11 @@ static inline bool gorget_map_remove(GorgetMap* m, const void* key) {
     for (size_t __probes = 0; __probes < m->cap; __probes++) {
         if (m->states[idx] == 0) return false;
         if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
+            // Drop the value and key before tombstoning the slot.
+            if (m->val_drop && m->values)
+                m->val_drop((char*)m->values + idx * m->val_size);
+            if (m->key_drop && m->keys)
+                m->key_drop((char*)m->keys + idx * m->key_size);
             m->states[idx] = 2;  // tombstone
             m->count--;
             m->tombstones++;

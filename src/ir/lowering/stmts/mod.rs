@@ -733,7 +733,7 @@ fn lower_return(
         };
         ctx.func_state.expected_type = prev_expected;
         // Identify the local being returned (to exclude from drops — it's being moved out)
-        let returned_local = match &operand {
+        let mut returned_local = match &operand {
             Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
                 Some(place.local)
             }
@@ -835,44 +835,52 @@ fn lower_return(
                     builder.assign(Place::local(LocalId(0)), operand.clone());
                 }
             }
-            // If the return local is str-typed and the operand is a GorgetString temp,
-            // unregister the temp to prevent use-after-free: the str view in the return
-            // local may be accessed after the temp's scope exit frees it.
-            if ret_type == ctx.type_mapper.owned_string_type {
-                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
-                    if place.projections.is_empty() {
-                        let rhs_type = builder.local_type(place.local);
-                        if rhs_type == ctx.type_mapper.owned_string_type {
-                            ctx.drops.unregister(place.local);
+            // When did_clone_return, the original source still has its own
+            // allocation (the clone produced an independent copy). Let scope-exit
+            // drops free it — don't unregister or move-zero it.
+            if did_clone_return {
+                returned_local = None; // original is NOT the returned local
+            }
+            if !did_clone_return {
+                // If the return local is str-typed and the operand is a GorgetString temp,
+                // unregister the temp to prevent use-after-free: the str view in the return
+                // local may be accessed after the temp's scope exit frees it.
+                if ret_type == ctx.type_mapper.owned_string_type {
+                    if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                        if place.projections.is_empty() {
+                            let rhs_type = builder.local_type(place.local);
+                            if rhs_type == ctx.type_mapper.owned_string_type {
+                                ctx.drops.unregister(place.local);
+                            }
                         }
                     }
                 }
-            }
-            // Move-zero source locals on return to prevent double-free.
-            // The return assigns into slot 0 (shallow copy). Without zeroing the
-            // source, both the source and the return slot share heap data — the
-            // source gets Recursive/Trivial drop at scope exit, and the caller
-            // drops the return value later → double-free.
-            if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
-                if place.projections.is_empty() && place.local != LocalId(0) {
-                    let rhs_type = builder.local_type(place.local);
-                    if ctx.type_registry.needs_drop(rhs_type) {
-                        ctx.move_zero_and_mark(builder, place.local);
-                    }
-                    // Tuple return: also MoveZero the individual element locals.
-                    // TupleInit copies element values into the tuple struct, then
-                    // the tuple is copied into the return slot. Without zeroing
-                    // the element locals, both the return tuple and the locals
-                    // own the same heap data → double-free at scope exit.
-                    if let Some(elem_locals) = ctx.func_state.tuple_element_locals.get(&place.local) {
-                        for &elem_local in elem_locals {
-                            if elem_local != LocalId(0)
-                                && !ctx.drops.is_moved(elem_local)
-                            {
-                                let elem_type = builder.local_type(elem_local);
-                                if ctx.type_registry.needs_drop(elem_type) {
-                                    builder.move_zero(Place::local(elem_local));
-                                    ctx.drops.mark_moved(elem_local);
+                // Move-zero source locals on return to prevent double-free.
+                // The return assigns into slot 0 (shallow copy). Without zeroing the
+                // source, both the source and the return slot share heap data — the
+                // source gets Recursive/Trivial drop at scope exit, and the caller
+                // drops the return value later → double-free.
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                    if place.projections.is_empty() && place.local != LocalId(0) {
+                        let rhs_type = builder.local_type(place.local);
+                        if ctx.type_registry.needs_drop(rhs_type) {
+                            ctx.move_zero_and_mark(builder, place.local);
+                        }
+                        // Tuple return: also MoveZero the individual element locals.
+                        // TupleInit copies element values into the tuple struct, then
+                        // the tuple is copied into the return slot. Without zeroing
+                        // the element locals, both the return tuple and the locals
+                        // own the same heap data → double-free at scope exit.
+                        if let Some(elem_locals) = ctx.func_state.tuple_element_locals.get(&place.local) {
+                            for &elem_local in elem_locals {
+                                if elem_local != LocalId(0)
+                                    && !ctx.drops.is_moved(elem_local)
+                                {
+                                    let elem_type = builder.local_type(elem_local);
+                                    if ctx.type_registry.needs_drop(elem_type) {
+                                        builder.move_zero(Place::local(elem_local));
+                                        ctx.drops.mark_moved(elem_local);
+                                    }
                                 }
                             }
                         }

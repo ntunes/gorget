@@ -1058,6 +1058,9 @@ pub(super) fn lower_interp_segment(
             };
             let tmp = builder.add_local(value_type, None);
             builder.assign(Place::local(tmp), Operand::Copy(deref_place));
+            // Register the deref copy for drops — the C backend clones
+            // string Ptrs into independent owned copies that need freeing.
+            ctx.drops.register_local(tmp, value_type, &ctx.type_registry);
             let (spec, args) = format_for_printf(ctx, builder, value_type, FunctionBuilder::copy(tmp), fmt_spec);
             format_str.push_str(&spec);
             printf_args.extend(args);
