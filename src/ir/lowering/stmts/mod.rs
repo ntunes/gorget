@@ -291,6 +291,19 @@ fn lower_var_decl(
             // (from cow_ptr_params or ref_locals), not from owned function returns.
             if !needs_reinfer {
                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
+                // Type mismatch: declared type (e.g. int) vs RHS resource type (e.g. String).
+                // This happens for `int ch = text.char_at(0)` where char_at returns String.
+                // Reinfer to the RHS type so the variable's slot matches the value, preventing
+                // the Move assign from storing a pointer-as-int into a mismatched slot.
+                if inferred != gir_type
+                    && !matches!(ctx.type_registry.get(inferred), Some(GirType::Ptr(_)))
+                    && ctx.type_registry.is_resource_type(inferred)
+                    && !ctx.type_registry.is_resource_type(gir_type)
+                {
+                    builder.locals[local_id.0 as usize].type_id = inferred;
+                    ctx.register_local(name, local_id, inferred);
+                    ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
+                }
                 if let Some(GirType::Ptr(_inner)) = ctx.type_registry.get(inferred).cloned() {
                     if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
                         // Check: is the source a borrowed PARAM (safe to propagate)?
