@@ -246,6 +246,11 @@ pub fn generate_llvm_ir(module: &LirModule) -> String {
                 if let Inst::DivCheck { .. } = inst {
                     str_globals.intern("division by zero\n");
                 }
+                if let Inst::Div { ty, .. } | Inst::Rem { ty, .. } = inst {
+                    if ty.is_integer() {
+                        str_globals.intern("division by zero");
+                    }
+                }
             }
         }
     }
@@ -414,6 +419,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare ptr @memset(ptr, i32, i64)").unwrap();
     writeln!(out, "declare ptr @memcpy(ptr, ptr, i64)").unwrap();
     writeln!(out, "declare void @gorget_init_args(i32, ptr)").unwrap();
+    writeln!(out, "declare void @gorget_panic(ptr)").unwrap();
     writeln!(out).unwrap();
 
     // Collect names of functions defined in this module (skip forward declarations)
@@ -620,6 +626,14 @@ fn emit_function(
                     | Inst::Sub { overflow: Overflow::Trap, ty, .. }
                     | Inst::Mul { overflow: Overflow::Trap, ty, .. } if ty.is_integer() => {
                         label = format!("ov.{bid}.{counter}.ok");
+                        counter += 1;
+                    }
+                    Inst::Div { ty, .. } if ty.is_integer() => {
+                        label = format!("divz.{bid}.{counter}.ok");
+                        counter += 1;
+                    }
+                    Inst::Rem { ty, .. } if ty.is_integer() => {
+                        label = format!("remz.{bid}.{counter}.ok");
                         counter += 1;
                     }
                     Inst::BoundsCheck { .. } => {
@@ -910,20 +924,46 @@ fn emit_inst(
             let lty = llvm_type(ty);
             if ty.is_float() {
                 writeln!(out, "  %v{} = fdiv {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
-            } else if is_signed(ty) {
-                writeln!(out, "  %v{} = sdiv {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
-                writeln!(out, "  %v{} = udiv {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
+                // Integer division: check for zero divisor
+                let uid = *trap_counter;
+                *trap_counter += 1;
+                let cmp = format!("divz.{block_id}.{uid}.cmp");
+                let trap_label = format!("divz.{block_id}.{uid}.trap");
+                let ok_label = format!("divz.{block_id}.{uid}.ok");
+                writeln!(out, "  %{cmp} = icmp eq {lty} %v{}, 0", rhs.0).unwrap();
+                writeln!(out, "  br i1 %{cmp}, label %{trap_label}, label %{ok_label}").unwrap();
+                writeln!(out, "{trap_label}:").unwrap();
+                let panic_msg_idx = str_globals.get_index("division by zero");
+                writeln!(out, "  call void @gorget_panic(ptr @.str.{panic_msg_idx})").unwrap();
+                writeln!(out, "  unreachable").unwrap();
+                writeln!(out, "{ok_label}:").unwrap();
+                *current_label = ok_label;
+                let op = if is_signed(ty) { "sdiv" } else { "udiv" };
+                writeln!(out, "  %v{} = {op} {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             }
         }
         Inst::Rem { dst, ty, lhs, rhs } => {
             let lty = llvm_type(ty);
             if ty.is_float() {
                 writeln!(out, "  %v{} = frem {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
-            } else if is_signed(ty) {
-                writeln!(out, "  %v{} = srem {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
-                writeln!(out, "  %v{} = urem {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
+                // Integer remainder: check for zero divisor
+                let uid = *trap_counter;
+                *trap_counter += 1;
+                let cmp = format!("remz.{block_id}.{uid}.cmp");
+                let trap_label = format!("remz.{block_id}.{uid}.trap");
+                let ok_label = format!("remz.{block_id}.{uid}.ok");
+                writeln!(out, "  %{cmp} = icmp eq {lty} %v{}, 0", rhs.0).unwrap();
+                writeln!(out, "  br i1 %{cmp}, label %{trap_label}, label %{ok_label}").unwrap();
+                writeln!(out, "{trap_label}:").unwrap();
+                let rem_panic_idx = str_globals.get_index("division by zero");
+                writeln!(out, "  call void @gorget_panic(ptr @.str.{rem_panic_idx})").unwrap();
+                writeln!(out, "  unreachable").unwrap();
+                writeln!(out, "{ok_label}:").unwrap();
+                *current_label = ok_label;
+                let op = if is_signed(ty) { "srem" } else { "urem" };
+                writeln!(out, "  %v{} = {op} {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             }
         }
         Inst::Mod { dst, ty, lhs, rhs } => {
