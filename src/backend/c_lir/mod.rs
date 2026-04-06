@@ -122,7 +122,12 @@ fn build_struct_names(module: &LirModule) -> HashMap<u32, String> {
             // The typedef will be emitted separately.
             map.insert(i as u32, def.name.clone());
         } else {
-            map.insert(i as u32, format!("__lir_s{i}"));
+            // Use original name for debuggability, prefixed to avoid C name collisions.
+            // Sanitize: replace non-alphanumeric chars with underscores.
+            let sanitized: String = def.name.chars()
+                .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+                .collect();
+            map.insert(i as u32, format!("__gg_{sanitized}"));
         }
     }
     map
@@ -1450,7 +1455,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
     let null_vals = ctx.null_vals;
     let ptr_pointee = ctx.ptr_pointee;
     let func_addr_targets = ctx.func_addr_targets;
-    let spawn_source_fn = ctx.spawn_source_fn;
+    let _spawn_source_fn = ctx.spawn_source_fn;
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -2471,9 +2476,9 @@ mod tests {
         module.add_function(func);
 
         let c = generate_c(&module);
-        assert!(c.contains("struct __lir_s0"));
+        assert!(c.contains("struct __gg_Point"), "expected __gg_Point in output:\n{c}");
         assert!(c.contains("double x;"));
-        assert!(c.contains("((__lir_s0 *)(__v0))->x"));
+        assert!(c.contains("((__gg_Point *)(__v0))->x"));
     }
 
     #[test]
