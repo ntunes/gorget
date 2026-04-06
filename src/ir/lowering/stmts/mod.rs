@@ -73,7 +73,7 @@ pub fn lower_stmt(
             if *shared != ast::SharedKind::None {
                 lower_shared_var_decl(ctx, builder, type_, pattern, value, shared);
             } else {
-                lower_var_decl(ctx, builder, type_, pattern, value);
+                lower_var_decl(ctx, builder, type_, pattern, value, stmt.span);
             }
         }
 
@@ -192,6 +192,7 @@ fn lower_var_decl(
     type_: &Spanned<ast::Type>,
     pattern: &Spanned<Pattern>,
     value: &Spanned<Expr>,
+    stmt_span: crate::span::Span,
 ) {
     match &pattern.node {
         Pattern::Binding(name) => {
@@ -300,7 +301,11 @@ fn lower_var_decl(
                         } else { false };
 
                         let in_loop = ctx.current_loop().is_some();
-                        if source_is_borrow && !in_loop {
+                        // Allow borrow propagation in loops when the variable is
+                        // never reassigned. cow_before_mutation handles mutation-
+                        // through-method-call (e.g. v.push(x)) correctly on BareParam.
+                        let safe_in_loop = !ctx.func_state.cow_reassigned_names.contains(name);
+                        if source_is_borrow && (!in_loop || safe_in_loop) {
                             // Propagate borrow
                             builder.locals[local_id.0 as usize].type_id = inferred;
                             ctx.register_local(name, local_id, inferred);
@@ -370,11 +375,13 @@ fn lower_var_decl(
                         assign_mode = AssignMode::Move;
                     }
                     // Named resource variable → CoW alias OR clone (if unsafe for CoW).
+                    // Flow-sensitive: only skip aliasing if the name is reassigned
+                    // on a forward path from THIS statement (not globally).
                     else if ctx.is_named_local(place.local)
                         && ctx.type_registry.is_resource_type(rhs_type)
-                        && !ctx.func_state.cow_reassigned_names.contains(name)
+                        && !ctx.is_cow_unsafe_at(name, stmt_span.start)
                         && !builder.local_name(place.local)
-                            .map_or(false, |n| ctx.func_state.cow_reassigned_names.contains(n))
+                            .map_or(false, |n| ctx.is_cow_unsafe_at(n, stmt_span.start))
                     {
                         // Create Ptr(T) alias instead of cloning
                         let ptr_type = ctx.register_ptr_type(rhs_type);
@@ -506,7 +513,7 @@ fn lower_shared_var_decl(
     let name = match &pattern.node {
         Pattern::Binding(n) => n,
         _ => {
-            lower_var_decl(ctx, builder, type_, pattern, value);
+            lower_var_decl(ctx, builder, type_, pattern, value, pattern.span);
             return;
         }
     };
@@ -1055,7 +1062,7 @@ fn lower_while(
     builder.switch_to(body_bb);
     let saved_while = ctx.save_locals();
     emit_is_bindings(ctx, builder, condition);
-    ctx.push_loop(header_bb, break_exit_bb);
+    ctx.push_loop(header_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
     lower_block(ctx, builder, body);
     ctx.drops.pop_scope(builder, &ctx.type_registry);
@@ -1092,7 +1099,7 @@ fn lower_loop(
     // Body: execute, jump back to body (infinite loop)
     builder.switch_to(body_bb);
     let saved_loop = ctx.save_locals();
-    ctx.push_loop(body_bb, exit_bb);
+    ctx.push_loop(body_bb, exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
     lower_block(ctx, builder, body);
     ctx.drops.pop_scope(builder, &ctx.type_registry);

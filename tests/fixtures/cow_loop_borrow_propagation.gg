@@ -1,0 +1,24 @@
+# Test: borrow propagation from bare params into loops.
+# Reading a param inside a loop should not clone if never reassigned.
+
+int sum_vector(Vector[int] v):
+    int total = 0
+    for n in v:
+        total = total + n
+    return total
+
+void print_all(Vector[String] names):
+    for name in names:
+        print(name)
+
+void main():
+    Vector[int] nums = Vector[int]()
+    nums.push(10)
+    nums.push(20)
+    nums.push(30)
+    print(sum_vector(nums))
+
+    Vector[String] greetings = Vector[String]()
+    greetings.push("hello")
+    greetings.push("world")
+    print_all(greetings)

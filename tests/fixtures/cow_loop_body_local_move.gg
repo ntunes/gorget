@@ -1,0 +1,15 @@
+# Test: locals declared inside a loop body can be auto-moved on last use.
+# Vector created inside loop, pushed into outer collection — should auto-move.
+
+void main():
+    Vector[Vector[int]] matrix = Vector[Vector[int]]()
+    int i = 0
+    while i < 3:
+        Vector[int] row = Vector[int]()
+        row.push(i)
+        row.push(i * 10)
+        matrix.push(row)
+        i = i + 1
+    for row in matrix:
+        for val in row:
+            print(val)

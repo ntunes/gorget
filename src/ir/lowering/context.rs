@@ -83,6 +83,9 @@ pub enum SharedLocalKind {
 pub struct LoopInfo {
     pub header_bb: BlockId,  // target for continue
     pub exit_bb: BlockId,    // target for break
+    /// LocalId upper bound before loop body. Locals with id >= this value
+    /// were created inside the loop body (fresh each iteration).
+    pub pre_loop_local_count: u32,
 }
 
 /// State for generic monomorphization within a function body.
@@ -213,6 +216,9 @@ pub struct FunctionState {
     /// CoW: variable names that are reassigned in the current function body.
     /// Pre-scanned before lowering. Locals in this set skip CoW aliasing.
     pub cow_reassigned_names: rustc_hash::FxHashSet<String>,
+    /// Flow-sensitive CoW: for each statement span.start, the set of names
+    /// reassigned or !-moved on any forward path from that point.
+    pub cow_reassigned_after: FxHashMap<usize, rustc_hash::FxHashSet<String>>,
     /// Phase 1f: name → use count in the function body. Names with count=1 are
     /// single-use (dead after their one use) → auto-move at push/constructor.
     pub name_use_counts: rustc_hash::FxHashMap<String, u32>,
@@ -733,6 +739,14 @@ impl<'a> LoweringContext<'a> {
         self.func_state.named_locals.contains(&local)
     }
 
+    /// Flow-sensitive CoW check: is `name` reassigned or !-moved on any forward
+    /// path from the statement at `stmt_span_start`?
+    pub fn is_cow_unsafe_at(&self, name: &str, stmt_span_start: usize) -> bool {
+        self.func_state.cow_reassigned_after
+            .get(&stmt_span_start)
+            .map_or(false, |set| set.contains(name))
+    }
+
     /// Create a local AND register it for drop if its type needs dropping.
     /// Use this instead of `builder.add_local()` for temps that might be resource types.
     /// The `needs_drop()` check inside `register_local` automatically skips primitives
@@ -805,7 +819,8 @@ impl<'a> LoweringContext<'a> {
                 if place.projections.is_empty() {
                     let local_type = builder.local_type(place.local);
                     let is_resource = self.type_registry.is_resource_type(local_type);
-                    let skip = self.is_named_local(place.local) && self.current_loop().is_some();
+                    let skip = self.is_named_local(place.local) && self.current_loop().is_some()
+                        && !self.is_loop_body_local(place.local);
                     if is_resource && !self.drops.is_moved(place.local) && !skip {
                         builder.move_zero(place.clone());
                         self.drops.mark_moved(place.local);
@@ -1478,8 +1493,16 @@ impl<'a> LoweringContext<'a> {
     // ---- Loop stack for break/continue ----
 
     /// Push a loop onto the stack (called when entering a while/for/loop).
-    pub fn push_loop(&mut self, header_bb: BlockId, exit_bb: BlockId) {
-        self.func_state.loop_stack.push(LoopInfo { header_bb, exit_bb });
+    /// `pre_loop_local_count` is `builder.locals.len() as u32` at loop entry —
+    /// locals with id >= this are loop-body locals (fresh each iteration).
+    pub fn push_loop(&mut self, header_bb: BlockId, exit_bb: BlockId, pre_loop_local_count: u32) {
+        self.func_state.loop_stack.push(LoopInfo { header_bb, exit_bb, pre_loop_local_count });
+    }
+
+    /// Check if a local was created inside the current innermost loop body.
+    pub fn is_loop_body_local(&self, local: LocalId) -> bool {
+        self.current_loop()
+            .map_or(false, |info| local.0 >= info.pre_loop_local_count)
     }
 
     /// Pop the current loop off the stack.

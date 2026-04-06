@@ -123,6 +123,145 @@ fn prescan_expr_moves(
     }
 }
 
+/// Flow-sensitive CoW analysis: for each statement, compute the set of variable names
+/// that are reassigned or !-moved on any forward execution path.
+///
+/// Algorithm: reverse walk of the AST (same shape as liveness analysis). At each
+/// statement, the "reassigned-after" set is the accumulation of all reassignments
+/// that appear textually after it. At branches (if/else), the sets are unioned
+/// (any-path: if a name is reassigned in any branch, it's unsafe for CoW).
+/// At loops, the loop body's reassignments are included (conservative but correct).
+fn compute_cow_reassigned_after(body: &[Spanned<Stmt>]) -> rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<String>> {
+    let mut result = rustc_hash::FxHashMap::default();
+    let mut future = rustc_hash::FxHashSet::default();
+    cow_after_block(body, &mut future, &mut result);
+    result
+}
+
+fn cow_after_block(
+    stmts: &[Spanned<Stmt>],
+    future: &mut rustc_hash::FxHashSet<String>,
+    result: &mut rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<String>>,
+) {
+    for stmt in stmts.iter().rev() {
+        // Record the "reassigned-after" set at this statement's position
+        result.insert(stmt.span.start, future.clone());
+        // Collect reassignments from this statement
+        cow_after_stmt(&stmt.node, future, result);
+    }
+}
+
+fn cow_after_stmt(
+    stmt: &Stmt,
+    future: &mut rustc_hash::FxHashSet<String>,
+    result: &mut rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<String>>,
+) {
+    match stmt {
+        Stmt::VarDecl { value, .. } => {
+            cow_after_expr_moves(&value.node, future);
+        }
+        Stmt::Assign { target, value, .. } => {
+            if let Expr::Identifier(name) = &target.node {
+                future.insert(name.clone());
+            }
+            cow_after_expr_moves(&value.node, future);
+        }
+        Stmt::CompoundAssign { target, value, .. } => {
+            if let Expr::Identifier(name) = &target.node {
+                future.insert(name.clone());
+            }
+            cow_after_expr_moves(&value.node, future);
+        }
+        Stmt::Expr(expr) => {
+            cow_after_expr_moves(&expr.node, future);
+        }
+        Stmt::Return(Some(expr)) => {
+            cow_after_expr_moves(&expr.node, future);
+        }
+        Stmt::While { body, else_body, .. } => {
+            // Loop body reassignments are visible to statements before the loop
+            cow_after_block(&body.stmts, future, result);
+            if let Some(eb) = else_body {
+                cow_after_block(&eb.stmts, future, result);
+            }
+        }
+        Stmt::For { body, .. } => {
+            cow_after_block(&body.stmts, future, result);
+        }
+        Stmt::If { then_body, elif_branches, else_body, .. } => {
+            // Union all branches: if a name is reassigned in any branch, it's unsafe
+            let saved = future.clone();
+            cow_after_block(&then_body.stmts, future, result);
+            let then_set = future.clone();
+            *future = saved.clone();
+            for (_, branch_body) in elif_branches {
+                cow_after_block(&branch_body.stmts, future, result);
+                // Accumulate into future (union)
+            }
+            if let Some(eb) = else_body {
+                cow_after_block(&eb.stmts, future, result);
+            }
+            // Union: include then-branch reassignments too
+            future.extend(then_set);
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            let saved = future.clone();
+            for item in arms {
+                if let crate::parser::ast::MatchItem::Arm(arm) = item {
+                    let mut branch = saved.clone();
+                    if let Expr::Block(block) = &arm.body.node {
+                        cow_after_block(&block.stmts, &mut branch, result);
+                    }
+                    future.extend(branch);
+                }
+            }
+            if let Some(b) = else_arm {
+                let mut branch = saved;
+                cow_after_block(&b.stmts, &mut branch, result);
+                future.extend(branch);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Collect !-moved names from expressions (same as prescan_expr_moves but
+/// inserts into the forward-reassigned set).
+fn cow_after_expr_moves(
+    expr: &Expr,
+    future: &mut rustc_hash::FxHashSet<String>,
+) {
+    match expr {
+        Expr::Call { args, callee, .. } => {
+            cow_after_expr_moves(&callee.node, future);
+            for arg in args {
+                if matches!(arg.node.ownership, Ownership::Move) {
+                    if let Expr::Identifier(name) = &arg.node.value.node {
+                        future.insert(name.clone());
+                    }
+                }
+                cow_after_expr_moves(&arg.node.value.node, future);
+            }
+        }
+        Expr::MethodCall { receiver, args, .. } => {
+            cow_after_expr_moves(&receiver.node, future);
+            for arg in args {
+                if matches!(arg.node.ownership, Ownership::Move) {
+                    if let Expr::Identifier(name) = &arg.node.value.node {
+                        future.insert(name.clone());
+                    }
+                }
+                cow_after_expr_moves(&arg.node.value.node, future);
+            }
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            cow_after_expr_moves(&left.node, future);
+            cow_after_expr_moves(&right.node, future);
+        }
+        _ => {}
+    }
+}
+
 /// Pre-scan: count how many times each declared name is USED (read) in the function body.
 /// Names with exactly 1 use-site (beyond their declaration) are "single-use" — they can
 /// be auto-moved at push/constructor sites instead of cloned.
@@ -336,6 +475,7 @@ pub fn lower_function(
     // Also count name uses and compute liveness for auto-move (Phase 1f).
     if let FunctionBody::Block(block) = &func.body {
         ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
+        ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(&block.stmts);
         ctx.func_state.name_use_counts = prescan_name_use_counts(&block.stmts);
         ctx.func_state.liveness = super::liveness::compute_function_liveness(&block.stmts);
     }
@@ -596,6 +736,7 @@ pub fn lower_equip_method(
     // Pre-scan: find variables unsafe for CoW + count name uses + liveness for auto-move.
     if let FunctionBody::Block(block) = &method.body {
         ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
+        ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(&block.stmts);
         ctx.func_state.name_use_counts = prescan_name_use_counts(&block.stmts);
         ctx.func_state.liveness = super::liveness::compute_function_liveness(&block.stmts);
     }

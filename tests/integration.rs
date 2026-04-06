@@ -14919,6 +14919,41 @@ done",
 }
 
 #[test]
+fn cow_loop_borrow_propagation() {
+    run_gg(
+        "cow_loop_borrow_propagation.gg",
+        "\
+60
+hello
+world",
+    );
+}
+
+#[test]
+fn cow_loop_body_local_move() {
+    run_gg(
+        "cow_loop_body_local_move.gg",
+        "\
+0
+0
+1
+10
+2
+20",
+    );
+}
+
+#[test]
+fn cow_flow_sensitive_alias() {
+    run_gg(
+        "cow_flow_sensitive_alias.gg",
+        "\
+2
+2",
+    );
+}
+
+#[test]
 fn move_and_reinit() {
     run_gg(
         "move_and_reinit.gg",

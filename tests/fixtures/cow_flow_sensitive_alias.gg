@@ -1,0 +1,16 @@
+# Test: flow-sensitive CoW — reassignment before alias creation is safe.
+# The alias should be zero-cost (no clone) when the source is not
+# reassigned on any forward path from the alias point.
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+    v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    # v was reassigned above, but NOT after this point.
+    # With flow-sensitive analysis, this becomes a zero-cost alias.
+    Vector[int] alias = v
+    print(alias.len())
+    print(v.len())

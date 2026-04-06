@@ -185,7 +185,7 @@ fn lower_for_string(
     // Body
     builder.switch_to(body_bb);
     let saved_str = ctx.save_locals();
-    ctx.push_loop(header_bb, break_exit_bb);
+    ctx.push_loop(header_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
     // cplen = gorget_utf8_codepoint_len((unsigned char)data[byte_pos])
@@ -278,7 +278,7 @@ fn lower_for_array(
     // Body
     builder.switch_to(body_bb);
     let saved_arr = ctx.save_locals();
-    ctx.push_loop(incr_bb, break_exit_bb);
+    ctx.push_loop(incr_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
     // elem = iter[idx] — load element from array
@@ -370,7 +370,7 @@ fn lower_for_enumerate(
     // Body
     builder.switch_to(body_bb);
     let saved_enum = ctx.save_locals();
-    ctx.push_loop(incr_bb, break_exit_bb);
+    ctx.push_loop(incr_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
     // Bind index variable (first tuple element)
@@ -476,7 +476,7 @@ fn lower_for_dict(
     // Body
     builder.switch_to(body_bb);
     let saved_dict = ctx.save_locals();
-    ctx.push_loop(incr_bb, break_exit_bb);
+    ctx.push_loop(incr_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
     // idx = oi (direct index into capacity)
@@ -612,7 +612,7 @@ fn lower_for_set(
 
     builder.switch_to(body_bb);
     let saved_set = ctx.save_locals();
-    ctx.push_loop(incr_bb, break_exit_bb);
+    ctx.push_loop(incr_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
     if is_ordered {
@@ -800,7 +800,7 @@ fn lower_for_iterable(
     // Body: extract value from Some variant
     builder.switch_to(body_bb);
     let saved_iter = ctx.save_locals();
-    ctx.push_loop(header_bb, break_exit_bb);
+    ctx.push_loop(header_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
     // Extract: elem = opt_result.data.Some._0
@@ -943,7 +943,7 @@ fn lower_for_range(
     // Body (wrapped in Loop scope for drop cleanup)
     // Continue target is incr_bb (not header_bb) so the loop variable gets incremented
     builder.switch_to(body_bb);
-    ctx.push_loop(incr_bb, break_exit_bb);
+    ctx.push_loop(incr_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
     lower_block(ctx, builder, body);
     ctx.drops.pop_scope(builder, &ctx.type_registry);

@@ -2383,10 +2383,13 @@ fn clone_multi_use_resource_args(
                             Some(!ctx.is_last_use_at(name, arg.span))
                         } else { None })
                         .unwrap_or(false);
-                    // In a loop body, named locals are effectively multi-use
-                    // (each iteration reads the same local). Force clone.
+                    // In a loop body, named locals declared BEFORE the loop are
+                    // effectively multi-use (each iteration reads the same local).
+                    // Locals declared INSIDE the loop are fresh each iteration —
+                    // they can be safely moved on last use.
                     let in_loop = ctx.current_loop().is_some();
-                    let is_named_in_loop = in_loop && ctx.is_named_local(local);
+                    let is_named_in_loop = in_loop && ctx.is_named_local(local)
+                        && !ctx.is_loop_body_local(local);
                     if is_borrow_param || is_multi_use || is_field_access || is_named_in_loop || is_non_owned_string {
                         let inner_type = ctx.pointee_type(local_type).unwrap_or(local_type);
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
