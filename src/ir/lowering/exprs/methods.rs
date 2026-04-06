@@ -1452,12 +1452,13 @@ pub(super) fn lower_method_call(
         } else {
             let dst = ctx.call_tracked(builder, call_name, call_args, ret_type);
             // Track collection provenance for Option__Ref_ results (from .get(), .first(), etc.).
-            // Only for named-local receivers (direct variables like `entries`), not
-            // field-access temps (`self.data`) — those have unstable LocalIds.
-            if let Some(recv_local) = recv_local_for_move_zero {
-                if ctx.is_named_local(recv_local) {
-                    if let Some(ret_name) = ctx.type_name_for_id(ret_type) {
-                        if ret_name.starts_with("Option__Ref_") {
+            // Only for direct named-local receivers — field-access receivers
+            // (self.data, game.entities) require mutation-side tracking that
+            // isn't fully implemented yet (index assignment bypasses cow_before_mutation).
+            if let Some(ret_name) = ctx.type_name_for_id(ret_type) {
+                if ret_name.starts_with("Option__Ref_") {
+                    if let Some(recv_local) = recv_local_for_move_zero {
+                        if ctx.is_named_local(recv_local) {
                             ctx.set_cow_borrow_source(dst, recv_local);
                         }
                     }

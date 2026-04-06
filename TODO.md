@@ -18,7 +18,7 @@
 
 ## Medium
 
-- **CowBorrow for field-access receivers**: `CowBorrow` provenance only tracks named-local receivers (`entries.get(i)`). Field-access receivers (`self.data.get(i)`) produce unstable temp LocalIds that don't match `cow_before_mutation` targets. Library code (Heap stdlib) still clones at typed bindings. Fix: track provenance by name or use a stable collection identifier. [added: 2026-04-06]
+- **CowBorrow for field-access receivers**: `CowBorrow` provenance only tracks direct named-local receivers (`entries.get(i)`). Field-access receivers (`game.entities.get(i)`, `self.data.get(i)`) can't propagate because mutation of the collection goes through index assignment and internal method calls that bypass `cow_before_mutation` on the root. Fix requires tracking collection identity structurally as `(root_local, field_path)` and hooking all mutation paths (index assign, field assign, method calls) to check for matching CollectionRefs. [added: 2026-04-06]
 
 
 - **Borrow checker: early return doesn't reset move state**: INVESTIGATED — the divergent-branch filtering in `merge_branch_states()` already works correctly. Moves in branches that return/throw/break are excluded from the join-point merge. Added regression test `move_in_divergent_branch_ok`. The self-host `scope.gg` defensive clones may have been needed before the StringView removal. Review if they can now be removed. [updated: 2026-04-06]

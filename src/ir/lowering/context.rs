@@ -1418,7 +1418,7 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Materialize a collection ref: clone the pointed-to element into an owned local.
-    fn cow_materialize_collection_ref(
+    pub fn cow_materialize_collection_ref(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         ref_local: LocalId,
