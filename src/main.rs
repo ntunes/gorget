@@ -370,6 +370,7 @@ fn try_build_ir(
     emit_lir: bool,
     emit_c_lir: bool,
     show_clones: bool,
+    backend_name: &str,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -561,9 +562,13 @@ fn try_build_ir(
         }
         gorget::lir::optimize::optimize_module(&mut lir_module);
 
-        let backend = gorget::backend::c_lir::CLirBackend;
-        let output = gorget::backend::Backend::generate(&backend, &lir_module);
-        let c_code = output.code;
+        let backend: Box<dyn gorget::backend::Backend> = match backend_name {
+            "llvm" => Box::new(gorget::backend::llvm::LlvmBackend),
+            _ => Box::new(gorget::backend::c_lir::CLirBackend),
+        };
+        let output = gorget::backend::Backend::generate(backend.as_ref(), &lir_module);
+        let generated_code = output.code;
+        let code_ext = output.extension;
 
         // Determine output paths
         let input_path = Path::new(filename);
@@ -573,15 +578,15 @@ fn try_build_ir(
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("output");
-        let (c_path, exe_path) = if let Some(out) = output_exe {
+        let (src_path, exe_path) = if let Some(out) = output_exe {
             let out = std::path::absolute(out).unwrap_or(out.to_path_buf());
-            let c_path = out.with_extension("c");
-            (c_path, out)
+            let src_path = out.with_extension(code_ext);
+            (src_path, out)
         } else {
-            let c_path = dir.join(format!("{stem}.c"));
+            let src_path = dir.join(format!("{stem}.{code_ext}"));
             let exe_path = dir.join(stem);
             let exe_path = std::path::absolute(&exe_path).unwrap_or(exe_path);
-            (c_path, exe_path)
+            (src_path, exe_path)
         };
 
         // ── --shared: build as shared library (used by hot-reload recompile) ──
@@ -589,12 +594,12 @@ fn try_build_ir(
             let shared_c_code = if lir_module.hot_reload {
                 let state_type = lir_module.hot_reload_state_type.as_deref().unwrap_or("State");
                 let (_, guest) = gorget::backend::generate_hot_reload_split(
-                    &c_code, state_type, lir_module.hot_reload_state_hash,
+                    &generated_code, state_type, lir_module.hot_reload_state_hash,
                     lir_module.hot_reload_has_reload_fn, None,
                 );
                 guest
             } else {
-                c_code.clone()
+                generated_code.clone()
             };
             let shared_c_path = dir.join(format!("{stem}_guest.c"));
             if let Err(e) = fs::write(&shared_c_path, &shared_c_code) {
@@ -669,7 +674,7 @@ fn try_build_ir(
                 recompile_cmd,
             };
             let (host_code, guest_code) = gorget::backend::generate_hot_reload_split(
-                &c_code, state_type, lir_module.hot_reload_state_hash,
+                &generated_code, state_type, lir_module.hot_reload_state_hash,
                 lir_module.hot_reload_has_reload_fn, Some(&hr_opts),
             );
 
@@ -730,10 +735,16 @@ fn try_build_ir(
         }
 
         // ── Normal LIR build ──
-        if let Err(e) = fs::write(&c_path, &c_code) {
-            return Err(format!("Error writing {}: {e}", c_path.display()));
+        if let Err(e) = fs::write(&src_path, &generated_code) {
+            return Err(format!("Error writing {}: {e}", src_path.display()));
         }
 
+        // ── LLVM backend: .ll → clang -c → link with runtime .o → binary ──
+        if backend_name == "llvm" {
+            return compile_llvm_pipeline(&src_path, &exe_path, &generated_code, &concat_source, &lir_module, &options, &gir_module);
+        }
+
+        // ── C backend: .c → cc → binary ──
         let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
         let mut cc_cmd = Command::new(&cc);
         let needs_metal = concat_source.contains("xtd.metal");
@@ -764,7 +775,7 @@ fn try_build_ir(
             cc_cmd.arg("-Wno-incompatible-pointer-types-discards-qualifiers");
             cc_cmd.arg("-Wno-nonnull");
         }
-        cc_cmd.arg(&c_path)
+        cc_cmd.arg(&src_path)
             .arg("-lm");
 
         #[cfg(not(target_os = "macos"))]
@@ -782,7 +793,7 @@ fn try_build_ir(
         }
 
         // Library detection — use generated C for precise SDL sub-library detection
-        add_sdl_flags(&mut cc_cmd, concat_source.contains("xtd.sdl") || concat_source.contains("xtd.gfx") || concat_source.contains("xtd.gl") || needs_metal, &c_code);
+        add_sdl_flags(&mut cc_cmd, concat_source.contains("xtd.sdl") || concat_source.contains("xtd.gfx") || concat_source.contains("xtd.gl") || needs_metal, &generated_code);
         add_gl_flags(&mut cc_cmd, concat_source.contains("xtd.gl"));
         add_audio_flags(&mut cc_cmd, concat_source.contains("xtd.audio"));
         add_compress_flags(&mut cc_cmd, concat_source.contains("xtd.compress"));
@@ -796,13 +807,192 @@ fn try_build_ir(
         return match status {
             Ok(s) if s.success() => Ok(exe_path),
             Ok(s) => Err(format!(
-                "C compiler exited with: {s}\nGenerated C file (LIR): {}",
-                c_path.display()
+                "C compiler exited with: {s}\nGenerated source file (LIR): {}",
+                src_path.display()
             )),
             Err(e) => Err(format!(
-                "Failed to run C compiler '{cc}': {e}\nGenerated C file (LIR): {}",
-                c_path.display()
+                "Failed to run C compiler '{cc}': {e}\nGenerated source file (LIR): {}",
+                src_path.display()
             )),
+    }
+}
+
+/// LLVM backend compilation pipeline: .ll → clang -c → link with runtime .o → binary
+fn compile_llvm_pipeline(
+    ll_path: &Path,
+    exe_path: &Path,
+    _ll_code: &str,
+    concat_source: &str,
+    lir_module: &gorget::lir::LirModule,
+    options: &gorget::ir::lowering::LoweringOptions,
+    gir_module: &gorget::ir::Module,
+) -> Result<PathBuf, String> {
+    let tmp_dir = ll_path.parent().unwrap_or(Path::new("."));
+
+    // Step 1: Write the C runtime to a temporary file and compile it
+    let runtime_c_path = tmp_dir.join("__gorget_runtime.c");
+    let mut runtime_src = String::with_capacity(256 * 1024);
+    // Include all runtime modules needed for a basic program
+    use gorget::backend::c::c_runtime;
+    runtime_src.push_str(c_runtime::RUNTIME_PREAMBLE);
+    runtime_src.push_str(c_runtime::PANIC_NORMAL);
+    runtime_src.push_str(c_runtime::RUNTIME_CHECKED_ARITH);
+    runtime_src.push_str(c_runtime::RUNTIME_STRING);
+    runtime_src.push_str(c_runtime::RUNTIME_STRING_EXTENDED);
+    runtime_src.push_str(c_runtime::RUNTIME_STRING_BASE_OPS);
+    runtime_src.push_str(c_runtime::RUNTIME_ARRAY);
+    runtime_src.push_str(c_runtime::RUNTIME_STRING_ARRAY);
+    runtime_src.push_str(c_runtime::RUNTIME_MAP);
+    runtime_src.push_str(c_runtime::RUNTIME_SET);
+    runtime_src.push_str(c_runtime::RUNTIME_ERROR);
+    runtime_src.push_str(c_runtime::RUNTIME_FILE);
+    runtime_src.push_str(c_runtime::RUNTIME_PATH);
+    runtime_src.push_str(c_runtime::RUNTIME_ARGS);
+    runtime_src.push_str(c_runtime::RUNTIME_PARSE);
+    runtime_src.push_str(c_runtime::RUNTIME_TOSTR);
+    runtime_src.push_str(c_runtime::RUNTIME_IO);
+    runtime_src.push_str(c_runtime::RUNTIME_MATH);
+    runtime_src.push_str(c_runtime::RUNTIME_SORT);
+    runtime_src.push_str(c_runtime::RUNTIME_ENV);
+    runtime_src.push_str(c_runtime::RUNTIME_ALLOC_REPORT);
+    // Conditionally include heavier runtime modules
+    if concat_source.contains("std.async") || !lir_module.spawned_fns.is_empty() {
+        runtime_src.push_str(c_runtime::ASYNC_RUNTIME);
+        runtime_src.push_str(c_runtime::TASK_COMMON);
+        runtime_src.push_str(c_runtime::EXECUTOR_RUNTIME);
+        runtime_src.push_str(c_runtime::MAIN_WAKER_RUNTIME);
+        runtime_src.push_str(c_runtime::CHANNEL_RUNTIME);
+        runtime_src.push_str(c_runtime::BLOCKING_POOL_RUNTIME);
+        runtime_src.push_str(c_runtime::TASK_GROUP_RUNTIME);
+        runtime_src.push_str(match lir_module.scheduler_mode {
+            gorget::ir::SchedulerMode::Pool => c_runtime::SCHEDULER_POOL_RUNTIME,
+            gorget::ir::SchedulerMode::Thread => c_runtime::SCHEDULER_THREAD_RUNTIME,
+            gorget::ir::SchedulerMode::Inline => c_runtime::SCHEDULER_INLINE_RUNTIME,
+            gorget::ir::SchedulerMode::Single => c_runtime::SCHEDULER_SINGLE_RUNTIME,
+        });
+    }
+    if concat_source.contains("std.sync") || concat_source.contains("Shared") {
+        runtime_src.push_str(c_runtime::SHARED_RUNTIME);
+        runtime_src.push_str(c_runtime::MUTEX_RUNTIME);
+        runtime_src.push_str(c_runtime::SYNC_RUNTIME);
+    }
+    if concat_source.contains("std.thread") || !lir_module.thread_spawned_fns.is_empty() {
+        runtime_src.push_str(c_runtime::THREAD_RUNTIME);
+    }
+    if concat_source.contains("std.alloc") {
+        runtime_src.push_str(c_runtime::RUNTIME_ARENA_ALLOC);
+        runtime_src.push_str(c_runtime::RUNTIME_TRACKING_ALLOC);
+        runtime_src.push_str(c_runtime::RUNTIME_POOL_ALLOC);
+        runtime_src.push_str(c_runtime::RUNTIME_TLSF_ALLOC);
+        runtime_src.push_str(c_runtime::RUNTIME_FIXEDBUF_ALLOC);
+        runtime_src.push_str(c_runtime::RUNTIME_FALLBACK_ALLOC);
+    }
+    if concat_source.contains("std.os") {
+        runtime_src.push_str(c_runtime::PROCESS_RUNTIME);
+        runtime_src.push_str(c_runtime::PROCESS_SPAWN_RUNTIME);
+    }
+    if concat_source.contains("xtd.regex") {
+        runtime_src.push_str(c_runtime::REGEX_RUNTIME);
+    }
+    if concat_source.contains("xtd.crypto") {
+        runtime_src.push_str(c_runtime::CRYPTO_RUNTIME);
+    }
+    if concat_source.contains("std.net") {
+        runtime_src.push_str(c_runtime::SOCKET_RUNTIME);
+        runtime_src.push_str(c_runtime::SERVER_SOCKET_RUNTIME);
+    }
+    if concat_source.contains("std.net.tls") {
+        runtime_src.push_str(c_runtime::TLS_SOCKET_RUNTIME);
+        runtime_src.push_str(c_runtime::TLS_SERVER_RUNTIME);
+    }
+    if concat_source.contains("std.net.udp") {
+        runtime_src.push_str(c_runtime::UDP_SOCKET_RUNTIME);
+    }
+    if concat_source.contains("xtd.bytes") {
+        runtime_src.push_str(c_runtime::BYTES_RUNTIME);
+    }
+    // Make static functions non-static so they're visible for linking.
+    // Keep _Thread_local statics (GCC requires TLS variables to be static at function scope).
+    let runtime_src = runtime_src
+        .replace("static inline ", "")
+        .replace("static _Thread_local", "_Thread_local_KEEP")
+        .replace("static ", "")
+        .replace("_Thread_local_KEEP", "static _Thread_local");
+
+    if let Err(e) = fs::write(&runtime_c_path, &runtime_src) {
+        return Err(format!("Error writing runtime C: {e}"));
+    }
+
+    // Compile runtime C → .o
+    let runtime_o_path = tmp_dir.join("__gorget_runtime.o");
+    let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let mut rt_cmd = Command::new(&cc);
+    rt_cmd
+        .arg("-c")
+        .arg("-O2")
+        .arg("-std=c11")
+        .arg("-w")  // suppress all warnings from runtime
+        .arg("-o").arg(&runtime_o_path)
+        .arg(&runtime_c_path)
+        .arg("-lm");
+    // Thread support
+    #[cfg(not(target_os = "macos"))]
+    rt_cmd.arg("-pthread");
+
+    let status = rt_cmd.status();
+    match status {
+        Ok(s) if !s.success() => return Err(format!("Runtime compilation failed: {s}")),
+        Err(e) => return Err(format!("Failed to run '{cc}' for runtime: {e}")),
+        _ => {}
+    }
+
+    // Step 2: Compile LLVM IR → .o using llc
+    let ll_o_path = tmp_dir.join("__gorget_user.o");
+    let llc = env::var("LLC").unwrap_or_else(|_| "llc".to_string());
+    let mut ll_cmd = Command::new(&llc);
+    ll_cmd
+        .arg("-filetype=obj")
+        .arg("-O0")
+        .arg("-opaque-pointers")
+        .arg("-o").arg(&ll_o_path)
+        .arg(ll_path);
+
+    let status = ll_cmd.status();
+    match status {
+        Ok(s) if !s.success() => return Err(format!(
+            "llc compilation failed: {s}\nGenerated LLVM IR: {}",
+            ll_path.display()
+        )),
+        Err(e) => return Err(format!("Failed to run '{llc}': {e}\nIs LLVM installed? (apt install llvm)")),
+        _ => {}
+    }
+
+    // Step 3: Link .o files → binary
+    let mut link_cmd = Command::new(&cc);
+    link_cmd
+        .arg("-o").arg(exe_path)
+        .arg(&ll_o_path)
+        .arg(&runtime_o_path)
+        .arg("-lm");
+
+    #[cfg(not(target_os = "macos"))]
+    link_cmd.arg("-pthread");
+
+    if options.overflow_wrap || gir_module.runtime.overflow_wrap {
+        link_cmd.arg("-fwrapv");
+    }
+
+    let status = link_cmd.status();
+    match status {
+        Ok(s) if s.success() => {
+            // Clean up temp files
+            let _ = fs::remove_file(&runtime_c_path);
+            let _ = fs::remove_file(&runtime_o_path);
+            let _ = fs::remove_file(&ll_o_path);
+            Ok(exe_path.to_path_buf())
+        }
+        Ok(s) => Err(format!("Linking failed: {s}\nGenerated LLVM IR: {}", ll_path.display())),
+        Err(e) => Err(format!("Failed to run '{cc}' for linking: {e}")),
     }
 }
 
@@ -1218,7 +1408,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false) {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, "c-lir") {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1254,7 +1444,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false) {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, "c-lir") {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1720,7 +1910,7 @@ fn main() {
             sanitize, scheduler_mode: parse_scheduler(&args),
             ..Default::default()
         };
-        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false)
+        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, "c-lir")
             .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
         let status = Command::new(&exe_path)
             .status()
@@ -1846,6 +2036,11 @@ fn main() {
     let emit_gir = args.iter().any(|a| a == "--emit-gir");
     let emit_lir = args.iter().any(|a| a == "--emit-lir");
     let emit_c_lir = args.iter().any(|a| a == "--emit-c-lir");
+    let backend_name = args.iter()
+        .position(|a| a == "--backend")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str())
+        .unwrap_or("c-lir");
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
     let show_clones = args.iter().any(|a| a == "--show-clones");
@@ -1868,7 +2063,7 @@ fn main() {
     // Find positional filename, skipping values of known flag pairs.
     // For `gg sim test <file>`, "test" is a subcommand not the filename.
     let filename = {
-        let flags_with_values = ["--tag", "--exclude-tag", "--filter", "--report", "--output", "-o", "--feature"];
+        let flags_with_values = ["--tag", "--exclude-tag", "--filter", "--report", "--output", "-o", "--feature", "--backend"];
         // Subcommand words that appear after the command and are NOT filenames.
         let sim_subcommands: &[&str] = if command == "sim" { &["test"] } else { &[] };
         let mut skip_next = false;
@@ -2156,7 +2351,7 @@ fn main() {
                     sanitize, scheduler_mode,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones);
+                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, backend_name);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built shared library: {}", p.display()); }
                     Err(e) => {
@@ -2186,7 +2381,7 @@ fn main() {
                     sanitize,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones);
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, backend_name);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built: {}", p.display()); }
                     Err(e) => {
@@ -2253,7 +2448,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false);
+            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, "c-lir");
             match result {
                 Ok(exe_path) => {
                     let status = Command::new(&exe_path)
@@ -2488,7 +2683,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false)
+            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, "c-lir")
                 .unwrap_or_else(|e| {
                     eprintln!("{e}");
                     process::exit(1);

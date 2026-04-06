@@ -1,5 +1,6 @@
 pub mod c;
 pub mod c_lir;
+pub mod llvm;
 
 use crate::lir::LirModule;
 
