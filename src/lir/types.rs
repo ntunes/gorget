@@ -48,6 +48,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
     vec![
         // GorgetString — 32-byte unified string struct (cap==0 ⟺ view, cap>0 ⟺ owned).
         // The C runtime typedef is "Str". gorget_string_free checks cap before freeing.
+        // C layout: { data, len, cap, alloc } — 4 × 8 = 32 bytes.
         StructDef {
             name: "GorgetString".into(),
             fields: vec![
@@ -57,9 +58,11 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("alloc".into(), LirType::Ptr),
             ],
             is_enum: false,
-            computed_c_size: None,
-                      },
-        // GorgetArray — dynamic array (Vector[T] backing)
+            computed_c_size: Some(32),
+        },
+        // GorgetArray — dynamic array (Vector[T] backing).
+        // C layout: { data, len, cap, elem_size, alloc, elem_drop, elem_clone } — 7 × 8 = 56 bytes.
+        // LIR only models 4 fields; the extra 3 are runtime-internal.
         StructDef {
             name: "GorgetArray".into(),
             fields: vec![
@@ -69,9 +72,9 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("elem_size".into(), LirType::I64),
             ],
             is_enum: false,
-            computed_c_size: None,
-                      },
-        // Closure — function pointer + environment
+            computed_c_size: Some(56),
+        },
+        // Closure — function pointer + environment. 2 × 8 = 16 bytes.
         StructDef {
             name: "GorgetClosure".into(),
             fields: vec![
@@ -79,9 +82,9 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("env".into(), LirType::Ptr),
             ],
             is_enum: false,
-            computed_c_size: None,
-                      },
-        // Trait object — data pointer + vtable pointer
+            computed_c_size: Some(16),
+        },
+        // Trait object — data pointer + vtable pointer. 2 × 8 = 16 bytes.
         StructDef {
             name: "TraitObj".into(),
             fields: vec![
@@ -89,9 +92,9 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("vtable".into(), LirType::Ptr),
             ],
             is_enum: false,
-            computed_c_size: None,
-                      },
-        // Task handle — task pointer + drop function
+            computed_c_size: Some(16),
+        },
+        // Task handle — task pointer + drop function. 2 × 8 = 16 bytes.
         StructDef {
             name: "TaskHandle".into(),
             fields: vec![
@@ -99,9 +102,11 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("drop_fn".into(), LirType::Ptr),
             ],
             is_enum: false,
-            computed_c_size: None,
-                      },
-        // GorgetMap — hash map backing Dict[K,V] and HashMap[K,V]
+            computed_c_size: Some(16),
+        },
+        // GorgetMap — hash map backing Dict[K,V] and HashMap[K,V].
+        // C layout: 16 fields × 8 = 128 bytes (includes key_drop, key_eq, key_hash).
+        // LIR models 13 fields; the extra 3 are runtime-internal.
         StructDef {
             name: "GorgetMap".into(),
             fields: vec![
@@ -120,9 +125,10 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("eq_fn".into(), LirType::Ptr),
             ],
             is_enum: false,
-            computed_c_size: None,
-                      },
-        // GorgetSet — typedef alias for GorgetMap, backs Set[T] and HashSet[T]
+            computed_c_size: Some(128),
+        },
+        // GorgetSet — typedef alias for GorgetMap, backs Set[T] and HashSet[T].
+        // Same C layout as GorgetMap: 128 bytes.
         StructDef {
             name: "GorgetSet".into(),
             fields: vec![
@@ -141,9 +147,9 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("eq_fn".into(), LirType::Ptr),
             ],
             is_enum: false,
-            computed_c_size: None,
-                      },
-        // GorgetRange — range iterator
+            computed_c_size: Some(128),
+        },
+        // GorgetRange — range iterator. 3 × 8 = 24 bytes.
         StructDef {
             name: "GorgetRange".into(),
             fields: vec![
