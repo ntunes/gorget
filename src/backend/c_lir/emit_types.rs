@@ -1,5 +1,5 @@
 //! Type definition emission, drop/clone functions, higher-order collection helpers,
-//! Option/Result combinator helpers, and spawn/thread helpers.
+//! Option/Result combinator helpers, spawn/thread helpers, and runtime module selection.
 
 use super::*;
 
@@ -2058,4 +2058,647 @@ pub(super) fn emit_monomorphized_typedefs(out: &mut String, module: &LirModule, 
     }
 
     writeln!(out).unwrap();
+}
+
+/// Scan call names in the LIR module and conditionally include C runtime modules,
+/// LIR helper functions, box allocators, and inline shim functions.
+///
+/// This covers everything that depends on `include_runtime == true`:
+/// - Conditional runtime section inclusion (preamble, allocators, collections, async, etc.)
+/// - LIR helpers (default value functions, comparators, hash functions)
+/// - `__gorget_box_alloc_*` monomorphized box allocators
+/// - Inline shims for str/array operations not provided by the C runtime
+pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct_names: &HashMap<u32, String>) {
+    // Scan ALL call names (externs + function names + CallExtern inside bodies)
+    // to determine which optional runtime modules are needed.
+    let mut all_call_names: Vec<&str> = module.externs.iter().map(|e| e.name.as_str())
+        .chain(module.functions.iter().map(|f| f.name.as_str()))
+        .collect();
+    for func in &module.functions {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let Inst::CallExtern { name, .. } = inst {
+                    all_call_names.push(name.as_str());
+                }
+            }
+        }
+    }
+    let has = |pred: &dyn Fn(&str) -> bool| all_call_names.iter().any(|n| pred(n));
+
+    // Also check struct names for monomorphized types that need specific runtimes.
+    let _has_struct = |name: &str| module.structs.iter().any(|s| s.name == name);
+
+    // ── Minimal preamble (headers, allocator, scoped alloc stubs) ──
+    out.push_str(crate::backend::c::c_runtime::RUNTIME_PREAMBLE);
+
+    // ── Conditional allocators ──
+    if has(&|n| n.starts_with("gorget_arena_") || n.starts_with("GorgetArena")) {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_ARENA_ALLOC);
+    }
+    if has(&|n| n.starts_with("gorget_tracking_")) {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_TRACKING_ALLOC);
+    }
+    if has(&|n| n.starts_with("gorget_pool_") || n.starts_with("GorgetPool")) {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_POOL_ALLOC);
+    }
+    if has(&|n| n.starts_with("gorget_tlsf_")) {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_TLSF_ALLOC);
+    }
+    if has(&|n| n.starts_with("gorget_fba_") || n.starts_with("gorget_fixed_buffer_")) {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_FIXEDBUF_ALLOC);
+    }
+    if has(&|n| n.starts_with("gorget_fallback_")) {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_FALLBACK_ALLOC);
+    }
+
+    // ── String types and operations ──
+    out.push_str(crate::backend::c::c_runtime::RUNTIME_STRING);
+
+    // Extended string methods (unicode tables, search, split/replace/trim/etc.)
+    if has(&|n| n.starts_with("gorget_str_to_upper") || n.starts_with("gorget_str_to_lower")
+        || n.starts_with("gorget_str_is_alpha") || n.starts_with("gorget_str_is_upper")
+        || n.starts_with("gorget_str_is_lower") || n.starts_with("gorget_str_is_digit")
+        || n.starts_with("gorget_str_is_whitespace")
+        || n.starts_with("gorget_str_contains") || n.starts_with("gorget_str_starts_with")
+        || n.starts_with("gorget_str_ends_with") || n.starts_with("gorget_str_find")
+        || n.starts_with("gorget_memmem")
+        || n.starts_with("gorget_str_trim") || n.starts_with("gorget_str_replace")
+        || n.starts_with("gorget_str_repeat") || n.starts_with("gorget_str_pad")
+        || n.starts_with("gorget_str_strip") || n.starts_with("gorget_str_lstrip")
+        || n.starts_with("gorget_str_rstrip") || n.starts_with("gorget_str_removeprefix")
+        || n.starts_with("gorget_str_removesuffix") || n.starts_with("gorget_str_index_of")
+        || n.starts_with("gorget_str_count") || n.starts_with("gorget_str_center")
+        || n.starts_with("gorget_str_ljust") || n.starts_with("gorget_str_rjust")
+        || n.starts_with("gorget_str_zfill") || n.starts_with("gorget_str_reverse")
+        || n.starts_with("gorget_str_encode_") || n.starts_with("gorget_str_decode_")
+        || n.starts_with("gorget_base64_") || n.starts_with("gorget_json_escape")
+        || n.starts_with("gorget_str_to_json") || n.starts_with("gorget_str_from_json")
+        || n.starts_with("gorget_uint8_is_") || n.starts_with("gorget_uint8_to_")) {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_STRING_EXTENDED);
+    }
+
+    // Base string operations (Str-aware concat, append, cstr conversion)
+    out.push_str(crate::backend::c::c_runtime::RUNTIME_STRING_BASE_OPS);
+
+    // ── Alloc report (test/bench mode only) ──
+    let is_test_or_bench = !module.test_fns.is_empty() || !module.bench_fns.is_empty() || module.is_test_module;
+    if is_test_or_bench {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_ALLOC_REPORT);
+    }
+
+    // ── Panic handler ──
+    if !is_test_or_bench {
+        out.push_str(crate::backend::c::c_runtime::PANIC_NORMAL);
+    } else {
+        out.push_str(crate::backend::c::c_runtime::PANIC_TEST);
+    }
+
+    // ── Conditional core sections (formerly RUNTIME_CORE) ──
+    // Use flags to track what's been emitted and enforce dependencies.
+    let mut emitted_array = false;
+    let mut emitted_map = false;
+
+    // Helper macro to emit RUNTIME_ARRAY if not yet emitted
+    macro_rules! ensure_array {
+        ($out:expr, $flag:expr) => {
+            if !$flag {
+                $out.push_str(crate::backend::c::c_runtime::RUNTIME_ARRAY);
+                $flag = true;
+            }
+        };
+    }
+    macro_rules! ensure_map {
+        ($out:expr, $aflag:expr, $mflag:expr) => {
+            ensure_array!($out, $aflag); // MAP depends on ARRAY
+            if !$mflag {
+                $out.push_str(crate::backend::c::c_runtime::RUNTIME_MAP);
+                $mflag = true;
+            }
+        };
+    }
+
+    // Checked arithmetic (macros used by integer overflow checks)
+    if has(&|n| n.starts_with("gorget_checked_") || n.starts_with("GORGET_CHECKED_")) {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_CHECKED_ARITH);
+    }
+
+    // Collections: Array
+    if has(&|n| n.starts_with("gorget_array_") || n.starts_with("Vector__")) {
+        ensure_array!(out, emitted_array);
+    }
+
+    // String/Array operations (join, split, iterators — needs RUNTIME_ARRAY)
+    if has(&|n| n.starts_with("gorget_str_join") || n.starts_with("gorget_str_split")
+        || n.starts_with("gorget_str_bytes") || n.starts_with("gorget_str_codepoints")
+        || n.starts_with("gorget_str_chars")) {
+        ensure_array!(out, emitted_array);
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_STRING_ARRAY);
+    }
+
+    // Collections: Map (depends on Array for keys/values/items)
+    if has(&|n| n.starts_with("gorget_map_") || n.starts_with("gorget_dict_")
+        || n.starts_with("Dict__") || n.starts_with("HashMap__")) {
+        ensure_map!(out, emitted_array, emitted_map);
+    }
+
+    // Collections: Set (depends on Map)
+    if has(&|n| n.starts_with("gorget_set_") || n.starts_with("Set__") || n.starts_with("HashSet__")) {
+        ensure_map!(out, emitted_array, emitted_map);
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_SET);
+    }
+
+    // Error handling (test/bench mode or explicit catch/throw)
+    if is_test_or_bench || has(&|n| n.starts_with("gorget_catch") || n.starts_with("gorget_throw")
+        || n.starts_with("gorget_cleanup_")) {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_ERROR);
+    }
+
+    // File I/O (depends on Array for read_file_bytes)
+    if has(&|n| n.starts_with("gorget_file_") || n == "gorget_read_file"
+        || n == "gorget_write_file" || n == "gorget_append_file"
+        || n == "gorget_read_file_bytes"
+        || n == "File__open" || n == "File__create") {  // codegen rewrites to gorget_file_open
+        ensure_array!(out, emitted_array);
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_FILE);
+    }
+
+    // Path functions + readdir (depends on Array for readdir)
+    if has(&|n| n.starts_with("gorget_path_") || n == "gorget_is_file" || n == "gorget_is_dir"
+        || n.starts_with("gorget_mkdir") || n.starts_with("gorget_readdir")
+        || n == "gorget_rename" || n == "gorget_copy_file" || n == "gorget_remove"
+        || n == "gorget_basename" || n == "gorget_dirname" || n == "gorget_file_size"
+        || n == "gorget_file_mtime") {
+        ensure_array!(out, emitted_array);
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_PATH);
+    }
+
+    // CLI args (gorget_args — needs RUNTIME_ARRAY; gorget_init_args is in preamble)
+    if has(&|n| n == "gorget_args") {
+        ensure_array!(out, emitted_array);
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_ARGS);
+    }
+
+    // Parsing (also detects int__parse/float__parse codegen patterns)
+    if has(&|n| n.starts_with("gorget_parse_int") || n.starts_with("gorget_parse_float")
+        || n.starts_with("gorget_try_parse")
+        || (n.ends_with("__parse") && (n.starts_with("int") || n.starts_with("uint")
+            || n == "double__parse" || n == "float__parse" || n == "bool__parse"))) {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_PARSE);
+    }
+
+    // to_str conversions
+    if has(&|n| n.starts_with("gorget_int_to_str") || n.starts_with("gorget_float_to_str")
+        || n.starts_with("gorget_bool_to_str") || n.starts_with("gorget_codepoint_to_utf8")
+        || n.starts_with("gorget_char_to_str") || n.starts_with("gorget_int_to_binary")
+        || n.starts_with("gorget_int_to_hex") || n.starts_with("gorget_int_to_octal")
+        || n.starts_with("gorget_int_to_float") || n.starts_with("gorget_float_to_int")
+        || n == "gorget_char_chr") {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_TOSTR);
+    }
+
+    // Environment
+    if has(&|n| n == "gorget_getenv" || n == "gorget_setenv" || n == "gorget_getcwd"
+        || n == "gorget_platform") {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_ENV);
+    }
+
+    // Interactive I/O, time, datetime, random, line input (depends on Array for dt_decompose)
+    if has(&|n| n.starts_with("gorget_input") || n.starts_with("gorget_rand")
+        || n.starts_with("gorget_seed") || n.starts_with("gorget_sleep_ms")
+        || n == "sleep_ms"
+        || n.starts_with("gorget_time") || n.starts_with("gorget_format_time")
+        || n.starts_with("gorget_parse_time") || n.starts_with("gorget_readline")
+        || n.starts_with("gorget_dt_decompose") || n.starts_with("gorget_getchar")
+        || n.starts_with("gorget_term_") || n == "gorget_is_tty") {
+        ensure_array!(out, emitted_array);
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_IO);
+    }
+
+    // Math
+    if has(&|n| n.starts_with("gorget_sqrt") || n.starts_with("gorget_pow")
+        || n.starts_with("gorget_floor") || n.starts_with("gorget_ceil")
+        || n.starts_with("gorget_round") || n.starts_with("gorget_abs")
+        || n.starts_with("gorget_sin") || n.starts_with("gorget_cos")
+        || n.starts_with("gorget_tan") || n.starts_with("gorget_log")
+        || n.starts_with("gorget_exp") || n.starts_with("gorget_atan2")
+        || n.starts_with("gorget_fmod") || n == "gorget_min" || n == "gorget_max"
+        || n.starts_with("GORGET_PI") || n.starts_with("GORGET_E")
+        || n.starts_with("GORGET_TAU") || n.starts_with("GORGET_INF")
+        || n.starts_with("GORGET_NAN")) {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_MATH);
+    }
+
+    // Sort comparators (depends on Array)
+    if has(&|n| n.starts_with("__gorget_cmp_") || n.starts_with("gorget_array_sort")
+        || n.starts_with("gorget_array_reverse") || n.starts_with("gorget_array_unique")) {
+        ensure_array!(out, emitted_array);
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_SORT);
+    }
+
+    writeln!(out).unwrap();
+
+    // Sync primitives (atomics, barriers, semaphores, etc.)
+    let needs_sync = has(&|n| n.starts_with("gorget_atomic_int_") || n.starts_with("gorget_atomic_bool_")) || has(&|n| {
+        n.starts_with("gorget_atomic_") || n.starts_with("gorget_barrier_")
+        || n.starts_with("gorget_condvar_") || n.starts_with("gorget_rwlock_")
+        || n.starts_with("gorget_waitgroup_") || n.starts_with("gorget_semaphore_")
+        || n.starts_with("gorget_onceflag_")
+        || n.starts_with("gorget_read_guard_") || n.starts_with("gorget_write_guard_")
+        || n.starts_with("ReadGuard__") || n.starts_with("WriteGuard__")
+    });
+    if needs_sync {
+        out.push_str(crate::backend::c::c_runtime::SYNC_RUNTIME);
+    }
+
+    // Async core
+    let needs_async = has(&|n| {
+        n.contains("channel") || n.contains("Channel")
+        || n.starts_with("gorget_mutex_") || n.starts_with("gorget_guard_")
+        || n.starts_with("gorget_executor_") || n == "gorget_spawn"
+        || n.starts_with("__gorget_spawn_") || n.starts_with("__gorget_await_")
+        || n.starts_with("gorget_task_group_") || n.starts_with("gorget_reactor_")
+        || n.starts_with("Mutex__") || n.starts_with("RWLock__")
+    });
+    if needs_async {
+        out.push_str(crate::backend::c::c_runtime::ASYNC_RUNTIME);
+        out.push_str(crate::backend::c::c_runtime::TASK_COMMON);
+        match module.scheduler_mode {
+            crate::ir::SchedulerMode::Pool => out.push_str(crate::backend::c::c_runtime::SCHEDULER_POOL_RUNTIME),
+            crate::ir::SchedulerMode::Thread => out.push_str(crate::backend::c::c_runtime::SCHEDULER_THREAD_RUNTIME),
+            crate::ir::SchedulerMode::Inline => out.push_str(crate::backend::c::c_runtime::SCHEDULER_INLINE_RUNTIME),
+            crate::ir::SchedulerMode::Single => out.push_str(crate::backend::c::c_runtime::SCHEDULER_SINGLE_RUNTIME),
+        }
+        out.push_str(crate::backend::c::c_runtime::MAIN_WAKER_RUNTIME);
+        out.push_str(crate::backend::c::c_runtime::EXECUTOR_RUNTIME);
+    }
+
+    // Channels (also triggered by monomorphized Channel__T methods)
+    if has(&|n| n.starts_with("gorget_channel_") || n.starts_with("Channel__")) {
+        if !needs_async {
+            out.push_str(crate::backend::c::c_runtime::ASYNC_RUNTIME);
+        }
+        out.push_str(crate::backend::c::c_runtime::CHANNEL_RUNTIME);
+    }
+
+    // Shared / Weak references (also triggered by monomorphized methods)
+    if has(&|n| n.starts_with("gorget_shared_") || n.starts_with("gorget_weak_")
+        || n.starts_with("Shared__") || n.starts_with("Weak__")) {
+        out.push_str(crate::backend::c::c_runtime::SHARED_RUNTIME);
+    }
+
+    // Mutex / Guard (also triggered by Mutex__T monomorphized methods)
+    if has(&|n| n.starts_with("gorget_mutex_") || n.starts_with("gorget_guard_")
+        || n.starts_with("Mutex__") || n.starts_with("RWLock__")
+        || n.starts_with("Guard__") || n.starts_with("ReadGuard__") || n.starts_with("WriteGuard__")
+        || n.starts_with("gorget_rwlock_") || n.starts_with("gorget_read_guard_")
+        || n.starts_with("gorget_write_guard_"))
+    {
+        if !needs_async {
+            out.push_str(crate::backend::c::c_runtime::ASYNC_RUNTIME);
+        }
+        out.push_str(crate::backend::c::c_runtime::MUTEX_RUNTIME);
+    }
+
+    // Reactor (async I/O, sleep, timers)
+    if has(&|n| n.starts_with("gorget_reactor_") || n.starts_with("gorget_sleep_async")) {
+        out.push_str(crate::backend::c::c_runtime::REACTOR_RUNTIME);
+    }
+
+    // Blocking pool — also needed for spawned functions (blocking spawn approach)
+    if has(&|n| n.starts_with("gorget_blocking_")) || !module.spawned_fns.is_empty() {
+        out.push_str(crate::backend::c::c_runtime::BLOCKING_POOL_RUNTIME);
+    }
+
+    // Task groups
+    if has(&|n| n.starts_with("gorget_task_group_")) {
+        out.push_str(crate::backend::c::c_runtime::TASK_GROUP_RUNTIME);
+    }
+
+    // Bytes
+    if has(&|n| n.starts_with("gorget_bytes_")) {
+        out.push_str(crate::backend::c::c_runtime::BYTES_RUNTIME);
+    }
+
+    // Regex
+    if has(&|n| n.starts_with("gorget_regex_") || n.starts_with("gorget_match_")) {
+        out.push_str(crate::backend::c::c_runtime::REGEX_RUNTIME);
+        // Forward-declare gorget_array_new for regex_split_pat.
+        out.push_str("static inline GorgetArray gorget_array_new(size_t elem_size);\n");
+        // Convenience wrappers for pattern-based regex operations.
+        out.push_str(r#"
+static GorgetRegexMatch gorget_regex_find_pat(const char* pattern, const char* subject) {
+    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
+    if (!_rx.code) { GorgetRegexMatch _m; _m.start = -1; return _m; }
+    GorgetRegexMatch _m = gorget_regex_find(&_rx, subject, 0);
+    gorget_regex_free(&_rx);
+    return _m;
+}
+static bool gorget_regex_is_match_pat(const char* pattern, const char* subject) {
+    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
+    if (!_rx.code) return false;
+    bool _b = gorget_regex_is_match(&_rx, subject);
+    gorget_regex_free(&_rx);
+    return _b;
+}
+static GorgetString gorget_regex_replace_pat(const char* pattern, const char* subject, const char* replacement) {
+    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
+    if (!_rx.code) return gorget_string_new(subject);
+    GorgetString _gs = gorget_regex_replace(&_rx, subject, replacement);
+    gorget_regex_free(&_rx);
+    return _gs;
+}
+static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subject, int64_t limit) {
+    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
+    if (!_rx.code) { GorgetArray _a = gorget_array_new(sizeof(Str)); return _a; }
+    GorgetArray _a = gorget_regex_split(&_rx, subject, limit);
+    gorget_regex_free(&_rx);
+    return _a;
+}
+"#);
+    }
+
+    // Crypto
+    if has(&|n| n.starts_with("gorget_crypto_") || n.starts_with("gorget_sha") || n.starts_with("gorget_hmac") || n.starts_with("gorget_x25519") || n.starts_with("gorget_hkdf") || n.starts_with("gorget_aead")) {
+        out.push_str(crate::backend::c::c_runtime::CRYPTO_RUNTIME);
+    }
+
+    // Socket (depends on Array for socket_read/read_exact)
+    if has(&|n| n.starts_with("gorget_socket_") || n.starts_with("gorget_tcp_")) {
+        ensure_array!(out, emitted_array);
+        out.push_str(crate::backend::c::c_runtime::SOCKET_RUNTIME);
+    }
+
+    // Server socket (depends on Array)
+    if has(&|n| n.starts_with("gorget_server_socket_") || n.starts_with("gorget_listener_")) {
+        ensure_array!(out, emitted_array);
+        out.push_str(crate::backend::c::c_runtime::SERVER_SOCKET_RUNTIME);
+    }
+
+    // UDP socket
+    if has(&|n| n.starts_with("gorget_udp_")) {
+        out.push_str(crate::backend::c::c_runtime::UDP_SOCKET_RUNTIME);
+    }
+
+    // TLS
+    if has(&|n| n.starts_with("gorget_tls_")) {
+        out.push_str(crate::backend::c::c_runtime::TLS_SOCKET_RUNTIME);
+        out.push_str(crate::backend::c::c_runtime::TLS_SERVER_RUNTIME);
+    }
+
+    // Process spawn (fork+exec with pipes) + signal handling (signal functions live in PROCESS_SPAWN_RUNTIME)
+    let needs_spawn = has(&|n| n.starts_with("gorget_process_spawn") || n.starts_with("gorget_process_wait")
+        || n.starts_with("gorget_process_kill") || n.starts_with("gorget_process_pid")
+        || n.starts_with("gorget_process_read_") || n.starts_with("gorget_process_write_")
+        || n.starts_with("gorget_process_close_")
+        || n.starts_with("gorget_signal_") || n == "gorget_getpid");
+
+    // Process — also needed when spawn is used (ExecResult typedef lives here)
+    if needs_spawn || has(&|n| n.starts_with("gorget_process_") || n.starts_with("gorget_exec_") || n == "gorget_getenv" || n == "gorget_setenv") {
+        out.push_str(crate::backend::c::c_runtime::PROCESS_RUNTIME);
+    }
+
+    if needs_spawn {
+        out.push_str(crate::backend::c::c_runtime::PROCESS_SPAWN_RUNTIME);
+    }
+
+    // Thread
+    if has(&|n| n.starts_with("gorget_thread_") || n.starts_with("gorget_current_thread_id")
+        || n.starts_with("__gorget_thread_spawn_")) || !module.thread_spawned_fns.is_empty() {
+        out.push_str(crate::backend::c::c_runtime::THREAD_RUNTIME);
+    }
+
+    // Trace
+    if module.trace_filename.is_some() || has(&|n| n.starts_with("gorget_trace_")) {
+        out.push_str(crate::backend::c::c_runtime::TRACE_RUNTIME);
+    }
+
+    // SDL
+    if has(&|n| n.starts_with("sdl_") || n.starts_with("gorget_sdl_")) {
+        if has(&|n| n == "sdl_load_texture" || n == "gorget_sdl_load_texture") {
+            out.push_str("#define GORGET_USE_SDL_IMAGE\n");
+        }
+        if has(&|n| n == "sdl_load_font" || n == "sdl_close_font" || n == "sdl_draw_text"
+            || n == "sdl_render_text" || n == "sdl_text_width" || n == "sdl_text_height"
+            || n.starts_with("gorget_sdl_load_font") || n.starts_with("gorget_sdl_draw_text")
+            || n.starts_with("gorget_sdl_render_text")) {
+            out.push_str("#define GORGET_USE_SDL_TTF\n");
+        }
+        out.push_str(crate::backend::c::c_runtime::SDL_RUNTIME);
+    }
+
+    // Bytes f32/f64/i64 helpers
+    if has(&|n| n.starts_with("gorget_bytes_") && (n.contains("f32") || n.contains("f64") || n.contains("i64"))) {
+        out.push_str(crate::backend::c::c_runtime::BYTES_F32_RUNTIME);
+    }
+
+    // OpenGL
+    if has(&|n| n.starts_with("gorget_gl_")) {
+        out.push_str(crate::backend::c::c_runtime::GL_RUNTIME);
+    }
+
+    // Image loading (stb_image)
+    if has(&|n| n.starts_with("gorget_image_")) {
+        out.push_str("\n#define STB_IMAGE_IMPLEMENTATION\n");
+        out.push_str("#define STBI_NO_STDIO\n");
+        out.push_str("#define STBI_ONLY_PNG\n");
+        out.push_str("#define STBI_ONLY_JPEG\n");
+        out.push_str("#define STBI_ONLY_TGA\n");
+        out.push_str("#define STBI_ONLY_BMP\n");
+        out.push_str("#define GORGET_HAS_STB_IMAGE 1\n");
+        out.push_str("#pragma GCC diagnostic push\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wsign-compare\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wshift-negative-value\"\n");
+        out.push_str(crate::backend::c::c_runtime::STB_IMAGE_SOURCE);
+        out.push_str("\n#pragma GCC diagnostic pop\n");
+        out.push_str(crate::backend::c::c_runtime::IMAGE_RUNTIME);
+    }
+
+    // Audio (SDL2_mixer)
+    if has(&|n| n.starts_with("gorget_audio_")) {
+        out.push_str(crate::backend::c::c_runtime::AUDIO_RUNTIME);
+    }
+
+    // Compression (zlib/deflate)
+    if has(&|n| n.starts_with("gorget_zlib_") || n.starts_with("gorget_deflate_") || n.starts_with("gorget_crc32_")) {
+        out.push_str(crate::backend::c::c_runtime::COMPRESS_RUNTIME);
+    }
+
+    // Metal (macOS Objective-C wrappers)
+    if has(&|n| n.starts_with("gorget_metal_") || n.starts_with("gorget_sdl_metal_")) {
+        out.push_str(crate::backend::c::c_runtime::METAL_RUNTIME);
+    }
+
+    // SQLite
+    let needs_sqlite = has(&|n| n.starts_with("gorget_sqlite_") || n == "sqlite_open");
+    if needs_sqlite {
+        out.push_str("\n#define SQLITE_MAX_MMAP_SIZE 0\n");
+        out.push_str("#define HAVE_MREMAP 0\n");
+        out.push_str("#pragma GCC diagnostic push\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wunused-variable\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wimplicit-fallthrough\"\n");
+        out.push_str("#pragma GCC diagnostic ignored \"-Wpedantic\"\n");
+        out.push_str(crate::backend::c::c_runtime::SQLITE_AMALGAMATION);
+        out.push_str("\n#pragma GCC diagnostic pop\n");
+        out.push_str(crate::backend::c::c_runtime::SQLITE_GORGET_WRAPPERS);
+    }
+
+    // Hot-reload runtime (dlopen/file-watcher helpers)
+    if module.hot_reload {
+        out.push_str(crate::backend::c::c_runtime::HOT_RELOAD_RUNTIME);
+    }
+
+    // Suppress "value never read" warnings on idempotent emit-once flags.
+    let _ = (emitted_array, emitted_map);
+
+    // LIR-specific helper functions not emitted by the old C backend preamble.
+    writeln!(out, "// ── LIR helpers ──").unwrap();
+    if has(&|n| n == "gorget_char_chr") {
+        writeln!(out, "static inline Str gorget_char_chr(int64_t code) {{ return gorget_codepoint_to_utf8(code); }}").unwrap();
+    }
+    if has(&|n| n == "gorget_str_ord") {
+        writeln!(out, "static inline int64_t gorget_str_ord(Str s) {{ size_t pos = 0; return (int64_t)gorget_utf8_decode(s.data, s.len, &pos); }}").unwrap();
+    }
+    // Default value functions for primitive types
+    writeln!(out, "static inline Str gorget_str_default(void) {{ return (Str){{NULL, 0, 0, NULL}}; }}").unwrap();
+    writeln!(out, "static inline int64_t int64_t__default(void) {{ return 0; }}").unwrap();
+    writeln!(out, "static inline int64_t int__default(void) {{ return 0; }}").unwrap();
+    writeln!(out, "static inline int8_t int8_t__default(void) {{ return 0; }}").unwrap();
+    writeln!(out, "static inline int16_t int16_t__default(void) {{ return 0; }}").unwrap();
+    writeln!(out, "static inline int32_t int32_t__default(void) {{ return 0; }}").unwrap();
+    writeln!(out, "static inline uint8_t uint8_t__default(void) {{ return 0; }}").unwrap();
+    writeln!(out, "static inline uint16_t uint16_t__default(void) {{ return 0; }}").unwrap();
+    writeln!(out, "static inline uint32_t uint32_t__default(void) {{ return 0; }}").unwrap();
+    writeln!(out, "static inline uint64_t uint64_t__default(void) {{ return 0; }}").unwrap();
+    writeln!(out, "static inline double double__default(void) {{ return 0.0; }}").unwrap();
+    writeln!(out, "static inline double float__default(void) {{ return 0.0; }}").unwrap();
+    writeln!(out, "static inline bool bool__default(void) {{ return false; }}").unwrap();
+    // Hash functions
+    writeln!(out, "static inline int64_t __gorget_hash_int(int64_t v) {{ return (int64_t)__gorget_fnv1a(&v, sizeof(v)); }}").unwrap();
+    writeln!(out, "static inline int64_t gorget_str_hash(Str s) {{ return (int64_t)__gorget_hash_str_len(s.data, s.len); }}").unwrap();
+    // Signal functions — defined in the main runtime (c_runtime.rs).
+    // Only emit minimal stubs when the runtime signal module is NOT included.
+    writeln!(out, "#ifndef _WIN32").unwrap();
+    writeln!(out, "#include <signal.h>").unwrap();
+    writeln!(out, "#endif").unwrap();
+    // Comparison functions for sorted()
+    writeln!(out, "static int gorget_generic_compare(const void* a, const void* b) {{ return memcmp(a, b, sizeof(int64_t)); }}").unwrap();
+    writeln!(out, "static int gorget_int_compare(const void* a, const void* b) {{ int64_t va = *(const int64_t*)a, vb = *(const int64_t*)b; return (va > vb) - (va < vb); }}").unwrap();
+    writeln!(out, "static int gorget_float_compare(const void* a, const void* b) {{ double da = *(const double*)a, db = *(const double*)b; return (da > db) - (da < db); }}").unwrap();
+    writeln!(out, "static int gorget_str_compare(const void* a, const void* b) {{ Str sa = *(const Str*)a, sb = *(const Str*)b; size_t ml = sa.len < sb.len ? sa.len : sb.len; int r = memcmp(sa.data, sb.data, ml); if (r) return r; return (sa.len > sb.len) - (sa.len < sb.len); }}").unwrap();
+    writeln!(out, "static inline int64_t int64_t__one(void) {{ return 1; }}").unwrap();
+    writeln!(out, "static inline int64_t int__one(void) {{ return 1; }}").unwrap();
+    writeln!(out, "static inline double double__one(void) {{ return 1.0; }}").unwrap();
+    writeln!(out, "static inline double float__one(void) {{ return 1.0; }}").unwrap();
+    writeln!(out).unwrap();
+}
+
+/// Emit `__gorget_box_alloc_*` monomorphized box allocators and inline shim
+/// functions for str/array operations that supplement the C runtime.
+pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_names: &HashMap<u32, String>) {
+    // Generate __gorget_box_alloc_* helper functions.
+    // These are monomorphized box allocators: malloc + store + return pointer.
+    let mut box_allocs: Vec<(&str, String)> = Vec::new();
+    for ext in &module.externs {
+        if ext.name.starts_with("__gorget_box_alloc_") && ext.params.len() == 1 {
+            // Derive the C type from the function name suffix, not from the LIR param type,
+            // because LIR represents Str as Ptr (void*) but the C box alloc needs the real type.
+            let suffix = &ext.name["__gorget_box_alloc_".len()..];
+            let param_ty = box_alloc_inner_c_type(suffix, &ext.params[0], struct_names);
+            box_allocs.push((&ext.name, param_ty));
+        }
+    }
+    // Also scan CallExtern instructions for box allocs not in externs list.
+    for func in &module.functions {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let Inst::CallExtern { name, args, .. } = inst {
+                    if name.starts_with("__gorget_box_alloc_") && args.len() == 1 {
+                        if !box_allocs.iter().any(|(n, _)| *n == name.as_str()) {
+                            let suffix = &name["__gorget_box_alloc_".len()..];
+                            let param_ty = box_alloc_suffix_to_c_type(suffix);
+                            box_allocs.push((name.as_str(), param_ty));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (name, param_ty) in &box_allocs {
+        writeln!(out, "static inline void* {name}({param_ty} val) {{ {param_ty}* p = ({param_ty}*)GORGET_ALLOC(sizeof({param_ty})); *p = val; return (void*)p; }}").unwrap();
+    }
+    if !box_allocs.is_empty() {
+        writeln!(out).unwrap();
+    }
+
+    // Generate gorget_str_push/gorget_str_str/gorget_str_clear if called but not in runtime.
+    let has_extern = |n: &str| module.externs.iter().any(|e| e.name == n)
+        || module.functions.iter().flat_map(|f| f.blocks.iter())
+            .flat_map(|b| b.insts.iter())
+            .any(|inst| matches!(inst, Inst::CallExtern { name, .. } if name == n));
+    if has_extern("gorget_str_push") {
+        writeln!(out, "static inline void gorget_str_push(GorgetString* s, Str chunk) {{ gorget_string_push_char(s, chunk); }}").unwrap();
+    }
+    if has_extern("gorget_str_str") {
+        writeln!(out, "static inline Str gorget_str_str(GorgetString* s) {{ return (Str){{ .data = s->data, .len = s->len, .cap = 0, .alloc = NULL }}; }}").unwrap();
+    }
+    if has_extern("gorget_str_clear") {
+        writeln!(out, "static inline void gorget_str_clear(GorgetString* s) {{ s->len = 0; }}").unwrap();
+    }
+    if has_extern("gorget_str_push_line") {
+        writeln!(out, "static inline void gorget_str_push_line(GorgetString* s, Str chunk) {{ gorget_string_push_char(s, chunk); gorget_string_push_byte(s, '\\n'); }}").unwrap();
+    }
+    if has_extern("gorget_str_capacity") {
+        writeln!(out, "static inline int64_t gorget_str_capacity(GorgetString* s) {{ return (int64_t)s->cap; }}").unwrap();
+    }
+    if has_extern("gorget_str_push_char") {
+        writeln!(out, "static inline void gorget_str_push_char(GorgetString* s, Str c) {{ gorget_string_push_char(s, c); }}").unwrap();
+    }
+    if has_extern("gorget_array_sort") {
+        // Thread-local to prevent data races when two threads sort concurrently.
+        writeln!(out, "static _Thread_local size_t __gorget_sort_elem_size;").unwrap();
+        writeln!(out, "static int __gorget_sort_cmp(const void* a, const void* b) {{ return memcmp(a, b, __gorget_sort_elem_size); }}").unwrap();
+        writeln!(out, "static inline void gorget_array_sort(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; __gorget_sort_elem_size = a->elem_size; qsort(a->data, a->len, a->elem_size, __gorget_sort_cmp); }}").unwrap();
+    }
+    if has_extern("gorget_array_sorted") {
+        writeln!(out, "static inline GorgetArray gorget_array_sorted(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); return r; }}").unwrap();
+    }
+    // gorget_array_reversed: clone + reverse (not in runtime, inlined by old backend)
+    if has_extern("gorget_array_reversed") {
+        writeln!(out, "static inline GorgetArray gorget_array_reversed(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); gorget_array_reverse(&r); return r; }}").unwrap();
+    }
+    // gorget_array_unique: clone + sort + dedup (matches GIR backend semantics)
+    if has_extern("gorget_array_unique") {
+        writeln!(out, "static inline GorgetArray gorget_array_unique(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); gorget_array_dedup(&r); return r; }}").unwrap();
+    }
+    // gorget_array_zip: pair elements from two arrays into an array of tuples
+    if has_extern("gorget_array_zip") {
+        // Tuple struct: { _0: A, _1: B }.  We compute tuple_size from the two elem_sizes.
+        // Both fields are at least 8-byte aligned in Gorget, so offset_1 = round_up(a_size, 8).
+        writeln!(out, "static inline GorgetArray gorget_array_zip(void* __arr_ptr, GorgetArray __b) {{ \
+            GorgetArray* __a = (GorgetArray*)__arr_ptr; \
+            size_t __min = __a->len < __b.len ? __a->len : __b.len; \
+            size_t __a_sz = __a->elem_size; \
+            size_t __b_sz = __b.elem_size; \
+            size_t __off1 = (__a_sz + 7) & ~(size_t)7; \
+            size_t __tuple_sz = __off1 + ((__b_sz + 7) & ~(size_t)7); \
+            GorgetArray __r = gorget_array_new(__tuple_sz); \
+            char __sbuf[256]; \
+            char* __buf = __tuple_sz <= sizeof(__sbuf) ? __sbuf : (char*)malloc(__tuple_sz); \
+            for (size_t __i = 0; __i < __min; __i++) {{ \
+                memset(__buf, 0, __tuple_sz); \
+                memcpy(__buf, (char*)__a->data + __i * __a_sz, __a_sz); \
+                memcpy(__buf + __off1, (char*)__b.data + __i * __b_sz, __b_sz); \
+                gorget_array_push(&__r, __buf); \
+            }} \
+            if (__buf != __sbuf) free(__buf); \
+            return __r; }}").unwrap();
+    }
+    // codepoint_to_str: used by encoding/toml fixtures
+    if has_extern("codepoint_to_str") {
+        writeln!(out, "static inline Str codepoint_to_str(int64_t code) {{ return gorget_codepoint_to_utf8(code); }}").unwrap();
+    }
 }
