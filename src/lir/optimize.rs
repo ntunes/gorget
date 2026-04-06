@@ -15,6 +15,7 @@ pub struct OptStats {
     pub copies_propagated: usize,
     pub constants_folded: usize,
     pub branches_folded: usize,
+    pub algebraic_simplified: usize,
 }
 
 /// Run all optimization passes on an LIR module.
@@ -34,6 +35,7 @@ fn optimize_function(func: &mut LirFunction, stats: &mut OptStats) {
     for _ in 0..MAX_ITERS {
         let snapshot = (func.blocks.len(), inst_count(func));
         stats.constants_folded += fold_constants(func);
+        stats.algebraic_simplified += simplify_algebraic(func);
         stats.branches_folded += fold_constant_branches(func);
         stats.dead_blocks_eliminated += eliminate_dead_blocks(func);
         merge_linear_blocks(func);
@@ -630,6 +632,144 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
 
         _ => None,
     }
+}
+
+// ── Algebraic Simplification ────────────────────────────────────────────────
+
+/// Simplify arithmetic/logic instructions using algebraic identities:
+///   x + 0 → x,  0 + x → x
+///   x - 0 → x
+///   x * 0 → 0,  x * 1 → x,  1 * x → x
+///   x / 1 → x
+///   x & 0 → 0,  x | 0 → x
+///   x ^ 0 → x
+///   x << 0 → x,  x >> 0 → x
+///   x * 2 → x + x  (strength reduction)
+/// Returns count of instructions simplified.
+fn simplify_algebraic(func: &mut LirFunction) -> usize {
+    let val_count = func.value_count() as usize;
+    let mut known_int: Vec<Option<i64>> = vec![None; val_count];
+
+    // Collect known integer constants.
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if let Inst::IConst { dst, value, .. } = inst {
+                if (dst.0 as usize) < val_count {
+                    known_int[dst.0 as usize] = Some(*value);
+                }
+            }
+        }
+    }
+
+    fn get_int(known: &[Option<i64>], v: ValueId) -> Option<i64> {
+        known.get(v.0 as usize).copied().flatten()
+    }
+
+    let mut simplified = 0;
+    for block in &mut func.blocks {
+        for inst in &mut block.insts {
+            let replacement = match inst {
+                // x + 0 → x, 0 + x → x
+                Inst::Add { dst, ty, lhs, rhs, .. } => {
+                    if get_int(&known_int, *rhs) == Some(0) {
+                        Some(identity(*dst, ty.clone(), *lhs))
+                    } else if get_int(&known_int, *lhs) == Some(0) {
+                        Some(identity(*dst, ty.clone(), *rhs))
+                    } else {
+                        None
+                    }
+                }
+                // x - 0 → x
+                Inst::Sub { dst, ty, lhs, rhs, .. } => {
+                    if get_int(&known_int, *rhs) == Some(0) {
+                        Some(identity(*dst, ty.clone(), *lhs))
+                    } else {
+                        None
+                    }
+                }
+                // x * 0 → 0, x * 1 → x, 1 * x → x, x * 2 → x + x
+                Inst::Mul { dst, ty, lhs, rhs, overflow } => {
+                    match (get_int(&known_int, *lhs), get_int(&known_int, *rhs)) {
+                        (_, Some(0)) | (Some(0), _) => {
+                            Some(Inst::IConst { dst: *dst, value: 0, ty: ty.clone() })
+                        }
+                        (_, Some(1)) => Some(identity(*dst, ty.clone(), *lhs)),
+                        (Some(1), _) => Some(identity(*dst, ty.clone(), *rhs)),
+                        // Strength reduction: x * 2 → x + x
+                        (_, Some(2)) => Some(Inst::Add {
+                            dst: *dst, ty: ty.clone(), lhs: *lhs, rhs: *lhs,
+                            overflow: *overflow,
+                        }),
+                        (Some(2), _) => Some(Inst::Add {
+                            dst: *dst, ty: ty.clone(), lhs: *rhs, rhs: *rhs,
+                            overflow: *overflow,
+                        }),
+                        _ => None,
+                    }
+                }
+                // x / 1 → x
+                Inst::Div { dst, ty, lhs, rhs } => {
+                    if get_int(&known_int, *rhs) == Some(1) {
+                        Some(identity(*dst, ty.clone(), *lhs))
+                    } else {
+                        None
+                    }
+                }
+                // x & 0 → 0, x | 0 → x, x ^ 0 → x
+                Inst::BitAnd { dst, ty, lhs, rhs } => {
+                    if get_int(&known_int, *rhs) == Some(0) || get_int(&known_int, *lhs) == Some(0) {
+                        Some(Inst::IConst { dst: *dst, value: 0, ty: ty.clone() })
+                    } else {
+                        None
+                    }
+                }
+                Inst::BitOr { dst, ty, lhs, rhs } => {
+                    if get_int(&known_int, *rhs) == Some(0) {
+                        Some(identity(*dst, ty.clone(), *lhs))
+                    } else if get_int(&known_int, *lhs) == Some(0) {
+                        Some(identity(*dst, ty.clone(), *rhs))
+                    } else {
+                        None
+                    }
+                }
+                Inst::BitXor { dst, ty, lhs, rhs } => {
+                    if get_int(&known_int, *rhs) == Some(0) {
+                        Some(identity(*dst, ty.clone(), *lhs))
+                    } else if get_int(&known_int, *lhs) == Some(0) {
+                        Some(identity(*dst, ty.clone(), *rhs))
+                    } else {
+                        None
+                    }
+                }
+                // x << 0 → x, x >> 0 → x
+                Inst::Shl { dst, ty, lhs, rhs } | Inst::Shr { dst, ty, lhs, rhs } => {
+                    if get_int(&known_int, *rhs) == Some(0) {
+                        Some(identity(*dst, ty.clone(), *lhs))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(new_inst) = replacement {
+                // Update known constants for cascading
+                if let Inst::IConst { dst, value, .. } = &new_inst {
+                    if (dst.0 as usize) < val_count {
+                        known_int[dst.0 as usize] = Some(*value);
+                    }
+                }
+                *inst = new_inst;
+                simplified += 1;
+            }
+        }
+    }
+    simplified
+}
+
+/// Create an identity instruction: dst = copy of src value.
+/// Uses IntCast as a no-op (same type to same type); DCE will clean up if unused.
+fn identity(dst: ValueId, ty: LirType, src: ValueId) -> Inst {
+    Inst::IntCast { dst, value: src, to: ty }
 }
 
 // ── Constant Branch Folding ──────────────────────────────────────────────────
