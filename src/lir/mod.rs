@@ -621,16 +621,19 @@ pub struct StructDef {
     /// instead of a flat field list. Field 0 is always "tag" (I32), fields 1+
     /// are grouped by variant name prefix (e.g., IFunction_0, IFunction_1).
     pub is_enum: bool,
+    /// Cached C sizeof for this struct (in bytes). Computed after type lowering
+    /// via `compute_struct_sizes()`. Avoids repeated string-based size lookups.
+    pub computed_c_size: Option<usize>,
 }
 
 impl StructDef {
     /// Create a regular (non-enum) struct definition.
     pub fn new(name: String, fields: Vec<(String, LirType)>) -> Self {
-        Self { name, fields, is_enum: false }
+        Self { name, fields, is_enum: false, computed_c_size: None }
     }
     /// Create an enum struct definition (union layout in C).
     pub fn new_enum(name: String, fields: Vec<(String, LirType)>) -> Self {
-        Self { name, fields, is_enum: true }
+        Self { name, fields, is_enum: true, computed_c_size: None }
     }
 }
 
@@ -841,6 +844,31 @@ impl LirModule {
         self.externs.push(ext);
     }
 
+    /// Compute and cache the C sizeof for every struct definition.
+    /// Call once after all struct types have been registered and fields populated.
+    /// Uses `c_sizeof_struct_def` for proper enum union layout handling.
+    pub fn compute_struct_sizes(&mut self) {
+        // Need to compute sizes in dependency order. Since structs can reference
+        // other structs via fields, we iterate until all sizes are computed.
+        // In practice, most structs only reference primitives or already-sized types.
+        let max_iters = self.structs.len() + 1;
+        for _ in 0..max_iters {
+            let mut progress = false;
+            for i in 0..self.structs.len() {
+                if self.structs[i].computed_c_size.is_some() {
+                    continue;
+                }
+                // Try to compute — may fail if a referenced struct is not yet sized.
+                // c_sizeof_struct_def reads other structs' sizes from their fields,
+                // not from computed_c_size, so this always works.
+                let size = lower::types::c_sizeof_struct_def(&self.structs[i], &self.structs);
+                self.structs[i].computed_c_size = Some(size);
+                progress = true;
+            }
+            if !progress { break; }
+        }
+    }
+
     /// Look up a struct definition by StructId.
     pub fn struct_def(&self, id: StructId) -> &StructDef {
         &self.structs[id.0 as usize]
@@ -989,6 +1017,7 @@ mod tests {
                 ("y".into(), LirType::F64),
             ],
             is_enum: false,
+            computed_c_size: None,
                       });
 
         let mut func = LirFunction::new("get_x".into(), vec![LirType::Ptr], LirType::F64);

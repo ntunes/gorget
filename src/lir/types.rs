@@ -57,6 +57,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("alloc".into(), LirType::Ptr),
             ],
             is_enum: false,
+            computed_c_size: None,
                       },
         // GorgetArray — dynamic array (Vector[T] backing)
         StructDef {
@@ -68,6 +69,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("elem_size".into(), LirType::I64),
             ],
             is_enum: false,
+            computed_c_size: None,
                       },
         // Closure — function pointer + environment
         StructDef {
@@ -77,6 +79,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("env".into(), LirType::Ptr),
             ],
             is_enum: false,
+            computed_c_size: None,
                       },
         // Trait object — data pointer + vtable pointer
         StructDef {
@@ -86,6 +89,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("vtable".into(), LirType::Ptr),
             ],
             is_enum: false,
+            computed_c_size: None,
                       },
         // Task handle — task pointer + drop function
         StructDef {
@@ -95,6 +99,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("drop_fn".into(), LirType::Ptr),
             ],
             is_enum: false,
+            computed_c_size: None,
                       },
         // GorgetMap — hash map backing Dict[K,V] and HashMap[K,V]
         StructDef {
@@ -115,6 +120,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("eq_fn".into(), LirType::Ptr),
             ],
             is_enum: false,
+            computed_c_size: None,
                       },
         // GorgetSet — typedef alias for GorgetMap, backs Set[T] and HashSet[T]
         StructDef {
@@ -135,6 +141,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("eq_fn".into(), LirType::Ptr),
             ],
             is_enum: false,
+            computed_c_size: None,
                       },
         // GorgetRange — range iterator
         StructDef {
@@ -145,6 +152,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("step".into(), LirType::I64),
             ],
             is_enum: false,
+            computed_c_size: None,
                       },
     ]
 }

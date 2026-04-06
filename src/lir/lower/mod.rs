@@ -303,6 +303,9 @@ impl<'a> LoweringContext<'a> {
         self.module.hot_reload_state_hash = self.gir.runtime.hot_reload_state_hash;
         self.module.hot_reload_has_reload_fn = self.gir.runtime.hot_reload_has_reload_fn;
 
+        // Compute and cache C sizeof for all struct definitions.
+        self.module.compute_struct_sizes();
+
         self.module
     }
 
@@ -564,6 +567,7 @@ impl<'a> LoweringContext<'a> {
                         name: def.name.clone(),
                         fields: vec![("_0".into(), LirType::Ptr)],
             is_enum: false,
+            computed_c_size: None,
                                   });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -580,6 +584,7 @@ impl<'a> LoweringContext<'a> {
                     name: def.name.clone(),
                     fields,
             is_enum: false,
+            computed_c_size: None,
                               });
                 self.struct_reg.register(&def.name, sid);
                 continue;
@@ -591,6 +596,7 @@ impl<'a> LoweringContext<'a> {
                         name: def.name.clone(),
                         fields: vec![],
             is_enum: false,
+            computed_c_size: None,
                                   });
                     self.struct_reg.register(&def.name, sid);
                     deferred.push((sid, idx));
@@ -715,6 +721,7 @@ impl<'a> LoweringContext<'a> {
                             name: name.clone(),
                             fields,
             is_enum: false,
+            computed_c_size: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -737,6 +744,7 @@ impl<'a> LoweringContext<'a> {
                             name: name.clone(),
                             fields,
             is_enum: false,
+            computed_c_size: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -751,6 +759,7 @@ impl<'a> LoweringContext<'a> {
                     name: name.clone(),
                     fields,
             is_enum: false,
+            computed_c_size: None,
                               });
                 self.struct_reg.register(name, sid);
             }

@@ -3012,6 +3012,7 @@ mod tests {
             name: "Point".into(),
             fields: vec![("x".into(), LirType::F64), ("y".into(), LirType::F64)],
             is_enum: false,
+            computed_c_size: None,
         });
 
         let mut func = LirFunction::new("get_x".into(), vec![LirType::Ptr], LirType::F64);

@@ -421,6 +421,7 @@ mod tests {
             name: "Point".into(),
             fields: vec![("x".into(), LirType::F64), ("y".into(), LirType::F64)],
             is_enum: false,
+            computed_c_size: None,
                       });
 
         let mut func = LirFunction::new("main".into(), vec![], LirType::I32);
@@ -547,6 +548,7 @@ mod tests {
             name: "Tiny".into(),
             fields: vec![("x".into(), LirType::I32)],
             is_enum: false,
+            computed_c_size: None,
                       });
 
         let mut func = LirFunction::new("bad".into(), vec![], LirType::Void);

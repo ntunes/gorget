@@ -136,9 +136,9 @@ pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> u
                 // struct { int32_t tag; <pad to 8>; T payload; }
                 return 8 + std::cmp::max(payload, 8);
             }
-            // User-defined struct — look up in LIR struct definitions.
+            // User-defined struct — prefer cached size, fall back to computation.
             if let Some(sd) = structs.iter().find(|s| s.name == type_name) {
-                return c_sizeof_struct_def(sd, structs);
+                return sd.computed_c_size.unwrap_or_else(|| c_sizeof_struct_def(sd, structs));
             }
             // Pointer/opaque types default to 8
             8
@@ -150,7 +150,7 @@ pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> u
 /// For enum structs (`is_enum == true`), uses union layout:
 ///   sizeof = align8(tag) + max(variant_size), aligned to 8
 /// For regular structs, sums fields sequentially with alignment.
-pub(super) fn c_sizeof_struct_def(sd: &StructDef, structs: &[StructDef]) -> usize {
+pub fn c_sizeof_struct_def(sd: &StructDef, structs: &[StructDef]) -> usize {
     if sd.is_enum && sd.fields.len() > 1 {
         // Union layout: tag (field 0) + union of variant groups.
         // tag is always I32 = 4 bytes, padded to 8 for union alignment.

@@ -363,6 +363,7 @@ mod tests {
             name: "GorgetString".into(),
             fields: vec![("data".into(), LirType::Ptr), ("len".into(), LirType::I64)],
             is_enum: false,
+            computed_c_size: None,
                       });
 
         module.add_extern(LirExtern {
