@@ -292,7 +292,7 @@ pub(super) fn lower_field_assign(
     if let Some((target_place, field_type)) = try_resolve_field_place(ctx, builder, object, field_name) {
         let rhs = lower_expr(ctx, builder, value);
         emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
-        maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
+        maybe_unregister_string_temp(ctx, builder, &rhs, field_type);
         maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
         builder.assign(target_place, rhs.clone());
         // Move-zero drop-registered temps after field assignment
@@ -354,7 +354,7 @@ pub(super) fn lower_field_assign(
                             let mut target_place = deref_place;
                             target_place.projections.push(Projection::Field(field_idx));
                             emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
-                            maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
+                            maybe_unregister_string_temp(ctx, builder, &rhs, field_type);
                             maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
                             builder.assign(target_place, rhs);
                             return;
@@ -372,7 +372,7 @@ pub(super) fn lower_field_assign(
                             let mut target_place = deref_place;
                             target_place.projections.push(Projection::Field(field_idx));
                             emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
-                            maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
+                            maybe_unregister_string_temp(ctx, builder, &rhs, field_type);
                             maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
                             builder.assign(target_place, rhs);
                             return;
@@ -398,7 +398,7 @@ pub(super) fn lower_field_assign(
                     target_place.projections.push(Projection::Field(field_idx));
                     // Drop old field value before reassignment if it's droppable
                     emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
-                    maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
+                    maybe_unregister_string_temp(ctx, builder, &rhs, field_type);
                     maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
                     builder.assign(target_place.clone(), rhs.clone());
                     // Move-zero drop-registered temps after field assignment
@@ -429,7 +429,7 @@ pub(super) fn lower_field_assign(
                     let mut target_place = base_place;
                     target_place.projections.push(Projection::Field(field_idx));
                     emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
-                    maybe_unregister_str_view_temp(ctx, builder, &rhs, field_type);
+                    maybe_unregister_string_temp(ctx, builder, &rhs, field_type);
                     maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
                     builder.assign(target_place.clone(), rhs.clone());
                     // Move-zero drop-registered temps after field assignment
@@ -470,10 +470,10 @@ fn maybe_unregister_owned_string_temp(
     }
 }
 
-/// If a GorgetString temp is being assigned to a str-typed target (field, variable, etc.),
-/// unregister the temp from drop tracking. The str view may escape the scope, and freeing
-/// the GorgetString would create a use-after-free. The GorgetString will leak.
-fn maybe_unregister_str_view_temp(
+/// If a GorgetString temp is being assigned to another string local,
+/// unregister the temp from drop tracking. The CoW alias shares the
+/// underlying buffer — the new owner is responsible for freeing it.
+fn maybe_unregister_string_temp(
     ctx: &mut LoweringContext,
     builder: &FunctionBuilder,
     rhs: &Operand,
