@@ -29,6 +29,11 @@ pub enum LocalOwnershipState {
     /// Generic Ptr reference: field loads, match pattern extracts, MutableBorrow params, etc.
     /// Not registered for drop. LIR uses SlotLoad instead of SlotAddr.
     Ref,
+    /// CoW borrow: a zero-cost Ptr(T) borrow where cloning is deferred to
+    /// ownership boundaries (struct init, push, return, move, mutation).
+    /// Currently set by `.get().unwrap()` on collection elements. Future
+    /// candidates: BareParam, CollectionRef, Alias could all unify under this.
+    CowBorrow,
 }
 
 impl LocalOwnershipState {
@@ -1219,6 +1224,17 @@ impl<'a> LoweringContext<'a> {
     /// Mark a local as a bare Ptr param borrowing from the caller.
     pub fn set_bare_param(&mut self, local: LocalId) {
         self.func_state.local_ownership.insert(local, LocalOwnershipState::BareParam);
+    }
+
+    /// Mark a local as a CoW borrow (deferred clone). Uses insert to
+    /// override any prior state (e.g., Owned from call_extern_tracked).
+    pub fn set_cow_borrow(&mut self, local: LocalId) {
+        self.func_state.local_ownership.insert(local, LocalOwnershipState::CowBorrow);
+    }
+
+    /// Check if a local is a CoW borrow (deferred clone).
+    pub fn is_cow_borrow(&self, local: LocalId) -> bool {
+        matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::CowBorrow))
     }
 
     /// Mark a local as a collection element reference.

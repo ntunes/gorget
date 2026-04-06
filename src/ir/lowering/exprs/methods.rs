@@ -408,10 +408,11 @@ pub(super) fn lower_method_call(
                         ctx.move_zero_and_mark(builder, place.local);
                     }
                     // Ptr(T) from Option__Ref_ (collection .get().unwrap()):
-                    // return as ref_local (borrow). CoW handles cloning at
-                    // ownership boundaries (VarDecl, struct init, function args).
+                    // Mark as CowBorrow so typed bindings defer the clone to
+                    // ownership boundaries instead of cloning at VarDecl.
+                    // Uses insert to override Owned from call_extern_tracked.
                     if matches!(ctx.type_registry.get(inner_type), Some(GirType::Ptr(_))) {
-                        ctx.set_ref(dst);
+                        ctx.set_cow_borrow(dst);
                     }
                     return FunctionBuilder::copy(dst);
                 }

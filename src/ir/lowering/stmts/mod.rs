@@ -307,8 +307,12 @@ fn lower_var_decl(
                 if let Some(GirType::Ptr(_inner)) = ctx.type_registry.get(inferred).cloned() {
                     if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
                         // Check: is the source a borrowed PARAM (safe to propagate)?
-                        // Only cow_ptr_params — NOT ref_locals. Collection element borrows
-                        // can become stale when the collection is mutated.
+                        // BareParam borrows from the caller — lifetime guaranteed for
+                        // the whole function. CowBorrow (from .get().unwrap()) requires
+                        // collection provenance tracking to propagate safely (the
+                        // collection can be mutated, invalidating the borrow). For now,
+                        // CowBorrow sources fall through to the clone path. The `auto`
+                        // path still gets zero-cost borrows via type inference.
                         let source_is_borrow = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                             p.projections.is_empty() && ctx.is_bare_param(p.local)
                         } else { false };
@@ -319,7 +323,7 @@ fn lower_var_decl(
                         // through-method-call (e.g. v.push(x)) correctly on BareParam.
                         let safe_in_loop = !ctx.func_state.cow_reassigned_names.contains(name);
                         if source_is_borrow && (!in_loop || safe_in_loop) {
-                            // Propagate borrow
+                            // Propagate borrow — typed binding gets same Ptr(T) as auto
                             builder.locals[local_id.0 as usize].type_id = inferred;
                             ctx.register_local(name, local_id, inferred);
                             ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);

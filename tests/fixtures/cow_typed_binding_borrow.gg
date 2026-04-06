@@ -1,0 +1,23 @@
+# Test: typed bindings from collection reads borrow (same as auto).
+# No implicit clone when using explicit type with .get().unwrap().
+
+struct Entry:
+    String name
+    int value
+
+void main():
+    Vector[Entry] entries = Vector[Entry]()
+    entries.push(Entry("alpha", 1))
+    entries.push(Entry("beta", 2))
+    entries.push(Entry("gamma", 3))
+
+    # auto → borrow (zero-cost)
+    auto a = entries.get(0).unwrap()
+    print(a.name)
+
+    # explicit type → should also borrow (zero-cost), not clone
+    Entry b = entries.get(1).unwrap()
+    print(b.name)
+
+    # Both should read from the collection without cloning
+    print(entries.get(2).unwrap().name)

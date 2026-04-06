@@ -44,14 +44,14 @@ print(s)                       # still "hello"
 ### Collection reads
 
 Collection reads (`.get()`, `v[i]`) return a mutable borrow (`&T`) into the
-collection's storage. Both `auto` and typed bindings produce borrows — there is
-no implicit clone:
+collection's storage. `auto` bindings preserve the borrow (zero cost). Typed
+bindings currently clone (the `CowBorrow` state is tracked but propagation
+to typed bindings requires collection provenance tracking — see TODO):
 
 ```gorget
 auto entry = v.get(i).unwrap() # &Entry — mutable borrow into v's storage
-Entry entry = v.get(i).unwrap() # &Entry — also a borrow, NOT a clone
-print(entry.name)              # read through borrow — zero cost
-entry.name = "new"             # mutation in place through & — modifies v[i] directly
+Entry entry = v.get(i).unwrap() # Entry — currently clones (owned copy)
+print(entry.name)              # read — zero cost either way
 ```
 
 Borrows propagate through field access and destructuring:
