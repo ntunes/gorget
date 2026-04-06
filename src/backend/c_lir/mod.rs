@@ -1139,8 +1139,20 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                             .unwrap_or_default();
                         if !call_fn.is_empty() {
                             if let Some(ret_ty_name) = closure_call_return_type(module, &call_fn, sn) {
-                                let prefix = if name.starts_with("Option__") { "Option__" } else { "Result__" };
-                                let target_name = format!("{prefix}{ret_ty_name}");
+                                let ret_mono = type_name_to_monomorphized(&ret_ty_name);
+                                let target_name = if name.starts_with("Option__") {
+                                    format!("Option__{ret_mono}")
+                                } else {
+                                    // Result__OkType__ErrType__map → extract error type from source
+                                    let type_prefix = _type_prefix;
+                                    let err_suffix = type_prefix.strip_prefix("Result__")
+                                        .and_then(|rest| rest.find("__").map(|pos| &rest[pos..]));
+                                    if let Some(err) = err_suffix {
+                                        format!("Result__{ret_mono}{err}")
+                                    } else {
+                                        format!("Result__{ret_mono}")
+                                    }
+                                };
                                 if let Some(target_sid) = module.structs.iter().position(|s| s.name == target_name) {
                                     let target_ty = LirType::Struct(StructId(target_sid as u32));
                                     val_types[d.0 as usize] = Some(target_ty.clone());

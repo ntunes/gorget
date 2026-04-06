@@ -1752,6 +1752,23 @@ static inline int gorget_utf8_encode(int64_t cp, char* out) {
     return 3;
 }
 
+// ── Str-native search primitive ─────────────────────────────
+// memmem implementation (always available, no _GNU_SOURCE dependency).
+// Placed in RUNTIME_STRING (always emitted) because multiple optional sections
+// (RUNTIME_STRING_EXTENDED, RUNTIME_ARRAY) depend on it.
+static inline const char* gorget_memmem(const char* h, size_t hlen, const char* n, size_t nlen) {
+    if (nlen == 0) return h;
+    if (nlen > hlen) return NULL;
+    const char first = n[0];
+    const char* end = h + hlen - nlen + 1;
+    for (const char* p = h; p < end; p++) {
+        p = (const char*)memchr(p, first, (size_t)(end - p));
+        if (!p) return NULL;
+        if (memcmp(p, n, nlen) == 0) return p;
+    }
+    return NULL;
+}
+
 "#;
 
 /// Unicode case mapping tables, upper/lower/alpha/whitespace, search, and string methods.
@@ -1965,21 +1982,6 @@ static inline bool gorget_is_unicode_whitespace(int64_t cp) {
     if (cp == 0x202F || cp == 0x205F) return true;
     if (cp == 0x3000) return true;
     return false;
-}
-
-// ── Str-native search primitives ─────────────────────────────
-// memmem implementation (always available, no _GNU_SOURCE dependency)
-static inline const char* gorget_memmem(const char* h, size_t hlen, const char* n, size_t nlen) {
-    if (nlen == 0) return h;
-    if (nlen > hlen) return NULL;
-    const char first = n[0];
-    const char* end = h + hlen - nlen + 1;
-    for (const char* p = h; p < end; p++) {
-        p = (const char*)memchr(p, first, (size_t)(end - p));
-        if (!p) return NULL;
-        if (memcmp(p, n, nlen) == 0) return p;
-    }
-    return NULL;
 }
 
 static inline bool gorget_str_contains(Str s, Str needle) {
@@ -5027,7 +5029,7 @@ static inline void __gorget_map_grow(GorgetMap* m) {
 }
 
 static inline GorgetMap gorget_map_new(size_t key_size, size_t val_size) {
-    return (GorgetMap){NULL, NULL, NULL, 0, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL, NULL};
+    return (GorgetMap){NULL, NULL, NULL, 0, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL};
 }
 
 // Ordered Dict: pre-allocates order array so put() tracks insertion order

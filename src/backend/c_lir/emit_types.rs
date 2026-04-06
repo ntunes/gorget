@@ -2458,6 +2458,7 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
     }
 
     if needs_spawn {
+        ensure_array!(out, emitted_array); // gorget_process_spawn uses gorget_array_get
         out.push_str(crate::backend::c::c_runtime::PROCESS_SPAWN_RUNTIME);
     }
 
