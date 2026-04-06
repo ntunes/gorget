@@ -5360,6 +5360,32 @@ static inline GorgetArray gorget_map_items(const GorgetMap* m) {
     return result;
 }
 
+// ── Dict/Set iteration accessors ──────────────────────────────
+// Used by GIR lowering to iterate over map/set entries without
+// InlineC. All accessors are trivial field reads that the C
+// compiler will inline to zero overhead.
+
+static inline int64_t gorget_map_iter_cap(const void* m) {
+    return (int64_t)((const GorgetMap*)m)->cap;
+}
+static inline int64_t gorget_map_iter_state(const void* m, int64_t idx) {
+    return (int64_t)((const GorgetMap*)m)->states[(size_t)idx];
+}
+static inline int64_t gorget_map_iter_order_len(const void* m) {
+    return (int64_t)((const GorgetMap*)m)->order_len;
+}
+static inline int64_t gorget_map_iter_order(const void* m, int64_t idx) {
+    return (int64_t)((const GorgetMap*)m)->order[(size_t)idx];
+}
+static inline void gorget_map_iter_key(const void* m, int64_t idx, void* out) {
+    const GorgetMap* mm = (const GorgetMap*)m;
+    memcpy(out, (const char*)mm->keys + (size_t)idx * mm->key_size, mm->key_size);
+}
+static inline void gorget_map_iter_value(const void* m, int64_t idx, void* out) {
+    const GorgetMap* mm = (const GorgetMap*)m;
+    memcpy(out, (const char*)mm->values + (size_t)idx * mm->val_size, mm->val_size);
+}
+
 "#;
 
 /// GorgetSet — thin wrapper over GorgetMap.

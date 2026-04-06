@@ -426,7 +426,12 @@ fn lower_for_dict(
     let iter_local = builder.add_local(iter_type, None);
     builder.assign(Place::local(iter_local), iter_op);
 
-    let dict_id = iter_local.0;
+    let dict_id = iter_local.0; // raw index for remaining InlineC key/value extraction
+
+    // Create a pointer to the dict for iterator accessor calls.
+    let dict_ptr_type = ctx.register_ptr_type(iter_type);
+    let dict_ptr = builder.add_local(dict_ptr_type, None);
+    builder.emit_borrow(dict_ptr, Place::local(iter_local));
 
     // Determine key/value type names from the collection type
     let type_name = ctx.type_name_for_id(iter_type)
@@ -434,7 +439,7 @@ fn lower_for_dict(
         .unwrap_or_default();
     // Parse: Dict__KeyType__ValueType or HashMap__KeyType__ValueType
     let (key_gir_type, val_gir_type) = parse_dict_kv_types(&type_name);
-    // Convert GIR names → C type names for inline C codegen
+    // C type names still needed for InlineC key/value extraction
     let key_c_type = to_c_type_name(&key_gir_type);
     let val_c_type = to_c_type_name(&val_gir_type);
     // Look up the TypeIds for key/value types (use GIR names for type registry)
@@ -446,8 +451,11 @@ fn lower_for_dict(
     builder.assign(Place::local(oi), Operand::Constant(Constant::I64(0)));
 
     // limit = cap (iterate over all slots, check states for USED)
-    let limit = builder.add_local(I64_TYPE, None);
-    builder.inline_c(format!("_{} = (int64_t)_{}.cap;", limit.0, dict_id));
+    let limit = builder.call_extern(
+        "gorget_map_iter_cap",
+        vec![FunctionBuilder::copy(dict_ptr)],
+        I64_TYPE,
+    );
 
     let header_bb = builder.new_block();
     let body_bb = builder.new_block();
@@ -479,9 +487,11 @@ fn lower_for_dict(
     builder.assign(Place::local(idx), FunctionBuilder::copy(oi));
 
     // state check: if states[idx] != 1, skip to incr
-    let state = builder.add_local(I64_TYPE, None);
-    builder.inline_c(format!("_{s} = (int64_t)_{dict}.states[(size_t)_{idx}];",
-        s = state.0, dict = dict_id, idx = idx.0));
+    let state = builder.call_extern(
+        "gorget_map_iter_state",
+        vec![FunctionBuilder::copy(dict_ptr), FunctionBuilder::copy(idx)],
+        I64_TYPE,
+    );
     let state_ok = builder.cmp(CmpOp::Eq, I64_TYPE, FunctionBuilder::copy(state), Operand::Constant(Constant::I64(1)));
 
     let elem_bb = builder.new_block();
@@ -550,7 +560,12 @@ fn lower_for_set(
     let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
     let iter_local = builder.add_local(iter_type, None);
     builder.assign(Place::local(iter_local), iter_op);
-    let set_id = iter_local.0;
+    let set_id = iter_local.0; // raw index for remaining InlineC element extraction
+
+    // Create pointer for iterator accessor calls
+    let set_ptr_type = ctx.register_ptr_type(iter_type);
+    let set_ptr = builder.add_local(set_ptr_type, None);
+    builder.emit_borrow(set_ptr, Place::local(iter_local));
 
     // Parse element type from Set__T
     let type_name = ctx.type_name_for_id(iter_type)
@@ -566,12 +581,19 @@ fn lower_for_set(
     builder.assign(Place::local(i_local), Operand::Constant(Constant::I64(0)));
 
     // limit: ordered uses order_len, unordered uses cap
-    let limit = builder.add_local(I64_TYPE, None);
-    if is_ordered {
-        builder.inline_c(format!("_{} = (int64_t)_{}.order_len;", limit.0, set_id));
+    let limit = if is_ordered {
+        builder.call_extern(
+            "gorget_map_iter_order_len",
+            vec![FunctionBuilder::copy(set_ptr)],
+            I64_TYPE,
+        )
     } else {
-        builder.inline_c(format!("_{} = (int64_t)_{}.cap;", limit.0, set_id));
-    }
+        builder.call_extern(
+            "gorget_map_iter_cap",
+            vec![FunctionBuilder::copy(set_ptr)],
+            I64_TYPE,
+        )
+    };
 
     let header_bb = builder.new_block();
     let body_bb = builder.new_block();
@@ -598,14 +620,18 @@ fn lower_for_set(
 
     if is_ordered {
         // For ordered sets: dereference order array to get the real bucket index
-        let real_i = builder.add_local(I64_TYPE, None);
-        builder.inline_c(format!("_{ri} = (int64_t)_{set}.order[(size_t)_{i}];",
-            ri = real_i.0, set = set_id, i = i_local.0));
+        let real_i = builder.call_extern(
+            "gorget_map_iter_order",
+            vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(i_local)],
+            I64_TYPE,
+        );
 
         // state check (still needed — deleted entries may leave stale order slots)
-        let state = builder.add_local(I64_TYPE, None);
-        builder.inline_c(format!("_{s} = (int64_t)_{set}.states[(size_t)_{ri}];",
-            s = state.0, set = set_id, ri = real_i.0));
+        let state = builder.call_extern(
+            "gorget_map_iter_state",
+            vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(real_i)],
+            I64_TYPE,
+        );
         let state_ok = builder.cmp(CmpOp::Eq, I64_TYPE, FunctionBuilder::copy(state), Operand::Constant(Constant::I64(1)));
 
         let elem_bb = builder.new_block();
@@ -618,10 +644,12 @@ fn lower_for_set(
             e = elem_local.0, set = set_id, ri = real_i.0));
         ctx.register_local(var_name, elem_local, elem_type);
     } else {
-        // state check (assignment form)
-        let state = builder.add_local(I64_TYPE, None);
-        builder.inline_c(format!("_{s} = (int64_t)_{set}.states[(size_t)_{i}];",
-            s = state.0, set = set_id, i = i_local.0));
+        // state check
+        let state = builder.call_extern(
+            "gorget_map_iter_state",
+            vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(i_local)],
+            I64_TYPE,
+        );
         let state_ok = builder.cmp(CmpOp::Eq, I64_TYPE, FunctionBuilder::copy(state), Operand::Constant(Constant::I64(1)));
 
         let elem_bb = builder.new_block();
