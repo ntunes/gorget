@@ -595,6 +595,43 @@ fn emit_function(
     // First, collect predecessor info for phi nodes
     let pred_map = build_predecessor_map(func);
 
+    // Pre-compute exit labels for each block: if a block contains overflow/bounds/div checks,
+    // the actual exit point is the last "ok" label, not the original bb{N}.
+    // Must exactly mirror the trap_counter increments in emit_inst.
+    let block_exit_labels: HashMap<BlockId, String> = {
+        let mut labels = HashMap::new();
+        for block in &func.blocks {
+            let bid = block.id.0;
+            let mut label = format!("bb{bid}");
+            let mut counter = 0u32;
+            for inst in &block.insts {
+                match inst {
+                    Inst::Add { overflow: Overflow::Trap, ty, .. }
+                    | Inst::Sub { overflow: Overflow::Trap, ty, .. }
+                    | Inst::Mul { overflow: Overflow::Trap, ty, .. } if ty.is_integer() => {
+                        label = format!("ov.{bid}.{counter}.ok");
+                        counter += 1;
+                    }
+                    Inst::BoundsCheck { .. } => {
+                        label = format!("bc.{bid}.{counter}.ok");
+                        counter += 1;
+                    }
+                    Inst::DivCheck { .. } => {
+                        label = format!("dc.{bid}.{counter}.ok");
+                        counter += 1;
+                    }
+                    // Printf string extraction also increments trap_counter
+                    Inst::CallExtern { name, args, .. } if name == "printf" && !args.is_empty() => {
+                        counter += 1;
+                    }
+                    _ => {}
+                }
+            }
+            labels.insert(block.id, label);
+        }
+        labels
+    };
+
     for block in &func.blocks {
         let bid = block.id.0;
         writeln!(out, "bb{bid}:").unwrap();
@@ -607,11 +644,14 @@ fn emit_function(
                 for &pred_id in preds {
                     let pred_block = &func.blocks[pred_id.0 as usize];
                     let args = get_branch_args_for_target(&pred_block.terminator, block.id);
+                    // Use the actual exit label (may differ from bb{N} due to overflow checks)
+                    let pred_label = block_exit_labels.get(&pred_id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("bb{}", pred_id.0));
                     if pi < args.len() {
-                        phi_entries.push(format!("[ %v{}, %bb{} ]", args[pi].0, pred_id.0));
+                        phi_entries.push(format!("[ %v{}, %{pred_label} ]", args[pi].0));
                     } else {
-                        // Missing arg — use undef
-                        phi_entries.push(format!("[ undef, %bb{} ]", pred_id.0));
+                        phi_entries.push(format!("[ undef, %{pred_label} ]"));
                     }
                 }
             }
@@ -624,9 +664,12 @@ fn emit_function(
         }
 
         // Instructions
+        // Track the "current label" — overflow/bounds checks emit internal sub-blocks,
+        // changing the effective predecessor label for phi nodes in successor blocks.
         let mut trap_counter = 0u32;
+        let mut current_label = format!("bb{bid}");
         for inst in &block.insts {
-            emit_inst(out, inst, func, module, snames, str_globals, &val_types, bid, &mut trap_counter);
+            emit_inst(out, inst, func, module, snames, str_globals, &val_types, bid, &mut trap_counter, &mut current_label);
         }
 
         // Terminator
@@ -689,6 +732,7 @@ fn emit_inst(
     val_types: &[Option<LirType>],
     block_id: u32,
     trap_counter: &mut u32,
+    current_label: &mut String,
 ) {
     match inst {
         // ── Slot Access ─────────────────────────────────────────────
@@ -809,7 +853,7 @@ fn emit_inst(
         Inst::Add { dst, ty, lhs, rhs, overflow } => {
             let lty = llvm_type(ty);
             if *overflow == Overflow::Trap && ty.is_integer() {
-                emit_overflow_check(out, "add", dst, lhs, rhs, ty, snames, block_id, trap_counter);
+                emit_overflow_check(out, "add", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label);
             } else if ty.is_float() {
                 writeln!(out, "  %v{} = fadd {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -819,7 +863,7 @@ fn emit_inst(
         Inst::Sub { dst, ty, lhs, rhs, overflow } => {
             let lty = llvm_type(ty);
             if *overflow == Overflow::Trap && ty.is_integer() {
-                emit_overflow_check(out, "sub", dst, lhs, rhs, ty, snames, block_id, trap_counter);
+                emit_overflow_check(out, "sub", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label);
             } else if ty.is_float() {
                 writeln!(out, "  %v{} = fsub {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -829,7 +873,7 @@ fn emit_inst(
         Inst::Mul { dst, ty, lhs, rhs, overflow } => {
             let lty = llvm_type(ty);
             if *overflow == Overflow::Trap && ty.is_integer() {
-                emit_overflow_check(out, "mul", dst, lhs, rhs, ty, snames, block_id, trap_counter);
+                emit_overflow_check(out, "mul", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label);
             } else if ty.is_float() {
                 writeln!(out, "  %v{} = fmul {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -1209,6 +1253,7 @@ fn emit_inst(
             writeln!(out, "  call void @abort()").unwrap();
             writeln!(out, "  unreachable").unwrap();
             writeln!(out, "{ok_label}:").unwrap();
+            *current_label = ok_label;
         }
         Inst::DivCheck { divisor } => {
             let trap_id = *trap_counter;
@@ -1224,6 +1269,7 @@ fn emit_inst(
             writeln!(out, "  call void @abort()").unwrap();
             writeln!(out, "  unreachable").unwrap();
             writeln!(out, "{ok_label}:").unwrap();
+            *current_label = ok_label;
         }
         Inst::Trap { msg } => {
             let fmt_idx = str_globals.get_index(msg);
@@ -1294,6 +1340,7 @@ fn emit_overflow_check(
     _snames: &HashMap<u32, String>,
     block_id: u32,
     trap_counter: &mut u32,
+    current_label: &mut String,
 ) {
     let lty = llvm_type(ty);
     let bits = int_bits(ty);
@@ -1318,6 +1365,9 @@ fn emit_overflow_check(
     writeln!(out, "  unreachable").unwrap();
     writeln!(out, "{ok_label}:").unwrap();
     writeln!(out, "  %v{} = add {lty} 0, %{val}", dst.0).unwrap();
+
+    // Update current_label — execution continues from the ok block
+    *current_label = ok_label;
 }
 
 // ── Terminator Emission ────────────────────────────────────────────────────
@@ -1333,7 +1383,16 @@ fn emit_term(
     match term {
         Term::Ret(val) => {
             let ret_ty = llvm_type_full(&func.return_type, snames);
-            writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
+            // If function returns aggregate but value is a pointer, load from it
+            let val_ty = val_types.get(val.0 as usize).and_then(|t| t.as_ref());
+            let is_ptr_val = val_ty.map_or(false, |t| t.is_ptr());
+            let is_agg_ret = func.return_type.is_aggregate();
+            if is_agg_ret && is_ptr_val {
+                writeln!(out, "  %ret.load.{} = load {ret_ty}, ptr %v{}", val.0, val.0).unwrap();
+                writeln!(out, "  ret {ret_ty} %ret.load.{}", val.0).unwrap();
+            } else {
+                writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
+            }
         }
         Term::RetVoid => {
             writeln!(out, "  ret void").unwrap();

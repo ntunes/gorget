@@ -854,7 +854,8 @@ fn compile_llvm_pipeline(
     runtime_src.push_str(c_runtime::RUNTIME_MATH);
     runtime_src.push_str(c_runtime::RUNTIME_SORT);
     runtime_src.push_str(c_runtime::RUNTIME_ENV);
-    runtime_src.push_str(c_runtime::RUNTIME_ALLOC_REPORT);
+    // Note: RUNTIME_ALLOC_REPORT deliberately excluded — it registers an atexit handler
+    // that prints allocation stats, which the C backend only includes for test/bench mode.
     // Conditionally include heavier runtime modules
     if concat_source.contains("std.async") || !lir_module.spawned_fns.is_empty() {
         runtime_src.push_str(c_runtime::ASYNC_RUNTIME);
