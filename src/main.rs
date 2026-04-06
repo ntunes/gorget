@@ -881,6 +881,11 @@ fn compile_llvm_pipeline(
         || concat_source.contains("Guard")
         || !lir_module.externs.iter().all(|e| !e.name.contains("mutex") && !e.name.contains("shared") && !e.name.contains("guard") && !e.name.contains("rwlock"));
     if needs_sync {
+        // Mutex/Sync depend on async types (GorgetWaker) — include async basics if not already
+        if !needs_async {
+            runtime_src.push_str(c_runtime::ASYNC_RUNTIME);
+            runtime_src.push_str(c_runtime::TASK_COMMON);
+        }
         runtime_src.push_str(c_runtime::SHARED_RUNTIME);
         runtime_src.push_str(c_runtime::MUTEX_RUNTIME);
         runtime_src.push_str(c_runtime::SYNC_RUNTIME);
@@ -896,7 +901,8 @@ fn compile_llvm_pipeline(
         runtime_src.push_str(c_runtime::RUNTIME_FIXEDBUF_ALLOC);
         runtime_src.push_str(c_runtime::RUNTIME_FALLBACK_ALLOC);
     }
-    if concat_source.contains("std.os") {
+    if concat_source.contains("std.os")
+        || !lir_module.externs.iter().all(|e| !e.name.contains("gorget_exec") && !e.name.contains("gorget_process") && !e.name.contains("gorget_getpid")) {
         runtime_src.push_str(c_runtime::PROCESS_RUNTIME);
         runtime_src.push_str(c_runtime::PROCESS_SPAWN_RUNTIME);
     }

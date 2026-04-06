@@ -334,7 +334,10 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
             writeln!(out, "%{name} = type {{ i8 }}").unwrap();
         } else {
             let fields: Vec<String> = def.fields.iter()
-                .map(|(_, fty)| llvm_type_full(fty, snames))
+                .map(|(_, fty)| {
+                    if *fty == LirType::Void { "i8".to_string() }
+                    else { llvm_type_full(fty, snames) }
+                })
                 .collect();
             writeln!(out, "%{name} = type {{ {} }}", fields.join(", ")).unwrap();
         }
@@ -408,7 +411,7 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
 // ── Extern Declarations ───────────────────────────────────────────────────
 
 /// Names that are declared as libc builtins — skip if they also appear in module externs.
-const LIBC_BUILTINS: &[&str] = &["printf", "fprintf", "abort", "memset", "memcpy", "exit", "malloc", "free", "realloc", "calloc"];
+const LIBC_BUILTINS: &[&str] = &["printf", "fprintf", "abort", "memset", "memcpy", "exit", "malloc", "free", "realloc", "calloc", "gorget_panic", "gorget_init_args"];
 
 fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>) {
     // Also declare libc functions we use directly
@@ -646,6 +649,8 @@ fn emit_function(
                     }
                     // CallExtern inline expansions that increment trap_counter
                     Inst::CallExtern { name, args, .. } => {
+                        let is_drop_guard = name.starts_with("__gorget_drop_if_alive_open__")
+                            || name == "__gorget_drop_if_alive_close";
                         // Printf string extraction
                         if name == "printf" && !args.is_empty() {
                             counter += 1;
@@ -657,11 +662,21 @@ fn emit_function(
                         if is_tag && !args.is_empty() {
                             counter += 1;
                         }
-                        // Option/Result unwrap
+                        // Option/Result unwrap / unwrap_or
                         let is_unwrap = name == "__option_unwrap" || name == "__result_unwrap"
                             || name.ends_with("__unwrap") || name.ends_with("__expect");
                         if is_unwrap && !args.is_empty() {
                             counter += 1;
+                        }
+                        let is_unwrap_or = name == "__option_unwrap_or" || name == "__result_unwrap_or"
+                            || name.ends_with("__unwrap_or");
+                        if is_unwrap_or && args.len() >= 2 {
+                            counter += 1;
+                        }
+                        // General CallExtern path uses ext_uid (trap_counter++)
+                        if !is_drop_guard && !(name == "printf" && !args.is_empty())
+                            && !(is_tag && !args.is_empty()) && !(is_unwrap && !args.is_empty()) {
+                            counter += 1; // ext_uid
                         }
                     }
                     _ => {}
@@ -1238,8 +1253,29 @@ fn emit_inst(
                     *trap_counter += 1;
                     let payload_ptr = format!("unwrap.{block_id}.{uid}.ptr");
                     writeln!(out, "  %{payload_ptr} = getelementptr i8, ptr %v{}, i64 8", args[0].0).unwrap();
-                    // For aggregate payloads, return the pointer; for scalars, load i64
                     writeln!(out, "  %v{} = load i64, ptr %{payload_ptr}", d.0).unwrap();
+                }
+                return;
+            }
+
+            // Option/Result unwrap_or — return payload if Some/Ok, else default
+            let is_unwrap_or = name == "__option_unwrap_or" || name == "__result_unwrap_or"
+                || name.ends_with("__unwrap_or");
+            if is_unwrap_or && args.len() >= 2 {
+                if let Some(d) = dst {
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    let tag_ptr = format!("unwrapor.{block_id}.{uid}.tagptr");
+                    let tag_val = format!("unwrapor.{block_id}.{uid}.tag");
+                    let payload_ptr = format!("unwrapor.{block_id}.{uid}.pptr");
+                    let payload_val = format!("unwrapor.{block_id}.{uid}.pval");
+                    let cmp = format!("unwrapor.{block_id}.{uid}.cmp");
+                    writeln!(out, "  %{tag_ptr} = getelementptr i8, ptr %v{}, i32 0", args[0].0).unwrap();
+                    writeln!(out, "  %{tag_val} = load i32, ptr %{tag_ptr}").unwrap();
+                    writeln!(out, "  %{cmp} = icmp ne i32 %{tag_val}, 0").unwrap();
+                    writeln!(out, "  %{payload_ptr} = getelementptr i8, ptr %v{}, i64 8", args[0].0).unwrap();
+                    writeln!(out, "  %{payload_val} = load i64, ptr %{payload_ptr}").unwrap();
+                    writeln!(out, "  %v{} = select i1 %{cmp}, i64 %{payload_val}, i64 %v{}", d.0, args[1].0).unwrap();
                 }
                 return;
             }
@@ -1277,7 +1313,11 @@ fn emit_inst(
             let ext = module.externs.iter().find(|e| e.name == *name);
             if let Some(ext) = ext {
                 let ret_ty = llvm_type_full(&ext.return_type, snames);
-                // For each arg, if extern expects ptr but value is scalar, spill to alloca
+                // For each arg, handle type mismatches:
+                // - extern expects ptr but value is scalar → spill to alloca
+                // - extern expects aggregate but value is ptr → load struct from ptr
+                let ext_uid = *trap_counter;
+                *trap_counter += 1;
                 let mut spill_lines = Vec::new();
                 let arg_strs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
                     let expected_ty = if i < ext.params.len() {
@@ -1289,10 +1329,18 @@ fn emit_inst(
                     let expects_ptr = expected_ty.map_or(false, |t| t.is_ptr());
                     let is_ptr = actual_ty.map_or(false, |t| t.is_ptr());
 
-                    if expects_ptr && !is_ptr && actual_ty.is_some() {
+                    let expects_agg = expected_ty.map_or(false, |t| t.is_aggregate());
+
+                    if expects_agg && is_ptr {
+                        // Extern expects aggregate by value, but we have a ptr — load it
+                        let ety = llvm_type_full(expected_ty.unwrap(), snames);
+                        let load_name = format!("ext.load.{block_id}.{ext_uid}.{i}");
+                        spill_lines.push(format!("  %{load_name} = load {ety}, ptr %v{}", a.0));
+                        format!("{ety} %{load_name}")
+                    } else if expects_ptr && !is_ptr && actual_ty.is_some() {
                         // Spill scalar to alloca and pass pointer
                         let spill_ty = llvm_type_full(actual_ty.unwrap(), snames);
-                        let spill_name = format!("spill.{}.{i}", a.0);
+                        let spill_name = format!("spill.{block_id}.{ext_uid}.{i}");
                         spill_lines.push(format!("  %{spill_name} = alloca {spill_ty}"));
                         spill_lines.push(format!("  store {spill_ty} %v{}, ptr %{spill_name}", a.0));
                         format!("ptr %{spill_name}")
