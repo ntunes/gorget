@@ -2168,14 +2168,10 @@ pub(super) fn emit_call_extern(
                     if let Some(Some(LirType::Struct(pt_sid))) = ptr_pointee.get(arg_val.0 as usize) {
                         // Only zero direct resource types (GorgetArray, GorgetMap, etc.)
                         // after push/set/send.  User structs containing resources are
-                        // handled via Custom/Recursive drop guards (memcmp zero check).
+                        // handled by GIR-level move-zero on the clone temp.
                         if is_direct_resource_type(*pt_sid, module) {
                             if is_str_struct_id(pt_sid, module) {
-                                // For unified str/String: zero only the cap field
-                                // (demote to view) instead of zeroing the entire struct.
-                                // This prevents double-free (gorget_string_free checks
-                                // cap==0) while preserving data/len for subsequent reads,
-                                // since str is a copy type in Gorget.
+                                // Bare GorgetString: zero cap+alloc only (demote to view).
                                 write!(out, "\n    ((GorgetString*){p})->cap = 0; ((GorgetString*){p})->alloc = NULL;", p = v(*arg_val)).unwrap();
                             } else {
                                 let sn_name = module.structs.get(pt_sid.0 as usize)

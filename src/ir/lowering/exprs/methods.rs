@@ -1371,6 +1371,8 @@ pub(super) fn lower_method_call(
         // Auto-clone Ptr(resource) args at consuming method positions.
         // IndexLoad returns Ptr(T) for CoW. Consuming methods (push/put/set)
         // need an OWNED copy — clone the pointed-to data.
+        // Track cloned temps so we can move-zero them after the call.
+        let mut consuming_clone_temps: Vec<LocalId> = Vec::new();
         {
             let consuming_pos: Option<usize> = match method_name {
                 "push" | "add" | "extend" | "send" | "push_back" | "push_front" => Some(0),
@@ -1398,6 +1400,7 @@ pub(super) fn lower_method_call(
                             vec![FunctionBuilder::copy(ptr_local)], inner_type);
                         ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);
                         ctx.set_owned(cloned);
+                        consuming_clone_temps.push(cloned);
                         let ptr_type = ctx.register_ptr_type(inner_type);
                         let ptr = builder.add_local(ptr_type, None);
                         builder.emit_borrow(ptr, Place::local(cloned));
@@ -1420,6 +1423,14 @@ pub(super) fn lower_method_call(
             builder.move_zero(place.clone());
             ctx.emit_field_origin_zero(builder, place.local);
             ctx.drops.mark_moved(place.local);
+        }
+
+        // MoveZero clone temps from consuming-position auto-clone.
+        // The push/put/set memcpy'd the clone into the collection buffer;
+        // the temp must be zeroed so its DropIfAlive guard doesn't
+        // double-free the data the collection now owns.
+        for local in &consuming_clone_temps {
+            ctx.move_zero_and_mark(builder, *local);
         }
 
         // Zero source fields for resource-type args that came from field loads.
