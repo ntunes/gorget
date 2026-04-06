@@ -1567,7 +1567,9 @@ pub(super) fn emit_recursive_struct_clones(out: &mut String, module: &LirModule,
                     let base = &other[..other.len() - 6]; // strip "__drop"
                     let inner_clone = format!("{base}__clone");
                     // Check if this inner type also has a Recursive clone (will be generated)
-                    if module.recursive_drop_structs.contains_key(base) {
+                    if module.recursive_drop_structs.contains_key(base)
+                        || module.recursive_drop_enums.contains_key(base)
+                    {
                         writeln!(out, "    dst.{field_name} = {inner_clone}(&dst.{field_name});").unwrap();
                         continue;
                     }
