@@ -431,7 +431,7 @@ pub fn emit_pattern_bindings(
 
                 // Mark Ptr-extracted locals as ref_locals (no auto-deref, no drop)
                 if matches!(ctx.type_registry.get(field_type), Some(GirType::Ptr(_))) {
-                    ctx.ref_locals.insert(dst);
+                    ctx.set_ref(dst);
                 }
                 // Value scrutinee + owned string field: clone to create an
                 // independent copy that can be safely freed at scope exit.
@@ -455,7 +455,7 @@ pub fn emit_pattern_bindings(
                         );
                         builder.assign(Place::local(dst), FunctionBuilder::copy(cloned));
                         ctx.drops.register_local(dst, field_type, &ctx.type_registry);
-                        ctx.owned_locals.insert(dst);
+                        ctx.set_owned(dst);
                     }
                 }
 

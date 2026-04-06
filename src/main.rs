@@ -369,6 +369,7 @@ fn try_build_ir(
     emit_gir: bool,
     emit_lir: bool,
     emit_c_lir: bool,
+    show_clones: bool,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -416,29 +417,60 @@ fn try_build_ir(
     // Lower AST to GIR
     let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
 
-    // Display implicit clone warnings
+    // Display implicit clone warnings / structured clone report
     if !gir_module.implicit_clone_warnings.is_empty() {
         let reporter = ErrorReporter::new_multi(file_infos.clone());
-        let mut shown = std::collections::HashSet::new();
-        let mut lib_warning_count = 0usize;
-        for warn in &gir_module.implicit_clone_warnings {
-            // Warnings from imported libraries: count but don't show by default.
-            // Set GORGET_SHOW_LIB_CLONE_WARNINGS=1 to display them.
-            if !reporter.is_entry_file(warn.span) {
-                lib_warning_count += 1;
-                if std::env::var("GORGET_SHOW_LIB_CLONE_WARNINGS").is_ok() {
-                    reporter.report_implicit_clone_warning(warn);
+        if show_clones {
+            // Structured clone report: compact table with file:line:col, type, reason
+            let mut shown = std::collections::HashSet::new();
+            let mut entries: Vec<(String, usize, usize, String, &str)> = Vec::new();
+            let mut lib_count = 0usize;
+            for warn in &gir_module.implicit_clone_warnings {
+                if !reporter.is_entry_file(warn.span) {
+                    lib_count += 1;
+                    continue;
                 }
-                continue;
+                if !shown.insert(warn.span.start) {
+                    continue;
+                }
+                let (file, line, col) = reporter.span_location(warn.span);
+                let reason = match &warn.reason {
+                    gorget::ir::ImplicitCloneReason::VarDeclFromBorrow => "variable declaration from borrow",
+                    gorget::ir::ImplicitCloneReason::NamedToNamed => "named-to-named assignment",
+                    gorget::ir::ImplicitCloneReason::ReturnFromBorrow => "return from borrow",
+                    gorget::ir::ImplicitCloneReason::MoveParamFromBorrow => "move param from borrow",
+                    gorget::ir::ImplicitCloneReason::StructFieldFromBorrow => "struct field from borrow",
+                };
+                entries.push((file, line, col, warn.type_name.clone(), reason));
             }
-            // Deduplicate by source location (same span = same warning)
-            if !shown.insert(warn.span.start) {
-                continue;
+            eprintln!("\n=== Clone Report ({} implicit clone{}) ===", entries.len(), if entries.len() == 1 { "" } else { "s" });
+            for (file, line, col, type_name, reason) in &entries {
+                eprintln!("  {file}:{line}:{col}  {type_name:<16} {reason}");
             }
-            reporter.report_implicit_clone_warning(warn);
-        }
-        if lib_warning_count > 0 {
-            eprintln!("  ... and {lib_warning_count} implicit clone warning(s) in imported libraries");
+            if lib_count > 0 {
+                eprintln!("  ... and {lib_count} clone(s) in imported libraries (set GORGET_SHOW_LIB_CLONE_WARNINGS=1 to include)");
+            }
+            eprintln!();
+        } else {
+            // Default: verbose codespan diagnostic warnings
+            let mut shown = std::collections::HashSet::new();
+            let mut lib_warning_count = 0usize;
+            for warn in &gir_module.implicit_clone_warnings {
+                if !reporter.is_entry_file(warn.span) {
+                    lib_warning_count += 1;
+                    if std::env::var("GORGET_SHOW_LIB_CLONE_WARNINGS").is_ok() {
+                        reporter.report_implicit_clone_warning(warn);
+                    }
+                    continue;
+                }
+                if !shown.insert(warn.span.start) {
+                    continue;
+                }
+                reporter.report_implicit_clone_warning(warn);
+            }
+            if lib_warning_count > 0 {
+                eprintln!("  ... and {lib_warning_count} implicit clone warning(s) in imported libraries");
+            }
         }
     }
 
@@ -1171,7 +1203,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false) {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false) {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1207,7 +1239,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false) {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false) {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1673,7 +1705,7 @@ fn main() {
             sanitize, scheduler_mode: parse_scheduler(&args),
             ..Default::default()
         };
-        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false)
+        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false)
             .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
         let status = Command::new(&exe_path)
             .status()
@@ -1801,6 +1833,7 @@ fn main() {
     let emit_c_lir = args.iter().any(|a| a == "--emit-c-lir");
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
+    let show_clones = args.iter().any(|a| a == "--show-clones");
     let warn_const = args.iter().any(|a| a == "--warn-const");
     let features = parse_features(&args);
     // Parse -o <path> for shared output
@@ -2108,7 +2141,7 @@ fn main() {
                     sanitize, scheduler_mode,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir);
+                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built shared library: {}", p.display()); }
                     Err(e) => {
@@ -2138,7 +2171,7 @@ fn main() {
                     sanitize,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir);
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built: {}", p.display()); }
                     Err(e) => {
@@ -2205,7 +2238,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false);
+            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false);
             match result {
                 Ok(exe_path) => {
                     let status = Command::new(&exe_path)
@@ -2440,7 +2473,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false)
+            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false)
                 .unwrap_or_else(|e| {
                     eprintln!("{e}");
                     process::exit(1);

@@ -64,7 +64,7 @@ pub(super) fn lower_call_arg(
                         Some(GirType::MutPtr(_)) | Some(GirType::Ptr(_))
                     )
                 };
-                if ctx.ref_locals.contains(&local_id)
+                if ctx.is_ref_local(local_id)
                     || ctx.mut_capture_locals.contains_key(&local_id)
                     || is_already_ptr
                 {
@@ -1045,7 +1045,7 @@ pub(super) fn lower_interp_segment(
         // Covers &/! params (mut_capture_locals) and borrowed resource params (ref_locals).
         let ptr_value_type = ctx.mut_capture_locals.get(&local_id).copied()
             .or_else(|| {
-                if ctx.ref_locals.contains(&local_id) {
+                if ctx.is_ref_local(local_id) {
                     ctx.pointee_type(builder.local_type(local_id))
                 } else {
                     None

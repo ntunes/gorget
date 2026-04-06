@@ -334,12 +334,8 @@ impl<'a> BorrowChecker<'a> {
                 // not legacy str view tracking from provenance.
                 {
                     let method_name = method.node.as_str();
-                    let is_mutating_collection_method = matches!(
-                        method_name,
-                        "push" | "pop" | "set" | "clear" | "sort" | "reverse"
-                        | "insert" | "remove" | "extend" | "reserve" | "put"
-                        | "update" | "add" | "append"
-                    );
+                    let is_mutating_collection_method =
+                        crate::ir::lowering::builtins::is_mutating_builtin_method(method_name);
                     if is_mutating_collection_method {
                         if let Some(recv_def_id) = self.find_root_def_id(receiver) {
                             let recv_name = self.scopes.get_def(recv_def_id).name.clone();

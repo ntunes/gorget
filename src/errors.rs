@@ -358,6 +358,18 @@ impl ErrorReporter {
         self.emit(&diag);
     }
 
+    /// Resolve a span to (filename, line_number, column_number) for structured output.
+    pub fn span_location(&self, span: Span) -> (String, usize, usize) {
+        use codespan_reporting::files::Files;
+        let (fid, local_offset) = self.resolve_offset(span.start);
+        let name = self.files.name(fid).map(|n| n.clone()).unwrap_or_default();
+        if let Ok(loc) = self.files.location(fid, local_offset) {
+            (name, loc.line_number, loc.column_number)
+        } else {
+            (name, 0, 0)
+        }
+    }
+
     pub fn report_implicit_clone_warning(&self, warn: &crate::ir::ImplicitCloneWarning) {
         let label = self.primary_label(warn.span)
             .with_message(format!("implicit clone of `{}`", warn.type_name));

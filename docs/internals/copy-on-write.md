@@ -232,7 +232,7 @@ a shallow `memcpy`, causing double-free on `Set[String]` drop.
 | 1a | Static mutation analysis pass — detect which locals are mutated | Done |
 | 1b | Pointer semantics for variable assignment — aliased values stay as pointers | Done |
 | 1c | Pointer semantics for function params — bare params clone on mutation | Done |
-| 1d | Pointer semantics for collection reads — IndexLoad returns pointer, clone on mutation | Done (cow_collection_refs wired up) |
+| 1d | Pointer semantics for collection reads — IndexLoad returns pointer, clone on mutation | Done (CollectionRef variant in local_ownership) |
 | 1e | `!` optional for push/put/set | Done |
 | 1f | Liveness analysis — full-function reverse walk for last-use detection | Done |
 | 1g | VarDecl borrow propagation — typed bindings keep Ptr, no auto-clone | Done (34 tests need materialization points 3-6) |

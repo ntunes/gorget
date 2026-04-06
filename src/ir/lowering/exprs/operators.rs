@@ -17,7 +17,7 @@ fn cow_deref_if_ptr(
     operand: Operand,
 ) -> Operand {
     if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
-        if place.projections.is_empty() && ctx.ref_locals.contains(&place.local) {
+        if place.projections.is_empty() && ctx.is_ref_local(place.local) {
             let ptr_type = builder.local_type(place.local);
             if let Some(inner) = ctx.pointee_type(ptr_type) {
                 let derefed = builder.load_ref(place.clone(), inner);

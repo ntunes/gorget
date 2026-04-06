@@ -294,10 +294,8 @@ pub fn lower_function(
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.register_local(&p.node.name.node, local_id, gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
-            // Bare-borrow resource param: Ptr, no auto-deref
-            ctx.ref_locals.insert(local_id);
-            // CoW Phase 1c: track for clone-on-mutation
-            ctx.cow_ptr_params.insert(local_id);
+            // Bare-borrow resource param: Ptr, no auto-deref, clone-on-mutation
+            ctx.set_bare_param(local_id);
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             // ! resource params and & trivial params: MutPtr, auto-deref + write-through
             ctx.mut_capture_locals.insert(local_id, base_type);
@@ -307,7 +305,7 @@ pub fn lower_function(
         if ctx.type_mapper.is_string_type(base_type)
             && matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
         {
-            ctx.owned_locals.insert(local_id);
+            ctx.set_owned(local_id);
         }
         // Track callable parameter return types
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
@@ -437,7 +435,7 @@ pub fn lower_function(
     let mut func = builder.build();
     func.display_name = Some(name.to_string());
     func.def_span = Some(func_span);
-    func.ref_locals = ctx.ref_locals.clone();
+    func.ref_locals = ctx.derive_ref_locals();
     module.functions.push(func);
 }
 
@@ -545,12 +543,11 @@ pub fn lower_equip_method(
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
-            ctx.ref_locals.insert(LocalId(param_idx));
-            ctx.cow_ptr_params.insert(LocalId(param_idx));
+            ctx.set_bare_param(LocalId(param_idx));
         } else if matches!(p.node.ownership, crate::parser::ast::Ownership::MutableBorrow)
             && ctx.type_registry.is_resource_type(base_type)
         {
-            ctx.ref_locals.insert(LocalId(param_idx));
+            ctx.set_ref(LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }
@@ -663,7 +660,7 @@ pub fn lower_equip_method(
 
     let mut func = builder.build();
     func.display_name = Some(format!("{type_name}.{method_name}"));
-    func.ref_locals = ctx.ref_locals.clone();
+    func.ref_locals = ctx.derive_ref_locals();
     module.functions.push(func);
 }
 
@@ -820,12 +817,11 @@ pub fn lower_generic_function(
         let gir_type = ctx.resolve_param_type(base_type, ownership);
         ctx.register_local(&p.node.name.node, local_id, gir_type);
         if ctx.is_ref_param(base_type, ownership) {
-            ctx.ref_locals.insert(local_id);
-            ctx.cow_ptr_params.insert(local_id);
+            ctx.set_bare_param(local_id);
         } else if matches!(ownership, Ownership::MutableBorrow)
             && ctx.type_registry.is_resource_type(base_type)
         {
-            ctx.ref_locals.insert(local_id);
+            ctx.set_ref(local_id);
         } else if ctx.is_mut_ref_param(base_type, ownership) {
             ctx.mut_capture_locals.insert(local_id, base_type);
         }
@@ -1039,12 +1035,11 @@ pub fn lower_generic_equip_methods_with_defaults(
             let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
             ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
             if ctx.is_ref_param(base_type, p.node.ownership) {
-                ctx.ref_locals.insert(LocalId(param_idx));
-                ctx.cow_ptr_params.insert(LocalId(param_idx));
+                ctx.set_bare_param(LocalId(param_idx));
             } else if matches!(p.node.ownership, Ownership::MutableBorrow)
                 && ctx.type_registry.is_resource_type(base_type)
             {
-                ctx.ref_locals.insert(LocalId(param_idx));
+                ctx.set_ref(LocalId(param_idx));
             } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
                 ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
             }

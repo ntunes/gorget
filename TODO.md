@@ -5,7 +5,7 @@
 - **Leak reduction — status**: Error path fixed (emit_enum_init_owned). StringView call results upgraded to GorgetString in call_tracked. Match pattern strings clone-on-extract. Struct field strings now Ptr(GorgetString) references (matching collection pattern). LIR FieldLoad cap/alloc zeroing blocks deleted. [updated: 2026-04-05]
 
 
-- **Clone observability + Cloneable trait**: `.clone()` works on all types. Remaining: `gg build --show-clones` structured report (JSON/human-readable) of all CoW materialization points with source line, type, reason. `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
+- **Clone observability + Cloneable trait**: `.clone()` works on all types. `gg build --show-clones` done. Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
 
 - **Struct clone ownership masking**: `emit_recursive_struct_clones` uses `gorget_string_clone` (view-preserving) which masks ownership bugs in code paths where struct values are passed to functions without move-zeroing the source. Example: `TaskStore__add` takes a Task by pointer, memcpys it into an array, but the caller's copy isn't zeroed — both copies share the title pointer. With `gorget_string_clone_to_owned` this manifests as double-free. Root cause: LIR doesn't emit move-zero after passing struct values to consuming functions. Fix: ensure consuming function calls zero the source, then upgrade all clone generators to `gorget_string_clone_to_owned`. [added: 2026-04-05]
 
@@ -23,11 +23,9 @@
 
 - **LoweringContext per-function state isolation**: `LoweringContext` is a god struct shared across all function lowering. Per-function transients (`expected_type`, `current_throws_result_type`, `closure_param_type_hints`, `loop_stack`, `pattern_must_clone_strings`, etc.) leak across function boundaries when arm body lowering triggers monomorphization. Fix: split into `FunctionLoweringState` struct pushed/popped on a stack at function entry/exit. Module-wide state (`fn_sigs`, `type_registry`, `enum_variants`, `runtime_callees`) stays on LoweringContext. Unblocks: conditional match-pattern clone optimization (skip clone when scrutinee is dead in arm body). [added: 2026-04-05]
 
-- **CoW map consolidation**: Replace 8 tracking maps (`cow_alias_sources`, `cow_alias_targets`, `cow_ptr_params`, `cow_collection_refs`, `ref_locals`, `owned_locals`, etc.) with unified `LocalOwnershipState` enum per local. ~40% conditional reduction. The reverse map (`cow_alias_targets`) becomes a derived query, not stored state. [added: 2026-04-05]
 
 - **Flow-sensitive prescan**: Track which basic blocks reassign each name, not just function-wide. Reduces conservative clones when only one branch mutates. [added: 2026-04-05]
 
-- **Mutation trait on method declarations**: Replace hardcoded `is_mutating_collection_method` name list with `mutates_self` flag on `BuiltinMethodDecl`. Derive the check from the protocol table instead of hardcoding method names. [added: 2026-04-05]
 
 - **CoW: nested field mutation gap**: `s.v.push(x)` goes through `field_place_info` path in `methods.rs:1030` which skips `cow_before_mutation`. If `s.v[0]` previously created a `cow_collection_refs` entry keyed on a FieldLoad temp, the ref won't be cloned out before the push. Only affects resource-type elements (e.g., `Vector[Vector[int]]` inside a struct), not strings or primitives. The borrow checker only catches explicit `T &` refs, not implicit CoW borrows. Fix requires tracking FieldLoad provenance through to `cow_collection_refs` — non-trivial. [added: 2026-04-05]
 

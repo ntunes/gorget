@@ -86,7 +86,7 @@ These replace the `mut_capture_locals` auto-deref pattern where `&` and `!` para
 | Set | Purpose | Will be replaced by |
 |-----|---------|-------------------|
 | `named_locals` | Distinguish vars from temps for clone decisions | AssignMode (partially) |
-| `ref_locals` | Ptr-typed locals that skip auto-deref | LoadRef/StoreRef (future) |
+| `local_ownership` | Unified `LocalOwnershipState` enum (Owned/Alias/CollectionRef/BareParam/Ref) | LoadRef/StoreRef (future) |
 | `mut_capture_locals` | `&`/`!` params with auto-deref + write-through | LoadRef/StoreRef (future) |
 | `field_load_origins` | Track source field for post-assign zeroing | FieldLoadMode (partially) |
 | `drops` | Track moved/registered locals for scope-exit drops | AssignMode::Move (partially) |
@@ -129,7 +129,7 @@ When a borrowed value (`Ptr(T)`) must become owned, the compiler materializes it
 | 5. Return | `return x` where x is borrowed | `lower_return` Ptr→T auto-clone |
 | 6. Move transfer | `consume(!x)` where x is borrowed | Ownership::Move Ptr→clone |
 
-**`cow_before_mutation()`** is the single entry point for CoW severance at points 1 and 2. It checks `cow_alias_sources` for the local, and if an alias relationship exists, emits a clone of the source data into the alias, then removes the alias tracking. All mutation sites (assignment, mutating method calls) route through this gate.
+**`cow_before_mutation()`** is the single entry point for CoW severance at points 1 and 2. It checks the `local_ownership` map for the local's state (`BareParam`, `Alias`, or collection refs via derived scan), and if a CoW relationship exists, emits a clone of the source data, then updates the ownership state to `Owned`. All mutation sites (assignment, mutating method calls) route through this gate.
 
 ## Call Result Drop Registration
 

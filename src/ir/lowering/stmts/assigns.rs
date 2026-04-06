@@ -63,15 +63,11 @@ pub(super) fn lower_assign(
                 // CoW: if this local is an alias, just remove from alias maps.
                 // The reassignment naturally replaces the binding value.
                 if ctx.cow_is_alias(local_id) {
-                    if let Some(source) = ctx.cow_alias_sources.remove(&local_id) {
-                        if let Some(targets) = ctx.cow_alias_targets.get_mut(&source) {
-                            targets.remove(&local_id);
-                        }
-                    }
+                    ctx.local_ownership.remove(&local_id);
                 }
                 // CoW: if this collection has element refs, clone them out.
                 // Reassignment replaces the buffer; outstanding refs would dangle.
-                if ctx.cow_collection_refs.contains_key(&local_id) {
+                if ctx.cow_has_collection_refs(local_id) {
                     ctx.cow_before_mutation(builder, local_id);
                 }
                 // CoW clone-on-mutate: if LHS is an immutable borrow (Ptr, not MutPtr),
@@ -89,9 +85,7 @@ pub(super) fn lower_assign(
                                 builder.locals[local_id.0 as usize].type_id = inner;
                                 ctx.register_local(name, local_id, inner);
                                 ctx.drops.update_or_register_type(local_id, inner, &ctx.type_registry);
-                                ctx.ref_locals.remove(&local_id);
-                                ctx.cow_ptr_params.remove(&local_id);
-                                ctx.owned_locals.insert(local_id);
+                                ctx.set_owned(local_id);
                             }
                         }
                     }
@@ -131,7 +125,7 @@ pub(super) fn lower_assign(
                                 owned,
                             );
                             ctx.drops.register_local(cloned, owned, &ctx.type_registry);
-                            ctx.owned_locals.insert(cloned);
+                            ctx.set_owned(cloned);
                             operand = FunctionBuilder::copy(cloned);
                         }
                     }
@@ -191,7 +185,7 @@ pub(super) fn lower_assign(
                                     let ptr_local = builder.add_local(ptr_type, None);
                                     builder.emit_borrow(ptr_local, place.clone());
                                     let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
-                                    ctx.owned_locals.insert(cloned);
+                                    ctx.set_owned(cloned);
                                     operand = FunctionBuilder::copy(cloned);
                                     assign_mode = AssignMode::Move;
                                 }
@@ -226,8 +220,8 @@ pub(super) fn lower_assign(
                     // Propagate ownership: if RHS local owned its data (call result),
                     // the target local now owns the data after move/clone.
                     if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                        if ctx.owned_locals.contains(&p.local) {
-                            ctx.owned_locals.insert(local_id);
+                        if ctx.is_owned_local(p.local) {
+                            ctx.set_owned(local_id);
                         }
                     }
                 }

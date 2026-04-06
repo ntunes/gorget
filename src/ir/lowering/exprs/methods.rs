@@ -233,7 +233,7 @@ pub(super) fn lower_method_call(
     // Auto-deref would copy the struct, and mutations to the copy wouldn't propagate back.
     let borrow_param_local = if let Expr::Identifier(name) = &receiver.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
-            if ctx.ref_locals.contains(&local_id)
+            if ctx.is_ref_local(local_id)
                 || ctx.mut_capture_locals.contains_key(&local_id)
             {
                 Some(local_id)
@@ -411,7 +411,7 @@ pub(super) fn lower_method_call(
                     // return as ref_local (borrow). CoW handles cloning at
                     // ownership boundaries (VarDecl, struct init, function args).
                     if matches!(ctx.type_registry.get(inner_type), Some(GirType::Ptr(_))) {
-                        ctx.ref_locals.insert(dst);
+                        ctx.set_ref(dst);
                     }
                     return FunctionBuilder::copy(dst);
                 }
@@ -987,12 +987,8 @@ pub(super) fn lower_method_call(
 
         // Create a borrow of the receiver for the self parameter.
         // Mutating methods need a mutable borrow (&self → MutPtr).
-        let is_mutating = matches!(method_name,
-            "push" | "pop" | "put" | "remove" | "insert" | "extend"
-            | "clear" | "sort" | "reverse" | "append" | "set"
-            | "push_back" | "push_front" | "pop_back" | "pop_front"
-            | "add" | "push_line" | "push_str" | "push_char"
-        );
+        let is_mutating =
+            crate::ir::lowering::builtins::is_mutating_builtin_method(method_name);
 
         // Determine if we need a mutable borrow (from explicit list, protocol, or fn_sigs)
         let needs_mut = is_mutating
@@ -1402,7 +1398,7 @@ pub(super) fn lower_method_call(
                         let cloned = builder.call(&clone_fn,
                             vec![FunctionBuilder::copy(ptr_local)], inner_type);
                         ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);
-                        ctx.owned_locals.insert(cloned);
+                        ctx.set_owned(cloned);
                         let ptr_type = ctx.register_ptr_type(inner_type);
                         let ptr = builder.add_local(ptr_type, None);
                         builder.emit_borrow(ptr, Place::local(cloned));
@@ -1464,7 +1460,7 @@ pub(super) fn lower_method_call(
                     if let Some((local_id, _)) = ctx.lookup_local(name) {
                         if ctx.is_named_local(local_id)
                             && is_resource_type_local(local_id, builder, &ctx.type_registry)
-                            && !ctx.cow_ptr_params.contains(&local_id)
+                            && !ctx.is_bare_param(local_id)
                             && ctx.is_last_use_at(name, ast_arg.node.value.span)
                         {
                             ctx.move_zero_and_mark(builder, local_id);
@@ -1898,13 +1894,7 @@ pub(super) fn lower_index_access(
         };
         let dst = builder.index_load(place.clone(), idx, result_type);
         if ctx.type_registry.is_resource_type(elem_type) && !is_task && !is_string_base {
-            ctx.ref_locals.insert(dst);
-            // Track that dst borrows from the collection — if the collection
-            // is mutated (push/pop/etc.), dst must be cloned out first.
-            ctx.cow_collection_refs
-                .entry(place.local)
-                .or_insert_with(Vec::new)
-                .push(dst);
+            ctx.set_collection_ref(dst, place.local);
         }
         return FunctionBuilder::copy(dst);
     }

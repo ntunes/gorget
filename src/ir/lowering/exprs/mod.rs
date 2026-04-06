@@ -108,14 +108,14 @@ fn lower_expr_inner(
                     let tmp = builder.add_local(value_type, None);
                     // ! params (owned): use Move to transfer ownership (memcpy, no clone).
                     // & params (mutable borrow): use Copy (clone to prevent aliasing).
-                    let is_move_param = ctx.owned_locals.contains(&local_id);
+                    let is_move_param = ctx.is_owned_local(local_id);
                     if is_move_param {
                         builder.assign_mode(
                             crate::ir::instructions::AssignMode::Move,
                             Place::local(tmp),
                             Operand::Move(deref_place),
                         );
-                        ctx.owned_locals.insert(tmp);
+                        ctx.set_owned(tmp);
                     } else {
                         builder.assign(Place::local(tmp), Operand::Copy(deref_place));
                     }
@@ -188,7 +188,7 @@ fn lower_expr_inner(
             // CoW: if moving a borrowed local, materialize first
             if let Expr::Identifier(name) = &inner.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name) {
-                    if ctx.cow_ptr_params.contains(&local_id) {
+                    if ctx.is_bare_param(local_id) {
                         ctx.cow_before_mutation(builder, local_id);
                     }
                 }
@@ -207,7 +207,11 @@ fn lower_expr_inner(
                 ctx.move_zero_and_mark(builder, place_clone.local);
                 // Clean up CoW tracking — moved local's data is zeroed, so
                 // any collection refs keyed on it are stale.
-                ctx.cow_collection_refs.remove(&place_clone.local);
+                // Remove any collection refs keyed on this local (now zeroed/stale)
+                let stale_refs = ctx.cow_collection_refs_for(place_clone.local);
+                for r in stale_refs {
+                    ctx.local_ownership.remove(&r);
+                }
                 FunctionBuilder::copy(tmp)
             } else {
                 val
@@ -219,7 +223,7 @@ fn lower_expr_inner(
             // Skip the auto-deref that Identifier normally does — just forward the pointer.
             if let Expr::Identifier(name) = &inner.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name) {
-                    if ctx.ref_locals.contains(&local_id)
+                    if ctx.is_ref_local(local_id)
                         || ctx.mut_capture_locals.contains_key(&local_id)
                     {
                         return FunctionBuilder::copy(local_id);
@@ -1032,7 +1036,7 @@ fn resolve_option_result_variant(
                 .unwrap_or(UNIT_TYPE);
             let type_name = ctx.type_registry.type_name(type_id).unwrap_or_else(|| mangled.clone());
             let dst = builder.enum_init(&type_name, "Some", type_id, vec![field_op]);
-            ctx.owned_locals.insert(dst);
+            ctx.set_owned(dst);
             Some(FunctionBuilder::copy(dst))
         }
         "None" if args.is_empty() => {
@@ -1053,7 +1057,7 @@ fn resolve_option_result_variant(
                 return None;
             };
             let dst = builder.enum_init(&type_name, "None", type_id, vec![]);
-            ctx.owned_locals.insert(dst);
+            ctx.set_owned(dst);
             Some(FunctionBuilder::copy(dst))
         }
         "Ok" if args.len() == 1 => {
@@ -1068,7 +1072,7 @@ fn resolve_option_result_variant(
                         if p.projections.is_empty() { Some(p.local) } else { None }
                     } else { None };
                     let dst = builder.enum_init(&name, "Ok", et, vec![field_op]);
-                    ctx.owned_locals.insert(dst);
+                    ctx.set_owned(dst);
                     if let Some(local) = consumed {
                         ctx.move_zero_and_mark(builder, local);
                     }
@@ -1086,7 +1090,7 @@ fn resolve_option_result_variant(
                         if p.projections.is_empty() { Some(p.local) } else { None }
                     } else { None };
                     let dst = builder.enum_init(&name, "Ok", rt, vec![field_op]);
-                    ctx.owned_locals.insert(dst);
+                    ctx.set_owned(dst);
                     if let Some(local) = consumed {
                         ctx.move_zero_and_mark(builder, local);
                     }
@@ -1398,7 +1402,7 @@ fn lower_struct_literal(
 
     let type_id = ctx.type_mapper.lookup_named(&effective_name).unwrap_or(UNIT_TYPE);
     let dst = builder.struct_init(&effective_name, type_id, field_operands.clone());
-    ctx.owned_locals.insert(dst);
+    ctx.set_owned(dst);
 
     // Phase 1f: MoveZero single-use/temp sources AFTER struct init.
     move_zero_consumed_args(ctx, builder, &field_operands);
@@ -1475,7 +1479,7 @@ fn lower_field_access(
                             };
                             let dst = builder.field_load(deref_place, field_idx, result_type);
                             if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                                ctx.ref_locals.insert(dst);
+                                ctx.set_ref(dst);
                             }
                             return FunctionBuilder::copy(dst);
                         }
@@ -1492,7 +1496,7 @@ fn lower_field_access(
                                         };
                                         let dst = builder.field_load(deref_place, i as u32, result_type);
                                         if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                                            ctx.ref_locals.insert(dst);
+                                            ctx.set_ref(dst);
                                         }
                                         return FunctionBuilder::copy(dst);
                                     }
@@ -1539,7 +1543,7 @@ fn lower_field_access(
                     };
                     let dst = builder.field_load(base_place.clone(), field_idx, result_type);
                     if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                        ctx.ref_locals.insert(dst);
+                        ctx.set_ref(dst);
                     }
                     return FunctionBuilder::copy(dst);
                 }
@@ -1557,7 +1561,7 @@ fn lower_field_access(
                                 };
                                 let dst = builder.field_load(base_place.clone(), i as u32, result_type);
                                 if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                                    ctx.ref_locals.insert(dst);
+                                    ctx.set_ref(dst);
                                 }
                                 return FunctionBuilder::copy(dst);
                             }
@@ -2320,7 +2324,7 @@ fn lower_string_interpolation(
     let dst = builder.call_extern("gorget_string_format", all_args, owned_string_type);
     // Register for drop — needs_drop() handles type filtering.
     ctx.drops.register_local(dst, owned_string_type, &ctx.type_registry);
-    ctx.owned_locals.insert(dst);
+    ctx.set_owned(dst);
     FunctionBuilder::copy(dst)
 }
 
@@ -2362,18 +2366,15 @@ fn clone_multi_use_resource_args(
 
                 if is_resource_type_local(local, builder, &ctx.type_registry) {
                     // Already owned (call results, cloned temps) — skip
-                    if ctx.owned_locals.contains(&local) && !ctx.is_named_local(local) {
+                    if ctx.is_owned_local(local) && !ctx.is_named_local(local) {
                         continue;
                     }
                     // String views (non-owned) ALWAYS need clone for struct/enum storage.
-                    // They may be views into data that the parent struct/function owns;
-                    // storing a view in a new struct would create a dangling reference
-                    // when the source is freed.
                     let is_non_owned_string = ctx.is_string_type(local_type)
-                        && !ctx.owned_locals.contains(&local);
+                        && !ctx.is_owned_local(local);
                     // Must clone if: bare borrow param, multi-use named local,
                     // field access on a struct, or non-owned string view.
-                    let is_borrow_param = ctx.cow_ptr_params.contains(&local);
+                    let is_borrow_param = ctx.is_bare_param(local);
                     let is_field_access = ast_args.get(i)
                         .map(|arg| matches!(&arg.node, Expr::FieldAccess { .. }))
                         .unwrap_or(false);

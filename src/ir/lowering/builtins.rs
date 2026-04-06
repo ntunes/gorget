@@ -747,3 +747,12 @@ pub fn is_mut_borrow_method(type_name: &str, method_name: &str) -> bool {
         .map(|m| m.self_conv == SelfConvention::MutBorrow)
         .unwrap_or(false)
 }
+
+/// Check if `method_name` is marked as mutating (`is_mutating: true`) on any
+/// builtin type protocol. Used by the borrow checker for borrow invalidation
+/// and by IR lowering for field-zeroing after mutation.
+pub fn is_mutating_builtin_method(method_name: &str) -> bool {
+    ALL_PROTOCOLS.iter().any(|p| {
+        p.methods.iter().any(|m| m.name == method_name && m.is_mutating)
+    })
+}

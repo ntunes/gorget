@@ -12,6 +12,32 @@ use super::types::TypeMapper;
 
 use crate::ir::types::BlockId;
 
+/// Unified ownership state for a GIR local variable.
+/// Replaces the scattered `ref_locals`, `owned_locals`, `cow_alias_sources`,
+/// `cow_alias_targets`, `cow_ptr_params`, and `cow_collection_refs` maps.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LocalOwnershipState {
+    /// Owns its data. Registered for drop. Created by function calls, constructors,
+    /// operators, or CoW materialization.
+    Owned,
+    /// CoW alias: Ptr(T) borrowing from source. Clone-on-mutation severs the alias.
+    Alias { source: LocalId },
+    /// Element reference: Ptr borrowed from a collection element (IndexLoad result).
+    CollectionRef { collection: LocalId },
+    /// Bare Ptr param: borrows from caller. Clone-on-mutation to avoid modifying caller's data.
+    BareParam,
+    /// Generic Ptr reference: field loads, match pattern extracts, MutableBorrow params, etc.
+    /// Not registered for drop. LIR uses SlotLoad instead of SlotAddr.
+    Ref,
+}
+
+impl LocalOwnershipState {
+    /// Whether this state represents a borrowed Ptr reference (not owned).
+    pub fn is_ref(&self) -> bool {
+        !matches!(self, LocalOwnershipState::Owned)
+    }
+}
+
 /// How a function parameter is passed at the C ABI level.
 /// Single source of truth — replaces scattered re-derivation in lower_call_arg
 /// and format_args_with_coercion.
@@ -170,11 +196,11 @@ pub struct LoweringContext<'a> {
     /// LocalIds that are mutable capture pointers (need deref on read/write in closure bodies).
     /// Tracks `&` (MutableBorrow) and `!` (Move) struct params, which are MutPtr in GIR.
     pub mut_capture_locals: FxHashMap<LocalId, TypeId>,
-    /// LocalIds that hold borrowed Ptr references — bare-borrow resource params
-    /// and collection borrowing reads. These are NOT auto-dereferenced on access;
-    /// they stay as Ptr(T) throughout the callee body. The LIR backend uses
-    /// SlotLoad instead of SlotAddr for these locals. Not registered for drop.
-    pub ref_locals: FxHashSet<LocalId>,
+    /// Unified ownership state for tracked locals. Replaces the former `ref_locals`,
+    /// `owned_locals`, `cow_alias_sources`, `cow_alias_targets`, `cow_ptr_params`,
+    /// and `cow_collection_refs` maps. Most locals are untracked (not in this map);
+    /// only locals with ownership significance have entries.
+    pub local_ownership: FxHashMap<LocalId, LocalOwnershipState>,
     /// LocalIds that are named variables (vs anonymous temps from expressions).
     /// Used to distinguish variable-to-variable assignment (needs clone) from
     /// temp-to-variable (needs move-zero).
@@ -254,29 +280,12 @@ pub struct LoweringContext<'a> {
     /// CoW: variable names that are reassigned in the current function body.
     /// Pre-scanned before lowering. Locals in this set skip CoW aliasing.
     pub cow_reassigned_names: rustc_hash::FxHashSet<String>,
-    /// CoW: alias_local → source_local. The alias holds a Ptr(T) that borrows source's data.
-    /// When either side is mutated, the alias is severed by cloning.
-    pub cow_alias_sources: FxHashMap<LocalId, LocalId>,
-    /// CoW reverse: source_local → {alias_locals}. For severing when source is mutated.
-    pub cow_alias_targets: FxHashMap<LocalId, rustc_hash::FxHashSet<LocalId>>,
-    /// CoW: collection_local → [ref_locals pointing into it].
-    /// When the collection is mutated, these refs must be cloned out first.
-    /// CoW Phase 1c: bare Ptr params (borrow from caller). On mutation, these
-    /// are cloned to owned copies so the caller's data is not modified.
-    pub cow_ptr_params: rustc_hash::FxHashSet<LocalId>,
-    /// Bare string function params — views of caller's data. Must be cloned
-    /// before storing in structs/enums/collections to prevent escaping views.
-    // string_param_locals removed — replaced by type-based StringView check in MoveZero paths.
-    pub cow_collection_refs: FxHashMap<LocalId, Vec<LocalId>>,
     /// Phase 1f: name → use count in the function body. Names with count=1 are
     /// single-use (dead after their one use) → auto-move at push/constructor.
     pub name_use_counts: rustc_hash::FxHashMap<String, u32>,
     /// Full-function liveness analysis result. Contains span positions of
     /// identifier uses that are the last use on all reachable paths.
     pub liveness: super::liveness::LivenessResult,
-    /// Locals that definitely own their data (created by function calls, constructors,
-    /// or operators). Safe to Move on return — no shared/borrowed data.
-    pub owned_locals: rustc_hash::FxHashSet<LocalId>,
     /// Locals from Move-argument lowering that need MoveZero AFTER the call.
     /// Populated by lower_call_arg when a Move param borrows a local, drained by
     /// the call lowering site after emitting the Call instruction.
@@ -306,7 +315,7 @@ impl<'a> LoweringContext<'a> {
             snapshot_mode: false,
             overflow_wrap: false,
             mut_capture_locals: FxHashMap::default(),
-            ref_locals: FxHashSet::default(),
+            local_ownership: FxHashMap::default(),
             named_locals: FxHashSet::default(),
             extern_bindings: FxHashMap::default(),
             fn_defaults: FxHashMap::default(),
@@ -334,13 +343,8 @@ impl<'a> LoweringContext<'a> {
             implicit_clone_warnings: Vec::new(),
             runtime_callees: FxHashMap::default(),
             cow_reassigned_names: rustc_hash::FxHashSet::default(),
-            cow_alias_sources: FxHashMap::default(),
-            cow_alias_targets: FxHashMap::default(),
-            cow_collection_refs: FxHashMap::default(),
-            cow_ptr_params: rustc_hash::FxHashSet::default(),
             name_use_counts: rustc_hash::FxHashMap::default(),
             liveness: super::liveness::LivenessResult { last_use_spans: Default::default() },
-            owned_locals: rustc_hash::FxHashSet::default(),
             pending_move_zeros: Vec::new(),
         }
     }
@@ -768,7 +772,7 @@ impl<'a> LoweringContext<'a> {
             self.drops.register_local(local, return_type, &self.type_registry);
         }
         // Function call results own their data — safe to Move on return.
-        self.owned_locals.insert(local);
+        self.set_owned(local);
         local
     }
 
@@ -784,7 +788,7 @@ impl<'a> LoweringContext<'a> {
         if self.type_registry.needs_drop(return_type) {
             self.drops.register_local(local, return_type, &self.type_registry);
         }
-        self.owned_locals.insert(local);
+        self.set_owned(local);
         local
     }
 
@@ -803,7 +807,7 @@ impl<'a> LoweringContext<'a> {
         // Uses the same logic as clone_multi_use_resource_args (struct init path).
         self.clone_resource_args_for_init(builder, &mut args);
         let dst = builder.enum_init(enum_name, variant_name, type_id, args.clone());
-        self.owned_locals.insert(dst);
+        self.set_owned(dst);
         // MoveZero single-use/temp resource args after init — transfers ownership.
         for op in &args {
             if let Operand::Copy(place) = op {
@@ -850,14 +854,14 @@ impl<'a> LoweringContext<'a> {
 
                     if self.type_registry.is_resource_type(local_type) {
                         // Already owned — skip
-                        if self.owned_locals.contains(&local) && !self.is_named_local(local) {
+                        if self.is_owned_local(local) && !self.is_named_local(local) {
                             continue;
                         }
                         // Non-owned string views — always clone
                         let is_non_owned_string = self.is_string_type(local_type)
-                            && !self.owned_locals.contains(&local);
+                            && !self.is_owned_local(local);
                         // Borrow params — always clone
-                        let is_borrow_param = self.cow_ptr_params.contains(&local);
+                        let is_borrow_param = matches!(self.local_ownership.get(&local), Some(LocalOwnershipState::BareParam));
                         if is_non_owned_string || is_borrow_param {
                             if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
                                 let ptr_type = self.register_ptr_type(local_type);
@@ -884,7 +888,7 @@ impl<'a> LoweringContext<'a> {
     pub fn clear_locals(&mut self) {
         self.locals.clear();
         self.mut_capture_locals.clear();
-        self.ref_locals.clear();
+        self.local_ownership.clear();
         self.named_locals.clear();
         self.spawn.result_locals.clear();
         self.spawn.pending_fn = None;
@@ -893,11 +897,6 @@ impl<'a> LoweringContext<'a> {
         self.postconditions.clear();
         self.move_override_params.clear();
         self.cow_reassigned_names.clear();
-        self.cow_alias_sources.clear();
-        self.cow_alias_targets.clear();
-        self.cow_collection_refs.clear();
-        self.cow_ptr_params.clear();
-        self.owned_locals.clear();
     }
 
     /// Clone the locals map for save/restore around nested scopes (if, while, for, match, etc.).
@@ -1203,7 +1202,7 @@ impl<'a> LoweringContext<'a> {
                             inner,
                         );
                         self.drops.register_local(cloned, inner, &self.type_registry);
-                        self.owned_locals.insert(cloned);
+                        self.set_owned(cloned);
                         return crate::ir::builder::FunctionBuilder::copy(cloned);
                     }
                 }
@@ -1212,38 +1211,109 @@ impl<'a> LoweringContext<'a> {
         operand
     }
 
+    // ── Unified ownership state helpers ──────────────────────────────
+
+    /// Check if a local is tracked as a borrowed Ptr reference.
+    pub fn is_ref_local(&self, local: LocalId) -> bool {
+        self.local_ownership.get(&local).map_or(false, |s| s.is_ref())
+    }
+
+    /// Check if a local is tracked as definitely owning its data.
+    pub fn is_owned_local(&self, local: LocalId) -> bool {
+        matches!(self.local_ownership.get(&local), Some(LocalOwnershipState::Owned))
+    }
+
+    /// Mark a local as owning its data. Overwrites any previous state.
+    pub fn set_owned(&mut self, local: LocalId) {
+        self.local_ownership.insert(local, LocalOwnershipState::Owned);
+    }
+
+    /// Mark a local as a generic Ptr reference. Only sets if not already tracked
+    /// with a more specific state (BareParam, Alias, CollectionRef).
+    pub fn set_ref(&mut self, local: LocalId) {
+        self.local_ownership.entry(local).or_insert(LocalOwnershipState::Ref);
+    }
+
+    /// Check if a local is a bare Ptr param borrowing from the caller.
+    pub fn is_bare_param(&self, local: LocalId) -> bool {
+        matches!(self.local_ownership.get(&local), Some(LocalOwnershipState::BareParam))
+    }
+
+    /// Mark a local as a bare Ptr param borrowing from the caller.
+    pub fn set_bare_param(&mut self, local: LocalId) {
+        self.local_ownership.insert(local, LocalOwnershipState::BareParam);
+    }
+
+    /// Mark a local as a collection element reference.
+    pub fn set_collection_ref(&mut self, local: LocalId, collection: LocalId) {
+        self.local_ownership.insert(local, LocalOwnershipState::CollectionRef { collection });
+    }
+
+    /// Derive the set of ref locals for GIR function output.
+    /// Collects all locals with any ref state (Ref, BareParam, Alias, CollectionRef).
+    pub fn derive_ref_locals(&self) -> FxHashSet<LocalId> {
+        self.local_ownership.iter()
+            .filter(|(_, s)| s.is_ref())
+            .map(|(&id, _)| id)
+            .collect()
+    }
+
     // ── Copy-on-Write alias management ────────────────────────────────
 
     /// Register a CoW alias: `alias_local` is a Ptr(T) borrowing from `source_local`.
     /// Resolves transitively: if source is itself an alias, points to the root.
     pub fn cow_register_alias(&mut self, alias_local: LocalId, source_local: LocalId) {
-        // Resolve to root source (transitively)
         let root = self.cow_resolve_root(source_local);
-        self.cow_alias_sources.insert(alias_local, root);
-        self.cow_alias_targets.entry(root).or_default().insert(alias_local);
+        self.local_ownership.insert(alias_local, LocalOwnershipState::Alias { source: root });
     }
 
     /// Resolve a local to its root source (follow alias chain).
     fn cow_resolve_root(&self, local: LocalId) -> LocalId {
         let mut current = local;
-        while let Some(&source) = self.cow_alias_sources.get(&current) {
-            if source == current { break; }
-            current = source;
+        while let Some(LocalOwnershipState::Alias { source }) = self.local_ownership.get(&current) {
+            if *source == current { break; }
+            current = *source;
         }
         current
     }
 
     /// Check if a local is a CoW alias of something else.
     pub fn cow_is_alias(&self, local: LocalId) -> bool {
-        self.cow_alias_sources.contains_key(&local)
+        matches!(self.local_ownership.get(&local), Some(LocalOwnershipState::Alias { .. }))
     }
 
     /// Check if a local has CoW aliases pointing to it (is a source).
     pub fn cow_has_aliases(&self, local: LocalId) -> bool {
-        self.cow_alias_targets.get(&local).map_or(false, |s| !s.is_empty())
+        self.local_ownership.values().any(|s| matches!(s, LocalOwnershipState::Alias { source } if *source == local))
+    }
+
+    /// Collect all aliases pointing to `source`. Derived query — O(n) scan.
+    fn cow_aliases_of(&self, source: LocalId) -> Vec<LocalId> {
+        self.local_ownership.iter()
+            .filter_map(|(&id, s)| match s {
+                LocalOwnershipState::Alias { source: s } if *s == source => Some(id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Check if a collection has any element refs pointing into it.
+    pub fn cow_has_collection_refs(&self, collection: LocalId) -> bool {
+        self.local_ownership.values().any(|s| matches!(s, LocalOwnershipState::CollectionRef { collection: c } if *c == collection))
+    }
+
+    /// Collect all collection refs pointing to `collection`. Derived query — O(n) scan.
+    pub fn cow_collection_refs_for(&self, collection: LocalId) -> Vec<LocalId> {
+        self.local_ownership.iter()
+            .filter_map(|(&id, s)| match s {
+                LocalOwnershipState::CollectionRef { collection: c } if *c == collection => Some(id),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Before mutating `local`, sever all CoW alias relationships:
+    /// - If `local` is a BareParam → clone to owned before mutation.
     /// - If `local` is an alias → clone source into local (local becomes owned).
     /// - If `local` is a source → clone into each alias (aliases become owned).
     /// - If `local` is a collection with refs → clone each ref out.
@@ -1253,42 +1323,32 @@ impl<'a> LoweringContext<'a> {
         local: LocalId,
     ) {
         // Phase 1c: bare Ptr params — clone to owned before mutation
-        // so the caller's data is not modified.
-        if self.cow_ptr_params.remove(&local) {
+        if matches!(self.local_ownership.get(&local), Some(LocalOwnershipState::BareParam)) {
+            self.local_ownership.remove(&local);
             self.cow_materialize_alias(builder, local, local);
         }
 
-        // Early exit: if local has no CoW relationships, nothing to do.
-        if !self.cow_alias_sources.contains_key(&local)
-            && !self.cow_alias_targets.contains_key(&local)
-            && !self.cow_collection_refs.contains_key(&local)
-        {
-            return;
-        }
-
         // Case 1: local is an alias of something else → clone source into local
-        if let Some(source) = self.cow_alias_sources.remove(&local) {
-            // Remove from reverse map
-            if let Some(targets) = self.cow_alias_targets.get_mut(&source) {
-                targets.remove(&local);
-            }
-            // Clone: get the source's inner type, call clone, store in local
+        if let Some(LocalOwnershipState::Alias { source }) = self.local_ownership.get(&local).cloned() {
+            self.local_ownership.remove(&local);
             self.cow_materialize_alias(builder, local, source);
         }
 
         // Case 2: local is a source with aliases → clone into each alias
-        if let Some(aliases) = self.cow_alias_targets.remove(&local) {
+        let aliases = self.cow_aliases_of(local);
+        if !aliases.is_empty() {
             for alias in aliases {
-                self.cow_alias_sources.remove(&alias);
+                self.local_ownership.remove(&alias);
                 self.cow_materialize_alias(builder, alias, local);
             }
         }
 
         // Case 3: local is a collection with refs into it → clone each ref
-        if let Some(refs) = self.cow_collection_refs.remove(&local) {
+        let refs = self.cow_collection_refs_for(local);
+        if !refs.is_empty() {
             for ref_local in refs {
                 // Only sever if the ref is still live (not already moved/reassigned)
-                if self.ref_locals.contains(&ref_local) {
+                if self.is_ref_local(ref_local) {
                     self.cow_materialize_collection_ref(builder, ref_local);
                 }
             }
@@ -1302,16 +1362,21 @@ impl<'a> LoweringContext<'a> {
         builder: &mut crate::ir::builder::FunctionBuilder,
         source_local: LocalId,
     ) {
-        if let Some(aliases) = self.cow_alias_targets.remove(&source_local) {
-            for alias in aliases {
-                self.cow_alias_sources.remove(&alias);
-                self.cow_materialize_alias(builder, alias, source_local);
-            }
+        let aliases = self.cow_aliases_of(source_local);
+        for alias in aliases {
+            self.local_ownership.remove(&alias);
+            self.cow_materialize_alias(builder, alias, source_local);
         }
         // Clean up other CoW tracking for the reassigned source — it's about
         // to get a new value, so stale entries would cause incorrect clones.
-        self.cow_ptr_params.remove(&source_local);
-        self.cow_collection_refs.remove(&source_local);
+        if matches!(self.local_ownership.get(&source_local), Some(LocalOwnershipState::BareParam)) {
+            self.local_ownership.remove(&source_local);
+        }
+        // Remove collection refs pointing to this source
+        let refs = self.cow_collection_refs_for(source_local);
+        for r in refs {
+            self.local_ownership.remove(&r);
+        }
     }
 
     /// Materialize an alias: clone the source's data into the alias local.
@@ -1323,40 +1388,29 @@ impl<'a> LoweringContext<'a> {
         _source_local: LocalId,
     ) {
         let alias_type = builder.local_type(alias_local);
-        // Only materialize if alias is actually a Ptr(T)
         let inner_type = match self.pointee_type(alias_type) {
             Some(inner) => inner,
-            None => return, // Not a Ptr — nothing to materialize
+            None => return,
         };
         if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
-            // The alias local already holds a Ptr(T) to the source data.
-            // Clone it to produce an owned T.
             let cloned = builder.call(&clone_fn,
                 vec![crate::ir::builder::FunctionBuilder::copy(alias_local)], inner_type);
-            // Create a NEW local for the owned copy (can't reuse alias_local because
-            // ref_locals is static per-function in the LIR — changing type mid-function breaks).
             let name_hint = builder.local_name(alias_local).map(|s| s.to_string());
             let owned_local = builder.add_local(inner_type,
                 name_hint.as_deref());
             builder.assign(crate::ir::instructions::Place::local(owned_local),
                           crate::ir::builder::FunctionBuilder::copy(cloned));
-            // Register the owned local for drop
             self.drops.register_local(owned_local, inner_type, &self.type_registry);
-            self.owned_locals.insert(owned_local);
-            // Update context: redirect the variable name to the new owned local
+            self.set_owned(owned_local);
             if let Some(ref hint) = builder.local_name(alias_local).map(|s| s.to_string()) {
                 let name = hint.clone();
                 self.register_local(&name, owned_local, inner_type);
                 self.named_locals.insert(owned_local);
             }
-            // The old alias_local stays as Ptr in ref_locals (dead — no more references).
         }
     }
 
     /// Materialize a collection ref: clone the pointed-to element into an owned local.
-    /// Creates a NEW local for the owned copy (same pattern as `cow_materialize_alias`)
-    /// to avoid changing a local's type mid-function, which would violate the LIR
-    /// invariant that ref_locals and slot types are static per-function.
     fn cow_materialize_collection_ref(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
@@ -1365,27 +1419,22 @@ impl<'a> LoweringContext<'a> {
         let ref_type = builder.local_type(ref_local);
         let inner_type = self.pointee_type(ref_type).unwrap_or(ref_type);
         if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
-            // The ref_local already holds a Ptr — use it directly as the clone arg
             let cloned = builder.call(&clone_fn,
                 vec![crate::ir::builder::FunctionBuilder::copy(ref_local)], inner_type);
-            // Create a NEW local for the owned copy (can't reuse ref_local because
-            // ref_locals is static per-function in the LIR — changing type mid-function breaks).
             let name_hint = builder.local_name(ref_local).map(|s| s.to_string());
             let owned_local = builder.add_local(inner_type,
                 name_hint.as_deref());
             builder.assign(crate::ir::instructions::Place::local(owned_local),
                           crate::ir::builder::FunctionBuilder::copy(cloned));
-            // Register the owned local for drop
             self.drops.register_local(owned_local, inner_type, &self.type_registry);
-            self.owned_locals.insert(owned_local);
-            // Update context: redirect the variable name to the new owned local
+            self.set_owned(owned_local);
             if let Some(ref hint) = builder.local_name(ref_local).map(|s| s.to_string()) {
                 let name = hint.clone();
                 self.register_local(&name, owned_local, inner_type);
                 self.named_locals.insert(owned_local);
             }
-            // The old ref_local stays as Ptr in ref_locals (dead — no more references).
-            self.ref_locals.remove(&ref_local);
+            // The old ref_local is now dead
+            self.local_ownership.remove(&ref_local);
         }
     }
 
