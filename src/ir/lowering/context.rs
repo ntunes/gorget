@@ -156,6 +156,75 @@ pub struct SharedVarState {
     pub pending_variants: Vec<crate::ir::transforms::shared_async::PendingSharedVariant>,
 }
 
+/// Per-function transient state that resets between function boundaries.
+///
+/// Extracted from `LoweringContext` to prevent per-function state from leaking
+/// across function boundaries during monomorphization. All fields reset to their
+/// defaults between functions via `LoweringContext::clear_locals()`.
+#[derive(Default)]
+pub struct FunctionState {
+    /// name → (LocalId, GIR TypeId) for variables in the current function.
+    pub locals: FxHashMap<String, (LocalId, TypeId)>,
+    /// Stack of active loops for break/continue targeting.
+    pub loop_stack: Vec<LoopInfo>,
+    /// LocalIds that are mutable capture pointers (need deref on read/write in closure bodies).
+    /// Tracks `&` (MutableBorrow) and `!` (Move) struct params, which are MutPtr in GIR.
+    pub mut_capture_locals: FxHashMap<LocalId, TypeId>,
+    /// Unified ownership state for tracked locals. Replaces the former `ref_locals`,
+    /// `owned_locals`, `cow_alias_sources`, `cow_alias_targets`, `cow_ptr_params`,
+    /// and `cow_collection_refs` maps. Most locals are untracked (not in this map);
+    /// only locals with ownership significance have entries.
+    pub local_ownership: FxHashMap<LocalId, LocalOwnershipState>,
+    /// LocalIds that are named variables (vs anonymous temps from expressions).
+    /// Used to distinguish variable-to-variable assignment (needs clone) from
+    /// temp-to-variable (needs move-zero).
+    pub named_locals: FxHashSet<LocalId>,
+    /// If current function uses `throws`, the Result TypeId for wrapping return/throw.
+    pub current_throws_result_type: Option<TypeId>,
+    /// Target type hint for the current expression being lowered.
+    /// Set by VarDecl/Assign handlers so enum variant constructors (Some, None, Ok, Error)
+    /// can pick the correctly-monomorphized type.
+    pub expected_type: Option<TypeId>,
+    /// Closure parameter type hints for higher-order collection methods.
+    /// Set before lowering closure arguments to filter/map/fold/etc. so that
+    /// untyped closure params get the correct element type instead of I64_TYPE.
+    pub closure_param_type_hints: Vec<TypeId>,
+    /// Callable parameter return types: LocalId → return TypeId.
+    /// Populated during function setup for parameters with Callable/function types.
+    pub callable_return_types: FxHashMap<LocalId, TypeId>,
+    /// Active `with shared_var:` auto-refresh bindings.
+    /// Maps the with-binding local → the shared facade local it mirrors.
+    /// After each await, the shared var is re-read into the binding local.
+    pub with_shared_refresh: Vec<(LocalId, LocalId)>,
+    /// Accumulated `on error:` cleanup blocks. Emitted in LIFO order on error paths.
+    pub on_error_blocks: Vec<crate::parser::ast::Block>,
+    /// Accumulated `assert return` postcondition expressions.
+    /// Checked at every `return` site before the value is returned.
+    pub postconditions: Vec<(crate::span::Spanned<crate::parser::ast::Expr>, Option<crate::span::Spanned<crate::parser::ast::Expr>>)>,
+    /// Parameters upgraded from Borrow to Move in generic functions that return them directly.
+    /// The return path must zero the source through the pointer to prevent caller double-free.
+    pub move_override_params: std::collections::HashSet<String>,
+    /// Maps temp locals from field_load → (source_field_place, field_type).
+    /// Used by VarDecl/Assign to emit MoveZero after extracting resource-type fields.
+    pub field_load_origins: FxHashMap<LocalId, (crate::ir::instructions::Place, TypeId)>,
+    /// TupleInit element origins: tuple_local → Vec<element_local_ids>.
+    /// Used by the return path to MoveZero element locals when returning a tuple.
+    pub tuple_element_locals: FxHashMap<LocalId, Vec<LocalId>>,
+    /// CoW: variable names that are reassigned in the current function body.
+    /// Pre-scanned before lowering. Locals in this set skip CoW aliasing.
+    pub cow_reassigned_names: rustc_hash::FxHashSet<String>,
+    /// Phase 1f: name → use count in the function body. Names with count=1 are
+    /// single-use (dead after their one use) → auto-move at push/constructor.
+    pub name_use_counts: rustc_hash::FxHashMap<String, u32>,
+    /// Full-function liveness analysis result. Contains span positions of
+    /// identifier uses that are the last use on all reachable paths.
+    pub liveness: super::liveness::LivenessResult,
+    /// Locals from Move-argument lowering that need MoveZero AFTER the call.
+    /// Populated by lower_call_arg when a Move param borrows a local, drained by
+    /// the call lowering site after emitting the Call instruction.
+    pub pending_move_zeros: Vec<LocalId>,
+}
+
 /// Tracks lowering state within a function.
 pub struct LoweringContext<'a> {
     pub analysis: &'a AnalysisResult,
@@ -166,8 +235,8 @@ pub struct LoweringContext<'a> {
     pub closures: ClosureLowering,
     /// Drop elaboration state.
     pub drops: DropElaborator,
-    /// name → (LocalId, GIR TypeId) for variables in the current function.
-    locals: FxHashMap<String, (LocalId, TypeId)>,
+    /// Per-function transient state. Reset between function boundaries.
+    pub func_state: FunctionState,
     /// Function signatures: name → (param GIR TypeIds, return GIR TypeId).
     pub fn_sigs: FxHashMap<String, (Vec<TypeId>, TypeId)>,
     /// Enum variant → (enum_type_name, variant_name) mapping.
@@ -177,8 +246,6 @@ pub struct LoweringContext<'a> {
     /// Closure info: struct_name → (call_fn_name, struct_type_id, by-value captures with field indices).
     /// Each capture entry is (name, type_id, struct_field_index).
     pub closure_info: FxHashMap<String, (String, TypeId, Vec<(String, TypeId, u32)>)>,
-    /// Stack of active loops for break/continue targeting.
-    loop_stack: Vec<LoopInfo>,
     /// Generic monomorphization state.
     pub generics: GenericState,
     /// Spawn/concurrency tracking.
@@ -193,18 +260,6 @@ pub struct LoweringContext<'a> {
     pub snapshot_mode: bool,
     /// Whether `directive overflow wrap` is active (integer overflow wraps).
     pub overflow_wrap: bool,
-    /// LocalIds that are mutable capture pointers (need deref on read/write in closure bodies).
-    /// Tracks `&` (MutableBorrow) and `!` (Move) struct params, which are MutPtr in GIR.
-    pub mut_capture_locals: FxHashMap<LocalId, TypeId>,
-    /// Unified ownership state for tracked locals. Replaces the former `ref_locals`,
-    /// `owned_locals`, `cow_alias_sources`, `cow_alias_targets`, `cow_ptr_params`,
-    /// and `cow_collection_refs` maps. Most locals are untracked (not in this map);
-    /// only locals with ownership significance have entries.
-    pub local_ownership: FxHashMap<LocalId, LocalOwnershipState>,
-    /// LocalIds that are named variables (vs anonymous temps from expressions).
-    /// Used to distinguish variable-to-variable assignment (needs clone) from
-    /// temp-to-variable (needs move-zero).
-    pub named_locals: FxHashSet<LocalId>,
     /// Extern binding: Gorget name → C symbol name (e.g., "llabs_wrapper" → "llabs").
     pub extern_bindings: FxHashMap<String, String>,
     /// Default parameter values: fn_name → Vec<(param_index, default_expr)>.
@@ -224,19 +279,6 @@ pub struct LoweringContext<'a> {
     pub yield_point_fns: rustc_hash::FxHashSet<String>,
     /// Per-function return ABI kind.
     pub fn_return_abis: rustc_hash::FxHashMap<String, crate::ir::abi::AbiKind>,
-    /// If current function uses `throws`, the Result TypeId for wrapping return/throw.
-    pub current_throws_result_type: Option<TypeId>,
-    /// Target type hint for the current expression being lowered.
-    /// Set by VarDecl/Assign handlers so enum variant constructors (Some, None, Ok, Error)
-    /// can pick the correctly-monomorphized type.
-    pub expected_type: Option<TypeId>,
-    /// Closure parameter type hints for higher-order collection methods.
-    /// Set before lowering closure arguments to filter/map/fold/etc. so that
-    /// untyped closure params get the correct element type instead of I64_TYPE.
-    pub closure_param_type_hints: Vec<TypeId>,
-    /// Callable parameter return types: LocalId → return TypeId.
-    /// Populated during function setup for parameters with Callable/function types.
-    pub callable_return_types: FxHashMap<LocalId, TypeId>,
     /// Module-level global variable names (from StaticDecl items).
     /// Used by Expr::Identifier lowering to emit Constant::GlobalRef instead of I64(0).
     pub global_names: rustc_hash::FxHashSet<String>,
@@ -249,47 +291,16 @@ pub struct LoweringContext<'a> {
     /// Functions with FunctionBody::Extern — their call results are always owned.
     /// A C function cannot return a view into Gorget-managed memory.
     pub extern_body_fns: rustc_hash::FxHashSet<String>,
-    /// Active `with shared_var:` auto-refresh bindings.
-    /// Maps the with-binding local → the shared facade local it mirrors.
-    /// After each await, the shared var is re-read into the binding local.
-    pub with_shared_refresh: Vec<(LocalId, LocalId)>,
-    /// Accumulated `on error:` cleanup blocks. Emitted in LIFO order on error paths.
-    pub on_error_blocks: Vec<crate::parser::ast::Block>,
-    /// Accumulated `assert return` postcondition expressions.
-    /// Checked at every `return` site before the value is returned.
-    pub postconditions: Vec<(crate::span::Spanned<crate::parser::ast::Expr>, Option<crate::span::Spanned<crate::parser::ast::Expr>>)>,
-    /// Parameters upgraded from Borrow to Move in generic functions that return them directly.
-    /// The return path must zero the source through the pointer to prevent caller double-free.
-    pub move_override_params: std::collections::HashSet<String>,
     /// Methods whose -1 sentinel return should be wrapped into Option[int].
     /// Populated during registration for stdlib collection/string `find`/`index_of` methods.
     /// User-defined methods default to NOT being in this set.
     pub sentinel_to_option_methods: rustc_hash::FxHashSet<String>,
-    /// Maps temp locals from field_load → (source_field_place, field_type).
-    /// Used by VarDecl/Assign to emit MoveZero after extracting resource-type fields.
-    pub field_load_origins: FxHashMap<LocalId, (crate::ir::instructions::Place, TypeId)>,
-    /// TupleInit element origins: tuple_local → Vec<element_local_ids>.
-    /// Used by the return path to MoveZero element locals when returning a tuple.
-    pub tuple_element_locals: FxHashMap<LocalId, Vec<LocalId>>,
     /// Accumulated implicit clone warnings during lowering.
     pub implicit_clone_warnings: Vec<crate::ir::ImplicitCloneWarning>,
     /// Maps monomorphized method name → C runtime function name.
     /// Populated from BuiltinTypeProtocol declarations during module setup.
     /// Used by the LIR backend to replace `map_monomorphized_to_runtime()`.
     pub runtime_callees: FxHashMap<String, String>,
-    /// CoW: variable names that are reassigned in the current function body.
-    /// Pre-scanned before lowering. Locals in this set skip CoW aliasing.
-    pub cow_reassigned_names: rustc_hash::FxHashSet<String>,
-    /// Phase 1f: name → use count in the function body. Names with count=1 are
-    /// single-use (dead after their one use) → auto-move at push/constructor.
-    pub name_use_counts: rustc_hash::FxHashMap<String, u32>,
-    /// Full-function liveness analysis result. Contains span positions of
-    /// identifier uses that are the last use on all reachable paths.
-    pub liveness: super::liveness::LivenessResult,
-    /// Locals from Move-argument lowering that need MoveZero AFTER the call.
-    /// Populated by lower_call_arg when a Move param borrows a local, drained by
-    /// the call lowering site after emitting the Call instruction.
-    pub pending_move_zeros: Vec<LocalId>,
 }
 
 
@@ -301,12 +312,11 @@ impl<'a> LoweringContext<'a> {
             type_registry,
             closures: ClosureLowering::new(),
             drops: DropElaborator::new(),
-            locals: FxHashMap::default(),
+            func_state: FunctionState::default(),
             fn_sigs: FxHashMap::default(),
             enum_variants: FxHashMap::default(),
             struct_fields: FxHashMap::default(),
             closure_info: FxHashMap::default(),
-            loop_stack: Vec::new(),
             generics: GenericState::default(),
             spawn: SpawnState::default(),
             shared: SharedVarState::default(),
@@ -314,9 +324,6 @@ impl<'a> LoweringContext<'a> {
             strip_asserts: false,
             snapshot_mode: false,
             overflow_wrap: false,
-            mut_capture_locals: FxHashMap::default(),
-            local_ownership: FxHashMap::default(),
-            named_locals: FxHashSet::default(),
             extern_bindings: FxHashMap::default(),
             fn_defaults: FxHashMap::default(),
             fn_param_names: FxHashMap::default(),
@@ -325,27 +332,13 @@ impl<'a> LoweringContext<'a> {
             fn_extern_abi_kinds: FxHashMap::default(),
             yield_point_fns: rustc_hash::FxHashSet::default(),
             fn_return_abis: rustc_hash::FxHashMap::default(),
-            current_throws_result_type: None,
-            expected_type: None,
-            closure_param_type_hints: Vec::new(),
-            callable_return_types: FxHashMap::default(),
             global_names: rustc_hash::FxHashSet::default(),
             global_type_names: FxHashMap::default(),
             gir_equip_methods: rustc_hash::FxHashSet::default(),
             extern_body_fns: rustc_hash::FxHashSet::default(),
-            with_shared_refresh: Vec::new(),
-            on_error_blocks: Vec::new(),
-            postconditions: Vec::new(),
-            move_override_params: std::collections::HashSet::new(),
             sentinel_to_option_methods: rustc_hash::FxHashSet::default(),
-            field_load_origins: FxHashMap::default(),
-            tuple_element_locals: FxHashMap::default(),
             implicit_clone_warnings: Vec::new(),
             runtime_callees: FxHashMap::default(),
-            cow_reassigned_names: rustc_hash::FxHashSet::default(),
-            name_use_counts: rustc_hash::FxHashMap::default(),
-            liveness: super::liveness::LivenessResult { last_use_spans: Default::default() },
-            pending_move_zeros: Vec::new(),
         }
     }
 
@@ -713,8 +706,8 @@ impl<'a> LoweringContext<'a> {
 
     /// Register a variable in the current function scope.
     pub fn register_local(&mut self, name: &str, local_id: LocalId, type_id: TypeId) {
-        self.locals.insert(name.to_string(), (local_id, type_id));
-        self.named_locals.insert(local_id);
+        self.func_state.locals.insert(name.to_string(), (local_id, type_id));
+        self.func_state.named_locals.insert(local_id);
     }
 
     /// Phase 1f: check if a named variable is dead after the current statement.
@@ -722,22 +715,22 @@ impl<'a> LoweringContext<'a> {
     /// Uses liveness analysis (reverse walk with branch union).
     pub fn is_single_use(&self, name: &str) -> bool {
         // Fallback for call sites that don't have span info.
-        matches!(self.name_use_counts.get(name), Some(1))
+        matches!(self.func_state.name_use_counts.get(name), Some(1))
     }
 
     /// Phase 1f: check if a specific use of a variable (at the given span) is
     /// the last use on all reachable execution paths. If yes, the value can be
     /// moved instead of cloned. Uses full-function liveness analysis.
     pub fn is_last_use_at(&self, _name: &str, span: crate::span::Span) -> bool {
-        if self.liveness.last_use_spans.is_empty() {
+        if self.func_state.liveness.last_use_spans.is_empty() {
             return false; // No liveness data → conservative (don't move)
         }
-        self.liveness.last_use_spans.contains(&span.start)
+        self.func_state.liveness.last_use_spans.contains(&span.start)
     }
 
     /// Check if a local is a named variable (vs an anonymous temp).
     pub fn is_named_local(&self, local: LocalId) -> bool {
-        self.named_locals.contains(&local)
+        self.func_state.named_locals.contains(&local)
     }
 
     /// Create a local AND register it for drop if its type needs dropping.
@@ -859,7 +852,7 @@ impl<'a> LoweringContext<'a> {
                         let is_non_owned_string = self.is_string_type(local_type)
                             && !self.is_owned_local(local);
                         // Borrow params — always clone
-                        let is_borrow_param = matches!(self.local_ownership.get(&local), Some(LocalOwnershipState::BareParam));
+                        let is_borrow_param = matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::BareParam));
                         if is_non_owned_string || is_borrow_param {
                             if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
                                 let ptr_type = self.register_ptr_type(local_type);
@@ -879,42 +872,36 @@ impl<'a> LoweringContext<'a> {
 
     /// Look up a variable by name.
     pub fn lookup_local(&self, name: &str) -> Option<(LocalId, TypeId)> {
-        self.locals.get(name).copied()
+        self.func_state.locals.get(name).copied()
     }
 
-    /// Reset locals for the next function.
+    /// Reset all per-function transient state for the next function.
     pub fn clear_locals(&mut self) {
-        self.locals.clear();
-        self.mut_capture_locals.clear();
-        self.local_ownership.clear();
-        self.named_locals.clear();
+        self.func_state = FunctionState::default();
+        // Also reset per-function subfields on module-wide structs:
         self.spawn.result_locals.clear();
         self.spawn.pending_fn = None;
         self.shared.locals.clear();
-        self.with_shared_refresh.clear();
-        self.postconditions.clear();
-        self.move_override_params.clear();
-        self.cow_reassigned_names.clear();
     }
 
     /// Clone the locals map for save/restore around nested scopes (if, while, for, match, etc.).
     pub fn save_locals(&self) -> FxHashMap<String, (LocalId, TypeId)> {
-        self.locals.clone()
+        self.func_state.locals.clone()
     }
 
     /// Take the locals map, leaving it empty. Used for save/restore during async variant generation.
     pub fn take_locals(&mut self) -> FxHashMap<String, (LocalId, TypeId)> {
-        std::mem::take(&mut self.locals)
+        std::mem::take(&mut self.func_state.locals)
     }
 
     /// Restore a previously saved locals map.
     pub fn restore_locals(&mut self, locals: FxHashMap<String, (LocalId, TypeId)>) {
-        self.locals = locals;
+        self.func_state.locals = locals;
     }
 
     /// Iterate over all locals (for type inference).
     pub fn locals_iter(&self) -> impl Iterator<Item = (&String, &(LocalId, TypeId))> {
-        self.locals.iter()
+        self.func_state.locals.iter()
     }
 
     /// Resolve the GIR type for a variable declaration.
@@ -967,7 +954,7 @@ impl<'a> LoweringContext<'a> {
                     if let Some((_, ret_ty)) = self.fn_sigs.get(name.as_str()) {
                         let ret_ty = *ret_ty;
                         // In a propagation context, auto-unwrap Result to its Ok type
-                        if self.current_throws_result_type.is_some() {
+                        if self.func_state.current_throws_result_type.is_some() {
                             if let Some(ok_ty) = self.unwrap_result_ok_type(ret_ty) {
                                 return ok_ty;
                             }
@@ -1187,44 +1174,44 @@ impl<'a> LoweringContext<'a> {
 
     /// Check if a local is tracked as a borrowed Ptr reference.
     pub fn is_ref_local(&self, local: LocalId) -> bool {
-        self.local_ownership.get(&local).map_or(false, |s| s.is_ref())
+        self.func_state.local_ownership.get(&local).map_or(false, |s| s.is_ref())
     }
 
     /// Check if a local is tracked as definitely owning its data.
     pub fn is_owned_local(&self, local: LocalId) -> bool {
-        matches!(self.local_ownership.get(&local), Some(LocalOwnershipState::Owned))
+        matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::Owned))
     }
 
     /// Mark a local as owning its data. Overwrites any previous state.
     pub fn set_owned(&mut self, local: LocalId) {
-        self.local_ownership.insert(local, LocalOwnershipState::Owned);
+        self.func_state.local_ownership.insert(local, LocalOwnershipState::Owned);
     }
 
     /// Mark a local as a generic Ptr reference. Only sets if not already tracked
     /// with a more specific state (BareParam, Alias, CollectionRef).
     pub fn set_ref(&mut self, local: LocalId) {
-        self.local_ownership.entry(local).or_insert(LocalOwnershipState::Ref);
+        self.func_state.local_ownership.entry(local).or_insert(LocalOwnershipState::Ref);
     }
 
     /// Check if a local is a bare Ptr param borrowing from the caller.
     pub fn is_bare_param(&self, local: LocalId) -> bool {
-        matches!(self.local_ownership.get(&local), Some(LocalOwnershipState::BareParam))
+        matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::BareParam))
     }
 
     /// Mark a local as a bare Ptr param borrowing from the caller.
     pub fn set_bare_param(&mut self, local: LocalId) {
-        self.local_ownership.insert(local, LocalOwnershipState::BareParam);
+        self.func_state.local_ownership.insert(local, LocalOwnershipState::BareParam);
     }
 
     /// Mark a local as a collection element reference.
     pub fn set_collection_ref(&mut self, local: LocalId, collection: LocalId) {
-        self.local_ownership.insert(local, LocalOwnershipState::CollectionRef { collection });
+        self.func_state.local_ownership.insert(local, LocalOwnershipState::CollectionRef { collection });
     }
 
     /// Derive the set of ref locals for GIR function output.
     /// Collects all locals with any ref state (Ref, BareParam, Alias, CollectionRef).
     pub fn derive_ref_locals(&self) -> FxHashSet<LocalId> {
-        self.local_ownership.iter()
+        self.func_state.local_ownership.iter()
             .filter(|(_, s)| s.is_ref())
             .map(|(&id, _)| id)
             .collect()
@@ -1236,13 +1223,13 @@ impl<'a> LoweringContext<'a> {
     /// Resolves transitively: if source is itself an alias, points to the root.
     pub fn cow_register_alias(&mut self, alias_local: LocalId, source_local: LocalId) {
         let root = self.cow_resolve_root(source_local);
-        self.local_ownership.insert(alias_local, LocalOwnershipState::Alias { source: root });
+        self.func_state.local_ownership.insert(alias_local, LocalOwnershipState::Alias { source: root });
     }
 
     /// Resolve a local to its root source (follow alias chain).
     fn cow_resolve_root(&self, local: LocalId) -> LocalId {
         let mut current = local;
-        while let Some(LocalOwnershipState::Alias { source }) = self.local_ownership.get(&current) {
+        while let Some(LocalOwnershipState::Alias { source }) = self.func_state.local_ownership.get(&current) {
             if *source == current { break; }
             current = *source;
         }
@@ -1251,17 +1238,17 @@ impl<'a> LoweringContext<'a> {
 
     /// Check if a local is a CoW alias of something else.
     pub fn cow_is_alias(&self, local: LocalId) -> bool {
-        matches!(self.local_ownership.get(&local), Some(LocalOwnershipState::Alias { .. }))
+        matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::Alias { .. }))
     }
 
     /// Check if a local has CoW aliases pointing to it (is a source).
     pub fn cow_has_aliases(&self, local: LocalId) -> bool {
-        self.local_ownership.values().any(|s| matches!(s, LocalOwnershipState::Alias { source } if *source == local))
+        self.func_state.local_ownership.values().any(|s| matches!(s, LocalOwnershipState::Alias { source } if *source == local))
     }
 
     /// Collect all aliases pointing to `source`. Derived query — O(n) scan.
     fn cow_aliases_of(&self, source: LocalId) -> Vec<LocalId> {
-        self.local_ownership.iter()
+        self.func_state.local_ownership.iter()
             .filter_map(|(&id, s)| match s {
                 LocalOwnershipState::Alias { source: s } if *s == source => Some(id),
                 _ => None,
@@ -1271,12 +1258,12 @@ impl<'a> LoweringContext<'a> {
 
     /// Check if a collection has any element refs pointing into it.
     pub fn cow_has_collection_refs(&self, collection: LocalId) -> bool {
-        self.local_ownership.values().any(|s| matches!(s, LocalOwnershipState::CollectionRef { collection: c } if *c == collection))
+        self.func_state.local_ownership.values().any(|s| matches!(s, LocalOwnershipState::CollectionRef { collection: c } if *c == collection))
     }
 
     /// Collect all collection refs pointing to `collection`. Derived query — O(n) scan.
     pub fn cow_collection_refs_for(&self, collection: LocalId) -> Vec<LocalId> {
-        self.local_ownership.iter()
+        self.func_state.local_ownership.iter()
             .filter_map(|(&id, s)| match s {
                 LocalOwnershipState::CollectionRef { collection: c } if *c == collection => Some(id),
                 _ => None,
@@ -1295,14 +1282,14 @@ impl<'a> LoweringContext<'a> {
         local: LocalId,
     ) {
         // Phase 1c: bare Ptr params — clone to owned before mutation
-        if matches!(self.local_ownership.get(&local), Some(LocalOwnershipState::BareParam)) {
-            self.local_ownership.remove(&local);
+        if matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::BareParam)) {
+            self.func_state.local_ownership.remove(&local);
             self.cow_materialize_alias(builder, local, local);
         }
 
         // Case 1: local is an alias of something else → clone source into local
-        if let Some(LocalOwnershipState::Alias { source }) = self.local_ownership.get(&local).cloned() {
-            self.local_ownership.remove(&local);
+        if let Some(LocalOwnershipState::Alias { source }) = self.func_state.local_ownership.get(&local).cloned() {
+            self.func_state.local_ownership.remove(&local);
             self.cow_materialize_alias(builder, local, source);
         }
 
@@ -1310,7 +1297,7 @@ impl<'a> LoweringContext<'a> {
         let aliases = self.cow_aliases_of(local);
         if !aliases.is_empty() {
             for alias in aliases {
-                self.local_ownership.remove(&alias);
+                self.func_state.local_ownership.remove(&alias);
                 self.cow_materialize_alias(builder, alias, local);
             }
         }
@@ -1336,18 +1323,18 @@ impl<'a> LoweringContext<'a> {
     ) {
         let aliases = self.cow_aliases_of(source_local);
         for alias in aliases {
-            self.local_ownership.remove(&alias);
+            self.func_state.local_ownership.remove(&alias);
             self.cow_materialize_alias(builder, alias, source_local);
         }
         // Clean up other CoW tracking for the reassigned source — it's about
         // to get a new value, so stale entries would cause incorrect clones.
-        if matches!(self.local_ownership.get(&source_local), Some(LocalOwnershipState::BareParam)) {
-            self.local_ownership.remove(&source_local);
+        if matches!(self.func_state.local_ownership.get(&source_local), Some(LocalOwnershipState::BareParam)) {
+            self.func_state.local_ownership.remove(&source_local);
         }
         // Remove collection refs pointing to this source
         let refs = self.cow_collection_refs_for(source_local);
         for r in refs {
-            self.local_ownership.remove(&r);
+            self.func_state.local_ownership.remove(&r);
         }
     }
 
@@ -1377,7 +1364,7 @@ impl<'a> LoweringContext<'a> {
             if let Some(ref hint) = builder.local_name(alias_local).map(|s| s.to_string()) {
                 let name = hint.clone();
                 self.register_local(&name, owned_local, inner_type);
-                self.named_locals.insert(owned_local);
+                self.func_state.named_locals.insert(owned_local);
             }
         }
     }
@@ -1403,10 +1390,10 @@ impl<'a> LoweringContext<'a> {
             if let Some(ref hint) = builder.local_name(ref_local).map(|s| s.to_string()) {
                 let name = hint.clone();
                 self.register_local(&name, owned_local, inner_type);
-                self.named_locals.insert(owned_local);
+                self.func_state.named_locals.insert(owned_local);
             }
             // The old ref_local is now dead
-            self.local_ownership.remove(&ref_local);
+            self.func_state.local_ownership.remove(&ref_local);
         }
     }
 
@@ -1418,7 +1405,7 @@ impl<'a> LoweringContext<'a> {
         builder: &mut crate::ir::builder::FunctionBuilder,
         local: LocalId,
     ) {
-        if let Some((field_place, _)) = self.field_load_origins.remove(&local) {
+        if let Some((field_place, _)) = self.func_state.field_load_origins.remove(&local) {
             builder.move_zero(field_place);
         }
     }
@@ -1492,17 +1479,17 @@ impl<'a> LoweringContext<'a> {
 
     /// Push a loop onto the stack (called when entering a while/for/loop).
     pub fn push_loop(&mut self, header_bb: BlockId, exit_bb: BlockId) {
-        self.loop_stack.push(LoopInfo { header_bb, exit_bb });
+        self.func_state.loop_stack.push(LoopInfo { header_bb, exit_bb });
     }
 
     /// Pop the current loop off the stack.
     pub fn pop_loop(&mut self) {
-        self.loop_stack.pop();
+        self.func_state.loop_stack.pop();
     }
 
     /// Get the current (innermost) loop info for break/continue.
     pub fn current_loop(&self) -> Option<&LoopInfo> {
-        self.loop_stack.last()
+        self.func_state.loop_stack.last()
     }
 
     // ---- Enum variant tag resolution ----

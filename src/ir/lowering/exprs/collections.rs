@@ -73,7 +73,7 @@ pub(super) fn lower_dict_literal(
 ) -> Operand {
     if pairs.is_empty() {
         // Use expected type from VarDecl context to determine dict type
-        if let Some(expected_type) = ctx.expected_type {
+        if let Some(expected_type) = ctx.func_state.expected_type {
             if let Some(type_name) = ctx.type_registry.type_name(expected_type) {
                 if type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") {
                     let new_fn = format!("{type_name}__new");

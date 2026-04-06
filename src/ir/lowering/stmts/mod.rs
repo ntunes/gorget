@@ -40,7 +40,7 @@ pub fn lower_block(
         // Clear unconsumed field_load_origins. Only VarDecl/Assign consume them
         // via maybe_emit_field_move_zero. Field loads used as method receivers
         // (e.g., h.data.push(x)) create dead temps that should not trigger zeroing.
-        ctx.field_load_origins.clear();
+        ctx.func_state.field_load_origins.clear();
     }
 }
 
@@ -136,7 +136,7 @@ pub fn lower_stmt(
 
         Stmt::AssertReturn { condition, message } => {
             if !ctx.strip_asserts {
-                ctx.postconditions.push((condition.clone(), message.clone()));
+                ctx.func_state.postconditions.push((condition.clone(), message.clone()));
             }
         }
 
@@ -164,7 +164,7 @@ pub fn lower_stmt(
 
         Stmt::OnError { body } => {
             // Register the cleanup block — it will be emitted on error paths
-            ctx.on_error_blocks.push(body.clone());
+            ctx.func_state.on_error_blocks.push(body.clone());
         }
     }
 }
@@ -175,11 +175,11 @@ pub fn emit_on_error_cleanups(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
 ) {
-    if ctx.on_error_blocks.is_empty() {
+    if ctx.func_state.on_error_blocks.is_empty() {
         return;
     }
     // Clone the blocks to avoid borrow conflicts (lowering each block borrows ctx mutably)
-    let blocks: Vec<_> = ctx.on_error_blocks.iter().rev().cloned().collect();
+    let blocks: Vec<_> = ctx.func_state.on_error_blocks.iter().rev().cloned().collect();
     for block in &blocks {
         lower_block(ctx, builder, block);
     }
@@ -236,14 +236,14 @@ fn lower_var_decl(
             }
             // Set expected type hint so enum variant constructors (Some, None, Ok, Error)
             // can pick the correctly-monomorphized type
-            let prev_expected = ctx.expected_type;
-            ctx.expected_type = Some(gir_type);
+            let prev_expected = ctx.func_state.expected_type;
+            ctx.func_state.expected_type = Some(gir_type);
             let operand = lower_expr(ctx, builder, value);
             // Auto-propagate: if operand is Result-typed but the declared type is not Result,
             // unwrap it (propagating errors) so the binding gets the Ok value.
             // NOTE: must run before restoring expected_type so the guard sees gir_type.
             let mut operand = maybe_auto_propagate(ctx, builder, operand);
-            ctx.expected_type = prev_expected;
+            ctx.func_state.expected_type = prev_expected;
             // If this was a Spawn expression, register the task local → spawned fn mapping
             if let Some(fn_name) = ctx.spawn.pending_fn.take() {
                 ctx.spawn.result_locals.insert(local_id, fn_name);
@@ -372,9 +372,9 @@ fn lower_var_decl(
                     // Named resource variable → CoW alias OR clone (if unsafe for CoW).
                     else if ctx.is_named_local(place.local)
                         && ctx.type_registry.is_resource_type(rhs_type)
-                        && !ctx.cow_reassigned_names.contains(name)
+                        && !ctx.func_state.cow_reassigned_names.contains(name)
                         && !builder.local_name(place.local)
-                            .map_or(false, |n| ctx.cow_reassigned_names.contains(n))
+                            .map_or(false, |n| ctx.func_state.cow_reassigned_names.contains(n))
                     {
                         // Create Ptr(T) alias instead of cloning
                         let ptr_type = ctx.register_ptr_type(rhs_type);
@@ -522,10 +522,10 @@ fn lower_shared_var_decl(
     let inner_type = ctx.resolve_var_type(type_, value);
     let inner_c = ctx.c_type_name_for_id(inner_type);
 
-    let prev_expected = ctx.expected_type;
-    ctx.expected_type = Some(inner_type);
+    let prev_expected = ctx.func_state.expected_type;
+    ctx.func_state.expected_type = Some(inner_type);
     let val_operand = lower_expr(ctx, builder, value);
-    ctx.expected_type = prev_expected;
+    ctx.func_state.expected_type = prev_expected;
 
     match strategy {
         SharedStrategy::ArcAtomic => {
@@ -719,9 +719,9 @@ fn lower_return(
             )
         );
         // Set expected type from function return type so variant constructors resolve correctly
-        let prev_expected = ctx.expected_type;
+        let prev_expected = ctx.func_state.expected_type;
         let ret_type = builder.locals[0].type_id;
-        ctx.expected_type = Some(ret_type);
+        ctx.func_state.expected_type = Some(ret_type);
         let operand = lower_expr(ctx, builder, expr);
         // Auto-propagate: if returning a Result value from a throws function,
         // unwrap so the Ok-wrapping below works on the inner value.
@@ -731,7 +731,7 @@ fn lower_return(
         } else {
             operand
         };
-        ctx.expected_type = prev_expected;
+        ctx.func_state.expected_type = prev_expected;
         // Identify the local being returned (to exclude from drops — it's being moved out)
         let returned_local = match &operand {
             Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
@@ -739,7 +739,7 @@ fn lower_return(
             }
             _ => None,
         };
-        if let Some(result_type) = ctx.current_throws_result_type {
+        if let Some(result_type) = ctx.func_state.current_throws_result_type {
             if is_explicit_result_variant {
                 // Expression already produced a Result — assign directly, no wrapping
                 builder.assign(Place::local(LocalId(0)), operand);
@@ -864,7 +864,7 @@ fn lower_return(
                     // the tuple is copied into the return slot. Without zeroing
                     // the element locals, both the return tuple and the locals
                     // own the same heap data → double-free at scope exit.
-                    if let Some(elem_locals) = ctx.tuple_element_locals.get(&place.local) {
+                    if let Some(elem_locals) = ctx.func_state.tuple_element_locals.get(&place.local) {
                         for &elem_local in elem_locals {
                             if elem_local != LocalId(0)
                                 && !ctx.drops.is_moved(elem_local)
@@ -882,9 +882,9 @@ fn lower_return(
         }
         // For move-overridden generic params: zero the source through the pointer
         // to transfer ownership to the caller and prevent double-free.
-        if !ctx.move_override_params.is_empty() {
+        if !ctx.func_state.move_override_params.is_empty() {
             if let Expr::Identifier(name) = &expr.node {
-                if ctx.move_override_params.contains(name.as_str()) {
+                if ctx.func_state.move_override_params.contains(name.as_str()) {
                     if let Some((local_id, _)) = ctx.lookup_local(name.as_str()) {
                         builder.move_zero(crate::ir::instructions::Place {
                             local: local_id,
@@ -915,14 +915,14 @@ fn emit_postcondition_checks(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
 ) {
-    if ctx.postconditions.is_empty() {
+    if ctx.func_state.postconditions.is_empty() {
         return;
     }
     // Register __return__ → _0 so the postcondition expression can reference the return value
     let ret_type = builder.locals[0].type_id;
     ctx.register_local("__return__", LocalId(0), ret_type);
 
-    let postconditions = ctx.postconditions.clone();
+    let postconditions = ctx.func_state.postconditions.clone();
     for (condition, message) in &postconditions {
         lower_assert(ctx, builder, condition, message.as_ref());
     }
@@ -1138,7 +1138,7 @@ fn lower_throw(
     expr: &Spanned<Expr>,
 ) {
     let val = lower_expr(ctx, builder, expr);
-    if let Some(result_type) = ctx.current_throws_result_type {
+    if let Some(result_type) = ctx.func_state.current_throws_result_type {
         // Wrap error in Result.Error and return
         let err_dst = {
                 let type_name = ctx.type_registry.type_name(result_type).unwrap_or_else(|| "Result".to_string());
@@ -1629,13 +1629,13 @@ fn lower_with(
     }
 
     // Push shared-refresh entries for the duration of the body
-    let prev_refresh_len = ctx.with_shared_refresh.len();
-    ctx.with_shared_refresh.extend(shared_refresh_entries);
+    let prev_refresh_len = ctx.func_state.with_shared_refresh.len();
+    ctx.func_state.with_shared_refresh.extend(shared_refresh_entries);
 
     lower_block(ctx, builder, body);
 
     // Pop shared-refresh entries
-    ctx.with_shared_refresh.truncate(prev_refresh_len);
+    ctx.func_state.with_shared_refresh.truncate(prev_refresh_len);
 
     // Drop all non-allocator locals FIRST (while the allocator is still alive),
     // then pop + destroy allocators. This avoids use-after-free when collections

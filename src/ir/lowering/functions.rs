@@ -287,7 +287,7 @@ pub fn lower_function(
     ctx.clear_locals();
 
     // Register parameters as locals
-    ctx.callable_return_types.clear();
+    ctx.func_state.callable_return_types.clear();
     for (i, p) in func.params.iter().enumerate() {
         let local_id = LocalId((i + 1) as u32); // _1, _2, ...
         let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
@@ -298,7 +298,7 @@ pub fn lower_function(
             ctx.set_bare_param(local_id);
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             // ! resource params and & trivial params: MutPtr, auto-deref + write-through
-            ctx.mut_capture_locals.insert(local_id, base_type);
+            ctx.func_state.mut_capture_locals.insert(local_id, base_type);
         }
         // ! string params: caller transfers ownership — mark as owned
         // so clone_resource_args_for_init skips the clone.
@@ -309,12 +309,12 @@ pub fn lower_function(
         }
         // Track callable parameter return types
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
-            ctx.callable_return_types.insert(local_id, ret_type);
+            ctx.func_state.callable_return_types.insert(local_id, ret_type);
         }
     }
 
     // Track throws context for Result wrapping in return/throw
-    ctx.current_throws_result_type = if func.throws.is_some() {
+    ctx.func_state.current_throws_result_type = if func.throws.is_some() {
         Some(return_type)
     } else {
         None
@@ -335,9 +335,9 @@ pub fn lower_function(
     // Pre-scan: find variables unsafe for CoW (reassigned, !-moved).
     // Also count name uses and compute liveness for auto-move (Phase 1f).
     if let FunctionBody::Block(block) = &func.body {
-        ctx.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
-        ctx.name_use_counts = prescan_name_use_counts(&block.stmts);
-        ctx.liveness = super::liveness::compute_function_liveness(&block.stmts);
+        ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
+        ctx.func_state.name_use_counts = prescan_name_use_counts(&block.stmts);
+        ctx.func_state.liveness = super::liveness::compute_function_liveness(&block.stmts);
     }
 
     // Lower the body
@@ -524,7 +524,7 @@ pub fn lower_equip_method(
 
     // Clear and register locals
     ctx.clear_locals();
-    ctx.callable_return_types.clear();
+    ctx.func_state.callable_return_types.clear();
 
     // Register self as local _1 (only if method has self)
     let mut param_idx = if let Some(spt) = self_ptr_type {
@@ -549,11 +549,11 @@ pub fn lower_equip_method(
         {
             ctx.set_ref(LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
-            ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
+            ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
-            ctx.callable_return_types.insert(LocalId(param_idx), ret_type);
+            ctx.func_state.callable_return_types.insert(LocalId(param_idx), ret_type);
         }
         param_idx += 1;
     }
@@ -576,7 +576,7 @@ pub fn lower_equip_method(
     }
 
     // Track throws context for Result wrapping in return/throw statements
-    ctx.current_throws_result_type = if method.throws.is_some() {
+    ctx.func_state.current_throws_result_type = if method.throws.is_some() {
         Some(return_type)
     } else {
         None
@@ -595,9 +595,9 @@ pub fn lower_equip_method(
 
     // Pre-scan: find variables unsafe for CoW + count name uses + liveness for auto-move.
     if let FunctionBody::Block(block) = &method.body {
-        ctx.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
-        ctx.name_use_counts = prescan_name_use_counts(&block.stmts);
-        ctx.liveness = super::liveness::compute_function_liveness(&block.stmts);
+        ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
+        ctx.func_state.name_use_counts = prescan_name_use_counts(&block.stmts);
+        ctx.func_state.liveness = super::liveness::compute_function_liveness(&block.stmts);
     }
 
     // Lower the body
@@ -796,10 +796,10 @@ pub fn lower_generic_function(
     // Clear and register locals — assign sequential LocalIds to runtime params only
     // (meta op params carry no runtime value and are skipped).
     ctx.clear_locals();
-    ctx.callable_return_types.clear();
+    ctx.func_state.callable_return_types.clear();
     // Store move_override_params in context so return-statement lowering can zero sources.
     // Must be set AFTER clear_locals() which resets it.
-    ctx.move_override_params = move_override_params.clone();
+    ctx.func_state.move_override_params = move_override_params.clone();
 
     let mut local_idx: u32 = 0;
     for p in template.params.iter() {
@@ -823,11 +823,11 @@ pub fn lower_generic_function(
         {
             ctx.set_ref(local_id);
         } else if ctx.is_mut_ref_param(base_type, ownership) {
-            ctx.mut_capture_locals.insert(local_id, base_type);
+            ctx.func_state.mut_capture_locals.insert(local_id, base_type);
         }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
-            ctx.callable_return_types.insert(local_id, ret_type);
+            ctx.func_state.callable_return_types.insert(local_id, ret_type);
         }
     }
 
@@ -1020,7 +1020,7 @@ pub fn lower_generic_equip_methods_with_defaults(
         let mut builder = FunctionBuilder::new(method_mangled, return_type, &params);
 
         ctx.clear_locals();
-        ctx.callable_return_types.clear();
+        ctx.func_state.callable_return_types.clear();
         let mut param_idx = if has_self {
             ctx.register_local("self", LocalId(1), self_ptr_type);
             2u32
@@ -1041,11 +1041,11 @@ pub fn lower_generic_equip_methods_with_defaults(
             {
                 ctx.set_ref(LocalId(param_idx));
             } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
-                ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
+                ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
             }
             // Track callable parameter return types for indirect call lowering
             if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
-                ctx.callable_return_types.insert(LocalId(param_idx), ret_type);
+                ctx.func_state.callable_return_types.insert(LocalId(param_idx), ret_type);
             }
             param_idx += 1;
         }

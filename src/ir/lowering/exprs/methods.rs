@@ -234,7 +234,7 @@ pub(super) fn lower_method_call(
     let borrow_param_local = if let Expr::Identifier(name) = &receiver.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
             if ctx.is_ref_local(local_id)
-                || ctx.mut_capture_locals.contains_key(&local_id)
+                || ctx.func_state.mut_capture_locals.contains_key(&local_id)
             {
                 Some(local_id)
             } else {
@@ -1102,26 +1102,26 @@ pub(super) fn lower_method_call(
 
         // For higher-order methods (filter/map/fold/etc.), set closure parameter type hints
         // so untyped closure params get the correct element type instead of defaulting to I64.
-        let prev_hints = std::mem::take(&mut ctx.closure_param_type_hints);
+        let prev_hints = std::mem::take(&mut ctx.func_state.closure_param_type_hints);
         if matches!(method_name, "filter" | "map" | "flat_map" | "any" | "all" | "each" | "for_each" | "find" | "count" | "reduce" | "enumerate") {
             if let Some(elem_type_id) = extract_elem_type_id_from_type_name(ctx, &type_name) {
-                ctx.closure_param_type_hints = vec![elem_type_id];
+                ctx.func_state.closure_param_type_hints = vec![elem_type_id];
             }
         } else if method_name == "fold" {
             // fold closure has (accumulator, element) — use element type for both params
             // as a reasonable default. Explicitly-typed params override the hint.
             if let Some(elem_type_id) = extract_elem_type_id_from_type_name(ctx, &type_name) {
-                ctx.closure_param_type_hints = vec![elem_type_id, elem_type_id];
+                ctx.func_state.closure_param_type_hints = vec![elem_type_id, elem_type_id];
             }
         }
 
         // For and_then/or_else, the closure should return the same Option/Result type
         // as the receiver. Set expected_type so Ok()/Error()/Some()/None() constructors
         // inside the closure body get the correct type.
-        let prev_expected = ctx.expected_type;
+        let prev_expected = ctx.func_state.expected_type;
         if matches!(method_name, "and_then" | "or_else") {
             if let Some(type_id) = ctx.lookup_type_by_name(&type_name) {
-                ctx.expected_type = Some(type_id);
+                ctx.func_state.expected_type = Some(type_id);
             }
         }
 
@@ -1169,8 +1169,8 @@ pub(super) fn lower_method_call(
         call_args.extend(lowered_method_args.iter().cloned());
 
         // Restore previous hints and expected type
-        ctx.closure_param_type_hints = prev_hints;
-        ctx.expected_type = prev_expected;
+        ctx.func_state.closure_param_type_hints = prev_hints;
+        ctx.func_state.expected_type = prev_expected;
 
         // For Vector.zip(other_vec), register tuple and result vector types
         if method_name == "zip" && type_name.starts_with("Vector__") {

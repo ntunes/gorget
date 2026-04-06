@@ -65,7 +65,7 @@ pub(super) fn lower_call_arg(
                     )
                 };
                 if ctx.is_ref_local(local_id)
-                    || ctx.mut_capture_locals.contains_key(&local_id)
+                    || ctx.func_state.mut_capture_locals.contains_key(&local_id)
                     || is_already_ptr
                 {
                     return FunctionBuilder::copy(local_id);
@@ -209,7 +209,7 @@ pub(super) fn lower_call_arg(
                     // Schedule MoveZero AFTER the call — the callee reads from this
                     // address, so we can't zero before. The post-call MoveZero
                     // prevents the scope-exit drop from double-freeing.
-                    ctx.pending_move_zeros.push(place.local);
+                    ctx.func_state.pending_move_zeros.push(place.local);
                     return FunctionBuilder::copy(dst);
                 }
             }
@@ -726,7 +726,7 @@ pub(super) fn lower_call(
                     // (don't auto-deref). The adapter function expects the pointer type.
                     if let Expr::Identifier(arg_name) = &arg.node.value.node {
                         if let Some((arg_local, _)) = ctx.lookup_local(arg_name) {
-                            if ctx.mut_capture_locals.contains_key(&arg_local) {
+                            if ctx.func_state.mut_capture_locals.contains_key(&arg_local) {
                                 call_args.push(FunctionBuilder::copy(arg_local));
                                 continue;
                             }
@@ -736,7 +736,7 @@ pub(super) fn lower_call(
                 }
                 let callable_name = format!("__callable_{}", local_id.0);
                 // Look up tracked callable return type, fall back to I64_TYPE
-                let ret_type = ctx.callable_return_types.get(&local_id)
+                let ret_type = ctx.func_state.callable_return_types.get(&local_id)
                     .copied()
                     .unwrap_or(I64_TYPE);
                 if ret_type == UNIT_TYPE {
@@ -787,18 +787,18 @@ pub(super) fn lower_call(
             .unwrap_or_default();
         // Save pending_move_zeros baseline so we only drain entries added
         // by THIS call's argument lowering (not from nested/prior calls).
-        let move_zero_baseline = ctx.pending_move_zeros.len();
+        let move_zero_baseline = ctx.func_state.pending_move_zeros.len();
         let lowered_args: Vec<Operand> = resolved_args
             .iter()
             .enumerate()
             .map(|(i, arg)| {
-                let prev_expected = ctx.expected_type;
+                let prev_expected = ctx.func_state.expected_type;
                 let callee_pt = param_types.get(i).copied();
                 if let Some(pt) = callee_pt {
-                    ctx.expected_type = Some(pt);
+                    ctx.func_state.expected_type = Some(pt);
                 }
                 let op = lower_call_arg(ctx, builder, arg, callee_pt, &effective_name, i);
-                ctx.expected_type = prev_expected;
+                ctx.func_state.expected_type = prev_expected;
                 op
             })
             .collect();
@@ -883,7 +883,7 @@ pub(super) fn lower_call(
         // These were borrowed (borrow_mut) for the callee; now that the call
         // has returned, zero the source to prevent double-free at scope exit.
         // Only drain entries added during THIS call's arg lowering.
-        let pending: Vec<LocalId> = ctx.pending_move_zeros.drain(move_zero_baseline..).collect();
+        let pending: Vec<LocalId> = ctx.func_state.pending_move_zeros.drain(move_zero_baseline..).collect();
         for local in pending {
             builder.move_zero(Place::local(local));
         }
@@ -1043,7 +1043,7 @@ pub(super) fn lower_interp_segment(
     if let Some((local_id, type_id)) = ctx.lookup_local(var_name) {
         // If this is a pointer param, deref to get the value for formatting.
         // Covers &/! params (mut_capture_locals) and borrowed resource params (ref_locals).
-        let ptr_value_type = ctx.mut_capture_locals.get(&local_id).copied()
+        let ptr_value_type = ctx.func_state.mut_capture_locals.get(&local_id).copied()
             .or_else(|| {
                 if ctx.is_ref_local(local_id) {
                     ctx.pointee_type(builder.local_type(local_id))

@@ -100,7 +100,7 @@ fn lower_expr_inner(
                 // If this is a &/! param (MutPtr), deref to get the value.
                 // ref_locals (bare-borrow Ptr params) are NOT auto-deref'd —
                 // they stay as Ptr throughout the callee body.
-                if let Some(&value_type) = ctx.mut_capture_locals.get(&local_id) {
+                if let Some(&value_type) = ctx.func_state.mut_capture_locals.get(&local_id) {
                     let deref_place = Place {
                         local: local_id,
                         projections: vec![Projection::Deref],
@@ -210,7 +210,7 @@ fn lower_expr_inner(
                 // Remove any collection refs keyed on this local (now zeroed/stale)
                 let stale_refs = ctx.cow_collection_refs_for(place_clone.local);
                 for r in stale_refs {
-                    ctx.local_ownership.remove(&r);
+                    ctx.func_state.local_ownership.remove(&r);
                 }
                 FunctionBuilder::copy(tmp)
             } else {
@@ -224,7 +224,7 @@ fn lower_expr_inner(
             if let Expr::Identifier(name) = &inner.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name) {
                     if ctx.is_ref_local(local_id)
-                        || ctx.mut_capture_locals.contains_key(&local_id)
+                        || ctx.func_state.mut_capture_locals.contains_key(&local_id)
                     {
                         return FunctionBuilder::copy(local_id);
                     }
@@ -361,7 +361,7 @@ fn lower_expr_inner(
             let type_id = register_tuple_type(ctx, &elem_types);
             let dst = builder.tuple_init(operands, type_id);
             if !elem_locals.is_empty() {
-                ctx.tuple_element_locals.insert(dst, elem_locals);
+                ctx.func_state.tuple_element_locals.insert(dst, elem_locals);
             }
             FunctionBuilder::copy(dst)
         }
@@ -966,7 +966,7 @@ fn lower_expr_inner(
                 .collect();
 
             // 1. Try expected_type (set by VarDecl, Assign, Return, or function arg)
-            if let Some(et) = ctx.expected_type {
+            if let Some(et) = ctx.func_state.expected_type {
                 if let Some(type_name) = ctx.type_registry.type_name(et) {
                     if let Some(type_def) = ctx.type_registry.get_type_def(&type_name) {
                         if let TypeDefKind::Enum(ref e) = type_def.kind {
@@ -1022,7 +1022,7 @@ fn resolve_option_result_variant(
             let type_id = ctx.type_mapper.lookup_named(&mangled)
                 .or_else(|| {
                     // Fall back to expected type from context (e.g., VarDecl target)
-                    ctx.expected_type.and_then(|et| {
+                    ctx.func_state.expected_type.and_then(|et| {
                         let name = ctx.type_registry.type_name(et)?;
                         let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option)
                             || name.starts_with("Option__");
@@ -1041,7 +1041,7 @@ fn resolve_option_result_variant(
         }
         "None" if args.is_empty() => {
             // None() has no arguments — determine type from context
-            let (type_name, type_id) = if let Some(et) = ctx.expected_type {
+            let (type_name, type_id) = if let Some(et) = ctx.func_state.expected_type {
                 let name = ctx.type_registry.type_name(et)
                     .unwrap_or_else(|| "Option__int64_t".to_string());
                 let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option)
@@ -1062,7 +1062,7 @@ fn resolve_option_result_variant(
         }
         "Ok" if args.len() == 1 => {
             // Ok(value) — determine Result type from context (expected_type)
-            if let Some(et) = ctx.expected_type {
+            if let Some(et) = ctx.func_state.expected_type {
                 let name = ctx.type_registry.type_name(et).unwrap_or_default();
                 let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
                     || name.starts_with("Result__");
@@ -1080,7 +1080,7 @@ fn resolve_option_result_variant(
                 }
             }
             // Also check current_throws_result_type
-            if let Some(rt) = ctx.current_throws_result_type {
+            if let Some(rt) = ctx.func_state.current_throws_result_type {
                 let name = ctx.type_registry.type_name(rt).unwrap_or_default();
                 let is_result = ctx.type_registry.enum_category(rt) == Some(EnumCategory::Result)
                     || name.starts_with("Result__");
@@ -1103,7 +1103,7 @@ fn resolve_option_result_variant(
             // Error(value) — determine Result type from context.
             // Use emit_enum_init_owned to clone non-owned string views and
             // MoveZero consumed args — matches Ok/Some/EnumConstructor paths.
-            if let Some(et) = ctx.expected_type {
+            if let Some(et) = ctx.func_state.expected_type {
                 let name = ctx.type_registry.type_name(et).unwrap_or_default();
                 let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
                     || name.starts_with("Result__");
@@ -1113,7 +1113,7 @@ fn resolve_option_result_variant(
                     return Some(FunctionBuilder::copy(dst));
                 }
             }
-            if let Some(rt) = ctx.current_throws_result_type {
+            if let Some(rt) = ctx.func_state.current_throws_result_type {
                 let name = ctx.type_registry.type_name(rt).unwrap_or_default();
                 let is_result = ctx.type_registry.enum_category(rt) == Some(EnumCategory::Result)
                     || name.starts_with("Result__");
@@ -1438,7 +1438,7 @@ fn lower_field_access(
     // so field access goes through the pointer (*ptr).field instead of copying
     let obj = if let Expr::Identifier(name) = &object.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
-            if ctx.mut_capture_locals.contains_key(&local_id) {
+            if ctx.func_state.mut_capture_locals.contains_key(&local_id) {
                 Operand::Copy(Place::local(local_id))
             } else {
                 lower_expr(ctx, builder, object)
@@ -1889,7 +1889,7 @@ pub fn emit_result_auto_propagate(
         err_field_type,
     );
     // Re-wrap error in the *current* function's Result type and return.
-    let fn_result_type = ctx.current_throws_result_type.or_else(|| {
+    let fn_result_type = ctx.func_state.current_throws_result_type.or_else(|| {
         let ret_type = builder.locals[0].type_id;
         let type_name = ctx.type_registry.type_name(ret_type)?;
         let is_result = ctx.type_registry.enum_category(ret_type) == Some(EnumCategory::Result)
@@ -1948,7 +1948,7 @@ pub fn should_auto_propagate(ctx: &LoweringContext, builder: &FunctionBuilder, t
         return None;
     }
     // Check if current function can propagate
-    if ctx.current_throws_result_type.is_some() {
+    if ctx.func_state.current_throws_result_type.is_some() {
         return Some(type_id);
     }
     let ret_type = builder.locals[0].type_id;
@@ -1972,7 +1972,7 @@ pub fn maybe_auto_propagate(
     operand: Operand,
 ) -> Operand {
     // If the destination expects a Result, don't unwrap
-    if let Some(expected) = ctx.expected_type {
+    if let Some(expected) = ctx.func_state.expected_type {
         if let Some(name) = ctx.type_registry.type_name(expected) {
             let is_result = ctx.type_registry.enum_category(expected) == Some(EnumCategory::Result)
                 || name.starts_with("Result__");
@@ -2054,7 +2054,7 @@ fn lower_rethrow_expr(
     let new_err = lower_expr(ctx, builder, transform);
 
     // Wrap the transformed error in the current function's Result.Error and return
-    if let Some(result_type) = ctx.current_throws_result_type {
+    if let Some(result_type) = ctx.func_state.current_throws_result_type {
         let type_name = ctx.type_registry.type_name(result_type).unwrap_or_else(|| "Result".to_string());
         let err_dst = builder.enum_init(type_name, "Error", result_type, vec![new_err]);
         builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_dst));
@@ -2448,7 +2448,7 @@ fn move_zero_consumed_args(
 /// Infer the GIR type of an operand by examining its structure.
 /// Register (or reuse) a Tuple TypeDef for the given element types.
 /// Infer operand type using both ctx locals and builder locals.
-/// This handles compiler temporaries (tuples, struct inits, etc.) that aren't in ctx.locals.
+/// This handles compiler temporaries (tuples, struct inits, etc.) that aren't in ctx.func_state.locals.
 /// Extract the local ID from an operand if it's a simple local reference.
 #[cfg(test)]
 mod tests {

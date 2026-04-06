@@ -13,6 +13,7 @@ use rustc_hash::FxHashSet;
 /// Result of full-function liveness analysis.
 /// Contains the span start positions of identifier uses that are the last use
 /// of that variable on all reachable paths.
+#[derive(Default)]
 pub struct LivenessResult {
     /// Set of span.start values for Expr::Identifier uses that are last uses.
     pub last_use_spans: FxHashSet<usize>,

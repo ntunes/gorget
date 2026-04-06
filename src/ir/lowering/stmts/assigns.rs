@@ -63,7 +63,7 @@ pub(super) fn lower_assign(
                 // CoW: if this local is an alias, just remove from alias maps.
                 // The reassignment naturally replaces the binding value.
                 if ctx.cow_is_alias(local_id) {
-                    ctx.local_ownership.remove(&local_id);
+                    ctx.func_state.local_ownership.remove(&local_id);
                 }
                 // CoW: if this collection has element refs, clone them out.
                 // Reassignment replaces the buffer; outstanding refs would dangle.
@@ -75,7 +75,7 @@ pub(super) fn lower_assign(
                 // MutPtr (& params) and mut_capture locals pass through without cloning.
                 {
                     use crate::ir::types::GirType;
-                    let is_mut = ctx.mut_capture_locals.contains_key(&local_id)
+                    let is_mut = ctx.func_state.mut_capture_locals.contains_key(&local_id)
                         || matches!(ctx.type_registry.get(type_id), Some(GirType::MutPtr(_)));
                     if !is_mut {
                         if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(type_id).cloned() {
@@ -104,12 +104,12 @@ pub(super) fn lower_assign(
                     } else { false }
                 };
                 // Compute new value (now operating on owned copy if CoW upgraded)
-                let prev_expected = ctx.expected_type;
-                ctx.expected_type = Some(type_id);
+                let prev_expected = ctx.func_state.expected_type;
+                ctx.func_state.expected_type = Some(type_id);
                 let operand = lower_expr(ctx, builder, value);
                 // Auto-propagate: if RHS is Result-typed but target is not, unwrap
                 let mut operand = maybe_auto_propagate(ctx, builder, operand);
-                ctx.expected_type = prev_expected;
+                ctx.func_state.expected_type = prev_expected;
                 // String self-referential reassignment fix: if the RHS might be a
                 // view into the old LHS (e.g., `s = s.trim()` or `s = s[0..1]`),
                 // clone-to-owned before dropping. gorget_string_clone_to_owned is
@@ -157,7 +157,7 @@ pub(super) fn lower_assign(
                     }
                 }
                 // If this is a mutable capture pointer, write through the pointer
-                if ctx.mut_capture_locals.contains_key(&local_id) {
+                if ctx.func_state.mut_capture_locals.contains_key(&local_id) {
                     let deref_place = Place {
                         local: local_id,
                         projections: vec![Projection::Deref],
@@ -314,7 +314,7 @@ pub(super) fn lower_field_assign(
     // instead of lower_expr which would copy the deref'd value to a temp
     let obj = if let Expr::Identifier(name) = &object.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
-            if ctx.mut_capture_locals.contains_key(&local_id) {
+            if ctx.func_state.mut_capture_locals.contains_key(&local_id) {
                 // Return the raw pointer local (not deref'd)
                 Operand::Copy(Place::local(local_id))
             } else {
@@ -687,9 +687,9 @@ pub(super) fn lower_compound_assign(
                 }
             }
 
-            let is_mut_capture = ctx.mut_capture_locals.contains_key(&local_id);
+            let is_mut_capture = ctx.func_state.mut_capture_locals.contains_key(&local_id);
             let value_type = if is_mut_capture {
-                ctx.mut_capture_locals[&local_id]
+                ctx.func_state.mut_capture_locals[&local_id]
             } else {
                 type_id
             };

@@ -21,8 +21,6 @@
 
 ## Medium
 
-- **LoweringContext per-function state isolation**: `LoweringContext` is a god struct shared across all function lowering. Per-function transients (`expected_type`, `current_throws_result_type`, `closure_param_type_hints`, `loop_stack`, `pattern_must_clone_strings`, etc.) leak across function boundaries when arm body lowering triggers monomorphization. Fix: split into `FunctionLoweringState` struct pushed/popped on a stack at function entry/exit. Module-wide state (`fn_sigs`, `type_registry`, `enum_variants`, `runtime_callees`) stays on LoweringContext. Unblocks: conditional match-pattern clone optimization (skip clone when scrutinee is dead in arm body). [added: 2026-04-05]
-
 
 - **Flow-sensitive prescan**: Track which basic blocks reassign each name, not just function-wide. Reduces conservative clones when only one branch mutates. [added: 2026-04-05]
 

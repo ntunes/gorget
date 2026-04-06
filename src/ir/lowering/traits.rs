@@ -733,7 +733,7 @@ fn lower_trait_method_body(
         // If this param is passed by pointer (base is resource type, vtable type is MutPtr),
         // mark in mut_capture_locals so nested calls don't double-wrap.
         if vtable_type != base_type {
-            ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
+            ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }
         vt_idx += 1;
         param_idx += 1;
@@ -756,7 +756,7 @@ fn lower_trait_method_body(
     }
 
     // Track throws context for Result wrapping in return/throw statements
-    ctx.current_throws_result_type = if method_def.throws.is_some() {
+    ctx.func_state.current_throws_result_type = if method_def.throws.is_some() {
         Some(return_type)
     } else {
         None
@@ -1169,7 +1169,7 @@ fn lower_static_trait_method(
         {
             ctx.set_ref(LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
-            ctx.mut_capture_locals.insert(LocalId(param_idx), base_type);
+            ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }
         param_idx += 1;
     }

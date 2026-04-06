@@ -154,9 +154,9 @@ impl ClosureLowering {
             .map(|(i, p)| {
                 if let Some(ref ty) = p.node.type_ {
                     ctx.type_mapper.map_ast_type(&ty.node)
-                } else if i < ctx.closure_param_type_hints.len() {
+                } else if i < ctx.func_state.closure_param_type_hints.len() {
                     // Use hint from enclosing higher-order method call (e.g., filter/map/fold)
-                    ctx.closure_param_type_hints[i]
+                    ctx.func_state.closure_param_type_hints[i]
                 } else {
                     I64_TYPE // fallback for untyped params
                 }
@@ -201,7 +201,7 @@ impl ClosureLowering {
             param_types: closure_param_types,
             return_type,
             body: body.clone(),
-            expected_type: ctx.expected_type,
+            expected_type: ctx.func_state.expected_type,
         });
 
         // Emit the creation-site StructInit.
@@ -288,7 +288,7 @@ pub fn emit_closure_call_function(
                 // Register with pointer type; reads/writes in the body will
                 // go through Deref projections (checked via mut_capture_locals).
                 ctx.register_local(&cap.name, ptr_local, ptr_type);
-                ctx.mut_capture_locals.insert(ptr_local, cap.type_id);
+                ctx.func_state.mut_capture_locals.insert(ptr_local, cap.type_id);
             }
         }
     }
@@ -305,8 +305,8 @@ pub fn emit_closure_call_function(
 
     // Restore expected_type from closure creation context so Ok/Error/Some/None
     // constructors inside the body resolve to the correct Result/Option type.
-    let prev_expected = ctx.expected_type;
-    ctx.expected_type = closure.expected_type;
+    let prev_expected = ctx.func_state.expected_type;
+    ctx.func_state.expected_type = closure.expected_type;
 
     // Lower the closure body
     match &closure.body.node {
@@ -342,7 +342,7 @@ pub fn emit_closure_call_function(
         }
     }
 
-    ctx.expected_type = prev_expected;
+    ctx.func_state.expected_type = prev_expected;
 
     let mut func = builder.build();
     // Update the function's return_type to match the actual local[0] type
@@ -720,7 +720,7 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
                 }
                 if (name == "Ok" || name == "Error") && args.len() == 1 {
                     // Check expected_type from context
-                    if let Some(et) = ctx.expected_type {
+                    if let Some(et) = ctx.func_state.expected_type {
                         let tn = ctx.type_registry.type_name(et).unwrap_or_default();
                         let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
                             || tn.starts_with("Result__");
@@ -745,7 +745,7 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
             }
             // None() call
             if matches!(callee.node, Expr::NoneLiteral) {
-                if let Some(et) = ctx.expected_type {
+                if let Some(et) = ctx.func_state.expected_type {
                     let tn = ctx.type_registry.type_name(et).unwrap_or_default();
                     let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option)
                         || tn.starts_with("Option__");
@@ -758,7 +758,7 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
         }
         Expr::NoneLiteral => {
             // Bare `None` — check expected_type for Option context
-            if let Some(et) = ctx.expected_type {
+            if let Some(et) = ctx.func_state.expected_type {
                 let tn = ctx.type_registry.type_name(et).unwrap_or_default();
                 let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option)
                     || tn.starts_with("Option__");

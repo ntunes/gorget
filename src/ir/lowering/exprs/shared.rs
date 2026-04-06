@@ -267,12 +267,12 @@ pub fn emit_with_shared_refresh(
 ) {
     use super::super::context::SharedLocalKind;
 
-    if ctx.with_shared_refresh.is_empty() {
+    if ctx.func_state.with_shared_refresh.is_empty() {
         return;
     }
 
     // Snapshot to avoid borrow issues
-    let refresh_pairs: Vec<_> = ctx.with_shared_refresh.clone();
+    let refresh_pairs: Vec<_> = ctx.func_state.with_shared_refresh.clone();
     for (binding_local, facade_local) in refresh_pairs {
         let info = match ctx.shared.locals.get(&facade_local) {
             Some(info) => (info.hidden_local, info.inner_type, info.kind),
