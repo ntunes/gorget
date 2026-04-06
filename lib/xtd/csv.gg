@@ -18,7 +18,7 @@ equip CsvParser:
 
     void fail(&self, String msg):
         if self.err == "":
-            self.err = move msg
+            self.err = !msg
 
     bool at_end(self): self.pos >= self.input.byte_len()
 

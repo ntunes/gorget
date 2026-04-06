@@ -2,10 +2,10 @@ struct Point:
     int x
     int y
 
-void consume(String move s):
+void consume(String !s):
     print(f"{s}")
 
-void borrow_it(String mutable s):
+void borrow_it(String &s):
     print(f"{s}")
 
 void look(int x):
@@ -18,19 +18,19 @@ void main():
     print(f"{a}")
     print(f"{b}")
 
-    # Structs use move semantics with `move` keyword
+    # Structs use move semantics with `!` sigil
     Point p = Point(1, 2)
-    Point q = move p
+    Point q = !p
     print(f"{q.x}")
     print(f"{q.y}")
 
-    # Move ownership with keyword
+    # Move ownership with sigil
     String s1 = "moved"
-    consume(move s1)
+    consume(!s1)
 
-    # Mutable borrow with keyword
+    # Mutable borrow with sigil
     String s2 = "borrowed"
-    borrow_it(mutable s2)
+    borrow_it(&s2)
 
     # Bare borrow of copy type
     int n = 99

@@ -408,10 +408,10 @@ impl Parser {
                 ))
             }
 
-            // Move (! or move keyword)
-            Token::Bang | Token::Keyword(Keyword::Move) => {
+            // Move expression (! prefix)
+            Token::Bang => {
                 self.advance();
-                // Check for move closure: !(params): or move (params):
+                // Check for move closure: !(params): body
                 if self.check(&Token::LParen) {
                     return self.parse_closure(true, false, start);
                 }
@@ -422,6 +422,18 @@ impl Parser {
                         expr: Box::new(operand),
                     },
                     start.merge(end),
+                ))
+            }
+
+            // Move closure only (move keyword): move (params): body
+            Token::Keyword(Keyword::Move) => {
+                self.advance();
+                if self.check(&Token::LParen) {
+                    return self.parse_closure(true, false, start);
+                }
+                Err(self.error_at(start,
+                    "use `!` for move expressions (e.g. `!x`). \
+                     The `move` keyword is only valid for closures: `move (params): body`",
                 ))
             }
 
@@ -439,8 +451,8 @@ impl Parser {
                 ))
             }
 
-            // Mutable borrow (& or mutable keyword)
-            Token::Ampersand | Token::Keyword(Keyword::Mutable) => {
+            // Mutable borrow (& prefix)
+            Token::Ampersand => {
                 self.advance();
                 let operand = self.parse_expr_bp(33)?;
                 let end = operand.span;
@@ -1678,7 +1690,6 @@ impl Parser {
                 | Token::Keyword(Keyword::SelfLower)
                 | Token::Keyword(Keyword::It)
                 | Token::Keyword(Keyword::Move)
-                | Token::Keyword(Keyword::Mutable)
                 | Token::Keyword(Keyword::Int)
                 | Token::Keyword(Keyword::Int8)
                 | Token::Keyword(Keyword::Int16)

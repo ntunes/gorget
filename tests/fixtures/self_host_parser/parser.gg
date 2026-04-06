@@ -520,7 +520,7 @@ int keyword_tag(Token tok):
 # parse_expr() consumes 'expr as name' as EAs(expr, type);
 # extract the inner expression and binding name.
 
-Stmt decompose_with_stmt(SpannedExpr move full_expr, Vector[Stmt] move body):
+Stmt decompose_with_stmt(SpannedExpr !full_expr, Vector[Stmt] !body):
     match full_expr.expr:
         case EAs(inner_expr, cast_ty):
             String name = ""

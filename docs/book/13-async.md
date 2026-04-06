@@ -193,7 +193,7 @@ async void example():
     print(name)     # fine: String owns its data
 ```
 
-**Copy types** — `int`, `float`, `bool`, `char` — are trivially duplicated. No pointers
+**Copy types** — `int`, `float`, `bool` — are trivially duplicated. No pointers
 involved.
 
 ```gorget

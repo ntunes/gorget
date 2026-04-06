@@ -15,7 +15,7 @@ int x = 5
 float pi = 3.14159
 bool active = true
 String greeting = "hello"
-char letter = 'A'
+String letter = 'A'
 ```
 
 This is the **type-first** style: `int x`, not `x: int`. It reads like natural
@@ -76,21 +76,14 @@ bool yes = true
 bool no = false
 ```
 
-### Characters
-
-A `char` is a Unicode scalar value (4 bytes):
-
-```gorget
-char a = 'A'
-char emoji = '\u{1F600}'
-```
-
 ### Strings
 
-Gorget has a single string type: **`String`**.
+Gorget has a single string type: **`String`**. Both single-quoted (`'A'`) and
+double-quoted (`"hello"`) literals produce `String` values.
 
 ```gorget
 String greeting = "hello"
+String letter = 'A'
 String name = "world"
 String combined = greeting + " " + name   # concatenation creates new String
 ```

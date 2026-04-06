@@ -399,7 +399,7 @@ String s2 = !s1          # explicit move, s1 is invalid
 # print(s1)              # COMPILE ERROR
 ```
 
-Trivial types (int, float, bool, char) are always copied automatically:
+Trivial types (int, float, bool) are always copied automatically:
 ```gorget
 int a = 5
 int b = a                # just copies, both valid (no ! needed)
@@ -2277,9 +2277,9 @@ String query = """
 # Byte strings — *Removed; use `Vector[uint8]` instead*
 # [uint8] bytes = b"hello"
 
-# Character literals
-char letter = 'A'
-char emoji = '\u{1F40D}'     # snake emoji
+# Single-quoted strings — just String values (no separate char type)
+String letter = 'A'
+String emoji = '\u{1F40D}'     # snake emoji
 
 # String interpolation (f-strings only)
 String greeting = f"Hello, {name}! You are {age} years old."

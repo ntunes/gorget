@@ -423,13 +423,13 @@ impl<'a> BorrowChecker<'a> {
                 let param_name = info.param_names[i].clone();
                 let expected_str = match expected {
                     Ownership::Borrow => "borrow (bare)",
-                    Ownership::MutableBorrow => "mutable borrow (& or mutable)",
-                    Ownership::Move => "consume (! or move)",
+                    Ownership::MutableBorrow => "mutable borrow (&)",
+                    Ownership::Move => "consume (!)",
                 };
                 let found_str = match found {
                     Ownership::Borrow => "borrow (bare)",
-                    Ownership::MutableBorrow => "mutable borrow (& or mutable)",
-                    Ownership::Move => "consume (! or move)",
+                    Ownership::MutableBorrow => "mutable borrow (&)",
+                    Ownership::Move => "consume (!)",
                 };
                 self.error(
                     SemanticErrorKind::OwnershipMismatch {

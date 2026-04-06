@@ -45,7 +45,7 @@ equip TomlParser:
 
     void fail(&self, String msg):
         if self.err == "":
-            self.err = move msg
+            self.err = !msg
 
     String peek(self):
         if self.pos < self.source.byte_len():

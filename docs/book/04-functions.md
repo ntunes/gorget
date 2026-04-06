@@ -73,7 +73,7 @@ modify(&msg)        # mutable borrow
 consume(!msg)       # move — msg is invalid after this
 ```
 
-Copy types (integers, floats, bools, chars) don't need `!` — they're implicitly
+Copy types (integers, floats, bools) don't need `!` — they're implicitly
 copied.
 
 ---

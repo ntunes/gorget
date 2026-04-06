@@ -20,7 +20,7 @@ async void main():
         Vector[Task[void]] tasks = Vector[Task[void]]()
         int i = 0
         while i < 10:
-            tasks.push(move spawn increment_yield(&counter))
+            tasks.push(!spawn increment_yield(&counter))
             i = i + 1
         int j = 0
         while j < 10:

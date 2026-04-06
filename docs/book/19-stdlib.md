@@ -59,7 +59,7 @@ from std.conv import int_to_str, parse_int, parse_float, ord, chr
 
 String s = int_to_str(42)          # "42"
 int n = parse_int("100")        # 100
-char c = chr(65)                # 'A'
+String c = chr(65)              # "A"
 int code = ord('A')             # 65
 ```
 

@@ -60,15 +60,6 @@ void main():
 The `&` appears in both the parameter declaration and the call site. This makes
 mutation visible at every call site — no hidden side effects.
 
-The keyword form `mutable` is equivalent:
-
-```gorget
-void set_priority(mutable Message msg, int priority):
-    msg.priority = priority
-
-set_priority(mutable msg, 5)
-```
-
 ### Method Syntax
 
 Methods use `&self` for mutable access:
@@ -275,7 +266,7 @@ code.
 | Concept | Syntax | Meaning |
 |---------|--------|---------|
 | Immutable borrow | `f(x)` | Read access, original stays valid |
-| Mutable borrow | `f(&x)` or `f(mutable x)` | Write access, exclusive |
+| Mutable borrow | `f(&x)` | Write access, exclusive |
 | Mutable parameter | `void f(Type &x)` | Declares mutable borrow |
 | Auto-borrowing | `x.method()` | Compiler inserts borrow for `self`/`&self` |
 | Lifetime annotation | `live String s` | Explicit borrow tracking |

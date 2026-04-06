@@ -216,7 +216,7 @@ equip JsonParser:
 
     void fail(&self, String msg):
         if self.err == "":
-            self.err = move msg
+            self.err = !msg
 
     void skip_whitespace(&self):
         while self.pos < self.input.byte_len():

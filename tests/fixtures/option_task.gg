@@ -4,9 +4,9 @@ async void noop():
 async void main():
     # Option[Task[void]] via get(), pop(), first(), last()
     Vector[Task[void]] tasks = Vector[Task[void]]()
-    tasks.push(move spawn noop())
-    tasks.push(move spawn noop())
-    tasks.push(move spawn noop())
+    tasks.push(!spawn noop())
+    tasks.push(!spawn noop())
+    tasks.push(!spawn noop())
 
     Option[Task[void]] first = tasks.get(0)
     print(f"{first.is_some()}")

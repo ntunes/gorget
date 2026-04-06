@@ -73,7 +73,7 @@ Keywords are reserved and cannot be used as identifiers.
 int    int8   int16  int32  int64
 uint   uint8  uint16 uint32 uint64
 float  float32 float64
-bool   char   String void   auto
+bool   String void   auto   byte
 ```
 
 **Declaration keywords:**
@@ -208,15 +208,14 @@ true   false
 
 Type: `bool`.
 
-#### Character Literals
+#### Single-Quoted String Literals
 
-```ebnf
-CHAR_LITERAL = "'" ( char | escape ) "'" ;
-escape       = "\\" ( "n" | "t" | "r" | "\\" | "'" | "0"
-             | "u{" hex_digit { hex_digit } "}" ) ;
+Single-quoted strings use the same type as double-quoted strings (`String`). They are convenient for single characters but are not a distinct type:
+
+```gorget
+String letter = 'A'
+String newline = '\n'
 ```
-
-Type: `char`. A Unicode scalar value (4 bytes).
 
 #### String Literals
 
@@ -299,10 +298,8 @@ Type: `Option[T]` for some inferred `T`.
 | Symbol/Keyword | Name           | Meaning                |
 |----------------|----------------|------------------------|
 | (bare)         | Immutable borrow | Read-only access       |
-| `&` or `mutable` | Mutable borrow | Read+write access    |
-| `!` or `move`  | Move           | Ownership transfer   |
-
-Both operator and keyword forms are equivalent and may be used interchangeably.
+| `&`            | Mutable borrow | Read+write access    |
+| `!`            | Move           | Ownership transfer   |
 
 **Range:**
 
@@ -370,13 +367,12 @@ Both operator and keyword forms are equivalent and may be used interchangeably.
 | `float32` | 32-bit  | Floating-point                  |
 | `float64` | 64-bit  | Floating-point                  |
 | `bool`    | 1 byte  | Boolean (`true` or `false`)     |
-| `char`    | 4 bytes | Unicode scalar value            |
 | `String`  | 32 bytes | String (provenance-inferred: view or owned) |
 | `byte`    | 8-bit   | Alias for `uint8`               |
 | `cstr`    | pointer | Null-terminated C string pointer |
 | `void`    | 0       | No value (unit type)            |
 
-All primitive numeric types and `bool` and `char` are **Copy** types — they are implicitly copied on assignment and do not require `!` or `move` to transfer. `String` values are automatically classified by the compiler's provenance inference pass: string literals and function parameters are lightweight views (Copy), while concatenation and f-strings produce owned values (Move). `byte` is a convenience alias for `uint8`. `cstr` is a raw C string pointer (`const char*`) for FFI interop — prefer `String` for normal string handling.
+All primitive numeric types and `bool` are **Copy** types — they are implicitly copied on assignment and do not require `!` to transfer. `String` values are automatically classified by the compiler's provenance inference pass: string literals and function parameters are lightweight views (Copy), while concatenation and f-strings produce owned values (Move). `byte` is a convenience alias for `uint8`. `cstr` is a raw C string pointer (`const char*`) for FFI interop — prefer `String` for normal string handling.
 
 ### 4.2 Compound Types
 
@@ -543,11 +539,11 @@ auto name = "hello"  # inferred as String
 **Trivial types** (implicitly copied, no `!` needed):
 - All integer types (`int`, `int8`, ..., `uint64`)
 - All float types (`float`, `float32`, `float64`)
-- `bool`, `char`
+- `bool`
 - Tuples where all elements are Trivial
 - Small value structs with no owned resources (e.g., `Point { float x, float y }`)
 
-**Resource types** (own heap allocations or handles, require `!` or `move` to transfer ownership):
+**Resource types** (own heap allocations or handles, require `!` to transfer ownership):
 - `String`
 - Collections (`Vector`, `Dict`, `Set`, `Heap`)
 - Lock guards (`Guard[T]`, `ReadGuard[T]`, `WriteGuard[T]`)
@@ -585,7 +581,7 @@ qualifiers    = { "async" | "const" | "static" | "unsafe" } ;
 return_type   = type { "," type } | "void" ;  (* bare tuple: String, int or (String, int) *)
 param_list    = param { "," param } ;
 param         = [ "live" [ "(" IDENTIFIER ")" ] ]
-                type [ "&" | "!" | "mutable" | "move" ] IDENTIFIER [ "=" expr ]
+                type [ "&" | "!" ] IDENTIFIER [ "=" expr ]
               | "meta" IDENTIFIER ;   (* meta op parameter — see §19.23 *)
 throws_clause = "throws" [ type ] ;
 block         = ":" NEWLINE INDENT { statement } DEDENT ;
@@ -608,10 +604,10 @@ A function has:
 | Declaration                      | Meaning           | Call site                      |
 |----------------------------------|-------------------|--------------------------------|
 | `Type name`                      | Immutable borrow  | `f(arg)`                       |
-| `Type &name` or `Type mutable name` | Mutable borrow | `f(&arg)` or `f(mutable arg)` |
-| `Type !name` or `Type move name`  | Move (ownership) | `f(!arg)` or `f(move arg)` |
+| `Type &name`                       | Mutable borrow    | `f(&arg)`                      |
+| `Type !name`                       | Move (ownership)  | `f(!arg)`                      |
 
-The ownership annotation at the call site **must match** the parameter declaration. Mismatches are compile-time errors. Both operator (`&`/`!`) and keyword (`mutable`/`move`) forms are equivalent.
+The ownership annotation at the call site **must match** the parameter declaration. Mismatches are compile-time errors.
 
 **Expression body shorthand:**
 
@@ -626,8 +622,8 @@ Equivalent to a block body with `return`.
 | Form                       | Meaning           |
 |----------------------------|-------------------|
 | `self`                     | Immutable borrow  |
-| `&self` or `mutable self`  | Mutable borrow    |
-| `!self` or `move self`   | Consuming (move)  |
+| `&self`                    | Mutable borrow    |
+| `!self`                    | Consuming (move)  |
 | *(no self)*                | Static method     |
 
 The `live` keyword on a parameter indicates that the return value borrows from that parameter's data (explicit lifetime annotation):
@@ -1169,7 +1165,7 @@ match value:
 ### 6.11 For Loop
 
 ```ebnf
-for_stmt = "for" pattern { "," pattern } "in" [ "&" | "!" | "mutable" | "move" ] expr ":" block
+for_stmt = "for" pattern { "," pattern } "in" [ "&" | "!" ] expr ":" block
            [ "else" ":" block ] ;
 ```
 
@@ -1178,8 +1174,8 @@ Iterates over a collection or range. The optional ownership modifier before the 
 | Form                               | Meaning                              |
 |------------------------------------|--------------------------------------|
 | `for x in coll`                     | Immutable borrow (collection intact) |
-| `for x in &coll` or `for x in mutable coll` | Mutable borrow (modify in-place) |
-| `for x in !coll` or `for x in move coll`   | Move (consumes collection)       |
+| `for x in &coll`                    | Mutable borrow (modify in-place)     |
+| `for x in !coll`                    | Move (consumes collection)           |
 
 The optional `else` block runs if the loop completes without `break` (Python-style).
 
@@ -1479,16 +1475,16 @@ if value in 1..=100:
 ```ebnf
 call_expr = expr [ "[" type { "," type } "]" ] "(" [ arg_list ] ")" ;
 arg_list  = call_arg { "," call_arg } ;
-call_arg  = [ IDENTIFIER "=" ] [ "&" | "!" | "mutable" | "move" ] expr ;
+call_arg  = [ IDENTIFIER "=" ] [ "&" | "!" ] expr ;
 ```
 
-The optional `[...]` provides explicit generic type arguments. Arguments may use ownership annotations matching the parameter declarations. Both operator and keyword forms are accepted.
+The optional `[...]` provides explicit generic type arguments. Arguments may use ownership annotations matching the parameter declarations.
 
 ```gorget
 add(1, 2)
 max[int](a, b)
-consume(!value)          # or: consume(move value)
-modify(&data)            # or: modify(mutable data)
+consume(!value)
+modify(&data)
 create_user("Alice", 30, admin = true)
 ```
 
@@ -1610,29 +1606,26 @@ This replaces the need for any special keyword — the compiler infers from the 
 ### 7.14 Move Expression
 
 ```ebnf
-move_expr = ( "!" | "move" ) expr ;
+move_expr = "!" expr ;
 ```
 
-Transfers ownership of a value. The source variable becomes invalid after the move. Both `!` and `move` keyword are equivalent.
+Transfers ownership of a value. The source variable becomes invalid after the move.
 
 ```gorget
 String s2 = !s1          # s1 is invalid after this
-String s3 = move s2    # equivalent keyword form
 consume(!data)            # data is moved into consume
-consume(move data)      # equivalent keyword form
 ```
 
 ### 7.15 Mutable Borrow Expression
 
 ```ebnf
-mut_borrow_expr = ( "&" | "mutable" ) expr ;
+mut_borrow_expr = "&" expr ;
 ```
 
-Creates a mutable borrow of a value. The original variable remains valid but cannot be accessed while the borrow is active. Both `&` and `mutable` keyword are equivalent.
+Creates a mutable borrow of a value. The original variable remains valid but cannot be accessed while the borrow is active.
 
 ```gorget
-modify(&data)          # operator form
-modify(mutable data)   # keyword form
+modify(&data)
 ```
 
 ### 7.16 Type Cast
@@ -1650,8 +1643,6 @@ Converts between types. The following cast pairs are allowed:
 | `int` ↔ `i8` / `i16` / `i32` | (each other) | Narrows or widens; narrowing may truncate |
 | `uint8` / `u16` / `u32` / `uint64` | `int` / `float` | Unsigned to signed/float widening |
 | `int` / `float` | `uint8` / `u16` / `u32` / `uint64` | Signed to unsigned; negative values wrap |
-| `char` | `int` | Unicode codepoint value |
-| `int` | `char` | Codepoint to character (must be valid Unicode) |
 | `int` | `uint8` | Common for byte manipulation |
 | `bool` | `int` | `true` → 1, `false` → 0 |
 
@@ -1660,8 +1651,8 @@ Casts between unrelated types (e.g., `String as int`) are a compile error. Use `
 ```gorget
 float f = 42 as float       # int → float
 int n = 3.14 as int          # float → int (truncates: 3)
-int code = 'A' as int        # char → int (65)
 uint8 b = 255 as uint8       # int → byte
+int code = ord('A')          # String → codepoint (65)
 ```
 
 ### 7.17 Pattern Test (`is`)
@@ -1731,7 +1722,7 @@ int result = do:
 ```ebnf
 closure = [ "!" | "move" ] [ "async" ] "(" [ closure_param_list ] ")" ":" ( expr | block ) ;
 closure_param_list = closure_param { "," closure_param } ;
-closure_param = [ type ] [ "&" | "!" | "mutable" | "move" ] IDENTIFIER ;
+closure_param = [ type ] [ "&" | "!" ] IDENTIFIER ;
 ```
 
 Anonymous functions that capture variables from their environment.
@@ -1745,10 +1736,10 @@ auto typed = strings.map((String s): s.parse[int]())
 **Move closures:** Prefix `!` or `move` forces all captured variables to be moved into the closure:
 
 ```gorget
-auto handle = thread.spawn(!(x):          # operator form
+auto handle = thread.spawn(!(x):
     print("value: {x}")
 )
-auto handle = thread.spawn(move (x):    # keyword form
+auto handle = thread.spawn(move (x):    # keyword form also accepted for closures
     print("value: {x}")
 )
 ```
@@ -1780,7 +1771,7 @@ Rules for `it`:
 #### List Comprehension
 
 ```ebnf
-list_comp = "[" expr "for" pattern "in" [ "&" | "!" | "mutable" | "move" ] expr [ "if" expr ] "]" ;
+list_comp = "[" expr "for" pattern "in" [ "&" | "!" ] expr [ "if" expr ] "]" ;
 ```
 
 ```gorget
@@ -1902,7 +1893,7 @@ An `.await()` expression is a **suspension point** — execution may pause and r
 
 **What can cross an `.await()`:**
 - **Owned types** (`String`, structs, enums, collections) — they own their data, so the data moves with the suspended state.
-- **Copy types** (`int`, `float`, `bool`, `char`) — trivially duplicated, no pointers involved.
+- **Copy types** (`int`, `float`, `bool`) — trivially duplicated, no pointers involved.
 - **Static string literals** (`String s = "hello"`) — point to program-global storage that is always valid.
 - **`String` parameters** — the caller is blocked at the direct-await call site, so `String` params and any `String` derived from them remain alive across the suspension.
 
@@ -2122,11 +2113,11 @@ Gorget enforces memory safety through compile-time ownership and borrowing rules
 
 1. Every value has exactly one **owner** (the variable that holds it).
 2. When the owner goes out of scope, the value is dropped (freed).
-3. Ownership can be **transferred** (moved) using `!` or the `move` keyword.
+3. Ownership can be **transferred** (moved) using `!`.
 4. After a move, the source variable is invalid. Any use is a compile-time error (**use-after-move**).
 5. A variable cannot be moved more than once (**double-move** error).
 6. A variable cannot be moved inside a loop body (**move-in-loop** error).
-7. **Copy types** (primitives, small value types) are implicitly copied on assignment; no `!` or `move` is needed.
+7. **Copy types** (primitives, small value types) are implicitly copied on assignment; no `!` is needed.
 8. Reassigning a moved variable revives it — the new value makes it live again.
 
 ### 9.2 Borrowing Rules
@@ -2145,8 +2136,8 @@ The ownership annotation on a call argument **must match** the parameter declara
 | Parameter declares                 | Call site must use                 | Meaning |
 |------------------------------------|-----------------------------------|---------|
 | `String s`                         | `f(s)`                            | Immutable borrow |
-| `String &s` or `String mutable s`  | `f(&s)` or `f(mutable s)`        | Mutable borrow |
-| `String !s` or `String move s`   | `f(!s)` or `f(move s)`         | Move |
+| `String &s`                        | `f(&s)`                           | Mutable borrow |
+| `String !s`                        | `f(!s)`                           | Move |
 
 Mismatches produce an **OwnershipMismatch** error.
 
@@ -2556,7 +2547,7 @@ String interpolation is available only in **f-strings** (strings prefixed with `
 
 The interpolated expression must be of a type that is either:
 
-- A primitive type (`int`, `float`, `bool`, `char`)
+- A primitive type (`int`, `float`, `bool`)
 - A `String`
 
 Using a non-printable type (struct, enum) in interpolation is a compile-time error (**NonPrintableInterpolation**) unless the type implements `Displayable`.
@@ -3042,7 +3033,7 @@ The following methods are available on built-in types without any import.
 | `ends_with(suffix)` | `String → bool` | True if string ends with `suffix` |
 | `index_of(needle)` | `String → Option[int]` | Codepoint index of first occurrence (`None` if not found) |
 | `count(needle)` | `String → int` | Number of non-overlapping occurrences |
-| `char_at(index)` | `int → char` | Byte at byte index (panics if out of bounds; for parser/codec use) |
+| `char_at(index)` | `int → String` | Byte at byte index (panics if out of bounds; for parser/codec use, deprecated — prefer `byte_at`) |
 | `byte_slice(start, end)` | `int, int → String` | Byte-range substring view (O(1), for parser/codec use) |
 | `substring(start, end)` | `int, int → String` | Codepoint-range substring view from `start` to `end` (panics if out of bounds) |
 | `trim()` | `→ String` | Strip leading/trailing Unicode whitespace (view, no allocation) |
@@ -3057,8 +3048,8 @@ The following methods are available on built-in types without any import.
 | `repeat(n)` | `int → String` | Repeat string `n` times |
 | `removeprefix(prefix)` | `String → String` | Remove `prefix` if present, otherwise return unchanged (view) |
 | `removesuffix(suffix)` | `String → String` | Remove `suffix` if present, otherwise return unchanged (view) |
-| `pad_left(n, char)` | `int, char → String` | Left-pad to width `n` with fill character |
-| `pad_right(n, char)` | `int, char → String` | Right-pad to width `n` with fill character |
+| `pad_left(n, fill)` | `int, String → String` | Left-pad to width `n` with fill character |
+| `pad_right(n, fill)` | `int, String → String` | Right-pad to width `n` with fill character |
 | `bytes()` | `→ Vector[uint8]` | Raw UTF-8 bytes as a vector |
 | `codepoints()` | `→ Vector[int]` | Unicode codepoint values as a vector |
 | `chars()` | `→ Vector[String]` | Individual characters (codepoints) as `String` views |
@@ -3080,7 +3071,7 @@ The following methods are available on built-in types without any import.
 | `s[-1]` | `String` | Negative indexing counts from end |
 | `for ch in s:` | yields `String` | Iterates Unicode codepoints (O(n) total, single UTF-8 pass) |
 
-For byte-level access (useful in parsers and codecs), use `char_at(i)` (returns `char`) and `byte_slice(a, b)` (returns `String` byte-range view in O(1)).
+For byte-level access (useful in parsers and codecs), use `byte_at(i)` (returns `byte`) and `byte_slice(a, b)` (returns `String` byte-range view in O(1)).
 
 **UTF-8 validation at system boundaries.** All `String` values are guaranteed to contain valid UTF-8. The compiler enforces this at the boundaries where external bytes enter the string world:
 
@@ -3103,14 +3094,16 @@ In addition to the read-only methods above, `String` supports these mutation met
 | `is_empty()` | `→ bool` | True if length is zero |
 | `capacity()` | `→ int` | Current allocated capacity in bytes |
 | `push(s)` | `String → void` | Append a string |
-| `push_char(c)` | `char → void` | Append a single character |
+| `push_char(c)` | `String → void` | Append a single character |
 | `push_line(s)` | `String → void` | Append a string followed by a newline |
 | `clear()` | `→ void` | Remove all content (keeps allocated capacity) |
 | `str()` | `→ String` | Return an immutable view (no allocation) |
 
 `String` also inherits all read-only string methods: `contains()`, `starts_with()`, `split()`, `trim()`, etc.
 
-**`char`** — Character methods
+**`String`** — Character classification and case methods
+
+These methods operate on individual characters within a `String`:
 
 | Method | Signature | Description |
 |---|---|---|
@@ -3120,8 +3113,8 @@ In addition to the read-only methods above, `String` supports these mutation met
 | `is_whitespace()` | `→ bool` | True if whitespace |
 | `is_upper()` | `→ bool` | True if uppercase letter |
 | `is_lower()` | `→ bool` | True if lowercase letter |
-| `to_upper()` | `→ char` | Convert to uppercase |
-| `to_lower()` | `→ char` | Convert to lowercase |
+| `to_upper()` | `→ String` | Convert to uppercase |
+| `to_lower()` | `→ String` | Convert to lowercase |
 
 **`Vector[T]`** — Dynamic array
 
@@ -3342,17 +3335,17 @@ The following functions are available via `import`:
 
 | Function | Signature | Description |
 |---|---|---|
-| `ord` | `int(char)` | Character to integer code point |
-| `chr` | `char(int)` | Integer code point to character |
-| `parse_int` | `int(String)` | Parse string as integer |
-| `parse_float` | `float(String)` | Parse string as float |
+| `ord` | `int(String)` | Character to integer code point |
+| `chr` | `String(int)` | Integer code point to character |
+| `parse_int` | `Result[int, String](String)` | Parse string as integer |
+| `parse_float` | `Result[float, String](String)` | Parse string as float |
 | `int_to_str` | `String(int)` | Integer to string |
 | `float_to_str` | `String(float)` | Float to string (compact format) |
 | `bool_to_str` | `String(bool)` | Bool to `"true"` or `"false"` |
-| `char_to_str` | `String(char)` | Single character to string |
 | `codepoint_to_str` | `String(int)` | Unicode code point to string |
+| `int_to_float` | `float(int)` | Integer to float |
 
-> **Note:** `parse_int` and `parse_float` panic on invalid input. For fallible parsing, use the `Parseable` trait: `int.parse(s)` returns `Option[int]`, `float.parse(s)` returns `Option[float]` (see §15.1).
+> **Note:** `parse_int` and `parse_float` return `Result` — use `.unwrap()` or pattern match to extract the value. For `Option`-based fallible parsing, use the `Parseable` trait: `int.parse(s)` returns `Option[int]`, `float.parse(s)` returns `Option[float]` (see §15.1).
 
 **`std.io`** — I/O
 
@@ -4445,7 +4438,7 @@ Core functions:
 | `ReturnOutsideFunction`      | `return` outside of function                         |
 | `ThrowInNonThrowingFunction` | `throw` in function without `throws`                 |
 | `UseAfterMove`               | Variable used after ownership was moved              |
-| `MoveWithoutOperator`        | Non-Copy type passed without `!` or `move`         |
+| `MoveWithoutOperator`        | Non-Copy type passed without `!`                   |
 | `BorrowConflict`             | Borrow exclusivity violated (aliasing in call)       |
 | `MoveInLoop`                 | Moving a variable inside a loop body                 |
 | `DoubleMove`                 | Same variable moved more than once                   |
@@ -5412,7 +5405,7 @@ void main():
 | `T is numeric` | T is any integer or float |
 | `T is bool` | T is exactly bool |
 | `T is String` | T is exactly String |
-| `T is char` | T is exactly char |
+| `T is String` | T is exactly String (alternate form) |
 | `T is float32` | T is exactly float32 (exact match, not a category) |
 | `T is int8`, `T is uint64`, etc. | T is exactly that type (exact match) |
 | `T is MyStruct` | T resolves to exactly MyStruct (exact match) |
@@ -6264,7 +6257,7 @@ qualifier     = "async" | "const" | "static" | "unsafe" ;
 return_type   = type { "," type } | "void" ;  (* bare tuple: String, int or (String, int) *)
 param_list    = param { "," param } ;
 param         = [ "live" [ "(" IDENTIFIER ")" ] ]
-                type [ "&" | "!" | "mutable" | "move" ] IDENTIFIER [ "=" expr ]
+                type [ "&" | "!" ] IDENTIFIER [ "=" expr ]
               | "meta" IDENTIFIER ;   (* meta op parameter — see §19.23 *)
 throws_clause = "throws" [ type ] ;
 block         = ":" NEWLINE INDENT { statement } DEDENT ;
@@ -6352,7 +6345,7 @@ type = primitive_type | named_type | array_type | slice_type
 primitive_type = "int" | "int8" | "int16" | "int32" | "int64"
                | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
                | "float" | "float32" | "float64"
-               | "bool" | "char" | "byte" | "String" | "cstr" | "void" ;
+               | "bool" | "byte" | "String" | "cstr" | "void" ;
 named_type     = IDENTIFIER [ "[" type { "," type } "]" ] ;
 array_type     = type "[" const_expr "]" ;
 slice_type     = type "[" "]" ;
@@ -6375,7 +6368,7 @@ break_stmt          = "break" [ expr ] NEWLINE ;
 continue_stmt       = "continue" NEWLINE ;
 pass_stmt           = "pass" NEWLINE ;
 
-for_stmt   = "for" pattern { "," pattern } "in" [ "&" | "!" | "mutable" | "move" ] expr ":" block [ "else" ":" block ] ;  (* bare tuple: for x, y in ... *)
+for_stmt   = "for" pattern { "," pattern } "in" [ "&" | "!" ] expr ":" block [ "else" ":" block ] ;  (* bare tuple: for x, y in ... *)
 while_stmt = "while" expr ":" block [ "else" ":" block ] ;
 loop_stmt  = "loop" ":" block ;
 if_stmt    = "if" expr ":" block { "elif" expr ":" block } [ "else" ":" block ] ;

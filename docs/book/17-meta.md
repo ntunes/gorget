@@ -131,7 +131,6 @@ Available predicates:
 | `T is numeric` | Any number |
 | `T is bool` | `bool` |
 | `T is String` | `String` |
-| `T is char` | `char` |
 | `T is int32` | Exact type match |
 | `T is MyStruct` | Exact type match |
 

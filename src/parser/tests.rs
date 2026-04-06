@@ -208,12 +208,12 @@ fn test_self_param_variants() {
     }
 }
 
-// ── Ownership Keyword Self Params ──────────────────────────
+// ── Ownership Sigil Self Params ───────────────────────────
 
 #[test]
 fn test_mutable_self_param() {
-    // mutable self should be equivalent to &self
-    let module = parse("equip Foo:\n    void b(mutable self):\n        pass\n");
+    // &self = mutable borrow
+    let module = parse("equip Foo:\n    void b(&self):\n        pass\n");
     if let Item::Equip(ref imp) = module.items[0].node {
         let param = &imp.items[0].node.params[0].node;
         assert_eq!(param.ownership, Ownership::MutableBorrow);
@@ -224,8 +224,8 @@ fn test_mutable_self_param() {
 
 #[test]
 fn test_move_self_param() {
-    // move self should be equivalent to !self
-    let module = parse("equip Foo:\n    void c(move self):\n        pass\n");
+    // !self = consuming/move
+    let module = parse("equip Foo:\n    void c(!self):\n        pass\n");
     if let Item::Equip(ref imp) = module.items[0].node {
         let param = &imp.items[0].node.params[0].node;
         assert_eq!(param.ownership, Ownership::Move);
@@ -236,8 +236,8 @@ fn test_move_self_param() {
 
 #[test]
 fn test_move_param() {
-    // move keyword on regular param should be equivalent to !
-    let module = parse("void take(String move s):\n    pass\n");
+    // ! sigil on regular param = move
+    let module = parse("void take(String !s):\n    pass\n");
     if let Item::Function(ref f) = module.items[0].node {
         assert_eq!(f.params[0].node.ownership, Ownership::Move);
     } else {
@@ -247,8 +247,8 @@ fn test_move_param() {
 
 #[test]
 fn test_mutable_param() {
-    // mutable keyword on regular param should be equivalent to &
-    let module = parse("void modify(String mutable s):\n    pass\n");
+    // & sigil on regular param = mutable borrow
+    let module = parse("void modify(String &s):\n    pass\n");
     if let Item::Function(ref f) = module.items[0].node {
         assert_eq!(f.params[0].node.ownership, Ownership::MutableBorrow);
     } else {

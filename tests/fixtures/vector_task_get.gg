@@ -9,9 +9,9 @@ async void increment(int &counter):
 async void main():
     shared int counter = 0
     Vector[Task[void]] tasks = Vector[Task[void]]()
-    tasks.push(move spawn increment(&counter))
-    tasks.push(move spawn increment(&counter))
-    tasks.push(move spawn increment(&counter))
+    tasks.push(!spawn increment(&counter))
+    tasks.push(!spawn increment(&counter))
+    tasks.push(!spawn increment(&counter))
     Task[void] t2 = tasks.remove(2).unwrap()
     Task[void] t1 = tasks.remove(1).unwrap()
     Task[void] t0 = tasks.remove(0).unwrap()

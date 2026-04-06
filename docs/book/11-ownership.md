@@ -22,7 +22,7 @@ Not every type follows move semantics. Small, simple types are **copied** implic
 **Copy types** (no `!` needed):
 - All integers: `int`, `int8`, `int16`, `int32`, `uint`, `uint8`, etc.
 - All floats: `float`, `float32`
-- `bool`, `char`
+- `bool`
 - Tuples of copy types
 
 **Move types** (require `!` to transfer):
@@ -57,12 +57,6 @@ struct Message:
 Message msg = Message("Alice", "hello")
 Message copy = !msg    # msg is moved to copy
 # msg is now invalid
-```
-
-The keyword form `move` is equivalent:
-
-```gorget
-Message copy = move msg
 ```
 
 ### Move in Function Calls
@@ -262,7 +256,7 @@ when clones happen — the rule is simple: borrows are free, ownership costs a c
 | Concept | Syntax | Meaning |
 |---------|--------|---------|
 | Copy type | `int b = a` | Implicit copy, both valid |
-| Move | `!expr` or `move expr` | Transfer ownership |
+| Move | `!expr` | Transfer ownership |
 | Move parameter | `void f(Type !name)` | Function takes ownership |
 | Use after move | — | Compile error |
 | Drop | `equip T with Drop: void drop(!self)` | Cleanup on scope exit |

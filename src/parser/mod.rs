@@ -210,12 +210,12 @@ impl Parser {
         }
     }
 
-    /// Parse an ownership modifier: `&`/`mutable` → MutableBorrow, `!`/`move` → Move, else Borrow.
+    /// Parse an ownership modifier: `&` → MutableBorrow, `!` → Move, else Borrow.
     pub fn parse_ownership_modifier(&mut self) -> Ownership {
-        if self.check(&Token::Ampersand) || self.check_keyword(Keyword::Mutable) {
+        if self.check(&Token::Ampersand) {
             self.advance();
             Ownership::MutableBorrow
-        } else if self.check(&Token::Bang) || self.check_keyword(Keyword::Move) {
+        } else if self.check(&Token::Bang) {
             self.advance();
             Ownership::Move
         } else {
@@ -1761,17 +1761,17 @@ impl Parser {
             let name_tok = self.advance();
             return Ok(make_self_param(start, name_tok.span, Ownership::Borrow, is_live, live_group));
         }
-        if (self.check(&Token::Ampersand) || self.check_keyword(Keyword::Mutable))
+        if self.check(&Token::Ampersand)
             && matches!(self.peek_ahead(1), Token::Keyword(Keyword::SelfLower))
         {
-            self.advance(); // skip & or mutable
+            self.advance(); // skip &
             let name_tok = self.advance(); // self
             return Ok(make_self_param(start, name_tok.span, Ownership::MutableBorrow, is_live, live_group));
         }
-        if (self.check(&Token::Bang) || self.check_keyword(Keyword::Move))
+        if self.check(&Token::Bang)
             && matches!(self.peek_ahead(1), Token::Keyword(Keyword::SelfLower))
         {
-            self.advance(); // skip ! or move
+            self.advance(); // skip !
             let name_tok = self.advance(); // self
             return Ok(make_self_param(start, name_tok.span, Ownership::Move, is_live, live_group));
         }
