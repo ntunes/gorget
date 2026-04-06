@@ -484,6 +484,11 @@ fn try_build_ir(
         if opt_stats.insts_eliminated() > 0 || opt_stats.blocks_eliminated() > 0 {
             eprintln!("; Optimization: {} blocks, {} instructions, {} locals eliminated",
                 opt_stats.blocks_eliminated(), opt_stats.insts_eliminated(), opt_stats.locals_eliminated());
+            for (name, stats) in &opt_stats.per_pass {
+                if stats.insts_eliminated > 0 {
+                    eprintln!(";   {name}: {} insts", stats.insts_eliminated);
+                }
+            }
         }
         // Don't proceed to C codegen — just dump and exit
         let input_path = Path::new(filename);
@@ -926,8 +931,17 @@ fn try_profile(
     println!("    \"lir_functions\": {},", lir_functions);
     println!("    \"lir_instructions\": {},", lir_instructions);
     println!("    \"c_lines\": {},", c_lines);
-    println!("    \"gir_opt\": {{ \"blocks_eliminated\": {}, \"insts_eliminated\": {}, \"locals_eliminated\": {} }},",
+    print!("    \"gir_opt\": {{ \"blocks_eliminated\": {}, \"insts_eliminated\": {}, \"locals_eliminated\": {}",
         gir_opt_stats.blocks_eliminated(), gir_opt_stats.insts_eliminated(), gir_opt_stats.locals_eliminated());
+    if !gir_opt_stats.per_pass.is_empty() {
+        print!(", \"per_pass\": {{ ");
+        for (i, (name, stats)) in gir_opt_stats.per_pass.iter().enumerate() {
+            if i > 0 { print!(", "); }
+            print!("\"{name}\": {}", stats.insts_eliminated);
+        }
+        print!(" }}");
+    }
+    println!(" }},");
     println!("    \"lir_opt\": {{ \"dead_functions\": {}, \"dead_globals\": {}, \"dead_instructions\": {}, \"constants_folded\": {}, \"copies_propagated\": {} }}",
         lir_opt_stats.dead_functions_eliminated, lir_opt_stats.dead_globals_eliminated,
         lir_opt_stats.dead_instructions_eliminated, lir_opt_stats.constants_folded,

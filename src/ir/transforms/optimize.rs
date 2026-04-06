@@ -9,6 +9,13 @@ use crate::ir::{BasicBlock, Function};
 use crate::ir::instructions::{BinOp, CmpOp, Constant, Instruction, Operand, Place, Projection, Terminator, UnOp};
 use crate::ir::types::{BlockId, LocalId, TypeId};
 
+/// Per-pass optimization statistics.
+#[derive(Debug, Default, Clone)]
+pub struct PassStats {
+    /// Number of instructions eliminated by this pass.
+    pub insts_eliminated: usize,
+}
+
 /// Optimization statistics for a module.
 #[derive(Debug, Default)]
 pub struct OptStats {
@@ -18,6 +25,8 @@ pub struct OptStats {
     pub insts_after: usize,
     pub locals_before: usize,
     pub locals_after: usize,
+    /// Per-pass stats accumulated across all functions and iterations.
+    pub per_pass: Vec<(&'static str, PassStats)>,
 }
 
 impl OptStats {
@@ -43,24 +52,26 @@ fn count_module(module: &crate::ir::Module) -> (usize, usize, usize) {
 /// merges blocks, new constant propagation and dead code opportunities emerge.
 pub fn optimize_module(module: &mut crate::ir::Module) -> OptStats {
     let (b0, i0, l0) = count_module(module);
+    let mut per_pass: Vec<(&'static str, PassStats)> = Vec::new();
     for func in &mut module.functions {
-        optimize_function(func);
+        optimize_function(func, &mut per_pass);
     }
     let (b1, i1, l1) = count_module(module);
     OptStats {
         blocks_before: b0, blocks_after: b1,
         insts_before: i0, insts_after: i1,
         locals_before: l0, locals_after: l1,
+        per_pass,
     }
 }
 
 /// Run the optimization pipeline on a single function, iterating until
 /// no further improvements are found (fixpoint) or up to MAX_PASSES.
-fn optimize_function(func: &mut Function) {
+fn optimize_function(func: &mut Function, pass_stats: &mut Vec<(&'static str, PassStats)>) {
     const MAX_PASSES: usize = 3;
     for _ in 0..MAX_PASSES {
         let snapshot = count_function(func);
-        optimize_function_once(func);
+        optimize_function_once(func, pass_stats);
         let after = count_function(func);
         // Stop if nothing changed (fixpoint reached)
         if after == snapshot {
@@ -76,31 +87,46 @@ fn count_function(func: &Function) -> (usize, usize, usize) {
     (blocks, insts, locals)
 }
 
-fn optimize_function_once(func: &mut Function) {
+/// Run a single pass, measure its effect, and accumulate stats.
+fn run_pass(func: &mut Function, name: &'static str, pass_fn: fn(&mut Function), stats: &mut Vec<(&'static str, PassStats)>) {
+    let before: usize = func.blocks.iter().map(|b| b.instructions.len()).sum();
+    pass_fn(func);
+    let after: usize = func.blocks.iter().map(|b| b.instructions.len()).sum();
+    let eliminated = before.saturating_sub(after);
+    if eliminated > 0 {
+        if let Some(entry) = stats.iter_mut().find(|(n, _)| *n == name) {
+            entry.1.insts_eliminated += eliminated;
+        } else {
+            stats.push((name, PassStats { insts_eliminated: eliminated }));
+        }
+    }
+}
+
+fn optimize_function_once(func: &mut Function, stats: &mut Vec<(&'static str, PassStats)>) {
     // Phase 1: simplify values
-    propagate_constants(func);
-    constant_fold(func);
+    run_pass(func, "const_prop", propagate_constants, stats);
+    run_pass(func, "const_fold", constant_fold, stats);
     // Re-propagate after folding: constant_fold can turn computed
     // instructions (e.g., UnOp(Not, false)) into Assign(true),
     // creating new propagation opportunities.
-    propagate_constants(func);
-    constant_fold(func);
-    propagate_copies(func);
-    simplify_algebraic(func);
-    simplify_cmp(func);
-    eliminate_common_subexpressions(func);
-    reduce_strength(func);
-    fold_constant_branches(func);
-    eliminate_self_assigns(func);
+    run_pass(func, "const_prop", propagate_constants, stats);
+    run_pass(func, "const_fold", constant_fold, stats);
+    run_pass(func, "copy_prop", propagate_copies, stats);
+    run_pass(func, "algebraic", simplify_algebraic, stats);
+    run_pass(func, "cmp_simplify", simplify_cmp, stats);
+    run_pass(func, "cse", eliminate_common_subexpressions, stats);
+    run_pass(func, "strength_reduce", reduce_strength, stats);
+    run_pass(func, "const_branch", fold_constant_branches, stats);
+    run_pass(func, "self_assign", eliminate_self_assigns, stats);
     // Phase 2: eliminate dead code
-    eliminate_nops(func);
-    elide_dead_drops(func);
-    eliminate_dead_stores(func);
+    run_pass(func, "nop_elim", eliminate_nops, stats);
+    run_pass(func, "dead_drop", elide_dead_drops, stats);
+    run_pass(func, "dead_store", eliminate_dead_stores, stats);
     // Phase 3: simplify CFG
-    thread_jumps(func);
-    merge_blocks(func);
-    eliminate_dead_blocks(func);
-    eliminate_unused_locals(func);
+    run_pass(func, "jump_thread", thread_jumps, stats);
+    run_pass(func, "block_merge", merge_blocks, stats);
+    run_pass(func, "dead_block", eliminate_dead_blocks, stats);
+    run_pass(func, "unused_local", eliminate_unused_locals, stats);
 }
 
 // ── Constant Propagation ─────────────────────────────────────────────
