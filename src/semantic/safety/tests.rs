@@ -358,6 +358,29 @@ void main():
         );
     }
 
+    #[test]
+    fn move_in_divergent_branch_ok() {
+        // Moving in a branch that always returns should not mark the variable as moved
+        // at the join point — the divergent branch never reaches the join.
+        let source = "\
+void consume(String !s):
+    pass
+
+int main():
+    String s = \"hello\"
+    if true:
+        consume(!s)
+        return 1
+    print(s)
+    return 0
+";
+        let errors = check(source);
+        assert!(
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterMove { name, .. } if name == "s")),
+            "should NOT get UseAfterMove when move is in a divergent branch, got: {:?}", errors
+        );
+    }
+
     // ── Lifetime inference tests ──
 
     #[test]
