@@ -19,7 +19,7 @@
 ## Medium
 
 
-- **`!self` borrow checker enforcement**: `!self` consuming self works at the IR level (MoveZeroSource field loads, caller MoveZero). Missing: borrow checker rejection of receiver use after `!self` method call on named vars, and requiring `!` syntax on named receivers. Currently only works safely on temps (method chains). [added: 2026-04-06]
+- **`!self` loop constraint**: `!self` method call on a named var inside a loop body should be rejected (the var is consumed on first iteration). Currently the IR-level MoveZero fires each iteration which is correct but the borrow checker doesn't flag it. [added: 2026-04-06]
 
 - **Borrow checker: early return doesn't reset move state**: INVESTIGATED — the divergent-branch filtering in `merge_branch_states()` already works correctly. Moves in branches that return/throw/break are excluded from the join-point merge. Added regression test `move_in_divergent_branch_ok`. The self-host `scope.gg` defensive clones may have been needed before the StringView removal. Review if they can now be removed. [updated: 2026-04-06]
 

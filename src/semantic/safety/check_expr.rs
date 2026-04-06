@@ -258,6 +258,24 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
+                // !self consuming methods: mark receiver as moved.
+                // Temps (method chains, function returns) don't have a def_id
+                // and are handled automatically — only named vars need checking.
+                if let Expr::Identifier(_) = &receiver.node {
+                    if let Some(&recv_def_id) = self.resolution_map.get(&receiver.span.start) {
+                        let kind = self.scopes.get_def(recv_def_id).kind;
+                        if kind == DefKind::Variable {
+                            if let Some(&method_def_id) = self.method_resolutions.get(&method.span.start) {
+                                if let Some(info) = self.function_info.get(&method_def_id) {
+                                    if info.param_ownerships.first() == Some(&Ownership::Move) {
+                                        self.check_move(recv_def_id, expr.span);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Borrow invalidation: mutating collection methods invalidate
                 // outstanding T & borrows from the receiver. This prevents use of
                 // references after the collection is structurally modified.

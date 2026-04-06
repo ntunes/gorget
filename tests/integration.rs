@@ -14964,6 +14964,11 @@ fn consuming_self() {
 }
 
 #[test]
+fn consuming_self_use_after_move_error() {
+    check_gg_fails("consuming_self_use_after_move_error.gg", "use of moved value");
+}
+
+#[test]
 fn move_and_reinit() {
     run_gg(
         "move_and_reinit.gg",
