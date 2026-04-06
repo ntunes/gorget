@@ -118,7 +118,7 @@ auto w = obj.items             # Stays as Ptr reference (zero cost)
 
 ## CoW Materialization Points
 
-When a borrowed value (`Ptr(T)`) must become owned, the compiler materializes it — cloning the data so the new owner has an independent copy. There are SIX materialization points:
+When a borrowed value (`Ptr(T)`) must become owned, the compiler materializes it — cloning the data so the new owner has an independent copy. There are SEVEN materialization points:
 
 | Point | Trigger | GIR Mechanism |
 |-------|---------|---------------|
@@ -128,6 +128,7 @@ When a borrowed value (`Ptr(T)`) must become owned, the compiler materializes it
 | 4. Collection put | `v.push(x)` where x is borrowed | `clone_multi_use_resource_args` |
 | 5. Return | `return x` where x is borrowed | `lower_return` Ptr→T auto-clone |
 | 6. Move transfer | `consume(!x)` where x is borrowed | Ownership::Move Ptr→clone |
+| 7. Field store | `self.f = x` where x is borrowed | `lower_field_assign` Ptr→`clone_fn_for_ptr` |
 
 **`cow_before_mutation()`** is the single entry point for CoW severance at points 1 and 2. It checks the `local_ownership` map for the local's state (`BareParam`, `Alias`, or collection refs via derived scan), and if a CoW relationship exists, emits a clone of the source data, then updates the ownership state to `Owned`. All mutation sites (assignment, mutating method calls) route through this gate.
 

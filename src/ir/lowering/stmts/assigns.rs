@@ -290,7 +290,24 @@ pub(super) fn lower_field_assign(
     // `gs.current_weapon.ammo = x` by building Place { local: gs, projections: [Deref, Field(5), Field(2)] }
     // instead of copying the intermediate struct to a temp.
     if let Some((target_place, field_type)) = try_resolve_field_place(ctx, builder, object, field_name) {
-        let rhs = lower_expr(ctx, builder, value);
+        let mut rhs = lower_expr(ctx, builder, value);
+        // Clone borrowed references (Ptr-typed locals) before storing into fields.
+        // Without this, the field and the caller's original share the same heap
+        // allocation — when the caller drops its copy the field becomes dangling.
+        if let Operand::Copy(ref p) | Operand::Move(ref p) = rhs {
+            if p.projections.is_empty() {
+                let src_type = builder.local_type(p.local);
+                if let Some(inner) = ctx.pointee_type(src_type) {
+                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                        let cloned = ctx.call_tracked(builder, &clone_fn,
+                            vec![FunctionBuilder::copy(p.local)], inner);
+                        ctx.drops.register_local(cloned, inner, &ctx.type_registry);
+                        ctx.set_owned(cloned);
+                        rhs = FunctionBuilder::copy(cloned);
+                    }
+                }
+            }
+        }
         emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
         maybe_unregister_string_temp(ctx, builder, &rhs, field_type);
         maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
@@ -326,7 +343,22 @@ pub(super) fn lower_field_assign(
     } else {
         lower_expr(ctx, builder, object)
     };
-    let rhs = lower_expr(ctx, builder, value);
+    let mut rhs = lower_expr(ctx, builder, value);
+    // Clone borrowed references before storing into fields (same as primary path above).
+    if let Operand::Copy(ref p) | Operand::Move(ref p) = rhs {
+        if p.projections.is_empty() {
+            let src_type = builder.local_type(p.local);
+            if let Some(inner) = ctx.pointee_type(src_type) {
+                if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                    let cloned = ctx.call_tracked(builder, &clone_fn,
+                        vec![FunctionBuilder::copy(p.local)], inner);
+                    ctx.drops.register_local(cloned, inner, &ctx.type_registry);
+                    ctx.set_owned(cloned);
+                    rhs = FunctionBuilder::copy(cloned);
+                }
+            }
+        }
+    }
 
     if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
         let local_idx = place.local.0 as usize;

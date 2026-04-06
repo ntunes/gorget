@@ -174,7 +174,7 @@ This is safe because CoW guarantees every collection element is solely owned by 
 
 When a borrowed value (Ptr) crosses an ownership boundary, the compiler
 materializes it — clones the borrowed data so the new owner has an
-independent copy. These are the SIX points where materialization occurs:
+independent copy. These are the SEVEN points where materialization occurs:
 
 | Point | Trigger | Status |
 |-------|---------|--------|
@@ -184,8 +184,17 @@ independent copy. These are the SIX points where materialization occurs:
 | 4. Collection put | `v.push(x)` where x is borrowed | Done (clone_multi_use_resource_args) |
 | 5. Return | `return x` where x is borrowed | Done (lower_return Ptr→T auto-clone) |
 | 6. Move transfer | `consume(!x)` where x is borrowed | Done (Ownership::Move Ptr→clone) |
+| 7. Field store | `self.field = x` where x is borrowed | Done (lower_field_assign Ptr→clone) |
 
-All 6 points are implemented. `ensure_owned_string` has been deleted —
+Point 7 covers field assignments where the RHS is a `Ptr`-typed local
+(a borrowed parameter or reference). Without cloning, the field and the
+caller's original share the same heap allocation — when the caller drops
+its copy, the field becomes a dangling pointer. `lower_field_assign` in
+`assigns.rs` detects `Ptr`-typed sources via `pointee_type()` and emits
+`clone_fn_for_ptr()` (e.g. `gorget_string_clone_to_owned` for strings,
+`gorget_array_clone` for vectors) to produce an independently-owned copy.
+
+All 7 points are implemented. `ensure_owned_string` has been deleted —
 its role is now handled by the generic `is_non_owned_string` check in
 the resource clone paths.
 

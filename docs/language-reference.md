@@ -2188,6 +2188,7 @@ Resource types use **copy-on-write** (CoW): assignments, parameters, and field r
 4. **Collection store** — pushing/putting a borrowed value into a collection
 5. **Return** — returning a borrowed value from a function
 6. **Move transfer** — using `!` on a borrowed value
+7. **Field store** — assigning a borrowed value to a struct field (`self.name = text`)
 
 **`.clone()` works on all types.** Explicit `.clone()` calls route to the correct clone function: collections use `gorget_array_clone`/`gorget_map_clone`/etc., user structs use generated `{Name}__clone`, copy types return the value unchanged.
 
