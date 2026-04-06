@@ -630,9 +630,25 @@ fn emit_function(
                         label = format!("dc.{bid}.{counter}.ok");
                         counter += 1;
                     }
-                    // Printf string extraction also increments trap_counter
-                    Inst::CallExtern { name, args, .. } if name == "printf" && !args.is_empty() => {
-                        counter += 1;
+                    // CallExtern inline expansions that increment trap_counter
+                    Inst::CallExtern { name, args, .. } => {
+                        // Printf string extraction
+                        if name == "printf" && !args.is_empty() {
+                            counter += 1;
+                        }
+                        // Option/Result tag checks
+                        let is_tag = name == "__option_is_some" || name == "__option_is_none"
+                            || name.ends_with("__is_some") || name.ends_with("__is_none")
+                            || name.ends_with("__is_ok") || name.ends_with("__is_err");
+                        if is_tag && !args.is_empty() {
+                            counter += 1;
+                        }
+                        // Option/Result unwrap
+                        let is_unwrap = name == "__option_unwrap" || name == "__result_unwrap"
+                            || name.ends_with("__unwrap") || name.ends_with("__expect");
+                        if is_unwrap && !args.is_empty() {
+                            counter += 1;
+                        }
                     }
                     _ => {}
                 }
@@ -1138,6 +1154,56 @@ fn emit_inst(
         }
         Inst::CallExtern { dst, name, args, .. } => {
             // Special case: printf/fprintf with GorgetString arg → extract .data field
+            // Drop-if-alive guards — no-op in LLVM (drops happen unconditionally)
+            if name.starts_with("__gorget_drop_if_alive_open__") || name == "__gorget_drop_if_alive_close" {
+                writeln!(out, "  ; {name} (no-op in LLVM)").unwrap();
+                return;
+            }
+
+            // Inline expansion of Option/Result helpers
+            // Option/Result is_some/is_none/is_ok/is_err — tag check
+            let is_tag_check = name == "__option_is_some" || name == "__option_is_none"
+                || name.ends_with("__is_some") || name.ends_with("__is_none")
+                || name.ends_with("__is_ok") || name.ends_with("__is_err");
+            if is_tag_check && !args.is_empty() {
+                let uid = *trap_counter;
+                *trap_counter += 1;
+                let tag_ptr = format!("opt.{block_id}.{uid}.tagptr");
+                let tag_val = format!("opt.{block_id}.{uid}.tag");
+                writeln!(out, "  %{tag_ptr} = getelementptr i8, ptr %v{}, i32 0", args[0].0).unwrap();
+                writeln!(out, "  %{tag_val} = load i32, ptr %{tag_ptr}").unwrap();
+                if let Some(d) = dst {
+                    let is_positive = name.contains("is_some") || name.contains("is_ok");
+                    if is_positive {
+                        // is_some/is_ok: tag != 0 (Some=1, Ok=1)
+                        writeln!(out, "  %v{} = icmp ne i32 %{tag_val}, 0", d.0).unwrap();
+                    } else {
+                        // is_none/is_err: tag == 0 for None, tag == 2 for Err
+                        if name.contains("is_err") {
+                            writeln!(out, "  %v{} = icmp eq i32 %{tag_val}, 2", d.0).unwrap();
+                        } else {
+                            writeln!(out, "  %v{} = icmp eq i32 %{tag_val}, 0", d.0).unwrap();
+                        }
+                    }
+                }
+                return;
+            }
+
+            // Option/Result unwrap — return payload from offset 8
+            let is_unwrap = name == "__option_unwrap" || name == "__result_unwrap"
+                || name.ends_with("__unwrap") || name.ends_with("__expect");
+            if is_unwrap && !args.is_empty() {
+                if let Some(d) = dst {
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    let payload_ptr = format!("unwrap.{block_id}.{uid}.ptr");
+                    writeln!(out, "  %{payload_ptr} = getelementptr i8, ptr %v{}, i64 8", args[0].0).unwrap();
+                    // For aggregate payloads, return the pointer; for scalars, load i64
+                    writeln!(out, "  %v{} = load i64, ptr %{payload_ptr}", d.0).unwrap();
+                }
+                return;
+            }
+
             if name == "printf" && !args.is_empty() {
                 // First arg is ptr to GorgetString — extract .data (field 0)
                 let uid = *trap_counter;

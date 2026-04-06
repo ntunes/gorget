@@ -857,7 +857,10 @@ fn compile_llvm_pipeline(
     // Note: RUNTIME_ALLOC_REPORT deliberately excluded — it registers an atexit handler
     // that prints allocation stats, which the C backend only includes for test/bench mode.
     // Conditionally include heavier runtime modules
-    if concat_source.contains("std.async") || !lir_module.spawned_fns.is_empty() {
+    let needs_async = concat_source.contains("std.async")
+        || !lir_module.spawned_fns.is_empty()
+        || !lir_module.externs.iter().all(|e| !e.name.contains("gorget_channel") && !e.name.contains("gorget_task"));
+    if needs_async {
         runtime_src.push_str(c_runtime::ASYNC_RUNTIME);
         runtime_src.push_str(c_runtime::TASK_COMMON);
         runtime_src.push_str(c_runtime::EXECUTOR_RUNTIME);
@@ -872,7 +875,12 @@ fn compile_llvm_pipeline(
             gorget::ir::SchedulerMode::Single => c_runtime::SCHEDULER_SINGLE_RUNTIME,
         });
     }
-    if concat_source.contains("std.sync") || concat_source.contains("Shared") {
+    let needs_sync = concat_source.contains("std.sync")
+        || concat_source.contains("Shared")
+        || concat_source.contains("Mutex")
+        || concat_source.contains("Guard")
+        || !lir_module.externs.iter().all(|e| !e.name.contains("mutex") && !e.name.contains("shared") && !e.name.contains("guard") && !e.name.contains("rwlock"));
+    if needs_sync {
         runtime_src.push_str(c_runtime::SHARED_RUNTIME);
         runtime_src.push_str(c_runtime::MUTEX_RUNTIME);
         runtime_src.push_str(c_runtime::SYNC_RUNTIME);
