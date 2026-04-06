@@ -368,6 +368,18 @@ pub struct CodegenOutput {
     pub extension: &'static str,
 }
 
+/// Backend feature flags — enables feature negotiation between the pipeline
+/// and the backend without tight coupling.
+#[derive(Debug, Default)]
+pub struct BackendFeatures {
+    /// Whether the backend can emit debug line number mappings.
+    pub debug_info: bool,
+    /// Whether the backend supports incremental compilation (hot-reload).
+    pub hot_reload: bool,
+    /// Whether the backend can emit per-function output (for testing/inspection).
+    pub per_function_emit: bool,
+}
+
 /// Trait for LIR-consuming backends.
 ///
 /// All backends consume an optimized `LirModule` and produce source code
@@ -378,6 +390,17 @@ pub trait Backend {
 
     /// Generate source code from an LIR module.
     fn generate(&self, module: &LirModule) -> CodegenOutput;
+
+    /// Advertise supported features. Defaults to none.
+    fn features(&self) -> BackendFeatures {
+        BackendFeatures::default()
+    }
+
+    /// Emit a single function's code (for testing or inspection).
+    /// Returns `None` if the backend doesn't support per-function emission.
+    fn emit_function(&self, _func: &crate::lir::LirFunction, _module: &LirModule) -> Option<String> {
+        None
+    }
 }
 
 /// Options for hot-reload code generation.

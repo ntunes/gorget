@@ -2916,6 +2916,21 @@ impl super::Backend for CLirBackend {
             extension: "c",
         }
     }
+
+    fn features(&self) -> super::BackendFeatures {
+        super::BackendFeatures {
+            debug_info: false,
+            hot_reload: true,
+            per_function_emit: true,
+        }
+    }
+
+    fn emit_function(&self, func: &crate::lir::LirFunction, module: &LirModule) -> Option<String> {
+        let sn = build_struct_names(module);
+        let mut out = String::new();
+        emit_function(&mut out, func, module, &sn);
+        Some(out)
+    }
 }
 
 #[cfg(test)]
