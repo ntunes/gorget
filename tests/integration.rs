@@ -14969,6 +14969,11 @@ fn consuming_self_use_after_move_error() {
 }
 
 #[test]
+fn consuming_self_loop_error() {
+    check_gg_fails("consuming_self_loop_error.gg", "cannot move");
+}
+
+#[test]
 fn move_and_reinit() {
     run_gg(
         "move_and_reinit.gg",

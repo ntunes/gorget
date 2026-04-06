@@ -120,6 +120,38 @@ v.push(a)                      # auto-move if dead, auto-clone if alive
 v.push(!a)                     # always moves (a is dead after)
 ```
 
+## Consuming Self (`!self`) for Equip Methods
+
+Methods that return a new value constructed from self's fields can use
+`!self` to consume the receiver, eliminating clone overhead:
+
+```gorget
+equip Config:
+    Config with_width(!self, int w):
+        return Config(w, self.height, self.title, self.fullscreen)
+        #                             ^^^^^^^^^^
+        #                             moved out (zero-cost), not cloned
+```
+
+With `!self`, resource-type field loads from self use `MoveZeroSource` —
+the field value is moved out and the source field is zeroed. The struct's
+drop function handles cleanup of any unconsumed fields (e.g., when
+`with_title` replaces `self.title` with a new value, the old title stays
+in the zeroed struct and is freed by the drop).
+
+At the call site, temps auto-move (zero-cost), and named vars require
+explicit `!` or are rejected by the borrow checker:
+
+```gorget
+# Temps: auto-move (zero-cost, invisible)
+Config c = default_config().with_width(1920).with_title("game")
+
+# Named vars: consumed, use-after-move is a compile error
+Config c = Config(800, 600, "game", false)
+Config c2 = c.with_width(1920)   # c is consumed
+print(c.title)                    # ERROR: use of moved value `c`
+```
+
 ## Mutable Borrow (`&`) Unchanged
 
 `&` still means "the callee can mutate the caller's value directly." This bypasses CoW — the callee operates on the original data. The borrow checker ensures no aliases exist during the mutable borrow.
