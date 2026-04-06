@@ -253,7 +253,7 @@ pub(super) fn c_suffix_to_type_id(suffix: &str, ctx: &LoweringContext) -> TypeId
         "int64_t" | "int" | "long long" => I64_TYPE,
         "int32_t" => I32_TYPE,
         "int8_t"  => I8_TYPE,
-        "GorgetString" => ctx.type_mapper.string_view_type,
+        "GorgetString" => ctx.type_mapper.owned_string_type,
         other     => ctx.type_mapper.lookup_named(other).unwrap_or(I64_TYPE),
     }
 }

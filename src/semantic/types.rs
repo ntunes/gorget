@@ -137,7 +137,7 @@ impl TypeTable {
         types.push(ResolvedType::Primitive(PrimitiveType::Float));
 
         let string_id = TypeId(types.len() as u32);
-        types.push(ResolvedType::Primitive(PrimitiveType::StringView));
+        types.push(ResolvedType::Primitive(PrimitiveType::StringType));
 
         let owned_string_id = TypeId(types.len() as u32);
         types.push(ResolvedType::Primitive(PrimitiveType::StringType));
@@ -212,7 +212,6 @@ impl TypeTable {
             PrimitiveType::Bool => self.bool_id,
             PrimitiveType::Int => self.int_id,
             PrimitiveType::Float => self.float_id,
-            PrimitiveType::StringView => self.string_id,
             PrimitiveType::CStr => self.cstr_id,
             PrimitiveType::StringType => self.owned_string_id,
             PrimitiveType::Void => self.void_id,
@@ -255,7 +254,6 @@ impl TypeTable {
         match self.get(id) {
             ResolvedType::Primitive(p) => match p {
                 PrimitiveType::StringType => "String".to_string(),
-                PrimitiveType::StringView => "String".to_string(),
                 PrimitiveType::CStr => "cstr".to_string(),
                 _ => format!("{p:?}").to_lowercase(),
             },
@@ -312,7 +310,6 @@ impl TypeTable {
                     P::Float | P::Float64 => self.float_id,
                     P::Bool => self.bool_id,
                     P::StringType => self.owned_string_id,
-                    P::StringView => self.string_id,
                     P::CStr => self.cstr_id,
                     P::Void => self.void_id,
                     _ => return None,
@@ -331,7 +328,6 @@ impl TypeTable {
 /// Includes: `str`, `Slice[T]`, and structs whose fields include reference types.
 pub fn is_reference_type(type_id: TypeId, types: &TypeTable, ref_type_structs: &FxHashSet<DefId>) -> bool {
     match types.get(type_id) {
-        ResolvedType::Primitive(PrimitiveType::StringView) => true,
         ResolvedType::Ref(_) => true,
         ResolvedType::Slice(_) => true,
         ResolvedType::Defined(def_id) => ref_type_structs.contains(def_id),

@@ -1,9 +1,0 @@
-void consume(String !s):
-    pass
-
-void main():
-    String s = "hello" + ""
-    String v = s.as_str()
-    auto f = (): print(v)
-    consume(!s)
-    f()

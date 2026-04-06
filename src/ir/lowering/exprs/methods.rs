@@ -13,7 +13,7 @@ use super::{lower_expr, lower_call_arg, infer_operand_type_full, register_tuple_
             index_expr_to_mangle_fragment, try_resolve_field_place};
 
 fn gorget_name_for_type_id(ctx: &LoweringContext, type_id: TypeId) -> String {
-    if type_id == ctx.type_mapper.string_view_type {
+    if type_id == ctx.type_mapper.owned_string_type {
         return "str".to_string();
     }
     match type_id {
@@ -954,8 +954,7 @@ pub(super) fn lower_method_call(
             }
             // String .clone(): use gorget_string_clone_to_owned to produce an
             // independent owned copy (gorget_string_clone preserves views).
-            let is_string = recv_type_id == ctx.type_mapper.owned_string_type
-                || recv_type_id == ctx.type_mapper.string_view_type;
+            let is_string = recv_type_id == ctx.type_mapper.owned_string_type;
             if is_string {
                 let owned_type = ctx.type_mapper.owned_string_type;
                 let ptr_arg = match &recv {
@@ -1066,10 +1065,10 @@ pub(super) fn lower_method_call(
             }
         } else if matches!(&recv, Operand::Constant(Constant::Str(_))) {
             // String constant receiver: materialize into a local for borrow
-            let string_view_type = ctx.type_mapper.string_view_type;
-            let tmp_local = builder.add_local(string_view_type, None);
+            let owned_string_type = ctx.type_mapper.owned_string_type;
+            let tmp_local = builder.add_local(owned_string_type, None);
             builder.assign(Place::local(tmp_local), recv);
-            let pt = ctx.register_ptr_type(string_view_type);
+            let pt = ctx.register_ptr_type(owned_string_type);
             let pl = builder.add_local(pt, None);
             builder.emit_borrow(pl, Place::local(tmp_local));
             call_args.push(FunctionBuilder::copy(pl));
@@ -1871,10 +1870,10 @@ pub(super) fn lower_index_access(
             }
         }
 
-        // Resolve through Ptr — string params are now Ptr(StringView)
+        // Resolve through Ptr — string params are now Ptr(GorgetString)
         let resolved_base = ctx.pointee_type(base_type).unwrap_or(base_type);
         let elem_type = if ctx.type_mapper.is_string_type(resolved_base) {
-            ctx.type_mapper.string_view_type // indexing a string returns Str
+            ctx.type_mapper.owned_string_type // indexing a string returns Str
         } else {
             // Try to infer element type from collection type name
             infer_collection_element_type(ctx, base_type)
@@ -1995,7 +1994,7 @@ pub(super) fn infer_type_name_from_operand_full(
     let effective_tid = ctx.pointee_type(type_id).unwrap_or(type_id);
 
     // Check primitive types
-    if effective_tid == ctx.type_mapper.string_view_type {
+    if effective_tid == ctx.type_mapper.owned_string_type {
         return Some("GorgetString".to_string());
     }
     if effective_tid == ctx.type_mapper.owned_string_type {
@@ -2068,7 +2067,7 @@ fn extract_elem_type_id_from_type_name(ctx: &LoweringContext, type_name: &str) -
             "int64_t" => Some(I64_TYPE),
             "double" => Some(F64_TYPE),
             "bool" => Some(BOOL_TYPE),
-            "GorgetString" => Some(ctx.type_mapper.string_view_type),
+            "GorgetString" => Some(ctx.type_mapper.owned_string_type),
             _ => ctx.lookup_type_by_name(elem)
                 .or_else(|| ctx.type_mapper.lookup_named(elem)),
         }

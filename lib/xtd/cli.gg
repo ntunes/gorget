@@ -45,8 +45,8 @@ equip CliParser:
 
     void add_option(&self, String long, String short, String help, String default):
         String key = strip_dashes(long)
+        self.parsed.put(key, default.clone())
         self.args.push(CliArg(long, short, help, default, false, false, ""))
-        self.parsed.put(key, default)
 
     void add_positional(&self, String name, String help):
         self.pos_spec_names.push(name)

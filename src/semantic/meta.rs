@@ -1345,7 +1345,7 @@ fn is_meta_compatible_type(ty: &Type) -> bool {
             | PrimitiveType::Float32
             | PrimitiveType::Float64
             | PrimitiveType::Bool
-            | PrimitiveType::StringView
+            | PrimitiveType::StringType
         )
     )
 }
@@ -1786,7 +1786,6 @@ fn validate_type(ty: &Type, value: &MetaValue, span: Span) -> Result<(), Semanti
         (Type::Primitive(PrimitiveType::Float32), MetaValue::Float(_)) => true,
         (Type::Primitive(PrimitiveType::Float64), MetaValue::Float(_)) => true,
         (Type::Primitive(PrimitiveType::Bool), MetaValue::Bool(_)) => true,
-        (Type::Primitive(PrimitiveType::StringView), MetaValue::Str(_)) => true,
         (Type::Primitive(PrimitiveType::StringType), MetaValue::Str(_)) => true,
         (Type::Primitive(PrimitiveType::CStr), MetaValue::Str(_)) => true,
         _ => false,
@@ -2564,7 +2563,6 @@ fn type_name(ty: &Type) -> &'static str {
         Type::Primitive(PrimitiveType::Float32) => "float32",
         Type::Primitive(PrimitiveType::Float64) => "float64",
         Type::Primitive(PrimitiveType::Bool) => "bool",
-        Type::Primitive(PrimitiveType::StringView) => "String",
         Type::Primitive(PrimitiveType::CStr) => "cstr",
         Type::Primitive(PrimitiveType::StringType) => "String",
         Type::Primitive(PrimitiveType::Void) => "void",
@@ -2611,7 +2609,6 @@ pub fn type_to_canonical_name(ty: &Type) -> String {
             PrimitiveType::Float32 => "float32",
             PrimitiveType::Float64 => "float64",
             PrimitiveType::Bool => "bool",
-            PrimitiveType::StringView => "String",
             PrimitiveType::CStr => "cstr",
             PrimitiveType::StringType => "String",
             PrimitiveType::Void => "void",
@@ -3877,7 +3874,7 @@ mod tests {
             items: vec![
                 Spanned::new(
                     Item::MetaConst(MetaConst {
-                        type_: Spanned::new(Type::Primitive(PrimitiveType::StringView), dummy_span()),
+                        type_: Spanned::new(Type::Primitive(PrimitiveType::StringType), dummy_span()),
                         name: Spanned::new("NAME".to_string(), dummy_span()),
                         value: Spanned::new(
                             Expr::StringLiteral(StringLiteral {

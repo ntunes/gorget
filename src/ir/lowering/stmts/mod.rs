@@ -212,9 +212,6 @@ fn lower_var_decl(
             } else {
                 gir_type
             };
-            // After str→StringType unification, provenance may have downgraded this
-            // binding's semantic type_id to view. Adjust the GIR type accordingly.
-            let gir_type = ctx.provenance_adjusted_string_type(gir_type, name, pattern.span);
             // Box[Callable[...]] variables pre-register with a "Box__Callable__unknown" type from the
             // generic collector. We need to reinfer from the actual RHS to get the real closure type.
             let gir_type_is_box_callable = ctx.type_name_for_id(gir_type)
@@ -347,7 +344,7 @@ fn lower_var_decl(
                     // function calls) should NOT be unregistered — they may hold
                     // owned data that needs freeing.
                     if rhs_type == ctx.type_mapper.owned_string_type
-                        && actual_var_type == ctx.type_mapper.string_view_type
+                        && actual_var_type == ctx.type_mapper.owned_string_type
                         && ctx.is_named_local(place.local)
                     {
                         ctx.drops.unregister(place.local);
@@ -474,11 +471,6 @@ fn lower_var_decl(
                 let field_local = builder.field_load_mode(mode, Place::local(tuple_local), i as u32, field_type);
 
                 if let Pattern::Binding(name) = &part.node {
-                    // Apply provenance adjustment: if the type checker downgraded
-                    // this binding from String to str (view), use the view type.
-                    let field_type = ctx.provenance_adjusted_string_type(
-                        field_type, name, part.span,
-                    );
                     ctx.register_local(name, field_local, field_type);
                     ctx.drops.register_local(field_local, field_type, &ctx.type_registry);
                 } else {
@@ -765,8 +757,8 @@ fn lower_return(
             }
         } else {
             let ret_type = builder.locals[0].type_id;
-            // If returning a string_view_type (Copy/view) value through an owned_string_type
-            // return slot, clone it so the caller gets an independent allocation.
+            // If returning a string value through the owned_string_type return slot,
+            // clone it so the caller gets an independent allocation.
             // Without this, the caller frees a pointer still owned by the source
             // (e.g., an enum field loaded via match destructuring).
             let mut did_clone_return = false;
@@ -774,7 +766,7 @@ fn lower_return(
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
                         let rhs_type = builder.local_type(place.local);
-                        if rhs_type == ctx.type_mapper.string_view_type {
+                        if rhs_type == ctx.type_mapper.owned_string_type {
                             let clone_fn = ctx.clone_fn_for_ptr(rhs_type)
                                 .unwrap_or_else(|| "gorget_string_from_str".to_string());
                             let clone_result = builder.call(
@@ -846,7 +838,7 @@ fn lower_return(
             // If the return local is str-typed and the operand is a GorgetString temp,
             // unregister the temp to prevent use-after-free: the str view in the return
             // local may be accessed after the temp's scope exit frees it.
-            if ret_type == ctx.type_mapper.string_view_type {
+            if ret_type == ctx.type_mapper.owned_string_type {
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
                         let rhs_type = builder.local_type(place.local);
@@ -1259,8 +1251,7 @@ fn emit_assert_comparison(
     _rhs_type: TypeId,
     op: BinaryOp,
 ) -> LocalId {
-    let is_string = lhs_type == ctx.type_mapper.string_view_type
-        || lhs_type == ctx.type_mapper.owned_string_type;
+    let is_string = lhs_type == ctx.type_mapper.owned_string_type;
 
     // String comparison via runtime functions
     if is_string {
@@ -1400,11 +1391,11 @@ fn assert_format_info_rich(
             let self_type = ctx.register_ptr_type(type_id);
             let self_ptr = builder.add_local(self_type, None);
             builder.emit_borrow(self_ptr, Place::local(local));
-            let string_view_type = ctx.type_mapper.string_view_type;
+            let owned_string_type = ctx.type_mapper.owned_string_type;
             let result = builder.call(
                 effective_method,
                 vec![FunctionBuilder::copy(self_ptr)],
-                string_view_type,
+                owned_string_type,
             );
             let result_c = format!("_{}", result.0);
             return ("%.*s".to_string(), format!("(int){result_c}.len, {result_c}.data"));
@@ -1524,11 +1515,11 @@ fn lower_snapshot(
             let self_type = ctx.register_ptr_type(val_type);
             let self_ptr = builder.add_local(self_type, None);
             builder.emit_borrow(self_ptr, Place::local(val_local));
-            let string_view_type = ctx.type_mapper.string_view_type;
+            let owned_string_type = ctx.type_mapper.owned_string_type;
             let result = builder.call(
                 effective_method,
                 vec![FunctionBuilder::copy(self_ptr)],
-                string_view_type,
+                owned_string_type,
             );
             builder.inline_c(format!(
                 "__gorget_snapshot_write_str(__gorget_current_test, \"{point_name}\", _{});",

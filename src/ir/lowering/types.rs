@@ -18,8 +18,6 @@ pub struct DeferredBuiltin {
 
 /// Maps AST types to GIR TypeIds.
 pub struct TypeMapper {
-    /// The GIR type for strings. Maps to Named("GorgetString").
-    pub string_view_type: TypeId,
     /// `String` (owned) maps to Named("GorgetString") for string interpolation results.
     pub owned_string_type: TypeId,
     /// Cache of Named type → GIR TypeId.
@@ -43,12 +41,7 @@ impl TypeMapper {
             },
         });
         let owned_string_type = registry.insert(GirType::Named("GorgetString".to_string()));
-        // StringView and GorgetString resolve to the SAME TypeId.
-        // The provenance pass still creates PrimitiveType::StringView in the AST
-        // (for safety checker Copy semantics), but the IR treats them identically.
-        let string_view_type = owned_string_type;
         Self {
-            string_view_type,
             owned_string_type,
             named_types: FxHashMap::default(),
             deferred_builtins: Vec::new(),
@@ -344,7 +337,7 @@ impl TypeMapper {
             PrimitiveType::Float | PrimitiveType::Float64 => F64_TYPE,
             PrimitiveType::Float32 => F32_TYPE,
             PrimitiveType::Bool => BOOL_TYPE,
-            PrimitiveType::StringView | PrimitiveType::CStr => self.string_view_type,
+            PrimitiveType::CStr => self.owned_string_type,
             PrimitiveType::StringType => self.owned_string_type,
             PrimitiveType::Void => UNIT_TYPE,
         }
@@ -360,7 +353,7 @@ impl TypeMapper {
             "%f"
         } else if type_id == BOOL_TYPE {
             "%s"
-        } else if type_id == self.string_view_type || type_id == self.owned_string_type {
+        } else if type_id == self.owned_string_type {
             "%s"
         } else {
             "%lld" // fallback
@@ -369,7 +362,7 @@ impl TypeMapper {
 
     /// Returns true if this type needs special printf handling (e.g., Str → two args).
     pub fn is_string_type(&self, type_id: TypeId) -> bool {
-        type_id == self.string_view_type || type_id == self.owned_string_type
+        type_id == self.owned_string_type
     }
 }
 
@@ -743,7 +736,6 @@ pub fn mangle_type_for_name(ty: &Type) -> String {
             PrimitiveType::Float | PrimitiveType::Float64 => "double".to_string(),
             PrimitiveType::Float32 => "float".to_string(),
             PrimitiveType::Bool => "bool".to_string(),
-            PrimitiveType::StringView => "GorgetString".to_string(),
             PrimitiveType::CStr => "cstr".to_string(),
             PrimitiveType::StringType => "GorgetString".to_string(),
             PrimitiveType::Void => "void".to_string(),
@@ -863,8 +855,8 @@ mod tests {
         assert_eq!(mapper.map_primitive(&PrimitiveType::Bool), BOOL_TYPE);
         assert_eq!(mapper.map_primitive(&PrimitiveType::Void), UNIT_TYPE);
         // str maps to a Named("Str") type (matches the runtime fat pointer struct)
-        let str_id = mapper.map_primitive(&PrimitiveType::StringView);
-        assert_eq!(str_id, mapper.string_view_type);
+        let str_id = mapper.map_primitive(&PrimitiveType::StringType);
+        assert_eq!(str_id, mapper.owned_string_type);
         assert!(matches!(reg.get(str_id), Some(GirType::Named(name)) if name == "GorgetString"));
     }
 
@@ -891,7 +883,7 @@ mod tests {
 
         assert_eq!(mapper.format_specifier(I64_TYPE), "%lld");
         assert_eq!(mapper.format_specifier(F64_TYPE), "%f");
-        assert_eq!(mapper.format_specifier(mapper.string_view_type), "%s");
+        assert_eq!(mapper.format_specifier(mapper.owned_string_type), "%s");
         assert_eq!(mapper.format_specifier(BOOL_TYPE), "%s");
         assert_eq!(mapper.format_specifier(U64_TYPE), "%llu");
     }
@@ -968,7 +960,7 @@ mod tests {
             "Result",
             &[
                 spanned(Type::Primitive(PrimitiveType::StringType)),
-                spanned(Type::Primitive(PrimitiveType::StringView)),
+                spanned(Type::Primitive(PrimitiveType::StringType)),
             ],
         );
         assert_eq!(name, "Result__GorgetString__GorgetString");

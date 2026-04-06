@@ -142,7 +142,7 @@ impl<'a> LoweringContext<'a> {
             }
             let mut ret_ty = map_gir_type_with_structs(&ext.return_type, &self.gir.type_registry, Some(&self.struct_reg));
             // String-returning runtime functions return Str by value in C,
-            // even though the GIR types them as Ptr(StringView) (resource type).
+            // even though the GIR types them as Ptr(GorgetString) (resource type).
             // Override Ptr → Struct(Str) to prevent the C backend from deref'ing.
             if matches!(ret_ty, LirType::Ptr) {
                 if let Some(ir::types::GirType::Ptr(inner) | ir::types::GirType::MutPtr(inner)) = self.gir.type_registry.get(ext.return_type) {

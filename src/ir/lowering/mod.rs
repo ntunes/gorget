@@ -337,7 +337,7 @@ pub fn lower_module(
 
     // Register runtime types needed by expression lowering
     // GorgetString: register in named_types so method dispatch can find them
-    type_mapper.register_named("GorgetString".to_string(), type_mapper.string_view_type);
+    type_mapper.register_named("GorgetString".to_string(), type_mapper.owned_string_type);
 
     // GorgetArray: opaque runtime array (element_size, data, len, cap)
     {
@@ -1053,7 +1053,6 @@ pub fn lower_module(
                     ast::PrimitiveType::Int | ast::PrimitiveType::Int64 => "int",
                     ast::PrimitiveType::Float | ast::PrimitiveType::Float64 => "float",
                     ast::PrimitiveType::Bool => "bool",
-                    ast::PrimitiveType::StringView => "str",
                     ast::PrimitiveType::StringType => "str",
                     ast::PrimitiveType::Int8 => "i8",
                     ast::PrimitiveType::Int16 => "i16",
@@ -1096,7 +1095,7 @@ pub fn lower_module(
             let name_override = module_fn_manglings
                 .get(&func.name.span.start)
                 .map(|s| s.as_str());
-            // Register as GIR-lowered so call_tracked upgrades StringView returns
+            // Register as GIR-lowered so call_tracked upgrades string returns
             let fn_name = name_override.unwrap_or(func.name.node.as_str());
             ctx.gir_equip_methods.insert(fn_name.to_string());
             lower_function(&mut ctx, &mut module, func, name_override);
@@ -1356,14 +1355,13 @@ pub fn lower_module(
 
 /// Register runtime built-in method signatures for Str, uint8_t, and primitive static methods.
 fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
-    let string_view_type = ctx.type_mapper.string_view_type;
-    let owned_str_type = ctx.type_mapper.owned_string_type;
+    let owned_string_type = ctx.type_mapper.owned_string_type;
     let array_type = ctx.type_mapper.named_types.get("GorgetArray").copied()
         .unwrap_or(UNIT_TYPE);
 
     // Str methods taking (self) returning various types
-    let str_self = vec![string_view_type];
-    let str_str = vec![string_view_type, string_view_type];
+    let str_self = vec![owned_string_type];
+    let str_str = vec![owned_string_type, owned_string_type];
 
     // Methods returning typed Vector
     // Ensure Vector__GorgetString is registered early so split() etc. return the correct type.
@@ -1383,19 +1381,19 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
     ctx.fn_sigs.insert("GorgetString__split".to_string(), (str_str.clone(), vec_str_type));
     // Methods returning Str
     for m in &["trim", "strip", "lstrip", "rstrip", "removeprefix", "removesuffix"] {
-        ctx.fn_sigs.insert(format!("GorgetString__{m}"), (str_self.clone(), string_view_type));
+        ctx.fn_sigs.insert(format!("GorgetString__{m}"), (str_self.clone(), owned_string_type));
     }
-    ctx.fn_sigs.insert("GorgetString__byte_slice".to_string(), (vec![string_view_type, I64_TYPE, I64_TYPE], string_view_type));
-    ctx.fn_sigs.insert("GorgetString__byte_at".to_string(), (vec![string_view_type, I64_TYPE], U8_TYPE));
-    ctx.fn_sigs.insert("GorgetString__char_at".to_string(), (vec![string_view_type, I64_TYPE], string_view_type));
+    ctx.fn_sigs.insert("GorgetString__byte_slice".to_string(), (vec![owned_string_type, I64_TYPE, I64_TYPE], owned_string_type));
+    ctx.fn_sigs.insert("GorgetString__byte_at".to_string(), (vec![owned_string_type, I64_TYPE], U8_TYPE));
+    ctx.fn_sigs.insert("GorgetString__char_at".to_string(), (vec![owned_string_type, I64_TYPE], owned_string_type));
     // Methods returning GorgetString
     for m in &["to_upper", "to_lower"] {
-        ctx.fn_sigs.insert(format!("GorgetString__{m}"), (str_self.clone(), owned_str_type));
+        ctx.fn_sigs.insert(format!("GorgetString__{m}"), (str_self.clone(), owned_string_type));
     }
-    ctx.fn_sigs.insert("GorgetString__replace".to_string(), (vec![string_view_type, string_view_type, string_view_type], owned_str_type));
-    ctx.fn_sigs.insert("GorgetString__repeat".to_string(), (vec![string_view_type, I64_TYPE], owned_str_type));
-    ctx.fn_sigs.insert("GorgetString__pad_left".to_string(), (vec![string_view_type, I64_TYPE, string_view_type], owned_str_type));
-    ctx.fn_sigs.insert("GorgetString__pad_right".to_string(), (vec![string_view_type, I64_TYPE, string_view_type], owned_str_type));
+    ctx.fn_sigs.insert("GorgetString__replace".to_string(), (vec![owned_string_type, owned_string_type, owned_string_type], owned_string_type));
+    ctx.fn_sigs.insert("GorgetString__repeat".to_string(), (vec![owned_string_type, I64_TYPE], owned_string_type));
+    ctx.fn_sigs.insert("GorgetString__pad_left".to_string(), (vec![owned_string_type, I64_TYPE, owned_string_type], owned_string_type));
+    ctx.fn_sigs.insert("GorgetString__pad_right".to_string(), (vec![owned_string_type, I64_TYPE, owned_string_type], owned_string_type));
     // Methods returning int64_t
     for m in &["len", "byte_len", "index_of", "count", "find"] {
         let params = if *m == "len" || *m == "byte_len" {
@@ -1415,7 +1413,7 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
         ctx.fn_sigs.insert(format!("GorgetString__{m}"), (params, BOOL_TYPE));
     }
     ctx.fn_sigs.insert("GorgetString__eq".to_string(), (str_str.clone(), BOOL_TYPE));
-    ctx.fn_sigs.insert("GorgetString__join".to_string(), (vec![string_view_type, array_type], owned_str_type));
+    ctx.fn_sigs.insert("GorgetString__join".to_string(), (vec![owned_string_type, array_type], owned_string_type));
 
     // uint8_t (byte) method signatures
     for m in &["is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
@@ -1440,13 +1438,13 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
     let opt_bool_type = ctx.type_mapper.named_types.get("Option__bool").copied()
         .or_else(|| ctx.lookup_type_by_name("Option__bool"))
         .unwrap_or(BOOL_TYPE);
-    ctx.fn_sigs.insert("int64_t__parse".to_string(), (vec![string_view_type], opt_int_type));
+    ctx.fn_sigs.insert("int64_t__parse".to_string(), (vec![owned_string_type], opt_int_type));
     ctx.fn_sigs.insert("int64_t__default".to_string(), (vec![], I64_TYPE));
     ctx.fn_sigs.insert("int64_t__one".to_string(), (vec![], I64_TYPE));
-    ctx.fn_sigs.insert("double__parse".to_string(), (vec![string_view_type], opt_float_type));
+    ctx.fn_sigs.insert("double__parse".to_string(), (vec![owned_string_type], opt_float_type));
     ctx.fn_sigs.insert("double__default".to_string(), (vec![], F64_TYPE));
     ctx.fn_sigs.insert("double__one".to_string(), (vec![], F64_TYPE));
-    ctx.fn_sigs.insert("bool__parse".to_string(), (vec![string_view_type], opt_bool_type));
+    ctx.fn_sigs.insert("bool__parse".to_string(), (vec![owned_string_type], opt_bool_type));
     ctx.fn_sigs.insert("bool__default".to_string(), (vec![], BOOL_TYPE));
 }
 
@@ -1784,7 +1782,6 @@ fn generic_nth_c_type(ty: &crate::parser::ast::Type, n: usize) -> String {
                     PrimitiveType::Int | PrimitiveType::Int64 => "int64_t".to_string(),
                     PrimitiveType::Float | PrimitiveType::Float64 => "double".to_string(),
                     PrimitiveType::Bool  => "bool".to_string(),
-                    PrimitiveType::StringView   => "GorgetString".to_string(),
                     PrimitiveType::StringType => "GorgetString".to_string(),
                     PrimitiveType::Uint8 => "uint8_t".to_string(),
                     _ => "int64_t".to_string(),
@@ -1807,7 +1804,6 @@ fn generic_elem_c_type(ty: &crate::parser::ast::Type) -> String {
                     PrimitiveType::Int | PrimitiveType::Int64 => "int64_t".to_string(),
                     PrimitiveType::Float | PrimitiveType::Float64 => "double".to_string(),
                     PrimitiveType::Bool  => "bool".to_string(),
-                    PrimitiveType::StringView   => "GorgetString".to_string(),
                     PrimitiveType::StringType => "GorgetString".to_string(),
                     PrimitiveType::Uint8 => "uint8_t".to_string(),
                     _ => "int64_t".to_string(),
@@ -2233,7 +2229,7 @@ fn register_builtin_enum_method_sigs(
             use context::ParamABI::*;
             let self_param = vec![self_ptr];
             sigs_to_add.push((format!("{mangled_name}__unwrap"), self_param.clone(), inner_type, vec![ByPtr]));
-            sigs_to_add.push((format!("{mangled_name}__expect"), vec![self_ptr, ctx.type_mapper.string_view_type], inner_type, vec![ByPtr, ByValue]));
+            sigs_to_add.push((format!("{mangled_name}__expect"), vec![self_ptr, ctx.type_mapper.owned_string_type], inner_type, vec![ByPtr, ByValue]));
             sigs_to_add.push((format!("{mangled_name}__unwrap_or"), vec![self_ptr, inner_type], inner_type, vec![ByPtr, ByValue]));
             sigs_to_add.push((format!("{mangled_name}__is_some"), self_param.clone(), BOOL_TYPE, vec![ByPtr]));
             sigs_to_add.push((format!("{mangled_name}__is_none"), self_param, BOOL_TYPE, vec![ByPtr]));
@@ -2247,7 +2243,7 @@ fn register_builtin_enum_method_sigs(
             use context::ParamABI::*;
             let self_param = vec![self_ptr];
             sigs_to_add.push((format!("{mangled_name}__unwrap"), self_param.clone(), ok_type, vec![ByPtr]));
-            sigs_to_add.push((format!("{mangled_name}__expect"), vec![self_ptr, ctx.type_mapper.string_view_type], ok_type, vec![ByPtr, ByValue]));
+            sigs_to_add.push((format!("{mangled_name}__expect"), vec![self_ptr, ctx.type_mapper.owned_string_type], ok_type, vec![ByPtr, ByValue]));
             sigs_to_add.push((format!("{mangled_name}__unwrap_or"), vec![self_ptr, ok_type], ok_type, vec![ByPtr, ByValue]));
             sigs_to_add.push((format!("{mangled_name}__is_ok"), self_param.clone(), BOOL_TYPE, vec![ByPtr]));
             sigs_to_add.push((format!("{mangled_name}__is_err"), self_param, BOOL_TYPE, vec![ByPtr]));

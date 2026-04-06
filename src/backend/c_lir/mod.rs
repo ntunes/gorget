@@ -895,7 +895,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     }
 
     // Propagate str_ptr_values from LIR function into ptr_pointee.
-    // The LIR lowering marks Ptr params that point to StringView/GorgetString.
+    // The LIR lowering marks Ptr params that point to GorgetString.
     // Propagate this info through SlotStore→SlotLoad chains so the C backend
     // can deref Ptr(Str) args in printf, CmpOp, and CallExtern.
     {

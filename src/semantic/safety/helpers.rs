@@ -9,7 +9,7 @@ use crate::semantic::scope::DefKind;
 use crate::semantic::types::{self as types, ResolvedType};
 
 use super::{BorrowChecker, BorrowOrigin, BorrowCaptureMode, CaptureSet, SharedDerivedInfo, WithGuardKind, BLOCKING_CALL_NAMES};
-use super::type_utils::{is_copy_type, is_ast_type_ref};
+use super::type_utils::is_ast_type_ref;
 use super::return_borrows::{CapturedRefOriginCollector, CapturedMutationCollector, CaptureSetCollector};
 
 impl<'a> BorrowChecker<'a> {
@@ -386,59 +386,6 @@ impl<'a> BorrowChecker<'a> {
             if def.is_param && def.param_ownership == Some(Ownership::MutableBorrow) {
                 self.mut_param_mutated.insert(def_id);
             }
-        }
-    }
-
-    /// Check if `expr` is a bare (non-mutable) parameter of a non-Copy type.
-    /// Returns the param name if mutation should be rejected.
-    pub(super) fn check_bare_param_mutation(&self, expr: &Spanned<Expr>) -> Option<String> {
-        let def_id = self.find_root_def_id(expr)?;
-        let def = self.scopes.get_def(def_id);
-        if !def.is_param {
-            return None;
-        }
-        // Only bare (Ownership::Borrow) params are immutable.
-        // Bare borrow = immutable regardless of Copy/non-Copy.
-        // Mutating a Copy param silently loses the change (bug trap).
-        if def.param_ownership != Some(crate::parser::ast::Ownership::Borrow) {
-            return None;
-        }
-        // Copy types (primitives + all-Copy-field structs) pass by value.
-        // Mutation modifies the local copy — harmless. Only reject for
-        // non-Copy types where bare borrow means pass-by-pointer (immutable).
-        if let Some(type_id) = def.type_id {
-            if is_copy_type(type_id, self.types, self.scopes) {
-                return None;
-            }
-        }
-        Some(def.name.clone())
-    }
-
-    /// Check if `expr` is a non-owned parameter (bare or `&`) of a non-Copy type.
-    /// Only `!` (move) params own the value and can be moved from.
-    /// Returns `(param_name, ownership_description)` if move should be rejected.
-    pub(super) fn check_non_owned_param_move(&self, expr: &Spanned<Expr>) -> Option<(String, &'static str)> {
-        let def_id = self.find_root_def_id(expr)?;
-        let def = self.scopes.get_def(def_id);
-        if !def.is_param {
-            return None;
-        }
-        // Copy types (primitives + all-Copy-field structs) pass by value.
-        // Storing them in collections is harmless (value-copied).
-        if let Some(type_id) = def.type_id {
-            if is_copy_type(type_id, self.types, self.scopes) {
-                return None;
-            }
-        }
-        // Bare borrow = immutable for non-Copy types.
-        // Mutating a Copy-type bare param silently loses the change (bug trap).
-        // Mutating a non-Copy bare param violates the borrow contract.
-        match def.param_ownership {
-            Some(crate::parser::ast::Ownership::Borrow) =>
-                Some((def.name.clone(), "immutable")),
-            Some(crate::parser::ast::Ownership::MutableBorrow) =>
-                Some((def.name.clone(), "mutably borrowed")),
-            _ => None, // Move/owned params can be moved
         }
     }
 

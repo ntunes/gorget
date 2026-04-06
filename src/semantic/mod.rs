@@ -3,7 +3,6 @@ pub mod derive;
 pub mod errors;
 pub mod ids;
 pub mod meta;
-pub mod provenance;
 pub mod purity;
 pub mod resolve;
 pub mod rewrite;
@@ -243,18 +242,8 @@ pub fn analyze_with_source_dir(
         &mut errors,
     );
 
-    // Pass 4.5: String provenance inference — downgrades view String bindings to Str.
-    // Still needed: the safety checker uses StringView to identify string borrows.
-    provenance::infer_string_provenance(
-        module, &mut scopes, &types, &resolution_map, &expr_types,
-        &mut resolve_ctx.function_info, &method_resolutions,
-    );
-
-    // Pass 4.5: Populate struct/enum field types on DefInfo for is_copy_type.
+    // Populate struct/enum field types on DefInfo for is_copy_type.
     populate_def_field_types(module, &mut scopes, &types);
-
-    // Pass 4.6: Rewrite AST type annotations to match provenance-adjusted type_ids.
-    provenance::rewrite_ast_string_types(module, &scopes, &types, &resolve_ctx.function_info);
 
     // Pass 5: Borrow checking (two sub-passes: 5a computes return_borrows_from, 5b does full check)
     let (shared_bindings, warnings, fn_purity, borrow_deps) = safety::check_module(

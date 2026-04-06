@@ -87,16 +87,6 @@ impl<'a> BorrowChecker<'a> {
 
             Expr::Move { expr: inner } => {
                 // The `!` operator: move the value
-                // Cannot move from a non-owned parameter — only `!` params own the value
-                if let Some((param_name, kind)) = self.check_non_owned_param_move(inner) {
-                    self.error(
-                        SemanticErrorKind::MutationOfBareParam {
-                            name: param_name,
-                            detail: format!("cannot move from {kind} parameter"),
-                        },
-                        expr.span,
-                    );
-                }
                 if let Expr::Identifier(_) = &inner.node {
                     if let Some(&def_id) = self.resolution_map.get(&inner.span.start) {
                         let kind = self.scopes.get_def(def_id).kind;
@@ -121,16 +111,6 @@ impl<'a> BorrowChecker<'a> {
                 // The `&` operator: mutable borrow
                 // Check that the inner expression is still usable
                 self.check_expr(inner);
-                // Cannot create a mutable borrow from a bare (immutable) parameter
-                if let Some(param_name) = self.check_bare_param_mutation(inner) {
-                    self.error(
-                        SemanticErrorKind::MutationOfBareParam {
-                            name: param_name,
-                            detail: "cannot create mutable borrow from immutable parameter".to_string(),
-                        },
-                        expr.span,
-                    );
-                }
             }
 
             Expr::Deref { expr: inner } => {
@@ -181,16 +161,6 @@ impl<'a> BorrowChecker<'a> {
                 for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
-                            // Cannot move from a non-owned parameter
-                            if let Some((param_name, kind)) = self.check_non_owned_param_move(&arg.node.value) {
-                                self.error(
-                                    SemanticErrorKind::MutationOfBareParam {
-                                        name: param_name,
-                                        detail: format!("cannot move from {kind} parameter"),
-                                    },
-                                    arg.span,
-                                );
-                            }
                             // Argument passed with `!` — check the move
                             if let Expr::Identifier(_) = &arg.node.value.node {
                                 if let Some(&def_id) =
@@ -213,17 +183,7 @@ impl<'a> BorrowChecker<'a> {
                             }
                         }
                         Ownership::MutableBorrow | Ownership::Borrow => {
-                            // Cannot pass a bare (immutable) param as `&` (mutable borrow)
                             if arg.node.ownership == Ownership::MutableBorrow {
-                                if let Some(param_name) = self.check_bare_param_mutation(&arg.node.value) {
-                                    self.error(
-                                        SemanticErrorKind::MutationOfBareParam {
-                                            name: param_name,
-                                            detail: "cannot create mutable borrow from immutable parameter".to_string(),
-                                        },
-                                        arg.span,
-                                    );
-                                }
                                 // Track passing `&` param with `&` to callee as mutation
                                 self.mark_mut_param_if_applicable(&arg.node.value);
                             }
@@ -234,19 +194,7 @@ impl<'a> BorrowChecker<'a> {
                                     if let Some(&var_def_id) = self.resolution_map.get(&arg.node.value.span.start) {
                                         let def = self.scopes.get_def(var_def_id);
                                         if def.kind == DefKind::Variable {
-                                            // Borrowed resource params cannot be stored in constructors.
-                                            if def.is_param {
-                                                if let Some((param_name, kind)) = self.check_non_owned_param_move(&arg.node.value) {
-                                                    self.error(
-                                                        SemanticErrorKind::MutationOfBareParam {
-                                                            name: param_name,
-                                                            detail: format!("cannot store {kind} parameter in a constructor — use `!` to transfer ownership"),
-                                                        },
-                                                        arg.span,
-                                                    );
-                                                    continue;
-                                                }
-                                            } else if let Some(type_id) = def.type_id {
+                                            if let Some(type_id) = def.type_id {
                                                 if !is_copy_type(type_id, self.types, self.scopes) {
                                                     let skip_implicit_move = self.loop_depth > 0
                                                         && !self.loop_local_defs.last()
@@ -295,23 +243,6 @@ impl<'a> BorrowChecker<'a> {
             } => {
                 self.check_expr(receiver);
                 self.check_call_aliasing(args);
-
-                // Check if calling a &self method on a bare (immutable) parameter
-                if let Some(param_name) = self.check_bare_param_mutation(receiver) {
-                    if let Some(&method_def_id) = self.method_resolutions.get(&method.span.start) {
-                        if let Some(info) = self.function_info.get(&method_def_id) {
-                            if info.param_ownerships.first() == Some(&Ownership::MutableBorrow) {
-                                self.error(
-                                    SemanticErrorKind::MutationOfBareParam {
-                                        name: param_name,
-                                        detail: "cannot call mutating method on immutable parameter".to_string(),
-                                    },
-                                    expr.span,
-                                );
-                            }
-                        }
-                    }
-                }
 
                 // Track `&` param mutation via &self method call
                 if let Some(def_id) = self.find_root_def_id(receiver) {
@@ -422,30 +353,9 @@ impl<'a> BorrowChecker<'a> {
                 } else {
                     false
                 };
-                // Detect consuming collection methods: push, put, set, add, etc.
-                // These store their value arg in the collection, transferring ownership.
-                let mname = method.node.as_str();
-                let consuming_value_idx: Option<usize> = match mname {
-                    "push" | "add" | "extend" | "send" | "push_back" | "push_front" => Some(0),
-                    "put" | "set" | "insert" | "update" | "get_or_put" => {
-                        if args.len() >= 2 { Some(1) } else { None }
-                    }
-                    _ => None,
-                };
-
-                for (arg_idx, arg) in args.iter().enumerate() {
+                for arg in args {
                     match arg.node.ownership {
                         Ownership::Move => {
-                            // Cannot move from a non-owned parameter
-                            if let Some((param_name, kind)) = self.check_non_owned_param_move(&arg.node.value) {
-                                self.error(
-                                    SemanticErrorKind::MutationOfBareParam {
-                                        name: param_name,
-                                        detail: format!("cannot move from {kind} parameter"),
-                                    },
-                                    arg.span,
-                                );
-                            }
                             if let Expr::Identifier(_) = &arg.node.value.node {
                                 if let Some(&def_id) =
                                     self.resolution_map.get(&arg.node.value.span.start)
@@ -460,24 +370,6 @@ impl<'a> BorrowChecker<'a> {
                             }
                         }
                         Ownership::MutableBorrow | Ownership::Borrow => {
-                            // Consuming collection method: value arg is stored in collection.
-                            // Non-owned resource params cannot be stored — use ! to transfer.
-                            // Only check direct identifiers — index/field expressions produce copies.
-                            if Some(arg_idx) == consuming_value_idx
-                                && matches!(&arg.node.value.node, Expr::Identifier(_))
-                            {
-                                if let Some((param_name, kind)) = self.check_non_owned_param_move(&arg.node.value) {
-                                    self.error(
-                                        SemanticErrorKind::MutationOfBareParam {
-                                            name: param_name,
-                                            detail: format!(
-                                                "cannot store {kind} parameter in collection via .{}() — use `!` to transfer ownership", mname
-                                            ),
-                                        },
-                                        arg.span,
-                                    );
-                                }
-                            }
                             // Track passing `&` param with `&` to callee as mutation
                             if arg.node.ownership == Ownership::MutableBorrow {
                                 self.mark_mut_param_if_applicable(&arg.node.value);
@@ -880,21 +772,7 @@ impl<'a> BorrowChecker<'a> {
                         if let Some(&var_def_id) = self.resolution_map.get(&arg.span.start) {
                             let def = self.scopes.get_def(var_def_id);
                             if def.kind == DefKind::Variable {
-                                // Borrowed resource params cannot be stored in structs.
-                                // The caller owns the data; storing creates a shallow copy
-                                // with shared heap pointers → use-after-free.
-                                if def.is_param {
-                                    if let Some((param_name, kind)) = self.check_non_owned_param_move(arg) {
-                                        self.error(
-                                            SemanticErrorKind::MutationOfBareParam {
-                                                name: param_name,
-                                                detail: format!("cannot store {kind} parameter in a struct — use `!` to transfer ownership"),
-                                            },
-                                            arg.span,
-                                        );
-                                        continue;
-                                    }
-                                } else if let Some(type_id) = def.type_id {
+                                if let Some(type_id) = def.type_id {
                                     if !is_copy_type(type_id, self.types, self.scopes) {
                                         let skip_implicit_move = self.loop_depth > 0
                                             && !self.loop_local_defs.last()

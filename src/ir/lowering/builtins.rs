@@ -44,7 +44,6 @@ pub struct BuiltinTypeArgs {
 /// Context for resolving return types that depend on other registered types.
 pub struct LookupCtx<'a> {
     pub lookup_type_by_name: &'a dyn Fn(&str) -> Option<TypeId>,
-    pub string_view_type: TypeId,
     pub owned_string_type: TypeId,
     /// Check if a TypeId is a resource type (owns heap allocations).
     pub is_resource: &'a dyn Fn(TypeId) -> bool,
@@ -157,9 +156,6 @@ fn ret_option_val(a: &BuiltinTypeArgs, ctx: &LookupCtx) -> TypeId {
     let option_name = format!("Option__{}", ctx.val_name);
     (ctx.ensure_option)(&option_name, a.val)
 }
-
-/// Returns StringView type.
-fn ret_string_view(_: &BuiltinTypeArgs, ctx: &LookupCtx) -> TypeId { ctx.string_view_type }
 
 /// Returns owned GorgetString type.
 fn ret_owned_string(_: &BuiltinTypeArgs, ctx: &LookupCtx) -> TypeId { ctx.owned_string_type }
@@ -534,12 +530,12 @@ pub static GORGET_STRING_VIEW: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "len", runtime_callee: Some("gorget_str_codepoint_count"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_int },
         BuiltinMethodDecl { name: "capacity", runtime_callee: Some("gorget_str_capacity"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_int },
         BuiltinMethodDecl { name: "hash", runtime_callee: Some("gorget_str_hash"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_int },
-        // View operations → StringView
-        BuiltinMethodDecl { name: "str", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_string_view },
-        BuiltinMethodDecl { name: "as_str", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_string_view },
-        BuiltinMethodDecl { name: "substring", runtime_callee: Some("gorget_str_slice"), self_conv: SelfConvention::Borrow, is_mutating: false, params: two_ints, return_type: ret_string_view },
-        BuiltinMethodDecl { name: "trim", runtime_callee: Some("gorget_str_trim"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_string_view },
-        BuiltinMethodDecl { name: "strip", runtime_callee: Some("gorget_str_strip"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_string_view },
+        // View operations → GorgetString
+        BuiltinMethodDecl { name: "str", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
+        BuiltinMethodDecl { name: "as_str", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
+        BuiltinMethodDecl { name: "substring", runtime_callee: Some("gorget_str_slice"), self_conv: SelfConvention::Borrow, is_mutating: false, params: two_ints, return_type: ret_owned_string },
+        BuiltinMethodDecl { name: "trim", runtime_callee: Some("gorget_str_trim"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
+        BuiltinMethodDecl { name: "strip", runtime_callee: Some("gorget_str_strip"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
         // Allocating operations → GorgetString
         BuiltinMethodDecl { name: "to_upper", runtime_callee: Some("gorget_str_to_upper"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
         BuiltinMethodDecl { name: "to_lower", runtime_callee: Some("gorget_str_to_lower"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },

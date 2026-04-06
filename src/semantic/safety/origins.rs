@@ -746,8 +746,7 @@ impl<'a> BorrowChecker<'a> {
         if let Some(&type_id) = self.expr_types.get(&expr.span) {
             return matches!(
                 self.types.get(type_id),
-                types::ResolvedType::Primitive(PrimitiveType::StringView)
-                | types::ResolvedType::Primitive(PrimitiveType::StringType)
+                types::ResolvedType::Primitive(PrimitiveType::StringType)
             );
         }
         // Structural heuristics
@@ -759,8 +758,7 @@ impl<'a> BorrowChecker<'a> {
                     if let Some(tid) = def.type_id {
                         return matches!(
                             self.types.get(tid),
-                            types::ResolvedType::Primitive(PrimitiveType::StringView)
-                            | types::ResolvedType::Primitive(PrimitiveType::StringType)
+                            types::ResolvedType::Primitive(PrimitiveType::StringType)
                         );
                     }
                 }

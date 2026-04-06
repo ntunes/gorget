@@ -52,8 +52,7 @@ pub(super) fn lower_binary_op(
 
     // Determine result type from lhs operand type (use _full to check builder temps too)
     let operand_type = infer_operand_type_full(ctx, &lhs, builder);
-    let is_string = operand_type == ctx.type_mapper.string_view_type
-        || operand_type == ctx.type_mapper.owned_string_type;
+    let is_string = operand_type == ctx.type_mapper.owned_string_type;
 
     match op {
         // Comparison operators → bool result
@@ -87,9 +86,7 @@ pub(super) fn lower_binary_op(
 
             // String equality: use gorget_str_eq instead of pointer comparison
             if is_string && matches!(op, AstOp::Eq | AstOp::Neq) {
-                let string_view_type = ctx.type_mapper.string_view_type;
                 let dst = builder.call_extern("gorget_str_eq", vec![lhs, rhs], BOOL_TYPE);
-                let _ = string_view_type;
                 if op == AstOp::Neq {
                     let neg = builder.un_op(UnOp::Not, BOOL_TYPE, FunctionBuilder::copy(dst));
                     return FunctionBuilder::copy(neg);

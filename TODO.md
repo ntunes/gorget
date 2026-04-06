@@ -26,6 +26,8 @@
 
 - **Flow-sensitive prescan**: Track which basic blocks reassign each name, not just function-wide. Reduces conservative clones when only one branch mutates. [added: 2026-04-05]
 
+- **Borrow checker: early return doesn't reset move state**: If a variable is moved inside an `if` block that always returns (all paths end with `return`), the borrow checker still considers the variable moved after the if block. This forced defensive `.clone()` in self-host `scope.gg` `define_with_mutability`. Should merge branch states at join points, recognizing divergent branches. [added: 2026-04-05]
+
 
 - **CoW: nested field mutation gap**: `s.v.push(x)` goes through `field_place_info` path in `methods.rs:1030` which skips `cow_before_mutation`. If `s.v[0]` previously created a `cow_collection_refs` entry keyed on a FieldLoad temp, the ref won't be cloned out before the push. Only affects resource-type elements (e.g., `Vector[Vector[int]]` inside a struct), not strings or primitives. The borrow checker only catches explicit `T &` refs, not implicit CoW borrows. Fix requires tracking FieldLoad provenance through to `cow_collection_refs` — non-trivial. [added: 2026-04-05]
 
@@ -74,8 +76,6 @@
 - **Inline `None()` without typed variable**: Produces garbage. Workaround: bind to typed `Option[T]` first. [added: 2026-03-11]
 
 - **`shared static` support**: Thread-safe module-level statics. Workaround: explicit `Mutex[int]`. [added: 2026-03-10]
-
-- **Remove PrimitiveType::StringView + provenance pass**: The provenance pass (Pass 4.5/4.6) rewrites AST types from StringType→StringView for string borrows. The safety checker uses StringView to identify borrows — without it, 112 integration tests fail ("cannot mutate bare parameter"). Removing StringView requires making the safety checker derive borrow status from parameter convention (all string params are borrows) rather than from the AST type. ~26 files, ~183 references. [added: 2026-04-05]
 
 - **C backend: `compute_type_overrides` should use TypeIds**: Fragile string-matching. [added: 2026-03-14]
 

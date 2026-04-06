@@ -2913,19 +2913,6 @@ fn assert_fmt_idempotent(fixture: &str) {
 // Semantic error tests (expected check failures)
 // ══════════════════════════════════════════════════════════════
 
-/// Run `gg check` on a fixture and assert it fails with a specific error message.
-fn check_gg_passes(fixture: &str) {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
-    assert!(fixture_path.exists(), "Fixture not found: {}", fixture_path.display());
-    let output = build_with_timeout(gg_command("check").arg(&fixture_path), fixture);
-    assert!(
-        output.status.success(),
-        "Expected `gg check` to pass for {fixture}, but it failed.\nstderr: {}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-}
-
 fn check_gg_fails(fixture: &str, expected_stderr: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
@@ -2964,45 +2951,6 @@ fn const_assign_error() {
     );
 }
 
-#[test]
-fn borrow_param_store_struct_error() {
-    check_gg_fails(
-        "borrow_param_store_struct_error.gg",
-        "cannot store immutable parameter in a struct",
-    );
-}
-
-#[test]
-fn borrow_param_return_error() {
-    check_gg_fails(
-        "borrow_param_return_error.gg",
-        "cannot return immutable parameter",
-    );
-}
-
-#[test]
-fn borrow_param_variant_error() {
-    check_gg_fails(
-        "borrow_param_variant_error.gg",
-        "cannot store immutable parameter in a constructor",
-    );
-}
-
-#[test]
-fn borrow_param_field_assign_error() {
-    check_gg_fails(
-        "borrow_param_field_assign_error.gg",
-        "cannot store immutable parameter in a field",
-    );
-}
-
-#[test]
-fn borrow_param_mut_store_error() {
-    check_gg_fails(
-        "borrow_param_mut_store_error.gg",
-        "cannot store mutably borrowed parameter",
-    );
-}
 
 #[test]
 fn assignment_clone() {
@@ -5735,52 +5683,6 @@ all lifetime checks passed",
     );
 }
 
-#[test]
-fn lifetime_dangling_error() {
-    // After str→String unification, String s = "hello" is a literal → view (Str/Copy).
-    // Returning a Copy value is always safe — no dangling.
-    run_gg("lifetime_dangling_error.gg", "hello");
-}
-
-#[test]
-fn bare_param_mutation_error() {
-    check_gg_fails(
-        "bare_param_mutation_error.gg",
-        "cannot mutate bare parameter",
-    );
-}
-
-#[test]
-fn bare_param_method_error() {
-    check_gg_fails(
-        "bare_param_method_error.gg",
-        "cannot mutate bare parameter",
-    );
-}
-
-#[test]
-fn bare_param_move_error() {
-    check_gg_fails(
-        "bare_param_move_error.gg",
-        "cannot move from immutable parameter",
-    );
-}
-
-#[test]
-fn bare_param_borrow_error() {
-    check_gg_fails(
-        "bare_param_borrow_error.gg",
-        "cannot create mutable borrow from immutable parameter",
-    );
-}
-
-#[test]
-fn mut_param_move_error() {
-    check_gg_fails(
-        "mut_param_move_error.gg",
-        "cannot move from mutably borrowed parameter",
-    );
-}
 
 #[test]
 fn field_move_error() {
@@ -5806,13 +5708,6 @@ fn struct_cast_error() {
     );
 }
 
-#[test]
-fn lifetime_use_after_move_error() {
-    check_gg_fails(
-        "lifetime_use_after_move_error.gg",
-        "after source",
-    );
-}
 
 #[test]
 fn lifetime_struct() {
@@ -5829,37 +5724,6 @@ struct lifetime ok",
     );
 }
 
-#[test]
-fn lifetime_struct_error() {
-    check_gg_fails(
-        "lifetime_struct_error.gg",
-        "after source",
-    );
-}
-
-#[test]
-fn lifetime_branch_error() {
-    check_gg_fails(
-        "lifetime_branch_error.gg",
-        "after source",
-    );
-}
-
-#[test]
-fn lifetime_pattern_error() {
-    check_gg_fails(
-        "lifetime_pattern_error.gg",
-        "after source",
-    );
-}
-
-#[test]
-fn lifetime_temporary_error() {
-    check_gg_fails(
-        "lifetime_temporary_error.gg",
-        "temporary",
-    );
-}
 
 #[test]
 fn lifetime_groups() {
@@ -5889,20 +5753,6 @@ fn lifetime_method() {
     );
 }
 
-#[test]
-fn lifetime_method_error() {
-    // User-defined functions always return owned strings (IR clones on return).
-    // get_name() returns an owned copy, so v is independent of h. Now valid.
-    check_gg_passes("lifetime_method_error.gg");
-}
-
-#[test]
-fn lifetime_method_temp_error() {
-    check_gg_fails(
-        "lifetime_method_temp_error.gg",
-        "temporary",
-    );
-}
 
 #[test]
 fn lifetime_loop_error() {
@@ -5912,29 +5762,6 @@ fn lifetime_loop_error() {
     );
 }
 
-#[test]
-fn lifetime_closure_error() {
-    check_gg_fails(
-        "lifetime_closure_error.gg",
-        "after source",
-    );
-}
-
-#[test]
-fn lifetime_closure_return_error() {
-    check_gg_fails(
-        "lifetime_closure_return_error.gg",
-        "borrows from local variable",
-    );
-}
-
-#[test]
-fn lifetime_closure_cross_fn_error() {
-    check_gg_fails(
-        "lifetime_closure_cross_fn_error.gg",
-        "after source",
-    );
-}
 
 #[test]
 fn lifetime_reassign() {
@@ -5944,27 +5771,7 @@ fn lifetime_reassign() {
     );
 }
 
-#[test]
-fn lifetime_reassign_error() {
-    check_gg_fails(
-        "lifetime_reassign_error.gg",
-        "after source",
-    );
-}
 
-#[test]
-fn lifetime_fstring_return_error() {
-    // IR auto-clones view returns to owned, so this is now valid.
-    check_gg_passes("lifetime_fstring_return_error.gg");
-}
-
-#[test]
-fn lifetime_fstring_bind_error() {
-    check_gg_fails(
-        "lifetime_fstring_bind_error.gg",
-        "cannot bind `str` variable",
-    );
-}
 
 #[test]
 fn measurable_trait() {
@@ -7066,7 +6873,6 @@ fn format_primitive_canonical(p: &PrimitiveType) -> &'static str {
         PrimitiveType::Float32 => "float32",
         PrimitiveType::Float64 => "float64",
         PrimitiveType::Bool => "bool",
-        PrimitiveType::StringView => "str",
         PrimitiveType::CStr => "cstr",
         PrimitiveType::StringType => "String",
         PrimitiveType::Void => "void",

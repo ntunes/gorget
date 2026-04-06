@@ -142,10 +142,10 @@ fn lower_for_string(
     body: &Block,
     else_arm: Option<&Block>,
 ) {
-    let string_view_type = ctx.type_mapper.string_view_type;
+    let owned_string_type = ctx.type_mapper.owned_string_type;
 
     // Store the iterable in a local
-    let iter_local = builder.add_local(string_view_type, None);
+    let iter_local = builder.add_local(owned_string_type, None);
     builder.assign(Place::local(iter_local), iter_op);
 
     // byte_pos = 0
@@ -201,9 +201,9 @@ fn lower_for_string(
     let ch_local = builder.call_extern(
         "gorget_str_codepoint_at",
         vec![FunctionBuilder::copy(iter_local), FunctionBuilder::copy(byte_pos)],
-        string_view_type,
+        owned_string_type,
     );
-    ctx.register_local(var_name, ch_local, string_view_type);
+    ctx.register_local(var_name, ch_local, owned_string_type);
 
     // Lower the body
     lower_block(ctx, builder, body);

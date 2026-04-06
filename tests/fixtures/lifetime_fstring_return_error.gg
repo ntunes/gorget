@@ -1,9 +1,0 @@
-# Lifetime error: returning view of local f-string (dangling return)
-# (After str/String unification, f-string → owned; .as_str() creates a view)
-String bad():
-    String local = f"x={42}" # f-string creates an owned String
-    String v = local.as_str()
-    return v
-
-void main():
-    print(bad())

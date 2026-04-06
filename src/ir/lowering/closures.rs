@@ -333,7 +333,7 @@ pub fn emit_closure_call_function(
             let should_override = actual_type != closure.return_type
                 && actual_type != UNIT_TYPE
                 && !(actual_type == ctx.type_mapper.owned_string_type
-                     && closure.return_type == ctx.type_mapper.string_view_type);
+                     && closure.return_type == ctx.type_mapper.owned_string_type);
             if should_override {
                 builder.locals[0].type_id = actual_type;
             }
@@ -689,7 +689,7 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
         Expr::IntLiteral(_) => I64_TYPE,
         Expr::FloatLiteral(_) => F64_TYPE,
         Expr::BoolLiteral(_) => BOOL_TYPE,
-        Expr::StringLiteral(_) => ctx.type_mapper.string_view_type,
+        Expr::StringLiteral(_) => ctx.type_mapper.owned_string_type,
         Expr::BinaryOp { op, .. } => {
             use crate::parser::ast::BinaryOp;
             match op {

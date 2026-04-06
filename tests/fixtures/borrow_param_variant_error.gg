@@ -1,9 +1,0 @@
-from std.collections import Vector
-
-Vector[int] items = [1, 2, 3]
-
-Option[Vector[int]] maybe_wrap(Vector[int] v):
-    return Some(v)
-
-void main():
-    Option[Vector[int]] wrapped = maybe_wrap(items)

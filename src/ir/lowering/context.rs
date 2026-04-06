@@ -376,7 +376,7 @@ impl<'a> LoweringContext<'a> {
                 "uint16_t" => crate::ir::types::U16_TYPE,
                 "uint8_t" => crate::ir::types::U8_TYPE,
                 "void" => UNIT_TYPE,
-                "GorgetString" | "Str" => mapper.string_view_type,
+                "GorgetString" | "Str" => mapper.owned_string_type,
                 other => mapper.lookup_named(other).unwrap_or(I64_TYPE),
             }
         };
@@ -417,7 +417,7 @@ impl<'a> LoweringContext<'a> {
                 (I64_TYPE, I64_TYPE, I64_TYPE, "int64_t".to_string(), "int64_t".to_string())
             };
 
-            // Resolve through Ptr — string borrow params are Ptr(StringView)
+            // Resolve through Ptr — string borrow params are Ptr(GorgetString)
             // but method return types should use the base type.
             let resolved_self = self.pointee_type(*type_id).unwrap_or(*type_id);
             let type_args = BuiltinTypeArgs {
@@ -431,7 +431,6 @@ impl<'a> LoweringContext<'a> {
             let type_registry = &self.type_registry;
             let lookup_ctx = LookupCtx {
                 lookup_type_by_name: &|name: &str| self.type_mapper.lookup_named(name),
-                string_view_type: self.type_mapper.string_view_type,
                 owned_string_type: self.type_mapper.owned_string_type,
                 is_resource: &|tid| type_registry.is_resource_type(tid),
                 ensure_option: &|name: &str, _inner: TypeId| {
@@ -516,7 +515,7 @@ impl<'a> LoweringContext<'a> {
                 "uint32_t" => crate::ir::types::U32_TYPE,
                 "uint64_t" => crate::ir::types::U64_TYPE,
                 "void" => UNIT_TYPE,
-                "GorgetString" | "Str" => self.type_mapper.string_view_type,
+                "GorgetString" | "Str" => self.type_mapper.owned_string_type,
                 other => self.type_mapper.lookup_named(other).unwrap_or(I64_TYPE),
             }
         };
@@ -550,7 +549,6 @@ impl<'a> LoweringContext<'a> {
         let type_mapper = &self.type_mapper;
         let lookup_ctx = LookupCtx {
             lookup_type_by_name: &|name: &str| self.type_mapper.lookup_named(name),
-            string_view_type: self.type_mapper.string_view_type,
             owned_string_type: self.type_mapper.owned_string_type,
             is_resource: &|tid| type_registry.is_resource_type(tid),
             ensure_option: &|name: &str, _inner: TypeId| {
@@ -932,32 +930,6 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    /// Adjust a GIR string type based on provenance analysis.
-    /// After str→StringType parser unification, all string annotations produce
-    /// `owned_string_type` in the IR. But provenance may have downgraded the
-    /// semantic type_id to `string_id` (view). This method checks the semantic
-    /// type_id and returns `str_type` if provenance determined the binding is a view.
-    pub fn provenance_adjusted_string_type(
-        &self,
-        gir_type: TypeId,
-        name: &str,
-        span: crate::span::Span,
-    ) -> TypeId {
-        if gir_type != self.type_mapper.owned_string_type {
-            return gir_type;
-        }
-        // Look up the provenance-adjusted type_id from semantic analysis
-        if let Some(def_id) = self.analysis.scopes.lookup_def_by_span(name, span) {
-            let def = self.analysis.scopes.get_def(def_id);
-            if let Some(sem_tid) = def.type_id {
-                if sem_tid == self.analysis.types.string_id {
-                    return self.type_mapper.string_view_type;
-                }
-            }
-        }
-        gir_type
-    }
-
     /// Extract the Ok type from a Result TypeId, if it is a Result type.
     pub fn unwrap_result_ok_type(&self, result_type: TypeId) -> Option<TypeId> {
         let name = self.type_registry.type_name(result_type)?;
@@ -977,7 +949,7 @@ impl<'a> LoweringContext<'a> {
             Expr::IntLiteral(_) => I64_TYPE,
             Expr::FloatLiteral(_) => F64_TYPE,
             Expr::BoolLiteral(_) => BOOL_TYPE,
-            Expr::StringLiteral(_) => self.type_mapper.string_view_type,
+            Expr::StringLiteral(_) => self.type_mapper.owned_string_type,
             Expr::BinaryOp { left, op, .. } => {
                 use crate::parser::ast::BinaryOp;
                 match op {
@@ -1120,7 +1092,7 @@ impl<'a> LoweringContext<'a> {
     /// Check if a type is a string type, resolving through Ptr.
     pub fn is_string_type(&self, type_id: TypeId) -> bool {
         let resolved = self.pointee_type(type_id).unwrap_or(type_id);
-        resolved == self.type_mapper.string_view_type
+        resolved == self.type_mapper.owned_string_type
             || resolved == self.type_mapper.owned_string_type
     }
 

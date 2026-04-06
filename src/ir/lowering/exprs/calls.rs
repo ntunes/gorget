@@ -155,9 +155,9 @@ pub(super) fn lower_call_arg(
                     return FunctionBuilder::copy(dst);
                 }
             }
-            // Fallback: materialize as StringView if the value is a string constant.
+            // Fallback: materialize as GorgetString if the value is a string constant.
             if let Operand::Constant(Constant::Str(_)) = &val {
-                let sv_type = ctx.type_mapper.string_view_type;
+                let sv_type = ctx.type_mapper.owned_string_type;
                 let tmp = builder.add_local(sv_type, None);
                 builder.assign(Place::local(tmp), val);
                 let ptr_type = ctx.register_ptr_type(sv_type);
@@ -1131,8 +1131,8 @@ fn format_for_printf(
             if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                 builder.emit_borrow(self_ptr, place.clone());
             }
-            let string_view_type = ctx.type_mapper.string_view_type;
-            let result = builder.call(effective_method, vec![FunctionBuilder::copy(self_ptr)], string_view_type);
+            let owned_string_type = ctx.type_mapper.owned_string_type;
+            let result = builder.call(effective_method, vec![FunctionBuilder::copy(self_ptr)], owned_string_type);
             ("%.*s".to_string(), vec![FunctionBuilder::copy(result)])
         } else {
             // No display method — fall through to default formatting
@@ -1280,12 +1280,12 @@ fn apply_format_spec(
         'b' if is_any_int => {
             // Binary has no printf equivalent — call runtime helper returning const char*
             let op = widen_int(builder, type_id, operand);
-            let string_view_type = ctx.type_mapper.string_view_type;
+            let owned_string_type = ctx.type_mapper.owned_string_type;
             let alt_arg = Operand::Constant(Constant::I64(if alt { 1 } else { 0 }));
             let result = builder.call_extern(
                 "gorget_int_to_binary",
                 vec![op, alt_arg],
-                string_view_type,
+                owned_string_type,
             );
             Some(("%.*s".to_string(), vec![FunctionBuilder::copy(result)]))
         }

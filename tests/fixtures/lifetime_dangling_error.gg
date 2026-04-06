@@ -1,9 +1,0 @@
-# Previously a lifetime error: returning a String view of a local String.
-# After str→String unification, String s = "hello" is a literal view (Copy).
-# Returning a Copy value is always safe.
-String get():
-    String s = "hello"
-    return s
-
-void main():
-    print(get())

@@ -22,13 +22,9 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(value);
 
                 // Check: if value is a bare identifier of non-Copy type, needs `!`
-                // Skip for view-string targets: creating a view from an owned string
-                // is a borrow (not a move). The provenance pass + AST rewrite set
-                // the target type to Str for view bindings.
                 // Destructuring patterns (Tuple) implicitly move the value,
                 // so suppress MoveWithoutOperator for them.
-                let target_is_view_str = matches!(type_.node, Type::Primitive(PrimitiveType::StringView));
-                if !target_is_view_str {
+                {
                     let is_destructure = matches!(&pattern.node, Pattern::Tuple(_));
                     if is_destructure {
                         self.in_destructuring_bind = true;
@@ -348,24 +344,6 @@ impl<'a> BorrowChecker<'a> {
                 }
                 self.check_expr(value);
 
-                // Borrowed resource params cannot be stored in struct fields.
-                // The field would hold a shallow copy sharing the caller's heap data.
-                // Only check bare identifiers — field access (b.value) reads a single
-                // field which may be a Copy type, not the whole resource param.
-                if matches!(&target.node, Expr::FieldAccess { .. } | Expr::Index { .. }) {
-                    if let Expr::Identifier(_) = &value.node {
-                        if let Some((param_name, kind)) = self.check_non_owned_param_move(value) {
-                            self.error(
-                                SemanticErrorKind::MutationOfBareParam {
-                                    name: param_name,
-                                    detail: format!("cannot store {kind} parameter in a field — use `!` to transfer ownership"),
-                                },
-                                value.span,
-                            );
-                        }
-                    }
-                }
-
                 // Check: if value is a bare identifier of non-Copy type, needs `!`
                 // Skip for view-string targets (creating a view from owned is a borrow).
                 let target_is_view_str = if let Expr::Identifier(_) = &target.node {
@@ -520,16 +498,6 @@ impl<'a> BorrowChecker<'a> {
                     }
                     // For field/index assignments, check the base object
                     _ => {
-                        // Check for mutation through a bare (immutable) parameter
-                        if let Some(param_name) = self.check_bare_param_mutation(target) {
-                            self.error(
-                                SemanticErrorKind::MutationOfBareParam {
-                                    name: param_name,
-                                    detail: "use `&` to declare a mutable parameter".to_string(),
-                                },
-                                target.span,
-                            );
-                        }
                         // Track mutation of `&` params
                         self.mark_mut_param_if_applicable(target);
                         self.check_expr(target);
@@ -605,16 +573,6 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
                 }
-                // Check for mutation through a bare (immutable) parameter
-                if let Some(param_name) = self.check_bare_param_mutation(target) {
-                    self.error(
-                        SemanticErrorKind::MutationOfBareParam {
-                            name: param_name,
-                            detail: "use `&` to declare a mutable parameter".to_string(),
-                        },
-                        target.span,
-                    );
-                }
                 self.check_expr(target);
                 self.check_expr(value);
             }
@@ -685,20 +643,6 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
                     } // imported_module_depth == 0
-
-                    // Borrowed resource params cannot be returned — shallow copy
-                    // shares the caller's heap data, freed at caller scope exit.
-                    if let Expr::Identifier(_) = &expr.node {
-                        if let Some((param_name, kind)) = self.check_non_owned_param_move(expr) {
-                            self.error(
-                                SemanticErrorKind::MutationOfBareParam {
-                                    name: param_name,
-                                    detail: format!("cannot return {kind} parameter — use `!` to transfer ownership"),
-                                },
-                                expr.span,
-                            );
-                        }
-                    }
 
                     // Check if returning a closure (or a struct/array containing one)
                     // that captures local variables — use-after-free.
@@ -1437,20 +1381,6 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
                 } // imported_module_depth == 0
-
-                // Borrowed resource params cannot be returned — shallow copy
-                // shares the caller's heap data, freed at caller scope exit.
-                if let Expr::Identifier(_) = &expr.node {
-                    if let Some((param_name, kind)) = self.check_non_owned_param_move(expr) {
-                        self.error(
-                            SemanticErrorKind::MutationOfBareParam {
-                                name: param_name,
-                                detail: format!("cannot return {kind} parameter — use `!` to transfer ownership"),
-                            },
-                            expr.span,
-                        );
-                    }
-                }
 
                 self.check_expr(expr);
                 // Also check closure escape for expression-body functions.

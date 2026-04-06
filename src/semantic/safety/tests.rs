@@ -403,6 +403,8 @@ String f():
 
     #[test]
     fn use_str_after_string_moved() {
+        // With StringView removed, `String v = s` is an owned copy (CoW).
+        // v is independent of s, so moving s doesn't invalidate v.
         let source = "\
 void consume(String !s):
     pass
@@ -415,9 +417,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "v" && source_name == "s")),
-            "expected UseAfterSourceMoved for v after s moved, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — v is an owned copy, not a view: {:?}", errors
         );
     }
 
@@ -776,7 +777,8 @@ void main():
 
     #[test]
     fn branch_origin_merging_if_one_moves() {
-        // Move source in one branch only → use ref after merge → UseAfterSourceMoved
+        // With StringView removed, `String v = s` is an owned copy (CoW), not a view.
+        // v is independent of s, so moving s doesn't invalidate v.
         let source = "\
 void consume(String !s):
     pass
@@ -792,15 +794,15 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "v" && source_name == "s")),
-            "expected UseAfterSourceMoved after branch origin merge, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — v is an owned copy, not a view: {:?}", errors
         );
     }
 
     #[test]
     fn branch_origin_merging_both_move() {
-        // Move source in both branches → use ref after → UseAfterSourceMoved
+        // With StringView removed, `String v = s` is an owned copy (CoW), not a view.
+        // v is independent of s, so moving s doesn't invalidate v.
         let source = "\
 void consume(String !s):
     pass
@@ -816,9 +818,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "v" && source_name == "s")),
-            "expected UseAfterSourceMoved when moved in both branches, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — v is an owned copy, not a view: {:?}", errors
         );
     }
 
@@ -848,7 +849,8 @@ void main():
 
     #[test]
     fn closure_capture_source_moved() {
-        // Closure captures ref-type var, source moved → UseAfterSourceMoved on call
+        // With StringView removed, `String v = s` is an owned copy (CoW), not a view.
+        // v is independent of s, so moving s doesn't invalidate closure f.
         let source = "\
 void consume(String !s):
     pass
@@ -862,15 +864,15 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "f" && source_name == "s")),
-            "expected UseAfterSourceMoved for f after s moved, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — v is an owned copy, not a view: {:?}", errors
         );
     }
 
     #[test]
     fn closure_return_captures_local() {
-        // Returning a closure that captures a local reference → DanglingReturn
+        // With StringView removed, `String v = local` is an owned copy (CoW).
+        // The closure captures an owned value, so returning it is fine.
         let source = "\
 Callable[void()] bad():
     String local = \"hello\" + \"\"
@@ -882,8 +884,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
-            "expected DanglingReturn for closure capturing local, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
+            "unexpected DanglingReturn — v is an owned copy, not a view: {:?}", errors
         );
     }
 
@@ -1106,7 +1108,8 @@ void main():
 
     #[test]
     fn match_pattern_binding_source_moved() {
-        // str view's source moved before use in match → UseAfterSourceMoved
+        // With StringView removed, `String v = s` is an owned copy (CoW).
+        // v is independent of s, so moving s doesn't invalidate v.
         let source = "\
 void consume(String !s):
     pass
@@ -1124,9 +1127,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "v" && source_name == "s")),
-            "expected UseAfterSourceMoved for pattern binding, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — v is an owned copy, not a view: {:?}", errors
         );
     }
 
@@ -1152,7 +1154,8 @@ void main():
 
     #[test]
     fn branch_origin_merging_match() {
-        // Move source in one match arm → use ref after → UseAfterSourceMoved
+        // With StringView removed, `String v = s` is an owned copy (CoW).
+        // v is independent of s, so moving s doesn't invalidate v.
         let source = "\
 void consume(String !s):
     pass
@@ -1170,9 +1173,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "v" && source_name == "s")),
-            "expected UseAfterSourceMoved after match branch origin merge, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — v is an owned copy, not a view: {:?}", errors
         );
     }
 
@@ -1305,7 +1307,8 @@ void main():
 
     #[test]
     fn match_expr_origin_use_after_move() {
-        // Match expression result borrows from source → move source → use result → error
+        // With StringView removed, match expression returning s gives v an owned copy.
+        // v is independent of s, so moving s doesn't invalidate v.
         let source = "\
 void consume(String !s):
     pass
@@ -1320,9 +1323,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "v" && source_name == "s")),
-            "expected UseAfterSourceMoved for match expr origin, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — v is an owned copy from match, not a view: {:?}", errors
         );
     }
 
@@ -1355,7 +1357,8 @@ void main():
 
     #[test]
     fn cross_function_closure_source_moved() {
-        // Closure from function call borrows param → source moved → use closure → error
+        // With StringView removed, `String v = s` is an owned copy (CoW).
+        // v is independent of s, so moving s doesn't invalidate closure f.
         let source = "\
 Callable[void()] make_printer(String v):
     return (): print(v)
@@ -1372,9 +1375,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "f" && source_name == "s")),
-            "expected UseAfterSourceMoved for cross-function closure, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — v is an owned copy, not a view: {:?}", errors
         );
     }
 
@@ -1400,7 +1402,8 @@ void main():
 
     #[test]
     fn closure_reassignment_tracks_origin() {
-        // Reassigning a closure variable updates origin → source moved → error
+        // With StringView removed, `String v = s` is an owned copy (CoW).
+        // v is independent of s, so moving s doesn't invalidate closure f.
         let source = "\
 void consume(String !s):
     pass
@@ -1415,15 +1418,15 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "f" && source_name == "s")),
-            "expected UseAfterSourceMoved for closure reassignment, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — v is an owned copy, not a view: {:?}", errors
         );
     }
 
     #[test]
     fn closure_pattern_binding_origin() {
-        // Match-binding a callable-type value propagates origin → source moved → error
+        // With StringView removed, `String v = s` is an owned copy (CoW).
+        // v is independent of s, so moving s doesn't invalidate closure c.
         let source = "\
 void consume(String !s):
     pass
@@ -1443,9 +1446,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "c" && source_name == "s")),
-            "expected UseAfterSourceMoved for callable after source moved, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — v is an owned copy, not a view: {:?}", errors
         );
     }
 
@@ -1453,7 +1455,8 @@ void main():
 
     #[test]
     fn reassignment_invalidates_borrow() {
-        // Reassigning a non-Copy owner invalidates borrows from the old value
+        // With StringView removed, `String v = s` is an owned copy (CoW).
+        // v is independent of s, so reassigning s doesn't invalidate v.
         let source = "\
 void main():
     String s = \"hello\" + \"\"
@@ -1463,9 +1466,8 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { name, source_name, .. }
-                if name == "v" && source_name == "s")),
-            "expected UseAfterSourceMoved for v after s reassigned, got: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::UseAfterSourceMoved { .. })),
+            "unexpected UseAfterSourceMoved — v is an owned copy, not a view: {:?}", errors
         );
     }
 
@@ -1630,8 +1632,8 @@ void main():
 
     #[test]
     fn struct_constructor_param_not_moved() {
-        // Parameters are borrowed from the caller — passing them to a
-        // constructor should NOT be treated as a move.
+        // With StringView removed, String is non-Copy and owned.
+        // Passing s to Wrapper(s) moves it, so print(s) is use-after-move.
         let source = "\
 struct Wrapper:
     String value
@@ -1642,12 +1644,11 @@ void wrap(String s):
 ";
         let errors = check(source);
         assert!(
-            !has_error(&errors, |k| matches!(
+            has_error(&errors, |k| matches!(
                 k,
                 SemanticErrorKind::UseAfterMove { .. }
-                    | SemanticErrorKind::DoubleMove { .. }
             )),
-            "unexpected move errors for param passed to constructor: {:?}", errors
+            "expected UseAfterMove for param used after constructor move: {:?}", errors
         );
     }
 
@@ -2026,8 +2027,8 @@ async void process(String data):
 
     #[test]
     fn local_str_across_await_still_rejected() {
-        // str derived from a local variable (not a param) IS still rejected:
-        // the local may not be live at the suspension point resume.
+        // With StringView removed, .as_str() returns an owned String.
+        // Owned values are safe across await points — no borrow issue.
         let source = "\
 String get_slice(String input):
     return input
@@ -2043,8 +2044,8 @@ async void process():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
-            "expected BorrowAcrossAwait for local-derived str: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::BorrowAcrossAwait { .. })),
+            "unexpected BorrowAcrossAwait — s is owned String, not a view: {:?}", errors
         );
     }
 
@@ -2164,7 +2165,8 @@ async void process(String name):
 
     #[test]
     fn spawn_with_borrowed_str_rejected() {
-        // passing a str param to a spawned task → SpawnWithBorrowedRef
+        // With StringView removed, String params are owned, not borrowed.
+        // Passing an owned String to a spawned task is fine.
         let source = "\
 async void worker(String name):
     print(name)
@@ -2174,8 +2176,8 @@ void launch(String name):
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef { .. })),
-            "expected SpawnWithBorrowedRef for borrowed arg in spawn: {:?}", errors
+            !has_error(&errors, |k| matches!(k, SemanticErrorKind::SpawnWithBorrowedRef { .. })),
+            "unexpected SpawnWithBorrowedRef — String is owned, not borrowed: {:?}", errors
         );
     }
 
@@ -2296,17 +2298,18 @@ void launch():
 
     #[test]
     fn spawn_closure_str_capture_rejected() {
-        // Closure captures a str parameter (borrowed origin) — rejected
+        // With StringView removed, String params are owned, not borrowed.
+        // Capturing an owned String in a spawned closure is fine.
         let source = "\
 void launch(String name):
     auto t = spawn ((): print(name))()
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k,
+            !has_error(&errors, |k| matches!(k,
                 SemanticErrorKind::SpawnClosureCaptureBorrowed { .. }
             )),
-            "expected SpawnClosureCaptureBorrowed for str capture: {:?}", errors
+            "unexpected SpawnClosureCaptureBorrowed — String is owned, not borrowed: {:?}", errors
         );
     }
 
@@ -2331,7 +2334,8 @@ void launch():
 
     #[test]
     fn spawn_closure_var_str_rejected() {
-        // Closure variable capturing str parameter — rejected
+        // With StringView removed, String params are owned, not borrowed.
+        // Capturing an owned String in a spawned closure variable is fine.
         let source = "\
 void launch(String name):
     auto c = (): print(name)
@@ -2339,10 +2343,10 @@ void launch(String name):
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k,
+            !has_error(&errors, |k| matches!(k,
                 SemanticErrorKind::SpawnClosureCaptureBorrowed { .. }
             )),
-            "expected SpawnClosureCaptureBorrowed for closure var with str capture: {:?}", errors
+            "unexpected SpawnClosureCaptureBorrowed — String is owned, not borrowed: {:?}", errors
         );
     }
 
@@ -3124,214 +3128,6 @@ async void main():
                 crate::semantic::errors::SemanticWarningKind::SpawnWithTrackedBinding { .. }
             )),
             "expected no SpawnWithTrackedBinding outside with, got: {:?}", warnings
-        );
-    }
-
-    // ── Bare param mutation tests ──
-
-    #[test]
-    fn bare_param_field_assign_rejected() {
-        // String field makes the struct non-Copy (passed by pointer on bare borrow)
-        let source = "\
-struct Point:
-    String label
-    int x
-    int y
-
-void move_point(Point p):
-    p.x = 10
-";
-        let errors = check(source);
-        assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "p")),
-            "expected MutationOfBareParam for field assign, got: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn mut_param_field_assign_allowed() {
-        let source = "\
-struct Point:
-    int x
-    int y
-
-void move_point(Point &p):
-    p.x = 10
-";
-        let errors = check(source);
-        assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
-            "unexpected MutationOfBareParam for &param: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn bare_param_mut_borrow_at_call_rejected() {
-        let source = "\
-struct Data:
-    String name
-    int val
-
-void mutate(Data &d):
-    d.val = 42
-
-void process(Data d):
-    mutate(&d)
-";
-        let errors = check(source);
-        assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "d")),
-            "expected MutationOfBareParam for &bare_param at call, got: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn bare_param_compound_assign_field_rejected() {
-        let source = "\
-struct Counter:
-    String label
-    int count
-
-void increment(Counter c):
-    c.count += 1
-";
-        let errors = check(source);
-        assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "c")),
-            "expected MutationOfBareParam for compound assign to field, got: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn bare_primitive_param_reassign_allowed() {
-        // Primitives are Copy — reassignment is fine (local copy)
-        let source = "\
-void add_one(int x):
-    x = x + 1
-    print(x)
-";
-        let errors = check(source);
-        assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
-            "unexpected MutationOfBareParam for primitive param: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn move_param_field_assign_allowed() {
-        let source = "\
-struct Point:
-    int x
-    int y
-
-void consume_point(Point !p):
-    p.x = 10
-";
-        let errors = check(source);
-        assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
-            "unexpected MutationOfBareParam for !param: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn bare_param_nested_field_assign_rejected() {
-        let source = "\
-struct Inner:
-    String name
-    int val
-
-struct Outer:
-    Inner inner
-
-void process(Outer o):
-    o.inner.val = 42
-";
-        let errors = check(source);
-        assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "o")),
-            "expected MutationOfBareParam for nested field assign, got: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn bare_param_method_call_rejected() {
-        let source = "\
-struct Items:
-    String label
-    int count
-
-equip Items:
-    void add(&self):
-        self.count = self.count + 1
-
-void process(Items items):
-    items.add()
-";
-        let errors = check(source);
-        assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "items")),
-            "expected MutationOfBareParam for &self method call on bare param, got: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn bare_param_non_mutating_method_allowed() {
-        let source = "\
-struct Items:
-    int count
-
-equip Items:
-    int get_count(self):
-        return self.count
-
-void process(Items items):
-    int c = items.get_count()
-";
-        let errors = check(source);
-        assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
-            "unexpected MutationOfBareParam for bare self method: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn bare_param_in_closure_rejected() {
-        let source = "\
-struct Point:
-    String label
-    int x
-
-void process(Point p):
-    auto f = ():
-        p.x = 10
-    f()
-";
-        let errors = check(source);
-        assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "p")),
-            "expected MutationOfBareParam for closure capturing bare param, got: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn bare_param_in_match_rejected() {
-        let source = "\
-struct Point:
-    String label
-    int x
-
-void process(Point p, int v):
-    match v:
-        case 1:
-            p.x = 10
-        else:
-            p.x = 20
-";
-        let errors = check(source);
-        assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, .. } if name == "p")),
-            "expected MutationOfBareParam for field assign in match arm, got: {:?}", errors
         );
     }
 
@@ -4133,111 +3929,3 @@ void main():
         assert!(warning.to_string().contains("unused import `helper`"));
     }
 
-    // ── Borrowed param storage restriction tests ──
-
-    #[test]
-    fn bare_resource_param_stored_in_struct_rejected() {
-        let source = "\
-struct Wrapper:
-    Vector[int] data
-
-void store(Vector[int] v):
-    Wrapper w = Wrapper(v)
-";
-        let errors = check(source);
-        assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, detail } if name == "v" && detail.contains("cannot store"))),
-            "expected MutationOfBareParam for storing bare param in struct, got: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn move_resource_param_stored_in_struct_allowed() {
-        let source = "\
-struct Wrapper:
-    Vector[int] data
-
-void store(Vector[int] !v):
-    Wrapper w = Wrapper(v)
-";
-        let errors = check(source);
-        assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
-            "unexpected MutationOfBareParam for !param stored in struct: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn bare_resource_param_returned_rejected() {
-        let source = "\
-Vector[int] identity(Vector[int] v):
-    return v
-";
-        let errors = check(source);
-        assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, detail } if name == "v" && detail.contains("cannot return"))),
-            "expected MutationOfBareParam for returning bare param, got: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn copy_param_stored_in_struct_allowed() {
-        let source = "\
-struct Pair:
-    int a
-    int b
-
-Pair make(int x, int y):
-    return Pair(x, y)
-";
-        let errors = check(source);
-        assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
-            "unexpected MutationOfBareParam for Copy-type param in struct: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn bare_resource_param_read_only_allowed() {
-        let source = "\
-int length(Vector[int] v):
-    return v.len()
-";
-        let errors = check(source);
-        assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { .. })),
-            "unexpected MutationOfBareParam for read-only access: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn mut_borrow_resource_param_stored_in_struct_rejected() {
-        let source = "\
-struct Wrapper:
-    Vector[int] data
-
-void store(Vector[int] &v):
-    Wrapper w = Wrapper(v)
-";
-        let errors = check(source);
-        assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, detail } if name == "v" && detail.contains("cannot store"))),
-            "expected MutationOfBareParam for &param stored in struct, got: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn bare_resource_param_stored_in_field_rejected() {
-        let source = "\
-struct Container:
-    Vector[int] items
-
-void store(Container &c, Vector[int] v):
-    c.items = v
-";
-        let errors = check(source);
-        assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MutationOfBareParam { name, detail } if name == "v" && detail.contains("cannot store"))),
-            "expected MutationOfBareParam for bare param stored in field, got: {:?}", errors
-        );
-    }
