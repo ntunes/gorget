@@ -43,7 +43,7 @@
 
 - **DSE may leak droppable values** (`ir/transforms/optimize.rs`): Dead store elimination removes `_1 = Copy(resource_local)` when `_1` is overwritten later, but the first value may need dropping. Investigated: DSE runs post-drop-insertion so scope-exit drops already cover this. Added safety comment. Still worth auditing for edge cases where DropElaborator doesn't insert intermediate drops at overwrites. [updated: 2026-04-06]
 
-- **Hardcoded type size database** (`lir/lower/types.rs`): 50+ lines of magic numbers (`GorgetString=32`, `GorgetArray=56`, `GorgetMap=128`). Not target-aware. Fix: attach `computed_size` to StructDef during type lowering. [added: 2026-04-06]
+- **Hardcoded type size database — remaining**: `c_sizeof_with_structs()` still has string-match fallbacks for `Vector__*`, `Dict__*`, `Set__*`, `Callable__*`, `Task__*`, `Tuple__*`, `Option__*`. These hit before the struct lookup. Fix: register monomorphized collection/option/tuple types with correct `computed_c_size` during type lowering so the match arms can be removed. [updated: 2026-04-06]
 
 - **InlineC instruction — IR escape hatch**: 15 occurrences across 5 LIR files. Opaque to optimization and validation. Each needs replacement with proper LIR instructions. [added: 2026-04-06]
 
