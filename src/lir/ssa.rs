@@ -154,11 +154,12 @@ impl<'a> SsaBuilder<'a> {
 
     /// Chase value_subst chain to find the canonical (non-eliminated) value.
     fn resolve_value(&self, mut val: ValueId) -> ValueId {
-        let mut steps = 0;
+        let mut visited = std::collections::HashSet::new();
         while let Some(&target) = self.value_subst.get(&val) {
+            if !visited.insert(val) {
+                break; // cycle detected — return best value so far
+            }
             val = target;
-            steps += 1;
-            if steps > 100 { break; } // safety: prevent infinite loops
         }
         val
     }

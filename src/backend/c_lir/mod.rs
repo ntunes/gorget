@@ -1025,7 +1025,8 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
             writeln!(out, "static inline void gorget_str_push_char(GorgetString* s, Str c) {{ gorget_string_push_char(s, c); }}").unwrap();
         }
         if has_extern("gorget_array_sort") {
-            writeln!(out, "static size_t __gorget_sort_elem_size;").unwrap();
+            // Thread-local to prevent data races when two threads sort concurrently.
+            writeln!(out, "static _Thread_local size_t __gorget_sort_elem_size;").unwrap();
             writeln!(out, "static int __gorget_sort_cmp(const void* a, const void* b) {{ return memcmp(a, b, __gorget_sort_elem_size); }}").unwrap();
             writeln!(out, "static inline void gorget_array_sort(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; __gorget_sort_elem_size = a->elem_size; qsort(a->data, a->len, a->elem_size, __gorget_sort_cmp); }}").unwrap();
         }
@@ -1052,12 +1053,15 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
                 size_t __off1 = (__a_sz + 7) & ~(size_t)7; \
                 size_t __tuple_sz = __off1 + ((__b_sz + 7) & ~(size_t)7); \
                 GorgetArray __r = gorget_array_new(__tuple_sz); \
+                char __sbuf[256]; \
+                char* __buf = __tuple_sz <= sizeof(__sbuf) ? __sbuf : (char*)malloc(__tuple_sz); \
                 for (size_t __i = 0; __i < __min; __i++) {{ \
-                    char __buf[256]; memset(__buf, 0, __tuple_sz); \
+                    memset(__buf, 0, __tuple_sz); \
                     memcpy(__buf, (char*)__a->data + __i * __a_sz, __a_sz); \
                     memcpy(__buf + __off1, (char*)__b.data + __i * __b_sz, __b_sz); \
                     gorget_array_push(&__r, __buf); \
                 }} \
+                if (__buf != __sbuf) free(__buf); \
                 return __r; }}").unwrap();
         }
         // codepoint_to_str: used by encoding/toml fixtures

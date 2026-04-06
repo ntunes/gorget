@@ -1405,6 +1405,11 @@ fn elide_dead_drops(func: &mut Function) {
 /// Only operates on `Assign { dst: Place::local(_), value: Constant|Copy }` — we
 /// don't remove Calls/BinOps/etc. that might have side effects.
 fn eliminate_dead_stores(func: &mut Function) {
+    // Safety: this runs AFTER drop insertion. If a local holds a droppable value
+    // that is overwritten, the DropElaborator already emitted a scope-exit Drop
+    // for it. The overwrite-without-drop case is an IR lowering concern (not DSE).
+    // We only remove pure stores (Copy/Constant) that are provably overwritten
+    // before any read, which is semantics-preserving.
     for bb in &mut func.blocks {
         // last_store[local_id] = instruction index of the last Assign to that local
         let mut last_store: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
