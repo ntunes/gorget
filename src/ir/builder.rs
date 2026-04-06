@@ -335,6 +335,19 @@ impl FunctionBuilder {
         })
     }
 
+    /// Call an extern function that returns void (output-parameter pattern).
+    pub fn call_extern_void(
+        &mut self,
+        func: impl Into<String>,
+        args: Vec<Operand>,
+    ) {
+        self.emit(Instruction::CallExtern {
+            dst: None,
+            func: func.into(),
+            args,
+        });
+    }
+
     pub fn struct_init(
         &mut self,
         type_name: impl Into<String>,

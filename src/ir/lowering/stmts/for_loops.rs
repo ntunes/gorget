@@ -426,23 +426,20 @@ fn lower_for_dict(
     let iter_local = builder.add_local(iter_type, None);
     builder.assign(Place::local(iter_local), iter_op);
 
-    let dict_id = iter_local.0; // raw index for remaining InlineC key/value extraction
-
     // Create a pointer to the dict for iterator accessor calls.
     let dict_ptr_type = ctx.register_ptr_type(iter_type);
     let dict_ptr = builder.add_local(dict_ptr_type, None);
     builder.emit_borrow(dict_ptr, Place::local(iter_local));
 
+    let dict_id = iter_local.0; // for InlineC key/value extraction
+
     // Determine key/value type names from the collection type
     let type_name = ctx.type_name_for_id(iter_type)
         .map(|s| s.to_string())
         .unwrap_or_default();
-    // Parse: Dict__KeyType__ValueType or HashMap__KeyType__ValueType
     let (key_gir_type, val_gir_type) = parse_dict_kv_types(&type_name);
-    // C type names still needed for InlineC key/value extraction
-    let key_c_type = to_c_type_name(&key_gir_type);
-    let val_c_type = to_c_type_name(&val_gir_type);
-    // Look up the TypeIds for key/value types (use GIR names for type registry)
+    let key_c_type = gir_to_c_type(&key_gir_type);
+    let val_c_type = gir_to_c_type(&val_gir_type);
     let key_type = ctx.lookup_type_by_name(&key_gir_type).unwrap_or(I64_TYPE);
     let val_type = ctx.lookup_type_by_name(&val_gir_type).unwrap_or(I64_TYPE);
 
@@ -498,7 +495,9 @@ fn lower_for_dict(
     builder.branch(FunctionBuilder::copy(state_ok), elem_bb, incr_bb);
     builder.switch_to(elem_bb);
 
-    // Extract key/value bindings
+    // Extract key/value bindings.
+    // Uses InlineC for typed pointer element access — the C backend dereferences
+    // MutPtr args, so output-parameter CallExtern doesn't work yet.
     match &pattern.node {
         Pattern::Tuple(parts) if parts.len() == 2 => {
             let k_name = if let Pattern::Binding(n) = &parts[0].node { n.clone() } else { "__k".to_string() };
@@ -515,7 +514,6 @@ fn lower_for_dict(
             ctx.register_local(&v_name, v_local, val_type);
         }
         Pattern::Binding(name) => {
-            // Single binding: bind the key
             let k_local = builder.add_local(key_type, Some(name));
             builder.inline_c(format!("_{k} = (({key_c_type}*)_{dict}.keys)[(size_t)_{idx}];",
                 k = k_local.0, dict = dict_id, idx = idx.0));
@@ -560,8 +558,6 @@ fn lower_for_set(
     let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
     let iter_local = builder.add_local(iter_type, None);
     builder.assign(Place::local(iter_local), iter_op);
-    let set_id = iter_local.0; // raw index for remaining InlineC element extraction
-
     // Create pointer for iterator accessor calls
     let set_ptr_type = ctx.register_ptr_type(iter_type);
     let set_ptr = builder.add_local(set_ptr_type, None);
@@ -571,9 +567,10 @@ fn lower_for_set(
     let type_name = ctx.type_name_for_id(iter_type)
         .map(|s| s.to_string())
         .unwrap_or_default();
+    let set_id = iter_local.0; // for InlineC element extraction
     let is_ordered = type_name.starts_with("Set__");
     let elem_gir_type = parse_set_elem_type(&type_name);
-    let elem_c_type = to_c_type_name(&elem_gir_type);
+    let elem_c_type = gir_to_c_type(&elem_gir_type);
     let elem_type = ctx.lookup_type_by_name(&elem_gir_type).unwrap_or(I64_TYPE);
 
     // i = 0  (for ordered: index into order array; for unordered: index into states)
@@ -656,7 +653,7 @@ fn lower_for_set(
         builder.branch(FunctionBuilder::copy(state_ok), elem_bb, incr_bb);
         builder.switch_to(elem_bb);
 
-        // Bind element (assignment form with correct type, cast void* keys)
+        // Bind element
         let elem_local = builder.add_local(elem_type, Some(var_name));
         builder.inline_c(format!("_{e} = (({elem_c_type}*)_{set}.keys)[(size_t)_{i}];",
             e = elem_local.0, set = set_id, i = i_local.0));
@@ -892,9 +889,8 @@ fn find_kv_split(s: &str) -> Option<usize> {
     None
 }
 
-/// Map a GIR/mangled type name to its C runtime type name for inline C codegen.
-/// Map GIR/mangled type names to C runtime type names for inline C codegen.
-fn to_c_type_name(gir_name: &str) -> String {
+/// Map a GIR/mangled type name to its C type name for InlineC key/value extraction.
+fn gir_to_c_type(gir_name: &str) -> String {
     match gir_name {
         "GorgetString" => "Str".to_string(),
         _ => gir_name.to_string(),
