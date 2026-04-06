@@ -543,7 +543,9 @@ fn emit_function(
         let _ = (i, p);
     }
 
-    // First pass: infer types from all instructions
+    // First pass: infer types from all instructions.
+    // Aggregate returns from Call/CallExtern are stored via temp alloca,
+    // making them pointers in LLVM — override their type to Ptr.
     for block in &func.blocks {
         for (vid, vty) in &block.params {
             if (vid.0 as usize) < val_types.len() {
@@ -554,6 +556,14 @@ fn emit_function(
             if let Some(dst) = inst.dst() {
                 if (dst.0 as usize) < val_types.len() {
                     let ty = infer_inst_type(inst, module, &val_types);
+                    // Aggregates are always represented as pointers in our LLVM codegen:
+                    // - Call/CallExtern results stored via temp alloca
+                    // - Load on aggregate uses pointer alias (no actual load)
+                    // - ParamRef for aggregate uses alloca
+                    let ty = match &ty {
+                        Some(t) if t.is_aggregate() => Some(LirType::Ptr),
+                        _ => ty,
+                    };
                     val_types[dst.0 as usize] = ty;
                 }
             }
@@ -1057,8 +1067,14 @@ fn emit_inst(
 
         // ── Memory ──────────────────────────────────────────────────
         Inst::Load { dst, ptr, ty } => {
-            let lty = llvm_type_full(ty, snames);
-            writeln!(out, "  %v{} = load {lty}, ptr %v{}", dst.0, ptr.0).unwrap();
+            if ty.is_aggregate() {
+                // For aggregates, don't load — just alias the pointer.
+                // Our codegen model keeps aggregates as pointers throughout.
+                writeln!(out, "  %v{} = getelementptr i8, ptr %v{}, i32 0", dst.0, ptr.0).unwrap();
+            } else {
+                let lty = llvm_type_full(ty, snames);
+                writeln!(out, "  %v{} = load {lty}, ptr %v{}", dst.0, ptr.0).unwrap();
+            }
         }
         Inst::Store { ptr, value } => {
             // Infer the type of the value being stored
