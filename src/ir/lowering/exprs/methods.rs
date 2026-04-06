@@ -1381,6 +1381,11 @@ pub(super) fn lower_method_call(
             };
             if let Some(value_idx) = consuming_pos {
                 let call_idx = 1 + value_idx;
+                // Check call_args first (ptr-wrapped). For Ptr(resource) field
+                // accesses the call arg is Ptr(Ptr(resource)) — pointee_type
+                // gives Ptr(resource) which is_resource_type misses. Fall back
+                // to lowered_method_args (pre-wrapping) which has Ptr(resource)
+                // → pointee_type gives resource → is_resource_type matches.
                 let needs_clone = call_args.get(call_idx).and_then(|op| {
                     if let Operand::Copy(place) | Operand::Move(place) = op {
                         if place.projections.is_empty() {
@@ -1393,6 +1398,21 @@ pub(super) fn lower_method_call(
                         }
                     }
                     None
+                }).or_else(|| {
+                    // Fallback: check pre-wrapped arg (handles Ptr(resource) from field access)
+                    lowered_method_args.get(value_idx).and_then(|op| {
+                        if let Operand::Copy(place) | Operand::Move(place) = op {
+                            if place.projections.is_empty() {
+                                let local_type = builder.local_type(place.local);
+                                if let Some(inner) = ctx.pointee_type(local_type) {
+                                    if ctx.type_registry.is_resource_type(inner) {
+                                        return Some((place.local, inner));
+                                    }
+                                }
+                            }
+                        }
+                        None
+                    })
                 });
                 if let Some((ptr_local, inner_type)) = needs_clone {
                     if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
