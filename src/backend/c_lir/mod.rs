@@ -14,6 +14,32 @@ mod helpers;
 use self::helpers::*;
 use self::emit_types::*;
 
+/// Per-function analysis context for instruction emission.
+/// Consolidates the parallel arrays that were previously passed as
+/// 10+ individual parameters to emit_inst() and emit_call_extern().
+pub(crate) struct EmitContext<'a> {
+    pub func: &'a LirFunction,
+    pub module: &'a LirModule,
+    /// StructId → C type name mapping.
+    pub sn: &'a HashMap<u32, String>,
+    /// Per-value inferred types (indexed by ValueId).
+    pub val_types: &'a [Option<LirType>],
+    /// Per-value: true if the value comes from a StrLit instruction.
+    pub str_lit_vals: &'a [bool],
+    /// Per-value: true if the value comes from a cstr-returning extern.
+    pub cstr_vals: &'a [bool],
+    /// Per-value: true if the value is from an extern with cstr return.
+    pub extern_cstr_return_vals: &'a [bool],
+    /// Per-value: true if the value is NullPtr.
+    pub null_vals: &'a [bool],
+    /// Per-value: the pointee type (if the value is a pointer).
+    pub ptr_pointee: &'a [Option<LirType>],
+    /// Per-value: the FuncId target (if the value is a FuncAddr).
+    pub func_addr_targets: &'a [Option<FuncId>],
+    /// Per-value: the source function name (for spawn).
+    pub spawn_source_fn: &'a [Option<String>],
+}
+
 /// Names of structs provided by the Gorget C runtime — these should NOT
 /// be re-defined by the LIR backend.
 const RUNTIME_STRUCTS: &[&str] = &[
@@ -1334,6 +1360,19 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         std::collections::HashSet::new()
     };
 
+    // Build consolidated emission context for instruction dispatch.
+    let ectx = EmitContext {
+        func, module, sn,
+        val_types: &val_types,
+        str_lit_vals: &str_lit_vals,
+        cstr_vals: &cstr_vals,
+        extern_cstr_return_vals: &extern_cstr_return_vals,
+        null_vals: &null_vals,
+        ptr_pointee: &ptr_pointee,
+        func_addr_targets: &func_addr_targets,
+        spawn_source_fn: &spawn_source_fn,
+    };
+
     // Blocks
     for block in &func.blocks {
         writeln!(out, "__bb{}:", block.id.0).unwrap();
@@ -1356,7 +1395,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         // Instructions
         for inst in &block.insts {
             write!(out, "    ").unwrap();
-            emit_inst(out, inst, func, module, sn, &val_types, &str_lit_vals, &cstr_vals, &extern_cstr_return_vals, &null_vals, &ptr_pointee, &func_addr_targets, &spawn_source_fn, &_collection_get_vals);
+            emit_inst(out, inst, &ectx);
             writeln!(out).unwrap();
 
             // In test functions, register droppable user-named slots on the cleanup stack
@@ -1400,7 +1439,18 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     writeln!(out, "}}").unwrap();
 }
 
-fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, val_types: &[Option<LirType>], str_lit_vals: &[bool], cstr_vals: &[bool], extern_cstr_return_vals: &[bool], null_vals: &[bool], ptr_pointee: &[Option<LirType>], func_addr_targets: &[Option<FuncId>], spawn_source_fn: &[Option<String>], _collection_get_vals: &[bool]) {
+fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
+    let func = ctx.func;
+    let module = ctx.module;
+    let sn = ctx.sn;
+    let val_types = ctx.val_types;
+    let str_lit_vals = ctx.str_lit_vals;
+    let cstr_vals = ctx.cstr_vals;
+    let extern_cstr_return_vals = ctx.extern_cstr_return_vals;
+    let null_vals = ctx.null_vals;
+    let ptr_pointee = ctx.ptr_pointee;
+    let func_addr_targets = ctx.func_addr_targets;
+    let spawn_source_fn = ctx.spawn_source_fn;
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -2057,7 +2107,7 @@ fn emit_inst(out: &mut String, inst: &Inst, func: &LirFunction, module: &LirModu
             write!(out, ");").unwrap();
         }
         Inst::CallExtern { dst, name, args, .. } => {
-            emit_call_extern::emit_call_extern(out, inst, dst, name, args, func, module, sn, val_types, str_lit_vals, cstr_vals, extern_cstr_return_vals, null_vals, ptr_pointee, func_addr_targets, spawn_source_fn);
+            emit_call_extern::emit_call_extern(out, inst, dst, name, args, ctx);
         }
         Inst::CallPtr { dst, callee, args } => {
             if let Some(d) = dst {

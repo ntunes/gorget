@@ -3,25 +3,23 @@
 use super::*;
 
 /// Emit code for an `Inst::CallExtern` instruction.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_call_extern(
     out: &mut String,
     inst: &Inst,
     dst: &Option<ValueId>,
     name: &str,
     args: &[ValueId],
-    func: &LirFunction,
-    module: &LirModule,
-    sn: &HashMap<u32, String>,
-    val_types: &[Option<LirType>],
-    str_lit_vals: &[bool],
-    _cstr_vals: &[bool],
-    _extern_cstr_return_vals: &[bool],
-    null_vals: &[bool],
-    ptr_pointee: &[Option<LirType>],
-    func_addr_targets: &[Option<FuncId>],
-    spawn_source_fn: &[Option<String>],
+    ctx: &super::EmitContext,
 ) {
+    let func = ctx.func;
+    let module = ctx.module;
+    let sn = ctx.sn;
+    let val_types = ctx.val_types;
+    let str_lit_vals = ctx.str_lit_vals;
+    let null_vals = ctx.null_vals;
+    let ptr_pointee = ctx.ptr_pointee;
+    let func_addr_targets = ctx.func_addr_targets;
+    let spawn_source_fn = ctx.spawn_source_fn;
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let _s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
