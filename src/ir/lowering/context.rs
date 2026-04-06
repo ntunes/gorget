@@ -207,6 +207,9 @@ pub struct FunctionState {
     /// Parameters upgraded from Borrow to Move in generic functions that return them directly.
     /// The return path must zero the source through the pointer to prevent caller double-free.
     pub move_override_params: std::collections::HashSet<String>,
+    /// True when the current method has `!self` (consuming self). Field loads
+    /// from self use MoveZeroSource for resource fields instead of Ptr borrows.
+    pub consuming_self: bool,
     /// Maps temp locals from field_load → (source_field_place, field_type).
     /// Used by VarDecl/Assign to emit MoveZero after extracting resource-type fields.
     pub field_load_origins: FxHashMap<LocalId, (crate::ir::instructions::Place, TypeId)>,

@@ -1,0 +1,33 @@
+# Test: !self consuming self in equip methods.
+# Field loads from !self produce owned values (no clone needed).
+
+struct Config:
+    int width
+    int height
+    String title
+    bool fullscreen
+
+Config default_config():
+    return Config(800, 600, "untitled", false)
+
+equip Config:
+    Config with_width(!self, int w):
+        return Config(w, self.height, self.title, self.fullscreen)
+
+    Config with_height(!self, int h):
+        return Config(self.width, h, self.title, self.fullscreen)
+
+    Config with_title(!self, String t):
+        return Config(self.width, self.height, t, self.fullscreen)
+
+    void describe(self):
+        print(f"{self.width}x{self.height} '{self.title}' fs={self.fullscreen}")
+
+void main():
+    # Method chaining on temps — zero clones
+    Config c = default_config().with_width(1920).with_height(1080).with_title("game")
+    c.describe()
+
+    # Single transform
+    Config c2 = default_config().with_title("editor")
+    c2.describe()

@@ -19,7 +19,7 @@
 ## Medium
 
 
-- **`!self` consuming self for equip methods**: The #1 remaining clone source is the builder pattern — `self.title` is a Ptr read-through that gets cloned at struct init. Root cause: `self` is always Ptr (borrow), no way to say "this method consumes self". Proposed: `!self` parameter mode — caller moves receiver, callee does MoveZeroSource field loads. Eliminates all builder-pattern clones (~16 fixtures). Language design change. [added: 2026-04-06]
+- **`!self` borrow checker enforcement**: `!self` consuming self works at the IR level (MoveZeroSource field loads, caller MoveZero). Missing: borrow checker rejection of receiver use after `!self` method call on named vars, and requiring `!` syntax on named receivers. Currently only works safely on temps (method chains). [added: 2026-04-06]
 
 - **Borrow checker: early return doesn't reset move state**: INVESTIGATED — the divergent-branch filtering in `merge_branch_states()` already works correctly. Moves in branches that return/throw/break are excluded from the join-point merge. Added regression test `move_in_divergent_branch_ok`. The self-host `scope.gg` defensive clones may have been needed before the StringView removal. Review if they can now be removed. [updated: 2026-04-06]
 

@@ -870,12 +870,16 @@ impl GenericCollector {
                         let mut abis = Vec::new();
                         if has_self {
                             let self_type_id = mapper.lookup_named(mangled_type_name).unwrap_or(UNIT_TYPE);
-                            let self_ptr_type = registry.insert(GirType::Ptr(self_type_id));
-                            param_types.push(self_ptr_type);
-                            let self_is_mutable = method.node.params.first()
-                                .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow))
+                            let self_needs_mut_ptr = method.node.params.first()
+                                .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow | Ownership::Move))
                                 .unwrap_or(false);
-                            abis.push(if self_is_mutable {
+                            let self_ptr_type = if self_needs_mut_ptr {
+                                registry.insert(GirType::MutPtr(self_type_id))
+                            } else {
+                                registry.insert(GirType::Ptr(self_type_id))
+                            };
+                            param_types.push(self_ptr_type);
+                            abis.push(if self_needs_mut_ptr {
                                 super::context::ParamABI::ByMutPtr
                             } else {
                                 super::context::ParamABI::ByPtr

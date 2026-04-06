@@ -981,6 +981,11 @@ pub(super) fn lower_method_call(
 
         let mangled = format!("{type_name}__{method_name}");
 
+        // Save receiver local for !self post-call MoveZero (before recv is consumed)
+        let recv_local_for_move_zero = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+            if place.projections.is_empty() { Some(place.local) } else { None }
+        } else { None };
+
         // Build args: &receiver + explicit args
         let mut call_args = Vec::new();
 
@@ -1086,6 +1091,12 @@ pub(super) fn lower_method_call(
                 .cloned()
                 .unwrap_or(mangled.clone())
         };
+
+        // Detect !self (consuming self) methods for post-call receiver MoveZero
+        let has_consuming_self = ctx.fn_param_ownerships.get(effective_name.as_str())
+            .and_then(|ownerships| ownerships.first())
+            .map(|o| matches!(o, crate::parser::ast::Ownership::Move))
+            .unwrap_or(false);
 
         // Pass-by-pointer non-self method args via lower_call_arg.
         // Only pass callee param types for GIR-lowered equip methods (which pass
@@ -1443,6 +1454,17 @@ pub(super) fn lower_method_call(
             builder.move_zero(place.clone());
             ctx.emit_field_origin_zero(builder, place.local);
             ctx.drops.mark_moved(place.local);
+        }
+
+        // !self consuming methods: MoveZero the receiver after the call.
+        // The callee consumed self's resource fields via MoveZeroSource;
+        // zeroing the receiver prevents double-free at scope exit.
+        if has_consuming_self {
+            if let Some(recv_local) = recv_local_for_move_zero {
+                if !ctx.drops.is_moved(recv_local) {
+                    ctx.move_zero_and_mark(builder, recv_local);
+                }
+            }
         }
 
         // MoveZero clone temps from consuming-position auto-clone.

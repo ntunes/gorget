@@ -889,10 +889,10 @@ pub fn lower_module(
                     let mut param_types = Vec::new();
                     if has_self {
                         let self_type_id = ctx.type_mapper.map_ast_type(&equip.type_.node);
-                        let self_is_mutable = method_def.params.first()
-                            .map(|p| matches!(p.node.ownership, ast::Ownership::MutableBorrow))
+                        let self_needs_mut_ptr = method_def.params.first()
+                            .map(|p| matches!(p.node.ownership, ast::Ownership::MutableBorrow | ast::Ownership::Move))
                             .unwrap_or(false);
-                        let self_ptr_type = if self_is_mutable {
+                        let self_ptr_type = if self_needs_mut_ptr {
                             ctx.register_mut_ptr_type(self_type_id)
                         } else {
                             ctx.register_ptr_type(self_type_id)
@@ -911,10 +911,10 @@ pub fn lower_module(
                     // Compute and insert ParamABI for equip methods
                     let mut param_abis = Vec::new();
                     if has_self {
-                        let self_is_mutable = method_def.params.first()
-                            .map(|p| matches!(p.node.ownership, ast::Ownership::MutableBorrow))
+                        let self_needs_mut_ptr = method_def.params.first()
+                            .map(|p| matches!(p.node.ownership, ast::Ownership::MutableBorrow | ast::Ownership::Move))
                             .unwrap_or(false);
-                        param_abis.push(if self_is_mutable {
+                        param_abis.push(if self_needs_mut_ptr {
                             context::ParamABI::ByMutPtr
                         } else {
                             context::ParamABI::ByPtr

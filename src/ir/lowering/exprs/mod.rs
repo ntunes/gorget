@@ -1520,6 +1520,12 @@ fn lower_field_access(
                     (local_type_id, place.clone())
                 };
 
+            // Detect consuming self (!self) field access: self.field returns
+            // owned values via MoveZeroSource instead of Ptr borrows.
+            let is_consuming_self_access = ctx.func_state.consuming_self
+                && (matches!(&object.node, Expr::Identifier(n) if n == "self")
+                    || matches!(&object.node, Expr::SelfExpr));
+
             // Look up the type name, then the field info
             if let Some(type_name) = ctx.type_name_for_id(effective_type_id) {
                 // Special case: GorgetString.data — return the GorgetString itself.
@@ -1530,6 +1536,32 @@ fn lower_field_access(
                 }
                 // First try the struct_fields cache
                 if let Some((field_idx, field_type)) = ctx.lookup_field(type_name, field_name) {
+                    // !self consuming access: resource fields are moved out (owned),
+                    // not borrowed. The source field is zeroed, and the struct's
+                    // drop function handles cleanup of any unconsumed fields.
+                    if is_consuming_self_access
+                        && (ctx.type_registry.is_collection_type(field_type)
+                            || field_type == ctx.type_mapper.owned_string_type
+                            || ctx.type_registry.is_resource_type(field_type))
+                    {
+                        let dst = builder.field_load_mode(
+                            FieldLoadMode::MoveZeroSource,
+                            base_place.clone(), field_idx, field_type,
+                        );
+                        // Zero the source field to prevent double-free when
+                        // the struct is dropped at scope exit.
+                        builder.move_zero(Place {
+                            local: base_place.local,
+                            projections: {
+                                let mut p = base_place.projections.clone();
+                                p.push(Projection::Field(field_idx));
+                                p
+                            },
+                        });
+                        ctx.set_owned(dst);
+                        ctx.drops.register_local(dst, field_type, &ctx.type_registry);
+                        return FunctionBuilder::copy(dst);
+                    }
                     // Resource-type fields: return a Ptr(T) reference instead of
                     // a shallow copy. Prevents shared heap buffer double-free.
                     // Auto-clone fires when assigned to an explicit-type variable
@@ -1548,25 +1580,48 @@ fn lower_field_access(
                     return FunctionBuilder::copy(dst);
                 }
                 // Fallback: read directly from TypeDef
-                if let Some(type_def) = ctx.type_registry.get_type_def(type_name) {
-                    if let TypeDefKind::Struct(ref s) = type_def.kind {
-                        for (i, field) in s.fields.iter().enumerate() {
-                            if field.name == field_name {
-                                let result_type = if ctx.type_registry.is_collection_type(field.type_id)
-                                    || field.type_id == ctx.type_mapper.owned_string_type
-                                {
-                                    ctx.type_registry.insert(GirType::Ptr(field.type_id))
-                                } else {
-                                    field.type_id
-                                };
-                                let dst = builder.field_load(base_place.clone(), i as u32, result_type);
-                                if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                                    ctx.set_ref(dst);
-                                }
-                                return FunctionBuilder::copy(dst);
-                            }
-                        }
+                // Extract field info first to avoid borrow conflict with ctx
+                let field_info: Option<(u32, TypeId)> = ctx.type_registry.get_type_def(type_name)
+                    .and_then(|td| if let TypeDefKind::Struct(ref s) = td.kind {
+                        s.fields.iter().enumerate()
+                            .find(|(_, f)| f.name == field_name)
+                            .map(|(i, f)| (i as u32, f.type_id))
+                    } else { None });
+                if let Some((field_idx, field_type)) = field_info {
+                    // !self consuming access (fallback path)
+                    if is_consuming_self_access
+                        && (ctx.type_registry.is_collection_type(field_type)
+                            || field_type == ctx.type_mapper.owned_string_type
+                            || ctx.type_registry.is_resource_type(field_type))
+                    {
+                        let dst = builder.field_load_mode(
+                            FieldLoadMode::MoveZeroSource,
+                            base_place.clone(), field_idx, field_type,
+                        );
+                        builder.move_zero(Place {
+                            local: base_place.local,
+                            projections: {
+                                let mut p = base_place.projections.clone();
+                                p.push(Projection::Field(field_idx));
+                                p
+                            },
+                        });
+                        ctx.set_owned(dst);
+                        ctx.drops.register_local(dst, field_type, &ctx.type_registry);
+                        return FunctionBuilder::copy(dst);
                     }
+                    let result_type = if ctx.type_registry.is_collection_type(field_type)
+                        || field_type == ctx.type_mapper.owned_string_type
+                    {
+                        ctx.type_registry.insert(GirType::Ptr(field_type))
+                    } else {
+                        field_type
+                    };
+                    let dst = builder.field_load(base_place.clone(), field_idx, result_type);
+                    if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
+                        ctx.set_ref(dst);
+                    }
+                    return FunctionBuilder::copy(dst);
                 }
             }
         }

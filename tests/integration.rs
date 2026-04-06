@@ -14954,6 +14954,16 @@ fn cow_flow_sensitive_alias() {
 }
 
 #[test]
+fn consuming_self() {
+    run_gg(
+        "consuming_self.gg",
+        "\
+1920x1080 'game' fs=false
+800x600 'editor' fs=false",
+    );
+}
+
+#[test]
 fn move_and_reinit() {
     run_gg(
         "move_and_reinit.gg",

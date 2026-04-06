@@ -638,10 +638,10 @@ pub fn lower_equip_method(
     let mut params: Vec<(TypeId, Option<&str>)> = Vec::new();
     let self_ptr_type = if has_self {
         let self_type_id = ctx.type_mapper.map_ast_type(equipped_type);
-        let self_is_mutable = method.params.first()
-            .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow))
+        let self_needs_mut_ptr = method.params.first()
+            .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow | Ownership::Move))
             .unwrap_or(false);
-        let spt = if self_is_mutable {
+        let spt = if self_needs_mut_ptr {
             ctx.register_mut_ptr_type(self_type_id)
         } else {
             ctx.register_ptr_type(self_type_id)
@@ -651,6 +651,10 @@ pub fn lower_equip_method(
     } else {
         None
     };
+    // Track consuming self (!self) for field load optimization
+    let self_is_consuming = has_self && method.params.first()
+        .map(|p| matches!(p.node.ownership, Ownership::Move))
+        .unwrap_or(false);
     for p in &method.params {
         if p.node.name.node == "self" {
             continue; // self handled above
@@ -665,6 +669,7 @@ pub fn lower_equip_method(
     // Clear and register locals
     ctx.clear_locals();
     ctx.func_state.callable_return_types.clear();
+    ctx.func_state.consuming_self = self_is_consuming;
 
     // Register self as local _1 (only if method has self)
     let mut param_idx = if let Some(spt) = self_ptr_type {
