@@ -291,38 +291,8 @@ pub(super) fn lower_field_assign(
     // instead of copying the intermediate struct to a temp.
     if let Some((target_place, field_type)) = try_resolve_field_place(ctx, builder, object, field_name) {
         let mut rhs = lower_expr(ctx, builder, value);
-        // Clone borrowed references (Ptr-typed locals) before storing into fields.
-        // Without this, the field and the caller's original share the same heap
-        // allocation — when the caller drops its copy the field becomes dangling.
-        if let Operand::Copy(ref p) | Operand::Move(ref p) = rhs {
-            if p.projections.is_empty() {
-                let src_type = builder.local_type(p.local);
-                if let Some(inner) = ctx.pointee_type(src_type) {
-                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                        let cloned = ctx.call_tracked(builder, &clone_fn,
-                            vec![FunctionBuilder::copy(p.local)], inner);
-                        ctx.drops.register_local(cloned, inner, &ctx.type_registry);
-                        ctx.set_owned(cloned);
-                        rhs = FunctionBuilder::copy(cloned);
-                    }
-                }
-            }
-        }
-        emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
-        maybe_unregister_string_temp(ctx, builder, &rhs, field_type);
-        maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
-        builder.assign(target_place, rhs.clone());
-        // Move-zero drop-registered temps after field assignment
-        // to prevent scope-exit double-free.
-        if let Operand::Copy(ref p) | Operand::Move(ref p) = rhs {
-            if p.projections.is_empty()
-                && !ctx.drops.is_moved(p.local)
-                && ctx.drops.is_registered(p.local)
-            {
-                ctx.move_zero_and_mark(builder, p.local);
-            }
-        }
-        super::maybe_emit_field_move_zero(ctx, builder, &rhs);
+        clone_ptr_rhs_if_needed(ctx, builder, &mut rhs);
+        emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
         return;
     }
 
@@ -344,21 +314,7 @@ pub(super) fn lower_field_assign(
         lower_expr(ctx, builder, object)
     };
     let mut rhs = lower_expr(ctx, builder, value);
-    // Clone borrowed references before storing into fields (same as primary path above).
-    if let Operand::Copy(ref p) | Operand::Move(ref p) = rhs {
-        if p.projections.is_empty() {
-            let src_type = builder.local_type(p.local);
-            if let Some(inner) = ctx.pointee_type(src_type) {
-                if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                    let cloned = ctx.call_tracked(builder, &clone_fn,
-                        vec![FunctionBuilder::copy(p.local)], inner);
-                    ctx.drops.register_local(cloned, inner, &ctx.type_registry);
-                    ctx.set_owned(cloned);
-                    rhs = FunctionBuilder::copy(cloned);
-                }
-            }
-        }
-    }
+    clone_ptr_rhs_if_needed(ctx, builder, &mut rhs);
 
     if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
         let local_idx = place.local.0 as usize;
@@ -385,10 +341,7 @@ pub(super) fn lower_field_assign(
                         if let Some((field_idx, field_type)) = ctx.lookup_field(&inner_type_name, field_name) {
                             let mut target_place = deref_place;
                             target_place.projections.push(Projection::Field(field_idx));
-                            emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
-                            maybe_unregister_string_temp(ctx, builder, &rhs, field_type);
-                            maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
-                            builder.assign(target_place, rhs);
+                            emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
                             return;
                         }
                         let inner_field: Option<(u32, TypeId)> = ctx.type_registry.get_type_def(&inner_type_name)
@@ -403,10 +356,7 @@ pub(super) fn lower_field_assign(
                         if let Some((field_idx, field_type)) = inner_field {
                             let mut target_place = deref_place;
                             target_place.projections.push(Projection::Field(field_idx));
-                            emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
-                            maybe_unregister_string_temp(ctx, builder, &rhs, field_type);
-                            maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
-                            builder.assign(target_place, rhs);
+                            emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
                             return;
                         }
                     }
@@ -428,26 +378,10 @@ pub(super) fn lower_field_assign(
                 if let Some((field_idx, field_type)) = ctx.lookup_field(&type_name, field_name) {
                     let mut target_place = base_place;
                     target_place.projections.push(Projection::Field(field_idx));
-                    // Drop old field value before reassignment if it's droppable
-                    emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
-                    maybe_unregister_string_temp(ctx, builder, &rhs, field_type);
-                    maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
-                    builder.assign(target_place.clone(), rhs.clone());
-                    // Move-zero drop-registered temps after field assignment
-                    // to prevent scope-exit double-free.
-                    if let Operand::Copy(ref p) | Operand::Move(ref p) = rhs {
-                        if p.projections.is_empty()
-                            && !ctx.drops.is_moved(p.local)
-                            && ctx.drops.is_registered(p.local)
-                        {
-                            ctx.move_zero_and_mark(builder, p.local);
-                        }
-                    }
-                    super::maybe_emit_field_move_zero(ctx, builder, &rhs);
+                    emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
                     return;
                 }
                 // Fallback: look up from TypeDef
-                // Look up field index and type from TypeDef (separate borrow scope)
                 let field_match: Option<(u32, TypeId)> = ctx.type_registry.get_type_def(&type_name)
                     .and_then(|td| {
                         if let TypeDefKind::Struct(ref s) = td.kind {
@@ -460,25 +394,60 @@ pub(super) fn lower_field_assign(
                 if let Some((field_idx, field_type)) = field_match {
                     let mut target_place = base_place;
                     target_place.projections.push(Projection::Field(field_idx));
-                    emit_field_drop_if_needed(ctx, builder, &target_place, field_type);
-                    maybe_unregister_string_temp(ctx, builder, &rhs, field_type);
-                    maybe_unregister_owned_string_temp(ctx, builder, &rhs, field_type);
-                    builder.assign(target_place.clone(), rhs.clone());
-                    // Move-zero drop-registered temps after field assignment
-                    if let Operand::Copy(ref p) | Operand::Move(ref p) = rhs {
-                        if p.projections.is_empty()
-                            && !ctx.drops.is_moved(p.local)
-                            && ctx.drops.is_registered(p.local)
-                        {
-                            ctx.move_zero_and_mark(builder, p.local);
-                        }
-                    }
-                    super::maybe_emit_field_move_zero(ctx, builder, &rhs);
+                    emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
                     return;
                 }
             }
         }
     }
+}
+
+/// Clone a Ptr-typed RHS (borrowed reference) to produce an independently owned copy.
+/// Without this, storing a borrowed param into a struct field creates aliased ownership —
+/// when the caller drops its copy, the field becomes a dangling pointer.
+fn clone_ptr_rhs_if_needed(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    rhs: &mut Operand,
+) {
+    if let Operand::Copy(ref p) | Operand::Move(ref p) = *rhs {
+        if p.projections.is_empty() {
+            let src_type = builder.local_type(p.local);
+            if let Some(inner) = ctx.pointee_type(src_type) {
+                if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                    let cloned = ctx.call_tracked(builder, &clone_fn,
+                        vec![FunctionBuilder::copy(p.local)], inner);
+                    ctx.drops.register_local(cloned, inner, &ctx.type_registry);
+                    ctx.set_owned(cloned);
+                    *rhs = FunctionBuilder::copy(cloned);
+                }
+            }
+        }
+    }
+}
+
+/// Emit a field store with full cleanup: drop old value, unregister string temps,
+/// assign, move-zero the RHS temp to prevent scope-exit double-free.
+fn emit_field_store_with_cleanup(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    target_place: &Place,
+    field_type: TypeId,
+    rhs: &Operand,
+) {
+    emit_field_drop_if_needed(ctx, builder, target_place, field_type);
+    maybe_unregister_string_temp(ctx, builder, rhs, field_type);
+    maybe_unregister_owned_string_temp(ctx, builder, rhs, field_type);
+    builder.assign(target_place.clone(), rhs.clone());
+    if let Operand::Copy(ref p) | Operand::Move(ref p) = *rhs {
+        if p.projections.is_empty()
+            && !ctx.drops.is_moved(p.local)
+            && ctx.drops.is_registered(p.local)
+        {
+            ctx.move_zero_and_mark(builder, p.local);
+        }
+    }
+    super::maybe_emit_field_move_zero(ctx, builder, rhs);
 }
 
 /// If the RHS is a bare GorgetString local being assigned to a GorgetString field,
