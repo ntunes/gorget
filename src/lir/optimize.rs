@@ -16,6 +16,7 @@ pub struct OptStats {
     pub constants_folded: usize,
     pub branches_folded: usize,
     pub algebraic_simplified: usize,
+    pub cse_eliminated: usize,
 }
 
 /// Run all optimization passes on an LIR module.
@@ -36,6 +37,7 @@ fn optimize_function(func: &mut LirFunction, stats: &mut OptStats) {
         let snapshot = (func.blocks.len(), inst_count(func));
         stats.constants_folded += fold_constants(func);
         stats.algebraic_simplified += simplify_algebraic(func);
+        stats.cse_eliminated += eliminate_common_subexpressions(func);
         stats.branches_folded += fold_constant_branches(func);
         stats.dead_blocks_eliminated += eliminate_dead_blocks(func);
         merge_linear_blocks(func);
@@ -770,6 +772,91 @@ fn simplify_algebraic(func: &mut LirFunction) -> usize {
 /// Uses IntCast as a no-op (same type to same type); DCE will clean up if unused.
 fn identity(dst: ValueId, ty: LirType, src: ValueId) -> Inst {
     Inst::IntCast { dst, value: src, to: ty }
+}
+
+// ── Common Subexpression Elimination ────────────────────────────────────────
+
+/// Within each basic block, eliminate redundant computations.
+/// If `v1 = Add(a, b)` and later `v2 = Add(a, b)` with the same operands,
+/// replace v2's definition with a copy of v1. Returns count eliminated.
+fn eliminate_common_subexpressions(func: &mut LirFunction) -> usize {
+    use std::collections::HashMap;
+
+    /// Key for CSE: instruction kind + operands (without dst).
+    #[derive(Hash, Eq, PartialEq, Clone)]
+    enum CseKey {
+        BinOp { kind: u8, lhs: ValueId, rhs: ValueId },
+        UnOp { kind: u8, operand: ValueId },
+        Cmp { kind: u8, lhs: ValueId, rhs: ValueId },
+        FieldPtr { base: ValueId, struct_id: StructId, field: u32 },
+    }
+
+    let mut eliminated = 0;
+
+    for block in &mut func.blocks {
+        let mut seen: HashMap<CseKey, ValueId> = HashMap::new();
+        let mut replacements: Vec<(usize, ValueId, ValueId)> = Vec::new(); // (index, old_dst, existing_val)
+
+        for (i, inst) in block.insts.iter().enumerate() {
+            let (key, dst) = match inst {
+                Inst::Add { dst, lhs, rhs, .. } => (Some(CseKey::BinOp { kind: 0, lhs: *lhs, rhs: *rhs }), Some(*dst)),
+                Inst::Sub { dst, lhs, rhs, .. } => (Some(CseKey::BinOp { kind: 1, lhs: *lhs, rhs: *rhs }), Some(*dst)),
+                Inst::Mul { dst, lhs, rhs, .. } => (Some(CseKey::BinOp { kind: 2, lhs: *lhs, rhs: *rhs }), Some(*dst)),
+                Inst::Div { dst, lhs, rhs, .. } => (Some(CseKey::BinOp { kind: 3, lhs: *lhs, rhs: *rhs }), Some(*dst)),
+                Inst::Rem { dst, lhs, rhs, .. } => (Some(CseKey::BinOp { kind: 4, lhs: *lhs, rhs: *rhs }), Some(*dst)),
+                Inst::BitAnd { dst, lhs, rhs, .. } => (Some(CseKey::BinOp { kind: 5, lhs: *lhs, rhs: *rhs }), Some(*dst)),
+                Inst::BitOr { dst, lhs, rhs, .. } => (Some(CseKey::BinOp { kind: 6, lhs: *lhs, rhs: *rhs }), Some(*dst)),
+                Inst::BitXor { dst, lhs, rhs, .. } => (Some(CseKey::BinOp { kind: 7, lhs: *lhs, rhs: *rhs }), Some(*dst)),
+                Inst::Shl { dst, lhs, rhs, .. } => (Some(CseKey::BinOp { kind: 8, lhs: *lhs, rhs: *rhs }), Some(*dst)),
+                Inst::Shr { dst, lhs, rhs, .. } => (Some(CseKey::BinOp { kind: 9, lhs: *lhs, rhs: *rhs }), Some(*dst)),
+                Inst::Neg { dst, operand, .. } => (Some(CseKey::UnOp { kind: 0, operand: *operand }), Some(*dst)),
+                Inst::Not { dst, operand, .. } => (Some(CseKey::UnOp { kind: 1, operand: *operand }), Some(*dst)),
+                Inst::BitNot { dst, operand, .. } => (Some(CseKey::UnOp { kind: 2, operand: *operand }), Some(*dst)),
+                Inst::Cmp { dst, op, lhs, rhs, .. } => (Some(CseKey::Cmp { kind: *op as u8, lhs: *lhs, rhs: *rhs }), Some(*dst)),
+                Inst::FieldPtr { dst, base, struct_id, field } => (Some(CseKey::FieldPtr { base: *base, struct_id: *struct_id, field: *field }), Some(*dst)),
+                // Don't CSE instructions with side effects (calls, stores, loads)
+                _ => (None, None),
+            };
+
+            if let (Some(key), Some(dst)) = (key, dst) {
+                if let Some(&existing) = seen.get(&key) {
+                    replacements.push((i, dst, existing));
+                } else {
+                    seen.insert(key, dst);
+                }
+            }
+
+            // Invalidate after calls (they can modify memory)
+            if matches!(inst, Inst::Call { .. } | Inst::CallExtern { .. } | Inst::CallPtr { .. } | Inst::Store { .. }) {
+                seen.clear();
+            }
+        }
+
+        // Apply replacements: replace the instruction with IntCast (identity copy)
+        for (idx, _old_dst, existing) in &replacements {
+            let old_inst = &block.insts[*idx];
+            if let Some(dst) = old_inst.dst() {
+                let ty = match old_inst {
+                    Inst::Cmp { .. } | Inst::Not { .. } => LirType::Bool,
+                    Inst::FieldPtr { .. } => LirType::Ptr,
+                    inst => {
+                        // Extract type from the instruction
+                        match inst {
+                            Inst::Add { ty, .. } | Inst::Sub { ty, .. } | Inst::Mul { ty, .. }
+                            | Inst::Div { ty, .. } | Inst::Rem { ty, .. } | Inst::Neg { ty, .. }
+                            | Inst::BitAnd { ty, .. } | Inst::BitOr { ty, .. } | Inst::BitXor { ty, .. }
+                            | Inst::BitNot { ty, .. } | Inst::Shl { ty, .. } | Inst::Shr { ty, .. } => ty.clone(),
+                            _ => LirType::I64,
+                        }
+                    }
+                };
+                block.insts[*idx] = Inst::IntCast { dst, value: *existing, to: ty };
+                eliminated += 1;
+            }
+        }
+    }
+
+    eliminated
 }
 
 // ── Constant Branch Folding ──────────────────────────────────────────────────

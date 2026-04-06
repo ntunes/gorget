@@ -942,10 +942,11 @@ fn try_profile(
         print!(" }}");
     }
     println!(" }},");
-    println!("    \"lir_opt\": {{ \"dead_functions\": {}, \"dead_globals\": {}, \"dead_instructions\": {}, \"constants_folded\": {}, \"copies_propagated\": {}, \"algebraic_simplified\": {} }}",
+    println!("    \"lir_opt\": {{ \"dead_functions\": {}, \"dead_globals\": {}, \"dead_instructions\": {}, \"constants_folded\": {}, \"copies_propagated\": {}, \"algebraic_simplified\": {}, \"cse_eliminated\": {} }}",
         lir_opt_stats.dead_functions_eliminated, lir_opt_stats.dead_globals_eliminated,
         lir_opt_stats.dead_instructions_eliminated, lir_opt_stats.constants_folded,
-        lir_opt_stats.copies_propagated, lir_opt_stats.algebraic_simplified);
+        lir_opt_stats.copies_propagated, lir_opt_stats.algebraic_simplified,
+        lir_opt_stats.cse_eliminated);
     println!("  }}");
     println!("}}");
     Ok(())
