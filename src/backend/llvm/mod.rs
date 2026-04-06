@@ -1230,15 +1230,11 @@ fn emit_inst(
                 if let Some(d) = dst {
                     let is_positive = name.contains("is_some") || name.contains("is_ok");
                     if is_positive {
-                        // is_some/is_ok: tag != 0 (Some=1, Ok=1)
-                        writeln!(out, "  %v{} = icmp ne i32 %{tag_val}, 0", d.0).unwrap();
+                        // is_some/is_ok: tag == 0 (Some=tag0, Ok=tag0)
+                        writeln!(out, "  %v{} = icmp eq i32 %{tag_val}, 0", d.0).unwrap();
                     } else {
-                        // is_none/is_err: tag == 0 for None, tag == 2 for Err
-                        if name.contains("is_err") {
-                            writeln!(out, "  %v{} = icmp eq i32 %{tag_val}, 2", d.0).unwrap();
-                        } else {
-                            writeln!(out, "  %v{} = icmp eq i32 %{tag_val}, 0", d.0).unwrap();
-                        }
+                        // is_none/is_err: tag != 0
+                        writeln!(out, "  %v{} = icmp ne i32 %{tag_val}, 0", d.0).unwrap();
                     }
                 }
                 return;
@@ -1272,7 +1268,7 @@ fn emit_inst(
                     let cmp = format!("unwrapor.{block_id}.{uid}.cmp");
                     writeln!(out, "  %{tag_ptr} = getelementptr i8, ptr %v{}, i32 0", args[0].0).unwrap();
                     writeln!(out, "  %{tag_val} = load i32, ptr %{tag_ptr}").unwrap();
-                    writeln!(out, "  %{cmp} = icmp ne i32 %{tag_val}, 0").unwrap();
+                    writeln!(out, "  %{cmp} = icmp eq i32 %{tag_val}, 0").unwrap();
                     writeln!(out, "  %{payload_ptr} = getelementptr i8, ptr %v{}, i64 8", args[0].0).unwrap();
                     writeln!(out, "  %{payload_val} = load i64, ptr %{payload_ptr}").unwrap();
                     writeln!(out, "  %v{} = select i1 %{cmp}, i64 %{payload_val}, i64 %v{}", d.0, args[1].0).unwrap();
