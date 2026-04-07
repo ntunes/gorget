@@ -132,6 +132,7 @@ struct GirModule:
     Vector[GirType] type_table
     Dict[String, int] fn_sigs
     Dict[String, int] named_types
+    Dict[String, bool] resource_types
 
 # ── Helpers ──────────────────────────────────────────────
 

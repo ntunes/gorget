@@ -4,7 +4,7 @@
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str
-from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type
 from scope import ScopeTable
 from types import TypeTable
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator
@@ -135,6 +135,39 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
         else:
             pass
     return I64_TYPE
+
+# ── Resource type detection ──────────────────────────────
+
+bool is_resource_field_type(SpannedType stype, Dict[String, bool] resource_types):
+    match stype.ty:
+        case TPrimitive(name):
+            match name:
+                case "String":
+                    return true
+                else:
+                    return false
+        case TNamed(name, _):
+            match name:
+                case "Vector" | "Dict" | "Set" | "Box" | "Rc" | "Arc":
+                    return true
+                else:
+                    if resource_types.contains(name):
+                        return true
+                    return false
+        else:
+            return false
+
+bool is_resource_type_name(String name, GirModule &gmod):
+    match name:
+        case "GorgetString" | "String":
+            return true
+        else:
+            if gmod.resource_types.contains(name):
+                return true
+            # Collection types are always resource types
+            if name.starts_with("Vector") or name.starts_with("Dict") or name.starts_with("Set"):
+                return true
+            return false
 
 # ── Binary operator mapping ──────────────────────────────
 
@@ -398,9 +431,12 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     while pi < fdef.params.len():
         Param p = fdef.params.get(pi).unwrap()
         int pt = map_ast_type(p.param_type, &gmod)
-        # Bare params of resource types (structs, strings, collections) → Ptr
+        # Bare params of resource types (strings, collections, structs with resource fields) → Ptr
+        # Small types (enums, simple structs) are passed by value
         if p.ownership == 0 and pt >= PRIM_COUNT:
-            pt = register_ptr(&gmod, pt)
+            String type_c_name = type_to_c_name(p.param_type, &gmod)
+            if is_resource_type_name(type_c_name, &gmod):
+                pt = register_ptr(&gmod, pt)
         # Mutable borrow (&) params → MutPtr
         if p.ownership == 2:
             if pt < PRIM_COUNT:
@@ -485,7 +521,9 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             int pt = map_ast_type(p.param_type, &gmod)
             # Bare params of resource types → Ptr
             if p.ownership == 0 and pt >= PRIM_COUNT:
-                pt = register_ptr(&gmod, pt)
+                String type_c_name = type_to_c_name(p.param_type, &gmod)
+                if is_resource_type_name(type_c_name, &gmod):
+                    pt = register_ptr(&gmod, pt)
             if p.ownership == 2:
                 pt = register_type(&gmod, GtMutPtr(pt))
             param_types.push(pt)
@@ -538,7 +576,43 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
         ii = ii + 1
 
     Dict[String, int] named_types = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types)
+    # Scan struct/enum defs to determine which types have resource fields
+    Dict[String, bool] resource_types = {}
+    resource_types.put("String", true)
+    resource_types.put("GorgetString", true)
+    int ri = 0
+    while ri < m.items.len():
+        Item ritem = m.items.get(ri).unwrap()
+        match ritem:
+            case IStruct(sdef):
+                bool has_resource = false
+                int fi = 0
+                while fi < sdef.fields.len():
+                    Param fld = sdef.fields.get(fi).unwrap()
+                    if is_resource_field_type(fld.param_type, resource_types):
+                        has_resource = true
+                    fi += 1
+                if has_resource:
+                    resource_types.put(sdef.name, true)
+            case IEnum(edef):
+                bool has_resource = false
+                int vi = 0
+                while vi < edef.variants.len():
+                    EnumVariant var = edef.variants.get(vi).unwrap()
+                    int vfi = 0
+                    while vfi < var.fields.len():
+                        SpannedType vft = var.fields.get(vfi).unwrap()
+                        if is_resource_field_type(vft, resource_types):
+                            has_resource = true
+                        vfi += 1
+                    vi += 1
+                if has_resource:
+                    resource_types.put(edef.name, true)
+            else:
+                pass
+        ri += 1
+
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types)
 
     # Lower each function and equip method
     int fi = 0
