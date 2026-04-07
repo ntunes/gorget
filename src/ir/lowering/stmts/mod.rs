@@ -322,9 +322,10 @@ fn lower_var_decl(
 
                         let in_loop = ctx.current_loop().is_some();
                         // Allow borrow propagation in loops when the variable is
-                        // never reassigned. cow_before_mutation handles mutation-
-                        // through-method-call (e.g. v.push(x)) correctly on BareParam.
-                        let safe_in_loop = !ctx.func_state.cow_reassigned_names.contains(name);
+                        // not reassigned on any forward path from this statement.
+                        // Flow-sensitive: only blocks propagation when the name is
+                        // reassigned AFTER this VarDecl, not globally in the function.
+                        let safe_in_loop = !ctx.is_cow_unsafe_at(name, stmt_span.start);
                         if source_is_bare_param && (!in_loop || safe_in_loop) {
                             // Propagate bare param borrow
                             builder.locals[local_id.0 as usize].type_id = inferred;
@@ -801,13 +802,19 @@ fn lower_return(
             // Without this, the caller frees a pointer still owned by the source
             // (e.g., an enum field loaded via match destructuring, or a named
             // local whose scope-exit drop would double-free the return value).
-            // TODO: skip for owned temps to eliminate clone+free round-trip.
+            // Clone string returns unless the source is a fresh string allocation
+            // (direct function/extern call result returning owned string type).
+            // Fresh strings own their heap data independently — no sharing.
+            // Struct inits, field loads, and pattern extracts may contain strings
+            // that share heap data with other variables, so they MUST be cloned.
             let mut did_clone_return = false;
             if ret_type == ctx.type_mapper.owned_string_type {
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
                         let rhs_type = builder.local_type(place.local);
-                        if rhs_type == ctx.type_mapper.owned_string_type {
+                        if rhs_type == ctx.type_mapper.owned_string_type
+                            && !ctx.is_fresh_string(place.local)
+                        {
                             let clone_fn = ctx.clone_fn_for_ptr(rhs_type)
                                 .unwrap_or_else(|| "gorget_string_from_str".to_string());
                             let clone_result = builder.call(

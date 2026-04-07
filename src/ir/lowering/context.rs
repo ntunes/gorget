@@ -252,6 +252,12 @@ pub struct FunctionState {
     /// Populated by lower_call_arg when a Move param borrows a local, drained by
     /// the call lowering site after emitting the Call instruction.
     pub pending_move_zeros: Vec<LocalId>,
+    /// Locals whose string heap data is a fresh allocation — not shared with any
+    /// other variable. Set for function/extern call results returning the owned
+    /// string type directly (gorget_str_cat, gorget_string_format, user functions).
+    /// NOT set for struct inits, field loads, or pattern extracts (these may share
+    /// string data with the source). Used by the return path to skip redundant clones.
+    pub fresh_string_locals: rustc_hash::FxHashSet<LocalId>,
 }
 
 /// Tracks lowering state within a function.
@@ -801,6 +807,15 @@ impl<'a> LoweringContext<'a> {
         }
         // Function call results own their data — safe to Move on return.
         self.set_owned(local);
+        // Mark as fresh ONLY for user-defined function calls (which have the
+        // return clone path ensuring independence). Builtin method calls
+        // (present in fn_sigs) are dispatched to C runtime functions that may
+        // return views into existing data, so they're NOT marked fresh.
+        if return_type == self.type_mapper.owned_string_type
+            && !self.fn_sigs.contains_key(func_name.as_str())
+        {
+            self.func_state.fresh_string_locals.insert(local);
+        }
         local
     }
 
@@ -817,6 +832,9 @@ impl<'a> LoweringContext<'a> {
             self.drops.register_local(local, return_type, &self.type_registry);
         }
         self.set_owned(local);
+        // NOTE: extern calls are NOT marked as fresh_string_locals because many
+        // runtime functions (gorget_str_char_at, gorget_str_slice, etc.) return
+        // views into existing data, not independent allocations.
         local
     }
 
@@ -1223,6 +1241,13 @@ impl<'a> LoweringContext<'a> {
     /// Mark a local as owning its data. Overwrites any previous state.
     pub fn set_owned(&mut self, local: LocalId) {
         self.func_state.local_ownership.insert(local, LocalOwnershipState::Owned);
+    }
+
+    /// Check if a local's string data is a fresh allocation not shared with any
+    /// other variable. True only for direct function/extern call results that
+    /// return the owned string type.
+    pub fn is_fresh_string(&self, local: LocalId) -> bool {
+        self.func_state.fresh_string_locals.contains(&local)
     }
 
     /// Mark a local as a generic Ptr reference. Only sets if not already tracked

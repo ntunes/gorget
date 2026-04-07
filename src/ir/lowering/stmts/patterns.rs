@@ -440,7 +440,8 @@ pub fn emit_pattern_bindings(
                 // scrutinee after extraction (e.g., child_list.push(child_nd) in
                 // xml.gg), the push does a shallow copy sharing the buffer. The
                 // clone ensures the binding's drop doesn't corrupt the pushed copy.
-                // TODO: skip clone when liveness shows scrutinee is dead in arm body.
+                // NOTE: clone elision requires zeroing BOTH the scrutinee copy AND
+                // the original variable (which is also dropped). Not yet implemented.
                 else if !scrut_is_ptr
                     && field_type == ctx.type_mapper.owned_string_type
                 {
