@@ -50,7 +50,7 @@
 
 - **`char` type backend bugs**: `char as int` gives garbage, char `==`/`!=` uses `gorget_str_eq`. [added: 2026-03-21]
 
-- **Self-host comparison — type checker crashes**: Re-measured at 856 fixtures (2026-04-07). Parser: 851/856 (99.4%). Resolver: 852/856 (99.5%). **Type checker: 436/856 (50.9%), 405 crashes** (double-free). Crashes are from the same Ptr→owned CoW upgrade in loop scopes — needs further investigation of struct-with-String-field patterns. [updated: 2026-04-07]
+- **Self-host type checker — 41 remaining crashes**: Re-measured at 857 fixtures (2026-04-07). Parser: 851/857. Resolver: 852/857. **Type checker: 794/857 (92.6%), 41 crashes**, 22 mismatches. Crashes from 2 sources: (1) derive expansion cloning AST nodes with freed String fields (~30), (2) specific double-free patterns in coroutine/dict/httpserver fixtures (~6). [updated: 2026-04-07]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 

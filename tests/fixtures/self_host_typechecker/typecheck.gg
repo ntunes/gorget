@@ -454,13 +454,13 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                 ResolvedType ert = get_rtype_at(types.types, expected_type)
                 match ert:
                     case RTFunction(ptypes, _, _):
-                        expected_params = !ptypes
+                        expected_params = ptypes
                     case RTCallableTrait(inner_fn):
                         if inner_fn >= 0 and inner_fn < types.types.len():
                             ResolvedType ifn = get_rtype_at(types.types, inner_fn)
                             match ifn:
                                 case RTFunction(ptypes, _, _):
-                                    expected_params = !ptypes
+                                    expected_params = ptypes
                                 else:
                                     pass
                     case RTMutCallableTrait(inner_fn):
@@ -468,7 +468,7 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                             ResolvedType ifn = get_rtype_at(types.types, inner_fn)
                             match ifn:
                                 case RTFunction(ptypes, _, _):
-                                    expected_params = !ptypes
+                                    expected_params = ptypes
                                 else:
                                     pass
                     case RTConsumeCallableTrait(inner_fn):
@@ -476,7 +476,7 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                             ResolvedType ifn = get_rtype_at(types.types, inner_fn)
                             match ifn:
                                 case RTFunction(ptypes, _, _):
-                                    expected_params = !ptypes
+                                    expected_params = ptypes
                                 else:
                                     pass
                     case RTBoxedCallable(kind_name, inner_fn):
@@ -484,7 +484,7 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                             ResolvedType ifn = get_rtype_at(types.types, inner_fn)
                             match ifn:
                                 case RTFunction(ptypes, _, _):
-                                    expected_params = !ptypes
+                                    expected_params = ptypes
                                 else:
                                     pass
                     else:
@@ -524,7 +524,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                 ResolvedType ct = get_rtype_at(types.types, callee_type)
                 match ct:
                     case RTFunction(ptypes, _, _):
-                        call_param_types = !ptypes
+                        call_param_types = ptypes
                     else:
                         pass
             int ai = 0
