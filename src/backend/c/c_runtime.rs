@@ -4598,6 +4598,9 @@ static inline void gorget_array_remove(GorgetArray* arr, size_t index) {
         fprintf(stderr, "gorget: panic: index out of bounds: index %zu, length %zu\n", index, arr->len);
         exit(1);
     }
+    if (arr->elem_drop) {
+        arr->elem_drop((char*)arr->data + index * arr->elem_size);
+    }
     if (index + 1 < arr->len) {
         memmove((char*)arr->data + index * arr->elem_size,
                 (char*)arr->data + (index + 1) * arr->elem_size,
@@ -4669,6 +4672,11 @@ static inline void* gorget_array_last(const GorgetArray* arr) {
 }
 
 static inline void gorget_array_clear(GorgetArray* arr) {
+    if (arr->elem_drop && arr->data) {
+        for (size_t i = 0; i < arr->len; i++) {
+            arr->elem_drop((char*)arr->data + i * arr->elem_size);
+        }
+    }
     arr->len = 0;
 }
 
@@ -4816,7 +4824,7 @@ static inline void gorget_array_clone_inplace(void* p) {
 }
 static inline void gorget_string_clone_inplace(void* p) {
     GorgetString* s = (GorgetString*)p;
-    *s = gorget_string_clone(s);
+    *s = gorget_string_clone_to_owned(s);
 }
 
 static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t start, int64_t end) {
@@ -4826,12 +4834,18 @@ static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t sta
     }
     size_t slice_len = (size_t)(end - start);
     GorgetAllocator* a = __gorget_current_alloc;
-    GorgetArray result = {NULL, 0, 0, arr->elem_size, a};
+    GorgetArray result = {NULL, 0, 0, arr->elem_size, a, arr->elem_drop, arr->elem_clone};
     if (slice_len > 0) {
         result.data = a->alloc(a->ctx, slice_len * arr->elem_size);
         memcpy(result.data, (char*)arr->data + (size_t)start * arr->elem_size, slice_len * arr->elem_size);
         result.len = slice_len;
         result.cap = slice_len;
+        // Deep-clone resource-type elements so the slice is independent
+        if (result.elem_clone) {
+            for (size_t i = 0; i < slice_len; i++) {
+                result.elem_clone((char*)result.data + i * result.elem_size);
+            }
+        }
     }
     return result;
 }

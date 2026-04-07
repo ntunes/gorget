@@ -1707,7 +1707,8 @@ impl<'a> FuncLowering<'a> {
         // The GIR backend does this inline; we do it here in the LIR lowering
         // because the GIR's MoveZero doesn't cover all push cases.
         let consuming_arg_gir_idx: Option<usize> = match emit_name {
-            "gorget_array_push" | "gorget_set_add" | "gorget_heap_push" => Some(1),
+            "gorget_array_push" | "gorget_set_add" | "gorget_heap_push"
+            | "gorget_array_extend" => Some(1),
             "gorget_array_insert" | "gorget_array_set" | "gorget_map_put" => Some(2),
             "gorget_channel_send" => Some(1),
             _ => None,

@@ -121,6 +121,10 @@ pub(super) fn lower_call_arg(
                         builder.emit_borrow_mut(dst, place.clone());
                         // Mark source as moved — callee takes ownership
                         ctx.drops.mark_moved(place.local);
+                        // Schedule MoveZero AFTER the call — the callee reads from
+                        // this address, so we can't zero before. Matches the
+                        // Ownership::Move path at line ~212.
+                        ctx.func_state.pending_move_zeros.push(place.local);
                         return FunctionBuilder::copy(dst);
                     } else {
                         let ptr_type = ctx.register_ptr_type(local_type);

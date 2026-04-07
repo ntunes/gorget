@@ -1153,6 +1153,10 @@ pub(super) fn lower_method_call(
             }
         }
 
+        // Save pending_move_zeros baseline so we only drain entries added
+        // by THIS method call's argument lowering (not from nested/prior calls).
+        let move_zero_baseline = ctx.func_state.pending_move_zeros.len();
+
         let mut lowered_method_args: Vec<Operand> = args.iter()
             .enumerate()
             .map(|(i, arg)| {
@@ -1519,6 +1523,14 @@ pub(super) fn lower_method_call(
                 }
             }
         }
+        // Drain pending_move_zeros from lower_call_arg. These were borrowed
+        // (borrow_mut) for the callee; now that the call has returned, zero
+        // the source to prevent double-free at scope exit.
+        let pending: Vec<LocalId> = ctx.func_state.pending_move_zeros.drain(move_zero_baseline..).collect();
+        for local in pending {
+            builder.move_zero(Place::local(local));
+        }
+
         // Phase 1f: auto-move for push/put/set/add value args.
         // Single-use named locals: MoveZero after push (zero-cost transfer).
         // TODO: multi-use locals need clone BEFORE push. Requires proper liveness
