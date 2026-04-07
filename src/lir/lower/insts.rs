@@ -1879,6 +1879,8 @@ impl<'a> FuncLowering<'a> {
                     LirType::Struct(self.struct_reg.lookup("GorgetString").unwrap()),
                     Some("__bool_str".into()),
                 );
+                let str_struct_ty = LirType::Struct(self.struct_reg.lookup("GorgetString").unwrap());
+                self.ensure_extern("gorget_bool_to_str", &[LirType::Bool], &str_struct_ty);
                 let str_result = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: Some(str_result),

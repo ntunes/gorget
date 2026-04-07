@@ -214,8 +214,13 @@ impl<'a> LoweringContext<'a> {
         // Register synthetic externs discovered during function lowering.
         for ext in all_pending_externs {
             if let Some(existing) = self.module.externs.iter_mut().find(|e| e.name == ext.name) {
-                // Replace if existing is variadic or has fewer params (less specific).
-                if existing.is_variadic || (existing.params.is_empty() && !ext.params.is_empty()) {
+                // Replace if existing is variadic, has fewer params, or has a less specific return type.
+                // For runtime functions with known signatures (from ensure_extern + runtime_extern_sig),
+                // always prefer the new declaration which has the canonical types.
+                let should_replace = existing.is_variadic
+                    || (existing.params.is_empty() && !ext.params.is_empty())
+                    || (existing.return_type != ext.return_type && ext.return_type.is_aggregate());
+                if should_replace {
                     *existing = ext;
                 }
             } else {
