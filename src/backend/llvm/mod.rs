@@ -329,6 +329,13 @@ pub fn generate_llvm_ir(module: &LirModule) -> String {
                         str_globals.intern("gorget: division by zero\n");
                     }
                 }
+                if let Inst::Add { overflow: Overflow::Trap, ty, .. }
+                    | Inst::Sub { overflow: Overflow::Trap, ty, .. }
+                    | Inst::Mul { overflow: Overflow::Trap, ty, .. } = inst {
+                    if ty.is_integer() {
+                        str_globals.intern("gorget: integer overflow\n");
+                    }
+                }
             }
         }
     }
@@ -1088,7 +1095,7 @@ fn emit_inst(
         Inst::Add { dst, ty, lhs, rhs, overflow } => {
             let lty = llvm_type(ty);
             if *overflow == Overflow::Trap && ty.is_integer() {
-                emit_overflow_check(out, "add", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label);
+                emit_overflow_check(out, "add", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals);
             } else if ty.is_float() {
                 writeln!(out, "  %v{} = fadd {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -1098,7 +1105,7 @@ fn emit_inst(
         Inst::Sub { dst, ty, lhs, rhs, overflow } => {
             let lty = llvm_type(ty);
             if *overflow == Overflow::Trap && ty.is_integer() {
-                emit_overflow_check(out, "sub", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label);
+                emit_overflow_check(out, "sub", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals);
             } else if ty.is_float() {
                 writeln!(out, "  %v{} = fsub {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -1108,7 +1115,7 @@ fn emit_inst(
         Inst::Mul { dst, ty, lhs, rhs, overflow } => {
             let lty = llvm_type(ty);
             if *overflow == Overflow::Trap && ty.is_integer() {
-                emit_overflow_check(out, "mul", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label);
+                emit_overflow_check(out, "mul", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals);
             } else if ty.is_float() {
                 writeln!(out, "  %v{} = fmul {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -1335,11 +1342,16 @@ fn emit_inst(
         }
         Inst::Store { ptr, value } => {
             // Infer the type of the value being stored
-            let val_ty = val_types.get(value.0 as usize)
-                .and_then(|t| t.as_ref())
-                .map(|t| llvm_type_full(t, snames))
-                .unwrap_or_else(|| "i64".to_string());
-            writeln!(out, "  store {val_ty} %v{}, ptr %v{}", value.0, ptr.0).unwrap();
+            let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
+            if let Some(LirType::PtrTo(sid)) = val_ty {
+                // Source is a pointer to an aggregate — memcpy the struct contents
+                let sz = sizeof_lir_type(&LirType::Struct(*sid), &module.structs, snames);
+                writeln!(out, "  call ptr @memcpy(ptr %v{}, ptr %v{}, i64 {sz})", ptr.0, value.0).unwrap();
+            } else {
+                let ty_str = val_ty.map(|t| llvm_type_full(t, snames))
+                    .unwrap_or_else(|| "i64".to_string());
+                writeln!(out, "  store {ty_str} %v{}, ptr %v{}", value.0, ptr.0).unwrap();
+            }
         }
         Inst::FieldPtr { dst, base, struct_id, field } => {
             let sname = &snames[&struct_id.0];
@@ -1816,6 +1828,7 @@ fn emit_overflow_check(
     block_id: u32,
     trap_counter: &mut u32,
     current_label: &mut String,
+    str_globals: &StrGlobals,
 ) {
     let lty = llvm_type(ty);
     let bits = int_bits(ty);
@@ -1836,7 +1849,12 @@ fn emit_overflow_check(
     writeln!(out, "  %{flag} = extractvalue {{ {lty}, i1 }} %{result}, 1").unwrap();
     writeln!(out, "  br i1 %{flag}, label %{trap_label}, label %{ok_label}").unwrap();
     writeln!(out, "{trap_label}:").unwrap();
-    writeln!(out, "  call void @llvm.trap()").unwrap();
+    // Match C backend: fprintf(stderr, "gorget: integer overflow\n"); exit(1);
+    let ov_se = format!("ov.{block_id}.{trap_id}.stderr");
+    writeln!(out, "  %{ov_se} = load ptr, ptr @stderr").unwrap();
+    let ov_msg_idx = str_globals.get_index("gorget: integer overflow\n");
+    writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{ov_se}, ptr @.str.{ov_msg_idx})").unwrap();
+    writeln!(out, "  call void @exit(i32 1)").unwrap();
     writeln!(out, "  unreachable").unwrap();
     writeln!(out, "{ok_label}:").unwrap();
     writeln!(out, "  %v{} = add {lty} 0, %{val}", dst.0).unwrap();
