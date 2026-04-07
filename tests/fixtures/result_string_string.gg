@@ -1,0 +1,69 @@
+# Result[String, String] — regression test for double-free on Ok(borrowed_param)
+from std.collections import Vector
+
+Result[String, String] validate_username(String name):
+    if name.is_empty():
+        return Error("username cannot be empty")
+    if name.len() < 3:
+        return Error(f"too short: {name.len()} chars")
+    if name.contains(" "):
+        return Error("no spaces allowed")
+    return Ok(name)
+
+Result[String, String] validate_and_normalize(String input):
+    String trimmed = input.trim()
+    if trimmed.is_empty():
+        return Error("blank after trim")
+    return validate_username(trimmed.to_lower())
+
+String process_or_default(String input):
+    Result[String, String] r = validate_and_normalize(input)
+    match r:
+        case Ok(v):
+            return v
+        case Error(e):
+            return f"default ({e})"
+
+void main():
+    # Direct validate_username calls
+    Result[String, String] v1 = validate_username("alice")
+    print(f"alice: {v1.unwrap()}")
+
+    Result[String, String] v2 = validate_username("")
+    print(f"empty: {v2.unwrap_error()}")
+
+    Result[String, String] v3 = validate_username("ab")
+    print(f"ab: {v3.unwrap_error()}")
+
+    Result[String, String] v4 = validate_username("hello world")
+    print(f"space: {v4.unwrap_error()}")
+
+    # Chained validation (exercises borrowed param → Ok clone)
+    Result[String, String] c1 = validate_and_normalize("  Alice  ")
+    print(f"norm: {c1.unwrap()}")
+
+    Result[String, String] c2 = validate_and_normalize("  ")
+    print(f"blank: {c2.unwrap_error()}")
+
+    # Match on Result[String, String]
+    String result = process_or_default("good_data")
+    print(f"good: {result}")
+    String result2 = process_or_default("")
+    print(f"bad: {result2}")
+
+    # In a loop
+    Vector[String] inputs = Vector[String]()
+    inputs.push("alice")
+    inputs.push("")
+    inputs.push("ab")
+    inputs.push("bob")
+    int ok_count = 0
+    int err_count = 0
+    for input in inputs:
+        Result[String, String] r = validate_username(input)
+        match r:
+            case Ok(v):
+                ok_count = ok_count + 1
+            case Error(e):
+                err_count = err_count + 1
+    print(f"ok: {ok_count}, err: {err_count}")

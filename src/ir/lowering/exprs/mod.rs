@@ -1035,8 +1035,7 @@ fn resolve_option_result_variant(
                 })
                 .unwrap_or(UNIT_TYPE);
             let type_name = ctx.type_registry.type_name(type_id).unwrap_or_else(|| mangled.clone());
-            let dst = builder.enum_init(&type_name, "Some", type_id, vec![field_op]);
-            ctx.set_owned(dst);
+            let dst = ctx.emit_enum_init_owned(builder, &type_name, "Some", type_id, vec![field_op]);
             Some(FunctionBuilder::copy(dst))
         }
         "None" if args.is_empty() => {
@@ -1061,21 +1060,15 @@ fn resolve_option_result_variant(
             Some(FunctionBuilder::copy(dst))
         }
         "Ok" if args.len() == 1 => {
-            // Ok(value) — determine Result type from context (expected_type)
+            // Ok(value) — determine Result type from context (expected_type).
+            // Use emit_enum_init_owned to clone borrowed resource args (e.g. BareParam strings).
             if let Some(et) = ctx.func_state.expected_type {
                 let name = ctx.type_registry.type_name(et).unwrap_or_default();
                 let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
                     || name.starts_with("Result__");
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
-                    let consumed = if let Operand::Copy(ref p) | Operand::Move(ref p) = field_op {
-                        if p.projections.is_empty() { Some(p.local) } else { None }
-                    } else { None };
-                    let dst = builder.enum_init(&name, "Ok", et, vec![field_op]);
-                    ctx.set_owned(dst);
-                    if let Some(local) = consumed {
-                        ctx.move_zero_and_mark(builder, local);
-                    }
+                    let dst = ctx.emit_enum_init_owned(builder, &name, "Ok", et, vec![field_op]);
                     return Some(FunctionBuilder::copy(dst));
                 }
             }
@@ -1086,14 +1079,7 @@ fn resolve_option_result_variant(
                     || name.starts_with("Result__");
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
-                    let consumed = if let Operand::Copy(ref p) | Operand::Move(ref p) = field_op {
-                        if p.projections.is_empty() { Some(p.local) } else { None }
-                    } else { None };
-                    let dst = builder.enum_init(&name, "Ok", rt, vec![field_op]);
-                    ctx.set_owned(dst);
-                    if let Some(local) = consumed {
-                        ctx.move_zero_and_mark(builder, local);
-                    }
+                    let dst = ctx.emit_enum_init_owned(builder, &name, "Ok", rt, vec![field_op]);
                     return Some(FunctionBuilder::copy(dst));
                 }
             }

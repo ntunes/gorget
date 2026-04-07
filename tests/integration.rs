@@ -16069,3 +16069,20 @@ still hello: true
 pathological ok",
     );
 }
+
+#[test]
+fn result_string_string() {
+    run_gg(
+        "result_string_string.gg",
+        "\
+alice: alice
+empty: username cannot be empty
+ab: too short: 2 chars
+space: no spaces allowed
+norm: alice
+blank: blank after trim
+good: good_data
+bad: default (blank after trim)
+ok: 2, err: 2",
+    );
+}
