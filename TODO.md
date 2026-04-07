@@ -14,6 +14,8 @@
 
 ## Medium
 
+- **CoW: scope-escape materialization boundary**: When a CoW borrow escapes its scope (stored in a struct field, returned from function, pushed to collection), materialize to owned at the boundary. This is the generalization of the existing return-clone and field-store-from-borrow materializations. Once all escape boundaries are covered, strings no longer need an allocator pointer in every struct — the CoW system guarantees that all live references are independently owned at scope boundaries. Enables removing the allocator field from `GorgetString`, reducing every string from 32 to 24 bytes. [added: 2026-04-07]
+
 - **Borrow checker: early return doesn't reset move state**: INVESTIGATED — the divergent-branch filtering in `merge_branch_states()` already works correctly. Moves in branches that return/throw/break are excluded from the join-point merge. Added regression test `move_in_divergent_branch_ok`. The self-host `scope.gg` defensive clones may have been needed before the StringView removal. Review if they can now be removed. [updated: 2026-04-06]
 
 - **CoW: nested field mutation gap**: `s.v.push(x)` goes through `field_place_info` path in `methods.rs:1030` which skips `cow_before_mutation`. If `s.v[0]` previously created a `cow_collection_refs` entry keyed on a FieldLoad temp, the ref won't be cloned out before the push. Only affects resource-type elements (e.g., `Vector[Vector[int]]` inside a struct), not strings or primitives. The borrow checker only catches explicit `T &` refs, not implicit CoW borrows. Fix requires tracking FieldLoad provenance through to `cow_collection_refs` — non-trivial. [added: 2026-04-05]
@@ -48,7 +50,7 @@
 
 - **`char` type backend bugs**: `char as int` gives garbage, char `==`/`!=` uses `gorget_str_eq`. [added: 2026-03-21]
 
-- **Self-host type checker — 41 remaining crashes**: Re-measured at 857 fixtures (2026-04-07). Parser: 851/857. Resolver: 852/857. **Type checker: 794/857 (92.6%), 41 crashes**, 22 mismatches. Crashes from 2 sources: (1) derive expansion cloning AST nodes with freed String fields (~30), (2) specific double-free patterns in coroutine/dict/httpserver fixtures (~6). [updated: 2026-04-07]
+- **Self-host comparison — 16 type checker mismatches**: At 861 fixtures (2026-04-07). Parser: 856/861 (99.4%). Resolver: 854/861 (99.2%). Type checker: 845/861 (98.1%), **0 crashes**. 16 mismatches remain (type var numbering, closure param inference, Gorget-more-correct). [updated: 2026-04-07]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
