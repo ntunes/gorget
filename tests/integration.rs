@@ -14809,6 +14809,18 @@ done",
 }
 
 #[test]
+fn cow_borrow_field_access() {
+    run_gg(
+        "cow_borrow_field_access.gg",
+        "\
+Alice
+Alice
+3
+done",
+    );
+}
+
+#[test]
 fn cow_transitive_alias() {
     run_gg(
         "cow_transitive_alias.gg",

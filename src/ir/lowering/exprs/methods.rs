@@ -6,11 +6,11 @@ use crate::ir::types::*;
 use crate::parser::ast::{self, Expr, Ownership};
 use crate::span::Spanned;
 
-use super::super::context::LoweringContext;
+use super::super::context::{LoweringContext, CollectionId};
 use super::{lower_expr, lower_call_arg, infer_operand_type_full, register_tuple_type,
             is_resource_type_local, get_or_register_type,
             ensure_box_type_def, ensure_guard_type_def, ensure_shared_type_def, ensure_weak_type_def,
-            index_expr_to_mangle_fragment, try_resolve_field_place};
+            index_expr_to_mangle_fragment, try_resolve_field_place, extract_field_path_string};
 
 fn gorget_name_for_type_id(ctx: &LoweringContext, type_id: TypeId) -> String {
     if type_id == ctx.type_mapper.owned_string_type {
@@ -229,6 +229,9 @@ pub(super) fn lower_method_call(
         None
     };
 
+    // Extract field path string for CowBorrow provenance on field-access receivers.
+    let field_path_for_cow: Option<String> = extract_field_path_string(&receiver.node);
+
     // For pointer params used as method receivers, pass the raw pointer directly.
     // Auto-deref would copy the struct, and mutations to the copy wouldn't propagate back.
     let borrow_param_local = if let Expr::Identifier(name) = &receiver.node {
@@ -414,7 +417,7 @@ pub(super) fn lower_method_call(
                     // Propagate collection provenance from the Option local.
                     if matches!(ctx.type_registry.get(inner_type), Some(GirType::Ptr(_))) {
                         ctx.set_cow_borrow(dst);
-                        if let Some(collection) = ctx.cow_borrow_source(place.local) {
+                        if let Some(collection) = ctx.cow_borrow_source(place.local).cloned() {
                             ctx.set_cow_borrow_source(dst, collection);
                         }
                     }
@@ -1027,6 +1030,15 @@ pub(super) fn lower_method_call(
             }
         }
 
+        // CoW: field-access receiver mutation — materialize any collection refs
+        // that borrow from this field path (e.g., self.data.push(x) severs refs
+        // created by self.data.get(i).unwrap()).
+        if needs_mut {
+            if let Some(ref field_path) = field_path_for_cow {
+                ctx.cow_before_field_mutation(builder, field_path);
+            }
+        }
+
         // If receiver is a field access, borrow the field in-place instead of
         // borrowing a copy (which would mutate the copy, not the original).
         if let Some((field_place, field_type_id)) = &field_place_info {
@@ -1452,15 +1464,14 @@ pub(super) fn lower_method_call(
         } else {
             let dst = ctx.call_tracked(builder, call_name, call_args, ret_type);
             // Track collection provenance for Option__Ref_ results (from .get(), .first(), etc.).
-            // Only for direct named-local receivers — field-access receivers
-            // (self.data, game.entities) require mutation-side tracking that
-            // isn't fully implemented yet (index assignment bypasses cow_before_mutation).
             if let Some(ret_name) = ctx.type_name_for_id(ret_type) {
                 if ret_name.starts_with("Option__Ref_") {
                     if let Some(recv_local) = recv_local_for_move_zero {
                         if ctx.is_named_local(recv_local) {
-                            ctx.set_cow_borrow_source(dst, recv_local);
+                            ctx.set_cow_borrow_source(dst, CollectionId::Local(recv_local));
                         }
+                    } else if let Some(ref field_path) = field_path_for_cow {
+                        ctx.set_cow_borrow_source(dst, CollectionId::FieldPath(field_path.clone()));
                     }
                 }
             }
@@ -1964,7 +1975,7 @@ pub(super) fn lower_index_access(
         };
         let dst = builder.index_load(place.clone(), idx, result_type);
         if ctx.type_registry.is_resource_type(elem_type) && !is_task && !is_string_base {
-            ctx.set_collection_ref(dst, place.local);
+            ctx.set_collection_ref(dst, CollectionId::Local(place.local));
         }
         return FunctionBuilder::copy(dst);
     }

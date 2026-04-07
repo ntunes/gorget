@@ -336,7 +336,7 @@ fn lower_var_decl(
                             // behaves identically to `auto`. cow_before_mutation on the
                             // collection materializes this local before collection mutation.
                             let collection = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                                ctx.cow_borrow_source(p.local).unwrap()
+                                ctx.cow_borrow_source(p.local).cloned().unwrap()
                             } else { unreachable!() };
                             builder.locals[local_id.0 as usize].type_id = inferred;
                             ctx.register_local(name, local_id, inferred);

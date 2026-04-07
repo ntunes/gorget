@@ -1,0 +1,18 @@
+struct GameState:
+    Vector[String] entities
+
+void main():
+    GameState game = GameState(Vector[String]())
+    game.entities.push("Alice")
+    game.entities.push("Bob")
+
+    # Borrow through field access — should be zero-cost (CowBorrow)
+    String first = game.entities.get(0).unwrap()
+    print(first)
+
+    # Mutation of field-accessed collection triggers materialization
+    game.entities.push("Charlie")
+    print(first)
+    print(game.entities.len())
+
+    print("done")

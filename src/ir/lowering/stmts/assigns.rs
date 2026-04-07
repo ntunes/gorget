@@ -13,7 +13,7 @@ use super::super::exprs::{
     emit_shared_mutex_lock_get, emit_shared_mutex_lock_set,
     atomic_type_name_for, emit_atomic_load, emit_atomic_store,
     emit_rwlock_write_get, emit_rwlock_write_set, emit_rwlock_write_finish,
-    try_resolve_field_place,
+    try_resolve_field_place, extract_field_path_string,
     infer_collection_element_type,
 };
 
@@ -283,6 +283,8 @@ pub(super) fn lower_field_assign(
         if let Some((local_id, _)) = ctx.lookup_local(obj_name) {
             ctx.cow_before_mutation(builder, local_id);
         }
+    } else if let Some(field_path) = extract_field_path_string(&object.node) {
+        ctx.cow_before_field_mutation(builder, &field_path);
     }
 
     // Try to resolve the full field projection chain without materializing
@@ -510,6 +512,8 @@ pub(super) fn lower_index_assign(
         if let Some((local_id, _)) = ctx.lookup_local(obj_name) {
             ctx.cow_before_mutation(builder, local_id);
         }
+    } else if let Some(field_path) = extract_field_path_string(&object.node) {
+        ctx.cow_before_field_mutation(builder, &field_path);
     }
 
     // When the object is a struct field access (e.g. self.dict_field[key] = val),

@@ -1631,6 +1631,25 @@ fn lower_field_access(
     Operand::Constant(Constant::Unit)
 }
 
+/// Extract a dot-separated field path string from a field-access expression.
+/// Returns `Some("self.data")` for `FieldAccess { SelfExpr, "data" }`,
+/// `Some("game.entities")` for `FieldAccess { Identifier("game"), "entities" }`,
+/// `Some("self.game.entities")` for nested chains.
+pub(super) fn extract_field_path_string(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::FieldAccess { object, field } => {
+            let prefix = match &object.node {
+                Expr::SelfExpr => Some("self".to_string()),
+                Expr::Identifier(name) => Some(name.clone()),
+                Expr::FieldAccess { .. } => extract_field_path_string(&object.node),
+                _ => None,
+            };
+            prefix.map(|p| format!("{}.{}", p, field.node))
+        }
+        _ => None,
+    }
+}
+
 /// Resolve a field access expression to a Place (with projections) and the field's type,
 /// WITHOUT copying the field to a temp. This allows borrowing the field in-place.
 /// Returns `Some((place, field_type_id))` if the expression is a resolvable field access.

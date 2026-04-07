@@ -14,6 +14,17 @@ use crate::ir::types::BlockId;
 
 /// Unified ownership state for a GIR local variable.
 /// Replaces the scattered `ref_locals`, `owned_locals`, `cow_alias_sources`,
+/// Identity of a collection for CowBorrow provenance tracking.
+/// Tracks which collection a borrowed element came from, so that
+/// mutation of that collection triggers materialization of the borrow.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CollectionId {
+    /// Direct named local variable (e.g., `entries` in `entries.get(i)`).
+    Local(LocalId),
+    /// Field access path (e.g., "self.data" in `self.data.get(i)`).
+    FieldPath(String),
+}
+
 /// `cow_alias_targets`, `cow_ptr_params`, and `cow_collection_refs` maps.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LocalOwnershipState {
@@ -23,7 +34,7 @@ pub enum LocalOwnershipState {
     /// CoW alias: Ptr(T) borrowing from source. Clone-on-mutation severs the alias.
     Alias { source: LocalId },
     /// Element reference: Ptr borrowed from a collection element (IndexLoad result).
-    CollectionRef { collection: LocalId },
+    CollectionRef { collection: CollectionId },
     /// Bare Ptr param: borrows from caller. Clone-on-mutation to avoid modifying caller's data.
     BareParam,
     /// Generic Ptr reference: field loads, match pattern extracts, MutableBorrow params, etc.
@@ -224,7 +235,7 @@ pub struct FunctionState {
     /// CoW borrow provenance: maps a CowBorrow local to the collection it
     /// borrows from. Propagated through .get() → Option → .unwrap() chain.
     /// Used by VarDecl to set CollectionRef with the correct source.
-    pub cow_borrow_sources: FxHashMap<LocalId, LocalId>,
+    pub cow_borrow_sources: FxHashMap<LocalId, CollectionId>,
     /// CoW: variable names that are reassigned in the current function body.
     /// Pre-scanned before lowering. Locals in this set skip CoW aliasing.
     pub cow_reassigned_names: rustc_hash::FxHashSet<String>,
@@ -1242,17 +1253,17 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Record the source collection for a CowBorrow local.
-    pub fn set_cow_borrow_source(&mut self, local: LocalId, collection: LocalId) {
+    pub fn set_cow_borrow_source(&mut self, local: LocalId, collection: CollectionId) {
         self.func_state.cow_borrow_sources.insert(local, collection);
     }
 
     /// Look up the source collection for a CowBorrow local.
-    pub fn cow_borrow_source(&self, local: LocalId) -> Option<LocalId> {
-        self.func_state.cow_borrow_sources.get(&local).copied()
+    pub fn cow_borrow_source(&self, local: LocalId) -> Option<&CollectionId> {
+        self.func_state.cow_borrow_sources.get(&local)
     }
 
     /// Mark a local as a collection element reference.
-    pub fn set_collection_ref(&mut self, local: LocalId, collection: LocalId) {
+    pub fn set_collection_ref(&mut self, local: LocalId, collection: CollectionId) {
         self.func_state.local_ownership.insert(local, LocalOwnershipState::CollectionRef { collection });
     }
 
@@ -1306,17 +1317,23 @@ impl<'a> LoweringContext<'a> {
 
     /// Check if a collection has any element refs pointing into it.
     pub fn cow_has_collection_refs(&self, collection: LocalId) -> bool {
-        self.func_state.local_ownership.values().any(|s| matches!(s, LocalOwnershipState::CollectionRef { collection: c } if *c == collection))
+        let target = CollectionId::Local(collection);
+        self.func_state.local_ownership.values().any(|s| matches!(s, LocalOwnershipState::CollectionRef { collection: c } if *c == target))
     }
 
-    /// Collect all collection refs pointing to `collection`. Derived query — O(n) scan.
-    pub fn cow_collection_refs_for(&self, collection: LocalId) -> Vec<LocalId> {
+    /// Collect all collection refs pointing to a `CollectionId`. Derived query — O(n) scan.
+    fn cow_collection_refs_for_id(&self, target: &CollectionId) -> Vec<LocalId> {
         self.func_state.local_ownership.iter()
             .filter_map(|(&id, s)| match s {
-                LocalOwnershipState::CollectionRef { collection: c } if *c == collection => Some(id),
+                LocalOwnershipState::CollectionRef { collection: c } if c == target => Some(id),
                 _ => None,
             })
             .collect()
+    }
+
+    /// Collect all collection refs pointing to a direct local.
+    pub fn cow_collection_refs_for(&self, collection: LocalId) -> Vec<LocalId> {
+        self.cow_collection_refs_for_id(&CollectionId::Local(collection))
     }
 
     /// Before mutating `local`, sever all CoW alias relationships:
@@ -1358,6 +1375,22 @@ impl<'a> LoweringContext<'a> {
                 if self.is_ref_local(ref_local) {
                     self.cow_materialize_collection_ref(builder, ref_local);
                 }
+            }
+        }
+    }
+
+    /// Before mutating a field-accessed collection (e.g., `self.data.push(x)`),
+    /// materialize all CollectionRefs that borrow from that field path.
+    pub fn cow_before_field_mutation(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        field_path: &str,
+    ) {
+        let target = CollectionId::FieldPath(field_path.to_string());
+        let refs = self.cow_collection_refs_for_id(&target);
+        for ref_local in refs {
+            if self.is_ref_local(ref_local) {
+                self.cow_materialize_collection_ref(builder, ref_local);
             }
         }
     }
