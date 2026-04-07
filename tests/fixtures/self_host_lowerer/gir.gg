@@ -1,0 +1,150 @@
+# GIR (Gorget Intermediate Representation) data structures.
+# Mirrors the Rust types in src/ir/ for self-hosted IR lowering.
+
+from std.collections import Vector
+from std.conv import int_to_str
+
+# ── Pre-allocated primitive type IDs ───────────────────────
+
+const int BOOL_TYPE = 0
+const int I8_TYPE = 1
+const int I16_TYPE = 2
+const int I32_TYPE = 3
+const int I64_TYPE = 4
+const int U8_TYPE = 5
+const int U16_TYPE = 6
+const int U32_TYPE = 7
+const int U64_TYPE = 8
+const int F32_TYPE = 9
+const int F64_TYPE = 10
+const int UNIT_TYPE = 11
+const int PRIM_COUNT = 12
+
+# ── GIR type representation ───────────────────────────────
+
+enum GirType:
+    GtBool()
+    GtI8()
+    GtI16()
+    GtI32()
+    GtI64()
+    GtU8()
+    GtU16()
+    GtU32()
+    GtU64()
+    GtF32()
+    GtF64()
+    GtUnit()
+    GtPtr(int)
+    GtMutPtr(int)
+    GtNamed(String)
+    GtFnPtr(Vector[int], int)
+
+# ── Operand — right-hand side value ───────────────────────
+
+enum Operand:
+    OpCopy(int)
+    OpMove(int)
+    OpConstBool(bool)
+    OpConstI32(int)
+    OpConstI64(int)
+    OpConstF64(float)
+    OpConstStr(String)
+    OpConstUnit()
+    OpConstNull()
+    OpSizeOf(int)
+
+# ── Binary / comparison operator tags ─────────────────────
+
+const int OP_ADD = 0
+const int OP_SUB = 1
+const int OP_MUL = 2
+const int OP_DIV = 3
+const int OP_REM = 4
+const int OP_MOD = 5
+
+const int CMP_EQ = 0
+const int CMP_NE = 1
+const int CMP_LT = 2
+const int CMP_LE = 3
+const int CMP_GT = 4
+const int CMP_GE = 5
+
+# ── Instructions ──────────────────────────────────────────
+
+enum Instruction:
+    IAssign(int, Operand)
+    IBinOp(int, int, int, Operand, Operand)
+    ICmp(int, int, int, Operand, Operand)
+    ICall(int, String, Vector[Operand])
+    ICallExtern(int, String, Vector[Operand])
+    IDrop(int)
+    IDropIfAlive(int)
+    IMoveZero(int)
+    INop()
+
+# ── Terminators ───────────────────────────────────────────
+
+enum Terminator:
+    TReturn(Operand)
+    TJump(int)
+    TBranch(Operand, int, int)
+
+# ── Basic block ───────────────────────────────────────────
+
+struct BasicBlock:
+    Vector[Instruction] insts
+    Option[Terminator] term
+
+# ── Local variable slot ──────────────────────────────────
+
+struct GirLocal:
+    int type_id
+    Option[String] name_hint
+
+# ── Function ─────────────────────────────────────────────
+
+struct GirFunction:
+    String name
+    Vector[int] param_types
+    int return_type
+    Vector[GirLocal] locals
+    Vector[BasicBlock] blocks
+
+# ── Extern declaration ───────────────────────────────────
+
+struct GirExtern:
+    String name
+    bool is_variadic
+    int return_type
+
+# ── Module ───────────────────────────────────────────────
+
+struct GirModule:
+    Vector[GirFunction] functions
+    Vector[GirExtern] externs
+    Vector[GirType] type_table
+    Dict[String, int] fn_sigs
+
+# ── Helpers ──────────────────────────────────────────────
+
+Vector[GirType] init_type_table():
+    Vector[GirType] t = []
+    t.push(GtBool())
+    t.push(GtI8())
+    t.push(GtI16())
+    t.push(GtI32())
+    t.push(GtI64())
+    t.push(GtU8())
+    t.push(GtU16())
+    t.push(GtU32())
+    t.push(GtU64())
+    t.push(GtF32())
+    t.push(GtF64())
+    t.push(GtUnit())
+    return t
+
+int register_type(GirModule &gmod, GirType gt):
+    int id = gmod.type_table.len()
+    gmod.type_table.push(gt)
+    return id

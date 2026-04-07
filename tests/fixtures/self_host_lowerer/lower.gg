@@ -1,0 +1,286 @@
+# Minimal AST → GIR lowerer.
+# Handles: functions with primitive types, int/float/bool/string literals,
+# binary ops, function calls, variable declarations, return statements, print().
+
+from std.collections import Vector, Dict
+from std.conv import int_to_str
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType
+from scope import ScopeTable
+from types import TypeTable
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator
+from gir import Operand, GirType, GirExtern
+from gir import BOOL_TYPE, I32_TYPE, I64_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
+from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from gir import init_type_table, register_type
+
+# ── Lowering context ─────────────────────────────────────
+
+struct LowerCtx:
+    Vector[GirLocal] locals
+    Vector[BasicBlock] blocks
+    int current_block
+    Dict[String, int] named_locals
+
+# ── Helpers ──────────────────────────────────────────────
+
+int add_local(LowerCtx &ctx, int type_id, Option[String] name):
+    int id = ctx.locals.len()
+    ctx.locals.push(GirLocal(type_id, name))
+    return id
+
+void emit(LowerCtx &ctx, Instruction inst):
+    BasicBlock bb = ctx.blocks.get(ctx.current_block).unwrap()
+    bb.insts.push(inst)
+    ctx.blocks.set(ctx.current_block, bb)
+
+void set_terminator(LowerCtx &ctx, Terminator term):
+    BasicBlock bb = ctx.blocks.get(ctx.current_block).unwrap()
+    bb.term = Some(term)
+    ctx.blocks.set(ctx.current_block, bb)
+
+# ── Type mapping ─────────────────────────────────────────
+
+int prim_name_to_type(String name):
+    if name == "int":
+        return I64_TYPE
+    if name == "float":
+        return F64_TYPE
+    if name == "bool":
+        return BOOL_TYPE
+    if name == "void":
+        return UNIT_TYPE
+    return -1
+
+int map_ast_type(SpannedType stype):
+    match stype.ty:
+        case TPrimitive(name):
+            int t = prim_name_to_type(name)
+            if t >= 0:
+                return t
+        case TNamed(name, _):
+            int t = prim_name_to_type(name)
+            if t >= 0:
+                return t
+        case TInferred():
+            return I64_TYPE
+        else:
+            pass
+    return I64_TYPE
+
+# ── Binary operator mapping ──────────────────────────────
+
+int map_binop(String op):
+    if op == "+":
+        return OP_ADD
+    if op == "-":
+        return OP_SUB
+    if op == "*":
+        return OP_MUL
+    if op == "/":
+        return OP_DIV
+    if op == "%":
+        return OP_REM
+    return OP_ADD
+
+bool is_comparison(String op):
+    if op == "==" or op == "!=" or op == "<" or op == "<=" or op == ">" or op == ">=":
+        return true
+    return false
+
+int map_cmpop(String op):
+    if op == "==":
+        return CMP_EQ
+    if op == "!=":
+        return CMP_NE
+    if op == "<":
+        return CMP_LT
+    if op == "<=":
+        return CMP_LE
+    if op == ">":
+        return CMP_GT
+    if op == ">=":
+        return CMP_GE
+    return CMP_EQ
+
+# ── Expression lowering ─────────────────────────────────
+
+int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
+    match sexpr.expr:
+        case EIntLiteral(v):
+            int dst = add_local(&ctx, I64_TYPE, None)
+            emit(&ctx, IAssign(dst, OpConstI64(v)))
+            return dst
+        case EFloatLiteral(v):
+            int dst = add_local(&ctx, F64_TYPE, None)
+            emit(&ctx, IAssign(dst, OpConstF64(v)))
+            return dst
+        case EBoolLiteral(v):
+            int dst = add_local(&ctx, BOOL_TYPE, None)
+            emit(&ctx, IAssign(dst, OpConstBool(v)))
+            return dst
+        case EIdentifier(name):
+            if ctx.named_locals.contains(name):
+                return ctx.named_locals.get(name).unwrap()
+            return -1
+        case EBinaryOp(lhs_box, op, rhs_box):
+            int lhs = lower_expr(&ctx, *lhs_box, &gmod)
+            int rhs = lower_expr(&ctx, *rhs_box, &gmod)
+            if is_comparison(op):
+                int dst = add_local(&ctx, BOOL_TYPE, None)
+                emit(&ctx, ICmp(dst, map_cmpop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
+                return dst
+            int dst = add_local(&ctx, I64_TYPE, None)
+            emit(&ctx, IBinOp(dst, map_binop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
+            return dst
+        case ECall(callee_box, args, targs):
+            SpannedExpr callee = *callee_box
+            match callee.expr:
+                case EIdentifier(fname):
+                    return lower_call(&ctx, &fname, &args, &gmod)
+                else:
+                    pass
+            return -1
+        else:
+            return -1
+
+# ── Call lowering ────────────────────────────────────────
+
+int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, GirModule &gmod):
+    int result = -1
+    bool is_print = fname == "print"
+    if is_print:
+        # print() → printf
+        if args.len() > 0:
+            SpannedExpr parg = args.get(0).unwrap()
+            int val = lower_expr(&ctx, parg, &gmod)
+            int val_type = ctx.locals.get(val).unwrap().type_id
+            String fmt = "%lld\n"
+            if val_type == F64_TYPE:
+                fmt = "%f\n"
+            Vector[Operand] printf_args = [OpConstStr(fmt), OpCopy(val)]
+            int pdst = add_local(&ctx, I32_TYPE, None)
+            emit(&ctx, ICallExtern(pdst, "printf", printf_args))
+            result = pdst
+    else:
+        # User function call
+        Vector[Operand] gir_args = []
+        int ai = 0
+        while ai < args.len():
+            SpannedExpr arg = args.get(ai).unwrap()
+            int arg_local = lower_expr(&ctx, arg, &gmod)
+            gir_args.push(OpCopy(arg_local))
+            ai = ai + 1
+        # TODO: look up return type from module's fn_sigs
+        # Currently blocked by borrow checker false positive on &gmod across branches
+        int ret_type = I64_TYPE
+        int dst = add_local(&ctx, ret_type, None)
+        emit(&ctx, ICall(dst, fname, gir_args))
+        result = dst
+    return result
+
+# ── Statement lowering ───────────────────────────────────
+
+void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
+    match stmt:
+        case SVarDecl(stype, name, init_expr, _, _, _):
+            int val = lower_expr(&ctx, init_expr, &gmod)
+            int var_type = ctx.locals.get(val).unwrap().type_id
+            int var_local = add_local(&ctx, var_type, Some(name.clone()))
+            emit(&ctx, IAssign(var_local, OpCopy(val)))
+            ctx.named_locals.put(name, var_local)
+        case SReturn(opt_expr):
+            match opt_expr:
+                case Some(ret_expr):
+                    int val = lower_expr(&ctx, ret_expr, &gmod)
+                    emit(&ctx, IAssign(0, OpCopy(val)))
+                    set_terminator(&ctx, TReturn(OpCopy(0)))
+                case None:
+                    set_terminator(&ctx, TReturn(OpConstUnit()))
+        case SExpr(sexpr):
+            lower_expr(&ctx, sexpr, &gmod)
+        else:
+            pass
+
+# ── Function lowering ────────────────────────────────────
+
+GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
+    bool is_main = fdef.name == "main"
+    int ret_type = I64_TYPE
+    if is_main:
+        ret_type = I32_TYPE
+    else:
+        ret_type = map_ast_type(fdef.return_type)
+
+    LowerCtx ctx = LowerCtx([], [BasicBlock([], None)], 0, {})
+
+    # _0 = return place
+    add_local(&ctx, ret_type, None)
+
+    # _1.._N = params
+    Vector[int] param_types = []
+    int pi = 0
+    while pi < fdef.params.len():
+        Param p = fdef.params.get(pi).unwrap()
+        int pt = map_ast_type(p.param_type)
+        param_types.push(pt)
+        int plid = add_local(&ctx, pt, Some(p.param_name.clone()))
+        ctx.named_locals.put(p.param_name, plid)
+        pi = pi + 1
+
+
+
+    # Lower body statements
+    int si = 0
+    while si < fdef.body.len():
+        Stmt stmt = fdef.body.get(si).unwrap()
+        lower_stmt(&ctx, stmt, &gmod, is_main)
+        si = si + 1
+
+    # If main and no explicit return, add return 0
+    if is_main:
+        BasicBlock last = ctx.blocks.get(ctx.current_block).unwrap()
+        match last.term:
+            case None:
+                emit(&ctx, IAssign(0, OpConstI32(0)))
+                set_terminator(&ctx, TReturn(OpConstI32(0)))
+            else:
+                pass
+
+    return GirFunction(fdef.name, param_types, ret_type, ctx.locals, ctx.blocks)
+
+# ── Module lowering ──────────────────────────────────────
+
+GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
+    Vector[GirType] type_table = init_type_table()
+
+    # Pre-scan function signatures for call resolution
+    Dict[String, int] fn_sigs = {}
+    int ii = 0
+    while ii < m.items.len():
+        Item item = m.items.get(ii).unwrap()
+        match item:
+            case IFunction(fdef):
+                int rt = I64_TYPE
+                if fdef.name == "main":
+                    rt = I32_TYPE
+                else:
+                    rt = map_ast_type(fdef.return_type)
+                fn_sigs.put(fdef.name, rt)
+            else:
+                pass
+        ii = ii + 1
+
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs)
+
+    # Lower each function
+    int fi = 0
+    while fi < m.items.len():
+        Item item = m.items.get(fi).unwrap()
+        match item:
+            case IFunction(fdef):
+                gmod.functions.push(lower_function(fdef, &gmod))
+            else:
+                pass
+        fi = fi + 1
+    return gmod

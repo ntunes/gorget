@@ -1,0 +1,236 @@
+# GIR text formatter — produces output matching `gg build --emit-gir`.
+
+from std.collections import Vector
+from std.conv import int_to_str, float_to_str
+from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction
+from gir import Terminator, Operand, GirType, GirExtern
+from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE
+from gir import U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
+from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+
+# ── Type name formatting ─────────────────────────────────
+
+String format_type_id(int tid, GirModule &gmod):
+    if tid == BOOL_TYPE:
+        return "bool"
+    if tid == I8_TYPE:
+        return "i8"
+    if tid == I16_TYPE:
+        return "i16"
+    if tid == I32_TYPE:
+        return "i32"
+    if tid == I64_TYPE:
+        return "i64"
+    if tid == U8_TYPE:
+        return "u8"
+    if tid == U16_TYPE:
+        return "u16"
+    if tid == U32_TYPE:
+        return "u32"
+    if tid == U64_TYPE:
+        return "u64"
+    if tid == F32_TYPE:
+        return "f32"
+    if tid == F64_TYPE:
+        return "f64"
+    if tid == UNIT_TYPE:
+        return "unit"
+    if tid >= 0 and tid < gmod.type_table.len():
+        GirType gt = gmod.type_table.get(tid).unwrap()
+        match gt:
+            case GtNamed(name):
+                return name
+            case GtPtr(inner):
+                return "*" + format_type_id(inner, &gmod)
+            case GtMutPtr(inner):
+                return "*mut " + format_type_id(inner, &gmod)
+            else:
+                pass
+    return "?type" + int_to_str(tid)
+
+# ── Operand formatting ───────────────────────────────────
+
+String format_operand(Operand op, GirModule &gmod):
+    match op:
+        case OpCopy(lid):
+            return "copy _" + int_to_str(lid)
+        case OpMove(lid):
+            return "move _" + int_to_str(lid)
+        case OpConstBool(b):
+            if b:
+                return "const true"
+            return "const false"
+        case OpConstI32(v):
+            return "const " + int_to_str(v) + "i32"
+        case OpConstI64(v):
+            return "const " + int_to_str(v) + "i64"
+        case OpConstF64(v):
+            return "const " + float_to_str(v) + "f64"
+        case OpConstStr(s):
+            return "const " + "\"" + s + "\""
+        case OpConstUnit():
+            return "const unit"
+        case OpConstNull():
+            return "const null"
+        case OpSizeOf(tid):
+            return "const sizeof(" + format_type_id(tid, &gmod) + ")"
+
+# ── Binary op name ───────────────────────────────────────
+
+String binop_name(int op):
+    if op == OP_ADD:
+        return "add"
+    if op == OP_SUB:
+        return "sub"
+    if op == OP_MUL:
+        return "mul"
+    if op == OP_DIV:
+        return "div"
+    if op == OP_REM:
+        return "rem"
+    if op == OP_MOD:
+        return "mod"
+    return "?op" + int_to_str(op)
+
+String cmpop_name(int op):
+    if op == CMP_EQ:
+        return "cmp_eq"
+    if op == CMP_NE:
+        return "cmp_ne"
+    if op == CMP_LT:
+        return "cmp_lt"
+    if op == CMP_LE:
+        return "cmp_le"
+    if op == CMP_GT:
+        return "cmp_gt"
+    if op == CMP_GE:
+        return "cmp_ge"
+    return "?cmp" + int_to_str(op)
+
+# ── Instruction formatting ───────────────────────────────
+
+String format_args(Vector[Operand] args, GirModule &gmod):
+    String result = ""
+    int i = 0
+    while i < args.len():
+        if i > 0:
+            result = result + ", "
+        Operand arg = args.get(i).unwrap()
+        result = result + format_operand(arg, &gmod)
+        i = i + 1
+    return result
+
+String format_instruction(Instruction inst, GirModule &gmod):
+    match inst:
+        case IAssign(dst, val):
+            return "        _" + int_to_str(dst) + " = " + format_operand(val, &gmod)
+        case IBinOp(dst, op, tid, lhs, rhs):
+            return "        _" + int_to_str(dst) + " = " + binop_name(op) + " " + format_type_id(tid, &gmod) + " " + format_operand(lhs, &gmod) + ", " + format_operand(rhs, &gmod)
+        case ICmp(dst, op, tid, lhs, rhs):
+            return "        _" + int_to_str(dst) + " = " + cmpop_name(op) + " " + format_type_id(tid, &gmod) + " " + format_operand(lhs, &gmod) + ", " + format_operand(rhs, &gmod)
+        case ICall(dst, name, args):
+            String args_str = format_args(args, &gmod)
+            if dst >= 0:
+                return "        _" + int_to_str(dst) + " = call @" + name + "(" + args_str + ")"
+            return "        call @" + name + "(" + args_str + ")"
+        case ICallExtern(dst, name, args):
+            String args_str = format_args(args, &gmod)
+            if dst >= 0:
+                return "        _" + int_to_str(dst) + " = call_extern @" + name + "(" + args_str + ")"
+            return "        call_extern @" + name + "(" + args_str + ")"
+        case IDrop(lid):
+            return "        drop _" + int_to_str(lid)
+        case IDropIfAlive(lid):
+            return "        drop_if_alive _" + int_to_str(lid)
+        case IMoveZero(lid):
+            return "        move_zero _" + int_to_str(lid)
+        case INop():
+            return "        nop"
+
+# ── Terminator formatting ────────────────────────────────
+
+String format_terminator(Terminator term, GirModule &gmod):
+    match term:
+        case TReturn(val):
+            return "        return " + format_operand(val, &gmod)
+        case TJump(bid):
+            return "        jump bb" + int_to_str(bid)
+        case TBranch(cond, then_bb, else_bb):
+            return "        br " + format_operand(cond, &gmod) + ", bb" + int_to_str(then_bb) + ", bb" + int_to_str(else_bb)
+
+# ── Function formatting ──────────────────────────────────
+
+String format_function(GirFunction func, GirModule &gmod):
+    # Signature: fn @name(param_types) -> return_type {
+    String params_str = ""
+    int pi = 0
+    while pi < func.param_types.len():
+        if pi > 0:
+            params_str = params_str + ", "
+        int pt = func.param_types.get(pi).unwrap()
+        params_str = params_str + format_type_id(pt, &gmod)
+        pi = pi + 1
+    String sig = "fn @" + func.name + "(" + params_str + ") -> " + format_type_id(func.return_type, &gmod) + " {"
+
+    # Locals
+    String locals_str = "    locals:"
+    int li = 0
+    while li < func.locals.len():
+        GirLocal loc = func.locals.get(li).unwrap()
+        String line = "        _" + int_to_str(li) + ": " + format_type_id(loc.type_id, &gmod)
+        Option[String] hint = loc.name_hint
+        match hint:
+            case Some(h):
+                line = line + "         ; " + h
+            else:
+                pass
+        locals_str = locals_str + "\n" + line
+        li = li + 1
+
+    # Blocks
+    String blocks_str = ""
+    int bi = 0
+    while bi < func.blocks.len():
+        blocks_str = blocks_str + "\n    bb" + int_to_str(bi) + ":"
+        BasicBlock bb = func.blocks.get(bi).unwrap()
+        int ii = 0
+        while ii < bb.insts.len():
+            Instruction inst = bb.insts.get(ii).unwrap()
+            blocks_str = blocks_str + "\n" + format_instruction(inst, &gmod)
+            ii = ii + 1
+        Option[Terminator] t = bb.term
+        match t:
+            case Some(term):
+                blocks_str = blocks_str + "\n" + format_terminator(term, &gmod)
+            else:
+                pass
+        bi = bi + 1
+
+    return sig + "\n" + locals_str + "\n" + blocks_str + "\n}"
+
+# ── Module formatting ────────────────────────────────────
+
+String format_module(GirModule &gmod):
+    String result = ""
+    # Extern declarations
+    int ei = 0
+    while ei < gmod.externs.len():
+        GirExtern ext = gmod.externs.get(ei).unwrap()
+        String variadic = ""
+        if ext.is_variadic:
+            variadic = "..."
+        result = result + "extern fn @" + ext.name + "(" + variadic + ") -> " + format_type_id(ext.return_type, &gmod) + "\n"
+        ei = ei + 1
+    if gmod.externs.len() > 0:
+        result = result + "\n"
+    # Functions
+    int fi = 0
+    while fi < gmod.functions.len():
+        GirFunction func = gmod.functions.get(fi).unwrap()
+        if fi > 0:
+            result = result + "\n"
+        result = result + format_function(func, &gmod)
+        result = result + "\n"
+        fi = fi + 1
+    return result
