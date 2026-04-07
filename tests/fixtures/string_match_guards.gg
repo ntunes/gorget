@@ -1,0 +1,116 @@
+# Strings in match expressions with guards and complex patterns
+from std.collections import Vector
+
+void main():
+    # --- Match on string with length guards ---
+    Vector[String] inputs = Vector[String]()
+    inputs.push("")
+    inputs.push("a")
+    inputs.push("hi")
+    inputs.push("hello")
+    inputs.push("extraordinary")
+
+    for s in inputs:
+        print(classify_length(s))
+
+    # --- Match with content guards ---
+    Vector[String] emails = Vector[String]()
+    emails.push("user@example.com")
+    emails.push("admin@corp.org")
+    emails.push("no-at-sign")
+    emails.push("")
+    emails.push("test@test.co")
+
+    for e in emails:
+        print(classify_email(e))
+
+    # --- Match on string literal + fallthrough to guard ---
+    Vector[String] commands = Vector[String]()
+    commands.push("quit")
+    commands.push("exit")
+    commands.push("help topics")
+    commands.push("help")
+    commands.push("run test")
+    commands.push("unknown")
+
+    for cmd in commands:
+        print(execute(cmd))
+
+    # --- Match with multiple string conditions ---
+    print(rate_password(""))
+    print(rate_password("abc"))
+    print(rate_password("abcdefgh"))
+    print(rate_password("Abcdefgh1"))
+
+String classify_length(String s):
+    int n = s.len()
+    match n:
+        case 0:
+            return "empty"
+        case 1:
+            return "single"
+        case n if n <= 5:
+            return "short"
+        case n if n <= 10:
+            return "medium"
+        else:
+            return "long"
+
+String classify_email(String email):
+    if email.is_empty():
+        return "empty"
+    if not email.contains("@"):
+        return "invalid"
+    Vector[String] parts = email.split("@")
+    if parts.len() != 2:
+        return "invalid"
+    String domain = parts[1]
+    if domain.ends_with(".com"):
+        return "commercial"
+    if domain.ends_with(".org"):
+        return "organization"
+    return "other"
+
+String execute(String cmd):
+    match cmd:
+        case "quit":
+            return "goodbye"
+        case "exit":
+            return "goodbye"
+        case "help":
+            return "showing help"
+        case cmd if cmd.starts_with("help "):
+            String topic = cmd.removeprefix("help ")
+            return f"help: {topic}"
+        case cmd if cmd.starts_with("run "):
+            String target = cmd.removeprefix("run ")
+            return f"running: {target}"
+        else:
+            return f"unknown: {cmd}"
+
+String rate_password(String pw):
+    if pw.is_empty():
+        return "empty"
+    int score = 0
+    if pw.len() >= 8:
+        score = score + 1
+    bool has_upper = false
+    bool has_digit = false
+    for ch in pw:
+        if ch.is_upper():
+            has_upper = true
+        if ch.is_digit():
+            has_digit = true
+    if has_upper:
+        score = score + 1
+    if has_digit:
+        score = score + 1
+    match score:
+        case 0:
+            return "weak"
+        case 1:
+            return "fair"
+        case 2:
+            return "good"
+        else:
+            return "strong"

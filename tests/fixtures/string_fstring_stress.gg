@@ -1,0 +1,82 @@
+# F-string stress: complex expressions, chaining, nested calls, in loops
+from std.collections import Vector
+
+void main():
+    # --- F-strings with method calls ---
+    String name = "  alice  "
+    print(f"{'hello'.to_upper()}")
+    print(f"{name.trim().to_upper()}")
+    print(f"len={name.trim().len()}")
+
+    # --- F-strings with arithmetic ---
+    int a = 7
+    int b = 3
+    print(f"{a} + {b} = {a + b}")
+    print(f"{a} * {b} = {a * b}")
+    print(f"{a} / {b} = {a / b}")
+    int remainder = a % b
+    print(f"{a} mod {b} = {remainder}")
+
+    # --- F-strings in loops ---
+    String table = ""
+    for i in 1..4:
+        for j in 1..4:
+            if table.len() > 0:
+                table = table + ", "
+            table = table + f"{i}x{j}={i*j}"
+    print(table)
+
+    # --- F-strings with boolean expressions ---
+    int x = 42
+    print(f"positive: {x > 0}")
+    print(f"even: {x % 2 == 0}")
+    print(f"big: {x > 100}")
+
+    # --- F-strings with conditional logic ---
+    for i in 0..5:
+        String parity = "even"
+        if i % 2 != 0:
+            parity = "odd"
+        print(f"{i}: {parity}")
+
+    # --- Nested f-strings ---
+    String inner = "world"
+    print(f"hello {f"dear {inner}"}")
+
+    # --- F-string with escaped braces ---
+    print(f"{{literal braces}}")
+    print(f"value = {{{x}}}")
+
+    # --- F-strings building structured output ---
+    Vector[String] items = Vector[String]()
+    items.push("apple")
+    items.push("banana")
+    items.push("cherry")
+    for i in 0..items.len():
+        print(f"  {i + 1}. {items[i]}")
+
+    # --- F-strings with string methods ---
+    String s = "hello world"
+    print(f"upper: {s.to_upper()}")
+    print(f"starts: {s.starts_with("hello")}")
+    print(f"count l: {s.count("l")}")
+    print(f"replace: {s.replace("world", "gorget")}")
+
+    # --- F-string accumulation stress ---
+    String acc = ""
+    for i in 0..100:
+        acc = f"{acc}{i % 10}"
+    print(f"acc len: {acc.len()}")
+    print(f"starts: {acc.starts_with("0123456789")}")
+    print(f"ends: {acc.ends_with("0123456789")}")
+
+    # --- Multiline f-string values ---
+    int rows = 3
+    int cols = 3
+    for r in 0..rows:
+        String row = ""
+        for c in 0..cols:
+            if row.len() > 0:
+                row = row + " "
+            row = row + f"{r * cols + c + 1}"
+        print(row)

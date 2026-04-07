@@ -1,0 +1,78 @@
+# Pathological string cases: very long strings, many splits, deep nesting
+from std.collections import Vector
+
+void main():
+    # --- Very long string via repeat ---
+    String long = "a".repeat(10000)
+    print(f"long len: {long.len()}")
+    print(f"long starts: {long.starts_with("aaa")}")
+    print(f"long ends: {long.ends_with("aaa")}")
+    print(f"long count a: {long.count("a")}")
+
+    # --- Long string search ---
+    # Needle at the very end
+    String haystack = "x".repeat(9999) + "y"
+    print(f"haystack len: {haystack.len()}")
+    print(f"contains y: {haystack.contains("y")}")
+    print(f"ends y: {haystack.ends_with("y")}")
+    print(f"index_of y: {haystack.index_of("y").unwrap()}")
+
+    # --- Many splits ---
+    String csv = ""
+    for i in 0..1000:
+        if csv.len() > 0:
+            csv = csv + ","
+        csv = csv + f"{i}"
+    Vector[String] parts = csv.split(",")
+    print(f"parts: {parts.len()}")
+    print(f"first: {parts[0]}")
+    print(f"last: {parts[999]}")
+
+    # --- Rejoin large split ---
+    String rejoined = ",".join(parts)
+    print(f"rejoin match: {rejoined == csv}")
+
+    # --- Long string replace ---
+    String pattern = "ab".repeat(500)
+    String replaced = pattern.replace("ab", "x")
+    print(f"replaced len: {replaced.len()}")
+    print(f"all x: {replaced == "x".repeat(500)}")
+
+    # --- Many small strings in vector ---
+    Vector[String] many = Vector[String]()
+    for i in 0..5000:
+        many.push(f"s{i}")
+    print(f"vector len: {many.len()}")
+    print(f"first: {many[0]}")
+    print(f"last: {many[4999]}")
+
+    # --- Long String builder ---
+    String builder = String(16384)
+    for i in 0..5000:
+        builder.push("x")
+    print(f"builder len: {builder.str().len()}")
+
+    # --- Deeply nested replace ---
+    String nested = "((((x))))"
+    int depth = 0
+    while nested.contains("("):
+        nested = nested.replace("(", "").replace(")", "")
+        depth = depth + 1
+    print(f"stripped: {nested}")
+    print(f"depth: {depth}")
+
+    # --- Long string substring ---
+    String alpha = ""
+    for i in 0..100:
+        alpha = alpha + "abcdefghij"
+    print(f"alpha len: {alpha.len()}")
+    String mid = alpha.substring(450, 460)
+    print(f"mid: {mid}")
+
+    # --- Repeated trim on already-trimmed string ---
+    String clean = "hello"
+    for i in 0..500:
+        clean = clean.trim()
+    print(f"still hello: {clean == "hello"}")
+
+    print("pathological ok")

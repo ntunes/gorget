@@ -48,6 +48,8 @@
 
 ## Low
 
+- **`Result[String, String]` double-free**: Returning `Ok(name)` where `name` is a borrowed param from `validate_username` triggers double-free at runtime. `Result[int, String]` works fine. Likely a drop/clone issue with String in both Ok and Error slots of Result. [added: 2026-04-07]
+
 - **`char` type backend bugs**: `char as int` gives garbage, char `==`/`!=` uses `gorget_str_eq`. [added: 2026-03-21]
 
 - **Self-host comparison — 16 type checker mismatches**: At 861 fixtures (2026-04-07). Parser: 856/861 (99.4%). Resolver: 854/861 (99.2%). Type checker: 845/861 (98.1%), **0 crashes**. 16 mismatches remain (type var numbering, closure param inference, Gorget-more-correct). [updated: 2026-04-07]

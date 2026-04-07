@@ -1,0 +1,81 @@
+# String comparison and lexicographic ordering edge cases
+from std.collections import Vector
+
+void main():
+    # --- Basic comparisons ---
+    print(f"eq: {"abc" == "abc"}")
+    print(f"ne: {"abc" != "def"}")
+    print(f"lt: {"abc" < "abd"}")
+    print(f"gt: {"abd" > "abc"}")
+    print(f"le: {"abc" <= "abc"}")
+    print(f"ge: {"abc" >= "abc"}")
+
+    # --- Empty string comparisons ---
+    print(f"empty eq: {"" == ""}")
+    print(f"empty lt any: {"" < "a"}")
+    print(f"any gt empty: {"a" > ""}")
+    print(f"empty le empty: {"" <= ""}")
+
+    # --- Prefix is less than longer ---
+    print(f"prefix lt: {"abc" < "abcd"}")
+    print(f"longer gt: {"abcd" > "abc"}")
+
+    # --- Case sensitivity ---
+    print(f"case: {"A" < "a"}")
+    print(f"upper lt lower: {"ABC" < "abc"}")
+    print(f"mixed: {"Hello" < "hello"}")
+
+    # --- Numbers as strings (lexicographic, not numeric!) ---
+    print(f"9 < 10: {"9" < "10"}")
+    print(f"2 > 19: {"2" > "19"}")
+
+    # --- Single character ordering ---
+    print(f"a < b: {"a" < "b"}")
+    print(f"z > a: {"z" > "a"}")
+    print(f"0 < 9: {"0" < "9"}")
+
+    # --- Sorting strings ---
+    Vector[String] fruits = Vector[String]()
+    fruits.push("banana")
+    fruits.push("apple")
+    fruits.push("cherry")
+    fruits.push("date")
+    fruits.push("elderberry")
+
+    Vector[String] sorted = fruits.sorted()
+    for f in sorted:
+        print(f)
+
+    # --- Min/max string in vector ---
+    String min_s = fruits[0]
+    String max_s = fruits[0]
+    for f in fruits:
+        if f < min_s:
+            min_s = f
+        if f > max_s:
+            max_s = f
+    print(f"min: {min_s}")
+    print(f"max: {max_s}")
+
+    # --- Comparison in loops (binary search-like) ---
+    Vector[String] haystack = sorted
+    String target = "cherry"
+    int lo = 0
+    int hi = haystack.len() - 1
+    bool found = false
+    while lo <= hi:
+        int mid = (lo + hi) / 2
+        if haystack[mid] == target:
+            found = true
+            lo = hi + 1
+        else:
+            if haystack[mid] < target:
+                lo = mid + 1
+            else:
+                hi = mid - 1
+    print(f"binary search cherry: {found}")
+
+    # --- Comparison with common prefix ---
+    print(f"test < testing: {"test" < "testing"}")
+    print(f"test == test: {"test" == "test"}")
+    print(f"testing > test: {"testing" > "test"}")

@@ -1,0 +1,92 @@
+# Strings in recursive functions
+from std.collections import Vector
+
+void main():
+    # --- Recursive string reversal ---
+    print(reverse("hello"))
+    print(reverse("a"))
+    print(reverse(""))
+    print(reverse("abcdef"))
+
+    # --- Recursive binary representation ---
+    print(to_binary(0))
+    print(to_binary(1))
+    print(to_binary(5))
+    print(to_binary(42))
+    print(to_binary(255))
+
+    # --- Recursive string repeat (divide and conquer) ---
+    print(fast_repeat("ab", 0))
+    print(fast_repeat("ab", 1))
+    print(fast_repeat("ab", 4))
+    print(fast_repeat("x", 8))
+
+    # --- Recursive substring count ---
+    print(f"count: {count_recursive("abcabcabc", "abc")}")
+    print(f"count: {count_recursive("aaa", "a")}")
+    print(f"count: {count_recursive("hello", "xyz")}")
+
+    # --- Recursive path simplification ---
+    print(simplify_path("/home//user///docs/"))
+    print(simplify_path("///a///b///"))
+    print(simplify_path("/single/"))
+
+    # --- Recursive depth via nested structure ---
+    # Count nesting depth of brackets
+    print(f"depth: {max_depth("(())")}")
+    print(f"depth: {max_depth("((()))")}")
+    print(f"depth: {max_depth("()()"  )}")
+    print(f"depth: {max_depth("")}")
+
+String reverse(String s):
+    if s.len() <= 1:
+        return s
+    return reverse(s.substring(1, s.len())) + s[0]
+
+String to_binary(int n):
+    if n == 0:
+        return "0"
+    if n == 1:
+        return "1"
+    int remainder = n % 2
+    return to_binary(n / 2) + f"{remainder}"
+
+String fast_repeat(String s, int n):
+    if n == 0:
+        return ""
+    if n == 1:
+        return s
+    String half = fast_repeat(s, n / 2)
+    if n % 2 == 0:
+        return half + half
+    return half + half + s
+
+int count_recursive(String haystack, String needle):
+    Option[int] pos = haystack.index_of(needle)
+    if pos.is_none():
+        return 0
+    int idx = pos.unwrap()
+    String rest = haystack.substring(idx + needle.len(), haystack.len())
+    return 1 + count_recursive(rest, needle)
+
+String simplify_path(String path):
+    if not path.contains("//"):
+        # Strip trailing slash if not root
+        if path.len() > 1 and path.ends_with("/"):
+            return path.substring(0, path.len() - 1)
+        return path
+    String simplified = path.replace("//", "/")
+    return simplify_path(simplified)
+
+int max_depth(String s):
+    int depth = 0
+    int max_d = 0
+    for ch in s:
+        if ch == "(":
+            depth = depth + 1
+            if depth > max_d:
+                max_d = depth
+        else:
+            if ch == ")":
+                depth = depth - 1
+    return max_d

@@ -15735,3 +15735,337 @@ key_5 = 50
 all ownership ok",
     );
 }
+
+#[test]
+fn string_algorithms() {
+    run_gg(
+        "string_algorithms.gg",
+        "\
+racecar: true
+hello: false
+a: true
+empty: true
+abba: true
+abca: false
+3a3b3c1a
+1a1b1c1d
+3a
+
+1a
+abcd/cdab: true
+abcd/abcd: true
+abcd/abdc: false
+abc/ab: false
+a/a: true
+(): true
+(()): true
+()[]{}: true
+([{}]): true
+(]: false
+((: false
+empty: true
+a(b)c: true
+lcp: [fl]
+lcp: []
+lcp: [abc]
+lcp: []
+encrypted: khoor
+decrypted: hello
+roundtrip: true",
+    );
+}
+
+#[test]
+fn string_word_frequency() {
+    run_gg(
+        "string_word_frequency.gg",
+        "\
+the: 3
+cat: 2
+sat: 1
+on: 1
+mat: 1
+unique: 5
+hello: 1
+words: 1
+go: 5
+most frequent: the
+host: localhost
+port: 8080
+mode: release
+has host: true
+has missing: false
+a: 4
+b: 2
+c: 2
+d: 1",
+    );
+}
+
+#[test]
+fn string_match_guards() {
+    run_gg(
+        "string_match_guards.gg",
+        "\
+empty
+single
+short
+short
+long
+commercial
+organization
+invalid
+empty
+other
+goodbye
+goodbye
+help: topics
+showing help
+running: test
+unknown: unknown
+empty
+weak
+fair
+strong",
+    );
+}
+
+#[test]
+fn string_recursive() {
+    run_gg(
+        "string_recursive.gg",
+        "\
+olleh
+a
+
+fedcba
+0
+1
+101
+101010
+11111111
+
+ab
+abababab
+xxxxxxxx
+count: 3
+count: 3
+count: 0
+/home/user/docs
+/a/b
+/single
+depth: 2
+depth: 3
+depth: 1
+depth: 0",
+    );
+}
+
+#[test]
+fn string_multiline_ops() {
+    run_gg(
+        "string_multiline_ops.gg",
+        "\
+lines: 3
+hello
+world
+foo
+non-empty: 3
+first
+second
+third
+    if true:
+        print(x)
+        return
+1: roses are red
+2: violets are blue
+3: gorget is fast
+4: and safe too
+and safe too
+gorget is fast
+violets are blue
+roses are red
+block lines: 3
+first: line one
+last: line three
+name | age | city
+-----------------
+alice | 30 | paris
+bob | 25 | london
+total words: 6
+max line len: 11",
+    );
+}
+
+#[test]
+fn string_comparison_ordering() {
+    run_gg(
+        "string_comparison_ordering.gg",
+        "\
+eq: true
+ne: true
+lt: true
+gt: true
+le: true
+ge: true
+empty eq: true
+empty lt any: true
+any gt empty: true
+empty le empty: true
+prefix lt: true
+longer gt: true
+case: true
+upper lt lower: true
+mixed: true
+9 < 10: false
+2 > 19: true
+a < b: true
+z > a: true
+0 < 9: true
+apple
+banana
+cherry
+date
+elderberry
+min: apple
+max: elderberry
+binary search cherry: true
+test < testing: true
+test == test: true
+testing > test: true",
+    );
+}
+
+#[test]
+fn string_higher_order() {
+    run_gg(
+        "string_higher_order.gg",
+        "\
+hello,world,hi,gorget,test
+HELLO,WORLD,HI,GORGET,TEST
+short: hi
+long: Hello,WORLD,gorget,TEST
+fold: HelloWORLDhigorgetTEST
+csv: Hello,WORLD,hi,gorget,TEST
+any all-upper: true
+all nonempty: true
+any empty: false
+all short: false
+chain: HELLO,WORLD,GORGET,TEST
+sorted long: Hello,TEST,WORLD,gorget
+[Hello],[WORLD],[hi],[gorget],[TEST]
+longest: gorget
+total long chars: 20
+hello,world,foo",
+    );
+}
+
+#[test]
+fn string_error_handling() {
+    run_gg(
+        "string_error_handling.gg",
+        "\
+42: 42
+-5: negative: -5
+abc: not a number: abc
+empty: empty input
+sum: 60
+errors: 2
+err: empty name
+err: too short: 2
+err: has spaces
+valid: 2, invalid: 3
+10/3 = 3
+error: division by zero",
+    );
+}
+
+#[test]
+fn string_enum_variants() {
+    run_gg(
+        "string_enum_variants.gg",
+        "\
+tokens: 7
+word: hello
+num: 42
+punct: +
+word: world
+words: hello,world
+text(11): HELLO WORLD
+cmd: greet(alice)
+empty
+texts: 2, cmds: 2",
+    );
+}
+
+#[test]
+fn string_fstring_stress() {
+    run_gg(
+        "string_fstring_stress.gg",
+        "\
+HELLO
+ALICE
+len=5
+7 + 3 = 10
+7 * 3 = 21
+7 / 3 = 2
+7 mod 3 = 1
+1x1=1, 1x2=2, 1x3=3, 2x1=2, 2x2=4, 2x3=6, 3x1=3, 3x2=6, 3x3=9
+positive: true
+even: true
+big: false
+0: even
+1: odd
+2: even
+3: odd
+4: even
+hello dear world
+{literal braces}
+value = {42}
+  1. apple
+  2. banana
+  3. cherry
+upper: HELLO WORLD
+starts: true
+count l: 3
+replace: hello gorget
+acc len: 100
+starts: true
+ends: true
+1 2 3
+4 5 6
+7 8 9",
+    );
+}
+
+#[test]
+fn string_pathological() {
+    run_gg(
+        "string_pathological.gg",
+        "\
+long len: 10000
+long starts: true
+long ends: true
+long count a: 10000
+haystack len: 10000
+contains y: true
+ends y: true
+index_of y: 9999
+parts: 1000
+first: 0
+last: 999
+rejoin match: true
+replaced len: 500
+all x: true
+vector len: 5000
+first: s0
+last: s4999
+builder len: 5000
+stripped: x
+depth: 1
+alpha len: 1000
+mid: abcdefghij
+still hello: true
+pathological ok",
+    );
+}

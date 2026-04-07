@@ -1,0 +1,100 @@
+# Strings with error handling: throws, catch, Result patterns
+from std.collections import Vector
+
+void main():
+    # --- Parse with validation ---
+    Result[int, String] r1 = parse_positive("42")
+    print(f"42: {r1.unwrap()}")
+
+    Result[int, String] r2 = parse_positive("-5")
+    print(f"-5: {r2.unwrap_error()}")
+
+    Result[int, String] r3 = parse_positive("abc")
+    print(f"abc: {r3.unwrap_error()}")
+
+    Result[int, String] r4 = parse_positive("")
+    print(f"empty: {r4.unwrap_error()}")
+
+    # --- Catch in loop ---
+    int sum = 0
+    int errors = 0
+    Vector[String] inputs = Vector[String]()
+    inputs.push("10")
+    inputs.push("bad")
+    inputs.push("20")
+    inputs.push("")
+    inputs.push("30")
+    for input in inputs:
+        Result[int, String] r = parse_positive(input)
+        match r:
+            case Ok(v):
+                sum = sum + v
+            case Error(e):
+                errors = errors + 1
+    print(f"sum: {sum}")
+    print(f"errors: {errors}")
+
+    # --- Error message building ---
+    Vector[String] names = Vector[String]()
+    names.push("alice")
+    names.push("")
+    names.push("ab")
+    names.push("hello world")
+    names.push("bob")
+
+    int valid = 0
+    int invalid = 0
+    for name in names:
+        Result[int, String] vr = validate_name_len(name)
+        match vr:
+            case Ok(n):
+                valid = valid + 1
+            case Error(msg):
+                print(f"err: {msg}")
+                invalid = invalid + 1
+    print(f"valid: {valid}, invalid: {invalid}")
+
+    # --- Throws/catch with string context ---
+    String r5 = safe_divide_str(10, 3)
+    print(r5)
+    String r6 = safe_divide_str(10, 0)
+    print(r6)
+
+Result[int, String] parse_positive(String s):
+    if s.is_empty():
+        return Error("empty input")
+    bool all_digits = true
+    bool has_neg = false
+    if s.len() > 0 and s[0] == "-":
+        has_neg = true
+    for ch in s:
+        if ch != "-" and not ch.is_digit():
+            all_digits = false
+    if not all_digits:
+        return Error(f"not a number: {s}")
+    int val = 0
+    int start = 0
+    if has_neg:
+        start = 1
+    for i in start..s.len():
+        val = val * 10 + (s[i].byte_at(0) as int - 48)
+    if has_neg:
+        val = -val
+    if val < 0:
+        return Error(f"negative: {val}")
+    return Ok(val)
+
+Result[int, String] validate_name_len(String name):
+    if name.is_empty():
+        return Error("empty name")
+    if name.len() < 3:
+        return Error(f"too short: {name.len()}")
+    if name.contains(" "):
+        return Error("has spaces")
+    return Ok(name.len())
+
+String safe_divide_str(int a, int b):
+    if b == 0:
+        return "error: division by zero"
+    int result = a / b
+    return f"{a}/{b} = {result}"

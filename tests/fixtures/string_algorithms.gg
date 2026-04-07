@@ -1,0 +1,145 @@
+# Classic string algorithms: palindrome, RLE, rotation, balanced parens, LCP
+from std.collections import Vector
+from std.conv import chr
+
+void main():
+    # --- Palindrome detection ---
+    print(f"racecar: {is_palindrome("racecar")}")
+    print(f"hello: {is_palindrome("hello")}")
+    print(f"a: {is_palindrome("a")}")
+    print(f"empty: {is_palindrome("")}")
+    print(f"abba: {is_palindrome("abba")}")
+    print(f"abca: {is_palindrome("abca")}")
+
+    # --- Run-length encoding ---
+    print(rle_encode("aaabbbccca"))
+    print(rle_encode("abcd"))
+    print(rle_encode("aaa"))
+    print(rle_encode(""))
+    print(rle_encode("a"))
+
+    # --- String rotation check ---
+    print(f"abcd/cdab: {is_rotation("abcd", "cdab")}")
+    print(f"abcd/abcd: {is_rotation("abcd", "abcd")}")
+    print(f"abcd/abdc: {is_rotation("abcd", "abdc")}")
+    print(f"abc/ab: {is_rotation("abc", "ab")}")
+    print(f"a/a: {is_rotation("a", "a")}")
+
+    # --- Balanced parentheses ---
+    print(f"(): {is_balanced("()")}")
+    print(f"(()): {is_balanced("(())")}")
+    print(f"()[]{{}}: {is_balanced("()[]{}")}")
+    print(f"([{{}}]): {is_balanced("([{}])")}")
+    print(f"(]: {is_balanced("(]")}")
+    print(f"((: {is_balanced("((")}")
+    print(f"empty: {is_balanced("")}")
+    print(f"a(b)c: {is_balanced("a(b)c")}")
+
+    # --- Longest common prefix ---
+    Vector[String] w1 = Vector[String]()
+    w1.push("flower")
+    w1.push("flow")
+    w1.push("flight")
+    print(f"lcp: [{longest_common_prefix(w1)}]")
+
+    Vector[String] w2 = Vector[String]()
+    w2.push("dog")
+    w2.push("racecar")
+    w2.push("car")
+    print(f"lcp: [{longest_common_prefix(w2)}]")
+
+    Vector[String] w3 = Vector[String]()
+    w3.push("abc")
+    w3.push("abc")
+    w3.push("abc")
+    print(f"lcp: [{longest_common_prefix(w3)}]")
+
+    Vector[String] w4 = Vector[String]()
+    print(f"lcp: [{longest_common_prefix(w4)}]")
+
+    # --- Caesar cipher ---
+    String encrypted = caesar_encrypt("hello", 3)
+    print(f"encrypted: {encrypted}")
+    String decrypted = caesar_encrypt(encrypted, -3)
+    print(f"decrypted: {decrypted}")
+    print(f"roundtrip: {decrypted == "hello"}")
+
+bool is_palindrome(String s):
+    if s.len() <= 1:
+        return true
+    int left = 0
+    int right = s.len() - 1
+    while left < right:
+        if s[left] != s[right]:
+            return false
+        left = left + 1
+        right = right - 1
+    return true
+
+String rle_encode(String s):
+    if s.is_empty():
+        return ""
+    String result = String()
+    String current = s[0]
+    int count = 1
+    for i in 1..s.len():
+        if s[i] == current:
+            count = count + 1
+        else:
+            result.push(f"{count}{current}")
+            current = s[i]
+            count = 1
+    result.push(f"{count}{current}")
+    return result.str()
+
+bool is_rotation(String a, String b):
+    if a.len() != b.len():
+        return false
+    if a.is_empty():
+        return true
+    String doubled = a + a
+    return doubled.contains(b)
+
+bool is_balanced(String s):
+    Vector[String] stack = Vector[String]()
+    for ch in s:
+        if ch == "(" or ch == "[" or ch == "{":
+            stack.push(ch)
+        else:
+            if ch == ")" or ch == "]" or ch == "}":
+                if stack.is_empty():
+                    return false
+                String top = stack.pop().unwrap()
+                if ch == ")" and top != "(":
+                    return false
+                if ch == "]" and top != "[":
+                    return false
+                if ch == "}" and top != "{":
+                    return false
+    return stack.is_empty()
+
+String longest_common_prefix(Vector[String] strings):
+    if strings.is_empty():
+        return ""
+    String prefix = strings[0]
+    for i in 1..strings.len():
+        while not strings[i].starts_with(prefix):
+            if prefix.is_empty():
+                return ""
+            prefix = prefix.substring(0, prefix.len() - 1)
+    return prefix
+
+String caesar_encrypt(String text, int shift):
+    String result = String()
+    for ch in text:
+        int b = ch.byte_at(0) as int
+        if b >= 97 and b <= 122:
+            int shifted = ((b - 97 + shift + 26) % 26) + 97
+            result.push(chr(shifted))
+        else:
+            if b >= 65 and b <= 90:
+                int shifted = ((b - 65 + shift + 26) % 26) + 65
+                result.push(chr(shifted))
+            else:
+                result.push(ch)
+    return result.str()

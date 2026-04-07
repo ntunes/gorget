@@ -1,0 +1,90 @@
+# Multiline string operations: line processing, indentation, joining
+from std.collections import Vector
+
+void main():
+    # --- Split on newlines and process each line ---
+    String text = "  hello  \n  world  \n  foo  "
+    Vector[String] lines = text.split("\n")
+    print(f"lines: {lines.len()}")
+
+    # Trim each line
+    String trimmed = ""
+    for line in lines:
+        if trimmed.len() > 0:
+            trimmed = trimmed + "\n"
+        trimmed = trimmed + line.trim()
+    print(trimmed)
+
+    # --- Filter non-empty lines ---
+    String with_blanks = "first\n\nsecond\n\n\nthird\n"
+    Vector[String] all_lines = with_blanks.split("\n")
+    Vector[String] non_empty = Vector[String]()
+    for line in all_lines:
+        if not line.trim().is_empty():
+            non_empty.push(line)
+    print(f"non-empty: {non_empty.len()}")
+    print("\n".join(non_empty))
+
+    # --- Indent/dedent ---
+    String code = "if true:\n    print(x)\n    return"
+    Vector[String] code_lines = code.split("\n")
+    # Add one level of indentation
+    String indented = ""
+    for line in code_lines:
+        if indented.len() > 0:
+            indented = indented + "\n"
+        indented = indented + "    " + line
+    print(indented)
+
+    # --- Number lines ---
+    String poem = "roses are red\nviolets are blue\ngorget is fast\nand safe too"
+    Vector[String] poem_lines = poem.split("\n")
+    int n = 1
+    for line in poem_lines:
+        print(f"{n}: {line}")
+        n = n + 1
+
+    # --- Reverse lines ---
+    Vector[String] reversed = Vector[String]()
+    int i = poem_lines.len() - 1
+    while i >= 0:
+        reversed.push(poem_lines[i])
+        i = i - 1
+    print("\n".join(reversed))
+
+    # --- Triple-quoted string processing ---
+    String block = """line one
+line two
+line three"""
+    Vector[String] block_lines = block.split("\n")
+    print(f"block lines: {block_lines.len()}")
+    print(f"first: {block_lines[0]}")
+    print(f"last: {block_lines[2]}")
+
+    # --- Build a simple table from lines ---
+    Vector[String] headers = Vector[String]()
+    headers.push("name")
+    headers.push("age")
+    headers.push("city")
+    String header_line = " | ".join(headers)
+    String separator = "-".repeat(header_line.len())
+    print(header_line)
+    print(separator)
+    print("alice | 30 | paris")
+    print("bob | 25 | london")
+
+    # --- Count words across multiple lines ---
+    String paragraph = "hello world\nfoo bar baz\ntest"
+    int word_count = 0
+    Vector[String] p_lines = paragraph.split("\n")
+    for line in p_lines:
+        Vector[String] words = line.split(" ")
+        word_count = word_count + words.len()
+    print(f"total words: {word_count}")
+
+    # --- Max line length ---
+    int max_len = 0
+    for line in p_lines:
+        if line.len() > max_len:
+            max_len = line.len()
+    print(f"max line len: {max_len}")

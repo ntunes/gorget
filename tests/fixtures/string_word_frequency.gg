@@ -1,0 +1,78 @@
+# Word frequency counting with Dict[String, int]
+from std.collections import Vector, Dict
+
+void main():
+    # --- Basic word frequency ---
+    String text = "the cat sat on the mat the cat"
+    Dict[String, int] freq = word_freq(text)
+    print(f"the: {freq.get("the").unwrap()}")
+    print(f"cat: {freq.get("cat").unwrap()}")
+    print(f"sat: {freq.get("sat").unwrap()}")
+    print(f"on: {freq.get("on").unwrap()}")
+    print(f"mat: {freq.get("mat").unwrap()}")
+    print(f"unique: {freq.len()}")
+
+    # --- Single word ---
+    Dict[String, int] f2 = word_freq("hello")
+    print(f"hello: {f2.get("hello").unwrap()}")
+    print(f"words: {f2.len()}")
+
+    # --- All same word ---
+    Dict[String, int] f3 = word_freq("go go go go go")
+    print(f"go: {f3.get("go").unwrap()}")
+
+    # --- Most frequent word ---
+    String most = most_frequent(text)
+    print(f"most frequent: {most}")
+
+    # --- Dict with string keys: insert, update, lookup ---
+    Dict[String, String] config = Dict[String, String]()
+    config.set("host", "localhost")
+    config.set("port", "8080")
+    config.set("mode", "debug")
+    print(f"host: {config.get("host").unwrap()}")
+    print(f"port: {config.get("port").unwrap()}")
+
+    # Update existing key
+    config.set("mode", "release")
+    print(f"mode: {config.get("mode").unwrap()}")
+    print(f"has host: {config.contains("host")}")
+    print(f"has missing: {config.contains("missing")}")
+
+    # --- Build frequency map in loop with conditional ---
+    String sentence = "a b a c b a d c a"
+    Dict[String, int] counts = Dict[String, int]()
+    Vector[String] words = sentence.split(" ")
+    for w in words:
+        if counts.contains(w):
+            int old = counts.get(w).unwrap()
+            counts.set(w, old + 1)
+        else:
+            counts.set(w, 1)
+    print(f"a: {counts.get("a").unwrap()}")
+    print(f"b: {counts.get("b").unwrap()}")
+    print(f"c: {counts.get("c").unwrap()}")
+    print(f"d: {counts.get("d").unwrap()}")
+
+Dict[String, int] word_freq(String text):
+    Dict[String, int] freq = Dict[String, int]()
+    Vector[String] words = text.split(" ")
+    for w in words:
+        if freq.contains(w):
+            int old = freq.get(w).unwrap()
+            freq.set(w, old + 1)
+        else:
+            freq.set(w, 1)
+    return freq
+
+String most_frequent(String text):
+    Dict[String, int] freq = word_freq(text)
+    Vector[String] words = text.split(" ")
+    String best = ""
+    int best_count = 0
+    for w in words:
+        int c = freq.get(w).unwrap()
+        if c > best_count:
+            best_count = c
+            best = w
+    return best

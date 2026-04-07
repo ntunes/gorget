@@ -1,0 +1,108 @@
+# Strings in enum variants: construction, pattern matching, mutation
+from std.collections import Vector
+
+enum Token:
+    Word(String)
+    Number(int)
+    Punct(String)
+    Whitespace()
+
+enum Message:
+    Text(String)
+    Command(String, String)
+    Empty()
+
+void main():
+    # --- Tokenize a simple expression ---
+    Vector[Token] tokens = tokenize("hello 42 + world")
+    print(f"tokens: {tokens.len()}")
+
+    for tok in tokens:
+        match tok:
+            case Token.Word(w):
+                print(f"word: {w}")
+            case Token.Number(n):
+                print(f"num: {n}")
+            case Token.Punct(p):
+                print(f"punct: {p}")
+            case Token.Whitespace():
+                pass
+
+    # --- Extract only words ---
+    Vector[String] words = Vector[String]()
+    for tok in tokens:
+        match tok:
+            case Token.Word(w):
+                words.push(w)
+            else:
+                pass
+    print(f"words: {",".join(words)}")
+
+    # --- Enum with string operations in match ---
+    Message m1 = Message.Text("Hello World")
+    Message m2 = Message.Command("greet", "alice")
+    Message m3 = Message.Empty()
+
+    print(describe(m1))
+    print(describe(m2))
+    print(describe(m3))
+
+    # --- Vector of enums with string data ---
+    Vector[Message] log = Vector[Message]()
+    log.push(Message.Text("started"))
+    log.push(Message.Command("run", "test1"))
+    log.push(Message.Text("checkpoint"))
+    log.push(Message.Command("run", "test2"))
+    log.push(Message.Empty())
+
+    int text_count = 0
+    int cmd_count = 0
+    for entry in log:
+        match entry:
+            case Message.Text(t):
+                text_count = text_count + 1
+            case Message.Command(c, a):
+                cmd_count = cmd_count + 1
+            case Message.Empty():
+                pass
+    print(f"texts: {text_count}, cmds: {cmd_count}")
+
+Vector[Token] tokenize(String input):
+    Vector[Token] tokens = Vector[Token]()
+    int i = 0
+    while i < input.len():
+        String ch = input[i]
+        if ch == " ":
+            tokens.push(Token.Whitespace())
+            i = i + 1
+        else:
+            if ch.is_alpha():
+                String word = ""
+                while i < input.len() and input[i].is_alpha():
+                    word = word + input[i]
+                    i = i + 1
+                tokens.push(Token.Word(word))
+            else:
+                if ch.is_digit():
+                    String num_str = ""
+                    while i < input.len() and input[i].is_digit():
+                        num_str = num_str + input[i]
+                        i = i + 1
+                    # Manual int parse
+                    int val = 0
+                    for d in num_str:
+                        val = val * 10 + (d.byte_at(0) - 48)
+                    tokens.push(Token.Number(val))
+                else:
+                    tokens.push(Token.Punct(ch))
+                    i = i + 1
+    return tokens
+
+String describe(Message msg):
+    match msg:
+        case Message.Text(t):
+            return f"text({t.len()}): {t.to_upper()}"
+        case Message.Command(cmd, arg):
+            return f"cmd: {cmd}({arg})"
+        case Message.Empty():
+            return "empty"

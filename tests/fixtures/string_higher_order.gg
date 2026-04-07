@@ -1,0 +1,84 @@
+# Strings with higher-order functions: map, filter, fold, any, all on Vector[String]
+from std.collections import Vector
+
+void main():
+    Vector[String] words = Vector[String]()
+    words.push("Hello")
+    words.push("WORLD")
+    words.push("hi")
+    words.push("gorget")
+    words.push("TEST")
+
+    # --- Map to lowercase ---
+    Vector[String] lowered = words.map((String s): s.to_lower())
+    print(",".join(lowered))
+
+    # --- Map to uppercase ---
+    Vector[String] uppered = words.map((String s): s.to_upper())
+    print(",".join(uppered))
+
+    # --- Filter by length ---
+    Vector[String] short = words.filter((String s): s.len() <= 3)
+    print(f"short: {",".join(short)}")
+
+    Vector[String] long = words.filter((String s): s.len() > 3)
+    print(f"long: {",".join(long)}")
+
+    # --- Fold to concatenate ---
+    String joined = words.fold("", (String acc, String s): acc + s)
+    print(f"fold: {joined}")
+
+    # --- Fold with separator (manual) ---
+    String csv = ""
+    for w in words:
+        if csv.len() > 0:
+            csv = csv + ","
+        csv = csv + w
+    print(f"csv: {csv}")
+
+    # --- any / all ---
+    bool any_upper = words.any((String s): s == s.to_upper())
+    print(f"any all-upper: {any_upper}")
+
+    bool all_nonempty = words.all((String s): s.len() > 0)
+    print(f"all nonempty: {all_nonempty}")
+
+    bool any_empty = words.any((String s): s.is_empty())
+    print(f"any empty: {any_empty}")
+
+    bool all_short = words.all((String s): s.len() <= 3)
+    print(f"all short: {all_short}")
+
+    # --- Chained: filter then map ---
+    Vector[String] long_upper = words.filter((String s): s.len() > 3).map((String s): s.to_upper())
+    print(f"chain: {",".join(long_upper)}")
+
+    # --- Sorted then filtered ---
+    Vector[String] sorted_long = words.sorted().filter((String s): s.len() > 3)
+    print(f"sorted long: {",".join(sorted_long)}")
+
+    # --- Map with f-string ---
+    Vector[String] labeled = words.map((String s): f"[{s}]")
+    print(",".join(labeled))
+
+    # --- Find longest manually ---
+    String longest = ""
+    for w in words:
+        if w.len() > longest.len():
+            longest = w
+    print(f"longest: {longest}")
+
+    # --- Filter + fold: total length of long words ---
+    int total = 0
+    Vector[String] longs = words.filter((String s): s.len() > 3)
+    for s in longs:
+        total = total + s.len()
+    print(f"total long chars: {total}")
+
+    # --- Map with trim ---
+    Vector[String] padded = Vector[String]()
+    padded.push("  hello  ")
+    padded.push(" world ")
+    padded.push("  foo  ")
+    Vector[String] trimmed = padded.map((String s): s.trim())
+    print(",".join(trimmed))
