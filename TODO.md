@@ -49,7 +49,7 @@
 
 - **`char` type backend bugs**: `char as int` gives garbage, char `==`/`!=` uses `gorget_str_eq`. [added: 2026-03-21]
 
-- **Self-host comparison — stale numbers**: Last measured at 797 fixtures (2026-03-21): parser 99.6% (3 unfixable mismatches), resolver 100%, type checker 99.2%. Needs re-measurement at current fixture count (~855). [updated: 2026-04-07]
+- **Self-host comparison — type checker crashes**: Re-measured at 856 fixtures (2026-04-07). Parser: 851/856 (99.4%). Resolver: 852/856 (99.5%). **Type checker: 436/856 (50.9%), 405 crashes** (double-free). Crashes are from the same Ptr→owned CoW upgrade in loop scopes — needs further investigation of struct-with-String-field patterns. [updated: 2026-04-07]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 

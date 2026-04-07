@@ -216,8 +216,11 @@ impl DropElaborator {
                 }
             }
         }
-        // Not yet registered — register it now (only if the new type needs dropping)
-        self.register_local(local, type_id, registry);
+        // Not yet registered — register at function scope. This handles the case
+        // where a local was originally Ptr (no drop needed) but got upgraded to an
+        // owned type by CoW materialization inside a loop body. Registering at the
+        // current (Loop) scope would incorrectly drop it at each iteration end.
+        self.register_local_at_function_scope(local, type_id, registry);
     }
 
     /// Emit cleanup drops for an early exit (return, break, continue).

@@ -13980,6 +13980,11 @@ fn closure_multiline_return() {
     );
 }
 
+#[test]
+fn string_reassign_loop() {
+    run_gg("string_reassign_loop.gg", "aaa\nbbb\nccc");
+}
+
 // ── Generic edge cases ──
 
 #[test]
