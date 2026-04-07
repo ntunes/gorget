@@ -13985,6 +13985,29 @@ fn string_reassign_loop() {
     run_gg("string_reassign_loop.gg", "aaa\nbbb\nccc");
 }
 
+#[test]
+fn struct_string_fields() {
+    run_gg("struct_string_fields.gg", "alice is 30\nbob is 25\nalice\n25");
+}
+
+#[test]
+fn vector_struct_loop() {
+    run_gg(
+        "vector_struct_loop.gg",
+        "apples: 3\nbananas: 5\ncherries: 2\ntotal: 10",
+    );
+}
+
+#[test]
+fn string_concat_loop_fn() {
+    run_gg("string_concat_loop_fn.gg", "ababab\none, two, three\n");
+}
+
+#[test]
+fn dict_string_keys() {
+    run_gg("dict_string_keys.gg", "3\n95\n87\ntrue\nfalse");
+}
+
 // ── Generic edge cases ──
 
 #[test]

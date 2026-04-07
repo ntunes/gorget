@@ -1,0 +1,15 @@
+struct Person:
+    String name
+    int age
+
+String describe(Person p):
+    return f"{p.name} is {p.age}"
+
+void main():
+    Person alice = Person("alice", 30)
+    Person bob = Person("bob", 25)
+    print(describe(alice))
+    print(describe(bob))
+    # Struct fields accessible directly
+    print(alice.name)
+    print(bob.age)

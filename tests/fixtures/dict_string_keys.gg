@@ -1,0 +1,10 @@
+void main():
+    Dict[String, int] scores = {}
+    scores.put("alice", 95)
+    scores.put("bob", 87)
+    scores.put("carol", 92)
+    print(scores.len())
+    print(scores.get("alice").unwrap())
+    print(scores.get("bob").unwrap())
+    print(scores.contains("carol"))
+    print(scores.contains("dave"))
