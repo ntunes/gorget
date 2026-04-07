@@ -418,6 +418,8 @@ const LIBC_BUILTINS: &[&str] = &[
     "gorget_string_format", "gorget_string_format_alloc", "fprintf_stderr",
     // gorget_bool_to_str — declared with sret in libc section
     "gorget_bool_to_str",
+    // Other builtins we declare explicitly
+    "free",
 ];
 
 fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>) {
@@ -434,6 +436,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare void @gorget_string_format_alloc(ptr sret(%GorgetString), ptr, ...)").unwrap();
     // gorget_bool_to_str returns GorgetString by value → sret
     writeln!(out, "declare void @gorget_bool_to_str(ptr sret(%GorgetString), i1)").unwrap();
+    writeln!(out, "declare void @free(ptr)").unwrap();
     writeln!(out).unwrap();
 
     // Collect names of functions defined in this module (skip forward declarations)
