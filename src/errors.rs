@@ -370,16 +370,6 @@ impl ErrorReporter {
         }
     }
 
-    pub fn report_implicit_clone_warning(&self, warn: &crate::ir::ImplicitCloneWarning) {
-        let label = self.primary_label(warn.span)
-            .with_message(format!("implicit clone of `{}`", warn.type_name));
-        let diag = diagnostic::Diagnostic::warning()
-            .with_message(format!("implicit clone of `{}`", warn.type_name))
-            .with_labels(vec![label])
-            .with_notes(vec![warn.reason.to_string()]);
-        self.emit(&diag);
-    }
-
     fn emit(&self, diag: &diagnostic::Diagnostic<usize>) {
         let writer = StandardStream::stderr(ColorChoice::Auto);
         let config = term::Config::default();

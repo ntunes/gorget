@@ -418,66 +418,39 @@ fn try_build_ir(
     // Lower AST to GIR
     let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
 
-    // Display implicit clone warnings / structured clone report
-    if !gir_module.implicit_clone_warnings.is_empty() {
+    // Display clone report only when --show-clones is passed
+    if show_clones && !gir_module.implicit_clone_warnings.is_empty() {
         let reporter = ErrorReporter::new_multi(file_infos.clone());
-        if show_clones {
-            // Structured clone report: compact table with file:line:col, type, reason
-            let mut shown = std::collections::HashSet::new();
-            let mut entries: Vec<(String, usize, usize, String, &str)> = Vec::new();
-            let mut lib_count = 0usize;
-            for warn in &gir_module.implicit_clone_warnings {
-                if !reporter.is_entry_file(warn.span) {
-                    lib_count += 1;
-                    continue;
-                }
-                if !shown.insert(warn.span.start) {
-                    continue;
-                }
-                let (file, line, col) = reporter.span_location(warn.span);
-                let reason = match &warn.reason {
-                    gorget::ir::ImplicitCloneReason::VarDeclFromBorrow => "variable declaration from borrow",
-                    gorget::ir::ImplicitCloneReason::NamedToNamed => "named-to-named assignment",
-                    gorget::ir::ImplicitCloneReason::ReturnFromBorrow => "return from borrow",
-                    gorget::ir::ImplicitCloneReason::MoveParamFromBorrow => "move param from borrow",
-                    gorget::ir::ImplicitCloneReason::StructFieldFromBorrow => "struct field from borrow",
-                    gorget::ir::ImplicitCloneReason::CoWMaterialization => "CoW materialization",
-                };
-                entries.push((file, line, col, warn.type_name.clone(), reason));
+        let mut shown = std::collections::HashSet::new();
+        let mut entries: Vec<(String, usize, usize, String, &str)> = Vec::new();
+        let mut lib_count = 0usize;
+        for warn in &gir_module.implicit_clone_warnings {
+            if !reporter.is_entry_file(warn.span) {
+                lib_count += 1;
+                continue;
             }
-            eprintln!("\n=== Clone Report ({} implicit clone{}) ===", entries.len(), if entries.len() == 1 { "" } else { "s" });
-            for (file, line, col, type_name, reason) in &entries {
-                eprintln!("  {file}:{line}:{col}  {type_name:<16} {reason}");
+            if !shown.insert(warn.span.start) {
+                continue;
             }
-            if lib_count > 0 {
-                eprintln!("  ... and {lib_count} clone(s) in imported libraries (set GORGET_SHOW_LIB_CLONE_WARNINGS=1 to include)");
-            }
-            eprintln!();
-        } else {
-            // Default: verbose codespan diagnostic warnings
-            // CoW materializations are audit-only (visible via --show-clones, not warned)
-            let mut shown = std::collections::HashSet::new();
-            let mut lib_warning_count = 0usize;
-            for warn in &gir_module.implicit_clone_warnings {
-                if matches!(warn.reason, gorget::ir::ImplicitCloneReason::CoWMaterialization) {
-                    continue;
-                }
-                if !reporter.is_entry_file(warn.span) {
-                    lib_warning_count += 1;
-                    if std::env::var("GORGET_SHOW_LIB_CLONE_WARNINGS").is_ok() {
-                        reporter.report_implicit_clone_warning(warn);
-                    }
-                    continue;
-                }
-                if !shown.insert(warn.span.start) {
-                    continue;
-                }
-                reporter.report_implicit_clone_warning(warn);
-            }
-            if lib_warning_count > 0 {
-                eprintln!("  ... and {lib_warning_count} implicit clone warning(s) in imported libraries");
-            }
+            let (file, line, col) = reporter.span_location(warn.span);
+            let reason = match &warn.reason {
+                gorget::ir::ImplicitCloneReason::VarDeclFromBorrow => "variable declaration from borrow",
+                gorget::ir::ImplicitCloneReason::NamedToNamed => "named-to-named assignment",
+                gorget::ir::ImplicitCloneReason::ReturnFromBorrow => "return from borrow",
+                gorget::ir::ImplicitCloneReason::MoveParamFromBorrow => "move param from borrow",
+                gorget::ir::ImplicitCloneReason::StructFieldFromBorrow => "struct field from borrow",
+                gorget::ir::ImplicitCloneReason::CoWMaterialization => "CoW materialization",
+            };
+            entries.push((file, line, col, warn.type_name.clone(), reason));
         }
+        eprintln!("\n=== Clone Report ({} implicit clone{}) ===", entries.len(), if entries.len() == 1 { "" } else { "s" });
+        for (file, line, col, type_name, reason) in &entries {
+            eprintln!("  {file}:{line}:{col}  {type_name:<16} {reason}");
+        }
+        if lib_count > 0 {
+            eprintln!("  ... and {lib_count} clone(s) in imported libraries (set GORGET_SHOW_LIB_CLONE_WARNINGS=1 to include)");
+        }
+        eprintln!();
     }
 
     // Run GIR optimization passes
