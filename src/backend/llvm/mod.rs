@@ -369,13 +369,26 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
                 writeln!(out, "@__lir_g{i} = {linkage} ptr @{fname} ; {}", global.name).unwrap();
             }
             LirGlobalInit::Struct { struct_id, fields } => {
-                let sty = format!("%{}", snames[&struct_id.0]);
                 let sdef = &module.structs[struct_id.0 as usize];
+                // Use named struct only if field count matches; otherwise anonymous
+                let use_named = fields.len() == sdef.fields.len() && !sdef.fields.is_empty();
+                let sty = if use_named {
+                    format!("%{}", snames[&struct_id.0])
+                } else {
+                    let ftypes: Vec<&str> = fields.iter().map(|f| match f {
+                        LirGlobalInit::FuncAddr(_) => "ptr",
+                        _ => "i64",
+                    }).collect();
+                    format!("{{ {} }}", ftypes.join(", "))
+                };
                 let field_vals: Vec<String> = fields.iter().enumerate().map(|(fi, init)| {
-                    let fty = if fi < sdef.fields.len() {
+                    let fty = if use_named && fi < sdef.fields.len() {
                         llvm_type_full(&sdef.fields[fi].1, snames)
                     } else {
-                        "i64".to_string()
+                        match init {
+                            LirGlobalInit::FuncAddr(_) => "ptr".to_string(),
+                            _ => "i64".to_string(),
+                        }
                     };
                     match init {
                         LirGlobalInit::Zeroed => format!("{fty} zeroinitializer"),
@@ -940,6 +953,10 @@ fn emit_inst(
                     // Aggregate passed by value — not typical, just forward
                     writeln!(out, "  %v{} = alloca {lty}", dst.0).unwrap();
                     writeln!(out, "  store {lty} %p{index}, ptr %v{}", dst.0).unwrap();
+                }
+                LirType::Void => {
+                    // Void param (closure env) — treat as ptr
+                    writeln!(out, "  %v{} = bitcast ptr %p{index} to ptr", dst.0).unwrap();
                 }
                 _ => {
                     writeln!(out, "  %v{} = add {lty} 0, %p{index}", dst.0).unwrap();
