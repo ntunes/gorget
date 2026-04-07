@@ -22,6 +22,26 @@ pub(super) fn lower_match_stmt(
     // Lower scrutinee to a temp local
     let scrut_op = lower_expr(ctx, builder, scrutinee);
     let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);
+
+    // Check if scrutinee is dead after the match (last use at match site) AND
+    // the operand is a simple local we can MoveZero. If both, we can skip the
+    // pattern extraction clone for string fields — the extracted field takes
+    // ownership, and both the scrutinee copy AND original are zeroed.
+    let scrutinee_dead_original = if let Expr::Identifier(name) = &scrutinee.node {
+        if ctx.is_last_use_at(name, scrutinee.span) {
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = scrut_op {
+                if place.projections.is_empty() {
+                    // Exclude Ptr originals — they're borrowed from the caller,
+                    // and the existing scrut_is_ptr check already skips cloning.
+                    let orig_type = builder.local_type(place.local);
+                    let is_ptr = matches!(ctx.type_registry.get(orig_type),
+                        Some(GirType::Ptr(_) | GirType::MutPtr(_)));
+                    if !is_ptr { Some(place.local) } else { None }
+                } else { None }
+            } else { None }
+        } else { None }
+    } else { None };
+
     let scrut_local = builder.add_local(scrut_type, None);
     builder.assign(Place::local(scrut_local), scrut_op);
 
@@ -68,11 +88,18 @@ pub(super) fn lower_match_stmt(
         } else {
             builder.branch(cond, arm_body_bb, next_test_bb);
 
-            // Arm body
+            // Arm body (non-guarded — safe to elide pattern clone if scrutinee is dead)
             builder.switch_to(arm_body_bb);
             let saved_arm = ctx.save_locals();
             ctx.drops.push_scope(DropScopeKind::Block);
+            ctx.func_state.scrutinee_clone_elision = scrutinee_dead_original.is_some();
             emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
+            ctx.func_state.scrutinee_clone_elision = false;
+            if let Some(original_local) = scrutinee_dead_original {
+                if !ctx.drops.is_moved(original_local) {
+                    ctx.move_zero_and_mark(builder, original_local);
+                }
+            }
             lower_expr(ctx, builder, &arm.body);
             if builder.is_terminated() {
                 // Return/break/continue already emitted early-exit drops — don't double-drop.
@@ -436,16 +463,18 @@ pub fn emit_pattern_bindings(
                 // Value scrutinee + owned string field: clone to create an
                 // independent copy that can be safely freed at scope exit.
                 // Pattern extraction is a shallow memcpy — the binding and the
-                // scrutinee share the same heap buffer. If the arm body uses the
-                // scrutinee after extraction (e.g., child_list.push(child_nd) in
-                // xml.gg), the push does a shallow copy sharing the buffer. The
-                // clone ensures the binding's drop doesn't corrupt the pushed copy.
-                // NOTE: clone elision requires zeroing BOTH the scrutinee copy AND
-                // the original variable (which is also dropped). Not yet implemented.
+                // scrutinee share the same heap buffer.
+                // When scrutinee_clone_elision is set, the scrutinee is dead and
+                // both the scrutinee copy AND the original variable will be zeroed
+                // after extraction — the shallow copy takes ownership directly.
                 else if !scrut_is_ptr
                     && field_type == ctx.type_mapper.owned_string_type
                 {
-                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(field_type) {
+                    if ctx.func_state.scrutinee_clone_elision {
+                        // Clone elision: register for drop without cloning.
+                        ctx.drops.register_local(dst, field_type, &ctx.type_registry);
+                        ctx.set_owned(dst);
+                    } else if let Some(clone_fn) = ctx.clone_fn_for_ptr(field_type) {
                         let ptr_type = ctx.register_ptr_type(field_type);
                         let ptr = builder.add_local(ptr_type, None);
                         builder.emit_borrow(ptr, Place::local(dst));

@@ -264,6 +264,10 @@ pub struct FunctionState {
     /// Used by the return path: if the returned named local is NOT in this set,
     /// its string data is not shared → safe to move without cloning.
     pub string_borrow_sources: rustc_hash::FxHashSet<LocalId>,
+    /// When true, pattern extraction of string fields skips cloning because
+    /// the scrutinee is dead and BOTH the scrutinee copy AND the original
+    /// variable will be MoveZeroed after extraction. Set by lower_match_stmt.
+    pub scrutinee_clone_elision: bool,
 }
 
 /// Tracks lowering state within a function.

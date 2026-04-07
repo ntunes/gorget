@@ -205,8 +205,38 @@ fn uses_expr(
             // Closures capture — treat as uses at the closure creation site.
             uses_expr(&body.node, span_start, live, lu);
         }
+        Expr::Is { expr, .. }
+        | Expr::Rethrow { expr, .. }
+        | Expr::Await { expr, .. }
+        | Expr::MutableBorrow { expr, .. }
+        | Expr::Deref { expr, .. }
+        | Expr::As { expr, .. } => {
+            uses_expr(&expr.node, expr.span.start, live, lu);
+        }
+        Expr::Catch { expr, recovery, .. } => {
+            uses_expr(&recovery.node, recovery.span.start, live, lu);
+            uses_expr(&expr.node, expr.span.start, live, lu);
+        }
+        Expr::OptionalChain { object, .. } => {
+            uses_expr(&object.node, object.span.start, live, lu);
+        }
+        Expr::Spawn { expr, .. } | Expr::SpawnBlocking { expr, .. } => {
+            uses_expr(&expr.node, expr.span.start, live, lu);
+        }
+        Expr::ListComprehension { expr, variable, iterable, condition, .. } => {
+            if let Some(c) = condition { uses_expr(&c.node, c.span.start, live, lu); }
+            uses_expr(&expr.node, expr.span.start, live, lu);
+            kill_pattern(variable, live);
+            uses_expr(&iterable.node, iterable.span.start, live, lu);
+        }
+        Expr::SetComprehension { expr, variable, iterable, condition, .. } => {
+            if let Some(c) = condition { uses_expr(&c.node, c.span.start, live, lu); }
+            uses_expr(&expr.node, expr.span.start, live, lu);
+            live.remove(&variable.node);
+            uses_expr(&iterable.node, iterable.span.start, live, lu);
+        }
         Expr::StringLiteral(_) => {}
-        _ => {} // Literals etc.
+        _ => {} // Literals, type names, etc.
     }
 }
 
