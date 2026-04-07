@@ -258,6 +258,12 @@ pub struct FunctionState {
     /// NOT set for struct inits, field loads, or pattern extracts (these may share
     /// string data with the source). Used by the return path to skip redundant clones.
     pub fresh_string_locals: rustc_hash::FxHashSet<LocalId>,
+    /// Locals that have been borrowed-from via the string Borrow assignment
+    /// path (`String b = a` unregisters `a`, shallow-copies to `b`).
+    /// A local in this set has at least one other local sharing its heap data.
+    /// Used by the return path: if the returned named local is NOT in this set,
+    /// its string data is not shared → safe to move without cloning.
+    pub string_borrow_sources: rustc_hash::FxHashSet<LocalId>,
 }
 
 /// Tracks lowering state within a function.
@@ -1248,6 +1254,12 @@ impl<'a> LoweringContext<'a> {
     /// return the owned string type.
     pub fn is_fresh_string(&self, local: LocalId) -> bool {
         self.func_state.fresh_string_locals.contains(&local)
+    }
+
+    /// Check if a local has been borrowed-from via string Borrow assignment.
+    /// If true, another local shares its heap data → clone needed on return.
+    pub fn has_string_borrowers(&self, local: LocalId) -> bool {
+        self.func_state.string_borrow_sources.contains(&local)
     }
 
     /// Mark a local as a generic Ptr reference. Only sets if not already tracked

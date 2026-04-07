@@ -386,6 +386,10 @@ fn lower_var_decl(
                         && ctx.is_named_local(place.local)
                     {
                         ctx.drops.unregister(place.local);
+                        // Track that the source has been borrowed-from.
+                        // If we later `return source`, the clone is needed because
+                        // the target shares the source's heap data.
+                        ctx.func_state.string_borrow_sources.insert(place.local);
                         assign_mode = AssignMode::Borrow;
                     }
                     // Named non-resource local with clone_fn (e.g., Str → GorgetString conversion):
@@ -797,23 +801,22 @@ fn lower_return(
             }
         } else {
             let ret_type = builder.locals[0].type_id;
-            // If returning a string value through the owned_string_type return slot,
-            // Clone string returns so the caller gets an independent allocation.
-            // Without this, the caller frees a pointer still owned by the source
-            // (e.g., an enum field loaded via match destructuring, or a named
-            // local whose scope-exit drop would double-free the return value).
-            // Clone string returns unless the source is a fresh string allocation
-            // (direct function/extern call result returning owned string type).
-            // Fresh strings own their heap data independently — no sharing.
-            // Struct inits, field loads, and pattern extracts may contain strings
-            // that share heap data with other variables, so they MUST be cloned.
+            // Clone string returns unless the source can be proven independent:
+            // 1. Fresh string temps (user function call results) — fresh allocation
+            // 2. Named owned locals with no string borrowers — sole data holder
+            // All other cases (field loads, pattern extracts, locals with borrowers)
+            // may share heap data with other variables and MUST be cloned.
             let mut did_clone_return = false;
             if ret_type == ctx.type_mapper.owned_string_type {
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
                         let rhs_type = builder.local_type(place.local);
+                        let can_skip_clone = ctx.is_fresh_string(place.local)
+                            || (ctx.is_owned_local(place.local)
+                                && ctx.is_named_local(place.local)
+                                && !ctx.has_string_borrowers(place.local));
                         if rhs_type == ctx.type_mapper.owned_string_type
-                            && !ctx.is_fresh_string(place.local)
+                            && !can_skip_clone
                         {
                             let clone_fn = ctx.clone_fn_for_ptr(rhs_type)
                                 .unwrap_or_else(|| "gorget_string_from_str".to_string());
