@@ -667,15 +667,20 @@ fn emit_function(
     // First, collect predecessor info for phi nodes
     let pred_map = build_predecessor_map(func);
 
-    // Pre-compute exit labels for each block: if a block contains overflow/bounds/div checks,
-    // the actual exit point is the last "ok" label, not the original bb{N}.
-    // Must exactly mirror the trap_counter increments in emit_inst.
+    // Pre-compute exit labels for each block. Only instructions that create
+    // LLVM sub-blocks (overflow/bounds/div checks) change the exit label.
+    // Other trap_counter increments (printf uid, ext_uid, etc.) are just for
+    // unique naming and don't create labels.
+    //
+    // We use a separate label_counter that tracks only label-creating
+    // instructions, and a separate total_counter that mirrors all trap_counter
+    // increments (so the label indices match the emission).
     let block_exit_labels: HashMap<BlockId, String> = {
         let mut labels = HashMap::new();
         for block in &func.blocks {
             let bid = block.id.0;
             let mut label = format!("bb{bid}");
-            let mut counter = 0u32;
+            let mut counter = 0u32; // mirrors trap_counter exactly
             for inst in &block.insts {
                 match inst {
                     Inst::Add { overflow: Overflow::Trap, ty, .. }
@@ -700,39 +705,27 @@ fn emit_function(
                         label = format!("dc.{bid}.{counter}.ok");
                         counter += 1;
                     }
-                    // CallExtern inline expansions that increment trap_counter
+                    // CallExtern paths that increment trap_counter but DON'T create labels
                     Inst::CallExtern { name, args, .. } => {
                         let is_drop_guard = name.starts_with("__gorget_drop_if_alive_open__")
                             || name == "__gorget_drop_if_alive_close";
-                        // Printf-like string extraction
+                        let is_bool_to_str = name == "gorget_bool_to_str";
                         let is_printf_like = name == "printf" || name == "gorget_string_format"
                             || name == "gorget_string_format_alloc" || name == "fprintf_stderr";
-                        if is_printf_like && !args.is_empty() {
-                            counter += 1;
-                        }
-                        // Option/Result tag checks
                         let is_tag = name == "__option_is_some" || name == "__option_is_none"
                             || name.ends_with("__is_some") || name.ends_with("__is_none")
                             || name.ends_with("__is_ok") || name.ends_with("__is_err");
-                        if is_tag && !args.is_empty() {
-                            counter += 1;
-                        }
-                        // Option/Result unwrap / unwrap_or
                         let is_unwrap = name == "__option_unwrap" || name == "__result_unwrap"
                             || name.ends_with("__unwrap") || name.ends_with("__expect");
-                        if is_unwrap && !args.is_empty() {
-                            counter += 1;
-                        }
                         let is_unwrap_or = name == "__option_unwrap_or" || name == "__result_unwrap_or"
                             || name.ends_with("__unwrap_or");
-                        if is_unwrap_or && args.len() >= 2 {
-                            counter += 1;
-                        }
-                        // General CallExtern path uses ext_uid (trap_counter++)
-                        if !is_drop_guard && !(is_printf_like && !args.is_empty())
-                            && !(is_tag && !args.is_empty()) && !(is_unwrap && !args.is_empty()) {
-                            counter += 1; // ext_uid
-                        }
+
+                        // Count ALL counter increments to stay in sync with emission
+                        if is_printf_like && !args.is_empty() { counter += 1; }
+                        else if is_tag && !args.is_empty() { counter += 1; }
+                        else if is_unwrap && !args.is_empty() { counter += 1; }
+                        else if is_unwrap_or && args.len() >= 2 { counter += 1; }
+                        else if !is_drop_guard && !is_bool_to_str { counter += 1; }
                     }
                     _ => {}
                 }
@@ -1489,6 +1482,8 @@ fn emit_inst(
                 }
             } else {
                 // Unknown extern — emit as call with inferred types
+                let _ext_uid = *trap_counter;
+                *trap_counter += 1;
                 let arg_strs: Vec<String> = args.iter().map(|a| {
                     let pty = val_types.get(a.0 as usize)
                         .and_then(|t| t.as_ref())
