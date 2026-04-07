@@ -72,9 +72,14 @@ const int CMP_GE = 5
 
 # ── Instructions ──────────────────────────────────────────
 
+const int UNOP_NEG = 0
+const int UNOP_NOT = 1
+const int UNOP_BITNOT = 2
+
 enum Instruction:
     IAssign(int, Operand)
     IBinOp(int, int, int, Operand, Operand)
+    IUnOp(int, int, int, Operand)
     ICmp(int, int, int, Operand, Operand)
     ICall(int, String, Vector[Operand])
     ICallExtern(int, String, Vector[Operand])
@@ -86,6 +91,7 @@ enum Instruction:
 # ── Terminators ───────────────────────────────────────────
 
 enum Terminator:
+    TNone()
     TReturn(Operand)
     TJump(int)
     TBranch(Operand, int, int)
@@ -94,7 +100,7 @@ enum Terminator:
 
 struct BasicBlock:
     Vector[Instruction] insts
-    Option[Terminator] term
+    Terminator term
 
 # ── Local variable slot ──────────────────────────────────
 

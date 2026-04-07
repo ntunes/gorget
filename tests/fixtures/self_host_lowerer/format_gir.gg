@@ -8,6 +8,7 @@ from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE
 from gir import U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 
 # ── Type name formatting ─────────────────────────────────
 
@@ -93,6 +94,15 @@ String binop_name(int op):
         return "mod"
     return "?op" + int_to_str(op)
 
+String unop_name(int op):
+    if op == UNOP_NEG:
+        return "neg"
+    if op == UNOP_NOT:
+        return "not"
+    if op == UNOP_BITNOT:
+        return "bitnot"
+    return "?unop" + int_to_str(op)
+
 String cmpop_name(int op):
     if op == CMP_EQ:
         return "cmp_eq"
@@ -127,6 +137,8 @@ String format_instruction(Instruction inst, GirModule &gmod):
             return "        _" + int_to_str(dst) + " = " + format_operand(val, &gmod)
         case IBinOp(dst, op, tid, lhs, rhs):
             return "        _" + int_to_str(dst) + " = " + binop_name(op) + " " + format_type_id(tid, &gmod) + " " + format_operand(lhs, &gmod) + ", " + format_operand(rhs, &gmod)
+        case IUnOp(dst, op, tid, operand):
+            return "        _" + int_to_str(dst) + " = " + unop_name(op) + " " + format_type_id(tid, &gmod) + " " + format_operand(operand, &gmod)
         case ICmp(dst, op, tid, lhs, rhs):
             return "        _" + int_to_str(dst) + " = " + cmpop_name(op) + " " + format_type_id(tid, &gmod) + " " + format_operand(lhs, &gmod) + ", " + format_operand(rhs, &gmod)
         case ICall(dst, name, args):
@@ -199,12 +211,12 @@ String format_function(GirFunction func, GirModule &gmod):
             Instruction inst = bb.insts.get(ii).unwrap()
             blocks_str = blocks_str + "\n" + format_instruction(inst, &gmod)
             ii = ii + 1
-        Option[Terminator] t = bb.term
+        Terminator t = bb.term
         match t:
-            case Some(term):
-                blocks_str = blocks_str + "\n" + format_terminator(term, &gmod)
-            else:
+            case TNone():
                 pass
+            else:
+                blocks_str = blocks_str + "\n" + format_terminator(t, &gmod)
         bi = bi + 1
 
     return sig + "\n" + locals_str + "\n" + blocks_str + "\n}"

@@ -4,7 +4,7 @@
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str
-from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch
 from scope import ScopeTable
 from types import TypeTable
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator
@@ -12,20 +12,21 @@ from gir import Operand, GirType, GirExtern
 from gir import BOOL_TYPE, I32_TYPE, I64_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from gir import init_type_table, register_type
 
 # ── Lowering context ─────────────────────────────────────
 
 struct LowerCtx:
     Vector[GirLocal] locals
-    Vector[BasicBlock] blocks
+    Vector[Vector[Instruction]] block_insts
+    Vector[Terminator] block_terms
     int current_block
     Dict[String, int] named_locals
 
 # ── Helpers ──────────────────────────────────────────────
 
 Option[String] NO_NAME = None
-Option[Terminator] NO_TERM = None
 
 int add_local(LowerCtx &ctx, int type_id, Option[String] name):
     int id = ctx.locals.len()
@@ -33,14 +34,24 @@ int add_local(LowerCtx &ctx, int type_id, Option[String] name):
     return id
 
 void emit(LowerCtx &ctx, Instruction inst):
-    BasicBlock bb = ctx.blocks.get(ctx.current_block).unwrap()
-    bb.insts.push(inst)
-    ctx.blocks.set(ctx.current_block, bb)
+    # Workaround: can't push to a vector inside a vector via .get().
+    # Reconstruct the block_insts with the new instruction appended.
+    Vector[Instruction] old = ctx.block_insts.get(ctx.current_block).unwrap()
+    old.push(inst)
+    ctx.block_insts.set(ctx.current_block, old)
+
+int new_block(LowerCtx &ctx):
+    int id = ctx.block_insts.len()
+    Vector[Instruction] empty_insts = []
+    ctx.block_insts.push(!empty_insts)
+    ctx.block_terms.push(TNone())
+    return id
+
+void switch_to(LowerCtx &ctx, int block_id):
+    ctx.current_block = block_id
 
 void set_terminator(LowerCtx &ctx, Terminator term):
-    BasicBlock bb = ctx.blocks.get(ctx.current_block).unwrap()
-    bb.term = Some(term)
-    ctx.blocks.set(ctx.current_block, bb)
+    ctx.block_terms.set(ctx.current_block, term)
 
 # ── Type mapping ─────────────────────────────────────────
 
@@ -136,6 +147,18 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int dst = add_local(&ctx, I64_TYPE, NO_NAME)
             emit(&ctx, IBinOp(dst, map_binop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
             return dst
+        case EUnaryOp(op, inner_box):
+            int inner = lower_expr(&ctx, *inner_box, &gmod)
+            int inner_type = ctx.locals.get(inner).unwrap().type_id
+            if op == "-":
+                int dst = add_local(&ctx, inner_type, NO_NAME)
+                emit(&ctx, IUnOp(dst, UNOP_NEG, inner_type, OpCopy(inner)))
+                return dst
+            if op == "not":
+                int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
+                emit(&ctx, IUnOp(dst, UNOP_NOT, BOOL_TYPE, OpCopy(inner)))
+                return dst
+            return inner
         case ECall(callee_box, args, targs):
             SpannedExpr callee = *callee_box
             match callee.expr:
@@ -202,8 +225,91 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     set_terminator(&ctx, TReturn(OpConstUnit()))
         case SExpr(sexpr):
             lower_expr(&ctx, sexpr, &gmod)
+        case SIf(cond_expr, then_body, else_branches):
+            lower_if(&ctx, cond_expr, then_body, else_branches, &gmod, is_main)
+        case SWhile(cond_expr, body):
+            lower_while(&ctx, cond_expr, body, &gmod, is_main)
+        case SAssign(target_expr, value_expr):
+            # Simple identifier assignment
+            match target_expr.expr:
+                case EIdentifier(name):
+                    if ctx.named_locals.contains(name):
+                        int lid = ctx.named_locals.get(name).unwrap()
+                        int val = lower_expr(&ctx, value_expr, &gmod)
+                        emit(&ctx, IAssign(lid, OpCopy(val)))
+                else:
+                    pass
         else:
             pass
+
+# ── Control flow lowering ────────────────────────────────
+
+void lower_stmts(LowerCtx &ctx, Vector[Stmt] stmts, GirModule &gmod, bool is_main):
+    int si = 0
+    while si < stmts.len():
+        Stmt stmt = stmts.get(si).unwrap()
+        lower_stmt(&ctx, stmt, &gmod, is_main)
+        si = si + 1
+
+void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] else_branches, GirModule &gmod, bool is_main):
+    int cond = lower_expr(&ctx, cond_expr, &gmod)
+    int then_bb = new_block(&ctx)
+    int else_bb = new_block(&ctx)
+    int merge_bb = new_block(&ctx)
+    set_terminator(&ctx, TBranch(OpCopy(cond), then_bb, else_bb))
+    # Then branch
+    switch_to(&ctx, then_bb)
+    lower_stmts(&ctx, then_body, &gmod, is_main)
+    # Only jump to merge if not already terminated (no return/break)
+    Terminator then_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match then_term:
+        case TNone():
+            set_terminator(&ctx, TJump(merge_bb))
+        else:
+            pass
+    # Else branch
+    switch_to(&ctx, else_bb)
+    if else_branches.len() > 0:
+        ElseBranch eb = else_branches.get(0).unwrap()
+        match eb.condition:
+            case Some(elif_cond):
+                # elif branch — recurse
+                Vector[ElseBranch] remaining = []
+                int ebi = 1
+                while ebi < else_branches.len():
+                    remaining.push(else_branches.get(ebi).unwrap())
+                    ebi = ebi + 1
+                lower_if(&ctx, elif_cond, eb.body, remaining, &gmod, is_main)
+            case None:
+                # else branch
+                lower_stmts(&ctx, eb.body, &gmod, is_main)
+    Terminator else_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match else_term:
+        case TNone():
+            set_terminator(&ctx, TJump(merge_bb))
+        else:
+            pass
+    switch_to(&ctx, merge_bb)
+
+void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, TJump(header_bb))
+    # Header: evaluate condition
+    switch_to(&ctx, header_bb)
+    int cond = lower_expr(&ctx, cond_expr, &gmod)
+    set_terminator(&ctx, TBranch(OpCopy(cond), body_bb, exit_bb))
+    # Body
+    switch_to(&ctx, body_bb)
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case TNone():
+            set_terminator(&ctx, TJump(header_bb))
+        else:
+            pass
+    switch_to(&ctx, exit_bb)
 
 # ── Function lowering ────────────────────────────────────
 
@@ -215,7 +321,10 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     else:
         ret_type = map_ast_type(fdef.return_type)
 
-    LowerCtx ctx = LowerCtx([], [BasicBlock([], NO_TERM)], 0, {})
+    Vector[Instruction] init_insts = []
+    Vector[Vector[Instruction]] block_insts = [!init_insts]
+    Vector[Terminator] block_terms = [TNone()]
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, {})
 
     # _0 = return place
     add_local(&ctx, ret_type, NO_NAME)
@@ -242,15 +351,23 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
 
     # If main and no explicit return, add return 0
     if is_main:
-        BasicBlock last = ctx.blocks.get(ctx.current_block).unwrap()
-        match last.term:
-            case None:
+        Terminator last_term = ctx.block_terms.get(ctx.current_block).unwrap()
+        match last_term:
+            case TNone():
                 emit(&ctx, IAssign(0, OpConstI32(0)))
                 set_terminator(&ctx, TReturn(OpConstI32(0)))
             else:
                 pass
 
-    return GirFunction(fdef.name, param_types, ret_type, ctx.locals, ctx.blocks)
+    # Assemble BasicBlocks from separate instruction and terminator vectors
+    Vector[BasicBlock] blocks = []
+    int bi = 0
+    while bi < ctx.block_insts.len():
+        Vector[Instruction] insts = ctx.block_insts.get(bi).unwrap()
+        Terminator term = ctx.block_terms.get(bi).unwrap()
+        blocks.push(BasicBlock(insts, term))
+        bi += 1
+    return GirFunction(fdef.name, param_types, ret_type, ctx.locals, !blocks)
 
 # ── Module lowering ──────────────────────────────────────
 
