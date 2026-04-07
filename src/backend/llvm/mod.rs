@@ -453,7 +453,11 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
             continue;
         }
         let params: Vec<String> = ext.params.iter()
-            .map(|p| llvm_type_full(p, snames))
+            .map(|p| {
+                // Void params are invalid in LLVM — replace with ptr (typically closure env)
+                if *p == LirType::Void { "ptr".to_string() }
+                else { llvm_type_full(p, snames) }
+            })
             .collect();
         let variadic = if ext.is_variadic {
             if params.is_empty() { "...".to_string() } else { ", ...".to_string() }
@@ -552,7 +556,10 @@ fn emit_function(
 ) {
     let ret = llvm_type_full(&func.return_type, snames);
     let params: Vec<String> = func.params.iter().enumerate()
-        .map(|(i, p)| format!("{} %p{i}", llvm_type_full(p, snames)))
+        .map(|(i, p)| {
+            let ty = if *p == LirType::Void { "ptr".to_string() } else { llvm_type_full(p, snames) };
+            format!("{ty} %p{i}")
+        })
         .collect();
 
     let is_main = func.name == "main";
