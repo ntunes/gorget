@@ -261,7 +261,7 @@ fn lower_expr_inner(
         // -- P2.4: Closures --
         Expr::Closure { params, body, is_move, .. } => {
             let mut cl = std::mem::take(&mut ctx.closures);
-            let result = cl.lower_closure(ctx, builder, params, body, *is_move);
+            let result = cl.lower_closure(ctx, builder, params, body, *is_move, expr.span);
             ctx.closures = cl;
             result
         }
@@ -526,7 +526,7 @@ fn lower_expr_inner(
             };
             let params = vec![Spanned::dummy(param)];
             let mut cl = std::mem::take(&mut ctx.closures);
-            let result = cl.lower_closure(ctx, builder, &params, body, false);
+            let result = cl.lower_closure(ctx, builder, &params, body, false, expr.span);
             ctx.closures = cl;
             result
         }
@@ -630,7 +630,7 @@ fn lower_expr_inner(
                     let call_args_cloned: Vec<_> = call_args.iter().cloned().collect();
 
                     let mut cl = std::mem::take(&mut ctx.closures);
-                    let closure_op = cl.lower_closure(ctx, builder, &params_cloned, &body_cloned, is_move_val);
+                    let closure_op = cl.lower_closure(ctx, builder, &params_cloned, &body_cloned, is_move_val, expr.span);
                     ctx.closures = cl;
 
                     if let Operand::Copy(ref place) | Operand::Move(ref place) = closure_op {

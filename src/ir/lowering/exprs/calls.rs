@@ -896,7 +896,7 @@ pub(super) fn lower_call(
     } else if let Expr::Closure { params, body, is_move, .. } = &callee.node {
         // IIFE: ((int x): x * x)(5) — inline closure called immediately
         let mut cl = std::mem::take(&mut ctx.closures);
-        let closure_op = cl.lower_closure(ctx, builder, params, body, *is_move);
+        let closure_op = cl.lower_closure(ctx, builder, params, body, *is_move, callee.span);
         ctx.closures = cl;
 
         if let Operand::Copy(ref place) | Operand::Move(ref place) = closure_op {

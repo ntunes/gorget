@@ -2993,7 +2993,7 @@ void main():
             right: Box::new(Spanned::dummy(ast::Expr::Identifier("y".to_string()))),
         });
 
-        let operand = closures.lower_closure(&mut ctx, &mut builder, &params, &body, false);
+        let operand = closures.lower_closure(&mut ctx, &mut builder, &params, &body, false, crate::span::Span::new(0, 0));
         assert!(matches!(operand, Operand::Copy(_)), "Should return a Copy operand");
 
         // Verify struct type was created

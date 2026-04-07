@@ -112,12 +112,16 @@ pub(super) fn lower_assign(
                 ctx.func_state.expected_type = prev_expected;
                 // String self-referential reassignment fix: if the RHS might be a
                 // view into the old LHS (e.g., `s = s.trim()` or `s = s[0..1]`),
-                // clone-to-owned before dropping. gorget_string_clone_to_owned is
-                // a no-op for already-owned values (memcpy), and allocates for views.
+                // clone-to-owned before dropping. gorget_string_clone_to_owned
+                // allocates a new buffer even for owned strings, so skip when the
+                // RHS is a fresh allocation (user function call result — independent
+                // buffer, cannot be a view into the old LHS).
                 if needs_drop && ctx.type_mapper.is_string_type(type_id) {
                     if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                         let src_type = builder.local_type(place.local);
-                        if ctx.type_mapper.is_string_type(src_type) {
+                        if ctx.type_mapper.is_string_type(src_type)
+                            && !ctx.is_fresh_string(place.local)
+                        {
                             let owned = ctx.type_mapper.owned_string_type;
                             let cloned = builder.call(
                                 "gorget_string_clone_to_owned",

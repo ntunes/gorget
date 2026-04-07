@@ -83,6 +83,7 @@ impl ClosureLowering {
         params: &[Spanned<ClosureParam>],
         body: &Spanned<Expr>,
         is_move: bool,
+        closure_span: crate::span::Span,
     ) -> Operand {
         let id = self.next_id;
         self.next_id += 1;
@@ -213,7 +214,18 @@ impl ClosureLowering {
                     CaptureMode::ByValue => {
                         // If this capture is a CoW Ptr(T) alias, clone through
                         // the Ptr to produce an owned T for the closure struct.
+                        // Exception: if the capture is the last use of the variable,
+                        // the closure takes ownership via move — no clone needed.
                         if let Some(inner) = ctx.pointee_type(cap.type_id) {
+                            let is_last_use = ctx.is_last_use_at(&cap.name, closure_span);
+                            if is_last_use {
+                                // Last use — auto-deref Ptr(T) to T (move ownership)
+                                let deref_local = builder.add_local(inner, None);
+                                builder.assign(Place::local(deref_local),
+                                    Operand::Move(Place::local(cap.local_id)));
+                                ctx.move_zero_and_mark(builder, cap.local_id);
+                                return FunctionBuilder::copy(deref_local);
+                            }
                             if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
                                 let cloned = builder.call(&clone_fn,
                                     vec![FunctionBuilder::copy(cap.local_id)], inner);
@@ -898,6 +910,7 @@ mod tests {
         let _operand = lowering.lower_closure(
             &mut ctx, &mut builder,
             &params, &body, false,
+            crate::span::Span::new(0, 0),
         );
 
         assert_eq!(lowering.lifted.len(), 1);
