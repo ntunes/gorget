@@ -2,7 +2,9 @@
 
 ## High
 
-- **Leak reduction — 2 remaining patterns**: Strings, Dicts, Closures, Vectors all leak-free (5/6 stress tests pass). `gorget_array_clear` and `gorget_array_remove` now call `elem_drop`. Remaining: (1) **Option/enum scope-exit drop doesn't free resource payloads** — `Option[Vector[int]]` leaks 128 bytes per `Some` (the inner Vector is not freed). Enum types have `drop: None`. (2) **Collection reassignment skips drop** — `v = !new_v` doesn't free old `v`. Fix blocked on self-referential detection (naively dropping before assign causes UAF for `v = v.slice(...)`). [updated: 2026-04-07]
+- **Leak reduction — 1 remaining pattern**: Match destructuring of collections in Result/Option now fixed (was only handling strings, not resource types). Remaining: **Collection reassignment skips drop** — `v = !new_v` doesn't free old `v`. Fix blocked on self-referential detection (naively dropping before assign causes UAF for `v = v.slice(...)`). [updated: 2026-04-07]
+
+- **Vector/Dict elem_drop for resource-type elements**: `Vector[String]`, `Vector[Vector[int]]`, etc. leak element contents when the collection is freed. `gorget_array_new` doesn't set `elem_drop`; needs `gorget_array_new_drop` with the appropriate element drop fn. Pre-existing — requires GIR-level change to propagate element type info to array creation. [added: 2026-04-07]
 
 - **Clone observability + Cloneable trait**: `.clone()` works on all types. `gg build --show-clones` done. Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
 
@@ -48,7 +50,6 @@
 
 ## Low
 
-- **`Result[String, String]` double-free**: Returning `Ok(name)` where `name` is a borrowed param from `validate_username` triggers double-free at runtime. `Result[int, String]` works fine. Likely a drop/clone issue with String in both Ok and Error slots of Result. [added: 2026-04-07]
 
 - **`char` type backend bugs**: `char as int` gives garbage, char `==`/`!=` uses `gorget_str_eq`. [added: 2026-03-21]
 

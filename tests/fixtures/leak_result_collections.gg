@@ -1,0 +1,102 @@
+# Leak test: collections extracted from Result/Option via match destructuring.
+# Covers Vector[int], Dict[String,int], and Option[Vector[int]].
+# Each section runs 200 iterations — any leaked collection buffers accumulate fast.
+from std.os import mem_live
+from std.collections import Vector, Dict
+
+# --- Vector in Result ---
+
+Result[Vector[int], String] make_int_vec(int n):
+    Vector[int] v = []
+    int i = 0
+    while i < n:
+        v.push(i)
+        i = i + 1
+    return Ok(v)
+
+Result[Vector[int], String] fail_int_vec():
+    return Error("failed")
+
+# --- Dict in Result ---
+
+Result[Dict[String, int], String] make_dict(int n):
+    Dict[String, int] d = {}
+    int i = 0
+    while i < n:
+        d[f"key_{i}"] = i
+        i = i + 1
+    return Ok(d)
+
+# --- Vector in Option ---
+
+Option[Vector[int]] maybe_vec(int n):
+    if n > 0:
+        Vector[int] v = []
+        int i = 0
+        while i < n:
+            v.push(i)
+            i = i + 1
+        return Some(v)
+    return None
+
+void main():
+    int baseline = mem_live()
+
+    # Section 1: Ok(Vector[int]) — extracted vector must be freed
+    int i = 0
+    while i < 200:
+        Result[Vector[int], String] r = make_int_vec(10)
+        match r:
+            case Ok(v):
+                int _len = v.len()
+            case Error(e):
+                pass
+        i = i + 1
+
+    # Section 2: Error(String) — no collection to free, just error string
+    i = 0
+    while i < 200:
+        Result[Vector[int], String] r = fail_int_vec()
+        match r:
+            case Ok(v):
+                pass
+            case Error(e):
+                pass
+        i = i + 1
+
+    # Section 3: Ok(Dict[String, int]) — dict with string keys
+    i = 0
+    while i < 200:
+        Result[Dict[String, int], String] r = make_dict(5)
+        match r:
+            case Ok(d):
+                int _size = d.len()
+            case Error(e):
+                pass
+        i = i + 1
+
+    # Section 4: Some(Vector[int]) in loop
+    i = 0
+    while i < 200:
+        Option[Vector[int]] opt = maybe_vec(10)
+        match opt:
+            case Some(v):
+                int _len = v.len()
+            case None:
+                pass
+        i = i + 1
+
+    # Section 5: None branch in loop (no collection)
+    i = 0
+    while i < 200:
+        Option[Vector[int]] opt = maybe_vec(0)
+        match opt:
+            case Some(v):
+                pass
+            case None:
+                pass
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")

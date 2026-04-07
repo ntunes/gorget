@@ -2185,6 +2185,20 @@ done");
 }
 
 #[test]
+fn leak_result_collections() {
+    run_gg("leak_result_collections.gg", "\
+leaked=false
+done");
+}
+
+#[test]
+fn leak_result_struct() {
+    run_gg("leak_result_struct.gg", "\
+leaked=false
+done");
+}
+
+#[test]
 fn trait_defaults() {
     run_gg(
         "trait_defaults.gg",
