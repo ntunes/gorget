@@ -13,7 +13,7 @@ from gir import BOOL_TYPE, I32_TYPE, I64_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
-from gir import init_type_table, register_type
+from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
 
 # ── Lowering context ─────────────────────────────────────
 
@@ -66,17 +66,60 @@ int prim_name_to_type(String name):
         return UNIT_TYPE
     return -1
 
-int map_ast_type(SpannedType stype):
+String mangle_type_name(String name, Vector[SpannedType] targs, GirModule &gmod):
+    # Mangle generic type names: Vector[int] → Vector__int64_t
+    if targs.len() == 0:
+        if name == "String":
+            return "GorgetString"
+        return name
+    String result = name
+    int i = 0
+    while i < targs.len():
+        SpannedType ta = targs.get(i).unwrap()
+        result = result + "__" + type_to_c_name(ta, &gmod)
+        i += 1
+    return result
+
+String type_to_c_name(SpannedType stype, GirModule &gmod):
+    match stype.ty:
+        case TPrimitive(name):
+            if name == "int":
+                return "int64_t"
+            if name == "float":
+                return "double"
+            if name == "bool":
+                return "bool"
+            if name == "void":
+                return "void"
+            if name == "String":
+                return "GorgetString"
+            return name
+        case TNamed(name, targs):
+            return mangle_type_name(name, targs, &gmod)
+        else:
+            pass
+    return "int64_t"
+
+int map_ast_type(SpannedType stype, GirModule &gmod):
     match stype.ty:
         case TPrimitive(name):
             int t = prim_name_to_type(name)
             if t >= 0:
                 return t
-        case TNamed(name, _):
+            # String primitive
+            if name == "String":
+                return lookup_or_register_named(&gmod, "GorgetString")
+        case TNamed(name, targs):
             int t = prim_name_to_type(name)
             if t >= 0:
                 return t
+            # Named type with possible generic args
+            String mangled = mangle_type_name(name, targs, &gmod)
+            return lookup_or_register_named(&gmod, mangled)
         case TInferred():
+            return I64_TYPE
+        case TTuple(elems):
+            # For now, tuples map to i64
             return I64_TYPE
         else:
             pass
@@ -225,8 +268,8 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     set_terminator(&ctx, TReturn(OpConstUnit()))
         case SExpr(sexpr):
             lower_expr(&ctx, sexpr, &gmod)
-        case SIf(cond_expr, then_body, else_branches):
-            lower_if(&ctx, cond_expr, then_body, else_branches, &gmod, is_main)
+        case SIf(cond_expr, then_body, elif_branches):
+            lower_if(&ctx, cond_expr, then_body, elif_branches, &gmod, is_main)
         case SWhile(cond_expr, body):
             lower_while(&ctx, cond_expr, body, &gmod, is_main)
         case SAssign(target_expr, value_expr):
@@ -251,7 +294,7 @@ void lower_stmts(LowerCtx &ctx, Vector[Stmt] stmts, GirModule &gmod, bool is_mai
         lower_stmt(&ctx, stmt, &gmod, is_main)
         si = si + 1
 
-void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] else_branches, GirModule &gmod, bool is_main):
+void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] elif_branches, GirModule &gmod, bool is_main):
     int cond = lower_expr(&ctx, cond_expr, &gmod)
     int then_bb = new_block(&ctx)
     int else_bb = new_block(&ctx)
@@ -269,15 +312,15 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
             pass
     # Else branch
     switch_to(&ctx, else_bb)
-    if else_branches.len() > 0:
-        ElseBranch eb = else_branches.get(0).unwrap()
+    if elif_branches.len() > 0:
+        ElseBranch eb = elif_branches.get(0).unwrap()
         match eb.condition:
             case Some(elif_cond):
                 # elif branch — recurse
                 Vector[ElseBranch] remaining = []
                 int ebi = 1
-                while ebi < else_branches.len():
-                    remaining.push(else_branches.get(ebi).unwrap())
+                while ebi < elif_branches.len():
+                    remaining.push(elif_branches.get(ebi).unwrap())
                     ebi = ebi + 1
                 lower_if(&ctx, elif_cond, eb.body, remaining, &gmod, is_main)
             case None:
@@ -319,7 +362,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     if is_main:
         ret_type = I32_TYPE
     else:
-        ret_type = map_ast_type(fdef.return_type)
+        ret_type = map_ast_type(fdef.return_type, &gmod)
 
     Vector[Instruction] init_insts = []
     Vector[Vector[Instruction]] block_insts = [!init_insts]
@@ -329,12 +372,21 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     # _0 = return place
     add_local(&ctx, ret_type, NO_NAME)
 
-    # _1.._N = params
+    # _1.._N = params — non-primitive bare params become Ptr(T)
     Vector[int] param_types = []
     int pi = 0
     while pi < fdef.params.len():
         Param p = fdef.params.get(pi).unwrap()
-        int pt = map_ast_type(p.param_type)
+        int pt = map_ast_type(p.param_type, &gmod)
+        # Bare params of resource types (structs, strings, collections) → Ptr
+        if p.ownership == 0 and pt >= PRIM_COUNT:
+            pt = register_ptr(&gmod, pt)
+        # Mutable borrow (&) params → MutPtr
+        if p.ownership == 2:
+            if pt < PRIM_COUNT:
+                pt = register_type(&gmod, GtMutPtr(pt))
+            else:
+                pt = register_type(&gmod, GtMutPtr(pt))
         param_types.push(pt)
         int plid = add_local(&ctx, pt, Some(p.param_name.clone()))
         ctx.named_locals.put(p.param_name, plid)
@@ -385,13 +437,21 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
                 if fdef.name == "main":
                     rt = I32_TYPE
                 else:
-                    rt = map_ast_type(fdef.return_type)
+                    # Pre-scan: just use primitive types for signatures
+                    match fdef.return_type.ty:
+                        case TPrimitive(name):
+                            int pt = prim_name_to_type(name)
+                            if pt >= 0:
+                                rt = pt
+                        else:
+                            pass
                 fn_sigs.put(fdef.name, rt)
             else:
                 pass
         ii = ii + 1
 
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs)
+    Dict[String, int] named_types = {}
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types)
 
     # Lower each function
     int fi = 0

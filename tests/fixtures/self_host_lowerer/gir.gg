@@ -131,6 +131,7 @@ struct GirModule:
     Vector[GirExtern] externs
     Vector[GirType] type_table
     Dict[String, int] fn_sigs
+    Dict[String, int] named_types
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -154,3 +155,13 @@ int register_type(GirModule &gmod, GirType gt):
     int id = gmod.type_table.len()
     gmod.type_table.push(gt)
     return id
+
+int lookup_or_register_named(GirModule &gmod, String name):
+    if gmod.named_types.contains(name):
+        return gmod.named_types.get(name).unwrap()
+    int id = register_type(&gmod, GtNamed(name.clone()))
+    gmod.named_types.put(name, id)
+    return id
+
+int register_ptr(GirModule &gmod, int inner):
+    return register_type(&gmod, GtPtr(inner))
