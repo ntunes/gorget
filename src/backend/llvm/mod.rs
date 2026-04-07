@@ -416,6 +416,8 @@ const LIBC_BUILTINS: &[&str] = &[
     "gorget_panic", "gorget_init_args",
     // Printf-like functions — we call them with (ptr, ...) signature, skip extern declaration
     "gorget_string_format", "gorget_string_format_alloc", "fprintf_stderr",
+    // gorget_bool_to_str — declared with sret in libc section
+    "gorget_bool_to_str",
 ];
 
 fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>) {
@@ -428,8 +430,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare ptr @memcpy(ptr, ptr, i64)").unwrap();
     writeln!(out, "declare void @gorget_init_args(i32, ptr)").unwrap();
     writeln!(out, "declare void @gorget_panic(ptr)").unwrap();
-    writeln!(out, "declare %GorgetString @gorget_string_format(ptr, ...)").unwrap();
-    writeln!(out, "declare %GorgetString @gorget_string_format_alloc(ptr, ...)").unwrap();
+    writeln!(out, "declare void @gorget_string_format(ptr sret(%GorgetString), ptr, ...)").unwrap();
+    writeln!(out, "declare void @gorget_string_format_alloc(ptr sret(%GorgetString), ptr, ...)").unwrap();
+    // gorget_bool_to_str returns GorgetString by value → sret
+    writeln!(out, "declare void @gorget_bool_to_str(ptr sret(%GorgetString), i1)").unwrap();
     writeln!(out).unwrap();
 
     // Collect names of functions defined in this module (skip forward declarations)
@@ -490,13 +494,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                         continue;
                     }
                     seen.insert(name.clone());
-                    // Infer signature: all args as ptr, return void or i64
-                    let params: Vec<&str> = args.iter().map(|_| "ptr").collect();
-                    if dst.is_some() {
-                        writeln!(out, "declare i64 @{name}({})", params.join(", ")).unwrap();
-                    } else {
-                        writeln!(out, "declare void @{name}({})", params.join(", ")).unwrap();
-                    }
+                    // Infer signature from args, defaulting to ptr params and i64/void return
+                    let params: Vec<String> = args.iter().map(|_| "ptr".to_string()).collect();
+                    let ret = if dst.is_some() { "i64" } else { "void" };
+                    writeln!(out, "declare {ret} @{name}({})", params.join(", ")).unwrap();
                 }
             }
         }
@@ -563,9 +564,17 @@ fn emit_function(
         .collect();
 
     let is_main = func.name == "main";
+    let has_sret = !is_main && func.return_type.is_aggregate();
     if is_main {
-        // main needs C ABI signature: (i32, ptr) for argc/argv
         writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{").unwrap();
+    } else if has_sret {
+        // Aggregate return: sret convention (hidden first parameter)
+        let sret_params = if params.is_empty() {
+            format!("ptr sret({ret}) %sret.out")
+        } else {
+            format!("ptr sret({ret}) %sret.out, {}", params.join(", "))
+        };
+        writeln!(out, "define void @{}({sret_params}) {{", &func.name).unwrap();
     } else {
         writeln!(out, "define {} @{}({}) {{", ret, &func.name, params.join(", ")).unwrap();
     }
@@ -829,7 +838,8 @@ fn emit_inst(
                 // Aggregate slot — value may be a pointer (SlotAddr/FieldPtr) or
                 // aggregate by value (Call return). Check val_types.
                 let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
-                let is_ptr_val = val_ty.map_or(false, |t| t.is_ptr());
+                // Assume ptr if type is unknown (None) — aggregate values are always ptrs in our model
+                let is_ptr_val = val_ty.map_or(true, |t| t.is_ptr());
                 if is_ptr_val {
                     // Value is a pointer — memcpy from it
                     let sz = sizeof_lir_type(slot_ty, &module.structs, snames);
@@ -1219,20 +1229,44 @@ fn emit_inst(
         Inst::Call { dst, func: fid, args } => {
             let target = &module.functions[fid.0 as usize];
             let ret_ty = llvm_type_full(&target.return_type, snames);
+            // For aggregate params: if value is ptr but param is aggregate, load first
+            let mut load_lines = Vec::new();
             let arg_strs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
-                let pty = if i < target.params.len() {
-                    llvm_type_full(&target.params[i], snames)
+                let param_ty = if i < target.params.len() { Some(&target.params[i]) } else { None };
+                let actual_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                let is_ptr_val = actual_ty.map_or(false, |t| t.is_ptr());
+                let is_agg_param = param_ty.map_or(false, |t| t.is_aggregate());
+
+                if is_agg_param && is_ptr_val {
+                    let pty = llvm_type_full(param_ty.unwrap(), snames);
+                    let load_name = format!("arg.load.{}.{i}", a.0);
+                    load_lines.push(format!("  %{load_name} = load {pty}, ptr %v{}", a.0));
+                    format!("{pty} %{load_name}")
                 } else {
-                    // Variadic or mismatch — try to infer
-                    val_types.get(a.0 as usize)
-                        .and_then(|t| t.as_ref())
-                        .map(|t| llvm_type_full(t, snames))
-                        .unwrap_or_else(|| "i64".to_string())
-                };
-                format!("{pty} %v{}", a.0)
+                    let pty = param_ty.map(|t| llvm_type_full(t, snames))
+                        .unwrap_or_else(|| actual_ty.map(|t| llvm_type_full(t, snames))
+                            .unwrap_or_else(|| "i64".to_string()));
+                    format!("{pty} %v{}", a.0)
+                }
             }).collect();
+            for line in &load_lines {
+                writeln!(out, "{line}").unwrap();
+            }
             if let Some(d) = dst {
-                writeln!(out, "  %v{} = call {ret_ty} @{}({})", d.0, target.name, arg_strs.join(", ")).unwrap();
+                if target.return_type == LirType::Void {
+                    writeln!(out, "  call void @{}({})", target.name, arg_strs.join(", ")).unwrap();
+                } else if target.return_type.is_aggregate() {
+                    // Aggregate return: sret convention
+                    writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
+                    let sret_args = if arg_strs.is_empty() {
+                        format!("ptr sret({ret_ty}) %v{}", d.0)
+                    } else {
+                        format!("ptr sret({ret_ty}) %v{}, {}", d.0, arg_strs.join(", "))
+                    };
+                    writeln!(out, "  call void @{}({sret_args})", target.name).unwrap();
+                } else {
+                    writeln!(out, "  %v{} = call {ret_ty} @{}({})", d.0, target.name, arg_strs.join(", ")).unwrap();
+                }
             } else {
                 writeln!(out, "  call {ret_ty} @{}({})", target.name, arg_strs.join(", ")).unwrap();
             }
@@ -1242,6 +1276,15 @@ fn emit_inst(
             // Drop-if-alive guards — no-op in LLVM (drops happen unconditionally)
             if name.starts_with("__gorget_drop_if_alive_open__") || name == "__gorget_drop_if_alive_close" {
                 writeln!(out, "  ; {name} (no-op in LLVM)").unwrap();
+                return;
+            }
+
+            // gorget_bool_to_str returns GorgetString via sret
+            if name == "gorget_bool_to_str" && !args.is_empty() {
+                if let Some(d) = dst {
+                    writeln!(out, "  %v{} = alloca %GorgetString", d.0).unwrap();
+                    writeln!(out, "  call void @gorget_bool_to_str(ptr sret(%GorgetString) %v{}, i1 %v{})", d.0, args[0].0).unwrap();
+                }
                 return;
             }
 
@@ -1339,10 +1382,10 @@ fn emit_inst(
                 };
                 if let Some(d) = dst {
                     if call_ret == "%GorgetString" {
-                        // Aggregate return — store via temp alloca
-                        writeln!(out, "  %call.tmp.{} = call {call_ret} (ptr, ...) @{call_name}({all_args})", d.0).unwrap();
+                        // Aggregate return via sret
                         writeln!(out, "  %v{} = alloca %GorgetString", d.0).unwrap();
-                        writeln!(out, "  store %GorgetString %call.tmp.{}, ptr %v{}", d.0, d.0).unwrap();
+                        let sret_all = format!("ptr sret(%GorgetString) %v{}, {all_args}", d.0);
+                        writeln!(out, "  call void @{call_name}({sret_all})").unwrap();
                     } else {
                         writeln!(out, "  %v{} = call {call_ret} (ptr, ...) @{call_name}({all_args})", d.0).unwrap();
                     }
@@ -1407,7 +1450,20 @@ fn emit_inst(
                     variadic,
                 );
                 if let Some(d) = dst {
-                    writeln!(out, "  %v{} = call {ret_ty} @{name}({})", d.0, arg_strs.join(", ")).unwrap();
+                    if ext.return_type == LirType::Void {
+                        writeln!(out, "  call void @{name}({})", arg_strs.join(", ")).unwrap();
+                    } else if ext.return_type.is_aggregate() {
+                        // Aggregate return: sret convention
+                        writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
+                        let sret_args = if arg_strs.is_empty() {
+                            format!("ptr sret({ret_ty}) %v{}", d.0)
+                        } else {
+                            format!("ptr sret({ret_ty}) %v{}, {}", d.0, arg_strs.join(", "))
+                        };
+                        writeln!(out, "  call void @{name}({sret_args})").unwrap();
+                    } else {
+                        writeln!(out, "  %v{} = call {ret_ty} @{name}({})", d.0, arg_strs.join(", ")).unwrap();
+                    }
                 } else {
                     writeln!(out, "  call {ret_ty} @{name}({})", arg_strs.join(", ")).unwrap();
                 }
@@ -1596,13 +1652,13 @@ fn emit_term(
     match term {
         Term::Ret(val) => {
             let ret_ty = llvm_type_full(&func.return_type, snames);
-            // If function returns aggregate but value is a pointer, load from it
-            let val_ty = val_types.get(val.0 as usize).and_then(|t| t.as_ref());
-            let is_ptr_val = val_ty.map_or(false, |t| t.is_ptr());
             let is_agg_ret = func.return_type.is_aggregate();
-            if is_agg_ret && is_ptr_val {
-                writeln!(out, "  %ret.load.{} = load {ret_ty}, ptr %v{}", val.0, val.0).unwrap();
-                writeln!(out, "  ret {ret_ty} %ret.load.{}", val.0).unwrap();
+            let is_main = func.name == "main";
+            if is_agg_ret && !is_main {
+                // sret convention: memcpy result into %sret.out, then ret void
+                let sz = sizeof_lir_type(&func.return_type, &_module.structs, snames);
+                writeln!(out, "  call ptr @memcpy(ptr %sret.out, ptr %v{}, i64 {sz})", val.0).unwrap();
+                writeln!(out, "  ret void").unwrap();
             } else {
                 writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
             }
