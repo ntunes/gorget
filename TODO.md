@@ -37,8 +37,6 @@
 
 - **InlineC instruction — remaining 13**: 5 in for_loops.rs (typed key/value extraction needing C pointer cast), 8 in stmts/mod.rs (snapshot writes + assert formatting needing C globals/formatting). The 8 scalar iterator accessors (cap, states, order) now use proper CallExtern via runtime functions. [updated: 2026-04-06]
 
-- **Closure return type inference**: Multi-line closures with `return` typed as void (`Expr::Block(_) => UNIT_TYPE` hardcoded). Need to propagate return type in typecheck.rs. [added: 2026-03-21]
-
 - **`@[no_alloc]` function annotation**: Compiler error on allocating operations. [added: 2026-03-21]
 
 - **Spawn captures don't check stale shared-derived**: Spawned closures can capture stale pre-await data. [added: 2026-03-18]

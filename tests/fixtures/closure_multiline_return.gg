@@ -1,0 +1,23 @@
+int apply(int(int) f, int x):
+    return f(x)
+
+void main():
+    # Multi-line closure with conditional returns
+    auto abs = (int x):
+        if x < 0:
+            return -x
+        return x
+    print(abs(5))
+    print(abs(-3))
+
+    # Multi-line closure returning String
+    auto greet = (String name):
+        if name == "world":
+            return f"hello, {name}!"
+        return f"hi, {name}"
+    print(greet("world"))
+    print(greet("alice"))
+
+    # Multi-line closure passed to higher-order function
+    print(apply(abs, 42))
+    print(apply(abs, -7))

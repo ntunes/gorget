@@ -13972,6 +13972,14 @@ fn closure_iife() {
     );
 }
 
+#[test]
+fn closure_multiline_return() {
+    run_gg(
+        "closure_multiline_return.gg",
+        "5\n3\nhello, world!\nhi, alice\n42\n7",
+    );
+}
+
 // ── Generic edge cases ──
 
 #[test]

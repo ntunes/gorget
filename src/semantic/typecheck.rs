@@ -500,6 +500,24 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn extract_fn_return_type_from_hint(&self, hint: Option<TypeId>) -> Option<TypeId> {
+        let hint = hint?;
+        let resolved = self.resolve_type(hint);
+        match self.types.get(resolved) {
+            ResolvedType::Function { return_type, .. } => Some(*return_type),
+            ResolvedType::CallableTrait(inner)
+            | ResolvedType::MutCallableTrait(inner)
+            | ResolvedType::ConsumeCallableTrait(inner)
+            | ResolvedType::BoxedCallable { inner, .. } => {
+                match self.types.get(*inner) {
+                    ResolvedType::Function { return_type, .. } => Some(*return_type),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Return a human-readable name for a resolved type.
     /// Uses the definition name for `Defined`/`Generic` types instead of the
     /// unhelpful `"<defined>"` from `TypeTable::display`.
@@ -1710,11 +1728,39 @@ impl<'a> TypeChecker<'a> {
                         }
                     }
                 }
+
+                // Set up closure return type tracking so `return` statements
+                // inside the closure body unify against the closure's own
+                // return type, not the enclosing function's.
+                let closure_ret_var = self.fresh_type_var();
+                if let Some(expected_ret) = self.extract_fn_return_type_from_hint(self.decl_type_hint) {
+                    self.unify(closure_ret_var, expected_ret, expr.span);
+                }
+                let saved_return_type = self.current_return_type;
+                self.current_return_type = Some(closure_ret_var);
+
                 let body_type = self.infer_expr(body);
+
+                self.current_return_type = saved_return_type;
+
+                // Determine the closure's return type: use the body's type for
+                // expression bodies / tail expressions, or the type collected
+                // from `return` statements for block bodies.
+                let return_type = if body_type != self.types.void_id {
+                    body_type
+                } else {
+                    let resolved = self.resolve_type(closure_ret_var);
+                    if matches!(self.types.get(resolved), ResolvedType::Var(_)) {
+                        self.types.void_id
+                    } else {
+                        resolved
+                    }
+                };
+
                 self.types.insert(ResolvedType::Function {
                     param_ownerships,
                     params: param_types,
-                    return_type: body_type,
+                    return_type,
                 })
             }
 
