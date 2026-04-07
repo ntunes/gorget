@@ -261,7 +261,7 @@ Type: `Option[T]` for some inferred `T`.
 | `*`    | Multiplication / Dereference |
 | `/`    | Division        |
 | `%`    | Remainder (sign follows dividend) |
-| `mod`  | Modulo (sign follows divisor) |
+| `.mod(n)` | Euclidean modulo (sign follows divisor) — method on numeric types |
 
 **Bitwise:**
 
@@ -1394,7 +1394,7 @@ From lowest to highest precedence:
 | 9          | `..` `..=`                   | Non-associative |
 | 10         | `<<` `>>`                    | Left          |
 | 11         | `+` `-` `+%` `-%`            | Left          |
-| 12         | `*` `/` `%` `mod` `*%`       | Left          |
+| 12         | `*` `/` `%` `*%`              | Left          |
 | 13         | Unary `-` `~` `!` `&` `*`   | Unary (prefix)|
 | 14         | `?.` `.` `()` `[]`           | Left          |
 | 15         | Atoms (literals, identifiers, grouped expressions) | — |
@@ -2655,7 +2655,7 @@ The compiler automatically registers the following core traits. They cannot be r
 | `Mul[Out]` | `Out mul(self, Self rhs)` | `Out` | `*` and `*=` operators |
 | `Div[Out]` | `Out div(self, Self rhs)` | `Out` | `/` and `/=` operators |
 | `Rem[Out]` | `Out rem(self, Self rhs)` | `Out` | `%` and `%=` operators |
-| `Mod[Out]` | `Out mod(self, Self rhs)` | `Out` | `mod` operator |
+| `Mod[Out]` | `Out mod(self, Self rhs)` | `Out` | `.mod()` method (Euclidean modulo) |
 | `Neg[Out]` | `Out neg(self)` | `Out` | Unary `-` operator |
 | `Comparable` | `int compare(self, Self other)` | `int` | `<`, `>`, `<=`, `>=` operators |
 | `Index[K, V]` | `V get(self, K key)` | `V` | `a[k]` read access |
@@ -2913,7 +2913,7 @@ print("{buf.len()}")   # 42
 
 Operator traits enable user-defined types to use built-in operators. The `Out` type parameter controls the return type.
 
-**Arithmetic (`Add`, `Sub`, `Mul`, `Div`, `Rem`, `Mod`).** Each trait enables its corresponding binary operator. `Rem` maps to `%`/`%=` (remainder — sign follows dividend). `Mod` maps to the `mod` keyword operator (modulo — sign follows divisor).
+**Arithmetic (`Add`, `Sub`, `Mul`, `Div`, `Rem`, `Mod`).** Each trait enables its corresponding binary operator. `Rem` maps to `%`/`%=` (remainder — sign follows dividend). `Mod` maps to the `.mod()` method (Euclidean modulo — sign follows divisor).
 
 ```gorget
 struct Vec2:

@@ -12,7 +12,7 @@ Operators listed from highest precedence (binds tightest) to lowest.
 | 20 | `&` | Mutable borrow | Right |
 | 20 | `spawn` `spawn blocking` | Task creation | Right |
 | 18 | `as` | Type cast | Left |
-| 17 | `*` `/` `%` `mod` `*%` | Multiplicative | Left |
+| 17 | `*` `/` `%` `*%` | Multiplicative | Left |
 | 16 | `+` `-` `+%` `-%` | Additive | Left |
 | 15 | `<<` `>>` | Shift | Left |
 | 14 | `..` `..=` | Range | Non-assoc |
@@ -39,7 +39,7 @@ Operators listed from highest precedence (binds tightest) to lowest.
 | `*` | Multiplication | `5 * 6` |
 | `/` | Division | `10 / 3` |
 | `%` | Remainder | `10 % 3` |
-| `mod` | Modulo (always non-negative) | `-7 mod 3` |
+| `.mod(n)` | Euclidean modulo (method) | `(-7).mod(3)` |
 | `-` (unary) | Negation | `-x` |
 
 ### Wrapping Arithmetic

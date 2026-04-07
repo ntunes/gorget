@@ -100,7 +100,7 @@ Each arithmetic operator maps to a trait:
 | `Mul[Out]` | `Out mul(self, Self rhs)` | `*` |
 | `Div[Out]` | `Out div(self, Self rhs)` | `/` |
 | `Rem[Out]` | `Out rem(self, Self rhs)` | `%` |
-| `Mod[Out]` | `Out mod(self, Self rhs)` | `mod` |
+| `Mod[Out]` | `Out mod(self, Self rhs)` | `.mod()` |
 | `Neg[Out]` | `Out neg(self)` | unary `-` |
 
 The `Out` parameter controls the return type. For most types, `Out` equals `Self`.

@@ -143,13 +143,13 @@ x - y          # subtraction
 x * y          # multiplication
 x / y          # division (integer division if both are int)
 x % y          # remainder (sign follows dividend)
-x mod y        # modulo (sign follows divisor)
+x.mod(y)       # Euclidean modulo (sign follows divisor)
 -x             # negation
 ```
 
-The distinction between `%` and `mod`: `-7 % 3` is `-1` (remainder), while
-`-7 mod 3` is `2` (modulo). Use `mod` when you want the result to always match
-the divisor's sign.
+The distinction between `%` and `.mod()`: `-7 % 3` is `-1` (remainder), while
+`(-7).mod(3)` is `2` (Euclidean modulo). Use `.mod()` when you want the result
+to always match the divisor's sign.
 
 ### Comparison
 
@@ -225,7 +225,7 @@ directive overflow=wrap
 | Type inference | `auto name = expr` | `auto x = 42` |
 | Constant | `const Type name = expr` | `const int MAX = 100` |
 | Type cast | `expr as Type` | `42 as float` |
-| Arithmetic | `+`, `-`, `*`, `/`, `%`, `mod` | `x + y`, `x mod 3` |
+| Arithmetic | `+`, `-`, `*`, `/`, `%`, `.mod()` | `x + y`, `x.mod(3)` |
 | Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=` | `x == y` |
 | Logical | `and`, `or`, `not` | `a and b` |
 | Bitwise | `&`, `\|`, `^`, `~`, `<<`, `>>` | `x & 0xFF` |
