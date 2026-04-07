@@ -1,0 +1,25 @@
+trait Describable:
+    String describe(self)
+
+trait Measurable:
+    int measure(self)
+
+struct Crate:
+    int width
+    int height
+
+equip Crate with Describable:
+    String describe(self):
+        return "crate"
+
+equip Crate with Measurable:
+    int measure(self):
+        return self.width * self.height
+
+void report[Describable & Measurable T](T val):
+    print(val.describe())
+    print(val.measure())
+
+void main():
+    Crate c = Crate(4, 5)
+    report[Crate](c)

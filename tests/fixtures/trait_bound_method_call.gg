@@ -1,0 +1,28 @@
+trait Summable:
+    int sum(self)
+
+struct Pair:
+    int a
+    int b
+
+equip Pair with Summable:
+    int sum(self):
+        return self.a + self.b
+
+struct Triple:
+    int x
+    int y
+    int z
+
+equip Triple with Summable:
+    int sum(self):
+        return self.x + self.y + self.z
+
+void print_sum[Summable T](T val):
+    print(val.sum())
+
+void main():
+    Pair p = Pair(3, 7)
+    print_sum[Pair](p)
+    Triple t = Triple(1, 2, 3)
+    print_sum[Triple](t)

@@ -1,0 +1,21 @@
+trait Hashable:
+    int hash(self)
+
+struct Key:
+    int id
+
+equip Key with Hashable:
+    int hash(self):
+        return self.id * 31
+
+int compute_hash[Hashable T](T val):
+    return val.hash()
+
+int double_hash[Hashable T](T val):
+    int h = compute_hash[T](val)
+    return h * 2
+
+void main():
+    Key k = Key(7)
+    print(compute_hash[Key](k))
+    print(double_hash[Key](k))

@@ -10,8 +10,6 @@
 
 - **Extern module ABI — remaining structural whitelist**: `is_cstr_returning_fn` and `takes_cstr_for_str_param` deleted (all entries eliminated). `runtime_arg_by_ptr` is structural (collection/string self-deref + string clone/free) — cannot be removed without changing how the LIR represents method dispatch. See `docs/internals/extern-modules.md`. [updated: 2026-04-03]
 
-- **Trait-bounded generic functions don't monomorphize**: `void print_sum[Summable T](T val)` — linker error. Core language feature gap. [added: 2026-03-23]
-
 - **`borrowed` qualifier for extern return types**: All extern function results are currently assumed owned. If we wrap a C library function returning a borrowed pointer (e.g., SDL_GetError's internal buffer), we need `extern borrowed String sdl_get_error()` to tell the compiler to auto-clone at the boundary. Currently these cases are handled by making the C wrapper return Str (copying internally). [added: 2026-04-03]
 
 ## Medium
@@ -53,7 +51,7 @@
 
 - **`char` type backend bugs**: `char as int` gives garbage, char `==`/`!=` uses `gorget_str_eq`. [added: 2026-03-21]
 
-- **Self-host comparison — stale numbers**: Last measured at 797 fixtures (2026-03-21): parser 99.6% (3 unfixable mismatches), resolver 100%, type checker 99.2%. Needs re-measurement at current fixture count (~890). [updated: 2026-04-06]
+- **Self-host comparison — stale numbers**: Last measured at 797 fixtures (2026-03-21): parser 99.6% (3 unfixable mismatches), resolver 100%, type checker 99.2%. Needs re-measurement at current fixture count (~855). [updated: 2026-04-07]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 

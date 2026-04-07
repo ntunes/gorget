@@ -2257,6 +2257,26 @@ fn trait_bounds() {
 }
 
 #[test]
+fn trait_bound_method_call() {
+    run_gg("trait_bound_method_call.gg", "10\n6");
+}
+
+#[test]
+fn trait_bound_multi_method() {
+    run_gg("trait_bound_multi_method.gg", "crate\n20");
+}
+
+#[test]
+fn trait_bound_transitive() {
+    run_gg("trait_bound_transitive.gg", "217\n434");
+}
+
+#[test]
+fn trait_bound_return_value() {
+    run_gg("trait_bound_return_value.gg", "25");
+}
+
+#[test]
 fn vector_capacity() {
     run_gg(
         "vector_capacity.gg",

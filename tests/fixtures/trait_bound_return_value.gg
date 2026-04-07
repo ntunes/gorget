@@ -1,0 +1,17 @@
+trait Weighted:
+    int weight(self)
+
+struct Item:
+    int w
+
+equip Item with Weighted:
+    int weight(self):
+        return self.w
+
+int total_weight[Weighted T](T a, T b):
+    return a.weight() + b.weight()
+
+void main():
+    Item x = Item(10)
+    Item y = Item(15)
+    print(total_weight[Item](x, y))
