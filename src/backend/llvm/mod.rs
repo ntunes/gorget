@@ -564,7 +564,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         let params: Vec<String> = ext.params.iter()
             .map(|p| {
                 // Void params are invalid in LLVM — replace with ptr (typically closure env)
-                if *p == LirType::Void { "ptr".to_string() }
+                // Aggregate params: use ptr to match C ABI (>16 bytes passed by indirect
+                // reference on aarch64). LLVM 14 and C compilers may disagree on register
+                // vs indirect passing for 32-byte structs, so always use ptr for externs.
+                if *p == LirType::Void || p.is_aggregate() { "ptr".to_string() }
                 else { llvm_type_full(p, snames) }
             })
             .collect();
@@ -1503,15 +1506,24 @@ fn emit_inst(
             let is_printf_like = name == "printf" || name == "gorget_string_format"
                 || name == "gorget_string_format_alloc" || name == "fprintf_stderr";
             if is_printf_like && !args.is_empty() {
-                // First arg is ptr to GorgetString — extract .data (field 0)
                 let uid = *trap_counter;
                 *trap_counter += 1;
+
+                // fprintf_stderr has args[0]=fd (skip), args[1]=fmt GorgetString
+                // printf/gorget_string_format have args[0]=fmt GorgetString
+                let (fmt_arg_idx, extra_start) = if name == "fprintf_stderr" && args.len() >= 2 {
+                    (1, 2)
+                } else {
+                    (0, 1)
+                };
+
+                // Extract .data from the GorgetString format arg
                 let str_data = format!("printf.{block_id}.{uid}.data");
                 let str_val = format!("printf.{block_id}.{uid}.val");
-                writeln!(out, "  %{str_data} = getelementptr %GorgetString, ptr %v{}, i32 0, i32 0", args[0].0).unwrap();
+                writeln!(out, "  %{str_data} = getelementptr %GorgetString, ptr %v{}, i32 0, i32 0", args[fmt_arg_idx].0).unwrap();
                 writeln!(out, "  %{str_val} = load ptr, ptr %{str_data}").unwrap();
                 // Build remaining args with their types
-                let extra_args: Vec<String> = args[1..].iter().map(|a| {
+                let extra_args: Vec<String> = args[extra_start..].iter().map(|a| {
                     let pty = val_types.get(a.0 as usize)
                         .and_then(|t| t.as_ref())
                         .map(|t| llvm_arg_type(t, snames))
@@ -1579,11 +1591,9 @@ fn emit_inst(
                     let expects_agg = expected_ty.map_or(false, |t| t.is_aggregate());
 
                     if expects_agg && is_ptr {
-                        // Extern expects aggregate by value, but we have a ptr — load it
-                        let ety = llvm_arg_type(expected_ty.unwrap(), snames);
-                        let load_name = format!("ext.load.{block_id}.{ext_uid}.{i}");
-                        spill_lines.push(format!("  %{load_name} = load {ety}, ptr %v{}", a.0));
-                        format!("{ety} %{load_name}")
+                        // Aggregate params are declared as ptr in the extern (C ABI).
+                        // Just pass the pointer directly — no struct load needed.
+                        format!("ptr %v{}", a.0)
                     } else if expects_ptr && !is_ptr && actual_ty.is_some() {
                         // Spill scalar to alloca and pass pointer
                         let spill_ty = llvm_arg_type(actual_ty.unwrap(), snames);
