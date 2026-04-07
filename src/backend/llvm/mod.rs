@@ -145,13 +145,23 @@ fn build_struct_names(module: &LirModule) -> HashMap<u32, String> {
 // ── Value Type Inference ───────────────────────────────────────────────────
 
 /// Infer the LirType produced by an instruction.
-fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType>]) -> Option<LirType> {
+fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType>], func: Option<&LirFunction>) -> Option<LirType> {
     match inst {
         Inst::SlotLoad { ty, .. } | Inst::ParamRef { ty, .. } => {
             // Void types produce ptr in our codegen (closure env)
             if *ty == LirType::Void { Some(LirType::Ptr) } else { Some(ty.clone()) }
         }
-        Inst::SlotAddr { .. } => Some(LirType::Ptr),
+        Inst::SlotAddr { slot, .. } => {
+            // Carry struct type info as PtrTo for Option/Result unwrap inference
+            if let Some(f) = func {
+                if let Some(s) = f.slots.get(slot.0 as usize) {
+                    if let LirType::Struct(sid) = &s.ty {
+                        return Some(LirType::PtrTo(*sid));
+                    }
+                }
+            }
+            Some(LirType::Ptr)
+        }
         Inst::IConst { ty, .. } | Inst::FConst { ty, .. } => Some(ty.clone()),
         Inst::BoolConst { .. } => Some(LirType::Bool),
         Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. } => Some(LirType::Ptr),
@@ -733,7 +743,7 @@ fn emit_function(
         for inst in &block.insts {
             if let Some(dst) = inst.dst() {
                 if (dst.0 as usize) < val_types.len() {
-                    let ty = infer_inst_type(inst, module, &val_types);
+                    let ty = infer_inst_type(inst, module, &val_types, Some(func));
                     // Aggregates are always represented as pointers in our LLVM codegen:
                     // - Call/CallExtern results stored via temp alloca
                     // - Load on aggregate uses pointer alias (no actual load)
