@@ -1055,11 +1055,15 @@ impl<'a> FuncLowering<'a> {
 
             Instruction::MoveZero { place } => {
                 // Zero out a place after move. Emit memset(addr, 0, sizeof).
-                // For PtrTo locals (pointer-wrapped strings), zero the POINTER SLOT
-                // (set to NULL), not the pointee. lower_place_addr for PtrTo does
-                // SlotLoad (returns pointer value), so memset would corrupt pointee.
+                // For PtrTo(GorgetString) locals (pointer-wrapped strings), zero
+                // the POINTER SLOT (set to NULL), not the pointee. lower_place_addr
+                // for these does SlotLoad (returns pointer value), so memset would
+                // corrupt pointee.
                 let slot = self.local_to_slot[place.local.0 as usize];
-                let is_ptr_slot = matches!(self.lir_func.slots[slot.0 as usize].ty, LirType::PtrTo(_));
+                let is_ptr_slot = match &self.lir_func.slots[slot.0 as usize].ty {
+                    LirType::PtrTo(sid) => self.struct_reg.lookup("GorgetString") == Some(*sid),
+                    _ => false,
+                };
                 let addr = if is_ptr_slot && place.projections.is_empty() {
                     let a = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: a, slot });

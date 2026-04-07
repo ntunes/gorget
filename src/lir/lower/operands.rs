@@ -32,7 +32,12 @@ impl<'a> FuncLowering<'a> {
         // - Without Deref: use SlotLoad — directly provides the pointer value
         //   (needed for borrows, method calls, indexing on the Ptr variable)
         let is_ref_local = self.gir_func.ref_locals.contains(&place.local);
-        let is_ptr_to_slot = matches!(self.lir_func.slots[slot.0 as usize].ty, LirType::PtrTo(_));
+        // Only treat PtrTo(GorgetString) slots as implicit ref locals.
+        // Other PtrTo slots carry type information but are not reference locals.
+        let is_ptr_to_slot = match &self.lir_func.slots[slot.0 as usize].ty {
+            LirType::PtrTo(sid) => self.struct_reg.lookup("GorgetString") == Some(*sid),
+            _ => false,
+        };
         let has_deref = place.projections.first() == Some(&Projection::Deref);
         if (is_ref_local || is_ptr_to_slot) && !has_deref {
             self.lir_func

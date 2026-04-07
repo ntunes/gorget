@@ -1958,7 +1958,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 // If the destination field/slot itself holds a pointer (Ptr/Void), store the pointer
                 // value directly — don't memcpy through it.  This happens for MutRef captures
                 // (void* fields holding &outer_var).
-                } else if matches!(dst_pointee, Some(LirType::Ptr) | Some(LirType::Void)) {
+                } else if matches!(dst_pointee, Some(LirType::Ptr) | Some(LirType::PtrTo(_)) | Some(LirType::Void)) {
                     write!(out, "*(void**)({p}) = {val};", p = v(*ptr), val = v(*value)).unwrap();
                 } else {
                     // Str and GorgetString are the same 32-byte struct (unified).

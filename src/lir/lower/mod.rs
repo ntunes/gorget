@@ -1118,8 +1118,13 @@ pub fn map_gir_type_with_structs(
             GirType::Ptr(inner) | GirType::MutPtr(inner) => {
                 if let Some(sr) = struct_reg {
                     if let Some(GirType::Named(name)) = registry.get(*inner) {
-                        if name == "GorgetString" {
-                            if let Some(sid) = sr.lookup(name) {
+                        // Resolve any registered struct type to PtrTo(sid).
+                        if let Some(sid) = sr.lookup(name) {
+                            return LirType::PtrTo(sid);
+                        }
+                        // Collection instantiations map to runtime structs.
+                        if let Some(runtime_name) = collection_runtime_type(name) {
+                            if let Some(sid) = sr.lookup(runtime_name) {
                                 return LirType::PtrTo(sid);
                             }
                         }
@@ -1451,5 +1456,54 @@ mod tests {
         assert!(output.contains("iconst 42"));
         assert!(output.contains("add"));
         assert!(output.contains("ret"));
+    }
+
+    #[test]
+    fn map_ptr_named_to_ptr_to() {
+        use crate::ir::types::{GirType, TypeRegistry};
+        use crate::lir::{StructId};
+        use crate::lir::types::StructRegistry;
+
+        let mut registry = TypeRegistry::new();
+        let mut struct_reg = StructRegistry::new();
+
+        // Register a named type and a Ptr to it.
+        let named_id = registry.insert(GirType::Named("TestStruct".to_string()));
+        let ptr_id = registry.insert(GirType::Ptr(named_id));
+
+        // Register the struct name in the struct registry.
+        let test_sid = StructId(100);
+        struct_reg.register("TestStruct", test_sid);
+
+        // Ptr(Named("TestStruct")) should resolve to PtrTo(test_sid).
+        let result = map_gir_type_with_structs(&ptr_id, &registry, Some(&struct_reg));
+        assert_eq!(result, LirType::PtrTo(test_sid));
+
+        // Ptr(I64) should fall through to Ptr (no Named inner).
+        let ptr_prim = registry.insert(GirType::Ptr(I64_TYPE));
+        let result2 = map_gir_type_with_structs(&ptr_prim, &registry, Some(&struct_reg));
+        assert_eq!(result2, LirType::Ptr);
+    }
+
+    #[test]
+    fn map_ptr_collection_to_ptr_to() {
+        use crate::ir::types::{GirType, TypeRegistry};
+        use crate::lir::{StructId};
+        use crate::lir::types::StructRegistry;
+
+        let mut registry = TypeRegistry::new();
+        let mut struct_reg = StructRegistry::new();
+
+        // Register the runtime struct (Vector__* maps to GorgetArray).
+        let array_sid = StructId(200);
+        struct_reg.register("GorgetArray", array_sid);
+
+        // Register a collection type name.
+        let vec_id = registry.insert(GirType::Named("Vector__int64_t".to_string()));
+        let ptr_vec = registry.insert(GirType::Ptr(vec_id));
+
+        // Ptr(Named("Vector__int64_t")) should resolve via collection_runtime_type.
+        let result = map_gir_type_with_structs(&ptr_vec, &registry, Some(&struct_reg));
+        assert_eq!(result, LirType::PtrTo(array_sid));
     }
 }
