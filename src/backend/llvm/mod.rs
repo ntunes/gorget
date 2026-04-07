@@ -1909,9 +1909,16 @@ fn emit_inst(
             writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf({all_args})").unwrap();
         }
 
-        // ── InlineC (C-backend only — skip) ─────────────────────────
-        Inst::InlineC { dst, .. } => {
-            if let Some(d) = dst {
+        // ── InlineC (C-backend only — partial emulation) ────────────
+        Inst::InlineC { dst, code } => {
+            // InlineC blocks often contain assert/panic logic that does:
+            //   fprintf(stderr, "...message..."); exit(1);
+            // Without emulating the C code, blocks ending in 'unreachable'
+            // will segfault. Detect fatal InlineC blocks and emit exit(1).
+            if code.contains("exit(") || code.contains("abort()") || code.contains("gorget_panic") {
+                writeln!(out, "  call void @exit(i32 1) ; InlineC fatal").unwrap();
+                writeln!(out, "  unreachable").unwrap();
+            } else if let Some(d) = dst {
                 writeln!(out, "  %v{} = add i64 0, 0 ; InlineC skipped", d.0).unwrap();
             } else {
                 writeln!(out, "  ; InlineC skipped").unwrap();
