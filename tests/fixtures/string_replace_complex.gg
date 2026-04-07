@@ -1,0 +1,80 @@
+# Complex replacement patterns: chained, in loops, with growing/shrinking strings
+from std.collections import Vector
+
+void main():
+    # --- Chain of replacements (template engine style) ---
+    String tmpl = "Hello {name}, welcome to {city}!"
+    String filled = tmpl.replace("{name}", "Alice").replace("{city}", "Paris")
+    print(filled)
+
+    # --- Replace all punctuation manually ---
+    String messy = "hello! world? foo, bar."
+    String clean = messy.replace("!", "").replace("?", "").replace(",", "").replace(".", "")
+    print(clean)
+
+    # --- Replace in loop (normalize whitespace) ---
+    String spaced = "a   b    c     d"
+    # Repeatedly collapse double spaces
+    while spaced.contains("  "):
+        spaced = spaced.replace("  ", " ")
+    print(spaced)
+
+    # --- Escape HTML entities ---
+    String html = "<div class=\"main\">&amp;</div>"
+    String escaped = html.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+    # Note: first & was already &amp;, gets double-escaped
+    print(escaped)
+
+    # --- ROT13-like substitution in loop ---
+    String input = "abc"
+    String output = ""
+    for ch in input:
+        if ch == "a":
+            output = output + "n"
+        else:
+            if ch == "b":
+                output = output + "o"
+            else:
+                if ch == "c":
+                    output = output + "p"
+                else:
+                    output = output + ch
+    print(output)
+
+    # --- Replace creating patterns that match next replace ---
+    String s = "1-2-3"
+    s = s.replace("-", "+-")
+    print(s)
+    s = s.replace("+-", "+")
+    print(s)
+
+    # --- Replace with longer string in loop ---
+    String expanding = "x"
+    for i in 0..4:
+        expanding = expanding.replace("x", "xox")
+    print(f"expanded len: {expanding.len()}")
+
+    # --- CSV column replacement ---
+    String csv = "name,age,city\nalice,30,paris\nbob,25,london"
+    Vector[String] lines = csv.split("\n")
+    String result = ""
+    for line in lines:
+        String modified = line.replace(",", " | ")
+        if result.len() > 0:
+            result = result + "\n"
+        result = result + modified
+    print(result)
+
+    # --- Trim and replace combined ---
+    String raw = "  hello   world  "
+    String normalized = raw.trim()
+    while normalized.contains("  "):
+        normalized = normalized.replace("  ", " ")
+    print(f"[{normalized}]")
+
+    # --- Replace preserving surrounding context ---
+    String path = "/home/user/docs/file.txt"
+    String new_path = path.replace("docs", "archive")
+    print(new_path)
+    print(f"still starts /home: {new_path.starts_with("/home")}")
+    print(f"still ends .txt: {new_path.ends_with(".txt")}")

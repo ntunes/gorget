@@ -1,0 +1,98 @@
+# Stress test: string methods at scale — correctness under repetition
+from std.collections import Vector
+
+void main():
+
+    # --- Stress: repeated split/join roundtrip ---
+    String data = "a,b,c,d,e"
+    int i = 0
+    while i < 500:
+        Vector[String] parts = data.split(",")
+        String rejoined = ",".join(parts)
+        if rejoined != data:
+            print(f"FAIL split/join at {i}")
+            return
+        i = i + 1
+    print("split/join x500 ok")
+
+    # --- Stress: replace in loop ---
+    String s = "aaaa"
+    i = 0
+    while i < 200:
+        s = s.replace("aa", "a")
+        i = i + 1
+    print(f"replace converged: {s}")
+
+    # --- Stress: trim in loop ---
+    i = 0
+    while i < 500:
+        String padded = f"   value{i}   "
+        String trimmed = padded.trim()
+        if not trimmed.starts_with("value"):
+            print(f"FAIL trim at {i}")
+            return
+        i = i + 1
+    print("trim x500 ok")
+
+    # --- Stress: contains/index_of search ---
+    String haystack = "the quick brown fox jumps over the lazy dog"
+    i = 0
+    int found_count = 0
+    while i < 1000:
+        if haystack.contains("fox"):
+            found_count = found_count + 1
+        i = i + 1
+    print(f"contains x1000: {found_count}")
+
+    i = 0
+    int idx_sum = 0
+    while i < 1000:
+        int idx = haystack.index_of("fox").unwrap()
+        idx_sum = idx_sum + idx
+        i = i + 1
+    print(f"index_of x1000: {idx_sum / 1000}")
+
+    # --- Stress: to_upper/to_lower roundtrip ---
+    String base = "Hello World"
+    i = 0
+    while i < 500:
+        String u = base.to_upper()
+        String l = u.to_lower()
+        if l != "hello world":
+            print(f"FAIL case roundtrip at {i}")
+            return
+        i = i + 1
+    print("case roundtrip x500 ok")
+
+    # --- Stress: substring extraction ---
+    String long = "abcdefghijklmnopqrstuvwxyz"
+    i = 0
+    while i < 500:
+        String sub = long.substring(i % 20, (i % 20) + 5)
+        if sub.len() != 5:
+            print(f"FAIL substring at {i}")
+            return
+        i = i + 1
+    print("substring x500 ok")
+
+    # --- Stress: String builder push ---
+    String builder = String(4096)
+    i = 0
+    while i < 1000:
+        builder.push(f"{i},")
+        i = i + 1
+    # Verify it starts and ends correctly
+    print(f"builder starts: {builder.str().starts_with("0,1,2,")}")
+    print(f"builder ends: {builder.str().ends_with("999,")}")
+
+    # --- Stress: repeat + len ---
+    i = 1
+    bool repeat_ok = true
+    while i <= 100:
+        String r = "x".repeat(i)
+        if r.len() != i:
+            repeat_ok = false
+        i = i + 1
+    print(f"repeat x100: {repeat_ok}")
+
+    print("all stress ok")

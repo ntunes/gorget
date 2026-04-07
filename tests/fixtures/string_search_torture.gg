@@ -1,0 +1,75 @@
+# String search torture: edge cases for contains, index_of, find, count, replace
+void main():
+    # --- Needle longer than haystack ---
+    String short = "hi"
+    print(f"long needle: {short.contains("hello world")}")
+    print(f"long index_of: {short.index_of("hello world").is_none()}")
+    print(f"long find: {short.find("hello world").is_none()}")
+
+    # --- Empty needle ---
+    String s = "hello"
+    print(f"empty contains: {s.contains("")}")
+    print(f"empty starts: {s.starts_with("")}")
+    print(f"empty ends: {s.ends_with("")}")
+
+    # --- Self-search ---
+    print(f"self contains: {s.contains("hello")}")
+    print(f"self index_of: {s.index_of("hello").unwrap()}")
+    print(f"self starts: {s.starts_with("hello")}")
+    print(f"self ends: {s.ends_with("hello")}")
+
+    # --- Single character searches ---
+    String abc = "abcdefg"
+    print(f"first: {abc.index_of("a").unwrap()}")
+    print(f"last: {abc.index_of("g").unwrap()}")
+    print(f"mid: {abc.index_of("d").unwrap()}")
+    print(f"miss: {abc.index_of("z").is_none()}")
+
+    # --- Overlapping patterns (count is non-overlapping) ---
+    String overlap = "aaaa"
+    print(f"aa in aaaa: {overlap.count("aa")}")
+
+    String banana = "banana"
+    print(f"ana in banana: {banana.count("ana")}")
+
+    # --- Multiple occurrences with index_of (finds first) ---
+    String repeated = "abcabcabc"
+    print(f"first abc: {repeated.index_of("abc").unwrap()}")
+
+    # --- find vs index_of consistency ---
+    String haystack = "the quick brown fox"
+    Option[int] idx1 = haystack.index_of("brown")
+    Option[int] idx2 = haystack.find("brown")
+    print(f"idx_of=find: {idx1.unwrap() == idx2.unwrap()}")
+    print(f"both none: {haystack.index_of("xyz").is_none() and haystack.find("xyz").is_none()}")
+
+    # --- Count edge cases ---
+    print(f"empty count: {"".count("x")}")
+    print(f"no match: {"hello".count("xyz")}")
+    print(f"count 1: {"hello".count("hello")}")
+    String all_same = "aaaaa"
+    print(f"single char: {all_same.count("a")}")
+
+    # --- Replace edge cases ---
+    # Replace with same string (no-op)
+    String noop = "hello".replace("hello", "hello")
+    print(f"noop replace: {noop}")
+
+    # Replace producing longer string repeatedly
+    String grow = "x"
+    int i = 0
+    while i < 5:
+        grow = grow.replace("x", "xx")
+        i = i + 1
+    print(f"grown len: {grow.len()}")
+
+    # Cascading replace (first replace creates target of second)
+    String cascade = "aab"
+    cascade = cascade.replace("a", "b")
+    print(f"cascade: {cascade}")
+
+    # --- starts_with / ends_with partial overlap ---
+    String over = "abcabc"
+    print(f"starts abc: {over.starts_with("abc")}")
+    print(f"ends abc: {over.ends_with("abc")}")
+    print(f"starts abcabcd: {over.starts_with("abcabcd")}")

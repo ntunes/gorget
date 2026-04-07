@@ -1,0 +1,84 @@
+# Split/join edge cases — inspired by Python, Rust, Go split semantics
+from std.collections import Vector
+
+void main():
+    # --- Consecutive delimiters produce empty strings ---
+    String s1 = "a,,b,,c"
+    Vector[String] p1 = s1.split(",")
+    print(f"parts: {p1.len()}")
+    for p in p1:
+        print(f"[{p}]")
+
+    # --- Delimiter at start ---
+    String s2 = ",a,b"
+    Vector[String] p2 = s2.split(",")
+    print(f"parts: {p2.len()}")
+    for p in p2:
+        print(f"[{p}]")
+
+    # --- Delimiter at end ---
+    String s3 = "a,b,"
+    Vector[String] p3 = s3.split(",")
+    print(f"parts: {p3.len()}")
+    for p in p3:
+        print(f"[{p}]")
+
+    # --- All delimiters ---
+    String s4 = ",,,"
+    Vector[String] p4 = s4.split(",")
+    print(f"parts: {p4.len()}")
+    for p in p4:
+        print(f"[{p}]")
+
+    # --- Single character string, delimiter not found ---
+    String s5 = "x"
+    Vector[String] p5 = s5.split(",")
+    print(f"parts: {p5.len()}")
+    print(f"[{p5[0]}]")
+
+    # --- Multi-character delimiter ---
+    String s6 = "one<>two<>three"
+    Vector[String] p6 = s6.split("<>")
+    print(f"parts: {p6.len()}")
+    for p in p6:
+        print(p)
+
+    # --- Split then join with different separator ---
+    String csv = "a,b,c,d"
+    Vector[String] items = csv.split(",")
+    String piped = "|".join(items)
+    print(piped)
+    String tabbed = "\t".join(items)
+    # verify tab join worked via contains
+    print(f"has tab: {tabbed.contains("\t")}")
+
+    # --- Join empty vector ---
+    Vector[String] empty_vec = Vector[String]()
+    String joined_empty = ",".join(empty_vec)
+    print(f"empty join: [{joined_empty}]")
+
+    # --- Join single element ---
+    Vector[String] single = Vector[String]()
+    single.push("only")
+    String joined_single = ",".join(single)
+    print(f"single join: {joined_single}")
+
+    # --- Split and count in loop ---
+    String log_line = "2024-01-15 12:30:45 INFO server started on port 8080"
+    Vector[String] tokens = log_line.split(" ")
+    print(f"tokens: {tokens.len()}")
+    print(f"date: {tokens[0]}")
+    print(f"level: {tokens[2]}")
+
+    # --- Repeated split/join preserves data ---
+    String original = "hello world foo bar"
+    Vector[String] w = original.split(" ")
+    String r1 = " ".join(w)
+    Vector[String] w2 = r1.split(" ")
+    String r2 = " ".join(w2)
+    print(f"stable: {r2 == original}")
+
+    # --- Split on string that appears as substring of delimiter ---
+    String tricky = "abcabcabc"
+    Vector[String] p7 = tricky.split("abc")
+    print(f"abc split: {p7.len()}")

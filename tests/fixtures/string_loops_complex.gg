@@ -1,0 +1,104 @@
+# Complex string operations inside loops: nested loops, conditionals, accumulation
+from std.collections import Vector
+
+void main():
+    # --- Nested loop string building ---
+    # Build a multiplication table snippet
+    String table = ""
+    for i in 1..4:
+        for j in 1..4:
+            int product = i * j
+            table = table + f"{product}"
+            if j < 3:
+                table = table + ","
+        table = table + ";"
+    print(table)
+
+    # --- Conditional accumulation in loop ---
+    String evens = ""
+    String odds = ""
+    for i in 0..10:
+        if i % 2 == 0:
+            if evens.len() > 0:
+                evens = evens + ","
+            evens = evens + f"{i}"
+        else:
+            if odds.len() > 0:
+                odds = odds + ","
+            odds = odds + f"{i}"
+    print(f"evens: {evens}")
+    print(f"odds: {odds}")
+
+    # --- Loop with method calls on accumulated string ---
+    String acc = ""
+    for i in 0..5:
+        acc = acc + "ab"
+        int count = acc.count("ab")
+        if count == i + 1:
+            pass
+        else:
+            print("BUG")
+    print(f"acc: {acc}")
+    print(f"count: {acc.count("ab")}")
+
+    # --- String transformation pipeline in loop ---
+    Vector[String] words = Vector[String]()
+    words.push("hello")
+    words.push("WORLD")
+    words.push("  spaces  ")
+    words.push("MiXeD")
+    String result = ""
+    for word in words:
+        String processed = word.trim().to_lower()
+        if result.len() > 0:
+            result = result + " "
+        result = result + processed
+    print(result)
+
+    # --- Reverse a string character by character ---
+    String original = "gorget"
+    String reversed = ""
+    int idx = original.len() - 1
+    while idx >= 0:
+        reversed = reversed + original[idx]
+        idx = idx - 1
+    print(reversed)
+
+    # --- Build string with repeat in loop ---
+    String pyramid = ""
+    for i in 1..6:
+        pyramid = pyramid + "*".repeat(i) + "\n"
+    print(pyramid.trim())
+
+    # --- Loop with split and rejoin ---
+    String csv = "10,20,30,40,50"
+    Vector[String] nums = csv.split(",")
+    # Just rejoin with different separator
+    String rejoined = " | ".join(nums)
+    print(rejoined)
+
+    # --- While loop with string shrinking ---
+    String shrink = "abcdefghij"
+    int count = 0
+    while shrink.len() > 2:
+        shrink = shrink.substring(1, shrink.len() - 1)
+        count = count + 1
+    print(f"{shrink} after {count} shrinks")
+
+    # --- Accumulate with contains check (dedup) ---
+    Vector[String] input = Vector[String]()
+    input.push("apple")
+    input.push("banana")
+    input.push("apple")
+    input.push("cherry")
+    input.push("banana")
+    input.push("date")
+    Vector[String] seen = Vector[String]()
+    for item in input:
+        bool found = false
+        for s in seen:
+            if s == item:
+                found = true
+        if not found:
+            seen.push(item)
+    print(",".join(seen))

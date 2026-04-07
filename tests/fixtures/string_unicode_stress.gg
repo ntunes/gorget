@@ -1,0 +1,99 @@
+# Unicode stress: multi-byte strings in loops, mixed ASCII/Unicode ops
+from std.collections import Vector
+
+void main():
+    # --- Multi-byte indexing in loop ---
+    String emoji_like = f"caf\u{E9} na\u{EF}ve r\u{E9}sum\u{E9}"
+    int cp_len = emoji_like.len()
+    print(f"codepoints: {cp_len}")
+
+    # Iterate all codepoints, count accented ones
+    int accented = 0
+    for ch in emoji_like:
+        Vector[uint8] bs = ch.bytes()
+        if bs.len() > 1:
+            accented = accented + 1
+    print(f"accented: {accented}")
+
+    # --- Split on multi-byte boundary ---
+    String csv = f"caf\u{E9},na\u{EF}ve,r\u{E9}sum\u{E9}"
+    Vector[String] parts = csv.split(",")
+    print(f"parts: {parts.len()}")
+    for p in parts:
+        print(p)
+
+    # --- Replace with multi-byte characters ---
+    String greeting = "Hello World"
+    String fancy = greeting.replace("o", f"\u{F6}")
+    print(fancy)
+
+    # --- Upper/lower in loop ---
+    Vector[String] words = Vector[String]()
+    words.push(f"caf\u{E9}")
+    words.push(f"\u{E9}l\u{E8}ve")
+    words.push(f"na\u{EF}ve")
+
+    String upper_all = ""
+    for w in words:
+        if upper_all.len() > 0:
+            upper_all = upper_all + " "
+        upper_all = upper_all + w.to_upper()
+    print(upper_all)
+
+    String lower_all = upper_all.to_lower()
+    print(lower_all)
+
+    # --- Substring on multi-byte ---
+    String cafe = f"caf\u{E9}"
+    # substring(0,3) = "caf", substring(3,4) = "é"
+    print(cafe.substring(0, 3))
+    print(cafe.substring(3, 4))
+
+    # --- byte_slice vs substring ---
+    # "café" = 63 61 66 C3 A9 (5 bytes, 4 codepoints)
+    int bl = cafe.byte_len()
+    int cl = cafe.len()
+    print(f"bytes: {bl}, codepoints: {cl}")
+    String bs = cafe.byte_slice(0, 3)
+    String ss = cafe.substring(0, 3)
+    print(f"byte_slice(0,3): {bs}")
+    print(f"substring(0,3): {ss}")
+    print(f"same: {bs == ss}")
+
+    # --- contains with multi-byte needle ---
+    print(f"contains e-acute: {cafe.contains(f"\u{E9}")}")
+    print(f"contains af: {cafe.contains("af")}")
+
+    # --- count multi-byte ---
+    String rep = f"\u{E9}\u{E9}\u{E9}abc\u{E9}"
+    print(f"count e-acute: {rep.count(f"\u{E9}")}")
+
+    # --- Negative indexing on multi-byte ---
+    print(f"last: {cafe[-1]}")
+
+    # --- chars() on multi-byte, reconstruct ---
+    Vector[String] chs = cafe.chars()
+    String rebuilt = ""
+    for ch in chs:
+        rebuilt = rebuilt + ch
+    print(f"rebuilt: {rebuilt}")
+    print(f"match: {rebuilt == cafe}")
+
+    # --- Mixed ASCII and multi-byte in String builder ---
+    String builder = String()
+    builder.push("ASCII:")
+    builder.push(f" caf\u{E9}")
+    builder.push(f" na\u{EF}ve")
+    print(builder.str())
+
+    # --- Stress: case conversion on multi-byte in loop ---
+    String base = f"caf\u{E9}"
+    int i = 0
+    while i < 200:
+        String u = base.to_upper()
+        String l = u.to_lower()
+        if l != base:
+            print(f"FAIL at {i}")
+            return
+        i = i + 1
+    print("unicode case x200 ok")

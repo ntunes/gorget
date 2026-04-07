@@ -1,0 +1,90 @@
+# String builder patterns: building structured output in loops
+from std.collections import Vector
+
+void main():
+    # --- Build CSV from data ---
+    Vector[int] values = Vector[int]()
+    values.push(10)
+    values.push(20)
+    values.push(30)
+    values.push(40)
+
+    String csv = String()
+    csv.push("id,value")
+    int id = 1
+    for v in values:
+        csv.push(f"\n{id},{v}")
+        id = id + 1
+    print(csv.str())
+
+    # --- Build JSON-like array ---
+    Vector[String] names = Vector[String]()
+    names.push("alice")
+    names.push("bob")
+    names.push("charlie")
+
+    String json = String()
+    json.push("[")
+    int i = 0
+    for name in names:
+        if i > 0:
+            json.push(",")
+        json.push(f"\"{name}\"")
+        i = i + 1
+    json.push("]")
+    print(json.str())
+
+    # --- Build with push_line ---
+    String lines = String()
+    for i in 1..6:
+        lines.push_line(f"line {i}")
+    # trim trailing newline for clean output
+    String output = lines.str().trim()
+    print(output)
+
+    # --- Build with push_char ---
+    String hex_str = String()
+    String hex_chars = "0123456789abcdef"
+    for i in 0..16:
+        hex_str.push_char(hex_chars[i])
+    print(hex_str.str())
+
+    # --- Capacity growth ---
+    String growing = String(4)
+    print(f"initial cap: {growing.capacity() >= 4}")
+    int j = 0
+    while j < 100:
+        growing.push("x")
+        j = j + 1
+    print(f"len after 100: {growing.str().len()}")
+    print(f"cap grew: {growing.capacity() >= 100}")
+
+    # --- Clear and reuse ---
+    String reusable = String()
+    reusable.push("first content")
+    print(reusable.str())
+    reusable.clear()
+    print(f"after clear: {reusable.str().is_empty()}")
+    reusable.push("second content")
+    print(reusable.str())
+
+    # --- Build nested structure ---
+    String table = String()
+    for row in 0..3:
+        table.push("|")
+        for col in 0..3:
+            int val = row * 3 + col + 1
+            String cell = f"{val}".pad_left(3, ' ')
+            table.push(cell)
+            table.push("|")
+        table.push_char("\n")
+    print(table.str().trim())
+
+    # --- Interleave two strings ---
+    String a = "abc"
+    String b = "123"
+    String interleaved = String()
+    for i in 0..a.len():
+        interleaved.push_char(a[i])
+        interleaved.push_char(b[i])
+    print(interleaved.str())

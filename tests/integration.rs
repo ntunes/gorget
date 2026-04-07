@@ -15510,3 +15510,228 @@ error: too long: max 3
 -1",
     );
 }
+
+// ══════════════════════════════════════════════════════════════
+// String stress & edge-case tests
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn string_loops_complex() {
+    run_gg(
+        "string_loops_complex.gg",
+        "\
+1,2,3;2,4,6;3,6,9;
+evens: 0,2,4,6,8
+odds: 1,3,5,7,9
+acc: ababababab
+count: 5
+hello world spaces mixed
+tegrog
+*
+**
+***
+****
+*****
+10 | 20 | 30 | 40 | 50
+ef after 4 shrinks
+apple,banana,cherry,date",
+    );
+}
+
+#[test]
+fn string_stress_methods() {
+    run_gg(
+        "string_stress_methods.gg",
+        "\
+split/join x500 ok
+replace converged: a
+trim x500 ok
+contains x1000: 1000
+index_of x1000: 16
+case roundtrip x500 ok
+substring x500 ok
+builder starts: true
+builder ends: true
+repeat x100: true
+all stress ok",
+    );
+}
+
+#[test]
+fn string_split_edge_cases() {
+    run_gg(
+        "string_split_edge_cases.gg",
+        "\
+parts: 5
+[a]
+[]
+[b]
+[]
+[c]
+parts: 3
+[]
+[a]
+[b]
+parts: 3
+[a]
+[b]
+[]
+parts: 4
+[]
+[]
+[]
+[]
+parts: 1
+[x]
+parts: 3
+one
+two
+three
+a|b|c|d
+has tab: true
+empty join: []
+single join: only
+tokens: 8
+date: 2024-01-15
+level: INFO
+stable: true
+abc split: 4",
+    );
+}
+
+#[test]
+fn string_builder_loop() {
+    run_gg(
+        "string_builder_loop.gg",
+        "\
+id,value
+1,10
+2,20
+3,30
+4,40
+[\"alice\",\"bob\",\"charlie\"]
+line 1
+line 2
+line 3
+line 4
+line 5
+0123456789abcdef
+initial cap: true
+len after 100: 100
+cap grew: true
+first content
+after clear: true
+second content
+|  1|  2|  3|
+|  4|  5|  6|
+|  7|  8|  9|
+a1b2c3",
+    );
+}
+
+#[test]
+fn string_search_torture() {
+    run_gg(
+        "string_search_torture.gg",
+        "\
+long needle: false
+long index_of: true
+long find: true
+empty contains: true
+empty starts: true
+empty ends: true
+self contains: true
+self index_of: 0
+self starts: true
+self ends: true
+first: 0
+last: 6
+mid: 3
+miss: true
+aa in aaaa: 2
+ana in banana: 1
+first abc: 0
+idx_of=find: true
+both none: true
+empty count: 0
+no match: 0
+count 1: 1
+single char: 5
+noop replace: hello
+grown len: 32
+cascade: bbb
+starts abc: true
+ends abc: true
+starts abcabcd: false",
+    );
+}
+
+#[test]
+fn string_replace_complex() {
+    run_gg(
+        "string_replace_complex.gg",
+        "\
+Hello Alice, welcome to Paris!
+hello world foo bar
+a b c d
+&lt;div class=&quot;main&quot;&gt;&amp;amp;&lt;/div&gt;
+nop
+1+-2+-3
+1+2+3
+expanded len: 31
+name | age | city
+alice | 30 | paris
+bob | 25 | london
+[hello world]
+/home/user/archive/file.txt
+still starts /home: true
+still ends .txt: true",
+    );
+}
+
+#[test]
+fn string_unicode_stress() {
+    run_gg(
+        "string_unicode_stress.gg",
+        "\
+codepoints: 17
+accented: 4
+parts: 3
+caf\u{e9}
+na\u{ef}ve
+r\u{e9}sum\u{e9}
+Hell\u{f6} W\u{f6}rld
+CAF\u{c9} \u{c9}L\u{c8}VE NA\u{cf}VE
+caf\u{e9} \u{e9}l\u{e8}ve na\u{ef}ve
+caf
+\u{e9}
+bytes: 5, codepoints: 4
+byte_slice(0,3): caf
+substring(0,3): caf
+same: true
+contains e-acute: true
+contains af: true
+count e-acute: 4
+last: \u{e9}
+rebuilt: caf\u{e9}
+match: true
+ASCII: caf\u{e9} na\u{ef}ve
+unicode case x200 ok",
+    );
+}
+
+#[test]
+fn string_ownership_loop() {
+    run_gg(
+        "string_ownership_loop.gg",
+        "\
+word_0
+word_99
+count: 100
+dots: 100
+found entry_25: true
+fizzbuzz count: 9
+key_5 = 50
+all ownership ok",
+    );
+}
