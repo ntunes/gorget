@@ -3130,9 +3130,9 @@ These methods operate on individual characters within a `String`:
 | `contains(item)` | `T → bool` | True if element exists (by value) |
 | `index_of(item)` | `T → Option[int]` | Index of first match (`None` if not found) |
 | `insert(index, item)` | `int, T → void` | Insert element at index, shifting subsequent elements |
-| `extend(other)` | `Vector[T] → void` | Append all elements from another vector |
-| `slice(start, end)` | `int, int → Vector[T]` | New vector from elements `[start, end)` |
-| `clear()` | `→ void` | Remove all elements |
+| `extend(other)` | `Vector[T] → void` | Append all elements from another vector (consuming — source is moved) |
+| `slice(start, end)` | `int, int → Vector[T]` | New vector from elements `[start, end)` (deep-clones resource-type elements) |
+| `clear()` | `→ void` | Remove all elements (drops resource-type elements) |
 | `reserve(n)` | `int → void` | Pre-allocate capacity for at least `n` elements |
 | `sort()` | `→ void` | Sort elements in place (ascending) |
 | `sorted()` | `→ Vector[T]` | Return a new sorted copy |
@@ -3145,7 +3145,7 @@ These methods operate on individual characters within a `String`:
 | `reduce(f)` | `(T, T) → T → T` | Reduce without initial value |
 | `first()` | `→ Option[T]` | First element (`None` if empty) |
 | `last()` | `→ Option[T]` | Last element (`None` if empty) |
-| `clone()` | `→ Vector[T]` | Shallow copy of the vector |
+| `clone()` | `→ Vector[T]` | Deep copy of the vector (resource-type elements independently cloned) |
 | `reversed()` | `→ Vector[T]` | New vector with elements in reverse order |
 | `binary_search(item)` | `T → int` | Binary search on a sorted vector (returns index, or -1) |
 | `unique()` | `→ Vector[T]` | New vector with consecutive duplicates removed |
@@ -4554,6 +4554,7 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `--hot-reload`       | Enable hot code reload (builds host + guest shared library) |
 | `--shared [-o file]` | Build as a shared library (`.dylib`/`.so`)              |
 | `--show-borrows`     | Print inferred borrow analysis for all functions (diagnostic) |
+| `--show-clones`      | Print clone report: all implicit clones with location, type, and reason (including CoW materializations) |
 | `-i` / `--in-place`  | Format file in place (for `gg fmt`)                     |
 
 ---

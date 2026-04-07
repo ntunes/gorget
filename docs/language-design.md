@@ -491,7 +491,7 @@ The struct retains ownership. The view/reference borrows from the struct and is 
 
 ```gorget
 auto fast = p.name         # String view (zero cost, borrows from p)
-String owned = p.name      # auto-clone via gorget_string_clone (independent copy)
+String owned = p.name      # auto-clone via gorget_string_clone_to_owned (independent copy)
 
 auto ref = p.scores        # Ptr reference (zero cost)
 Vector[int] copy = p.scores  # auto-clone via gorget_array_clone (independent)

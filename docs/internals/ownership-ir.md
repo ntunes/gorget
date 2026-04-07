@@ -151,7 +151,7 @@ The VarDecl path detects registered temps via `is_registered()` → `AssignMode:
 `Inst::SlotStore { slot, value, is_move }` carries a move flag from GIR `AssignMode::Move`. The C backend uses this to choose between:
 
 - `is_move: true` → `memcpy` (transfer ownership, source will be zeroed by MoveZero)
-- `is_move: false` → `gorget_string_clone` (independent copy, source stays alive)
+- `is_move: false` → `gorget_string_clone` (copy; views stay as views, owned strings get independent copy)
 
 This eliminates unnecessary `clone + free` round-trips for string temporaries.
 
@@ -177,11 +177,14 @@ When a `Ptr(T)` value (from IndexLoad or borrowed param) is assigned to an expli
 
 GorgetStrings have their own provenance-based ownership system (view vs owned). Auto-cloning GorgetStrings would break the `.str()` method chain pattern where a String view borrows from the backing GorgetString.
 
-### Collection elem_drop on overwrite
+### Collection elem_drop
 
-`GorgetArray` and `GorgetMap` have function pointer fields (`elem_drop`, `val_drop`) set at construction. `gorget_array_set` calls `elem_drop` on the old element before overwriting; `gorget_map_put` calls `val_drop` when a key already exists. This prevents resource leaks from element overwrite.
+`GorgetArray` and `GorgetMap` have function pointer fields (`elem_drop`, `val_drop`) set at construction. These are called in all element-removing operations:
 
-Collection destruction (`gorget_array_free`) does NOT use `elem_drop` — element drops on destruction are handled by the LIR's `elem_drop_recipes` mechanism to avoid double-drops.
+- `gorget_array_set` / `gorget_map_put` — drop old element before overwriting
+- `gorget_array_clear` — drop all elements before zeroing length
+- `gorget_array_remove` — drop removed element before memmove
+- `gorget_array_free` — drop all elements before freeing the buffer
 
 ## Key Files
 

@@ -797,9 +797,11 @@ fn lower_return(
         } else {
             let ret_type = builder.locals[0].type_id;
             // If returning a string value through the owned_string_type return slot,
-            // clone it so the caller gets an independent allocation.
+            // Clone string returns so the caller gets an independent allocation.
             // Without this, the caller frees a pointer still owned by the source
-            // (e.g., an enum field loaded via match destructuring).
+            // (e.g., an enum field loaded via match destructuring, or a named
+            // local whose scope-exit drop would double-free the return value).
+            // TODO: skip for owned temps to eliminate clone+free round-trip.
             let mut did_clone_return = false;
             if ret_type == ctx.type_mapper.owned_string_type {
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {

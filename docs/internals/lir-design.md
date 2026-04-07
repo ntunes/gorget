@@ -363,7 +363,7 @@ GIR `Drop { place }` is resolved during lowering using the type registry. The lo
 
 ```
 // String struct copy (unified 32-byte Str):
-// Views (cap==0): shallow memcpy. Owned (cap>0): gorget_string_clone().
+// Non-move copy uses gorget_string_clone (views stay views, owned gets new buffer).
 %data  = load (field_ptr %src, Str, 0), Ptr
 %len   = load (field_ptr %src, Str, 1), I64
 %cap   = load (field_ptr %src, Str, 2), I64

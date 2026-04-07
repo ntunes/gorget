@@ -65,6 +65,7 @@ violations, and unresolved names.
 ```bash
 gg check app.gg
 gg check app.gg --show-borrows    # print borrow checker summary
+gg build app.gg --show-clones     # print implicit clone report (including CoW materializations)
 ```
 
 ---
@@ -87,6 +88,8 @@ These flags work with `build` and `run`:
 |------|--------|
 | `--emit-lir` | Low-level SSA IR |
 | `--emit-c-lir` | Generated C code |
+| `--show-clones` | Implicit clone report (ownership-boundary clones + CoW materializations) |
+| `--show-borrows` | Borrow checker analysis summary |
 
 ---
 
