@@ -154,6 +154,8 @@ pub enum ImplicitCloneReason {
     MoveParamFromBorrow,
     /// `MyStruct{field: borrowed_ref}` — struct field receives a borrow
     StructFieldFromBorrow,
+    /// CoW materialization: collection mutation forced clone of a borrowed element
+    CoWMaterialization,
 }
 
 impl std::fmt::Display for ImplicitCloneReason {
@@ -164,6 +166,7 @@ impl std::fmt::Display for ImplicitCloneReason {
             Self::ReturnFromBorrow => write!(f, "use `.clone()` for explicit copy"),
             Self::MoveParamFromBorrow => write!(f, "use `.clone()` for explicit copy"),
             Self::StructFieldFromBorrow => write!(f, "use `.clone()` for explicit copy"),
+            Self::CoWMaterialization => write!(f, "mutation forced clone of borrowed element"),
         }
     }
 }

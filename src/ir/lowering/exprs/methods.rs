@@ -1016,7 +1016,7 @@ pub(super) fn lower_method_call(
         if needs_mut {
             if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
                 if place.projections.is_empty() {
-                    ctx.cow_before_mutation(builder, place.local);
+                    ctx.cow_before_mutation(builder, place.local, receiver.span);
                     // Re-resolve: cow_before_mutation may have redirected the variable
                     // name to a new owned local (Phase 1c param materialization).
                     if let Some(hint) = builder.local_name(place.local).map(|s| s.to_string()) {
@@ -1035,7 +1035,7 @@ pub(super) fn lower_method_call(
         // created by self.data.get(i).unwrap()).
         if needs_mut {
             if let Some(ref field_path) = field_path_for_cow {
-                ctx.cow_before_field_mutation(builder, field_path);
+                ctx.cow_before_field_mutation(builder, field_path, receiver.span);
             }
         }
 

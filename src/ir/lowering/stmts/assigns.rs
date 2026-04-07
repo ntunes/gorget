@@ -58,7 +58,7 @@ pub(super) fn lower_assign(
                 // CoW: if this local is a source with aliases, sever them first.
                 // Aliases keep the old value; this local gets the new value.
                 if ctx.cow_has_aliases(local_id) {
-                    ctx.cow_sever_all_aliases_from(builder, local_id);
+                    ctx.cow_sever_all_aliases_from(builder, local_id, target.span);
                 }
                 // CoW: if this local is an alias, just remove from alias maps.
                 // The reassignment naturally replaces the binding value.
@@ -68,7 +68,7 @@ pub(super) fn lower_assign(
                 // CoW: if this collection has element refs, clone them out.
                 // Reassignment replaces the buffer; outstanding refs would dangle.
                 if ctx.cow_has_collection_refs(local_id) {
-                    ctx.cow_before_mutation(builder, local_id);
+                    ctx.cow_before_mutation(builder, local_id, target.span);
                 }
                 // CoW clone-on-mutate: if LHS is an immutable borrow (Ptr, not MutPtr),
                 // materialize to owned before computing RHS. This is the CoW clone.
@@ -281,10 +281,10 @@ pub(super) fn lower_field_assign(
     // CoW: field write mutates the object. Sever aliases before proceeding.
     if let Expr::Identifier(obj_name) = &object.node {
         if let Some((local_id, _)) = ctx.lookup_local(obj_name) {
-            ctx.cow_before_mutation(builder, local_id);
+            ctx.cow_before_mutation(builder, local_id, object.span);
         }
     } else if let Some(field_path) = extract_field_path_string(&object.node) {
-        ctx.cow_before_field_mutation(builder, &field_path);
+        ctx.cow_before_field_mutation(builder, &field_path, object.span);
     }
 
     // Try to resolve the full field projection chain without materializing
@@ -510,10 +510,10 @@ pub(super) fn lower_index_assign(
     // CoW: index write mutates the object. Sever aliases before proceeding.
     if let Expr::Identifier(obj_name) = &object.node {
         if let Some((local_id, _)) = ctx.lookup_local(obj_name) {
-            ctx.cow_before_mutation(builder, local_id);
+            ctx.cow_before_mutation(builder, local_id, object.span);
         }
     } else if let Some(field_path) = extract_field_path_string(&object.node) {
-        ctx.cow_before_field_mutation(builder, &field_path);
+        ctx.cow_before_field_mutation(builder, &field_path, object.span);
     }
 
     // When the object is a struct field access (e.g. self.dict_field[key] = val),

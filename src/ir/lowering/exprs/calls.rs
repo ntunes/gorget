@@ -56,7 +56,7 @@ pub(super) fn lower_call_arg(
         if let Expr::Identifier(name) = &arg.node.value.node {
             if let Some((local_id, _)) = ctx.lookup_local(name) {
                 // CoW: mutable borrow mutates the local. Sever aliases first.
-                ctx.cow_before_mutation(builder, local_id);
+                ctx.cow_before_mutation(builder, local_id, arg.span);
                 let is_already_ptr = {
                     let lid = local_id.0 as usize;
                     lid < builder.locals.len() && matches!(
@@ -204,7 +204,7 @@ pub(super) fn lower_call_arg(
                         return FunctionBuilder::copy(dst);
                     }
                     // CoW: move transfers ownership. Sever aliases first.
-                    ctx.cow_before_mutation(builder, place.local);
+                    ctx.cow_before_mutation(builder, place.local, arg.span);
                     let ptr_type = ctx.register_mut_ptr_type(local_type);
                     let dst = builder.add_local(ptr_type, None);
                     builder.emit_borrow_mut(dst, place.clone());

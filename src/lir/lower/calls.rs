@@ -392,7 +392,7 @@ pub(super) fn clone_fn_for_collection_element(elem_type_name: &str) -> Option<&'
     {
         Some("gorget_set_clone")
     } else if elem_type_name == "GorgetString" {
-        Some("gorget_string_clone")
+        Some("gorget_string_clone_to_owned")
     } else {
         None
     }

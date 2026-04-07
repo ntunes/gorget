@@ -1345,17 +1345,18 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         local: LocalId,
+        span: crate::span::Span,
     ) {
         // Phase 1c: bare Ptr params — clone to owned before mutation
         if matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::BareParam)) {
             self.func_state.local_ownership.remove(&local);
-            self.cow_materialize_alias(builder, local, local);
+            self.cow_materialize_alias(builder, local, local, span);
         }
 
         // Case 1: local is an alias of something else → clone source into local
         if let Some(LocalOwnershipState::Alias { source }) = self.func_state.local_ownership.get(&local).cloned() {
             self.func_state.local_ownership.remove(&local);
-            self.cow_materialize_alias(builder, local, source);
+            self.cow_materialize_alias(builder, local, source, span);
         }
 
         // Case 2: local is a source with aliases → clone into each alias
@@ -1363,7 +1364,7 @@ impl<'a> LoweringContext<'a> {
         if !aliases.is_empty() {
             for alias in aliases {
                 self.func_state.local_ownership.remove(&alias);
-                self.cow_materialize_alias(builder, alias, local);
+                self.cow_materialize_alias(builder, alias, local, span);
             }
         }
 
@@ -1373,7 +1374,7 @@ impl<'a> LoweringContext<'a> {
             for ref_local in refs {
                 // Only sever if the ref is still live (not already moved/reassigned)
                 if self.is_ref_local(ref_local) {
-                    self.cow_materialize_collection_ref(builder, ref_local);
+                    self.cow_materialize_collection_ref(builder, ref_local, span);
                 }
             }
         }
@@ -1385,12 +1386,13 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         field_path: &str,
+        span: crate::span::Span,
     ) {
         let target = CollectionId::FieldPath(field_path.to_string());
         let refs = self.cow_collection_refs_for_id(&target);
         for ref_local in refs {
             if self.is_ref_local(ref_local) {
-                self.cow_materialize_collection_ref(builder, ref_local);
+                self.cow_materialize_collection_ref(builder, ref_local, span);
             }
         }
     }
@@ -1401,11 +1403,12 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         source_local: LocalId,
+        span: crate::span::Span,
     ) {
         let aliases = self.cow_aliases_of(source_local);
         for alias in aliases {
             self.func_state.local_ownership.remove(&alias);
-            self.cow_materialize_alias(builder, alias, source_local);
+            self.cow_materialize_alias(builder, alias, source_local, span);
         }
         // Clean up other CoW tracking for the reassigned source — it's about
         // to get a new value, so stale entries would cause incorrect clones.
@@ -1426,6 +1429,7 @@ impl<'a> LoweringContext<'a> {
         builder: &mut crate::ir::builder::FunctionBuilder,
         alias_local: LocalId,
         _source_local: LocalId,
+        span: crate::span::Span,
     ) {
         let alias_type = builder.local_type(alias_local);
         let inner_type = match self.pointee_type(alias_type) {
@@ -1433,6 +1437,7 @@ impl<'a> LoweringContext<'a> {
             None => return,
         };
         if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
+            self.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
             let cloned = builder.call(&clone_fn,
                 vec![crate::ir::builder::FunctionBuilder::copy(alias_local)], inner_type);
             let name_hint = builder.local_name(alias_local).map(|s| s.to_string());
@@ -1455,10 +1460,12 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         ref_local: LocalId,
+        span: crate::span::Span,
     ) {
         let ref_type = builder.local_type(ref_local);
         let inner_type = self.pointee_type(ref_type).unwrap_or(ref_type);
         if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
+            self.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
             let cloned = builder.call(&clone_fn,
                 vec![crate::ir::builder::FunctionBuilder::copy(ref_local)], inner_type);
             let name_hint = builder.local_name(ref_local).map(|s| s.to_string());

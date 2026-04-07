@@ -189,7 +189,7 @@ fn lower_expr_inner(
             if let Expr::Identifier(name) = &inner.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name) {
                     if ctx.is_bare_param(local_id) {
-                        ctx.cow_before_mutation(builder, local_id);
+                        ctx.cow_before_mutation(builder, local_id, inner.span);
                     }
                 }
             }

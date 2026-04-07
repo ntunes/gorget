@@ -441,6 +441,7 @@ fn try_build_ir(
                     gorget::ir::ImplicitCloneReason::ReturnFromBorrow => "return from borrow",
                     gorget::ir::ImplicitCloneReason::MoveParamFromBorrow => "move param from borrow",
                     gorget::ir::ImplicitCloneReason::StructFieldFromBorrow => "struct field from borrow",
+                    gorget::ir::ImplicitCloneReason::CoWMaterialization => "CoW materialization",
                 };
                 entries.push((file, line, col, warn.type_name.clone(), reason));
             }
@@ -454,9 +455,13 @@ fn try_build_ir(
             eprintln!();
         } else {
             // Default: verbose codespan diagnostic warnings
+            // CoW materializations are audit-only (visible via --show-clones, not warned)
             let mut shown = std::collections::HashSet::new();
             let mut lib_warning_count = 0usize;
             for warn in &gir_module.implicit_clone_warnings {
+                if matches!(warn.reason, gorget::ir::ImplicitCloneReason::CoWMaterialization) {
+                    continue;
+                }
                 if !reporter.is_entry_file(warn.span) {
                     lib_warning_count += 1;
                     if std::env::var("GORGET_SHOW_LIB_CLONE_WARNINGS").is_ok() {
