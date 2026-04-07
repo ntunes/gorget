@@ -24,6 +24,9 @@ struct LowerCtx:
 
 # ── Helpers ──────────────────────────────────────────────
 
+Option[String] NO_NAME = None
+Option[Terminator] NO_TERM = None
+
 int add_local(LowerCtx &ctx, int type_id, Option[String] name):
     int id = ctx.locals.len()
     ctx.locals.push(GirLocal(type_id, name))
@@ -108,15 +111,15 @@ int map_cmpop(String op):
 int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     match sexpr.expr:
         case EIntLiteral(v):
-            int dst = add_local(&ctx, I64_TYPE, None)
+            int dst = add_local(&ctx, I64_TYPE, NO_NAME)
             emit(&ctx, IAssign(dst, OpConstI64(v)))
             return dst
         case EFloatLiteral(v):
-            int dst = add_local(&ctx, F64_TYPE, None)
+            int dst = add_local(&ctx, F64_TYPE, NO_NAME)
             emit(&ctx, IAssign(dst, OpConstF64(v)))
             return dst
         case EBoolLiteral(v):
-            int dst = add_local(&ctx, BOOL_TYPE, None)
+            int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
             emit(&ctx, IAssign(dst, OpConstBool(v)))
             return dst
         case EIdentifier(name):
@@ -127,10 +130,10 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int lhs = lower_expr(&ctx, *lhs_box, &gmod)
             int rhs = lower_expr(&ctx, *rhs_box, &gmod)
             if is_comparison(op):
-                int dst = add_local(&ctx, BOOL_TYPE, None)
+                int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
                 emit(&ctx, ICmp(dst, map_cmpop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
                 return dst
-            int dst = add_local(&ctx, I64_TYPE, None)
+            int dst = add_local(&ctx, I64_TYPE, NO_NAME)
             emit(&ctx, IBinOp(dst, map_binop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
             return dst
         case ECall(callee_box, args, targs):
@@ -159,7 +162,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, GirModul
             if val_type == F64_TYPE:
                 fmt = "%f\n"
             Vector[Operand] printf_args = [OpConstStr(fmt), OpCopy(val)]
-            int pdst = add_local(&ctx, I32_TYPE, None)
+            int pdst = add_local(&ctx, I32_TYPE, NO_NAME)
             emit(&ctx, ICallExtern(pdst, "printf", printf_args))
             result = pdst
     else:
@@ -174,7 +177,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, GirModul
         # TODO: look up return type from module's fn_sigs
         # Currently blocked by borrow checker false positive on &gmod across branches
         int ret_type = I64_TYPE
-        int dst = add_local(&ctx, ret_type, None)
+        int dst = add_local(&ctx, ret_type, NO_NAME)
         emit(&ctx, ICall(dst, fname, gir_args))
         result = dst
     return result
@@ -212,10 +215,10 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     else:
         ret_type = map_ast_type(fdef.return_type)
 
-    LowerCtx ctx = LowerCtx([], [BasicBlock([], None)], 0, {})
+    LowerCtx ctx = LowerCtx([], [BasicBlock([], NO_TERM)], 0, {})
 
     # _0 = return place
-    add_local(&ctx, ret_type, None)
+    add_local(&ctx, ret_type, NO_NAME)
 
     # _1.._N = params
     Vector[int] param_types = []

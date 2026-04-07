@@ -6,10 +6,12 @@ from resolve import resolve_module, ResolveContext
 from typecheck import type_check_module
 from derive import expand_derives
 from meta import expand_meta_types
-from gir import GirModule, init_type_table
+from lower import lower_module
+from gir import GirModule
+from format_gir import format_module
 from std.fs import read_file
 from std.os import args
-from std.collections import Vector, Dict
+from std.collections import Vector
 
 void main():
     Vector[String] cmd_args = args()
@@ -23,7 +25,5 @@ void main():
     expand_meta_types(&m, &types)
     ResolveContext ctx = resolve_module(m, &scopes, &types)
     type_check_module(m, &scopes, &types, ctx)
-    print("front-end done")
-    Dict[String, int] sigs = {}
-    GirModule gir = GirModule([], [], init_type_table(), !sigs)
-    print(f"module created: {gir.functions.len()} functions")
+    GirModule gir = lower_module(m, scopes, types)
+    print(format_module(&gir))

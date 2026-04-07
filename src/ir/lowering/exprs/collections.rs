@@ -52,10 +52,15 @@ pub(super) fn lower_array_literal(
         }
         FunctionBuilder::copy(arr_local)
     } else {
-        // Empty array — use I64 as default element size
+        // Empty array — infer element size from expected type if available.
+        // Without this, Vector[LargeStruct] initialized as [] gets elem_size=8
+        // instead of sizeof(LargeStruct), causing buffer overflows on push.
+        let elem_size_type = ctx.func_state.expected_type
+            .map(|et| infer_collection_element_type(ctx, et))
+            .unwrap_or(I64_TYPE);
         let arr_local = builder.call_extern(
             "gorget_array_new",
-            vec![Operand::Constant(Constant::SizeOf(I64_TYPE))],
+            vec![Operand::Constant(Constant::SizeOf(elem_size_type))],
             array_type,
         );
         FunctionBuilder::copy(arr_local)

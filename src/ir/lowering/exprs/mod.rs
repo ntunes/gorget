@@ -1369,9 +1369,23 @@ fn lower_struct_literal(
         return FunctionBuilder::copy(dst);
     }
 
-    // Regular struct literal
-    let mut field_operands: Vec<Operand> = args.iter()
-        .map(|arg| lower_expr(ctx, builder, arg))
+    // Regular struct literal — set expected_type per field so empty array literals
+    // get the correct element size (e.g., Vector[LargeStruct] initialized as []).
+    let field_types: Vec<Option<TypeId>> = if let Some(td) = ctx.type_registry.get_type_def(&effective_name) {
+        if let crate::ir::types::TypeDefKind::Struct(ref sd) = td.kind {
+            sd.fields.iter().map(|f| Some(f.type_id)).collect()
+        } else { vec![] }
+    } else { vec![] };
+    let mut field_operands: Vec<Operand> = args.iter().enumerate()
+        .map(|(i, arg)| {
+            let prev = ctx.func_state.expected_type;
+            if let Some(&Some(ft)) = field_types.get(i) {
+                ctx.func_state.expected_type = Some(ft);
+            }
+            let op = lower_expr(ctx, builder, arg);
+            ctx.func_state.expected_type = prev;
+            op
+        })
         .collect();
 
     // Auto-clone Ptr(collection) operands used as struct fields.
