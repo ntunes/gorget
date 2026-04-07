@@ -1553,10 +1553,9 @@ pub(super) fn emit_recursive_struct_clones(out: &mut String, module: &LirModule,
         for (field_name, drop_fn, _field_type_name) in drop_info {
             // Map drop function → clone function
             let clone_fn = match drop_fn.as_str() {
-                // Use gorget_string_clone (view-preserving) for structs: some code paths
-                // have pre-existing ownership bugs where the clone source isn't move-zeroed
-                // after transfer, causing double-free with owned clones.
-                "gorget_string_free" => "gorget_string_clone",
+                // Clone to owned: CoW materializations must produce independently-owned
+                // copies. The MoveZero gap that required view-preserving clones is fixed.
+                "gorget_string_free" => "gorget_string_clone_to_owned",
                 "gorget_array_free" => "gorget_array_clone",
                 "gorget_map_free" => "gorget_map_clone",
                 "gorget_set_free" => "gorget_set_clone",

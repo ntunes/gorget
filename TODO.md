@@ -6,8 +6,6 @@
 
 - **Clone observability + Cloneable trait**: `.clone()` works on all types. `gg build --show-clones` done. Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
 
-- **Struct clone view-preserving workaround — deferred**: `emit_recursive_struct_clones` uses `gorget_string_clone` (view-preserving) for struct string fields. Root cause (MoveZero gap) fixed — consuming calls now zero the source. Upgrading to `gorget_string_clone_to_owned` deferred pending **IndexLoad reference semantics** (`v[i]` returns `&T` instead of clone), which eliminates the implicit struct clone entirely. Risk is narrow: only heap-derived string slice views stored as struct fields and extracted via IndexLoad. [updated: 2026-04-07]
-
 - **Recursive/Custom elem_drop — 1 remaining fix**: C backend Option wrapping must CLONE for Recursive/Custom elements when payload is NOT Ptr (consuming methods like gorget_array_safe_pop). The fragile struct-name lookup may miss types. Option[Ref_T].unwrap() returns Ptr (CoW borrow) — clone fires at ownership boundaries. [updated: 2026-04-05]
 
 - **Extern module ABI — remaining structural whitelist**: `is_cstr_returning_fn` and `takes_cstr_for_str_param` deleted (all entries eliminated). `runtime_arg_by_ptr` is structural (collection/string self-deref + string clone/free) — cannot be removed without changing how the LIR represents method dispatch. See `docs/internals/extern-modules.md`. [updated: 2026-04-03]
@@ -31,7 +29,7 @@
 
 - **Box.new should enforce `!` at borrow checker level**: Currently Box.new implicitly MoveZeros the source. [added: 2026-03-26]
 
-- **IndexLoad reference semantics**: `v[i]` / `.get()` returns `&T` (mutable borrow). Borrows propagate through fields and destructuring. `.clone()` for ownership. Subsumes the collection double-free fix. [updated: 2026-04-03]
+- **IndexLoad reference semantics — borrow checker integration**: GIR already produces `Ptr(T)` + `CollectionRef` for resource-type IndexLoads; CoW materialization handles correctness; struct clone now uses `clone_to_owned`. Remaining: extend borrow checker to track IndexLoad borrows and report `MutationWhileBorrowed`, borrow propagation through fields/destructuring. [updated: 2026-04-07]
 
 - **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
 

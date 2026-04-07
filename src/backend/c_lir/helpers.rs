@@ -1406,7 +1406,7 @@ pub(super) fn deep_clone_resource_fields(
                     "GorgetArray" => Some("gorget_array_clone"),
                     "GorgetMap" => Some("gorget_map_clone"),
                     "GorgetSet" => Some("gorget_set_clone"),
-                    "GorgetString" => Some("gorget_string_clone"),
+                    "GorgetString" => Some("gorget_string_clone_to_owned"),
                     _ => None,
                 };
                 if let Some(cfn) = clone_fn {
@@ -1421,7 +1421,7 @@ pub(super) fn deep_clone_resource_fields(
                                     "GorgetArray" => Some("gorget_array_clone"),
                                     "GorgetMap" => Some("gorget_map_clone"),
                                     "GorgetSet" => Some("gorget_set_clone"),
-                                    "GorgetString" => Some("gorget_string_clone"),
+                                    "GorgetString" => Some("gorget_string_clone_to_owned"),
                                     _ => None,
                                 };
                                 if let Some(icfn) = inner_clone {
