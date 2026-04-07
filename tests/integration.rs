@@ -2199,6 +2199,34 @@ done");
 }
 
 #[test]
+fn leak_collection_elements() {
+    run_gg("leak_collection_elements.gg", "\
+leaked=false
+done");
+}
+
+#[test]
+fn leak_match_resource() {
+    run_gg("leak_match_resource.gg", "\
+leaked=false
+done");
+}
+
+#[test]
+fn leak_string_ops() {
+    run_gg("leak_string_ops.gg", "\
+leaked=false
+done");
+}
+
+#[test]
+fn leak_for_loop() {
+    run_gg("leak_for_loop.gg", "\
+leaked=false
+done");
+}
+
+#[test]
 fn trait_defaults() {
     run_gg(
         "trait_defaults.gg",

@@ -1690,13 +1690,30 @@ impl<'a> FuncLowering<'a> {
 
         // Self-cleaning: gorget_array_set calls elem_drop internally.
 
+        // Array literal path: gorget_array_new(sizeof(T)) from lower_array_literal
+        // doesn't carry element type info in original_name (it's just "gorget_array_new").
+        // Synthesize a monomorphized name so the C backend can set elem_drop/elem_clone.
+        let effective_original_name = if original_name == "gorget_array_new" && !args.is_empty() {
+            if let Some(Operand::Constant(Constant::SizeOf(type_id))) = args.first() {
+                if let Some(GirType::Named(name)) = self.gir_types.get(*type_id) {
+                    format!("Vector__{name}__new")
+                } else {
+                    original_name.to_string()
+                }
+            } else {
+                original_name.to_string()
+            }
+        } else {
+            original_name.to_string()
+        };
+
         let is_void_ret = matches!(ret_ty, LirType::Void);
         let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
             dst: result,
             name: actual_emit_name,
             args: lir_args,
-            original_name: Some(original_name.to_string()),
+            original_name: Some(effective_original_name),
         });
         if let (Some(d), Some(r)) = (*dst, result) {
             self.store_to_local(d, r, bb);

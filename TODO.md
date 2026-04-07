@@ -2,9 +2,7 @@
 
 ## High
 
-- **Leak reduction — 1 remaining pattern**: Match destructuring of collections in Result/Option now fixed (was only handling strings, not resource types). Remaining: **Collection reassignment skips drop** — `v = !new_v` doesn't free old `v`. Fix blocked on self-referential detection (naively dropping before assign causes UAF for `v = v.slice(...)`). [updated: 2026-04-07]
-
-- **Vector/Dict elem_drop for resource-type elements**: `Vector[String]`, `Vector[Vector[int]]`, etc. leak element contents when the collection is freed. `gorget_array_new` doesn't set `elem_drop`; needs `gorget_array_new_drop` with the appropriate element drop fn. Pre-existing — requires GIR-level change to propagate element type info to array creation. [added: 2026-04-07]
+- **Leak reduction — 2 remaining patterns**: Match destructuring fixed, elem_drop for array literals fixed. Remaining: (1) **Collection reassignment skips drop** — `v = !new_v` doesn't free old `v`. Fix blocked on self-referential detection (naively dropping before assign causes UAF for `v = v.slice(...)`). (2) **For-loop resource-type element drops** — `for x in vec_of_strings` clones each element but the clone is never freed. Fix requires deep-clone at LIR level (`gorget_array_clone` is shallow — elem_drop on the clone corrupts the original). `for ch in dynamic_fstring` also leaks the iterator copy. [updated: 2026-04-07]
 
 - **Clone observability + Cloneable trait**: `.clone()` works on all types. `gg build --show-clones` done. Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
 

@@ -1,0 +1,66 @@
+# Leak test: collections with resource-type elements.
+# Tests that freeing a collection cascades to its elements (elem_drop).
+# Covers Vector[String], Vector[Vector[int]], Dict[String, String].
+from std.os import mem_live
+from std.collections import Vector, Dict
+
+void main():
+    int baseline = mem_live()
+
+    # Section 1: Vector[String] — strings freed when vector freed
+    int i = 0
+    while i < 200:
+        Vector[String] v = []
+        v.push(f"hello_{i}")
+        v.push(f"world_{i}")
+        v.push(f"test_{i}")
+        i = i + 1
+
+    # Section 2: Vector[Vector[int]] — inner vectors freed when outer freed
+    i = 0
+    while i < 200:
+        Vector[Vector[int]] outer = []
+        Vector[int] a = []
+        a.push(1)
+        a.push(2)
+        outer.push(a)
+        Vector[int] b = []
+        b.push(3)
+        b.push(4)
+        outer.push(b)
+        i = i + 1
+
+    # Section 3: Dict[String, String] — both keys and values freed
+    i = 0
+    while i < 200:
+        Dict[String, String] d = {}
+        d[f"key_{i}"] = f"val_{i}"
+        d["static_key"] = f"val2_{i}"
+        i = i + 1
+
+    # Section 4: Vector[String] returned from function
+    i = 0
+    while i < 200:
+        Vector[String] names = make_names(5)
+        i = i + 1
+
+    # Section 5: String methods that return new strings in loops
+    i = 0
+    while i < 200:
+        String s = f"  Hello World {i}  "
+        String t = s.trim()
+        String u = t.to_upper()
+        String v = u.replace("HELLO", "HI")
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")
+
+Vector[String] make_names(int n):
+    Vector[String] v = []
+    int i = 0
+    while i < n:
+        v.push(f"item_{i}")
+        i = i + 1
+    return v

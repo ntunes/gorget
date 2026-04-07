@@ -1,0 +1,53 @@
+# Leak test: string operations in loops.
+# Tests that intermediate strings from methods/formatting are freed.
+from std.os import mem_live
+from std.collections import Vector
+
+void main():
+    int baseline = mem_live()
+
+    # Section 1: f-string formatting in loop
+    int i = 0
+    while i < 500:
+        String s = f"item_{i}_value"
+        i = i + 1
+
+    # Section 2: String concat in loop
+    i = 0
+    while i < 500:
+        String a = "hello"
+        String b = " world"
+        String c = a + b
+        i = i + 1
+
+    # Section 3: String method chains in loop
+    i = 0
+    while i < 500:
+        String s = f"  HELLO world {i}  "
+        String t = s.trim().to_lower()
+        i = i + 1
+
+    # Section 4: String split producing Vector[String]
+    i = 0
+    while i < 200:
+        String s = "one,two,three,four,five"
+        Vector[String] parts = s.split(",")
+        i = i + 1
+
+    # Section 5: String replace in loop
+    i = 0
+    while i < 200:
+        String s = "aaa-bbb-ccc-ddd"
+        String t = s.replace("-", "_")
+        i = i + 1
+
+    # Section 6: Nested f-strings
+    i = 0
+    while i < 200:
+        String inner = f"x={i}"
+        String outer = f"[{inner}]"
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")

@@ -1,0 +1,35 @@
+# Leak test: for-loop iteration over collections with primitive elements.
+# NOTE: for-loop over Vector[String] and nested Vector[Vector[int]] have
+# known leaks — gorget_array_clone does shallow copy, so element drops on
+# the clone would corrupt the original. Tracked in TODO.md.
+from std.os import mem_live
+from std.collections import Vector
+
+int sum_vec(Vector[int] v):
+    int total = 0
+    for x in v:
+        total = total + x
+    return total
+
+void main():
+    int baseline = mem_live()
+
+    # Section 1: for-loop over Vector[int] via function call
+    int i = 0
+    while i < 200:
+        Vector[int] v = [1, 2, 3, 4, 5]
+        int total = sum_vec(v)
+        i = i + 1
+
+    # Section 2: for-loop producing new Vector[int]
+    i = 0
+    while i < 200:
+        Vector[int] src = [10, 20, 30]
+        Vector[int] doubled = []
+        for x in src:
+            doubled.push(x * 2)
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")
