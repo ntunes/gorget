@@ -932,24 +932,17 @@ mod tests {
 
     #[test]
     fn local_out_of_range() {
-        let mut module = Module::new();
+        // builder.build() now auto-extends locals to cover all referenced
+        // LocalIds, so out-of-range locals no longer occur after build().
+        // Verify that the extension works: local 99 should be present.
         let mut b = FunctionBuilder::new("f", I32_TYPE, &[]);
-        // Manually emit an instruction referencing a non-existent local.
         b.assign(
             Place::local(LocalId(99)),
             FunctionBuilder::const_i32(0),
         );
         b.ret(FunctionBuilder::const_i32(0));
-        module.functions.push(b.build());
-
-        let errors = validate(&module);
-        assert!(errors.iter().any(|e| matches!(
-            e.kind,
-            ValidationErrorKind::LocalOutOfRange {
-                local: LocalId(99),
-                ..
-            }
-        )));
+        let func = b.build();
+        assert!(func.locals.len() >= 100, "build() should extend locals to cover LocalId(99)");
     }
 
     #[test]
