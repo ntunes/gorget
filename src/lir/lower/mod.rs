@@ -9,7 +9,7 @@
 //! Phase 2.4: Enums + match (Switch).
 //! Phase 2.5: Type conversions.
 
-pub(super) mod calls;
+pub mod calls;
 pub(super) mod drops;
 pub(super) mod insts;
 pub(super) mod operands;
@@ -21,7 +21,7 @@ pub use self::types::lower_module;
 
 #[allow(unused_imports)]
 use self::calls::{
-    fix_printf_str_format, runtime_extern_sig, lower_binop, lower_unop, map_cmp_op,
+    fix_printf_format, runtime_extern_sig, lower_binop, lower_unop, map_cmp_op,
     clone_fn_for_collection_element, is_type_name, is_self_by_ptr_method,
     map_monomorphized_to_runtime_with_table, map_monomorphized_to_runtime,
 };

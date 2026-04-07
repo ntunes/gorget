@@ -1516,53 +1516,9 @@ pub(super) fn format_float(val: f64) -> String {
     }
 }
 
-/// Fix printf format strings: replace `%lld` with `%f` at positions where
-/// the corresponding variadic arg is a float.
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum PrintfArgKind { Int, Float, Str }
-
-pub(super) fn fix_printf_format(fmt: &str, arg_kinds: &[PrintfArgKind]) -> String {
-    let mut result = String::with_capacity(fmt.len());
-    let bytes = fmt.as_bytes();
-    let mut i = 0;
-    let mut arg_idx = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            if i + 1 < bytes.len() && bytes[i + 1] == b'%' {
-                // Literal %% — not a format specifier.
-                result.push_str("%%");
-                i += 2;
-            } else if i + 3 < bytes.len() && bytes[i..i + 4] == *b"%lld" {
-                let kind = arg_kinds.get(arg_idx).copied().unwrap_or(PrintfArgKind::Int);
-                match kind {
-                    PrintfArgKind::Float => result.push_str("%f"),
-                    PrintfArgKind::Str => result.push_str("%.*s"),
-                    PrintfArgKind::Int => result.push_str("%lld"),
-                }
-                arg_idx += 1;
-                i += 4;
-            } else {
-                // Other format spec (%s, %d, %c, etc.) — copy through.
-                result.push('%');
-                i += 1;
-                // Skip flags/width/precision
-                while i < bytes.len() && !bytes[i].is_ascii_alphabetic() && bytes[i] != b'%' {
-                    result.push(bytes[i] as char);
-                    i += 1;
-                }
-                if i < bytes.len() && bytes[i].is_ascii_alphabetic() {
-                    result.push(bytes[i] as char);
-                    i += 1;
-                }
-                arg_idx += 1;
-            }
-        } else {
-            result.push(bytes[i] as char);
-            i += 1;
-        }
-    }
-    result
-}
+// Printf format rewriting (fix_printf_format, PrintfArgKind) has been moved to
+// LIR lowering in src/lir/lower/calls.rs. The C backend no longer does format
+// string rewriting — all float/bool/string format fixes happen before codegen.
 
 /// Escape a string for C string literal.
 pub(super) fn escape_c_string(s: &str) -> String {

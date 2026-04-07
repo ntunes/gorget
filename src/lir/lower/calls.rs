@@ -2,9 +2,24 @@
 
 use super::*;
 
-/// Replace `%lld` with `%.*s` at positions where the arg is a Str.
-/// `is_str` is indexed from arg[1] onward (arg[0] is the format string).
-pub(super) fn fix_printf_str_format(fmt: &str, is_str: &[bool]) -> String {
+/// Printf argument type — used to select the correct format specifier.
+#[derive(Clone, Copy, PartialEq)]
+pub enum PrintfArgKind {
+    Int,
+    Float,
+    Str,
+    Bool,
+}
+
+/// Rewrite printf format specifiers to match actual argument types.
+/// `arg_kinds` is indexed from arg[1] onward (arg[0] is the format string).
+///
+/// Rewrites at each `%lld` position:
+///   Str   → `%.*s`  (string expanded to len+data pair)
+///   Float → `%f`    (C variadic promotes float to double)
+///   Bool  → `%s`    (bool converted to "true"/"false" via gorget_bool_to_str)
+///   Int   → `%lld`  (unchanged)
+pub fn fix_printf_format(fmt: &str, arg_kinds: &[PrintfArgKind]) -> String {
     let mut result = String::with_capacity(fmt.len() + 8);
     let mut arg_idx = 0usize;
     let bytes = fmt.as_bytes();
@@ -18,13 +33,27 @@ pub(super) fn fix_printf_str_format(fmt: &str, is_str: &[bool]) -> String {
             }
             // Check if this is %lld
             if i + 4 <= bytes.len() && &bytes[i..i+4] == b"%lld" {
-                if arg_idx < is_str.len() && is_str[arg_idx] {
-                    result.push_str("%.*s");
-                } else {
-                    result.push_str("%lld");
+                let kind = arg_kinds.get(arg_idx).copied().unwrap_or(PrintfArgKind::Int);
+                match kind {
+                    PrintfArgKind::Str => result.push_str("%.*s"),
+                    PrintfArgKind::Float => result.push_str("%f"),
+                    PrintfArgKind::Bool => result.push_str("%.*s"),
+                    PrintfArgKind::Int => result.push_str("%lld"),
                 }
                 arg_idx += 1;
                 i += 4;
+                continue;
+            }
+            // Check if this is %s that needs rewriting for Bool (expand to %.*s)
+            if i + 2 <= bytes.len() && &bytes[i..i+2] == b"%s" {
+                let kind = arg_kinds.get(arg_idx).copied().unwrap_or(PrintfArgKind::Int);
+                if kind == PrintfArgKind::Bool {
+                    result.push_str("%.*s");
+                } else {
+                    result.push_str("%s");
+                }
+                arg_idx += 1;
+                i += 2;
                 continue;
             }
             // Other format specifiers: scan past them

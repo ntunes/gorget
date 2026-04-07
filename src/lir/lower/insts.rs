@@ -1755,21 +1755,31 @@ impl<'a> FuncLowering<'a> {
 
     /// Lower printf/fprintf args, expanding Str-typed operands to (int)len, data.
     pub(super) fn lower_printf_args(&mut self, args: &[Operand], bb: BlockId) -> Vec<ValueId> {
+        use super::calls::PrintfArgKind;
+
         let mut lir_args = Vec::new();
-        // Pre-scan: which args (1-based) are Str-typed? We need this to fix the format string.
-        let str_arg_indices: Vec<bool> = args.iter().enumerate()
-            .map(|(i, a)| i > 0 && self.operand_is_str(a))
+        // Pre-scan: classify each arg (1-based) by type for format string rewriting.
+        let arg_kinds: Vec<PrintfArgKind> = args.iter().enumerate()
+            .map(|(i, a)| {
+                if i == 0 { return PrintfArgKind::Int; } // format string itself
+                if self.operand_is_str(a) { return PrintfArgKind::Str; }
+                let ty = self.operand_lir_type(a);
+                match ty {
+                    LirType::F32 | LirType::F64 => PrintfArgKind::Float,
+                    LirType::Bool => PrintfArgKind::Bool,
+                    _ => PrintfArgKind::Int,
+                }
+            })
             .collect();
-        let has_str_args = str_arg_indices.iter().any(|&b| b);
+        let needs_format_fix = arg_kinds[1..].iter().any(|k| *k != PrintfArgKind::Int);
 
         for (i, arg) in args.iter().enumerate() {
             if i == 0 {
                 // First arg is always the format string (const char*).
-                // If any subsequent args are Str, fix the format string:
-                // replace corresponding %lld with %.*s.
-                if has_str_args {
+                // If any subsequent args need format fixes, rewrite the format string.
+                if needs_format_fix {
                     if let Operand::Constant(Constant::Str(fmt_str)) = arg {
-                        let fixed = fix_printf_str_format(fmt_str, &str_arg_indices[1..]);
+                        let fixed = fix_printf_format(fmt_str, &arg_kinds[1..]);
                         let fixed_val = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::StrLit {
                             dst: fixed_val,
@@ -1782,7 +1792,7 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     lir_args.push(self.lower_operand(arg, bb));
                 }
-            } else if self.operand_is_str(arg) {
+            } else if arg_kinds[i] == PrintfArgKind::Str {
                 // Str-typed arg: expand to (int)len, (const char*)data for %.*s.
                 if let Operand::Copy(place) | Operand::Move(place) = arg {
                     let slot = self.local_to_slot[place.local.0 as usize];
@@ -1843,6 +1853,64 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     lir_args.push(self.lower_operand(arg, bb));
                 }
+            } else if arg_kinds[i] == PrintfArgKind::Float {
+                // Float arg: promote F32 to F64 for C variadic, pass directly.
+                let float_val = self.lower_operand(arg, bb);
+                let ty = self.operand_lir_type(arg);
+                if ty == LirType::F32 {
+                    let promoted = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::FloatCast {
+                        dst: promoted,
+                        value: float_val,
+                        to: LirType::F64,
+                    });
+                    lir_args.push(promoted);
+                } else {
+                    lir_args.push(float_val);
+                }
+            } else if arg_kinds[i] == PrintfArgKind::Bool {
+                // Bool arg: convert to "true"/"false" via gorget_bool_to_str (returns Str struct),
+                // then decompose into (i32 len, ptr data) like any Str arg.
+                let bool_val = self.lower_operand(arg, bb);
+
+                // Allocate a temp slot to hold the result Str struct
+                let str_slot = self.lir_func.add_slot(
+                    LirType::Struct(self.struct_reg.lookup("GorgetString").unwrap()),
+                    Some("__bool_str".into()),
+                );
+                let str_result = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    dst: Some(str_result),
+                    name: "gorget_bool_to_str".to_string(),
+                    args: vec![bool_val],
+                    original_name: None,
+                });
+                // Store result to slot
+                self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                    slot: str_slot,
+                    value: str_result,
+                    is_move: true,
+                });
+
+                // Decompose: load .len (field 1) → i32, load .data (field 0) → ptr
+                let str_sid = self.struct_reg.lookup("GorgetString").unwrap();
+                let base = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base, slot: str_slot });
+                let len_ptr = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr { dst: len_ptr, base, struct_id: str_sid, field: 1 });
+                let len_load = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::Load { dst: len_load, ptr: len_ptr, ty: LirType::I64 });
+                let len_i32 = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::IntCast { dst: len_i32, value: len_load, to: LirType::I32 });
+                lir_args.push(len_i32);
+
+                let base2 = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base2, slot: str_slot });
+                let data_ptr = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr { dst: data_ptr, base: base2, struct_id: str_sid, field: 0 });
+                let data_load = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::Load { dst: data_load, ptr: data_ptr, ty: LirType::Ptr });
+                lir_args.push(data_load);
             } else {
                 lir_args.push(self.lower_operand(arg, bb));
             }

@@ -1748,7 +1748,7 @@ pub(super) fn emit_call_extern(
             let fmt_arg_id = if is_printf && !emit_args.is_empty() {
                 emit_args.first()
             } else { None };
-            let need_fmt_fix = is_printf && fmt_arg_id.map_or(false, |fid| {
+            let _need_fmt_fix = is_printf && fmt_arg_id.map_or(false, |fid| {
                 str_lit_vals.get(fid.0 as usize).copied().unwrap_or(false)
             }) && emit_args.iter().skip(1).any(|a| {
                 let ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
@@ -1852,9 +1852,12 @@ pub(super) fn emit_call_extern(
                         continue;
                     }
                 }
-                // Fix printf format string: replace %lld with %f for float args.
-                if need_fmt_fix && i == 0 && is_str_lit {
-                    // Find the StrLit instruction that defines this format arg.
+                // Printf format rewriting for float/bool is handled by LIR lowering.
+                // Str decomposition for CallExtern @printf with PtrTo(Str) args is still
+                // needed here because the LIR lowering can't detect Str type for all values
+                // (e.g., gorget_array_get returns generic void*).
+                if _need_fmt_fix && i == 0 && is_str_lit {
+                    // Rewrite format string: %lld → %.*s for Str args at emit time.
                     let fmt_val = *a;
                     let mut fmt_text: Option<&str> = None;
                     'find_fmt: for blk in &func.blocks {
@@ -1868,124 +1871,54 @@ pub(super) fn emit_call_extern(
                         }
                     }
                     if let Some(fmt) = fmt_text {
+                        // Fix Str and Float args (bool already handled by LIR lowering)
+                        use crate::lir::lower::calls::PrintfArgKind;
                         let arg_kinds: Vec<PrintfArgKind> = emit_args[1..].iter()
                             .map(|ea| {
                                 let ty = val_types.get(ea.0 as usize).and_then(|t| t.as_ref());
                                 let ea_str_ptr = is_str_ptr_opt(ty, module)
                                     || (matches!(ty, Some(LirType::Ptr)) && ptr_pointee.get(ea.0 as usize)
                                         .and_then(|p| p.as_ref())
-                                        .map_or(false, |p| is_str_struct(p, module)));
+                                        .map_or(false, |p| is_str_struct(p, module)))
+                                    || matches!(ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
                                 if matches!(ty, Some(LirType::F32 | LirType::F64)) {
                                     PrintfArgKind::Float
                                 } else if ea_str_ptr {
-                                    PrintfArgKind::Str
-                                } else if matches!(ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString")) {
                                     PrintfArgKind::Str
                                 } else {
                                     PrintfArgKind::Int
                                 }
                             })
                             .collect();
-                        let fixed = fix_printf_format(fmt, &arg_kinds);
-                        let escaped = escape_c_string(&fixed);
-                        write!(out, "\"{}\"", escaped).unwrap();
+                        if arg_kinds.iter().any(|k| *k != PrintfArgKind::Int) {
+                            let fixed = crate::lir::lower::calls::fix_printf_format(fmt, &arg_kinds);
+                            let escaped = escape_c_string(&fixed);
+                            write!(out, "\"{}\"", escaped).unwrap();
+                        } else {
+                            write!(out, "{}", v(*a)).unwrap();
+                        }
                     } else {
-                        // Fallback: emit original value.
                         write!(out, "{}", v(*a)).unwrap();
                     }
                     continue;
                 }
-                // For printf, decompose GorgetString args into (int)len, data for %.*s format.
-                if need_fmt_fix && is_printf && i > 0
+                // Decompose GorgetString args into (int)len, data for %.*s format.
+                if _need_fmt_fix && is_printf && i > 0
                     && matches!(arg_ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"))
                 {
                     write!(out, "(int)({v}).len, ({v}).data", v = v(*a)).unwrap();
                     continue;
                 }
                 // PtrTo(Str) in printf — deref then decompose.
-                if need_fmt_fix && is_printf && i > 0 && (is_str_ptr_opt(arg_ty, module)
+                if _need_fmt_fix && is_printf && i > 0 && (is_str_ptr_opt(arg_ty, module)
                     || (matches!(arg_ty, Some(LirType::Ptr)) && ptr_pointee.get(a.0 as usize)
                         .and_then(|p| p.as_ref())
                         .map_or(false, |p| is_str_struct(p, module)))) {
                     write!(out, "(int)((Str*){v})->len, ((Str*){v})->data", v = v(*a)).unwrap();
                     continue;
                 }
-                // For printf, wrap bool/int args with ? "true" : "false" when
-                // the corresponding format specifier is %s.
-                // This handles cases where GIR types `any()`/`all()` results as i64
-                // but the format expects a boolean-as-string.
-                else if is_printf && i > 0 && matches!(arg_ty, Some(LirType::Bool) | Some(LirType::I64) | Some(LirType::I32)) {
-                    // Check if the format specifier for this arg position is %s.
-                    let fmt_is_pct_s = fmt_arg_id.and_then(|fid| {
-                        let mut fmt_text: Option<&str> = None;
-                        for blk in &func.blocks {
-                            for inst2 in &blk.insts {
-                                if let Inst::StrLit { dst, value } = inst2 {
-                                    if *dst == *fid { fmt_text = Some(value.as_str()); break; }
-                                }
-                            }
-                            if fmt_text.is_some() { break; }
-                        }
-                        fmt_text
-                    }).map_or(false, |fmt| {
-                        // Count % specifiers to find the one for arg position (i-1)
-                        let arg_idx = i - 1; // skip format arg itself
-                        let mut spec_idx = 0usize;
-                        let mut chars = fmt.chars().peekable();
-                        while let Some(ch) = chars.next() {
-                            if ch == '%' {
-                                if let Some(&next) = chars.peek() {
-                                    if next == '%' { chars.next(); continue; }
-                                    // Skip flags: - + space # 0
-                                    while chars.peek().map_or(false, |c| "-+ #0".contains(*c)) {
-                                        chars.next();
-                                    }
-                                    // Skip width: digits or * (* consumes an extra arg)
-                                    if chars.peek() == Some(&'*') {
-                                        chars.next();
-                                        // * in width position consumes an argument
-                                        if spec_idx == arg_idx { return false; }
-                                        spec_idx += 1;
-                                    } else {
-                                        while chars.peek().map_or(false, |c| c.is_ascii_digit()) {
-                                            chars.next();
-                                        }
-                                    }
-                                    // Skip precision: . followed by digits or * (* consumes an extra arg)
-                                    if chars.peek() == Some(&'.') {
-                                        chars.next();
-                                        if chars.peek() == Some(&'*') {
-                                            chars.next();
-                                            // * in precision position consumes an argument
-                                            if spec_idx == arg_idx { return false; }
-                                            spec_idx += 1;
-                                        } else {
-                                            while chars.peek().map_or(false, |c| c.is_ascii_digit()) {
-                                                chars.next();
-                                            }
-                                        }
-                                    }
-                                    // Skip length modifiers: h, hh, l, ll, L, z, j, t, q
-                                    while chars.peek().map_or(false, |c| "hlLzjtq".contains(*c)) {
-                                        chars.next();
-                                    }
-                                    // Read the actual conversion letter
-                                    if let Some(spec) = chars.next() {
-                                        if spec_idx == arg_idx {
-                                            return spec == 's';
-                                        }
-                                        spec_idx += 1;
-                                    }
-                                }
-                            }
-                        }
-                        false
-                    });
-                    if fmt_is_pct_s || matches!(arg_ty, Some(LirType::Bool)) {
-                        write!(out, "{} ? \"true\" : \"false\"", v(*a)).unwrap();
-                    } else {
-                        emit_coerced_arg(out, a, ext_params.and_then(|p| p.get(i)), val_types, str_lit_vals, sn);
-                    }
+                if false {
+                    // Placeholder
                 }
                 // Box[Str] alloc: StrLit arg → wrap with gorget_str_from_literal.
                 // Ptr arg (from a Str variable) → deref as *(Str*).
