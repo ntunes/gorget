@@ -1,4 +1,4 @@
-# Test % (remainder) and mod (modulo) operators
+# Test % (remainder) and .mod() (Euclidean modulo)
 
 void main():
     # Remainder: sign matches dividend (left operand)
@@ -11,22 +11,22 @@ void main():
     print(f"{r3}")
     print(f"{r4}")
 
-    # Modulo: sign matches divisor (right operand)
-    int m1 = -7 mod 3
-    int m2 = 7 mod -3
-    int m3 = -7 mod -3
+    # Euclidean modulo via .mod(): sign matches divisor (right operand)
+    int m1 = (-7).mod(3)
+    int m2 = 7.mod(-3)
+    int m3 = (-7).mod(-3)
     print(f"{m1}")
     print(f"{m2}")
     print(f"{m3}")
 
     # Positive operands: remainder == modulo
-    int m4 = 7 mod 3
-    int m5 = 10 mod 4
+    int m4 = 7.mod(3)
+    int m5 = 10.mod(4)
     print(f"{m4}")
     print(f"{m5}")
 
     # Float modulo
-    float fm = -7.0 mod 3.0
+    float fm = (-7.0).mod(3.0)
     print(f"{fm}")
 
     # Compound remainder assignment
@@ -36,6 +36,6 @@ void main():
 
     # Zero cases
     int z1 = 0 % 3
-    int z2 = 0 mod 3
+    int z2 = 0.mod(3)
     print(f"{z1}")
     print(f"{z2}")

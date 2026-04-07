@@ -765,12 +765,6 @@ impl Parser {
                 right: 30,
                 op: InfixOp::Binary(BinaryOp::Rem),
             },
-            Token::Keyword(Keyword::Mod) => InfixBP {
-                left: 29,
-                right: 30,
-                op: InfixOp::Binary(BinaryOp::Mod),
-            },
-
             // as (cast)
             Token::Keyword(Keyword::As) => InfixBP {
                 left: 31,

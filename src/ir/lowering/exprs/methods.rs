@@ -318,6 +318,14 @@ pub(super) fn lower_method_call(
     }
 
     // Primitive .hash() → runtime hash functions
+    // .mod(divisor) → Euclidean modulo (BinOp::Mod)
+    if method_name == "mod" && !args.is_empty() {
+        let recv_type = infer_operand_type_full(ctx, &recv, builder);
+        let divisor = lower_expr(ctx, builder, &args[0].node.value);
+        let dst = builder.bin_op(crate::ir::instructions::BinOp::Mod, recv_type, recv, divisor);
+        return FunctionBuilder::copy(dst);
+    }
+
     if method_name == "hash" {
         let recv_type = infer_operand_type_full(ctx, &recv, builder);
         if recv_type == I64_TYPE || recv_type == I32_TYPE {

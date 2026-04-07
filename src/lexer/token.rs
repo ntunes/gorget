@@ -328,9 +328,6 @@ pub enum Keyword {
     // Compile-time
     Meta,
 
-    // Arithmetic keyword operators
-    Mod,
-
     // Special identifiers
     It,
     Assert,
@@ -449,7 +446,6 @@ impl Keyword {
             Keyword::Bench => "bench",
             Keyword::Snapshot => "snapshot",
             Keyword::Meta => "meta",
-            Keyword::Mod => "mod",
             Keyword::It => "it",
             Keyword::Assert => "assert",
         }
@@ -541,7 +537,7 @@ impl Keyword {
             "bench" => Some(Keyword::Bench),
             "snapshot" => Some(Keyword::Snapshot),
             "meta" => Some(Keyword::Meta),
-            "mod" => Some(Keyword::Mod),
+            // "mod" removed as keyword — now .mod() method on ints
             "it" => Some(Keyword::It),
             "assert" => Some(Keyword::Assert),
             _ => None,

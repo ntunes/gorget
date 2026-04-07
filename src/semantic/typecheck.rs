@@ -3256,6 +3256,8 @@ impl<'a> TypeChecker<'a> {
                 PrimitiveType::Bool
             ) => {
                 if method == "hash" { return Some(self.types.int_id); }
+                // .mod(divisor) → Euclidean modulo, returns same type as receiver
+                if method == "mod" { return Some(receiver_type); }
                 return None;
             }
             _ => return None,
