@@ -56,15 +56,17 @@ void set_terminator(LowerCtx &ctx, Terminator term):
 # ── Type mapping ─────────────────────────────────────────
 
 int prim_name_to_type(String name):
-    if name == "int":
-        return I64_TYPE
-    if name == "float":
-        return F64_TYPE
-    if name == "bool":
-        return BOOL_TYPE
-    if name == "void":
-        return UNIT_TYPE
-    return -1
+    match name:
+        case "int":
+            return I64_TYPE
+        case "float":
+            return F64_TYPE
+        case "bool":
+            return BOOL_TYPE
+        case "void":
+            return UNIT_TYPE
+        else:
+            return -1
 
 String mangle_type_name(String name, Vector[SpannedType] targs, GirModule &gmod):
     # Mangle generic type names: Vector[int] → Vector__int64_t
@@ -83,17 +85,19 @@ String mangle_type_name(String name, Vector[SpannedType] targs, GirModule &gmod)
 String type_to_c_name(SpannedType stype, GirModule &gmod):
     match stype.ty:
         case TPrimitive(name):
-            if name == "int":
-                return "int64_t"
-            if name == "float":
-                return "double"
-            if name == "bool":
-                return "bool"
-            if name == "void":
-                return "void"
-            if name == "String":
-                return "GorgetString"
-            return name
+            match name:
+                case "int":
+                    return "int64_t"
+                case "float":
+                    return "double"
+                case "bool":
+                    return "bool"
+                case "void":
+                    return "void"
+                case "String":
+                    return "GorgetString"
+                else:
+                    return name
         case TNamed(name, targs):
             return mangle_type_name(name, targs, &gmod)
         else:
@@ -106,9 +110,11 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
             int t = prim_name_to_type(name)
             if t >= 0:
                 return t
-            # String primitive
-            if name == "String":
-                return lookup_or_register_named(&gmod, "GorgetString")
+            match name:
+                case "String":
+                    return lookup_or_register_named(&gmod, "GorgetString")
+                else:
+                    pass
         case TNamed(name, targs):
             int t = prim_name_to_type(name)
             if t >= 0:
@@ -128,37 +134,43 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
 # ── Binary operator mapping ──────────────────────────────
 
 int map_binop(String op):
-    if op == "+":
-        return OP_ADD
-    if op == "-":
-        return OP_SUB
-    if op == "*":
-        return OP_MUL
-    if op == "/":
-        return OP_DIV
-    if op == "%":
-        return OP_REM
-    return OP_ADD
+    match op:
+        case "+":
+            return OP_ADD
+        case "-":
+            return OP_SUB
+        case "*":
+            return OP_MUL
+        case "/":
+            return OP_DIV
+        case "%":
+            return OP_REM
+        else:
+            return OP_ADD
 
 bool is_comparison(String op):
-    if op == "==" or op == "!=" or op == "<" or op == "<=" or op == ">" or op == ">=":
-        return true
-    return false
+    match op:
+        case "==" | "!=" | "<" | "<=" | ">" | ">=":
+            return true
+        else:
+            return false
 
 int map_cmpop(String op):
-    if op == "==":
-        return CMP_EQ
-    if op == "!=":
-        return CMP_NE
-    if op == "<":
-        return CMP_LT
-    if op == "<=":
-        return CMP_LE
-    if op == ">":
-        return CMP_GT
-    if op == ">=":
-        return CMP_GE
-    return CMP_EQ
+    match op:
+        case "==":
+            return CMP_EQ
+        case "!=":
+            return CMP_NE
+        case "<":
+            return CMP_LT
+        case "<=":
+            return CMP_LE
+        case ">":
+            return CMP_GT
+        case ">=":
+            return CMP_GE
+        else:
+            return CMP_EQ
 
 # ── Expression lowering ─────────────────────────────────
 
@@ -193,14 +205,17 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
         case EUnaryOp(op, inner_box):
             int inner = lower_expr(&ctx, *inner_box, &gmod)
             int inner_type = ctx.locals.get(inner).unwrap().type_id
-            if op == "-":
-                int dst = add_local(&ctx, inner_type, NO_NAME)
-                emit(&ctx, IUnOp(dst, UNOP_NEG, inner_type, OpCopy(inner)))
-                return dst
-            if op == "not":
-                int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
-                emit(&ctx, IUnOp(dst, UNOP_NOT, BOOL_TYPE, OpCopy(inner)))
-                return dst
+            match op:
+                case "-":
+                    int dst = add_local(&ctx, inner_type, NO_NAME)
+                    emit(&ctx, IUnOp(dst, UNOP_NEG, inner_type, OpCopy(inner)))
+                    return dst
+                case "not":
+                    int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
+                    emit(&ctx, IUnOp(dst, UNOP_NOT, BOOL_TYPE, OpCopy(inner)))
+                    return dst
+                else:
+                    pass
             return inner
         case ECall(callee_box, args, targs):
             SpannedExpr callee = *callee_box
