@@ -411,7 +411,12 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
 // ── Extern Declarations ───────────────────────────────────────────────────
 
 /// Names that are declared as libc builtins — skip if they also appear in module externs.
-const LIBC_BUILTINS: &[&str] = &["printf", "fprintf", "abort", "memset", "memcpy", "exit", "malloc", "free", "realloc", "calloc", "gorget_panic", "gorget_init_args"];
+const LIBC_BUILTINS: &[&str] = &[
+    "printf", "fprintf", "abort", "memset", "memcpy", "exit", "malloc", "free", "realloc", "calloc",
+    "gorget_panic", "gorget_init_args",
+    // Printf-like functions — we call them with (ptr, ...) signature, skip extern declaration
+    "gorget_string_format", "gorget_string_format_alloc", "fprintf_stderr",
+];
 
 fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>) {
     // Also declare libc functions we use directly
@@ -423,6 +428,8 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare ptr @memcpy(ptr, ptr, i64)").unwrap();
     writeln!(out, "declare void @gorget_init_args(i32, ptr)").unwrap();
     writeln!(out, "declare void @gorget_panic(ptr)").unwrap();
+    writeln!(out, "declare %GorgetString @gorget_string_format(ptr, ...)").unwrap();
+    writeln!(out, "declare %GorgetString @gorget_string_format_alloc(ptr, ...)").unwrap();
     writeln!(out).unwrap();
 
     // Collect names of functions defined in this module (skip forward declarations)
@@ -651,8 +658,10 @@ fn emit_function(
                     Inst::CallExtern { name, args, .. } => {
                         let is_drop_guard = name.starts_with("__gorget_drop_if_alive_open__")
                             || name == "__gorget_drop_if_alive_close";
-                        // Printf string extraction
-                        if name == "printf" && !args.is_empty() {
+                        // Printf-like string extraction
+                        let is_printf_like = name == "printf" || name == "gorget_string_format"
+                            || name == "gorget_string_format_alloc" || name == "fprintf_stderr";
+                        if is_printf_like && !args.is_empty() {
                             counter += 1;
                         }
                         // Option/Result tag checks
@@ -674,7 +683,7 @@ fn emit_function(
                             counter += 1;
                         }
                         // General CallExtern path uses ext_uid (trap_counter++)
-                        if !is_drop_guard && !(name == "printf" && !args.is_empty())
+                        if !is_drop_guard && !(is_printf_like && !args.is_empty())
                             && !(is_tag && !args.is_empty()) && !(is_unwrap && !args.is_empty()) {
                             counter += 1; // ext_uid
                         }
@@ -1276,7 +1285,10 @@ fn emit_inst(
                 return;
             }
 
-            if name == "printf" && !args.is_empty() {
+            // Printf-like functions: extract .data from first GorgetString arg, pass rest by value
+            let is_printf_like = name == "printf" || name == "gorget_string_format"
+                || name == "gorget_string_format_alloc" || name == "fprintf_stderr";
+            if is_printf_like && !args.is_empty() {
                 // First arg is ptr to GorgetString — extract .data (field 0)
                 let uid = *trap_counter;
                 *trap_counter += 1;
@@ -1297,10 +1309,24 @@ fn emit_inst(
                 } else {
                     format!("ptr %{str_val}, {}", extra_args.join(", "))
                 };
-                if let Some(d) = dst {
-                    writeln!(out, "  %v{} = call i32 (ptr, ...) @printf({all_args})", d.0).unwrap();
+                // Determine return type and actual function name
+                let (call_name, call_ret) = if name == "printf" {
+                    ("printf", "i32")
                 } else {
-                    writeln!(out, "  call i32 (ptr, ...) @printf({all_args})").unwrap();
+                    // gorget_string_format etc. return GorgetString
+                    (name.as_str(), "%GorgetString")
+                };
+                if let Some(d) = dst {
+                    if call_ret == "%GorgetString" {
+                        // Aggregate return — store via temp alloca
+                        writeln!(out, "  %call.tmp.{} = call {call_ret} (ptr, ...) @{call_name}({all_args})", d.0).unwrap();
+                        writeln!(out, "  %v{} = alloca %GorgetString", d.0).unwrap();
+                        writeln!(out, "  store %GorgetString %call.tmp.{}, ptr %v{}", d.0, d.0).unwrap();
+                    } else {
+                        writeln!(out, "  %v{} = call {call_ret} (ptr, ...) @{call_name}({all_args})", d.0).unwrap();
+                    }
+                } else {
+                    writeln!(out, "  call {call_ret} (ptr, ...) @{call_name}({all_args})").unwrap();
                 }
                 return;
             }
