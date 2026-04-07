@@ -1,3 +1,7 @@
+# CLI driver for GIR lowering comparison testing.
+# Reads a .gg file, parses, resolves, type-checks, lowers to GIR, and prints.
+# Usage: driver <path-to-file.gg>
+
 from parser import parse_source
 from ast import Module
 from scope import ScopeTable

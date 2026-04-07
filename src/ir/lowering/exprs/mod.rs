@@ -2282,8 +2282,11 @@ fn lower_match_stmt_as_expr(
         builder.switch_to(arm_body_bb);
         super::stmts::emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
         let arm_val = lower_expr(ctx, builder, &arm.body);
-        builder.assign(Place::local(result_local), arm_val);
-        builder.jump(merge_bb);
+        // Don't overwrite return/break/continue terminators with jump
+        if !builder.is_terminated() {
+            builder.assign(Place::local(result_local), arm_val);
+            builder.jump(merge_bb);
+        }
 
         if next_test_bb != merge_bb {
             builder.switch_to(next_test_bb);
@@ -2292,8 +2295,10 @@ fn lower_match_stmt_as_expr(
 
     if let Some(else_block) = else_arm {
         let else_val = lower_block_expr(ctx, builder, else_block);
-        builder.assign(Place::local(result_local), else_val);
-        builder.jump(merge_bb);
+        if !builder.is_terminated() {
+            builder.assign(Place::local(result_local), else_val);
+            builder.jump(merge_bb);
+        }
     } else if !concrete_arms.is_empty() {
         // No else arm but we're on the fallthrough block — jump to merge
         builder.jump(merge_bb);

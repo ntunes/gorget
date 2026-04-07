@@ -4,7 +4,7 @@
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str
-from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock
 from scope import ScopeTable
 from types import TypeTable
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator
@@ -107,10 +107,15 @@ String type_to_c_name(SpannedType stype, GirModule &gmod):
 int map_ast_type(SpannedType stype, GirModule &gmod):
     match stype.ty:
         case TPrimitive(name):
-            int t = prim_name_to_type(name)
-            if t >= 0:
-                return t
             match name:
+                case "int":
+                    return I64_TYPE
+                case "float":
+                    return F64_TYPE
+                case "bool":
+                    return BOOL_TYPE
+                case "void":
+                    return UNIT_TYPE
                 case "String":
                     return lookup_or_register_named(&gmod, "GorgetString")
                 else:
@@ -436,6 +441,73 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
         bi += 1
     return GirFunction(fdef.name, param_types, ret_type, ctx.locals, !blocks)
 
+# ── Equip block lowering ─────────────────────────────────
+
+void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
+    # Get the target type name
+    String target_name = type_to_c_name(eqblk.target, &gmod)
+    int target_tid = lookup_or_register_named(&gmod, target_name)
+    int self_ptr_tid = register_ptr(&gmod, target_tid)
+
+    int mi = 0
+    while mi < eqblk.methods.len():
+        FunctionDef mdef = eqblk.methods.get(mi).unwrap()
+        # Mangled name: TargetType__method_name
+        String mangled = target_name + "__" + mdef.name
+
+        bool is_main = false
+        int ret_type = map_ast_type(mdef.return_type, &gmod)
+
+        LowerCtx ctx = LowerCtx([], [], [], 0, {})
+        # bb0
+        Vector[Instruction] init_insts = []
+        ctx.block_insts.push(!init_insts)
+        ctx.block_terms.push(TNone())
+
+        # _0 = return place
+        add_local(&ctx, ret_type, NO_NAME)
+
+        # _1 = self (Ptr to target type)
+        Vector[int] param_types = [self_ptr_tid]
+        int self_lid = add_local(&ctx, self_ptr_tid, NO_NAME)
+
+        # _2.._N = explicit params (skip self — already added above)
+        int pi = 0
+        while pi < mdef.params.len():
+            Param p = mdef.params.get(pi).unwrap()
+            # Skip self parameter
+            match p.param_type.ty:
+                case TSelf():
+                    pi += 1
+                    continue
+                else:
+                    pass
+            int pt = map_ast_type(p.param_type, &gmod)
+            # Bare params of resource types → Ptr
+            if p.ownership == 0 and pt >= PRIM_COUNT:
+                pt = register_ptr(&gmod, pt)
+            if p.ownership == 2:
+                pt = register_type(&gmod, GtMutPtr(pt))
+            param_types.push(pt)
+            int plid = add_local(&ctx, pt, Some(p.param_name.clone()))
+            ctx.named_locals.put(p.param_name, plid)
+            pi += 1
+
+        # Lower body
+        lower_stmts(&ctx, mdef.body, &gmod, is_main)
+
+        # Assemble blocks
+        Vector[BasicBlock] blocks = []
+        int bi = 0
+        while bi < ctx.block_insts.len():
+            Vector[Instruction] insts = ctx.block_insts.get(bi).unwrap()
+            Terminator term = ctx.block_terms.get(bi).unwrap()
+            blocks.push(BasicBlock(insts, term))
+            bi += 1
+
+        gmod.functions.push(GirFunction(mangled, !param_types, ret_type, ctx.locals, !blocks))
+        mi += 1
+
 # ── Module lowering ──────────────────────────────────────
 
 GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
@@ -468,13 +540,15 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
     Dict[String, int] named_types = {}
     GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types)
 
-    # Lower each function
+    # Lower each function and equip method
     int fi = 0
     while fi < m.items.len():
         Item item = m.items.get(fi).unwrap()
         match item:
             case IFunction(fdef):
                 gmod.functions.push(lower_function(fdef, &gmod))
+            case IEquip(eqblk):
+                lower_equip_block(eqblk, &gmod)
             else:
                 pass
         fi = fi + 1
