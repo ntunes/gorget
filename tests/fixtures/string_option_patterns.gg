@@ -1,0 +1,69 @@
+# Option[String] patterns: match, in loops, unwrap_or
+from std.collections import Vector
+
+Option[String] starts_with_a(String s):
+    if s.starts_with("a"):
+        return Some(s)
+    return None
+
+Option[String] clean_name(String input):
+    String trimmed = input.trim()
+    if trimmed.is_empty():
+        return None
+    return Some(trimmed)
+
+void main():
+    # --- Match on Option[String] ---
+    Option[String] m1 = starts_with_a("almond")
+    match m1:
+        case Some(v):
+            print(f"got: {v}")
+        case None:
+            print("none")
+
+    Option[String] m2 = starts_with_a("cherry")
+    match m2:
+        case Some(v):
+            print(f"got: {v}")
+        case None:
+            print("none")
+
+    # --- unwrap_or (Some case) ---
+    Option[String] o1 = starts_with_a("apricot")
+    print(o1.unwrap_or("default"))
+
+    # --- Option[String] in loop with match ---
+    Vector[String] words = Vector[String]()
+    words.push("apple")
+    words.push("banana")
+    words.push("avocado")
+    words.push("cherry")
+
+    int count = 0
+    for w in words:
+        Option[String] result = starts_with_a(w)
+        match result:
+            case Some(v):
+                count = count + 1
+            case None:
+                pass
+    print(f"a-count: {count}")
+
+    # --- clean_name in loop ---
+    Vector[String] data = Vector[String]()
+    data.push("  Alice  ")
+    data.push("")
+    data.push("  Bob  ")
+    data.push("   ")
+    data.push("  Charlie  ")
+
+    int found = 0
+    for d in data:
+        Option[String] cleaned = clean_name(d)
+        match cleaned:
+            case Some(v):
+                print(v)
+                found = found + 1
+            case None:
+                pass
+    print(f"found: {found}")

@@ -1,0 +1,75 @@
+# String conversion patterns: int/float/bool ↔ string, edge cases
+from std.conv import int_to_str, float_to_str, parse_int, parse_float
+
+void main():
+    # --- int_to_str basics ---
+    print(int_to_str(0))
+    print(int_to_str(42))
+    print(int_to_str(-1))
+    print(int_to_str(1000000))
+
+    # --- float_to_str basics ---
+    print(float_to_str(3.14))
+    print(float_to_str(0.0))
+    print(float_to_str(-2.5))
+
+    # --- f-string int/float/bool formatting ---
+    int x = 42
+    float pi = 3.14
+    bool flag = true
+    print(f"int: {x}")
+    print(f"float: {pi}")
+    print(f"bool: {flag}")
+
+    # --- parse_int roundtrip ---
+    String s42 = int_to_str(42)
+    Result[int, String] p42 = parse_int(s42)
+    print(f"roundtrip 42: {p42.unwrap()}")
+
+    String sn = int_to_str(-100)
+    Result[int, String] pn = parse_int(sn)
+    print(f"roundtrip -100: {pn.unwrap()}")
+
+    # --- parse_int edge cases ---
+    Result[int, String] p0 = parse_int("0")
+    print(f"parse 0: {p0.unwrap()}")
+
+    Result[int, String] bad = parse_int("abc")
+    print(f"parse abc: {bad.is_error()}")
+
+    Result[int, String] empty = parse_int("")
+    print(f"parse empty: {empty.is_error()}")
+
+    # --- parse_float roundtrip ---
+    String sf = float_to_str(2.718)
+    Result[float, String] pf = parse_float(sf)
+    print(f"roundtrip 2.718: {pf.is_ok()}")
+
+    Result[float, String] bad_f = parse_float("not_a_float")
+    print(f"parse bad float: {bad_f.is_error()}")
+
+    # --- Conversion in loops ---
+    String nums = ""
+    for i in 0..10:
+        if nums.len() > 0:
+            nums = nums + ","
+        nums = nums + int_to_str(i)
+    print(f"nums: {nums}")
+
+    # --- Parse back from generated string ---
+    auto parts = nums.split(",")
+    int sum = 0
+    for p in parts:
+        sum = sum + parse_int(p).unwrap()
+    print(f"sum: {sum}")
+
+    # --- Bool to string via f-string ---
+    print(f"{true}")
+    print(f"{false}")
+    print(f"flag is {true and false}")
+
+    # --- Large number conversion ---
+    String big = int_to_str(999999999)
+    print(f"big: {big}")
+    print(f"big len: {big.len()}")
+    print(f"big roundtrip: {parse_int(big).unwrap()}")

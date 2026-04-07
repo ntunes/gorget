@@ -1,0 +1,59 @@
+# Closures capturing and transforming strings
+from std.collections import Vector
+
+void main():
+    # --- Closure capturing a string ---
+    String prefix = "hello"
+    auto greet = (String name): f"{prefix} {name}"
+    print(greet("alice"))
+    print(greet("bob"))
+
+    # --- Closure returning transformed string ---
+    auto upper_trim = (String s): s.trim().to_upper()
+    print(upper_trim("  hello  "))
+    print(upper_trim("  world  "))
+
+    # --- Closure with captured prefix ---
+    String title = "Dr."
+    auto add_title = (String name): f"{title} {name}"
+    print(add_title("Smith"))
+    print(add_title("Jones"))
+
+    # --- Vector.map with string-transforming closure ---
+    Vector[String] words = Vector[String]()
+    words.push("hello")
+    words.push("world")
+    words.push("foo")
+
+    Vector[String] shouted = words.map((String s): s.to_upper() + "!")
+    print(",".join(shouted))
+
+    # --- Vector.filter with string predicate closure ---
+    Vector[String] long = words.filter((String s): s.len() > 3)
+    print(f"long: {",".join(long)}")
+
+    # --- Vector.fold building a string ---
+    String joined = words.fold("", (String acc, String s): acc + s)
+    print(f"fold: {joined}")
+
+    # --- Closure applied in loop ---
+    Vector[String] data = Vector[String]()
+    data.push("  Alice  ")
+    data.push("  Bob  ")
+    data.push("  Charlie  ")
+
+    auto normalizer = (String s): s.trim().to_lower()
+    for d in data:
+        print(normalizer(d))
+
+    # --- Chained higher-order ops ---
+    Vector[String] raw = Vector[String]()
+    raw.push("  Apple  ")
+    raw.push("  ")
+    raw.push("  Banana  ")
+    raw.push("")
+    raw.push("  Cherry  ")
+
+    Vector[String] cleaned = raw.map((String s): s.trim()).filter((String s): s.len() > 0)
+    print(f"cleaned: {",".join(cleaned)}")
+

@@ -1,0 +1,83 @@
+# Deep method chains and transformation invariants
+from std.collections import Vector
+
+void main():
+    # --- Deep chain: trim → lower → replace → split → join ---
+    String raw = "  Hello, World, Foo  "
+    String result = ", ".join(raw.trim().to_lower().split(", "))
+    print(result)
+
+    # --- Chain preserves data ---
+    String s = "  HELLO WORLD  "
+    String chained = s.trim().to_lower().replace("hello", "hi")
+    print(chained)
+
+    # --- Idempotence: trim(trim(s)) == trim(s) ---
+    String padded = "   test   "
+    String t1 = padded.trim()
+    String t2 = t1.trim()
+    print(f"trim idem: {t1 == t2}")
+
+    # --- Idempotence: upper(upper(s)) == upper(s) ---
+    String mixed = "Hello World"
+    String u1 = mixed.to_upper()
+    String u2 = u1.to_upper()
+    print(f"upper idem: {u1 == u2}")
+
+    # --- Idempotence: lower(lower(s)) == lower(s) ---
+    String l1 = mixed.to_lower()
+    String l2 = l1.to_lower()
+    print(f"lower idem: {l1 == l2}")
+
+    # --- upper(s).lower() == s.lower() ---
+    String word = "HeLLo"
+    print(f"upper-lower: {word.to_upper().to_lower() == word.to_lower()}")
+
+    # --- replace chain: a->b then b->c ---
+    String abc = "aaa"
+    String step1 = abc.replace("a", "b")
+    String step2 = step1.replace("b", "c")
+    print(f"a-b-c: {step2}")
+
+    # --- split then rejoin is identity ---
+    String csv = "one,two,three"
+    String roundtrip = ",".join(csv.split(","))
+    print(f"split-join roundtrip: {roundtrip == csv}")
+
+    # --- Method chain in loop ---
+    Vector[String] inputs = Vector[String]()
+    inputs.push("  HELLO  ")
+    inputs.push("  world  ")
+    inputs.push("  FOO bar  ")
+
+    for s in inputs:
+        print(s.trim().to_lower().replace(" ", "_"))
+
+    # --- removeprefix + removesuffix chain ---
+    String path = "/api/v1/users/"
+    String cleaned = path.removeprefix("/").removesuffix("/")
+    print(f"path: {cleaned}")
+
+    # --- pad then trim recovers original ---
+    String short = "hi"
+    String padded2 = short.pad_right(10, ' ')
+    String recovered = padded2.trim()
+    print(f"pad-trim: {recovered == short}")
+
+    # --- Chain with length checks ---
+    String data = "   test data   "
+    int orig_len = data.len()
+    int trimmed_len = data.trim().len()
+    int upper_len = data.trim().to_upper().len()
+    print(f"trim shorter: {trimmed_len < orig_len}")
+    print(f"upper same len: {upper_len == trimmed_len}")
+
+    # --- Nested replace ---
+    String html = "<p>Hello</p>"
+    String text = html.replace("<p>", "").replace("</p>", "")
+    print(f"stripped: {text}")
+
+    # --- starts_with on transformed string ---
+    String greeting = "hello world"
+    print(f"upper starts: {greeting.to_upper().starts_with("HELLO")}")
+    print(f"replace contains: {greeting.replace("world", "gorget").contains("gorget")}")

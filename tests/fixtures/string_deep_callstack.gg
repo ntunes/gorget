@@ -1,0 +1,122 @@
+# Strings through deep call stacks: 5+ levels of function calls
+from std.collections import Vector
+
+void main():
+    # --- 5-level string transformation pipeline ---
+    String result = level1("  Hello, World!  ")
+    print(result)
+
+    # --- Deep recursive string processing ---
+    String tagged = wrap_tags("content", 5)
+    print(tagged)
+
+    # --- Chain of function calls building strings ---
+    String report = build_report("Test Run", 3, 1)
+    print(report)
+
+    # --- String passed through validator chain ---
+    String input = "  alice@example.com  "
+    Result[String, String] validated = validate_email_chain(input)
+    match validated:
+        case Ok(v):
+            print(f"valid: {v}")
+        case Error(e):
+            print(f"error: {e}")
+
+    Result[String, String] bad = validate_email_chain("  nope  ")
+    match bad:
+        case Ok(v):
+            print(f"valid: {v}")
+        case Error(e):
+            print(f"error: {e}")
+
+    # --- Recursive string builder (Sierpinski triangle) ---
+    String tri = sierpinski(3)
+    print(tri)
+
+# --- 5-level transformation ---
+String level1(String s):
+    return level2(s.trim())
+
+String level2(String s):
+    return level3(s.to_lower())
+
+String level3(String s):
+    return level4(s.replace(",", ";"))
+
+String level4(String s):
+    return level5(s.replace("!", "."))
+
+String level5(String s):
+    return f"[{s}]"
+
+# --- Recursive tag wrapping ---
+String wrap_tags(String s, int depth):
+    if depth <= 0:
+        return s
+    String inner = wrap_tags(s, depth - 1)
+    return f"<{depth}>{inner}</{depth}>"
+
+# --- Multi-function report builder ---
+String build_report(String title, int passed, int failed):
+    String header = format_header(title)
+    String body = format_body(passed, failed)
+    String footer = format_footer(passed + failed)
+    return header + "\n" + body + "\n" + footer
+
+String format_header(String title):
+    String separator = "=".repeat(title.len() + 4)
+    return separator + "\n" + f"| {title} |" + "\n" + separator
+
+String format_body(int passed, int failed):
+    return format_line("passed", passed) + "\n" + format_line("failed", failed)
+
+String format_line(String label, int count):
+    return f"  {label}: {count}"
+
+String format_footer(int total):
+    return f"  total: {total}"
+
+# --- Email validation chain ---
+Result[String, String] validate_email_chain(String input):
+    return step1_trim(input)
+
+Result[String, String] step1_trim(String s):
+    String trimmed = s.trim()
+    if trimmed.is_empty():
+        return Error("empty")
+    return step2_check_at(trimmed)
+
+Result[String, String] step2_check_at(String s):
+    if not s.contains("@"):
+        return Error("no @")
+    return step3_check_domain(s)
+
+Result[String, String] step3_check_domain(String s):
+    Vector[String] parts = s.split("@")
+    if parts.len() != 2:
+        return Error("bad format")
+    return step4_normalize(parts[0], parts[1])
+
+Result[String, String] step4_normalize(String user, String domain):
+    String normalized = user.to_lower() + "@" + domain.to_lower()
+    return Ok(normalized)
+
+# --- Sierpinski string art ---
+String sierpinski(int n):
+    if n == 0:
+        return "*"
+    String prev = sierpinski(n - 1)
+    Vector[String] lines = prev.split("\n")
+    int width = lines[0].len()
+    String pad = " ".repeat(width / 2 + 1)
+    String result = ""
+    # Top: each line centered
+    for line in lines:
+        if result.len() > 0:
+            result = result + "\n"
+        result = result + pad + line
+    # Bottom: two copies side by side
+    for line in lines:
+        result = result + "\n" + line + " " + line
+    return result

@@ -16086,3 +16086,240 @@ bad: default (blank after trim)
 ok: 2, err: 2",
     );
 }
+
+#[test]
+fn string_option_patterns() {
+    run_gg(
+        "string_option_patterns.gg",
+        "\
+got: almond
+none
+apricot
+a-count: 2
+Alice
+Bob
+Charlie
+found: 3",
+    );
+}
+
+#[test]
+fn string_nested_collections() {
+    run_gg(
+        "string_nested_collections.gg",
+        "\
+rows: 2
+[0][1]: b
+[1][2]: f
+flat: a,b,c,d,e,f
+groups: 2
+a: apple,avocado
+b: banana,blueberry
+a names: alice,anna,alex
+c names: charlie,carol
+parsed rows: 3
+parsed[0]: one,two,three
+parsed[1]: four,five
+parsed[2][0]: six
+total cells: 6",
+    );
+}
+
+#[test]
+fn string_struct_complex() {
+    run_gg(
+        "string_struct_complex.gg",
+        "\
+Alice: alice@example.com
+Alice (alice@example.com, age 30)
+Alice (alice@example.com, age 30)
+Bob (bob@test.org, age 25)
+Charlie (charlie@mail.net, age 35)
+found: Bob
+dave: true
+example: Alice
+Dave (dave@new.io, age 28)
+host=localhost port=8080 timeout=30
+names: Alice, Bob, Charlie",
+    );
+}
+
+#[test]
+fn string_closures_transform() {
+    run_gg(
+        "string_closures_transform.gg",
+        "\
+hello alice
+hello bob
+HELLO
+WORLD
+Dr. Smith
+Dr. Jones
+HELLO!,WORLD!,FOO!
+long: hello,world
+fold: helloworldfoo
+alice
+bob
+charlie
+cleaned: Apple,Banana,Cherry",
+    );
+}
+
+#[test]
+fn string_immutability() {
+    run_gg(
+        "string_immutability.gg",
+        "\
+original: Hello World
+upper: HELLO WORLD
+lower: hello world
+unchanged: true
+base: foo bar foo
+replaced: baz bar baz
+unchanged: true
+padded: [  hello  ]
+trimmed: [hello]
+unchanged: true
+csv after split: a,b,c
+unchanged: true
+full: abcdefgh
+sub: cde
+unchanged: true
+unit: ab
+repeated: ababab
+unchanged: true
+start: [  Hello World  ]
+step1: Hello World
+step2: hello world
+step3: hello gorget
+s1 ok: true
+s2 ok: true
+s3 ok: true
+a: hello
+b:  world
+c: hello world
+a ok: true
+b ok: true
+template: value: {}
+survived: true",
+    );
+}
+
+#[test]
+fn string_chained_methods() {
+    run_gg(
+        "string_chained_methods.gg",
+        "\
+hello, world, foo
+hi world
+trim idem: true
+upper idem: true
+lower idem: true
+upper-lower: true
+a-b-c: ccc
+split-join roundtrip: true
+hello
+world
+foo_bar
+path: api/v1/users
+pad-trim: true
+trim shorter: true
+upper same len: true
+stripped: Hello
+upper starts: true
+replace contains: true",
+    );
+}
+
+#[test]
+fn string_parsing_patterns() {
+    run_gg(
+        "string_parsing_patterns.gg",
+        "\
+host: localhost
+port: 8080
+debug: true
+name: My App
+keys: 4
+rows: 4
+header: name,age,city
+row1: alice,30,paris
+[2][0]: bob
+[3][2]: berlin
+dir: /home/user/documents
+base: file.txt
+ext: txt
+stem: file
+ext none: []
+stem: Makefile
+name: alice
+city: paris
+tok: [count]
+tok: [+]
+tok: [1]
+tok: [*]
+tok: [value]
+errors: 1
+infos: 2
+ERROR: connection lost",
+    );
+}
+
+#[test]
+fn string_deep_callstack() {
+    run_gg(
+        "string_deep_callstack.gg",
+        "\
+[hello; world.]
+<5><4><3><2><1>content</1></2></3></4></5>
+============
+| Test Run |
+============
+  passed: 3
+  failed: 1
+  total: 4
+valid: alice@example.com
+error: no @
+      *
+     * *
+    *  *
+   * * * *
+   *    *
+  * *   * *
+ *  *  *  *
+* * * * * * * *",
+    );
+}
+
+#[test]
+fn string_conversions() {
+    run_gg(
+        "string_conversions.gg",
+        "\
+0
+42
+-1
+1000000
+3.14
+0
+-2.5
+int: 42
+float: 3.140000
+bool: true
+roundtrip 42: 42
+roundtrip -100: -100
+parse 0: 0
+parse abc: true
+parse empty: true
+roundtrip 2.718: true
+parse bad float: true
+nums: 0,1,2,3,4,5,6,7,8,9
+sum: 45
+true
+false
+flag is false
+big: 999999999
+big len: 9
+big roundtrip: 999999999",
+    );
+}

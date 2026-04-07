@@ -1,0 +1,74 @@
+# Verify string operations return new values without modifying originals
+void main():
+    # --- to_upper / to_lower don't modify original ---
+    String s = "Hello World"
+    String u = s.to_upper()
+    String l = s.to_lower()
+    print(f"original: {s}")
+    print(f"upper: {u}")
+    print(f"lower: {l}")
+    print(f"unchanged: {s == "Hello World"}")
+
+    # --- replace doesn't modify original ---
+    String base = "foo bar foo"
+    String replaced = base.replace("foo", "baz")
+    print(f"base: {base}")
+    print(f"replaced: {replaced}")
+    print(f"unchanged: {base == "foo bar foo"}")
+
+    # --- trim doesn't modify original ---
+    String padded = "  hello  "
+    String trimmed = padded.trim()
+    print(f"padded: [{padded}]")
+    print(f"trimmed: [{trimmed}]")
+    print(f"unchanged: {padded == "  hello  "}")
+
+    # --- split doesn't modify original ---
+    String csv = "a,b,c"
+    auto parts = csv.split(",")
+    print(f"csv after split: {csv}")
+    print(f"unchanged: {csv == "a,b,c"}")
+
+    # --- substring doesn't modify original ---
+    String full = "abcdefgh"
+    String sub = full.substring(2, 5)
+    print(f"full: {full}")
+    print(f"sub: {sub}")
+    print(f"unchanged: {full == "abcdefgh"}")
+
+    # --- repeat doesn't modify original ---
+    String unit = "ab"
+    String repeated = unit.repeat(3)
+    print(f"unit: {unit}")
+    print(f"repeated: {repeated}")
+    print(f"unchanged: {unit == "ab"}")
+
+    # --- Chained ops don't modify intermediate ---
+    String start = "  Hello World  "
+    String step1 = start.trim()
+    String step2 = step1.to_lower()
+    String step3 = step2.replace("world", "gorget")
+    print(f"start: [{start}]")
+    print(f"step1: {step1}")
+    print(f"step2: {step2}")
+    print(f"step3: {step3}")
+    print(f"s1 ok: {start == "  Hello World  "}")
+    print(f"s2 ok: {step1 == "Hello World"}")
+    print(f"s3 ok: {step2 == "hello world"}")
+
+    # --- Concat doesn't modify operands ---
+    String a = "hello"
+    String b = " world"
+    String c = a + b
+    print(f"a: {a}")
+    print(f"b: {b}")
+    print(f"c: {c}")
+    print(f"a ok: {a == "hello"}")
+    print(f"b ok: {b == " world"}")
+
+    # --- In a loop: verify original survives iteration ---
+    String template = "value: {}"
+    for i in 0..5:
+        String filled = template.replace("{}", f"{i}")
+    print(f"template: {template}")
+    print(f"survived: {template == "value: {}"}")

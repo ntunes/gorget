@@ -1,0 +1,85 @@
+# Strings in nested collections: Vector[Vector[String]], Dict[String, Vector[String]]
+from std.collections import Vector, Dict
+
+void main():
+    # --- Vector[Vector[String]] — matrix of strings ---
+    Vector[Vector[String]] matrix = Vector[Vector[String]]()
+    Vector[String] row1 = Vector[String]()
+    row1.push("a")
+    row1.push("b")
+    row1.push("c")
+    Vector[String] row2 = Vector[String]()
+    row2.push("d")
+    row2.push("e")
+    row2.push("f")
+    matrix.push(row1)
+    matrix.push(row2)
+    print(f"rows: {matrix.len()}")
+    print(f"[0][1]: {matrix[0][1]}")
+    print(f"[1][2]: {matrix[1][2]}")
+
+    # --- Flatten nested vector ---
+    String flat = ""
+    for row in matrix:
+        for cell in row:
+            if flat.len() > 0:
+                flat = flat + ","
+            flat = flat + cell
+    print(f"flat: {flat}")
+
+    # --- Dict[String, Vector[String]] — grouping ---
+    Dict[String, Vector[String]] groups = Dict[String, Vector[String]]()
+    Vector[String] fruits = Vector[String]()
+    fruits.push("apple")
+    fruits.push("avocado")
+    groups.set("a", fruits)
+    Vector[String] berries = Vector[String]()
+    berries.push("banana")
+    berries.push("blueberry")
+    groups.set("b", berries)
+
+    print(f"groups: {groups.len()}")
+    Vector[String] a_group = groups.get("a").unwrap()
+    print(f"a: {",".join(a_group)}")
+    Vector[String] b_group = groups.get("b").unwrap()
+    print(f"b: {",".join(b_group)}")
+
+    # --- Build groups from data ---
+    # Collect a-names and c-names separately (Dict get returns clone, not ref)
+    Vector[String] names = Vector[String]()
+    names.push("alice")
+    names.push("bob")
+    names.push("anna")
+    names.push("charlie")
+    names.push("alex")
+    names.push("carol")
+
+    Vector[String] a_names = Vector[String]()
+    Vector[String] c_names = Vector[String]()
+    for name in names:
+        if name.starts_with("a"):
+            a_names.push(name)
+        if name.starts_with("c"):
+            c_names.push(name)
+    print(f"a names: {",".join(a_names)}")
+    print(f"c names: {",".join(c_names)}")
+
+    # --- Vector of split results ---
+    Vector[String] lines = Vector[String]()
+    lines.push("one,two,three")
+    lines.push("four,five")
+    lines.push("six")
+
+    Vector[Vector[String]] parsed = Vector[Vector[String]]()
+    for line in lines:
+        parsed.push(line.split(","))
+    print(f"parsed rows: {parsed.len()}")
+    print(f"parsed[0]: {",".join(parsed[0])}")
+    print(f"parsed[1]: {",".join(parsed[1])}")
+    print(f"parsed[2][0]: {parsed[2][0]}")
+
+    # --- Total element count across nested vectors ---
+    int total = 0
+    for row in parsed:
+        total = total + row.len()
+    print(f"total cells: {total}")

@@ -1,0 +1,154 @@
+# String parsing patterns: key=value, CSV records, path parsing
+from std.collections import Vector, Dict
+
+void main():
+    # --- Key=value parsing ---
+    String config = "host=localhost\nport=8080\ndebug=true\nname=My App"
+    Dict[String, String] kv = parse_kv(config)
+    print(f"host: {kv.get("host").unwrap()}")
+    print(f"port: {kv.get("port").unwrap()}")
+    print(f"debug: {kv.get("debug").unwrap()}")
+    print(f"name: {kv.get("name").unwrap()}")
+    print(f"keys: {kv.len()}")
+
+    # --- CSV record parsing ---
+    String csv = "name,age,city\nalice,30,paris\nbob,25,london\ncharlie,35,berlin"
+    Vector[Vector[String]] table = parse_csv(csv)
+    print(f"rows: {table.len()}")
+    print(f"header: {",".join(table[0])}")
+    print(f"row1: {",".join(table[1])}")
+    # Access specific cell
+    print(f"[2][0]: {table[2][0]}")
+    print(f"[3][2]: {table[3][2]}")
+
+    # --- Path parsing ---
+    String path = "/home/user/documents/file.txt"
+    print(f"dir: {dirname(path)}")
+    print(f"base: {basename(path)}")
+    print(f"ext: {extension(path)}")
+    print(f"stem: {stem(path)}")
+
+    String no_ext = "/home/user/Makefile"
+    print(f"ext none: [{extension(no_ext)}]")
+    print(f"stem: {stem(no_ext)}")
+
+    # --- URL-like query string parsing ---
+    String query = "name=alice&age=30&city=paris&tag=a&tag=b"
+    Dict[String, String] params = parse_query(query)
+    print(f"name: {params.get("name").unwrap()}")
+    print(f"city: {params.get("city").unwrap()}")
+
+    # --- Simple tokenizer ---
+    String expr = "count + 1 * value"
+    Vector[String] tokens = tokenize(expr)
+    for t in tokens:
+        print(f"tok: [{t}]")
+
+    # --- Line-oriented parsing with prefix detection ---
+    String log = "INFO: server started\nWARN: slow query\nERROR: connection lost\nINFO: request ok"
+    Vector[String] errors = filter_lines(log, "ERROR:")
+    Vector[String] infos = filter_lines(log, "INFO:")
+    print(f"errors: {errors.len()}")
+    print(f"infos: {infos.len()}")
+    print(errors[0])
+
+Dict[String, String] parse_kv(String input):
+    Dict[String, String] result = Dict[String, String]()
+    Vector[String] lines = input.split("\n")
+    for line in lines:
+        Vector[String] parts = line.split("=")
+        if parts.len() >= 2:
+            String key = parts[0]
+            # Rejoin value in case it contains '='
+            String value = parts[1]
+            for i in 2..parts.len():
+                value = value + "=" + parts[i]
+            result.set(key, value)
+    return result
+
+Vector[Vector[String]] parse_csv(String input):
+    Vector[Vector[String]] rows = Vector[Vector[String]]()
+    Vector[String] lines = input.split("\n")
+    for line in lines:
+        if not line.trim().is_empty():
+            rows.push(line.split(","))
+    return rows
+
+String dirname(String path):
+    Option[int] idx = path.index_of("/")
+    if idx.is_none():
+        return "."
+    # Find last /
+    int last = 0
+    int pos = 0
+    while pos < path.len():
+        if path[pos] == "/":
+            last = pos
+        pos = pos + 1
+    if last == 0:
+        return "/"
+    return path.substring(0, last)
+
+String basename(String path):
+    int last = 0
+    int pos = 0
+    while pos < path.len():
+        if path[pos] == "/":
+            last = pos
+        pos = pos + 1
+    return path.substring(last + 1, path.len())
+
+String extension(String path):
+    String base = basename(path)
+    int last_dot = -1
+    int pos = 0
+    while pos < base.len():
+        if base[pos] == ".":
+            last_dot = pos
+        pos = pos + 1
+    if last_dot < 0:
+        return ""
+    return base.substring(last_dot + 1, base.len())
+
+String stem(String path):
+    String base = basename(path)
+    int last_dot = -1
+    int pos = 0
+    while pos < base.len():
+        if base[pos] == ".":
+            last_dot = pos
+        pos = pos + 1
+    if last_dot < 0:
+        return base
+    return base.substring(0, last_dot)
+
+Dict[String, String] parse_query(String query):
+    Dict[String, String] result = Dict[String, String]()
+    Vector[String] pairs = query.split("&")
+    for pair in pairs:
+        Vector[String] kv = pair.split("=")
+        if kv.len() == 2:
+            result.set(kv[0], kv[1])
+    return result
+
+Vector[String] tokenize(String input):
+    Vector[String] tokens = Vector[String]()
+    String current = ""
+    for ch in input:
+        if ch == " ":
+            if current.len() > 0:
+                tokens.push(current)
+                current = ""
+        else:
+            current = current + ch
+    if current.len() > 0:
+        tokens.push(current)
+    return tokens
+
+Vector[String] filter_lines(String input, String prefix):
+    Vector[String] result = Vector[String]()
+    Vector[String] lines = input.split("\n")
+    for line in lines:
+        if line.starts_with(prefix):
+            result.push(line)
+    return result

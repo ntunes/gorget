@@ -1,0 +1,87 @@
+# Complex struct + string interactions: construction, field access, loops, nesting
+from std.collections import Vector
+
+struct User:
+    String name
+    String email
+    int age
+
+struct Config:
+    String key
+    String value
+
+void main():
+    # --- Basic construction and field access ---
+    User alice = User("Alice", "alice@example.com", 30)
+    print(f"{alice.name}: {alice.email}")
+
+    # --- Struct fields in f-strings ---
+    print(format_user(alice))
+
+    # --- Vector of structs with string fields ---
+    Vector[User] users = Vector[User]()
+    users.push(User("Alice", "alice@example.com", 30))
+    users.push(User("Bob", "bob@test.org", 25))
+    users.push(User("Charlie", "charlie@mail.net", 35))
+
+    for u in users:
+        print(format_user(u))
+
+    # --- Search struct vector by string field ---
+    Option[User] found = find_user(users, "Bob")
+    match found:
+        case Some(u):
+            print(f"found: {u.name}")
+        case None:
+            print("not found")
+
+    Option[User] missing = find_user(users, "Dave")
+    print(f"dave: {missing.is_none()}")
+
+    # --- String field operations ---
+    for u in users:
+        if u.email.contains("example"):
+            print(f"example: {u.name}")
+
+    # --- Build struct from split string ---
+    String csv = "Dave,dave@new.io,28"
+    Vector[String] parts = csv.split(",")
+    int age = 0
+    for ch in parts[2]:
+        age = age * 10 + (ch.byte_at(0) as int - 48)
+    User dave = User(parts[0], parts[1], age)
+    print(format_user(dave))
+
+    # --- Config key-value pairs ---
+    Vector[Config] configs = Vector[Config]()
+    configs.push(Config("host", "localhost"))
+    configs.push(Config("port", "8080"))
+    configs.push(Config("debug", "true"))
+
+    String host = get_config(configs, "host", "unknown")
+    String port = get_config(configs, "port", "3000")
+    String missing_key = get_config(configs, "timeout", "30")
+    print(f"host={host} port={port} timeout={missing_key}")
+
+    # --- Struct field string concatenation ---
+    String all_names = ""
+    for u in users:
+        if all_names.len() > 0:
+            all_names = all_names + ", "
+        all_names = all_names + u.name
+    print(f"names: {all_names}")
+
+String format_user(User u):
+    return f"{u.name} ({u.email}, age {u.age})"
+
+Option[User] find_user(Vector[User] users, String name):
+    for u in users:
+        if u.name == name:
+            return Some(u)
+    return None
+
+String get_config(Vector[Config] configs, String key, String default_val):
+    for c in configs:
+        if c.key == key:
+            return c.value
+    return default_val
