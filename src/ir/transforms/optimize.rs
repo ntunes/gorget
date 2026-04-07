@@ -2091,7 +2091,11 @@ fn eliminate_unused_locals(func: &mut Function) {
 
     // Remap ref_locals — stale IDs would alias unrelated locals after remapping.
     let new_ref_locals = func.ref_locals.iter()
-        .filter(|id| (id.0 as usize) < remap.len() && referenced[id.0 as usize])
+        .filter(|id| {
+            debug_assert!((id.0 as usize) < remap.len(),
+                "ref_local {:?} has no remap entry (locals len = {})", id, remap.len());
+            (id.0 as usize) < remap.len() && referenced[id.0 as usize]
+        })
         .map(|id| LocalId(remap[id.0 as usize]))
         .collect();
     func.ref_locals = new_ref_locals;
