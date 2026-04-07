@@ -18,7 +18,6 @@
 
 ## Medium
 
-- **C codegen: non-resource struct slot typed as I64 through &self borrow**: `FaceDrawRange draw_range = gpu.face_draws.get(draw_idx).unwrap()` through `&self` generates an `int64_t` slot for the variable instead of the struct type. The VarDecl GIR type IS correct (FaceDrawRange, not Ptr) and `map_gir_type_with_structs` maps it to `Struct(sid)`. But the C backend emits `int64_t __sN` for the slot, then `memcpy(&__sN, src, sizeof(FaceDrawRange))` — buffer overflow. Same issue affects `Option[int]` through `&self`. Root cause: the LIR slot gets I64 despite the GIR local having correct struct type — something between GIR local type and LIR `local_to_slot` creation loses the struct type. NOT VarDecl Ptr propagation (verified correct types). NOT dead local elimination (LoadRef/StoreRef now handled). Suspect: `map_gir_type_with_structs` or struct registry lookup failure at LIR creation. Repro: gorget-arena `render_world_culled` in backend.gg. No workaround for non-resource structs. [added: 2026-04-07]
 
 - **Borrow checker: early return doesn't reset move state**: INVESTIGATED — the divergent-branch filtering in `merge_branch_states()` already works correctly. Moves in branches that return/throw/break are excluded from the join-point merge. Added regression test `move_in_divergent_branch_ok`. The self-host `scope.gg` defensive clones may have been needed before the StringView removal. Review if they can now be removed. [updated: 2026-04-06]
 
