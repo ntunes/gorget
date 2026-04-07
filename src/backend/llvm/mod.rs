@@ -165,7 +165,12 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType
         Inst::IConst { ty, .. } | Inst::FConst { ty, .. } => Some(ty.clone()),
         Inst::BoolConst { .. } => Some(LirType::Bool),
         Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. } => Some(LirType::Ptr),
-        Inst::StrLit { .. } => Some(LirType::Ptr), // materialized as alloca returning ptr
+        Inst::StrLit { .. } => {
+            // StrLit returns ptr to GorgetString alloca — find GorgetString struct id
+            let gs_id = module.structs.iter().position(|s| s.name == "GorgetString")
+                .map(|i| StructId(i as u32));
+            Some(gs_id.map_or(LirType::Ptr, LirType::PtrTo))
+        }
 
         Inst::Add { ty, .. } | Inst::Sub { ty, .. } | Inst::Mul { ty, .. }
         | Inst::Div { ty, .. } | Inst::Rem { ty, .. } | Inst::Mod { ty, .. }
@@ -180,7 +185,15 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType
         Inst::IntCast { to, .. } | Inst::FloatCast { to, .. }
         | Inst::IntToFloat { to, .. } | Inst::FloatToInt { to, .. }
         | Inst::Bitcast { to, .. } => Some(to.clone()),
-        Inst::PtrCast { .. } => Some(LirType::Ptr),
+        Inst::PtrCast { value, .. } => {
+            // Preserve PtrTo type info through pointer casts
+            let src_ty = _val_types.get(value.0 as usize).and_then(|t| t.as_ref());
+            if let Some(LirType::PtrTo(sid)) = src_ty {
+                Some(LirType::PtrTo(*sid))
+            } else {
+                Some(LirType::Ptr)
+            }
+        }
 
         Inst::Load { ty, .. } => Some(ty.clone()),
         Inst::FieldPtr { .. } | Inst::ElemPtr { .. } => Some(LirType::Ptr),
