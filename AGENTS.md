@@ -16,8 +16,14 @@ Gorget is a statically typed, Python-like language with Rust-inspired ownership 
 ```bash
 cargo build              # build the compiler
 cargo test --lib         # unit tests (currently ~970)
-cargo test --test integration -- --test-threads=4  # integration tests (currently ~843, parallel with serial_test groups for fixture conflicts)
+cargo test --test integration -- --test-threads=4  # integration tests (currently ~928, parallel with serial_test groups for fixture conflicts)
 cargo test               # all tests
+```
+
+**Always pipe integration tests through `tee`** — they take ~3 minutes and failure diffs can be long. Save output so you don't have to re-run to find which test failed. Use a random filename to avoid collisions with parallel agents:
+
+```bash
+cargo test --test integration -- --test-threads=4 2>&1 | tee /tmp/integration-$RANDOM.log
 ```
 
 ## Documentation
