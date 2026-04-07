@@ -3,24 +3,8 @@
 use super::*;
 
 impl<'a> FuncLowering<'a> {
-    /// Ensure local_to_slot covers the given local, extending dynamically if needed.
-    /// GIR locals can exceed the initial allocation from drop elaboration or
-    /// loop-body local creation in flow-sensitive passes.
-    pub(super) fn ensure_local(&mut self, local: crate::ir::types::LocalId) {
-        while (local.0 as usize) >= self.local_to_slot.len() {
-            let idx = self.local_to_slot.len();
-            let ty = if idx < self.gir_func.locals.len() {
-                super::map_gir_type_with_structs(
-                    &self.gir_func.locals[idx].type_id, self.gir_types, Some(self.struct_reg))
-            } else { LirType::I64 };
-            let hint = self.gir_func.locals.get(idx).and_then(|l| l.name_hint.clone());
-            self.local_to_slot.push(self.lir_func.add_slot(ty, hint));
-        }
-    }
-
     /// Get the address of a GIR place.
     pub(super) fn lower_place_addr(&mut self, place: &Place, bb: BlockId) -> ValueId {
-        self.ensure_local(place.local);
         let slot = self.local_to_slot[place.local.0 as usize];
         let local_gir_type = if (place.local.0 as usize) < self.gir_func.locals.len() {
             self.gir_func.locals[place.local.0 as usize].type_id
@@ -279,7 +263,6 @@ impl<'a> FuncLowering<'a> {
     }
 
     pub(super) fn store_to_local(&mut self, local: ir::types::LocalId, value: ValueId, bb: BlockId) {
-        self.ensure_local(local);
         let slot = self.local_to_slot[local.0 as usize];
         self.lir_func
             .block_mut(bb)

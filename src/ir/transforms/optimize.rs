@@ -2197,7 +2197,14 @@ fn mark_instruction_locals(inst: &Instruction, referenced: &mut [bool]) {
             mark_operand(count, referenced);
             mark_operand(allocator, referenced);
         }
-                Instruction::LoadRef { .. } | Instruction::StoreRef { .. } => {}
+        Instruction::LoadRef { dst, src } => {
+            mark_local(dst.0, referenced);
+            mark_place(src, referenced);
+        }
+        Instruction::StoreRef { dst, value } => {
+            mark_place(dst, referenced);
+            mark_operand(value, referenced);
+        }
         Instruction::Dealloc { ptr, allocator } => {
             mark_operand(ptr, referenced);
             mark_operand(allocator, referenced);
@@ -2341,7 +2348,14 @@ fn remap_instruction_locals(inst: &mut Instruction, remap: &[u32]) {
             remap_operand(count, remap);
             remap_operand(allocator, remap);
         }
-                Instruction::LoadRef { .. } | Instruction::StoreRef { .. } => {}
+        Instruction::LoadRef { dst, src } => {
+            remap_local(dst, remap);
+            remap_place(src, remap);
+        }
+        Instruction::StoreRef { dst, value } => {
+            remap_place(dst, remap);
+            remap_operand(value, remap);
+        }
         Instruction::Dealloc { ptr, allocator } => {
             remap_operand(ptr, remap);
             remap_operand(allocator, remap);

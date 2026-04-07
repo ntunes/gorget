@@ -56,7 +56,6 @@ impl<'a> FuncLowering<'a> {
     pub(super) fn lower_drop(&mut self, place: &Place, bb: BlockId) {
         use crate::ir::types::DropStrategy;
 
-        self.ensure_local(place.local);
         let local_idx = place.local.0 as usize;
 
         // Resolve the actual type at the end of the projection chain.

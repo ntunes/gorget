@@ -108,47 +108,7 @@ impl FunctionBuilder {
     }
 
     /// Finalize and return the completed Function.
-    pub fn build(mut self) -> Function {
-        // Extend locals if any instructions reference locals beyond the current
-        // list. This can happen when flow-sensitive passes (loop borrow propagation,
-        // drop elaboration) create locals during lowering.
-        let num = self.locals.len() as u32;
-        let mut max_local = num;
-        for block in &self.blocks {
-            for inst in &block.instructions {
-                use crate::ir::instructions::Instruction;
-                // Check common instruction patterns that carry Place/LocalId
-                match inst {
-                    Instruction::Assign { dst, value, .. } => {
-                        if dst.local.0 >= max_local { max_local = dst.local.0 + 1; }
-                        if let crate::ir::instructions::Operand::Copy(p) | crate::ir::instructions::Operand::Move(p) = value {
-                            if p.local.0 >= max_local { max_local = p.local.0 + 1; }
-                        }
-                    }
-                    Instruction::Drop { place: p } | Instruction::DropIfAlive { place: p } | Instruction::MoveZero { place: p } => {
-                        if p.local.0 >= max_local { max_local = p.local.0 + 1; }
-                    }
-                    Instruction::Call { dst, args, .. } | Instruction::CallExtern { dst, args, .. } => {
-                        if let Some(d) = dst { if d.0 >= max_local { max_local = d.0 + 1; } }
-                        for a in args {
-                            if let crate::ir::instructions::Operand::Copy(p) | crate::ir::instructions::Operand::Move(p) = a {
-                                if p.local.0 >= max_local { max_local = p.local.0 + 1; }
-                            }
-                        }
-                    }
-                    Instruction::Borrow { dst, place, .. } | Instruction::BorrowMut { dst, place, .. } => {
-                        if dst.0 >= max_local { max_local = dst.0 + 1; }
-                        if place.local.0 >= max_local { max_local = place.local.0 + 1; }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        if max_local > num {
-            while (self.locals.len() as u32) < max_local {
-                self.locals.push(Local { type_id: crate::ir::types::I64_TYPE, name_hint: None });
-            }
-        }
+    pub fn build(self) -> Function {
         Function {
             name: self.name,
             params: self.params,

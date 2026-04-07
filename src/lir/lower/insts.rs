@@ -30,7 +30,6 @@ impl<'a> FuncLowering<'a> {
                 if is_move && dst.projections.is_empty() {
                     // Move: emit SlotStore with is_move flag so C backend can use
                     // memcpy instead of clone for resource types (strings, etc.).
-                    self.ensure_local(dst.local);
                     let slot = self.local_to_slot[dst.local.0 as usize];
                     self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
                         slot, value: val, is_move: true,
@@ -1855,7 +1854,6 @@ impl<'a> FuncLowering<'a> {
     pub(super) fn lower_place_load(&mut self, place: &Place, bb: BlockId) -> ValueId {
         if place.projections.is_empty() {
             // Simple local — SlotLoad.
-            self.ensure_local(place.local);
             let slot = self.local_to_slot[place.local.0 as usize];
             let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
             if slot_ty.is_aggregate() {
