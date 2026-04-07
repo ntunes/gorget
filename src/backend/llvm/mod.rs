@@ -452,16 +452,27 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         if defined_fns.contains(ext.name.as_str()) {
             continue;
         }
-        let ret = llvm_type_full(&ext.return_type, snames);
         let params: Vec<String> = ext.params.iter()
             .map(|p| llvm_type_full(p, snames))
             .collect();
         let variadic = if ext.is_variadic {
-            if params.is_empty() { "...".to_string() } else { format!(", ...") }
+            if params.is_empty() { "...".to_string() } else { ", ...".to_string() }
         } else {
             String::new()
         };
-        writeln!(out, "declare {ret} @{}({}{})", ext.name, params.join(", "), variadic).unwrap();
+        if ext.return_type.is_aggregate() {
+            // Aggregate returns use sret convention — void return + sret first param
+            let ret_ty = llvm_type_full(&ext.return_type, snames);
+            let sret_params = if params.is_empty() {
+                format!("ptr sret({ret_ty}){variadic}")
+            } else {
+                format!("ptr sret({ret_ty}), {}{variadic}", params.join(", "))
+            };
+            writeln!(out, "declare void @{}({sret_params})", ext.name).unwrap();
+        } else {
+            let ret = llvm_type_full(&ext.return_type, snames);
+            writeln!(out, "declare {ret} @{}({}{})", ext.name, params.join(", "), variadic).unwrap();
+        }
     }
 
     // Auto-declare any CallExtern targets not yet declared
@@ -477,8 +488,11 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                     seen.insert(name.clone());
                     // Infer signature: all args as ptr, return void or i64
                     let params: Vec<&str> = args.iter().map(|_| "ptr").collect();
-                    let ret = if dst.is_some() { "i64" } else { "void" };
-                    writeln!(out, "declare {ret} @{name}({})", params.join(", ")).unwrap();
+                    if dst.is_some() {
+                        writeln!(out, "declare i64 @{name}({})", params.join(", ")).unwrap();
+                    } else {
+                        writeln!(out, "declare void @{name}({})", params.join(", ")).unwrap();
+                    }
                 }
             }
         }
