@@ -130,8 +130,14 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
         case TInferred():
             return I64_TYPE
         case TTuple(elems):
-            # For now, tuples map to i64
-            return I64_TYPE
+            # Mangle tuple: Tuple__T1__T2__...
+            String tuple_name = "Tuple"
+            int ti = 0
+            while ti < elems.len():
+                SpannedType elem = elems.get(ti).unwrap()
+                tuple_name = tuple_name + "__" + type_to_c_name(elem, &gmod)
+                ti += 1
+            return lookup_or_register_named(&gmod, tuple_name)
         else:
             pass
     return I64_TYPE
@@ -503,9 +509,17 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         # _0 = return place
         add_local(&ctx, ret_type, NO_NAME)
 
-        # _1 = self (Ptr to target type)
-        Vector[int] param_types = [self_ptr_tid]
-        int self_lid = add_local(&ctx, self_ptr_tid, NO_NAME)
+        # _1 = self — determine pointer type from ownership
+        # self (bare) → *T, &self → *mut T, !self → *mut T
+        int self_tid = self_ptr_tid
+        int self_ownership = 0
+        if mdef.params.len() > 0:
+            Param first_p = mdef.params.get(0).unwrap()
+            self_ownership = first_p.ownership
+        if self_ownership == 2 or self_ownership == 1:
+            self_tid = register_type(&gmod, GtMutPtr(target_tid))
+        Vector[int] param_types = [self_tid]
+        int self_lid = add_local(&ctx, self_tid, NO_NAME)
 
         # _2.._N = explicit params (skip self — already added above)
         int pi = 0
