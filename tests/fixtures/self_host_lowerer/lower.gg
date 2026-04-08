@@ -592,6 +592,34 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         gmod.functions.push(GirFunction(mangled, !param_types, ret_type, ctx.locals, !blocks))
         mi += 1
 
+# ── Simple expression type inference ─────────────────────
+
+int infer_expr_type(SpannedExpr sexpr):
+    match sexpr.expr:
+        case EIntLiteral(_):
+            return I64_TYPE
+        case EFloatLiteral(_):
+            return F64_TYPE
+        case EBoolLiteral(_):
+            return BOOL_TYPE
+        case EBinaryOp(_, op, _):
+            match op:
+                case "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or":
+                    return BOOL_TYPE
+                else:
+                    return I64_TYPE
+        case EUnaryOp(op, _):
+            match op:
+                case "not":
+                    return BOOL_TYPE
+                else:
+                    return I64_TYPE
+        case ENoneLiteral():
+            return UNIT_TYPE
+        else:
+            pass
+    return I64_TYPE
+
 # ── Closure scanning ─────────────────────────────────────
 
 int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
@@ -612,17 +640,19 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
                 param_types.push(pt)
                 pi += 1
 
-            # Infer return type from body (simplified: check last stmt)
+            # Infer return type from body
             int ret_type = I64_TYPE
             if body.len() > 0:
                 Stmt last_stmt = body.get(body.len() - 1).unwrap()
                 match last_stmt:
                     case SReturn(opt_expr):
-                        # Has explicit return — keep I64 for now
-                        pass
+                        match opt_expr:
+                            case Some(rexpr):
+                                ret_type = infer_expr_type(rexpr)
+                            case None:
+                                ret_type = UNIT_TYPE
                     case SExpr(expr):
-                        # Expression body — the value IS the return
-                        pass
+                        ret_type = infer_expr_type(expr)
                     else:
                         ret_type = UNIT_TYPE
 
