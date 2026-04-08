@@ -443,12 +443,10 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
             String type_c_name = type_to_c_name(p.param_type, &gmod)
             if is_resource_type_name(type_c_name, &gmod):
                 pt = register_ptr(&gmod, pt)
-        # Mutable borrow (&) params → MutPtr
-        if p.ownership == 2:
-            if pt < PRIM_COUNT:
-                pt = register_type(&gmod, GtMutPtr(pt))
-            else:
-                pt = register_type(&gmod, GtMutPtr(pt))
+        # Mutable borrow (&) and move (!) params → MutPtr
+        # OWN_MUTABLE=1, OWN_MOVE=2 in self-host parser
+        if p.ownership == 1 or p.ownership == 2:
+            pt = register_type(&gmod, GtMutPtr(pt))
         param_types.push(pt)
         int plid = add_local(&ctx, pt, Some(p.param_name.clone()))
         ctx.named_locals.put(p.param_name, plid)
@@ -516,7 +514,8 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         if mdef.params.len() > 0:
             Param first_p = mdef.params.get(0).unwrap()
             self_ownership = first_p.ownership
-        if self_ownership == 2 or self_ownership == 1:
+        # OWN_MUTABLE=1 (&self), OWN_MOVE=2 (!self) → *mut T
+        if self_ownership == 1 or self_ownership == 2:
             self_tid = register_type(&gmod, GtMutPtr(target_tid))
         Vector[int] param_types = [self_tid]
         int self_lid = add_local(&ctx, self_tid, NO_NAME)
@@ -538,7 +537,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
                 String type_c_name = type_to_c_name(p.param_type, &gmod)
                 if is_resource_type_name(type_c_name, &gmod):
                     pt = register_ptr(&gmod, pt)
-            if p.ownership == 2:
+            if p.ownership == 1 or p.ownership == 2:
                 pt = register_type(&gmod, GtMutPtr(pt))
             param_types.push(pt)
             int plid = add_local(&ctx, pt, Some(p.param_name.clone()))
