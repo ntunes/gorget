@@ -2241,7 +2241,7 @@ P2 Ok(Vec[int]): leaked=false
 P3 for String: leaked=true
 P4 for Vec[int]: leaked=true
 P5 for char: leaked=false
-P6 vec reassign: leaked=true
+P6 vec reassign: leaked=false
 done");
 }
 

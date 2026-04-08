@@ -95,10 +95,10 @@ void main():
     print(f"P5 for char: leaked={p5}")
 
     # P6: collection reassignment — old value not dropped
-    b = mem_live()
     i = 0
     Vector[int] v = []
     v.push(1)
+    b = mem_live()
     while i < 100:
         Vector[int] new_v = []
         new_v.push(i)

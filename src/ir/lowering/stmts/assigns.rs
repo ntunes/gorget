@@ -92,17 +92,11 @@ pub(super) fn lower_assign(
                 }
                 let type_id = builder.local_type(local_id); // re-read after possible CoW upgrade
                 // Check if old value needs dropping before reassignment.
-                let needs_drop = {
-                    use crate::ir::types::GirType;
-                    if let Some(GirType::Named(type_name)) = ctx.type_registry.get(type_id) {
-                        let type_name = type_name.clone();
-                        if ctx.type_registry.is_collection_type_name(&type_name) {
-                            ctx.drops.is_moved(local_id)
-                        } else {
-                            ctx.type_registry.needs_drop(type_id)
-                        }
-                    } else { false }
-                };
+                // All droppable types — including collections — drop the old value
+                // before the new one is assigned. The RHS is fully computed (and
+                // cloned for named locals) before the Drop fires, so even
+                // self-referential RHS like `v = v.slice(...)` is safe.
+                let needs_drop = ctx.type_registry.needs_drop(type_id);
                 // Compute new value (now operating on owned copy if CoW upgraded)
                 let prev_expected = ctx.func_state.expected_type;
                 ctx.func_state.expected_type = Some(type_id);
