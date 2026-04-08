@@ -15,8 +15,6 @@ fn make_self_param(
     start: Span,
     name_span: Span,
     ownership: Ownership,
-    is_live: bool,
-    live_group: Option<String>,
 ) -> Spanned<Param> {
     Spanned::new(
         Param {
@@ -24,8 +22,6 @@ fn make_self_param(
             ownership,
             name: Spanned::new("self".to_string(), name_span),
             default: None,
-            is_live,
-            live_group,
             is_meta_op: false,
         },
         start.merge(name_span),
@@ -1169,12 +1165,6 @@ impl Parser {
             None
         };
 
-        let where_clause = if self.check_keyword(Keyword::Where) {
-            Some(self.parse_where_clause()?)
-        } else {
-            None
-        };
-
         let items = if self.check(&Token::Colon) {
             self.advance();
             self.expect(&Token::Newline)?;
@@ -1249,7 +1239,6 @@ impl Parser {
             trait_,
             type_: self_type,
             via_field,
-            where_clause,
             items,
             span: start.merge(end),
         })
@@ -1647,12 +1636,7 @@ impl Parser {
             None
         };
 
-        // Parse where clause
-        let where_clause = if self.check_keyword(Keyword::Where) {
-            Some(self.parse_where_clause()?)
-        } else {
-            None
-        };
+
 
         // Parse body
         let body = if is_extern {
@@ -1690,7 +1674,6 @@ impl Parser {
             generic_params,
             params,
             throws,
-            where_clause,
             body,
             doc_comment,
             span: start.merge(end),
@@ -1736,44 +1719,30 @@ impl Parser {
                     ownership: Ownership::Borrow,
                     name,
                     default: None,
-                    is_live: false,
-                    live_group: None,
                     is_meta_op: true,
                 },
                 start.merge(end),
             ));
         }
 
-        let is_live = self.match_keyword(Keyword::Live);
-
-        // Parse optional borrow group name: `live(a)` → Some("a"), bare `live` → None
-        let live_group = if is_live && self.check(&Token::LParen) {
-            self.advance(); // skip (
-            let group_name = self.expect_identifier()?;
-            self.expect(&Token::RParen)?;
-            Some(group_name.node)
-        } else {
-            None
-        };
-
         // Handle self parameter: self, &self, !self
         if self.check_keyword(Keyword::SelfLower) {
             let name_tok = self.advance();
-            return Ok(make_self_param(start, name_tok.span, Ownership::Borrow, is_live, live_group));
+            return Ok(make_self_param(start, name_tok.span, Ownership::Borrow));
         }
         if self.check(&Token::Ampersand)
             && matches!(self.peek_ahead(1), Token::Keyword(Keyword::SelfLower))
         {
             self.advance(); // skip &
             let name_tok = self.advance(); // self
-            return Ok(make_self_param(start, name_tok.span, Ownership::MutableBorrow, is_live, live_group));
+            return Ok(make_self_param(start, name_tok.span, Ownership::MutableBorrow));
         }
         if self.check(&Token::Bang)
             && matches!(self.peek_ahead(1), Token::Keyword(Keyword::SelfLower))
         {
             self.advance(); // skip !
             let name_tok = self.advance(); // self
-            return Ok(make_self_param(start, name_tok.span, Ownership::Move, is_live, live_group));
+            return Ok(make_self_param(start, name_tok.span, Ownership::Move));
         }
 
         // Type-first: type [&|!]name
@@ -1796,8 +1765,6 @@ impl Parser {
                 ownership,
                 name,
                 default,
-                is_live,
-                live_group,
                 is_meta_op: false,
             },
             start.merge(end),
@@ -1814,14 +1781,7 @@ impl Parser {
         while !self.check(&Token::RBracket) && !self.at_end() {
             let param_start = self.peek_span();
 
-            if self.match_keyword(Keyword::Live) {
-                let name = self.expect_identifier()?;
-                let end = self.previous_span();
-                params.push(Spanned::new(
-                    GenericParam::Lifetime(name),
-                    param_start.merge(end),
-                ));
-            } else if self.match_keyword(Keyword::Const) {
+            if self.match_keyword(Keyword::Const) {
                 let type_ = self.parse_type()?;
                 let name = self.expect_identifier()?;
                 let end = self.previous_span();
@@ -1910,50 +1870,6 @@ impl Parser {
         doc_comment
     }
 
-    pub fn parse_where_clause(&mut self) -> Result<Spanned<WhereClause>, ParseError> {
-        let start = self.peek_span();
-        self.expect_keyword(Keyword::Where)?;
-
-        let mut bounds = Vec::new();
-        loop {
-            let bound_start = self.peek_span();
-            let type_name = self.expect_identifier()?;
-
-            if self.match_keyword(Keyword::Outlives) {
-                // `where a outlives b` — borrow group ordering constraint
-                let shorter = self.expect_identifier()?;
-                let bound_end = self.previous_span();
-                bounds.push(Spanned::new(
-                    WhereBound::Outlives {
-                        longer: type_name,
-                        shorter,
-                    },
-                    bound_start.merge(bound_end),
-                ));
-            } else {
-                // Old `where T is Trait` syntax is no longer valid.
-                // Trait bounds are now written inline in the generic parameter list:
-                //   `[Printable T]` instead of `[T] where T is Printable`
-                //   `[A & B T]` instead of `[T] where T is A + B`
-                return Err(self.error_at(
-                    bound_start.merge(self.peek_span()),
-                    &format!(
-                        "trait bounds in `where` clauses are no longer supported; \
-                         write them inline instead: use `[Trait T]` or `[A & B T]` \
-                         instead of `where {} is Trait`",
-                        type_name.node
-                    ),
-                ));
-            }
-
-            if !self.match_token(&Token::Comma) {
-                break;
-            }
-        }
-
-        let end = self.previous_span();
-        Ok(Spanned::new(WhereClause { bounds }, start.merge(end)))
-    }
 
     // ── Test Definition ────────────────────────────────────────
 

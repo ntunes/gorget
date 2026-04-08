@@ -5827,26 +5827,6 @@ struct lifetime ok",
 
 
 #[test]
-fn lifetime_groups() {
-    run_gg(
-        "lifetime_groups.gg",
-        "\
-hello
-world
-done
-",
-    );
-}
-
-#[test]
-fn lifetime_groups_error() {
-    check_gg_fails(
-        "lifetime_groups_error.gg",
-        "must outlive",
-    );
-}
-
-#[test]
 fn lifetime_method() {
     run_gg(
         "lifetime_method.gg",
@@ -7695,7 +7675,6 @@ fn format_generic_params_canonical(gp: &Option<Spanned<GenericParams>>) -> Strin
                 .iter()
                 .map(|p| match &p.node {
                     GenericParam::Type { name, .. } => name.node.clone(),
-                    GenericParam::Lifetime(name) => name.node.clone(),
                     GenericParam::Const { name, .. } => name.node.clone(),
                 })
                 .collect();

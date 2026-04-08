@@ -52,12 +52,6 @@ pub struct FunctionInfo {
     /// Param indices whose data flows to the return value (lifetime inference).
     /// Computed by borrow checker Pass 5a.
     pub return_borrows_from: Vec<usize>,
-    /// Whether each param has the `live` keyword annotation.
-    pub param_is_live: Vec<bool>,
-    /// Named borrow group for each param: `live(a)` → `Some("a")`, bare `live` → `None`.
-    pub param_live_groups: Vec<Option<String>>,
-    /// `where X outlives Y` bounds: `(longer_group, shorter_group)` pairs.
-    pub outlives_bounds: Vec<(String, String)>,
     /// Whether the function has a body (Block or Expression, not Declaration/Extern).
     pub has_body: bool,
     /// True if the function has a body and body analysis proved return value is static
@@ -325,12 +319,6 @@ fn collect_item(
 
                     let generic_param_names = extract_generic_param_names(&f.generic_params);
                     let trait_bounds = extract_generic_bounds(&f.generic_params);
-                    let outlives_bounds = extract_outlives_bounds(&f.where_clause);
-                    let param_is_live: Vec<bool> =
-                        f.params.iter().map(|p| p.node.is_live).collect();
-                    let param_live_groups: Vec<Option<String>> =
-                        f.params.iter().map(|p| p.node.live_group.clone()).collect();
-
                     ctx.function_info.insert(
                         def_id,
                         FunctionInfo {
@@ -347,9 +335,6 @@ fn collect_item(
                             generic_param_names,
                             trait_bounds,
                             return_borrows_from: Vec::new(),
-                            param_is_live,
-                            param_live_groups,
-                            outlives_bounds,
                             has_body: matches!(f.body, crate::parser::ast::FunctionBody::Block(_) | crate::parser::ast::FunctionBody::Expression(_)),
                             return_origin_is_static: false,
                         },
@@ -523,12 +508,6 @@ fn collect_item(
                         validate_default_param_ordering(&f.params, errors);
                         let generic_param_names = extract_generic_param_names(&f.generic_params);
                         let trait_bounds = extract_generic_bounds(&f.generic_params);
-                        let outlives_bounds = extract_outlives_bounds(&f.where_clause);
-                        let param_is_live: Vec<bool> =
-                            f.params.iter().map(|p| p.node.is_live).collect();
-                        let param_live_groups: Vec<Option<String>> =
-                            f.params.iter().map(|p| p.node.live_group.clone()).collect();
-
                         ctx.function_info.insert(
                             def_id,
                             FunctionInfo {
@@ -540,14 +519,11 @@ fn collect_item(
                                 param_defaults,
                                 throws: f.throws.is_some(),
                                 is_async: f.qualifiers.is_async,
-                            is_blocking: f.qualifiers.is_blocking,
+                                is_blocking: f.qualifiers.is_blocking,
                                 scope_id: scopes.current_scope(),
                                 generic_param_names,
                                 trait_bounds,
                                 return_borrows_from: Vec::new(),
-                                param_is_live,
-                                param_live_groups,
-                                outlives_bounds,
                                 has_body: matches!(f.body, crate::parser::ast::FunctionBody::Block(_) | crate::parser::ast::FunctionBody::Expression(_)),
                                 return_origin_is_static: false,
                             },
@@ -607,9 +583,6 @@ fn collect_item(
                             generic_param_names,
                             trait_bounds: Vec::new(),
                             return_borrows_from: Vec::new(),
-                            param_is_live: vec![false; param_count],
-                            param_live_groups: vec![None; param_count],
-                            outlives_bounds: Vec::new(),
                             has_body: false,
                             return_origin_is_static: true,
                         });
@@ -838,7 +811,6 @@ fn resolve_function(
                         errors.push(e);
                     }
                 }
-                GenericParam::Lifetime(_) => { /* lifetimes deferred */ }
                 GenericParam::Const { name, .. } => {
                     if let Err(e) =
                         scopes.define(name.node.clone(), DefKind::Const, name.span)
@@ -1751,25 +1723,6 @@ fn extract_generic_bounds(
                     Some((name.node.clone(), traits))
                 }
                 _ => None,
-            })
-            .collect(),
-        None => Vec::new(),
-    }
-}
-
-/// Extract `where X outlives Y` bounds as `(longer, shorter)` pairs.
-fn extract_outlives_bounds(
-    where_clause: &Option<Spanned<WhereClause>>,
-) -> Vec<(String, String)> {
-    match where_clause {
-        Some(wc) => wc
-            .node
-            .bounds
-            .iter()
-            .filter_map(|wb| match &wb.node {
-                WhereBound::Outlives { longer, shorter } => {
-                    Some((longer.node.clone(), shorter.node.clone()))
-                }
             })
             .collect(),
         None => Vec::new(),

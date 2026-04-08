@@ -1,7 +1,7 @@
 # Positive test: reassignment then re-borrow works fine.
 # After `s` is reassigned, creating a new borrow from `s` is valid.
 
-String get_view(live String s): s
+String get_view(String s): s
 
 void main():
     String s = "hello"

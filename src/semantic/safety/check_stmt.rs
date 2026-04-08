@@ -1273,7 +1273,6 @@ impl<'a> BorrowChecker<'a> {
         self.var_origins.clear();
         self.invalidated_origins.clear();
         self.current_param_def_ids.clear();
-        self.active_outlives.clear();
         self.current_function_is_async = func.qualifiers.is_async;
         self.current_function_throws = func.throws.is_some();
         self.await_invalidated.clear();

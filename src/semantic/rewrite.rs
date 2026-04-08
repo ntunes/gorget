@@ -494,7 +494,6 @@ mod tests {
                     generic_params: None,
                     params: vec![],
                     throws: None,
-                    where_clause: None,
                     body: FunctionBody::Block(Block {
                         stmts: vec![Spanned::new(Stmt::Expr(call_expr), dummy_span())],
                         span: dummy_span(),
@@ -570,7 +569,6 @@ mod tests {
                     generic_params: None,
                     params: vec![],
                     throws: None,
-                    where_clause: None,
                     body: FunctionBody::Block(Block {
                         stmts: vec![Spanned::new(Stmt::Expr(call_expr), dummy_span())],
                         span: dummy_span(),
@@ -653,7 +651,6 @@ mod tests {
                     generic_params: None,
                     params: vec![],
                     throws: None,
-                    where_clause: None,
                     body: FunctionBody::Block(Block {
                         stmts: vec![Spanned::new(Stmt::Expr(call_expr), dummy_span())],
                         span: dummy_span(),

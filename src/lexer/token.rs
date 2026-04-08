@@ -290,8 +290,6 @@ pub enum Keyword {
     // Generics/type constraints
     Where,
     Extends,
-    Live,
-    Outlives,
 
     // Concurrency
     Async,
@@ -426,8 +424,6 @@ impl Keyword {
             Keyword::Via => "via",
             Keyword::Where => "where",
             Keyword::Extends => "extends",
-            Keyword::Live => "live",
-            Keyword::Outlives => "outlives",
             Keyword::Async => "async",
             Keyword::Await => "await",
             Keyword::Spawn => "spawn",
@@ -517,8 +513,6 @@ impl Keyword {
             "via" => Some(Keyword::Via),
             "where" => Some(Keyword::Where),
             "extends" => Some(Keyword::Extends),
-            "live" => Some(Keyword::Live),
-            "outlives" => Some(Keyword::Outlives),
             "async" => Some(Keyword::Async),
             "await" => Some(Keyword::Await),
             "spawn" => Some(Keyword::Spawn),

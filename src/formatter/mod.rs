@@ -508,9 +508,6 @@ impl Formatter {
             self.emitter.write(" throws ");
             self.format_type(throws);
         }
-        if let Some(ref wc) = f.where_clause {
-            self.format_where_clause(wc);
-        }
         match &f.body {
             FunctionBody::Block(block) => {
                 self.emitter.write(":");
@@ -666,9 +663,6 @@ impl Formatter {
             self.emitter.write(" via ");
             self.emitter.write(&via.node);
         }
-        if let Some(ref wc) = e.where_clause {
-            self.format_where_clause(wc);
-        }
         self.emitter.write(":");
         self.emitter.newline();
         self.emitter.indent();
@@ -813,31 +807,11 @@ impl Formatter {
                 }
                 self.emitter.write(&name.node);
             }
-            GenericParam::Lifetime(name) => {
-                self.emitter.write("live ");
-                self.emitter.write(&name.node);
-            }
             GenericParam::Const { type_, name } => {
                 self.emitter.write("const ");
                 self.format_type(type_);
                 self.emitter.write(" ");
                 self.emitter.write(&name.node);
-            }
-        }
-    }
-
-    fn format_where_clause(&mut self, wc: &Spanned<WhereClause>) {
-        self.emitter.write(" where ");
-        for (i, bound) in wc.node.bounds.iter().enumerate() {
-            if i > 0 {
-                self.emitter.write(", ");
-            }
-            match &bound.node {
-                WhereBound::Outlives { longer, shorter } => {
-                    self.emitter.write(&longer.node);
-                    self.emitter.write(" outlives ");
-                    self.emitter.write(&shorter.node);
-                }
             }
         }
     }
@@ -1004,15 +978,6 @@ impl Formatter {
     }
 
     fn format_param(&mut self, param: &Param) {
-        if param.is_live {
-            if let Some(ref group) = param.live_group {
-                self.emitter.write("live(");
-                self.emitter.write(group);
-                self.emitter.write(") ");
-            } else {
-                self.emitter.write("live ");
-            }
-        }
         // self parameter (same in both modes)
         if matches!(param.type_.node, Type::SelfType) {
             match param.ownership {

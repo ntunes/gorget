@@ -502,18 +502,6 @@ void main():
     }
 
     #[test]
-    fn live_param_explicit() {
-        let source = "\
-String first(live String a, String b): a
-";
-        let errors = check(source);
-        assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::DanglingReturn { .. })),
-            "unexpected DanglingReturn with live annotation: {:?}", errors
-        );
-    }
-
-    #[test]
     fn return_str_from_expression_body_local() {
         // With str→String unification, returning a local owned string transfers
         // ownership safely — no DanglingReturn.
@@ -708,91 +696,6 @@ void main():
             has_error(&errors, |k| matches!(k, SemanticErrorKind::DoubleMove { name, .. }
                 if name == "s")),
             "expected DoubleMove for s (moved into struct, then consume), got: {:?}", errors
-        );
-    }
-
-    // ── Phase 5: Named borrow groups + outlives ──
-
-    #[test]
-    fn named_groups_basic_ok() {
-        let source = "\
-String pick(live(a) String x, live(b) String y) where a outlives b:
-    return x
-
-void main():
-    String s1 = \"hello\"
-    String s2 = \"world\"
-    String r = pick(s1, s2)
-    print(r)
-";
-        let errors = check(source);
-        assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::OutlivesViolation { .. })),
-            "expected no outlives violation, got: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn named_groups_shorter_moved_ok() {
-        // Moving the "shorter" group's source is fine — only "longer" must outlive "shorter"
-        let source = "\
-String pick(live(a) String x, live(b) String y) where a outlives b:
-    return x
-
-void main():
-    String s1 = \"hello\"
-    String s2 = \"world\"
-    String r = pick(s1, s2)
-    String moved = !s2
-    print(r)
-";
-        let errors = check(source);
-        assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::OutlivesViolation { .. })),
-            "expected no outlives violation when shorter group moved, got: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn named_groups_outlives_violation() {
-        // Moving the "longer" group's source while the "shorter" group's source is alive
-        let source = "\
-String pick(live(a) String x, live(b) String y) where a outlives b:
-    return x
-
-void main():
-    String s1 = \"hello\" + \"\"
-    String s2 = \"world\" + \"\"
-    String r = pick(s1, s2)
-    String moved = !s1
-    print(s2)
-";
-        let errors = check(source);
-        assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::OutlivesViolation { longer_group, .. }
-                if longer_group == "a")),
-            "expected OutlivesViolation for group a, got: {:?}", errors
-        );
-    }
-
-    #[test]
-    fn bare_live_still_works() {
-        // Bare `live` (no group name) still works for backwards compat
-        let source = "\
-String view(live String s):
-    return s
-
-void main():
-    String s = \"hello\"
-    String v = view(s)
-    print(v)
-";
-        let errors = check(source);
-        assert!(
-            !has_error(&errors, |k| matches!(k, SemanticErrorKind::OutlivesViolation { .. }
-                | SemanticErrorKind::UseAfterSourceMoved { .. }
-                | SemanticErrorKind::DanglingReturn { .. })),
-            "expected no errors for bare live, got: {:?}", errors
         );
     }
 
@@ -1551,7 +1454,7 @@ void main():
         // User-defined functions always return owned strings (IR clones on return),
         // so the value is independent — no dangling.
         let source = "\
-String identity(live String x):
+String identity(String x):
     return x
 
 void main():

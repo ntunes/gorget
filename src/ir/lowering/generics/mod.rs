@@ -241,7 +241,7 @@ impl GenericCollector {
         if let Some(ref gp) = func.generic_params {
             let names: Vec<String> = gp.node.params.iter().map(|p| match &p.node {
                 GenericParam::Type { name, .. } => name.node.clone(),
-                GenericParam::Lifetime(s) | GenericParam::Const { name: s, .. } => s.node.clone(),
+                GenericParam::Const { name: s, .. } => s.node.clone(),
             }).collect();
             self.current_generic_params = Some(names);
         }
@@ -1141,7 +1141,6 @@ fn build_type_substitutions(
         for (param, arg) in params.node.params.iter().zip(type_args.iter()) {
             let name = match &param.node {
                 GenericParam::Type { name: s, .. } => s.node.clone(),
-                GenericParam::Lifetime(s) => s.node.clone(),
                 GenericParam::Const { name, .. } => name.node.clone(),
             };
             subs.push((name, arg.node.clone()));

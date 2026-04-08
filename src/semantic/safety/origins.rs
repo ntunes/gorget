@@ -1,4 +1,4 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
@@ -8,7 +8,7 @@ use crate::semantic::ids::DefId;
 use crate::semantic::scope::DefKind;
 use crate::semantic::types::{self as types};
 
-use super::{ActiveOutlives, BorrowChecker, BorrowOrigin, BranchState, FallibleState, VarState};
+use super::{BorrowChecker, BorrowOrigin, BranchState, FallibleState, VarState};
 
 impl<'a> BorrowChecker<'a> {
     pub(super) fn mark_live(&mut self, def_id: DefId) {
@@ -449,95 +449,6 @@ impl<'a> BorrowChecker<'a> {
         self.compute_expr_origin(receiver)
     }
 
-    /// Record outlives constraints for a call to a function with `where a outlives b` bounds.
-    /// Maps group names to actual argument origins via `param_live_groups`.
-    pub(super) fn record_call_outlives(
-        &mut self,
-        callee: &Spanned<Expr>,
-        args: &[Spanned<CallArg>],
-        call_span: Span,
-    ) {
-        let callee_def_id = match self.resolve_callee_def_id(callee) {
-            Some(id) => id,
-            None => return,
-        };
-        let info = match self.function_info.get(&callee_def_id) {
-            Some(i) => i,
-            None => return,
-        };
-        if info.outlives_bounds.is_empty() {
-            return;
-        }
-
-        // Build group name → argument origin mapping
-        let mut group_origins: FxHashMap<String, Vec<DefId>> = FxHashMap::default();
-        for (i, group) in info.param_live_groups.iter().enumerate() {
-            if let Some(group_name) = group {
-                if let Some(arg) = args.get(i) {
-                    let origin = self.compute_expr_origin(&arg.node.value);
-                    group_origins
-                        .entry(group_name.clone())
-                        .or_default()
-                        .extend(origin.source_def_ids());
-                }
-            }
-        }
-
-        // Create ActiveOutlives entries for each bound
-        for (longer, shorter) in &info.outlives_bounds {
-            let longer_ids = group_origins.get(longer).cloned().unwrap_or_default();
-            let shorter_ids = group_origins.get(shorter).cloned().unwrap_or_default();
-            if !longer_ids.is_empty() || !shorter_ids.is_empty() {
-                self.active_outlives.push(ActiveOutlives {
-                    longer_group: longer.clone(),
-                    shorter_group: shorter.clone(),
-                    longer_source_def_ids: longer_ids,
-                    shorter_source_def_ids: shorter_ids,
-                    _call_span: call_span,
-                });
-            }
-        }
-    }
-
-    /// Check outlives constraints when a variable is moved.
-    /// For `where a outlives b`: if the moved DefId is a source for group `a` ("longer"),
-    /// and any source for group `b` ("shorter") is not yet invalidated, that's a violation.
-    pub(super) fn check_outlives_on_move(&mut self, moved_def_id: DefId, span: Span) {
-        let mut violations = Vec::new();
-
-        for constraint in &self.active_outlives {
-            // Check if the moved variable is a source for the "longer" group
-            if constraint.longer_source_def_ids.contains(&moved_def_id) {
-                // Check if any "shorter" group source is still alive
-                for &shorter_id in &constraint.shorter_source_def_ids {
-                    if !self.invalidated_origins.contains(&shorter_id) {
-                        let longer_name = self.scopes.get_def(moved_def_id).name.clone();
-                        let shorter_name = self.scopes.get_def(shorter_id).name.clone();
-                        violations.push((
-                            constraint.longer_group.clone(),
-                            constraint.shorter_group.clone(),
-                            longer_name,
-                            shorter_name,
-                            span,
-                        ));
-                    }
-                }
-            }
-        }
-
-        for (longer_group, shorter_group, longer_source, shorter_source, span) in violations {
-            self.error(
-                SemanticErrorKind::OutlivesViolation {
-                    longer_group,
-                    shorter_group,
-                    longer_source,
-                    shorter_source,
-                },
-                span,
-            );
-        }
-    }
-
     /// Move a variable: mark as Moved. Error if already moved or inside a loop.
     pub(super) fn check_move(&mut self, def_id: DefId, span: Span) {
         let name = self.scopes.get_def(def_id).name.clone();
@@ -569,10 +480,6 @@ impl<'a> BorrowChecker<'a> {
         // Invalidate this def for lifetime tracking — any reference-typed variable
         // whose origin chain includes this DefId becomes dangling.
         self.invalidated_origins.insert(def_id);
-
-        // Phase 5: Check outlives constraints — if we're moving a "longer" group's source,
-        // check that all "shorter" group sources are already invalidated.
-        self.check_outlives_on_move(def_id, span);
 
         // B6: If the moved variable is a closure that had mutable captures,
         // release those capture locks — the closure is no longer live.

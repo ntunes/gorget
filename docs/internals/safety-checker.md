@@ -85,14 +85,11 @@ return value's lifetime. Stored in `FunctionInfo.return_borrows_from`.
 
 **Algorithm** (`compute_function_return_borrows` in `return_borrows.rs`):
 
-1. **Explicit `live` annotations** — If params are marked `live`, use those
-   indices directly.
-
-2. **Body analysis** — Build a `LocalAliasMap` (local name -> set of param
+1. **Body analysis** — Build a `LocalAliasMap` (local name -> set of param
    indices it may alias), then trace return expressions backward through
    assignments and calls to find which params contribute.
 
-3. **Elision fallback** — If body analysis yields nothing:
+2. **Elision fallback** — If body analysis yields nothing:
    - Single ref-type param -> that param
    - First param named `self` -> self
    - No ref-type params -> mark `return_origin_is_static` (fresh data)
@@ -221,7 +218,6 @@ The safety checker produces 85+ error kinds. Major categories:
 | Concurrency | BorrowAcrossAwait, SpawnWithBorrowedRef, SpawnClosureCaptureMutable |
 | Patterns | NonExhaustiveMatch (from type checker, validated here) |
 | Arena | ArenaEscape (non-Copy value escaping arena scope) |
-| Outlives | OutlivesViolation (named borrow group constraint) |
 
 Warnings include `UnnecessaryShared`, `StaleSharedCondition`,
 `UncheckedUnwrap`, `CouldBeConst`, and `UnusedVariable`.

@@ -23,8 +23,8 @@ String forward(String s):
     String local = s
     return local
 
-# live annotation on parameter
-String first_live(live String a, String b): a
+# Explicit parameter forwarding
+String first_live(String a, String b): a
 
 void main():
     print(get_greeting())

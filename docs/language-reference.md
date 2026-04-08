@@ -122,7 +122,7 @@ with  as  via
 **Generic/constraint keywords:**
 
 ```
-where  extends  live  outlives
+extends
 ```
 
 **Concurrency keywords:**
@@ -575,13 +575,12 @@ item = function_def | struct_def | enum_def | trait_def
 function_def = { attribute } [ "public" ] [ qualifiers ]
                return_type IDENTIFIER [ generic_params ]
                "(" [ param_list ] ")" [ throws_clause ]
-               [ where_clause ] ( block | "=" expr NEWLINE | NEWLINE ) ;
+               ( block | "=" expr NEWLINE | NEWLINE ) ;
 
 qualifiers    = { "async" | "const" | "static" | "unsafe" } ;
 return_type   = type { "," type } | "void" ;  (* bare tuple: String, int or (String, int) *)
 param_list    = param { "," param } ;
-param         = [ "live" [ "(" IDENTIFIER ")" ] ]
-                type [ "&" | "!" ] IDENTIFIER [ "=" expr ]
+param         = type [ "&" | "!" ] IDENTIFIER [ "=" expr ]
               | "meta" IDENTIFIER ;   (* meta op parameter — see §19.23 *)
 throws_clause = "throws" [ type ] ;
 block         = ":" NEWLINE INDENT { statement } DEDENT ;
@@ -596,7 +595,6 @@ A function has:
 - Optional **generic parameters** in `[]`
 - A **parameter list** in `()`
 - Optional **throws clause**
-- Optional **where clause** for generic bounds
 - A **body**: either an indented block, an expression body (`= expr`), or no body (declaration only, for trait methods and extern functions)
 
 **Parameter ownership modes:**
@@ -626,38 +624,7 @@ Equivalent to a block body with `return`.
 | `!self`                    | Consuming (move)  |
 | *(no self)*                | Static method     |
 
-The `live` keyword on a parameter indicates that the return value borrows from that parameter's data (explicit lifetime annotation):
-
-```gorget
-String get(live Container self, int index)
-```
-
-Named borrow groups on parameters distinguish independent lifetimes when a function takes multiple borrowed inputs. The compiler uses body analysis to determine which groups flow to the return value, so moving a non-return-contributing source doesn't trigger false positives:
-
-```gorget
-String pick_first(live(a) String x, live(b) String y) where a outlives b:
-    return x
-```
-
-The `where a outlives b` bound is enforced at call sites: if group `a`'s argument source is moved while group `b`'s source is still alive, the compiler emits an error.
-
-See [section 9.6](#96-lifetime-inference-and-live-annotations) for guidance on when `live` is required vs. when inference handles it automatically.
-
-On struct fields, `live` marks fields that hold borrowed data. The struct cannot outlive the referenced data:
-
-```gorget
-struct Parser:
-    live String source
-    int position
-```
-
-Named borrow groups also work on struct fields to distinguish independent lifetimes:
-
-```gorget
-struct Merger:
-    live(left) String a
-    live(right) String b
-```
+Return value lifetime safety is handled automatically by the ownership system. Return values are always owned — functions transfer ownership of their return values to the caller. The compiler infers which parameters' data flows into a function's return value without any annotation (see [section 9.7](#97-return-value-inference)).
 
 ### 5.2 Structs
 
@@ -798,7 +765,7 @@ trait Animal extends Displayable:
 
 ```ebnf
 equip_block = "equip" [ generic_params ] type [ "with" type ] [ "via" IDENTIFIER ]
-              [ where_clause ] ":" NEWLINE INDENT { function_def | "pass" } DEDENT ;
+              ":" NEWLINE INDENT { function_def | "pass" } DEDENT ;
 ```
 
 Equip blocks attach methods to types. There are three forms:
@@ -2198,92 +2165,19 @@ for item in items:
     items.push(new_item)    # ERROR: cannot mutate during iteration
 ```
 
-### 9.7 Lifetime Inference and `live` Annotations
+### 9.7 Return Value Inference
 
-The compiler automatically infers which parameters' data flows into a function's return value. Most code needs no lifetime annotations at all. The `live` keyword exists for the small number of cases where inference cannot determine the relationship on its own.
+The compiler automatically infers which parameters' data flows into a function's return value. No annotations are needed — the ownership system ensures return values are always owned, so there is no possibility of returning a dangling reference.
 
-#### What the compiler infers automatically
+Internally, the compiler traces return expressions through function bodies to determine which parameters contribute to the return value. This covers:
 
-**Single reference parameter** — when a function takes exactly one reference-type parameter and returns a reference type, the compiler assumes the return borrows from that parameter:
+- **Single reference parameter** — the compiler assumes the return derives from that parameter.
+- **`self` methods** — the return is assumed to derive from `self`.
+- **Multiple parameters** — the compiler traces which parameters appear in return positions.
+- **Transitive calls** — the compiler uses callee metadata to determine which arguments flow through.
+- **Local variable aliases** — assignments from parameters to locals are traced.
 
-```gorget
-String trim_prefix(String s):
-    return s.byte_slice(1, s.byte_len())
-```
-
-**`self` methods** — methods returning a reference type are assumed to borrow from `self`:
-
-```gorget
-equip Holder:
-    String get_name(self):
-        return self.name
-```
-
-**Body analysis with multiple reference parameters** — the compiler traces return expressions through the function body to determine which parameters contribute:
-
-```gorget
-String longer(String x, String y):
-    if x.len() >= y.len():
-        return x
-    return y
-```
-
-Here the compiler sees both `x` and `y` in return positions and records that the result may borrow from either.
-
-**Transitive through calls** — when a return expression calls another function, the compiler uses that function's already-computed metadata to determine which arguments (and therefore which outer parameters) flow through:
-
-```gorget
-String chain(String s):
-    return identity(s)
-```
-
-**Local variable aliases** — assignments from parameters to locals are traced, so returning a local that holds parameter data is correctly attributed:
-
-```gorget
-String forward(String s):
-    String local = s
-    return local
-```
-
-#### When `live` is required
-
-**Trait method declarations** have no body for the compiler to analyze. For methods with `self`, the self-elision rule covers most cases automatically. For non-self methods with multiple reference parameters, `live` makes the dependency explicit:
-
-```gorget
-trait Container:
-    String get(live Container self, int index)
-```
-
-**Extern FFI declarations** also have no body. With two or more reference-type parameters and no `self`, the elision rules cannot determine which parameter the return borrows from:
-
-```gorget
-extern String pick_better(live String a, String b)
-```
-
-**Multiple independent borrow sources** needing precision use named groups and `outlives` constraints. This lets the compiler reject moving one source while the other is still in use:
-
-```gorget
-String pick_first(live(a) String x, live(b) String y) where a outlives b:
-    return x
-```
-
-Named groups are optional — the compiler's body analysis already determines that only `x` flows to the return. The groups add the `outlives` constraint, which is enforced at call sites.
-
-**Struct fields holding references** use `live` to mark that the struct borrows from external data. The struct cannot outlive what its `live` fields reference:
-
-```gorget
-struct Parser:
-    live String source
-    int position
-```
-
-Named groups on struct fields distinguish independent lifetimes:
-
-```gorget
-struct Merger:
-    live(left) String a
-    live(right) String b
-```
+This inference is fully automatic and requires no programmer-visible annotations.
 
 ---
 
@@ -2432,14 +2326,12 @@ enum AppError:
 ```ebnf
 generic_params = "[" generic_param { "," generic_param } "]" ;
 generic_param  = IDENTIFIER
-               | "live" IDENTIFIER
                | "const" type IDENTIFIER ;
 ```
 
 Types, functions, traits, and equip blocks may be parameterized:
 
 - **Type parameters:** `[T]`, `[T, U]`
-- **Lifetime parameters:** `[live a]` (for named borrow groups on structs — see §5.1)
 - **Const parameters:** `[const int N]`
 
 ```gorget
@@ -2469,7 +2361,6 @@ Trait bounds are written inline in the generic parameter list, before the parame
 
 ```ebnf
 generic_param     = [trait_bound_list " "] IDENTIFIER
-                  | "live" IDENTIFIER
                   | "const" type IDENTIFIER ;
 trait_bound_list  = trait_bound { "&" trait_bound } ;
 trait_bound       = IDENTIFIER [ "[" type_or_binding { "," type_or_binding } "]" ] ;
@@ -2482,13 +2373,6 @@ void print_all[Displayable T](Vector[T] items):
 
 void process[Displayable & Cloneable & Comparable T](T item):
     ...
-```
-
-The `where` keyword is retained solely for `outlives` borrow-group ordering constraints:
-
-```gorget
-String pick[Displayable T](live(a) T x, live(b) T y) where a outlives b:
-    return x
 ```
 
 ### 11.4 Monomorphization
@@ -6253,12 +6137,11 @@ directive = "directive" IDENTIFIER { "-" IDENTIFIER } [ "=" IDENTIFIER ] ;
 function_def = { attribute } [ "public" ] { qualifier }
                return_type IDENTIFIER [ generic_params ]
                "(" [ param_list ] ")" [ throws_clause ]
-               [ where_clause ] ( block | "=" expr NEWLINE | NEWLINE ) ;
+               ( block | "=" expr NEWLINE | NEWLINE ) ;
 qualifier     = "async" | "const" | "static" | "unsafe" ;
 return_type   = type { "," type } | "void" ;  (* bare tuple: String, int or (String, int) *)
 param_list    = param { "," param } ;
-param         = [ "live" [ "(" IDENTIFIER ")" ] ]
-                type [ "&" | "!" ] IDENTIFIER [ "=" expr ]
+param         = type [ "&" | "!" ] IDENTIFIER [ "=" expr ]
               | "meta" IDENTIFIER ;   (* meta op parameter — see §19.23 *)
 throws_clause = "throws" [ type ] ;
 block         = ":" NEWLINE INDENT { statement } DEDENT ;
@@ -6281,7 +6164,7 @@ trait_item = function_def | "type" IDENTIFIER [ ":" trait_bound_list ] NEWLINE ;
 
 (* ── Equip blocks ── *)
 equip_block = "equip" [ generic_params ] type [ "with" type ] [ "via" IDENTIFIER ]
-              [ where_clause ] ":" NEWLINE INDENT { function_def | "pass" } DEDENT ;
+              ":" NEWLINE INDENT { function_def | "pass" } DEDENT ;
 
 (* ── Imports ── *)
 import_stmt    = simple_import | grouped_import | from_import ;
@@ -6333,10 +6216,7 @@ attr_arg  = IDENTIFIER | STRING_LITERAL | IDENTIFIER "=" STRING_LITERAL ;
 (* ── Generics ── *)
 generic_params   = "[" generic_param { "," generic_param } "]" ;
 generic_param    = [ trait_bound_list " " ] IDENTIFIER
-                 | "live" IDENTIFIER
                  | "const" type IDENTIFIER ;
-where_clause     = "where" where_bound { "," where_bound } ;
-where_bound      = IDENTIFIER "outlives" IDENTIFIER ;
 trait_bound_list = trait_bound { "&" trait_bound } ;
 trait_bound      = IDENTIFIER [ "[" type_or_binding { "," type_or_binding } "]" ] ;
 

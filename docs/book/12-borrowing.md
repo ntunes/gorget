@@ -141,32 +141,6 @@ These all work without annotations. The compiler sees that:
 - `identity` returns its parameter — the result lives as long as the input
 - `forward` assigns to a local then returns — same lifetime chain
 
-### The `live` Annotation
-
-When the compiler can't infer lifetimes (trait methods, FFI, ambiguous cases),
-annotate explicitly:
-
-```gorget
-String first_live(live String a, String b):
-    return a
-```
-
-The `live` annotation tells the compiler that the return value borrows from `a`.
-Without it, with two `String` parameters and no body to analyze (e.g., in a trait
-declaration), the compiler wouldn't know which parameter the result depends on.
-
-### Named Lifetime Groups
-
-For complex cases with multiple borrow sources:
-
-```gorget
-String pick(live(x) String a, live(y) String b) where x outlives y:
-    return a
-```
-
-Named groups (`x`, `y`) let you express relationships between lifetimes. The
-`where` clause declares that `x` outlives `y`.
-
 ---
 
 ## Structs with Borrowed Fields
@@ -271,6 +245,4 @@ code.
 | Mutable borrow | `f(&x)` | Write access, exclusive |
 | Mutable parameter | `void f(Type &x)` | Declares mutable borrow |
 | Auto-borrowing | `x.method()` | Compiler inserts borrow for `self`/`&self` |
-| Lifetime annotation | `live String s` | Explicit borrow tracking |
-| Named lifetimes | `live(name) String s` | Grouped lifetime relationships |
 | Borrow rule | — | Many readers OR one writer, never both |

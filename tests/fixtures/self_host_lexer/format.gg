@@ -153,10 +153,6 @@ String describe_keyword_canonical(Keyword kw):
             return "kw:where"
         case KwExtends():
             return "kw:extends"
-        case KwLive():
-            return "kw:live"
-        case KwOutlives():
-            return "kw:outlives"
         case KwAsync():
             return "kw:async"
         case KwAwait():

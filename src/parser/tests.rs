@@ -572,7 +572,6 @@ fn test_generic_function_with_where() {
         } else {
             panic!("expected Type param");
         }
-        assert!(f.where_clause.is_none());
     } else {
         panic!();
     }
@@ -1099,37 +1098,6 @@ fn test_extern_block_still_works() {
     assert!(matches!(module.items[0].node, Item::ExternBlock(_)));
 }
 
-#[test]
-fn test_live_group_named() {
-    let source = "String pick(live(a) String x, live(b) String y) where a outlives b:\n    return x\n";
-    let module = parse(source);
-    if let Item::Function(f) = &module.items[0].node {
-        assert!(f.params[0].node.is_live);
-        assert_eq!(f.params[0].node.live_group.as_deref(), Some("a"));
-        assert!(f.params[1].node.is_live);
-        assert_eq!(f.params[1].node.live_group.as_deref(), Some("b"));
-        let wc = f.where_clause.as_ref().expect("where clause");
-        assert_eq!(wc.node.bounds.len(), 1);
-        let WhereBound::Outlives { longer, shorter } = &wc.node.bounds[0].node;
-        assert_eq!(longer.node, "a");
-        assert_eq!(shorter.node, "b");
-    } else {
-        panic!("expected function");
-    }
-}
-
-#[test]
-fn test_live_bare_no_group() {
-    let source = "String view(live String s):\n    return s\n";
-    let module = parse(source);
-    if let Item::Function(f) = &module.items[0].node {
-        assert!(f.params[0].node.is_live);
-        assert!(f.params[0].node.live_group.is_none());
-    } else {
-        panic!("expected function");
-    }
-}
-
 // ── Meta ──────────────────────────────────────────────────
 
 #[test]
@@ -1256,30 +1224,6 @@ else:
         assert_eq!(mi.else_items.as_ref().unwrap().len(), 1);
     } else {
         panic!("expected MetaIf");
-    }
-}
-
-#[test]
-fn test_where_mixed_bounds() {
-    // Trait bound is now inline; only `outlives` remains in the where clause
-    let source = "String pick[Displayable T](live(a) T x, live(b) T y) where a outlives b:\n    return x\n";
-    let module = parse(source);
-    if let Item::Function(f) = &module.items[0].node {
-        // Inline bound on T
-        let gp = f.generic_params.as_ref().expect("generic params");
-        if let GenericParam::Type { name, bounds } = &gp.node.params[0].node {
-            assert_eq!(name.node, "T");
-            assert_eq!(bounds.len(), 1);
-            assert_eq!(bounds[0].node.name.node, "Displayable");
-        } else {
-            panic!("expected Type param");
-        }
-        // Only the outlives bound remains in the where clause
-        let wc = f.where_clause.as_ref().expect("where clause");
-        assert_eq!(wc.node.bounds.len(), 1);
-        assert!(matches!(&wc.node.bounds[0].node, WhereBound::Outlives { longer, shorter } if longer.node == "a" && shorter.node == "b"));
-    } else {
-        panic!("expected function");
     }
 }
 

@@ -325,7 +325,7 @@ Bare Resource params are `const` — the C compiler enforces immutability. The `
 
 **Storing borrowed parameters:**
 
-Borrowed parameters (bare and `&`) cannot be stored in any structure that outlives the callee's frame. This prevents shallow-copy bugs where the stored value shares the caller's heap allocations:
+Borrowed parameters (bare and `&`) cannot be stored in any structure that escapes the callee's frame. This prevents shallow-copy bugs where the stored value shares the caller's heap allocations:
 
 ```gorget
 struct Wrapper:
@@ -436,7 +436,7 @@ Trivial types (int, float, bool, simple structs) are copied by value — no heap
 
 **Key rule:** Resource types are never implicitly copied. The programmer explicitly chooses move (`!`), clone (`.clone()`), or borrow (`auto`). This makes every allocation visible in the source code.
 
-**`auto` semantics:** `auto` borrows when the compiler can guarantee the source outlives the variable (same scope, LIFO drop ordering). For ephemeral sources (function call results), `auto` moves instead.
+**`auto` semantics:** `auto` borrows when the compiler can guarantee the source is still valid for the variable's entire scope (same scope, LIFO drop ordering). For ephemeral sources (function call results), `auto` moves instead.
 
 ### 3.4.1 The `Cloneable` Trait
 
@@ -507,88 +507,59 @@ At any given time, for a given piece of data, you can have **either**:
 
 Never both simultaneously. Enforced at compile time. This prevents data races and aliasing bugs.
 
-### 3.6 Lifetimes
+### 3.6 Borrow Origin Tracking
 
-**The compiler infers lifetimes from function bodies automatically.** Most programmers never write lifetime annotations.
+**Gorget requires zero lifetime annotations.** The compiler's borrow checker internally tracks the *origin* of every borrowed value — which parameter, local, or field a reference derives from — to catch use-after-move and dangling-return errors at compile time. This analysis is fully automatic; programmers never annotate lifetimes.
 
-When explicit annotation is needed (e.g., trait methods without bodies), use the `live` keyword on parameters whose data the return value depends on:
+This is possible because Gorget's ownership model draws a hard line: **Move types (non-Copy types like `String`, `Vector[T]`, structs with Move fields) always transfer ownership when returned or stored.** There is no user-visible borrowed-view type that can escape a function. Borrowed parameters (bare and `&`) are only valid within the callee's frame. This structural guarantee eliminates the class of bugs that Rust's lifetime annotations exist to prevent.
 
 ```gorget
-# Compiler infers: return borrows from both x and y (no annotation needed)
+# The compiler tracks that x and y are borrowed parameters.
+# Returning one is safe because it transfers ownership (Move).
 String longer(String x, String y):
     if x.len() > y.len():
         return x
     return y
 
-# Explicit: when compiler can't infer (e.g., trait methods)
+# Trait methods need no annotation either — the compiler knows
+# the return value is a freshly constructed or moved value.
 trait Container:
-    String get(live Container self, int index)
-    # live tells compiler: return value depends on self's data
+    String get(Container self, int index)
 
-# Combining live with & (mutable borrow whose data lives in the return)
-String process(live String &data):
+# Mutable borrow — the compiler tracks that data is mutated
+# and that first() returns a value derived from data.
+String process(String &data):
     data.sort()
     return data.first()
 ```
 
-**What requires no annotation (the common case):**
-- Functions using only owned types — no borrowing occurs, no inference needed
-- Functions with a single reference-type parameter returning a reference — compiler assumes the return borrows from that parameter (elision)
-- Methods returning a reference type — compiler assumes the return borrows from `self` (elision)
-- Functions with bodies and multiple reference parameters — compiler traces return expressions through the body to determine which parameters contribute (body analysis)
-- Transitive calls — when the return calls another function, the compiler uses the callee's already-computed metadata
-- Local variable aliases — assignments from parameters to locals are traced through
-
-**What requires `live` annotation:**
-- Trait method declarations (no body to analyze; `self` methods use elision, non-`self` multi-param methods need `live`)
-- Extern FFI declarations (no body; same elision rules as traits)
-- Struct fields holding borrowed data (`live String source` marks the field as a borrow)
-- Multiple independent borrow sources needing precision (named groups: `live(a) String x, live(b) String y`)
-- `outlives` constraints between borrow groups (`where a outlives b`)
-
-```gorget
-# Explicit on parameters (when compiler can't see the body)
-trait Container:
-    String get(live Container self, int index)
-
-# Struct with borrowed data (live on field)
-struct Parser:
-    live String source
-    int position
-
-    String remaining(self):
-        return self.source[self.position..]
-
-# Multiple independent borrow sources (named groups)
-struct Merger:
-    live(left) String a
-    live(right) String b
-
-# Lifetime bounds
-String merge(live Merger m) where left outlives right:
-    ...
-```
+**What the compiler checks automatically:**
+- **Use-after-move** — accessing a variable after it has been moved (`!`) is a compile error
+- **Dangling returns** — returning a reference to a local variable is rejected
+- **Borrow/move conflicts** — using a borrowed reference after the source has been moved
+- **Storing borrowed parameters** — borrowed parameters cannot be stored in structures that outlive the callee (see §3.3)
+- **Transitive tracking** — when the return calls another function, the compiler uses the callee's already-computed origin metadata
+- **Local aliases** — assignments from parameters to locals are traced through
 
 ---
 
 ### 3.7 Comparison with Rust Lifetimes
 
-Gorget's lifetime system covers the same safety guarantees as Rust's but differs in how annotations are inferred. This section is aimed at Rust-experienced users.
+Gorget provides the same memory safety guarantees as Rust but requires **zero lifetime annotations**. This section is aimed at Rust-experienced users.
 
 | Aspect | Rust | Gorget |
 |--------|------|--------|
-| Inference source | Signature only (elision rules) | Function body analysis + elision fallback |
-| Single ref param | Auto-inferred (elision rule 1) | Auto-inferred (same rule) |
-| `self` methods | Auto-inferred (elision rule 3) | Auto-inferred (same rule) |
-| Multi-param, has body | Must annotate: `fn f<'a>(x: &'a str, y: &str) -> &'a str` (Rust) | Auto-inferred from body — compiler traces which params reach `return` |
-| Multi-param, no body | Must annotate (same) | Must annotate with `live` keyword |
-| Syntax | `'a`, `'b`, `'static`, `where 'a: 'b` | `live`, `live(a)`, `live(b)`, `where a outlives b` |
-| Named lifetimes | Always named: `'a` | Only when needed for `outlives`; anonymous `live` covers most cases |
+| Lifetime annotations | Required on signatures (`'a`, `'b`) | None — fully inferred |
+| Inference source | Signature-only elision rules | Ownership model + body analysis |
+| Borrowed return values | Allowed — annotated with `'a` | Not applicable — Move types transfer ownership on return |
+| Use-after-move | Checked | Checked |
+| Dangling references | Prevented by lifetime bounds | Prevented structurally — borrows cannot escape their scope |
+| User-facing syntax | `'a`, `'b`, `'static`, `where 'a: 'b` | No lifetime syntax — the compiler handles everything internally |
 
-**Key difference — body analysis:** Gorget's main advantage is that multi-parameter functions with bodies need no annotation. Rust requires lifetime parameters on the function signature because it never inspects the body for lifetime inference. Gorget's compiler analyzes which return paths reference which parameters, making the common case annotation-free.
+**Why no annotations are needed:** Rust needs lifetime annotations because it allows functions to return borrowed references — the caller must know *which* input the return value borrows from. Gorget sidesteps this entirely: Move types always transfer ownership when returned. There is no user-visible borrowed-view type that can escape a function boundary. The compiler's internal origin tracking catches safety violations without exposing any of this machinery to the programmer.
 
 ```gorget
-# Gorget: no annotation needed — compiler reads the body
+# Gorget: no annotation needed — return transfers ownership
 String longer(String x, String y):
     if x.len() > y.len():
         return x
@@ -596,15 +567,13 @@ String longer(String x, String y):
 ```
 
 ```rust
-// Rust: must annotate — body is not inspected for lifetime inference
+// Rust: must annotate — the caller needs to know the return borrows from both inputs
 fn longer<'a>(x: &'a str, y: &'a str) -> &'a str {
     if x.len() > y.len() { x } else { y }
 }
 ```
 
-**Trade-off:** Gorget's body analysis is an extra compilation pass. More importantly, changing a function body can silently change which parameters the return borrows from — there is no stable signature contract. Rust's explicit annotations make the lifetime contract visible at the call site and cannot change without a signature change.
-
-**Where `live` is still required:** Trait method declarations and extern FFI declarations have no body, so Gorget falls back to the same elision rules as Rust. Methods with `self` get automatic elision (return borrows from `self`); non-`self` multi-parameter declarations need explicit `live` annotation.
+**Trade-off:** Gorget's annotation-free approach means there is no explicit lifetime contract in the signature. Rust's annotations serve as documentation and a stability guarantee — changing which input a return borrows from requires a signature change. In Gorget, the ownership model makes this moot: returned values are always owned, so there is no borrowing relationship to document.
 
 ---
 
@@ -921,12 +890,7 @@ void complex[Displayable & Cloneable T, Into[T] U](T a, U b):
     ...
 ```
 
-The `where` keyword is only for `outlives` borrow-group ordering:
-
-```gorget
-String pick[Displayable T](live(a) T x, live(b) T y) where a outlives b:
-    return x
-```
+The `where` keyword is reserved for future use (e.g., complex trait bounds). Currently, all constraints are expressed inline via trait bounds on generic parameters.
 
 ### 4.8 Method Dispatch
 
@@ -1905,7 +1869,7 @@ void main():
 
 | # | Question | Decision |
 |---|----------|----------|
-| 1 | **Lifetime syntax** | `live` keyword on params and struct fields; `outlives` for bounds; compiler auto-infers from function bodies (body analysis + elision) |
+| 1 | **Lifetime annotations** | None required — the compiler's borrow checker infers all origin tracking internally. Move types transfer ownership on return, eliminating the need for user-facing lifetime syntax. |
 | 2 | **Implicit borrow at call sites?** | Yes — bare type = immutable borrow, no annotation needed |
 | 3 | **Expression-oriented blocks?** | Both — `return` for explicit early returns, last expression as implicit return value |
 | 4 | **Inheritance?** | None — composition via traits only |
@@ -1935,7 +1899,7 @@ void main():
 | Semicolons | No | Yes | No | Yes |
 | Null | `Option[T]` | `Option<T>` | `None` | `null` |
 | Borrowing | bare / `&` / `!` | `&` / `&mut` / move | N/A | Implicit |
-| Lifetimes | Body-inferred + `live` | Signature-only + `'a` | N/A | N/A |
+| Lifetimes | Fully inferred (no annotations) | Signature-only + `'a` | N/A | N/A |
 | Generics | `[T]` | `<T>` | `[T]` | `<T>` |
 | Mutability | Mutable default + `const` | `let` default + `mut` | Default mutable | `final`/`const` |
 | Error handling | `throws` + Result capture | `Result` + `?` | Exceptions | Exceptions |
@@ -2237,7 +2201,7 @@ This is similar to how Swift's `String` unifies owned and borrowed representatio
 - String literals (`"hello"`) are views into static data — zero allocation.
 - Concatenation, formatting, and mutation produce owned strings.
 - Passing a string to a function that only reads it keeps the view provenance.
-- The compiler inserts ownership promotion (copy to heap) only when needed — e.g., storing into a collection or returning from a function that outlives the source.
+- The compiler inserts ownership promotion (copy to heap) only when needed — e.g., storing into a collection or returning from a function where the source would go out of scope.
 
 **Struct field ownership:** String fields in structs are **owned** (heap-allocated). The struct is responsible for freeing them. Reading a string field returns a **view** (no allocation, borrows from the struct). Assigning to a `String` variable triggers an auto-clone:
 
@@ -3237,7 +3201,7 @@ block          = COLON NEWLINE INDENT { statement } DEDENT ;
 (* Functions *)
 function_def   = { attribute } [ "public" ] [ "async" ] [ "const" ] [ "static" ]
                  return_type IDENT [ generic_params ] "(" [ param_list ] ")"
-                 [ "throws" type ] [ where_clause ] ( block | "=" expr NEWLINE ) ;
+                 [ "throws" type ] ( block | "=" expr NEWLINE ) ;
 return_type    = type | "void" ;
 param_list     = param { "," param } ;
 param          = type [ "&" | "!" ] IDENT [ "=" expr ] ;
@@ -3270,11 +3234,8 @@ type           = primitive_type | IDENT [ generic_args ]
                | type "(" [ type_list ] ")"  (* function type: int(int, int) *) ;
 generic_params   = "[" generic_param { "," generic_param } "]" ;
 generic_param    = [ trait_bound_list " " ] IDENT
-                 | "live" IDENT
                  | "const" type IDENT ;
 generic_args     = "[" type { "," type } "]" ;
-where_clause     = "where" where_bound { "," where_bound } ;
-where_bound      = IDENT "outlives" IDENT ;
 trait_bound_list = trait_bound { "&" trait_bound } ;
 trait_bound      = IDENT [ "[" assoc_type_binding { "," assoc_type_binding } "]" ] ;
 assoc_type_binding = IDENT "=" type ;
@@ -3322,7 +3283,7 @@ attribute      = "@" IDENT [ "(" attr_args ")" ] NEWLINE ;
 |---------|------------|
 | Indentation + ownership = complex error messages | Invest heavily in error message quality |
 | Bare/`&`/`!` syntax unfamiliar | Progressive: bare (90%) → `&` (9%) → `!` (1%) |
-| Lifetime syntax is unfamiliar | Elide 95% of cases; make explicit syntax readable |
+| Lifetime concerns | Fully inferred — no user-facing lifetime syntax |
 | Python devs expect GC | Clear docs: "this is not Python, it's Python-shaped Rust" |
 | C/Java devs expect null | Option[T] with good sugar (`is`, `?`, `unwrap_or`) |
 | Generics `[]` conflicts with indexing | Disambiguated by context: `arr[0]` vs `Vector[int]` (type position vs value position) |

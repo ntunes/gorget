@@ -63,7 +63,7 @@ need prior exposure to follow along.
 
 12. **[Borrowing and References](12-borrowing.md)**
     Immutable borrows, mutable borrows (`&`), the borrow checker rules,
-    auto-borrowing at call sites, lifetimes and `live` annotations.
+    auto-borrowing at call sites, and lifetime inference.
 
 ### Part IV — Concurrency
 

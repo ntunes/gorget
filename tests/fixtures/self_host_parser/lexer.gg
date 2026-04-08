@@ -26,7 +26,7 @@ enum Keyword:
     KwThrow  KwThrows
     KwImport  KwFrom  KwDirective
     KwWith  KwAs  KwVia
-    KwWhere  KwExtends  KwLive  KwOutlives
+    KwWhere  KwExtends
     KwAsync  KwAwait  KwSpawn
     KwUnsafe  KwExtern
     KwSelfLower  KwSelfUpper
@@ -227,10 +227,6 @@ Option[Keyword] keyword_from_str(String s):
         return Some(KwWhere())
     elif s == "extends":
         return Some(KwExtends())
-    elif s == "live":
-        return Some(KwLive())
-    elif s == "outlives":
-        return Some(KwOutlives())
     elif s == "async":
         return Some(KwAsync())
     elif s == "await":

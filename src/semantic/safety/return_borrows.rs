@@ -65,31 +65,7 @@ fn compute_function_return_borrows(
     }
 
     // Phase 3: Check for explicit `live` annotations first (they override body analysis).
-    // Phase 5: If named groups are present (live(a), live(b)), fall through to body analysis
-    // to determine precisely which groups flow to the return — named groups enable more
-    // precise tracking than bare `live`.
-    {
-        let info = match function_info.get(&def_id) {
-            Some(i) => i,
-            None => return,
-        };
-        let live_indices: Vec<usize> = info.param_is_live.iter()
-            .enumerate()
-            .filter(|(_, is_live)| **is_live)
-            .map(|(i, _)| i)
-            .collect();
-        let has_named_groups = info.param_live_groups.iter().any(|g| g.is_some());
-        if !live_indices.is_empty() && !has_named_groups {
-            // Bare `live` (no group names): all live params → return_borrows_from
-            if let Some(fi) = function_info.get_mut(&def_id) {
-                fi.return_borrows_from = live_indices;
-            }
-            return;
-        }
-        // Named groups: fall through to body analysis for precision
-    }
-
-    // Phase 2: Body analysis — trace return expressions back to params
+    // Body analysis — trace return expressions back to params
     // Build a map from param names to their indices for this function
     let param_name_to_idx: FxHashMap<String, usize> = {
         let info = match function_info.get(&def_id) {

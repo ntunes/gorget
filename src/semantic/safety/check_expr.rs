@@ -215,9 +215,6 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
-                // Phase 5: Record outlives constraints from this call site
-                self.record_call_outlives(callee, args, expr.span);
-
                 // §3.4 Stale-condition: blocking calls release the token just like await.
                 if self.current_function_is_async {
                     if self.is_yield_point_call(&callee.node) {

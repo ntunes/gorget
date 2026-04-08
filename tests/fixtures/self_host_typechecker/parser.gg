@@ -154,24 +154,22 @@ const int KW_CELL = 76
 const int KW_REFCELL = 77
 const int KW_MUTEX = 78
 const int KW_RWLOCK = 79
-const int KW_LIVE = 80
-const int KW_OUTLIVES = 81
-const int KW_ASYNC = 82
-const int KW_AWAIT = 83
-const int KW_SPAWN = 84
-const int KW_TEST = 85
-const int KW_SUITE = 86
-const int KW_IT = 87
-const int KW_PANIC = 88
-const int KW_SHARED = 89
-const int KW_META = 90
-const int KW_SELECT = 91
-const int KW_RETHROW = 92
-const int KW_MOD = 93
-const int KW_CATCH = 94
-const int KW_ON = 95
-const int KW_BENCH = 96
-const int KW_SNAPSHOT = 97
+const int KW_ASYNC = 80
+const int KW_AWAIT = 81
+const int KW_SPAWN = 82
+const int KW_TEST = 83
+const int KW_SUITE = 84
+const int KW_IT = 85
+const int KW_PANIC = 86
+const int KW_SHARED = 87
+const int KW_META = 88
+const int KW_SELECT = 89
+const int KW_RETHROW = 90
+const int KW_MOD = 91
+const int KW_CATCH = 92
+const int KW_ON = 93
+const int KW_BENCH = 94
+const int KW_SNAPSHOT = 95
 
 # ── Ownership constants ─────────────────────────────────────
 
@@ -475,10 +473,6 @@ int keyword_tag(Token tok):
                     return KW_MUTEX
                 case KwRwLock:
                     return KW_RWLOCK
-                case KwLive:
-                    return KW_LIVE
-                case KwOutlives:
-                    return KW_OUTLIVES
                 case KwAsync:
                     return KW_ASYNC
                 case KwAwait:
@@ -1331,12 +1325,8 @@ equip Parser:
         Vector[String] params = Vector[String]()
         if self.check_tok(TOK_LBRACKET):
             self.advance()
-            while self.check_tok(TOK_IDENT) or self.check_kw(KW_LIVE) or self.check_kw(KW_CONST):
-                if self.check_kw(KW_LIVE):
-                    self.advance()
-                    SpannedToken name_tok = self.advance()
-                    params.push(token_ident(name_tok.lex_token))
-                elif self.check_kw(KW_CONST):
+            while self.check_tok(TOK_IDENT) or self.check_kw(KW_CONST):
+                if self.check_kw(KW_CONST):
                     self.advance()
                     # Skip the type, read the name
                     self.skip_type_lookahead()
@@ -2968,13 +2958,6 @@ equip Parser:
             SpannedType tt = self.parse_type()
             throws_type = Some(tt)
 
-        # Skip optional 'where a outlives b, ...' clause (trait bounds are now inline)
-        if self.check_kw(KW_WHERE):
-            self.advance()
-            # Skip tokens until we hit ':', '=', newline, or EOF
-            while not self.check_tok(TOK_COLON) and not self.check_tok(TOK_EQ) and not self.check_tok(TOK_NEWLINE) and not self.check_tok(TOK_DEDENT) and not self.at_end():
-                self.advance()
-
         # Expression-body function: Type name(params) = expr (deprecated)
         if self.check_tok(TOK_EQ):
             self.advance()
@@ -3039,12 +3022,6 @@ equip Parser:
             own = OWN_MUTABLE
             self.advance()
 
-        # Skip lifetime annotation: live Type name or live(group) Type name
-        if self.check_kw(KW_LIVE):
-            self.advance()
-            # Skip optional group name: live(a) → skip (a)
-            if self.check_tok(TOK_LPAREN):
-                self.skip_paren_contents()
         SpannedType ty = self.parse_type()
         # Handle ownership markers between type and name
         if self.check_tok(TOK_BANG):

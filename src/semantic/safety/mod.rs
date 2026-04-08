@@ -154,19 +154,6 @@ impl BorrowOrigin {
     }
 }
 
-/// Active outlives constraint from a call site with `where a outlives b`.
-/// Tracks the source DefIds for each group so we can detect violations when
-/// the "longer" group's source is invalidated while the "shorter" group's
-/// source is still alive.
-#[derive(Debug, Clone)]
-pub(super) struct ActiveOutlives {
-    pub(super) longer_group: String,
-    pub(super) shorter_group: String,
-    pub(super) longer_source_def_ids: Vec<DefId>,
-    pub(super) shorter_source_def_ids: Vec<DefId>,
-    pub(super) _call_span: Span,
-}
-
 /// Snapshot of origin tracking state (for branching).
 pub(super) type OriginSnapshot = FxHashMap<DefId, BorrowOrigin>;
 
@@ -286,10 +273,6 @@ pub(super) struct BorrowChecker<'a> {
     // ── Method resolution (Phase 7) ──
     /// Method span start → DefId (from typechecker, for origin/temporary tracking).
     pub(super) method_resolutions: &'a FxHashMap<usize, DefId>,
-
-    // ── Outlives constraints (Phase 5) ──
-    /// Active `where a outlives b` constraints from call sites.
-    pub(super) active_outlives: Vec<ActiveOutlives>,
 
     // ── Reassignment invalidation (Phase 11) ──
     /// Variables whose borrow source was reassigned, making their reference stale.
@@ -428,7 +411,6 @@ impl<'a> BorrowChecker<'a> {
             current_return_type_id: None,
             imported_module_depth: 0,
             current_param_def_ids: Vec::new(),
-            active_outlives: Vec::new(),
             reassignment_invalidated: FxHashMap::default(),
             diverged: false,
             in_return_expr: false,

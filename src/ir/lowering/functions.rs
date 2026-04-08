@@ -1326,7 +1326,6 @@ fn build_subs(
         for (param, arg) in params.node.params.iter().zip(type_args.iter()) {
             let name = match &param.node {
                 GenericParam::Type { name: s, .. } => s.node.clone(),
-                GenericParam::Lifetime(s) => s.node.clone(),
                 GenericParam::Const { name, .. } => name.node.clone(),
             };
             subs.push((name, arg.node.clone()));

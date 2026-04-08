@@ -127,7 +127,6 @@ pub struct FunctionDef {
     pub generic_params: Option<Spanned<GenericParams>>,
     pub params: Vec<Spanned<Param>>,
     pub throws: Option<Spanned<Type>>,
-    pub where_clause: Option<Spanned<WhereClause>>,
     pub body: FunctionBody,
     pub doc_comment: Option<String>,
     pub span: Span,
@@ -164,9 +163,6 @@ pub struct Param {
     pub ownership: Ownership,
     pub name: Spanned<String>,
     pub default: Option<Spanned<Expr>>,
-    pub is_live: bool,
-    /// Named borrow group: `live(a)` → `Some("a")`, bare `live` → `None`.
-    pub live_group: Option<String>,
     /// True for params declared `meta name` — carry no runtime value; operator token only.
     pub is_meta_op: bool,
 }
@@ -273,7 +269,6 @@ pub struct EquipBlock {
     pub trait_: Option<EquipTrait>,
     pub type_: Spanned<Type>,
     pub via_field: Option<Spanned<String>>,
-    pub where_clause: Option<Spanned<WhereClause>>,
     pub items: Vec<Spanned<FunctionDef>>,
     pub span: Span,
 }
@@ -359,24 +354,9 @@ pub enum GenericParam {
         name: Spanned<String>,
         bounds: Vec<Spanned<TraitBound>>,
     },
-    Lifetime(Spanned<String>),
     Const {
         type_: Spanned<Type>,
         name: Spanned<String>,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct WhereClause {
-    pub bounds: Vec<Spanned<WhereBound>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum WhereBound {
-    /// `where a outlives b` — borrow group ordering constraint.
-    Outlives {
-        longer: Spanned<String>,
-        shorter: Spanned<String>,
     },
 }
 

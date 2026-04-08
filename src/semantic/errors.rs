@@ -368,20 +368,8 @@ pub enum SemanticErrorKind {
     /// Mutating a collection while an outstanding borrow exists.
     MutationWhileBorrowed { source: String, borrow: String },
 
-    /// Bodyless function returning a reference type with no `live` params.
-    MissingLiveAnnotation { func_name: String },
-
     /// Binding a reference type to a temporary that will be immediately dropped.
     TemporaryBorrow { name: String, callee: String, temp_at: Option<Span> },
-
-    /// `where a outlives b` violated: group a's source was invalidated
-    /// while group b's source is still alive.
-    OutlivesViolation {
-        longer_group: String,
-        shorter_group: String,
-        longer_source: String,
-        shorter_source: String,
-    },
 
     /// Parameter mode (`&` or `!`) is invalid for this type (e.g. `&str`, `!str`).
     InvalidParameterMode {
@@ -690,20 +678,14 @@ impl std::fmt::Display for SemanticError {
             SemanticErrorKind::MutationWhileBorrowed { source, borrow } => {
                 write!(f, "cannot mutate `{source}` while `{borrow}` borrows from it")
             }
-            SemanticErrorKind::MissingLiveAnnotation { func_name } => {
-                write!(f, "function `{func_name}` returns a reference type but has no `live` parameter annotations")
-            }
             SemanticErrorKind::TemporaryBorrow { name, callee, .. } => {
                 write!(f, "cannot bind `{name}` to temporary from `{callee}()` — value will be dropped")
-            }
-            SemanticErrorKind::OutlivesViolation { longer_group, shorter_group, longer_source, shorter_source } => {
-                write!(f, "borrow group `{longer_group}` must outlive `{shorter_group}`, but `{longer_source}` (group `{longer_group}`) was moved while `{shorter_source}` (group `{shorter_group}`) is still alive")
             }
             SemanticErrorKind::InvalidParameterMode { param_name, type_name, mode } => {
                 write!(f, "parameter `{param_name}` of type `{type_name}` cannot use `{mode}` mode — `{type_name}` is Copy and always passed by value")
             }
             SemanticErrorKind::UnresolvedBorrowOrigin { name } => {
-                write!(f, "cannot return `{name}`: borrow origin could not be determined — consider adding `live` annotation to the source function")
+                write!(f, "cannot return `{name}`: borrow origin could not be determined")
             }
             SemanticErrorKind::ArenaEscape { name, kind } => {
                 match kind {
