@@ -1,0 +1,98 @@
+# Simple multi-module import loader.
+# Reads imported .gg files, parses them, and merges their items into the
+# main module for lowering.
+
+from parser import parse_source
+from ast import Module, Item, ImportStmt
+from derive import expand_derives
+from std.fs import read_file, file_exists
+from std.collections import Vector, Dict
+
+# ── Path resolution ──────────────────────────────────────
+
+String resolve_module_path(String base_dir, String module_path):
+    # Convert dotted module path to file path: "std.fs" → "base_dir/std/fs.gg"
+    String path_part = module_path.replace(".", "/")
+    return base_dir + "/" + path_part + ".gg"
+
+String parent_dir(String path):
+    # Extract parent directory: find last '/' by scanning
+    int last_slash = -1
+    int pos = 0
+    while pos < path.len():
+        int found = path.find("/")
+        if found < 0:
+            # No more slashes after current scan — use last known position
+            # Actually find() always searches from start. Use a loop with offset.
+            break
+        last_slash = found
+        # Find next slash by searching in remainder
+        if found + 1 >= path.len():
+            break
+        # Simple approach: iterate through positions
+        break
+    # Fallback: scan character by character
+    last_slash = -1
+    int i = 0
+    while i < path.len():
+        # Check if character at position i is '/'
+        # Use slice to extract single char and compare
+        if i + 1 <= path.len():
+            String ch = path.slice(i, i + 1)
+            if ch == "/":
+                last_slash = i
+        i += 1
+    if last_slash >= 0:
+        return path.slice(0, last_slash)
+    return "."
+
+# ── Import loading ───────────────────────────────────────
+
+void load_imports(Module &m, String entry_path, String lib_dir):
+    String base_dir = parent_dir(entry_path)
+    Dict[String, bool] loaded = {}
+
+    # Collect import paths from the module
+    Vector[String] import_paths = []
+    int ii = 0
+    while ii < m.items.len():
+        Item item = m.items.get(ii).unwrap()
+        match item:
+            case IImport(imp):
+                if not loaded.contains(imp.module_path):
+                    import_paths.push(imp.module_path)
+                    loaded.put(imp.module_path, true)
+            else:
+                pass
+        ii += 1
+
+    # Load each imported module
+    int pi = 0
+    while pi < import_paths.len():
+        String mod_path = import_paths.get(pi).unwrap()
+
+        # Try local directory first, then lib directory
+        String file_path = resolve_module_path(base_dir, mod_path)
+        if not file_exists(file_path):
+            file_path = resolve_module_path(lib_dir, mod_path)
+        if file_exists(file_path):
+            String source = read_file(file_path)
+            Module imported = parse_source(source)
+            expand_derives(&imported)
+
+            # Add imported items to main module
+            int ji = 0
+            while ji < imported.items.len():
+                Item imp_item = imported.items.get(ji).unwrap()
+                # Recursively discover imports from the imported module
+                match imp_item:
+                    case IImport(sub_imp):
+                        if not loaded.contains(sub_imp.module_path):
+                            import_paths.push(sub_imp.module_path)
+                            loaded.put(sub_imp.module_path, true)
+                    else:
+                        pass
+                m.items.push(imp_item)
+                ji += 1
+
+        pi += 1

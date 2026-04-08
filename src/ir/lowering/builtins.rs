@@ -534,6 +534,7 @@ pub static GORGET_STRING_VIEW: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "str", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
         BuiltinMethodDecl { name: "as_str", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
         BuiltinMethodDecl { name: "substring", runtime_callee: Some("gorget_str_slice"), self_conv: SelfConvention::Borrow, is_mutating: false, params: two_ints, return_type: ret_owned_string },
+        BuiltinMethodDecl { name: "slice", runtime_callee: Some("gorget_str_slice"), self_conv: SelfConvention::Borrow, is_mutating: false, params: two_ints, return_type: ret_owned_string },
         BuiltinMethodDecl { name: "trim", runtime_callee: Some("gorget_str_trim"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
         BuiltinMethodDecl { name: "strip", runtime_callee: Some("gorget_str_strip"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_owned_string },
         // Allocating operations → GorgetString
