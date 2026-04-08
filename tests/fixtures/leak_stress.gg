@@ -1,0 +1,176 @@
+# Stress test: exercises many allocation patterns in loops to detect leaks.
+# Each section runs 500 iterations. A leak would show as mem_live growth.
+from std.os import mem_live
+from std.collections import Vector, Dict
+
+struct Point:
+    String label
+    int x
+    int y
+
+Result[Point, String] make_point(int i):
+    if i >= 0:
+        return Ok(Point(f"p{i}", i, i * 2))
+    return Error("negative")
+
+Vector[String] split_and_filter(String text, int min_len):
+    Vector[String] result = []
+    for w in text.split(" "):
+        if w.len() >= min_len:
+            result.push(w)
+    return result
+
+Dict[String, int] build_index(Vector[String] &words):
+    Dict[String, int] idx = Dict[String, int]()
+    int i = 0
+    for w in words:
+        idx.set(w, i)
+        i = i + 1
+    return idx
+
+void main():
+    int iters = 500
+
+    int b = 0
+    int i = 0
+
+    # 1. String concat in loop — buffer grows, so check proportionality.
+    # 10 iterations vs 100: if delta(100) > delta(10) * 15, it's a real leak
+    # (not just the growing buffer).
+    String s1 = f"start_{0}"
+    int b1a = mem_live()
+    while i < 10:
+        s1 = s1 + "."
+        i = i + 1
+    int delta10 = mem_live() - b1a
+    String s2 = f"start_{0}"
+    int b1b = mem_live()
+    i = 0
+    while i < 100:
+        s2 = s2 + "."
+        i = i + 1
+    int delta100 = mem_live() - b1b
+    bool t1 = delta100 > delta10 * 15
+    print(f"str concat: leaked={t1}")
+
+    # 2. Vector[String] build + drop
+    b = mem_live()
+    i = 0
+    while i < iters:
+        Vector[String] v = []
+        v.push(f"a_{i}")
+        v.push(f"b_{i}")
+        v.push(f"c_{i}")
+        int _l = v.len()
+        i = i + 1
+    bool t2 = mem_live() - b > 0
+    print(f"vec build+drop: leaked={t2}")
+
+    # 3. Dict[String,int] build + drop
+    b = mem_live()
+    i = 0
+    while i < iters:
+        Dict[String, int] d = Dict[String, int]()
+        d.set(f"k{i}", i)
+        d.set(f"v{i}", i * 2)
+        int _l = d.len()
+        i = i + 1
+    bool t3 = mem_live() - b > 0
+    print(f"dict build+drop: leaked={t3}")
+
+    # 4. Result[struct] match + extract
+    b = mem_live()
+    i = 0
+    while i < iters:
+        Result[Point, String] r = make_point(i)
+        match r:
+            case Ok(p):
+                int _l = p.label.len()
+            case Error(e):
+                pass
+        i = i + 1
+    bool t4 = mem_live() - b > 0
+    print(f"result match: leaked={t4}")
+
+    # 5. For-loop string borrow (read-only)
+    Vector[String] names = []
+    names.push("alice")
+    names.push("bob")
+    names.push("charlie")
+    b = mem_live()
+    i = 0
+    while i < iters:
+        for name in names:
+            int _l = name.len()
+        i = i + 1
+    bool t5 = mem_live() - b > 0
+    print(f"for borrow readonly: leaked={t5}")
+
+    # 6. For-loop string borrow + push
+    b = mem_live()
+    i = 0
+    while i < iters:
+        Vector[String] copied = []
+        for name in names:
+            copied.push(name)
+        int _l = copied.len()
+        i = i + 1
+    bool t6 = mem_live() - b > 0
+    print(f"for borrow+push: leaked={t6}")
+
+    # 7. Split + return from function
+    b = mem_live()
+    i = 0
+    while i < iters:
+        Vector[String] ws = split_and_filter("the quick brown fox", 4)
+        int _l = ws.len()
+        i = i + 1
+    bool t7 = mem_live() - b > 0
+    print(f"split+return: leaked={t7}")
+
+    # 8. Dict return from function
+    Vector[String] words = []
+    words.push("alpha")
+    words.push("beta")
+    words.push("gamma")
+    b = mem_live()
+    i = 0
+    while i < iters:
+        Dict[String, int] idx = build_index(&words)
+        int _l = idx.len()
+        i = i + 1
+    bool t8 = mem_live() - b > 0
+    print(f"dict return: leaked={t8}")
+
+    # 9. Collection reassignment
+    Vector[int] v = []
+    v.push(1)
+    b = mem_live()
+    i = 0
+    while i < iters:
+        Vector[int] nv = []
+        nv.push(i)
+        v = nv
+        i = i + 1
+    bool t9 = mem_live() - b > 0
+    print(f"vec reassign: leaked={t9}")
+
+    # 10. String reassignment — proportionality check (buffer size varies with i)
+    String rs1 = f"iter_{1000}"
+    b = mem_live()
+    i = 0
+    while i < 10:
+        rs1 = f"iter_{i + 1000}"
+        i = i + 1
+    int d10 = mem_live() - b
+    String rs2 = f"iter_{1000}"
+    b = mem_live()
+    i = 0
+    while i < 100:
+        rs2 = f"iter_{i + 1000}"
+        i = i + 1
+    int d100 = mem_live() - b
+    bool t10 = d100 > d10 * 15
+    print(f"str reassign: leaked={t10}")
+
+    print("done")

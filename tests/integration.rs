@@ -2286,6 +2286,22 @@ done");
 }
 
 #[test]
+fn leak_stress() {
+    run_gg("leak_stress.gg", "\
+str concat: leaked=false
+vec build+drop: leaked=false
+dict build+drop: leaked=false
+result match: leaked=false
+for borrow readonly: leaked=false
+for borrow+push: leaked=false
+split+return: leaked=false
+dict return: leaked=false
+vec reassign: leaked=false
+str reassign: leaked=false
+done");
+}
+
+#[test]
 fn leak_return_materialize() {
     run_gg("leak_return_materialize.gg", "\
 words: 4
