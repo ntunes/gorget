@@ -1470,7 +1470,85 @@ pub(super) fn lower_method_call(
             }
         }
 
-        let result = if ret_type == UNIT_TYPE {
+        // Option-returning Vector methods where the C runtime returns void*.
+        // Generate null-check + Option.Some/None construction at GIR level so both
+        // C and LLVM backends see truthful IR (extern returns Ptr, Option is explicit).
+        let is_option_void_ptr_vector = matches!(method_name, "get" | "first" | "last" | "pop" | "remove")
+            && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
+            && ret_type != UNIT_TYPE
+            && ctx.type_name_for_id(ret_type).map_or(false, |n| n.starts_with("Option__"));
+
+        let result = if is_option_void_ptr_vector {
+            let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
+            let inner_type = resolve_inner_type(ctx, elem_type_name);
+            let is_borrowing = matches!(method_name, "get" | "first" | "last");
+            let is_resource_elem = ctx.type_registry.has_resource_fields(inner_type);
+            // Borrowing + resource element → Option__Ref_T (Ptr payload, no deref needed)
+            let payload_is_ptr = is_borrowing && is_resource_elem;
+
+            // Call with Ptr return type (truthful void* ABI)
+            let ptr_type = ctx.register_ptr_type(inner_type);
+            let raw_ptr = builder.call(call_name, call_args, ptr_type);
+
+            // Null check: raw_ptr != null
+            let is_not_null = builder.cmp(
+                CmpOp::Ne, ptr_type,
+                FunctionBuilder::copy(raw_ptr),
+                FunctionBuilder::const_null(),
+            );
+
+            let result_id = builder.add_local(ret_type, None);
+            let some_bb = builder.new_block();
+            let none_bb = builder.new_block();
+            let merge_bb = builder.new_block();
+            builder.branch(FunctionBuilder::copy(is_not_null), some_bb, none_bb);
+
+            // === Some block: construct Option.Some(payload) ===
+            builder.switch_to(some_bb);
+            let option_name = ctx.type_name_for_id(ret_type)
+                .unwrap_or("Option__int64_t").to_string();
+            let payload = if payload_is_ptr {
+                // Option__Ref_T: the raw pointer IS the payload (borrowed reference)
+                FunctionBuilder::copy(raw_ptr)
+            } else {
+                // Dereference void* to get the element value.
+                // Uses Deref projection — LIR loads from the pointer address.
+                Operand::Copy(Place {
+                    local: raw_ptr,
+                    projections: vec![Projection::Deref],
+                })
+            };
+            let some_val = builder.enum_init(&option_name, "Some", ret_type, vec![payload]);
+            builder.assign(Place::local(result_id), FunctionBuilder::copy(some_val));
+            builder.jump(merge_bb);
+
+            // === None block: construct Option.None() ===
+            builder.switch_to(none_bb);
+            let none_val = builder.enum_init(&option_name, "None", ret_type, vec![]);
+            builder.assign(Place::local(result_id), FunctionBuilder::copy(none_val));
+            builder.jump(merge_bb);
+
+            // === Merge ===
+            builder.switch_to(merge_bb);
+            if ctx.type_registry.needs_drop(ret_type) {
+                ctx.drops.register_local(result_id, ret_type, &ctx.type_registry);
+            }
+            ctx.set_owned(result_id);
+
+            // Track collection provenance for Option__Ref_ results
+            if let Some(ret_name) = ctx.type_name_for_id(ret_type) {
+                if ret_name.starts_with("Option__Ref_") {
+                    if let Some(recv_local) = recv_local_for_move_zero {
+                        if ctx.is_named_local(recv_local) {
+                            ctx.set_cow_borrow_source(result_id, CollectionId::Local(recv_local));
+                        }
+                    } else if let Some(ref field_path) = field_path_for_cow {
+                        ctx.set_cow_borrow_source(result_id, CollectionId::FieldPath(field_path.clone()));
+                    }
+                }
+            }
+            FunctionBuilder::copy(result_id)
+        } else if ret_type == UNIT_TYPE {
             builder.call_void(call_name, call_args);
             Operand::Constant(Constant::Unit)
         } else {

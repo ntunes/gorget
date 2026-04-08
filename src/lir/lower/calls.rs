@@ -192,7 +192,8 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<(Vec
         "gorget_array_push" | "gorget_array_set" | "gorget_array_insert" => {
             Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void))
         }
-        "gorget_array_get" | "gorget_array_pop" | "gorget_array_first" | "gorget_array_last" => {
+        "gorget_array_get" | "gorget_array_pop" | "gorget_array_first" | "gorget_array_last"
+        | "gorget_array_safe_get" => {
             Some((vec![LirType::Ptr, LirType::I64], LirType::Ptr))
         }
         "gorget_array_safe_pop" => {
@@ -477,6 +478,8 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
             "get" => return Some("gorget_array_safe_get".into()),
             // Vector.pop() returns Option[T] — use safe (non-panicking) pop.
             "pop" => return Some("gorget_array_safe_pop".into()),
+            // Vector.remove() returns Option[T] — use the opt variant (returns void*).
+            "remove" => return Some("gorget_array_remove_opt".into()),
             _ => return Some(format!("gorget_array_{method}")),
         }
     }

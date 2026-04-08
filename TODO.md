@@ -34,7 +34,6 @@
 
 - **IndexLoad reference semantics — borrow checker integration**: GIR already produces `Ptr(T)` + `CollectionRef` for resource-type IndexLoads; CoW materialization handles correctness; struct clone now uses `clone_to_owned`. Remaining: extend borrow checker to track IndexLoad borrows and report `MutationWhileBorrowed`, borrow propagation through fields/destructuring. [updated: 2026-04-07]
 
-- **Collection void-return truthful LIR**: `gorget_array_safe_get` etc. return `void*` in C but the LIR extern declares aggregate return (Option). The C backend wraps via `is_collection_void_return()`. For the LLVM backend, the extern should declare Ptr return and the LIR should generate explicit null-check → Option construction. This requires block splitting at the GIR lowering level (not `emit_extern_call` which is straight-line). Affects ~10 LLVM fixtures with wrong values (`20 vs 10` pattern). [added: 2026-04-08]
 
 - **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
 

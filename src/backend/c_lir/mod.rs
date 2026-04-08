@@ -1827,7 +1827,12 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             };
             let lhs_str = is_str(lhs);
             let rhs_str = is_str(rhs);
-            if lhs_str || rhs_str {
+            // Don't use string comparison when either operand is null —
+            // this is a pointer null-check (e.g., from GIR-level Option wrapping),
+            // not a string equality test.
+            let lhs_null = null_vals.get(lhs.0 as usize).copied().unwrap_or(false);
+            let rhs_null = null_vals.get(rhs.0 as usize).copied().unwrap_or(false);
+            if (lhs_str || rhs_str) && !lhs_null && !rhs_null {
                 // String comparison — wrap operands into Str values for gorget_str_eq/gorget_str_cmp.
                 let wrap = |vid: &ValueId| -> String {
                     if str_lit_vals.get(vid.0 as usize).copied().unwrap_or(false) {

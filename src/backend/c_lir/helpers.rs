@@ -663,15 +663,15 @@ pub(super) fn is_sentinel_option_fn(name: &str) -> bool {
 /// Returns true if the collection runtime function returns `void*` (pointer to element).
 /// The caller must dereference the result to the concrete element type.
 pub(super) fn is_collection_void_return(name: &str) -> bool {
+    // NOTE: gorget_array_safe_get, gorget_array_safe_pop, and gorget_array_remove_opt
+    // are no longer here — their Option wrapping is now generated at GIR level
+    // (null-check + enum_init), so the C backend sees a truthful Ptr return.
     matches!(
         name,
         "gorget_array_get"
-            | "gorget_array_safe_get"
-            | "gorget_array_safe_pop"
             | "gorget_array_pop"
             | "gorget_array_first"
             | "gorget_array_last"
-            | "gorget_array_remove_opt"
             | "gorget_map_get"
             | "gorget_heap_pop"
             | "gorget_heap_peek"
@@ -692,17 +692,17 @@ pub(super) fn is_collection_void_return(name: &str) -> bool {
 
 /// Functions that return void but need Option wrapping — included in is_collection_void_return
 /// after being swapped to their opt variant.
-pub(super) fn needs_opt_wrapping(name: &str) -> bool {
-    matches!(name, "gorget_array_remove")
+/// NOTE: gorget_array_remove no longer needs this — the LIR now maps directly to
+/// gorget_array_remove_opt, and Option wrapping is done at GIR level.
+pub(super) fn needs_opt_wrapping(_name: &str) -> bool {
+    false
 }
 
 /// For collection functions that are void but need to return a value when
 /// the GIR expects Option[T], swap to the opt-returning variant.
+/// NOTE: No longer needed — the LIR maps remove directly to gorget_array_remove_opt.
 pub(super) fn void_to_opt_variant(name: &str) -> &str {
-    match name {
-        "gorget_array_remove" => "gorget_array_remove_opt",
-        _ => name,
-    }
+    name
 }
 
 /// Returns the indices of parameters that are `void*` (element/key/value pointers)

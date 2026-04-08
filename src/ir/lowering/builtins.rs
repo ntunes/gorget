@@ -210,7 +210,7 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "last", runtime_callee: Some("gorget_array_last"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_option_ref_or_val_elem },
         // Consuming reads
         BuiltinMethodDecl { name: "pop", runtime_callee: Some("gorget_array_safe_pop"), self_conv: SelfConvention::MutBorrow, is_mutating: true, params: no_params, return_type: ret_option_elem },
-        BuiltinMethodDecl { name: "remove", runtime_callee: Some("gorget_array_remove"), self_conv: SelfConvention::MutBorrow, is_mutating: true, params: int_param, return_type: ret_option_elem },
+        BuiltinMethodDecl { name: "remove", runtime_callee: Some("gorget_array_remove_opt"), self_conv: SelfConvention::MutBorrow, is_mutating: true, params: int_param, return_type: ret_option_elem },
         // Queries
         BuiltinMethodDecl { name: "len", runtime_callee: Some("gorget_array_len"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_int },
         BuiltinMethodDecl { name: "capacity", runtime_callee: Some("gorget_array_capacity"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_int },
