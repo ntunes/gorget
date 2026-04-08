@@ -149,9 +149,16 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
             # Named type with possible generic args
             String mangled = mangle_type_name(name, targs, &gmod)
             return lookup_or_register_named(&gmod, mangled)
-        case TFunction(_, _, _):
-            # Function types (closures, callables) → unit (opaque in GIR)
-            return UNIT_TYPE
+        case TFunction(ret_type_box, param_types, _):
+            # Function type → GtFnPtr for return types (fn(T1, ...) -> Tret)
+            Vector[int] fn_params = []
+            int fpi = 0
+            while fpi < param_types.len():
+                SpannedType fp = param_types.get(fpi).unwrap()
+                fn_params.push(map_ast_type(fp, &gmod))
+                fpi += 1
+            int fn_ret = map_ast_type(*ret_type_box, &gmod)
+            return register_type(&gmod, GtFnPtr(fn_params, fn_ret))
         case TInferred():
             return I64_TYPE
         case TTuple(elems):
@@ -749,6 +756,15 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
             # Known void methods
             if mname == "push" or mname == "set" or mname == "put" or mname == "clear" or mname == "pop":
                 return UNIT_TYPE
+            # Known string-returning methods
+            if mname == "upper" or mname == "lower" or mname == "trim" or mname == "strip" or mname == "replace" or mname == "slice" or mname == "join" or mname == "repeat" or mname == "to_string" or mname == "reverse":
+                return STRING_MARKER
+            # Known int-returning methods
+            if mname == "len" or mname == "find" or mname == "count" or mname == "hash":
+                return I64_TYPE
+            # Known bool-returning methods
+            if mname == "contains" or mname == "starts_with" or mname == "ends_with" or mname == "is_empty":
+                return BOOL_TYPE
         case EIdentifier(name):
             # Look up from fn_sigs (could be a variable holding a closure)
             if gmod.fn_sigs.contains(name):

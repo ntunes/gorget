@@ -46,6 +46,17 @@ String format_type_id(int tid, GirModule &gmod):
                 return "*" + format_type_id(inner, &gmod)
             case GtMutPtr(inner):
                 return "*mut " + format_type_id(inner, &gmod)
+            case GtFnPtr(fn_params, fn_ret):
+                String fn_str = "fn("
+                int fpi = 0
+                while fpi < fn_params.len():
+                    if fpi > 0:
+                        fn_str = fn_str + ", "
+                    int fp_tid = fn_params.get(fpi).unwrap()
+                    fn_str = fn_str + format_type_id(fp_tid, &gmod)
+                    fpi += 1
+                fn_str = fn_str + ") -> " + format_type_id(fn_ret, &gmod)
+                return fn_str
             else:
                 pass
     return "?type" + int_to_str(tid)
