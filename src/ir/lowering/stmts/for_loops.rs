@@ -75,7 +75,7 @@ pub(super) fn lower_for(
     };
 
     if ctx.type_mapper.is_string_type(iter_type) {
-        lower_for_string(ctx, builder, &var_name, iter_op, body, else_arm);
+        lower_for_string(ctx, builder, &var_name, iter_op, iterable, body, else_arm);
     } else {
         // Determine collection kind from type metadata (set by BuiltinTypeProtocol).
         // Falls back to name-based detection, then Iterable/Iterator trait dispatch.
@@ -139,14 +139,19 @@ fn lower_for_string(
     builder: &mut FunctionBuilder,
     var_name: &str,
     iter_op: Operand,
+    _iterable_expr: &Spanned<Expr>,
     body: &Block,
     else_arm: Option<&Block>,
 ) {
     let owned_string_type = ctx.type_mapper.owned_string_type;
 
-    // Store the iterable in a local
+    // Store the iterable in a local. The assign creates a CoW shallow copy;
+    // gorget_string_clone (emitted by the CoW system) allocates an independent
+    // buffer. Register iter_local for drop so the clone is freed at loop exit.
+    // The source variable is dropped separately by its own scope.
     let iter_local = builder.add_local(owned_string_type, None);
     builder.assign(Place::local(iter_local), iter_op);
+    ctx.drops.register_local(iter_local, owned_string_type, &ctx.type_registry);
 
     // byte_pos = 0
     let byte_pos = builder.add_local(I64_TYPE, None);
