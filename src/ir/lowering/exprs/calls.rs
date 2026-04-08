@@ -1115,6 +1115,14 @@ fn format_for_printf(
     if ctx.type_mapper.is_string_type(type_id) {
         // Str/GorgetString → %.*s with (int)expr.len, expr.data
         ("%.*s".to_string(), vec![operand])
+    } else if ctx.pointee_type(type_id).map_or(false, |inner| ctx.type_mapper.is_string_type(inner)) {
+        // Ptr(String) — dereference to get the String, then format as %.*s.
+        // Assign from the pointer into a String-typed local so the Printf expansion
+        // can extract .len and .data fields via SlotAddr + FieldPtr.
+        let str_ty = ctx.type_mapper.owned_string_type;
+        let tmp = builder.add_local(str_ty, None);
+        builder.assign(builder.local(tmp), operand);
+        ("%.*s".to_string(), vec![FunctionBuilder::copy(tmp)])
     } else if type_id == BOOL_TYPE {
         ("%s".to_string(), vec![operand])
     } else if let Some(GirType::Named(ref type_name)) = ctx.type_registry.get(type_id).cloned() {
