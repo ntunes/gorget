@@ -592,6 +592,133 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         gmod.functions.push(GirFunction(mangled, !param_types, ret_type, ctx.locals, !blocks))
         mi += 1
 
+# ── Closure scanning ─────────────────────────────────────
+
+int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
+    match sexpr.expr:
+        case EClosure(params, body):
+            # Emit __Closure_N__call function
+            String closure_name = "__Closure_" + int_to_str(next_id)
+            String call_name = closure_name + "__call"
+            int closure_tid = lookup_or_register_named(&gmod, closure_name)
+            int self_ptr = register_ptr(&gmod, closure_tid)
+
+            # Build param types: *__Closure_N + explicit params
+            Vector[int] param_types = [self_ptr]
+            int pi = 0
+            while pi < params.len():
+                Param p = params.get(pi).unwrap()
+                int pt = map_ast_type(p.param_type, &gmod)
+                param_types.push(pt)
+                pi += 1
+
+            # Infer return type from body (simplified: check last stmt)
+            int ret_type = I64_TYPE
+            if body.len() > 0:
+                Stmt last_stmt = body.get(body.len() - 1).unwrap()
+                match last_stmt:
+                    case SReturn(opt_expr):
+                        # Has explicit return — keep I64 for now
+                        pass
+                    case SExpr(expr):
+                        # Expression body — the value IS the return
+                        pass
+                    else:
+                        ret_type = UNIT_TYPE
+
+            # Create minimal function with empty body
+            Vector[GirLocal] locals = [GirLocal(ret_type, NO_NAME), GirLocal(self_ptr, NO_NAME)]
+            int li = 0
+            while li < params.len():
+                Param lp = params.get(li).unwrap()
+                int lpt = map_ast_type(lp.param_type, &gmod)
+                locals.push(GirLocal(lpt, Some(lp.param_name)))
+                li += 1
+            Vector[BasicBlock] blocks = [BasicBlock([], TReturn(OpCopy(0)))]
+            gmod.functions.push(GirFunction(call_name, !param_types, ret_type, !locals, !blocks))
+            next_id = next_id + 1
+
+            # Scan closure body for nested closures
+            next_id = scan_stmts_for_closures(body, next_id, &gmod)
+        case EBinaryOp(lhs, _, rhs):
+            next_id = scan_expr_for_closures(*lhs, next_id, &gmod)
+            next_id = scan_expr_for_closures(*rhs, next_id, &gmod)
+        case EUnaryOp(_, inner):
+            next_id = scan_expr_for_closures(*inner, next_id, &gmod)
+        case ECall(callee, args, _):
+            next_id = scan_expr_for_closures(*callee, next_id, &gmod)
+            int ai = 0
+            while ai < args.len():
+                SpannedExpr arg = args.get(ai).unwrap()
+                next_id = scan_expr_for_closures(arg, next_id, &gmod)
+                ai += 1
+        case EMethodCall(obj, _, args, _):
+            next_id = scan_expr_for_closures(*obj, next_id, &gmod)
+            int ai = 0
+            while ai < args.len():
+                SpannedExpr arg = args.get(ai).unwrap()
+                next_id = scan_expr_for_closures(arg, next_id, &gmod)
+                ai += 1
+        case EIf(cond, then_body, branches):
+            next_id = scan_expr_for_closures(*cond, next_id, &gmod)
+            next_id = scan_stmts_for_closures(then_body, next_id, &gmod)
+        case EFieldAccess(obj, _):
+            next_id = scan_expr_for_closures(*obj, next_id, &gmod)
+        case EIndex(obj, idx):
+            next_id = scan_expr_for_closures(*obj, next_id, &gmod)
+            next_id = scan_expr_for_closures(*idx, next_id, &gmod)
+        else:
+            pass
+    return next_id
+
+int scan_stmt_for_closures(Stmt stmt, int next_id, GirModule &gmod):
+    match stmt:
+        case SVarDecl(_, _, init, _, _, _):
+            next_id = scan_expr_for_closures(init, next_id, &gmod)
+        case SAssign(target, value):
+            next_id = scan_expr_for_closures(target, next_id, &gmod)
+            next_id = scan_expr_for_closures(value, next_id, &gmod)
+        case SExpr(expr):
+            next_id = scan_expr_for_closures(expr, next_id, &gmod)
+        case SReturn(opt_expr):
+            match opt_expr:
+                case Some(expr):
+                    next_id = scan_expr_for_closures(expr, next_id, &gmod)
+                case None:
+                    pass
+        case SIf(cond, then_body, branches):
+            next_id = scan_expr_for_closures(cond, next_id, &gmod)
+            next_id = scan_stmts_for_closures(then_body, next_id, &gmod)
+            int bi = 0
+            while bi < branches.len():
+                ElseBranch eb = branches.get(bi).unwrap()
+                match eb.condition:
+                    case Some(elif_cond):
+                        next_id = scan_expr_for_closures(elif_cond, next_id, &gmod)
+                    case None:
+                        pass
+                next_id = scan_stmts_for_closures(eb.body, next_id, &gmod)
+                bi += 1
+        case SWhile(cond, body):
+            next_id = scan_expr_for_closures(cond, next_id, &gmod)
+            next_id = scan_stmts_for_closures(body, next_id, &gmod)
+        case SFor(_, iter_expr, body, _, _):
+            next_id = scan_expr_for_closures(iter_expr, next_id, &gmod)
+            next_id = scan_stmts_for_closures(body, next_id, &gmod)
+        case SMatch(scrutinee, arms):
+            next_id = scan_expr_for_closures(scrutinee, next_id, &gmod)
+        else:
+            pass
+    return next_id
+
+int scan_stmts_for_closures(Vector[Stmt] stmts, int next_id, GirModule &gmod):
+    int si = 0
+    while si < stmts.len():
+        Stmt stmt = stmts.get(si).unwrap()
+        next_id = scan_stmt_for_closures(stmt, next_id, &gmod)
+        si += 1
+    return next_id
+
 # ── Module lowering ──────────────────────────────────────
 
 GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
@@ -672,4 +799,22 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
             else:
                 pass
         fi = fi + 1
+
+    # Scan all items for closures and emit __Closure_N__call functions
+    int closure_id = 0
+    int ci = 0
+    while ci < m.items.len():
+        Item citem = m.items.get(ci).unwrap()
+        match citem:
+            case IFunction(fdef):
+                closure_id = scan_stmts_for_closures(fdef.body, closure_id, &gmod)
+            case IEquip(eqblk):
+                int emi = 0
+                while emi < eqblk.methods.len():
+                    FunctionDef emdef = eqblk.methods.get(emi).unwrap()
+                    closure_id = scan_stmts_for_closures(emdef.body, closure_id, &gmod)
+                    emi += 1
+            else:
+                pass
+        ci += 1
     return gmod
