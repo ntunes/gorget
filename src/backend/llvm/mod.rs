@@ -1307,12 +1307,34 @@ fn emit_inst(
         Inst::Cmp { dst, op, lhs, rhs } => {
             // Determine operand type from val_types
             let lhs_ty = val_types.get(lhs.0 as usize).and_then(|t| t.as_ref());
+            let rhs_ty = val_types.get(rhs.0 as usize).and_then(|t| t.as_ref());
             let is_float_cmp = lhs_ty.map_or(false, |t| t.is_float());
             let is_ptr_cmp = lhs_ty.map_or(false, |t| t.is_ptr());
             let is_signed_cmp = lhs_ty.map_or(true, |t| is_signed(t));
             let lty = lhs_ty.map_or("i64", |t| {
                 if t.is_ptr() { "ptr" } else { llvm_type(t) }
             });
+
+            // If RHS has different integer width than LHS, emit trunc/zext to match
+            let rhs_name = if !is_float_cmp && !is_ptr_cmp {
+                let lhs_bits = lhs_ty.map_or(64, int_bits);
+                let rhs_bits = rhs_ty.map_or(64, int_bits);
+                if rhs_bits != lhs_bits && rhs_bits > 0 && lhs_bits > 0 {
+                    let rhs_ty_str = rhs_ty.map_or("i64", |t| llvm_type(t));
+                    let cast_name = format!("cmp.cast.{}.{}", dst.0, rhs.0);
+                    if rhs_bits > lhs_bits {
+                        writeln!(out, "  %{cast_name} = trunc {rhs_ty_str} %v{} to {lty}", rhs.0).unwrap();
+                    } else {
+                        let ext = if is_signed_cmp { "sext" } else { "zext" };
+                        writeln!(out, "  %{cast_name} = {ext} {rhs_ty_str} %v{} to {lty}", rhs.0).unwrap();
+                    }
+                    format!("%{cast_name}")
+                } else {
+                    format!("%v{}", rhs.0)
+                }
+            } else {
+                format!("%v{}", rhs.0)
+            };
 
             if is_float_cmp {
                 let fcmp_op = match op {
@@ -1323,14 +1345,14 @@ fn emit_inst(
                     CmpOp::Gt => "ogt",
                     CmpOp::Ge => "oge",
                 };
-                writeln!(out, "  %v{} = fcmp {fcmp_op} {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
+                writeln!(out, "  %v{} = fcmp {fcmp_op} {lty} %v{}, {rhs_name}", dst.0, lhs.0).unwrap();
             } else if is_ptr_cmp {
                 let icmp_op = match op {
                     CmpOp::Eq => "eq",
                     CmpOp::Ne => "ne",
-                    _ => "eq", // ptr comparisons other than eq/ne are rare
+                    _ => "eq",
                 };
-                writeln!(out, "  %v{} = icmp {icmp_op} ptr %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
+                writeln!(out, "  %v{} = icmp {icmp_op} ptr %v{}, {rhs_name}", dst.0, lhs.0).unwrap();
             } else {
                 let icmp_op = match op {
                     CmpOp::Eq => "eq",
@@ -1340,7 +1362,7 @@ fn emit_inst(
                     CmpOp::Gt => if is_signed_cmp { "sgt" } else { "ugt" },
                     CmpOp::Ge => if is_signed_cmp { "sge" } else { "uge" },
                 };
-                writeln!(out, "  %v{} = icmp {icmp_op} {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
+                writeln!(out, "  %v{} = icmp {icmp_op} {lty} %v{}, {rhs_name}", dst.0, lhs.0).unwrap();
             }
         }
         Inst::Not { dst, operand } => {
