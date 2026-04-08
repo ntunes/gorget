@@ -16,6 +16,8 @@
 
 ## Medium
 
+- **GIR call resolution confuses functions with similar first-param types**: When two functions in the same module have the same first param type (e.g., `infer_expr_type(SpannedExpr)` and `scan_expr_for_closures(SpannedExpr, int, GirModule &)`), the generated C passes the wrong argument count. Discovered via self-host lowerer. Workaround: rename one function. Root cause likely in `fn_sigs` lookup or call lowering in `calls.rs`. [added: 2026-04-08]
+
 - **CoW: scope-escape materialization boundary**: When a CoW borrow escapes its scope (stored in a struct field, returned from function, pushed to collection), materialize to owned at the boundary. This is the generalization of the existing return-clone and field-store-from-borrow materializations. Once all escape boundaries are covered, strings no longer need an allocator pointer in every struct — the CoW system guarantees that all live references are independently owned at scope boundaries. Enables removing the allocator field from `GorgetString`, reducing every string from 32 to 24 bytes. [added: 2026-04-07]
 
 - **Borrow checker: early return doesn't reset move state**: INVESTIGATED — the divergent-branch filtering in `merge_branch_states()` already works correctly. Moves in branches that return/throw/break are excluded from the join-point merge. Added regression test `move_in_divergent_branch_ok`. The self-host `scope.gg` defensive clones may have been needed before the StringView removal. Review if they can now be removed. [updated: 2026-04-06]
