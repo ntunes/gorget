@@ -124,9 +124,15 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
             int t = prim_name_to_type(name)
             if t >= 0:
                 return t
+            # Callable types → unit (opaque in GIR)
+            if name == "Callable" or name == "MutCallable" or name == "ConsumeCallable":
+                return UNIT_TYPE
             # Named type with possible generic args
             String mangled = mangle_type_name(name, targs, &gmod)
             return lookup_or_register_named(&gmod, mangled)
+        case TFunction(_, _, _):
+            # Function types (closures, callables) → unit (opaque in GIR)
+            return UNIT_TYPE
         case TInferred():
             return I64_TYPE
         case TTuple(elems):
@@ -594,7 +600,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
 
 # ── Simple expression type inference ─────────────────────
 
-int infer_expr_type(SpannedExpr sexpr):
+int guess_return_type(SpannedExpr sexpr):
     match sexpr.expr:
         case EIntLiteral(_):
             return I64_TYPE
@@ -648,11 +654,11 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
                     case SReturn(opt_expr):
                         match opt_expr:
                             case Some(rexpr):
-                                ret_type = infer_expr_type(rexpr)
+                                ret_type = guess_return_type(rexpr)
                             case None:
                                 ret_type = UNIT_TYPE
                     case SExpr(expr):
-                        ret_type = infer_expr_type(expr)
+                        ret_type = guess_return_type(expr)
                     else:
                         ret_type = UNIT_TYPE
 
