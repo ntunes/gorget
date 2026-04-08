@@ -545,7 +545,7 @@ fn remap_instruction(instr: &mut Instruction, map: &FxHashMap<LocalId, LocalId>)
             *dst = remap_local(*dst, map);
             remap_place(base, map);
         }
-        Instruction::IndexLoad { dst, base, index } => {
+        Instruction::IndexLoad { dst, base, index, .. } => {
             *dst = remap_local(*dst, map);
             remap_place(base, map);
             remap_operand(index, map);

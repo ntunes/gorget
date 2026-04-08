@@ -268,6 +268,9 @@ pub struct FunctionState {
     /// the scrutinee is dead and BOTH the scrutinee copy AND the original
     /// variable will be MoveZeroed after extraction. Set by lower_match_stmt.
     pub scrutinee_clone_elision: bool,
+    /// Set when a for-loop uses `index_load_borrow` for string elements.
+    /// If false, return materialization can be skipped (no views to materialize).
+    pub has_string_borrows: bool,
 }
 
 /// Tracks lowering state within a function.

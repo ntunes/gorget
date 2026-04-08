@@ -2174,7 +2174,7 @@ fn mark_instruction_locals(inst: &Instruction, referenced: &mut [bool]) {
             mark_local(dst.0, referenced);
             mark_place(base, referenced);
         }
-        Instruction::IndexLoad { dst, base, index } => {
+        Instruction::IndexLoad { dst, base, index, .. } => {
             mark_local(dst.0, referenced);
             mark_place(base, referenced);
             mark_operand(index, referenced);
@@ -2325,7 +2325,7 @@ fn remap_instruction_locals(inst: &mut Instruction, remap: &[u32]) {
             remap_local(dst, remap);
             remap_place(base, remap);
         }
-        Instruction::IndexLoad { dst, base, index } => {
+        Instruction::IndexLoad { dst, base, index, .. } => {
             remap_local(dst, remap);
             remap_place(base, remap);
             remap_operand(index, remap);

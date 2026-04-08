@@ -302,7 +302,7 @@ fn check_instruction_locals(
             check_local_id(*dst, max, ctx, errors);
             check_place_locals(base, max, ctx, errors);
         }
-        Instruction::IndexLoad { dst, base, index } => {
+        Instruction::IndexLoad { dst, base, index, .. } => {
             check_local_id(*dst, max, ctx, errors);
             check_place_locals(base, max, ctx, errors);
             check_operand_locals(index, max, ctx, errors);

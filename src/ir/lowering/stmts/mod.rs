@@ -1034,7 +1034,9 @@ fn lower_return(
             let is_dict_type = ret_name.starts_with("Dict__")
                 || ret_name.starts_with("HashMap__")
                 || ret_name == "GorgetMap";
-            if is_array_type || is_dict_type {
+            // Skip materialization when the function has no string borrows —
+            // no views could have been pushed into the returned collection.
+            if (is_array_type || is_dict_type) && ctx.func_state.has_string_borrows {
                 let ptr_type = ctx.register_ptr_type(ret_type);
                 let ptr = builder.add_local(ptr_type, None);
                 builder.emit_borrow_mut(ptr, Place::local(LocalId(0)));

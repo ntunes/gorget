@@ -577,7 +577,7 @@ impl<'a> FuncLowering<'a> {
                 }
             }
 
-            Instruction::IndexLoad { dst, base, index } => {
+            Instruction::IndexLoad { dst, base, index, borrow } => {
                 // Determine base type name and index type to dispatch appropriately.
                 let base_type = self.effective_place_type(base);
                 let base_type_name = self.resolve_type_name(base_type);
@@ -739,13 +739,18 @@ impl<'a> FuncLowering<'a> {
                     let clone_fn = clone_fn_for_collection_element(elem_type_name);
 
                     if let Some(clone_fn_name) = clone_fn {
-                        // Clone: call gorget_*_clone(elem_ptr) → new deep copy
+                        // Borrow mode: zero-copy view instead of clone for strings
+                        let actual_fn = if *borrow && clone_fn_name == "gorget_string_clone_to_owned" {
+                            "gorget_string_borrow"
+                        } else {
+                            clone_fn_name
+                        };
                         let ret_ty = elem_ty.clone();
-                        self.ensure_extern(clone_fn_name, &[LirType::Ptr], &ret_ty);
+                        self.ensure_extern(actual_fn, &[LirType::Ptr], &ret_ty);
                         let result = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                             dst: Some(result),
-                            name: clone_fn_name.to_string(),
+                            name: actual_fn.to_string(),
                             args: vec![ptr_val],
                             original_name: None,
                         });

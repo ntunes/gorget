@@ -870,7 +870,7 @@ impl<'m> Interpreter<'m> {
                 locals[idx] = field_val;
             }
 
-            Instruction::IndexLoad { dst, base, index } => {
+            Instruction::IndexLoad { dst, base, index, .. } => {
                 let base_val = self.read_place(locals, base)?;
                 let idx_val = self.eval_operand(locals, index)?;
 

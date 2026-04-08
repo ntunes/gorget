@@ -2238,8 +2238,8 @@ fn leak_known_patterns() {
     run_gg("leak_known_patterns.gg", "\
 P1 Ok(struct): leaked=false
 P2 Ok(Vec[int]): leaked=false
-P3 for String: leaked=true
-P4 for Vec[int]: leaked=true
+P3 for String: leaked=false
+P4 for Vec[int]: leaked=false
 P5 for char: leaked=false
 P6 vec reassign: leaked=false
 done");

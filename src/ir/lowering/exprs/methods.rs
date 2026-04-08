@@ -1375,13 +1375,14 @@ pub(super) fn lower_method_call(
                 if let Expr::Identifier(name) = &arg.node.value.node {
                     if let Some((local_id, _)) = ctx.lookup_local(name) {
                         if is_resource_type_local(local_id, builder, &ctx.type_registry) {
-                            // Pragmatic: skip MoveZero for named string locals.
-                            // ! on strings is a no-op (matches pre-unification behavior).
-                            // TODO: borrow checker should reject multi-use ! on strings.
+                            // Skip MoveZero for explicit ! on named string locals.
+                            // Existing code uses !key in loops (multi-use) where
+                            // MoveZero would cause use-after-move. Phase 1f auto-move
+                            // (below) handles the safe single-use case with is_last_use_at.
                             let local_type = builder.local_type(local_id);
                             let inner = ctx.pointee_type(local_type).unwrap_or(local_type);
                             if ctx.type_mapper.is_string_type(inner) && ctx.is_named_local(local_id) {
-                                return None; // Skip MoveZero
+                                return None;
                             }
                             return Some(Place::local(local_id));
                         }

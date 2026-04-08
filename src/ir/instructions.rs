@@ -135,6 +135,9 @@ pub enum Instruction {
         dst: LocalId,
         base: Place,
         index: Operand,
+        /// When true, the LIR emits a borrow (view) instead of a deep clone
+        /// for string elements. Used by for-loop iteration.
+        borrow: bool,
     },
 
     /// Load a value by dereferencing a Ptr-typed local.

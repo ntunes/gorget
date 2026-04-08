@@ -286,10 +286,14 @@ fn lower_for_array(
     ctx.push_loop(incr_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
-    // elem = iter[idx] — load element from array
+    // elem = iter[idx] — borrow element from array (view for strings, clone for collections).
     let elem_type = super::super::exprs::infer_collection_element_type(ctx, iter_type);
-    let elem = builder.index_load(Place::local(iter_local), FunctionBuilder::copy(idx), elem_type);
+    let elem = builder.index_load_borrow(Place::local(iter_local), FunctionBuilder::copy(idx), elem_type);
     ctx.register_local(var_name, elem, elem_type);
+    ctx.drops.register_local(elem, elem_type, &ctx.type_registry);
+    if ctx.type_mapper.is_string_type(elem_type) {
+        ctx.func_state.has_string_borrows = true;
+    }
 
     // If pattern is a destructuring tuple, emit bindings
     if !matches!(pattern.node, Pattern::Binding(_)) {
@@ -387,9 +391,13 @@ fn lower_for_enumerate(
 
     // Bind element variable (second tuple element) — load from array
     let elem_type = super::super::exprs::infer_collection_element_type(ctx, iter_type);
-    let elem = builder.index_load(Place::local(iter_local), FunctionBuilder::copy(idx), elem_type);
+    let elem = builder.index_load_borrow(Place::local(iter_local), FunctionBuilder::copy(idx), elem_type);
     if let Pattern::Binding(elem_name) = &parts[1].node {
         ctx.register_local(elem_name, elem, elem_type);
+    }
+    ctx.drops.register_local(elem, elem_type, &ctx.type_registry);
+    if ctx.type_mapper.is_string_type(elem_type) {
+        ctx.func_state.has_string_borrows = true;
     }
 
     lower_block(ctx, builder, body);

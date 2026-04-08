@@ -230,7 +230,7 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
         Instruction::FieldLoad { dst, base, field, .. } => {
             write!(out, "_{} = field_load {}, {}", dst.0, format_place(base), field).unwrap();
         }
-        Instruction::IndexLoad { dst, base, index } => {
+        Instruction::IndexLoad { dst, base, index, .. } => {
             write!(
                 out,
                 "_{} = index_load {}, {}",
