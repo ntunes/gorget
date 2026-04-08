@@ -4561,6 +4561,11 @@ static inline void gorget_array_push(GorgetArray* arr, const void* elem) {
     }
     memcpy((char*)arr->data + arr->len * arr->elem_size, elem, arr->elem_size);
     arr->len++;
+    // CoW ownership boundary: materialize views/borrows to owned copies.
+    // Push takes ownership — the collection must independently own its elements.
+    if (arr->elem_materialize) {
+        arr->elem_materialize((char*)arr->data + (arr->len - 1) * arr->elem_size);
+    }
 }
 
 static inline void* gorget_array_get(const GorgetArray* arr, size_t index) {
@@ -4695,8 +4700,20 @@ static inline void gorget_array_free(GorgetArray* arr) {
 }
 
 static inline bool gorget_array_contains(const GorgetArray* a, const void* needle, size_t elem_size) {
+    // String elements: use content-based comparison (len + data bytes).
+    // memcmp on the full GorgetString struct would compare cap/alloc fields
+    // which differ between views (cap=0) and owned strings (cap>0).
+    bool is_str = (a->elem_drop == (__gorget_drop_fn)gorget_string_free);
     for (size_t i = 0; i < a->len; i++) {
-        if (memcmp((char*)a->data + i * a->elem_size, needle, elem_size) == 0) return true;
+        void* slot = (char*)a->data + i * a->elem_size;
+        if (is_str) {
+            const Str* sa = (const Str*)slot;
+            const Str* sb = (const Str*)needle;
+            if (sa->len == sb->len && (sa->len == 0 || memcmp(sa->data, sb->data, sa->len) == 0))
+                return true;
+        } else {
+            if (memcmp(slot, needle, elem_size) == 0) return true;
+        }
     }
     return false;
 }
@@ -4853,6 +4870,11 @@ static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t sta
 
 static inline GorgetArray gorget_str_split(Str s, Str delim) {
     GorgetArray arr = gorget_array_new(sizeof(Str));
+    // NOTE: elem_drop/elem_clone are NOT set here. Split creates views (cap=0)
+    // into the source string — they must NOT be freed by elem_drop (that would
+    // free the source's buffer). elem_materialize is also not set so the views
+    // stay as views during push. The caller's for-loop borrow + push
+    // materialization handles ownership at the right boundary.
     if (delim.len == 0) {
         // Split into individual codepoints
         size_t pos = 0;
@@ -4945,6 +4967,7 @@ static inline GorgetArray gorget_str_codepoints(Str s) {
 
 static inline GorgetArray gorget_str_chars(Str s) {
     GorgetArray arr = gorget_array_new(sizeof(Str));
+    // chars creates views — same reasoning as split: no elem_drop/clone/materialize.
     size_t pos = 0;
     while (pos < s.len) {
         int cplen = gorget_utf8_codepoint_len((unsigned char)s.data[pos]);
@@ -5858,6 +5881,8 @@ static inline const char* gorget_path_absolute(const char* path) {
 // ── readdir ─────────────────────────────────────────────────
 static inline GorgetArray gorget_readdir(const char* path) {
     GorgetArray arr = gorget_array_new(sizeof(Str));
+    arr.elem_drop = (__gorget_drop_fn)gorget_string_free;
+    arr.elem_clone = (__gorget_drop_fn)gorget_string_clone_inplace;
     DIR* d = opendir(path);
     if (!d) { fprintf(stderr, "Error: cannot open directory '%s'\n", path); exit(1); }
     struct dirent* ent;
@@ -5880,6 +5905,8 @@ pub const RUNTIME_ARGS: &str = r#"
 // ── CLI args (gorget_args) ──────────────────────────────────
 static inline GorgetArray gorget_args(void) {
     GorgetArray arr = gorget_array_new(sizeof(Str));
+    arr.elem_drop = (__gorget_drop_fn)gorget_string_free;
+    arr.elem_clone = (__gorget_drop_fn)gorget_string_clone_inplace;
     for (int i = 0; i < gorget_argc; i++) {
         Str s = gorget_str_from_cstr(gorget_argv[i]);
         gorget_array_push(&arr, &s);
