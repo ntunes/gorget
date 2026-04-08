@@ -670,8 +670,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             case Some(tname):
                 # Derive-generated traits use short form (Type__method)
                 # Explicit trait impls use prefix (Trait_for_Type__method)
-                bool is_derive = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname.find("Iterator") == 0 or tname.find("Iterable") == 0
-                if not is_derive:
+                bool is_derive = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname.find("Iterator") == 0 or tname.find("Iterable") == 0                if not is_derive:
                     String mangled_trait = mangle_trait_name(tname)
                     mangled = mangled_trait + "_for_" + target_name + "__" + mdef.name
             case None:
@@ -703,8 +702,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         bool is_explicit_trait = false
         match eqblk.trait_name:
             case Some(tname):
-                bool is_derive_trait = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname.find("Iterator") == 0 or tname.find("Iterable") == 0
-                if not is_derive_trait:
+                bool is_derive_trait = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname.find("Iterator") == 0 or tname.find("Iterable") == 0                if not is_derive_trait:
                     is_explicit_trait = true
             case None:
                 pass
