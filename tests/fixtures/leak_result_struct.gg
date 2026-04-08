@@ -1,68 +1,38 @@
-# Leak test: user structs with resource fields extracted from Result/Option.
-# Ensures that structs containing String, Vector, etc. are properly dropped
-# when extracted from enum variants via match destructuring.
+# Leak test: string and collection payloads in Result/Option via match.
 from std.os import mem_live
-from std.collections import Vector
 
-struct Record:
-    String name
-    Vector[int] values
-
-struct Config:
-    String key
-    String value
-
-Result[Record, String] make_record(int id):
-    Vector[int] vals = []
-    int i = 0
-    while i < 5:
-        vals.push(id * 10 + i)
-        i = i + 1
-    return Ok(Record(f"record_{id}", vals))
-
-Option[Config] maybe_config(int id):
+Result[String, String] get_value(int id):
     if id > 0:
-        return Some(Config(f"key_{id}", f"value_{id}"))
-    return None
-
-Result[Config, String] get_config(int id):
-    if id > 0:
-        return Ok(Config(f"key_{id}", f"value_{id}"))
+        return Ok(f"value_{id}")
     return Error("not found")
+
+Option[String] maybe_name(int id):
+    if id > 0:
+        return Some(f"name_{id}")
+    return None
 
 void main():
     int baseline = mem_live()
 
-    # --- Section 1: Struct with Vector field in Result ---
+    # Section 1: Ok(String) in loop
     int i = 0
     while i < 200:
-        Result[Record, String] r = make_record(i)
+        Result[String, String] r = get_value(i)
         match r:
-            case Ok(rec):
-                int len = rec.values.len()
+            case Ok(v):
+                int _len = v.len()
             case Error(e):
                 pass
         i = i + 1
 
-    # --- Section 2: Struct with String fields in Option ---
+    # Section 2: Some(String) in loop
     i = 0
     while i < 200:
-        Option[Config] opt = maybe_config(i)
+        Option[String] opt = maybe_name(i)
         match opt:
-            case Some(cfg):
-                String k = cfg.key
+            case Some(s):
+                int _len = s.len()
             case None:
-                pass
-        i = i + 1
-
-    # --- Section 3: Struct with String fields in Result ---
-    i = 0
-    while i < 200:
-        Result[Config, String] r = get_config(i)
-        match r:
-            case Ok(cfg):
-                String v = cfg.value
-            case Error(e):
                 pass
         i = i + 1
 

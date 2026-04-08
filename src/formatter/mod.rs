@@ -2106,6 +2106,8 @@ impl Formatter {
                 '\\' => self.emitter.write("\\\\"),
                 '"' => self.emitter.write("\\\""),
                 '\0' => self.emitter.write("\\0"),
+                '{' if kind == StringKind::Format => self.emitter.write("{{"),
+                '}' if kind == StringKind::Format => self.emitter.write("}}"),
                 c => {
                     let mut buf = [0u8; 4];
                     self.emitter.write(c.encode_utf8(&mut buf));

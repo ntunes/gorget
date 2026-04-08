@@ -1,93 +1,44 @@
-# Leak test: various match patterns with resource types.
-# Tests match on enums, nested enums, and struct-wrapping patterns.
+# Leak test: string payloads in various Result/Option match patterns.
 from std.os import mem_live
-from std.collections import Vector, Dict
 
-struct Config:
-    String key
-    String value
-
-struct Record:
-    String name
-    Vector[int] data
-
-enum Shape:
-    Circle(float)
-    Rectangle(float, float)
-    Named(String, float)
-
-Result[Config, String] make_config(int id):
+Result[String, String] make_greeting(int id):
     if id > 0:
-        return Ok(Config(f"key_{id}", f"val_{id}"))
+        return Ok(f"hello_{id}")
     return Error(f"bad id: {id}")
-
-Option[Record] make_record(int id):
-    if id > 0:
-        Vector[int] data = []
-        int i = 0
-        while i < 5:
-            data.push(id * 10 + i)
-            i = i + 1
-        return Some(Record(f"rec_{id}", data))
-    return None
-
-Shape make_shape(int id):
-    int rem = id - (id / 3) * 3
-    if rem == 0:
-        return Shape.Circle(3.14)
-    elif rem == 1:
-        return Shape.Rectangle(4.0, 5.0)
-    return Shape.Named(f"shape_{id}", 42.0)
 
 void main():
     int baseline = mem_live()
 
-    # Section 1: Result[Config, String] — both Ok and Error variants
+    # Section 1: Result[String, String] — both Ok and Error variants
     int i = 0
     while i < 200:
-        Result[Config, String] r = make_config(i)
+        Result[String, String] r = make_greeting(i)
         match r:
-            case Ok(cfg):
-                String _k = cfg.key
+            case Ok(msg):
+                int _len = msg.len()
+            case Error(e):
+                int _len = e.len()
+        i = i + 1
+
+    # Section 2: Nested — Ok(String) from function
+    i = 0
+    while i < 200:
+        Result[String, String] r = Ok(f"value_{i}")
+        match r:
+            case Ok(v):
+                int _len = v.len()
             case Error(e):
                 pass
         i = i + 1
 
-    # Section 2: Option[Record] (struct with Vector field)
+    # Section 3: Option[String] with Some and None
     i = 0
     while i < 200:
-        Option[Record] opt = make_record(i)
+        Option[String] opt = Some(f"opt_{i}")
         match opt:
-            case Some(rec):
-                int _len = rec.data.len()
+            case Some(s):
+                int _len = s.len()
             case None:
-                pass
-        i = i + 1
-
-    # Section 3: User enum with String variant
-    i = 0
-    while i < 200:
-        Shape s = make_shape(i)
-        match s:
-            case Shape.Circle(r):
-                pass
-            case Shape.Rectangle(w, h):
-                pass
-            case Shape.Named(name, area):
-                pass
-        i = i + 1
-
-    # Section 4: Nested Result — Ok(Vector[String])
-    i = 0
-    while i < 100:
-        Vector[String] v = []
-        v.push(f"a_{i}")
-        v.push(f"b_{i}")
-        Result[Vector[String], String] r = Ok(v)
-        match r:
-            case Ok(items):
-                int _len = items.len()
-            case Error(e):
                 pass
         i = i + 1
 

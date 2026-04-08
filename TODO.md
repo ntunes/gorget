@@ -2,7 +2,7 @@
 
 ## High
 
-- **Leak reduction — 2 remaining patterns**: Match destructuring fixed, elem_drop for array literals fixed. Remaining: (1) **Collection reassignment skips drop** — `v = !new_v` doesn't free old `v`. Fix blocked on self-referential detection (naively dropping before assign causes UAF for `v = v.slice(...)`). (2) **For-loop resource-type element drops** — `for x in vec_of_strings` clones each element but the clone is never freed. Fix requires deep-clone at LIR level (`gorget_array_clone` is shallow — elem_drop on the clone corrupts the original). `for ch in dynamic_fstring` also leaks the iterator copy. [updated: 2026-04-07]
+- **Leak reduction — 3 remaining patterns**: elem_drop for array literals with string/collection elements fixed. Remaining: (1) **Match destructuring for collections/structs** — widening from `owned_string_type` to `is_resource_type` was attempted but causes use-after-free: extracted values that are returned aren't move-zeroed, so the drop frees the returned value. Blocked on proper move-zero tracking for pattern-extracted locals. (2) **Collection reassignment skips drop** — `v = !new_v` doesn't free old `v`. Blocked on self-referential detection. (3) **For-loop resource-type element drops** — `for x in vec_of_strings` clones each element but the clone is never freed. `gorget_array_clone` is shallow — elem_drop on the clone corrupts the original. [updated: 2026-04-08]
 
 - **Clone observability + Cloneable trait**: `.clone()` works on all types. `gg build --show-clones` done. Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
 
