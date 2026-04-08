@@ -837,7 +837,8 @@ fn compile_llvm_pipeline(
     // Conditionally include heavier runtime modules
     let needs_async = concat_source.contains("std.async")
         || !lir_module.spawned_fns.is_empty()
-        || !lir_module.externs.iter().all(|e| !e.name.contains("gorget_channel") && !e.name.contains("gorget_task"));
+        || !lir_module.externs.iter().all(|e| !e.name.contains("gorget_channel") && !e.name.contains("gorget_task")
+            && !e.name.starts_with("Channel__"));
     if needs_async {
         runtime_src.push_str(c_runtime::ASYNC_RUNTIME);
         runtime_src.push_str(c_runtime::TASK_COMMON);
@@ -859,7 +860,8 @@ fn compile_llvm_pipeline(
         || concat_source.contains("Shared")
         || concat_source.contains("Mutex")
         || concat_source.contains("Guard")
-        || !lir_module.externs.iter().all(|e| !e.name.contains("mutex") && !e.name.contains("shared") && !e.name.contains("guard") && !e.name.contains("rwlock"));
+        || !lir_module.externs.iter().all(|e| !e.name.contains("mutex") && !e.name.contains("shared") && !e.name.contains("guard") && !e.name.contains("rwlock")
+            && !e.name.starts_with("Shared__") && !e.name.starts_with("Mutex__") && !e.name.starts_with("Guard__"));
     if needs_sync {
         // Mutex/Sync depend on async types (GorgetWaker) — include async basics if not already
         if !needs_async {

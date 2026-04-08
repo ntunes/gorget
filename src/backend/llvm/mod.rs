@@ -401,7 +401,7 @@ pub fn generate_llvm_ir(module: &LirModule) -> String {
     emit_extern_declarations(&mut out, module, &snames);
 
     // Intrinsic declarations
-    emit_intrinsic_declarations(&mut out, module);
+    emit_intrinsic_declarations(&mut out, module, &snames);
 
     // No forward declarations needed — LLVM handles out-of-order function references.
 
@@ -777,7 +777,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
 
 // ── Intrinsic Declarations ────────────────────────────────────────────────
 
-fn emit_intrinsic_declarations(out: &mut String, module: &LirModule) {
+fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>) {
     // Check if we need overflow intrinsics
     let mut need_sadd_i64 = false;
     let mut need_ssub_i64 = false;
@@ -813,6 +813,31 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule) {
     if need_sadd_i32 { writeln!(out, "declare {{ i32, i1 }} @llvm.sadd.with.overflow.i32(i32, i32)").unwrap(); }
     if need_ssub_i32 { writeln!(out, "declare {{ i32, i1 }} @llvm.ssub.with.overflow.i32(i32, i32)").unwrap(); }
     if need_smul_i32 { writeln!(out, "declare {{ i32, i1 }} @llvm.smul.with.overflow.i32(i32, i32)").unwrap(); }
+
+    // Adapter function declarations for FuncAddr → callable wrapping.
+    // These are defined in the C wrapper glue; LLVM IR just needs extern declarations.
+    let mut adapter_fids = std::collections::HashSet::new();
+    for func in &module.functions {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let Inst::FuncAddr { func: fid, .. } = inst {
+                    adapter_fids.insert(fid.0);
+                }
+            }
+        }
+    }
+    for fid_raw in &adapter_fids {
+        let target = &module.functions[*fid_raw as usize];
+        let adapt_name = format!("__adapt_{}", target.name);
+        // Adapter signature: ret(void* env, params...) — env is ignored, forwards to real fn.
+        let ret = if target.return_type == LirType::Void { "void" }
+            else { "i64" }; // simplified — adapters return i64 for scalar, void for void
+        let mut param_tys = vec!["ptr".to_string()]; // env
+        for p in &target.params {
+            param_tys.push(llvm_arg_type(p, snames));
+        }
+        writeln!(out, "declare {ret} @{adapt_name}({})", param_tys.join(", ")).unwrap();
+    }
     writeln!(out).unwrap();
 }
 
@@ -2248,8 +2273,8 @@ fn emit_term(
                 writeln!(out, "  ret void").unwrap();
             } else if func.return_type.is_aggregate() && !is_main {
                 // Small aggregate: load from pointer and return by value
-                writeln!(out, "  %retval = load {ret_ty}, ptr %v{}", val.0).unwrap();
-                writeln!(out, "  ret {ret_ty} %retval").unwrap();
+                writeln!(out, "  %retval.{} = load {ret_ty}, ptr %v{}", val.0, val.0).unwrap();
+                writeln!(out, "  ret {ret_ty} %retval.{}", val.0).unwrap();
             } else {
                 writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
             }
