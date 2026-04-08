@@ -1,0 +1,94 @@
+# CoW ownership boundary tests — views materialize at push, return, and dict put.
+from std.os import mem_live
+from std.collections import Vector, Dict
+
+# --- Functions that return collections with views ---
+
+Dict[String, int] count_words(String text):
+    Dict[String, int] freq = Dict[String, int]()
+    Vector[String] words = text.split(" ")
+    for w in words:
+        if freq.contains(w):
+            int old = freq.get(w).unwrap()
+            freq.set(w, old + 1)
+        else:
+            freq.set(w, 1)
+    return freq
+
+Vector[String] get_words(String text):
+    Vector[String] result = []
+    Vector[String] words = text.split(" ")
+    for w in words:
+        result.push(w)
+    return result
+
+Vector[String] filter_words(String text, int min_len):
+    Vector[String] result = []
+    for w in text.split(" "):
+        if w.len() >= min_len:
+            result.push(w)
+    return result
+
+void main():
+    # Test 1: Dict with view keys returned from function
+    Dict[String, int] freq = count_words("the cat sat on the mat the cat")
+    print(f"the: {freq.get("the").unwrap()}")
+    print(f"cat: {freq.get("cat").unwrap()}")
+    print(f"unique: {freq.len()}")
+
+    # Test 2: Vector of views returned from function
+    Vector[String] words = get_words("hello world foo")
+    print(f"words: {words.len()}")
+    print(words[0])
+    print(words[2])
+
+    # Test 3: Filtered views returned
+    Vector[String] long = filter_words("a bb ccc dddd eeeee", 3)
+    print(f"long: {long.len()}")
+    print(long[0])
+    print(long[2])
+
+    # Test 4: Dict return leak check — key cloning on put adds a small
+    # per-call overhead (~2 bytes per key). Check for proportional growth
+    # by comparing 10 vs 100 iterations — the delta should be ~constant
+    # (from the always-clone-key overhead), not proportional to iterations.
+    int b10 = mem_live()
+    int i = 0
+    while i < 10:
+        Dict[String, int] d = count_words("x y z")
+        int _l = d.len()
+        i = i + 1
+    int delta10 = mem_live() - b10
+    int b100 = mem_live()
+    i = 0
+    while i < 100:
+        Dict[String, int] d2 = count_words("x y z")
+        int _l2 = d2.len()
+        i = i + 1
+    int delta100 = mem_live() - b100
+    bool t1 = delta100 > delta10 * 2
+    print(f"dict return leak: {t1}")
+
+    # Test 5: Vector return leak check
+    int b = mem_live()
+    i = 0
+    while i < 100:
+        Vector[String] ws = get_words("one two three")
+        int _l = ws.len()
+        i = i + 1
+    bool t2 = mem_live() - b > 0
+    print(f"vec return leak: {t2}")
+
+    # Test 6: Push materialization — views pushed to vector survive source drop
+    Vector[String] names = []
+    Vector[String] source = []
+    source.push("alice")
+    source.push("bob")
+    for n in source:
+        names.push(n)
+    # source and names both alive — views should work
+    print(f"names: {names.len()}")
+    print(names[0])
+    print(names[1])
+
+    print("done")

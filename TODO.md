@@ -2,7 +2,7 @@
 
 ## High
 
-- **CoW ownership boundaries — implemented for push + return**: All 6 leak patterns fixed. For-loop string elements use zero-copy views (cap=0). Push and return materialize views to owned via `elem_materialize` on GorgetArray. `gorget_array_contains` uses content-based comparison for string elements. Remaining: Dict key materialization at return (gorget_map has no elem_materialize equivalent yet), field store materialization, and borrow checker enforcement of view lifetimes. [updated: 2026-04-08]
+- **CoW ownership boundaries — push + return implemented**: All 6 leak patterns fixed. For-loop string elements are zero-copy views (cap=0). Push materializes views via `elem_materialize` on GorgetArray. Return materializes via `gorget_array_materialize_all` (Vector) and `gorget_map_materialize_keys` (Dict). `gorget_array_contains` uses content-based comparison for string elements. Dict put-time key materialization is a no-op — blocked on set/dict algebra operations using byte-based hash/eq on new collections (cloned keys with different cap/alloc don't match). Remaining: field store materialization, set/dict content-based hash/eq for all operations, and borrow checker view lifetime enforcement. [updated: 2026-04-08]
 
 - **Remove .clone() from Json.get()/at()**: Fix A (Ptr-scrutinee extraction widened to `is_resource_type` minus Box — done) and Fix B (`Option[Ptr(T)]` → `Option[T]` return conversion with deref+clone — done). However, `Ptr(Dict).get(key)` from pattern extraction on `&self` doesn't dispatch correctly — method calls on pattern-extracted Ptr locals produce wrong results. `.clone()` workaround is correct and safe. [updated: 2026-04-08]
 

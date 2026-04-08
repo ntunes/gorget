@@ -4615,6 +4615,21 @@ static inline void gorget_array_materialize_all(GorgetArray* arr) {
     }
 }
 
+// Ownership boundary for Dict returns: materialize all view keys to owned.
+// No-op for maps without key_clone (non-string keys).
+static inline void gorget_map_materialize_keys(GorgetMap* m) {
+    if (m->key_clone && m->keys) {
+        for (size_t i = 0; i < m->cap; i++) {
+            if (m->states[i] == 1) {
+                Str* k = (Str*)((char*)m->keys + i * m->key_size);
+                if (k->cap == 0 && k->len > 0 && k->alloc == NULL) {
+                    *k = gorget_string_clone_to_owned(k);
+                }
+            }
+        }
+    }
+}
+
 static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* elem) {
     if (index >= arr->len) {
         fprintf(stderr, "gorget: panic: index out of bounds: index %zu, length %zu\n", index, arr->len);
@@ -5142,6 +5157,18 @@ static inline GorgetMap gorget_dict_new_str(size_t val_size) {
     return m;
 }
 
+// Materialize a string key view to owned after memcpy into the map's key buffer.
+// Uses key_clone as the signal that keys are strings. Only materializes views
+// (cap=0, alloc=NULL) — owned keys and literals are left untouched.
+// CoW materialize for dict keys — currently a no-op. The existing
+// ownership-transfer pattern (caller zeros cap/alloc after put) is
+// incompatible with clone-on-put because set algebra operations create
+// new sets with byte-based hash/eq that don't match cloned keys.
+// TODO: enable when set/dict operations use content-based comparison.
+static inline void __gorget_map_materialize_key(GorgetMap* m, size_t idx) {
+    (void)m; (void)idx;
+}
+
 static inline void gorget_map_put(GorgetMap* m, const void* key, const void* value) {
     // Ordered mode (order != NULL): count tombstones in load factor to force grow,
     // and never reuse tombstone slots. This ensures stale order-array entries
@@ -5155,7 +5182,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         for (size_t __probes = 0; __probes < m->cap; __probes++) {
             if (m->states[idx] == 0) {
                 memcpy((char*)m->keys + idx * m->key_size, key, m->key_size);
-                // Key ownership transferred by caller (cap/alloc zeroed after put).
+                __gorget_map_materialize_key(m, idx);
                 if (m->val_size > 0 && value != NULL) {
                     memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
                 }
@@ -5188,6 +5215,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         if (m->states[idx] == 0) {
             size_t target = first_tombstone != (size_t)-1 ? first_tombstone : idx;
             memcpy((char*)m->keys + target * m->key_size, key, m->key_size);
+            __gorget_map_materialize_key(m, target);
             if (m->val_size > 0 && value != NULL) {
                 memcpy((char*)m->values + target * m->val_size, value, m->val_size);
             }
@@ -5211,6 +5239,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
     }
     if (first_tombstone != (size_t)-1) {
         memcpy((char*)m->keys + first_tombstone * m->key_size, key, m->key_size);
+        __gorget_map_materialize_key(m, first_tombstone);
         if (m->val_size > 0 && value != NULL) {
             memcpy((char*)m->values + first_tombstone * m->val_size, value, m->val_size);
         }

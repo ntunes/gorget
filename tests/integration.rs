@@ -2266,6 +2266,26 @@ done");
 }
 
 #[test]
+fn leak_cow_boundaries() {
+    run_gg("leak_cow_boundaries.gg", "\
+the: 3
+cat: 2
+unique: 5
+words: 3
+hello
+foo
+long: 3
+ccc
+eeeee
+dict return leak: false
+vec return leak: false
+names: 2
+alice
+bob
+done");
+}
+
+#[test]
 fn leak_return_materialize() {
     run_gg("leak_return_materialize.gg", "\
 words: 4
