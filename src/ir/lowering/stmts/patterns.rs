@@ -64,7 +64,16 @@ pub(super) fn lower_match_stmt(
     } else { None };
 
     let scrut_local = builder.add_local(scrut_type, None);
-    builder.assign(Place::local(scrut_local), scrut_op);
+    builder.assign(Place::local(scrut_local), scrut_op.clone());
+
+    // Propagate ownership from the source operand to the scrutinee temp.
+    // This lets pattern extraction know whether the scrutinee data is owned
+    // (safe to drop) vs borrowed (from .get().unwrap() etc.).
+    if let Operand::Copy(ref place) | Operand::Move(ref place) = scrut_op {
+        if place.projections.is_empty() && ctx.is_owned_local(place.local) {
+            ctx.set_owned(scrut_local);
+        }
+    }
 
     let merge_bb = builder.new_block();
 
@@ -485,32 +494,50 @@ pub fn emit_pattern_bindings(
                 if matches!(ctx.type_registry.get(field_type), Some(GirType::Ptr(_))) {
                     ctx.set_ref(dst);
                 }
-                // Value scrutinee + resource field (string, collection, user
-                // struct with resource fields): clone to create an independent
-                // copy that can be safely freed at scope exit.
+                // Value scrutinee + droppable field (string, collection, user
+                // struct with resource fields): register for drop at scope exit.
                 // Pattern extraction is a shallow memcpy — the binding and the
                 // scrutinee share the same heap buffer.
                 // When scrutinee_clone_elision is set, the scrutinee is dead and
                 // both the scrutinee copy AND the original variable will be zeroed
                 // after extraction — the shallow copy takes ownership directly.
+                // For non-elided cases, the scrutinee is MoveZeroed after
+                // extraction (line ~538), so the binding still takes ownership.
+                // Strings/collections clone to get an independent buffer;
+                // user structs take ownership directly (no clone needed).
                 else if !scrut_is_ptr
-                    && (field_type == ctx.type_mapper.owned_string_type
-                        || ctx.type_registry.is_collection_type(field_type))
+                    && ctx.type_registry.needs_drop(field_type)
                 {
-                    if ctx.func_state.scrutinee_clone_elision {
-                        // Clone elision: register for drop without cloning.
-                        ctx.drops.register_local(dst, field_type, &ctx.type_registry);
-                        ctx.set_owned(dst);
-                    } else if let Some(clone_fn) = ctx.clone_fn_for_ptr(field_type) {
-                        let ptr_type = ctx.register_ptr_type(field_type);
-                        let ptr = builder.add_local(ptr_type, None);
-                        builder.emit_borrow(ptr, Place::local(dst));
-                        let cloned = builder.call(
-                            &clone_fn,
-                            vec![FunctionBuilder::copy(ptr)],
-                            field_type,
-                        );
-                        builder.assign(Place::local(dst), FunctionBuilder::copy(cloned));
+                    let is_string_or_collection =
+                        field_type == ctx.type_mapper.owned_string_type
+                        || ctx.type_registry.is_collection_type(field_type);
+
+                    if is_string_or_collection {
+                        // String/collection: original behavior. Clone elision
+                        // registers directly; otherwise clone for independence.
+                        if ctx.func_state.scrutinee_clone_elision {
+                            ctx.drops.register_local(dst, field_type, &ctx.type_registry);
+                            ctx.set_owned(dst);
+                        } else if let Some(clone_fn) = ctx.clone_fn_for_ptr(field_type) {
+                            let ptr_type = ctx.register_ptr_type(field_type);
+                            let ptr = builder.add_local(ptr_type, None);
+                            builder.emit_borrow(ptr, Place::local(dst));
+                            let cloned = builder.call(
+                                &clone_fn,
+                                vec![FunctionBuilder::copy(ptr)],
+                                field_type,
+                            );
+                            builder.assign(Place::local(dst), FunctionBuilder::copy(cloned));
+                            ctx.drops.register_local(dst, field_type, &ctx.type_registry);
+                            ctx.set_owned(dst);
+                        }
+                    } else if ctx.is_owned_local(scrut_local) {
+                        // User struct without clone_fn: register directly, but
+                        // ONLY when the scrutinee owns its data. Borrowed
+                        // scrutinees (from .get().unwrap() etc.) share data with
+                        // the source — dropping would corrupt it. The scrutinee
+                        // is MoveZeroed after extraction (line ~538), so the
+                        // binding takes ownership of the fields.
                         ctx.drops.register_local(dst, field_type, &ctx.type_registry);
                         ctx.set_owned(dst);
                     }

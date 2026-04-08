@@ -1,0 +1,70 @@
+# Leak test: collection and string reassignment drops old value.
+from std.os import mem_live
+from std.collections import Vector, Dict
+
+void main():
+    # Test 1: Vector reassignment in loop
+    Vector[int] v = []
+    v.push(1)
+    int b = mem_live()
+    int i = 0
+    while i < 100:
+        Vector[int] nv = []
+        nv.push(i)
+        nv.push(i + 1)
+        v = nv
+        i = i + 1
+    bool t1 = mem_live() - b > 0
+    print(f"vec reassign loop: leaked={t1}")
+
+    # Test 2: String reassignment in loop
+    String s = "initial"
+    b = mem_live()
+    i = 0
+    while i < 100:
+        s = f"iter_{i}"
+        i = i + 1
+    bool t2 = mem_live() - b > 0
+    print(f"str reassign loop: leaked={t2}")
+
+    # Test 3: Dict reassignment
+    Dict[String, int] d = Dict[String, int]()
+    d.set("x", 1)
+    b = mem_live()
+    i = 0
+    while i < 50:
+        Dict[String, int] nd = Dict[String, int]()
+        nd.set(f"k{i}", i)
+        d = nd
+        i = i + 1
+    bool t3 = mem_live() - b > 0
+    print(f"dict reassign loop: leaked={t3}")
+
+    # Test 4: Vector[String] reassignment
+    Vector[String] vs = []
+    vs.push("hello")
+    b = mem_live()
+    i = 0
+    while i < 100:
+        Vector[String] nvs = []
+        nvs.push(f"s_{i}")
+        vs = nvs
+        i = i + 1
+    bool t4 = mem_live() - b > 0
+    print(f"vec_str reassign loop: leaked={t4}")
+
+    # Test 5: Self-referential reassignment (v = v.slice)
+    Vector[int] sv = []
+    i = 0
+    while i < 10:
+        sv.push(i)
+        i = i + 1
+    b = mem_live()
+    i = 0
+    while i < 50:
+        sv = sv.slice(0, sv.len())
+        i = i + 1
+    bool t5 = mem_live() - b > 0
+    print(f"self-ref slice: leaked={t5}")
+
+    print("done")

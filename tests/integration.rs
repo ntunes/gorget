@@ -2236,12 +2236,32 @@ done");
 #[test]
 fn leak_known_patterns() {
     run_gg("leak_known_patterns.gg", "\
-P1 Ok(struct): leaked=true
+P1 Ok(struct): leaked=false
 P2 Ok(Vec[int]): leaked=false
 P3 for String: leaked=true
 P4 for Vec[int]: leaked=true
 P5 for char: leaked=false
 P6 vec reassign: leaked=false
+done");
+}
+
+#[test]
+fn leak_match_struct() {
+    run_gg("leak_match_struct.gg", "\
+pair read-only: leaked=false
+triple read-only: leaked=false
+error string: leaked=false
+done");
+}
+
+#[test]
+fn leak_reassign() {
+    run_gg("leak_reassign.gg", "\
+vec reassign loop: leaked=false
+str reassign loop: leaked=true
+dict reassign loop: leaked=true
+vec_str reassign loop: leaked=false
+self-ref slice: leaked=false
 done");
 }
 

@@ -1,0 +1,68 @@
+# Leak test: struct destructuring in match — verifies resource fields are freed.
+from std.os import mem_live
+from std.collections import Vector
+
+struct Pair:
+    String left
+    String right
+
+struct Triple:
+    String a
+    String b
+    Vector[int] nums
+
+Result[Pair, String] make_pair(int id):
+    if id > 0:
+        return Ok(Pair(f"L{id}", f"R{id}"))
+    return Error("bad")
+
+Result[Triple, String] make_triple(int id):
+    Vector[int] v = []
+    v.push(id)
+    v.push(id * 2)
+    return Ok(Triple(f"a{id}", f"b{id}", v))
+
+void main():
+    # Test 1: Pair (two strings) extracted and read-only
+    int b = mem_live()
+    int i = 0
+    while i < 100:
+        Result[Pair, String] r = make_pair(i)
+        match r:
+            case Ok(p):
+                int _l = p.left.len() + p.right.len()
+            case Error(e):
+                pass
+        i = i + 1
+    bool t1 = mem_live() - b > 0
+    print(f"pair read-only: leaked={t1}")
+
+    # Test 2: Triple (strings + vector) extracted and read-only
+    b = mem_live()
+    i = 0
+    while i < 100:
+        Result[Triple, String] r = make_triple(i)
+        match r:
+            case Ok(t):
+                int _l = t.a.len() + t.nums.len()
+            case Error(e):
+                pass
+        i = i + 1
+    bool t2 = mem_live() - b > 0
+    print(f"triple read-only: leaked={t2}")
+
+    # Test 3: Result with Error(String) arm only
+    b = mem_live()
+    i = 0
+    while i < 100:
+        Result[Pair, String] r = make_pair(0 - i)
+        match r:
+            case Ok(p):
+                pass
+            case Error(e):
+                int _l = e.len()
+        i = i + 1
+    bool t3 = mem_live() - b > 0
+    print(f"error string: leaked={t3}")
+
+    print("done")
