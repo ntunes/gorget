@@ -1959,6 +1959,10 @@ pub fn emit_result_auto_propagate(
         0,
         ok_field_type,
     );
+    // MoveZero the Result after extracting Ok — prevents scope-exit Recursive
+    // drop from double-freeing the payload when Option/Result drops are enabled.
+    builder.move_zero(Place::local(val_local));
+    ctx.drops.mark_moved(val_local);
     builder.jump(merge_bb);
 
     // Error path: propagate error via early return
@@ -1969,6 +1973,8 @@ pub fn emit_result_auto_propagate(
         0,
         err_field_type,
     );
+    builder.move_zero(Place::local(val_local));
+    ctx.drops.mark_moved(val_local);
     // Re-wrap error in the *current* function's Result type and return.
     let fn_result_type = ctx.func_state.current_throws_result_type.or_else(|| {
         let ret_type = builder.locals[0].type_id;
@@ -2115,6 +2121,8 @@ fn lower_rethrow_expr(
         0,
         ok_field_type,
     );
+    builder.move_zero(Place::local(val_local));
+    ctx.drops.mark_moved(val_local);
     builder.jump(merge_bb);
 
     // Error path: optionally bind error to name, evaluate transform, throw that
@@ -2126,6 +2134,8 @@ fn lower_rethrow_expr(
             0,
             err_field_type,
         );
+        builder.move_zero(Place::local(val_local));
+        ctx.drops.mark_moved(val_local);
         let err_local = builder.add_local(err_field_type, Some(&error_name.node));
         builder.assign(Place::local(err_local), FunctionBuilder::copy(err_val));
         ctx.register_local(&error_name.node, err_local, err_field_type);

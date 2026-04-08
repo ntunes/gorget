@@ -2,7 +2,7 @@
 
 ## High
 
-- **CoW ownership boundaries — push + return implemented**: All 6 known leak patterns fixed. Remaining leaks: (1) **Option/Result with resource payloads** — `Option[Vector[int]]` not dropped because match/unwrap extraction paths don't coordinate with Recursive drop's `drop_if_alive` guard (double-free). Needs tag-checked drops that skip already-extracted payloads. Tracked in `stress_alloc_structs` and `stress_alloc_mixed` (both currently `leaked=true`). (2) **Dict put-time key materialization** — no-op, blocked on set/dict algebra byte-based hash/eq. (3) **Field store materialization**. (4) **Borrow checker view lifetime enforcement**. [updated: 2026-04-08]
+- **Option/Result Recursive drop**: Auto-propagate MoveZero fix landed (emit_result_auto_propagate + lower_rethrow_expr now MoveZero the Result temp after extraction). Remaining blockers for enabling Recursive drops: (1) `unwrap_error` at C backend level needs GIR-level MoveZero (C-level memset breaks data still in use), (2) `Result[int, int]` same-type variants have tag confusion under Recursive drop, (3) `.map()`/`.and_then()` combinator chains create intermediate Results not MoveZeroed. Tracked in `stress_alloc_structs` and `stress_alloc_mixed` (both `leaked=true`). [updated: 2026-04-08]
 
 - **Remove .clone() from Json.get()/at()**: Fix A (Ptr-scrutinee extraction widened to `is_resource_type` minus Box — done) and Fix B (`Option[Ptr(T)]` → `Option[T]` return conversion with deref+clone — done). However, `Ptr(Dict).get(key)` from pattern extraction on `&self` doesn't dispatch correctly — method calls on pattern-extracted Ptr locals produce wrong results. `.clone()` workaround is correct and safe. [updated: 2026-04-08]
 
