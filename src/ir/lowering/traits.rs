@@ -719,6 +719,10 @@ fn lower_trait_method_body(
     let self_cast = builder
         .ptr_cast(cast_type, FunctionBuilder::copy(LocalId(1)));
     ctx.register_local("self", self_cast, cast_type);
+    // Mark immutable self as BareParam so CoW materializes on mutation.
+    if !vtable_method.self_is_mutable {
+        ctx.set_bare_param(self_cast);
+    }
 
     // Register other params using vtable types (must match wrapper signature)
     let mut param_idx = 2u32;

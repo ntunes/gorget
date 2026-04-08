@@ -25,10 +25,15 @@ Not every type follows move semantics. Small, simple types are **copied** implic
 - `bool`
 - Tuples of copy types
 
-**Move types** (require `!` to transfer):
+**Resource types** (require `!` to transfer ownership):
 - `String`
-- All structs and enums
+- All structs and enums with resource fields
 - Collections: `Vector`, `Dict`, `Set`
+
+Resource types are **never** implicitly copied. When passed to a function
+without `!`, the compiler creates an immutable borrow (a pointer) — no
+data is copied. The only ways to get an owned resource are: construction,
+`.clone()`, or `!move`.
 
 ```gorget
 # Copy types — freely duplicated

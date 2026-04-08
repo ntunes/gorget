@@ -74,7 +74,10 @@ consume(!msg)       # move — msg is invalid after this
 ```
 
 Copy types (integers, floats, bools) don't need `!` — they're implicitly
-copied.
+copied. Resource types (String, Vector, Dict, user structs with resource
+fields) are **never** copied by value — the bare parameter mode automatically
+creates an immutable borrow. This is zero-cost (a pointer) and prevents
+aliasing bugs. To take ownership, use `!`.
 
 ---
 

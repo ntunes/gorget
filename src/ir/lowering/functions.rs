@@ -674,6 +674,10 @@ pub fn lower_equip_method(
     // Register self as local _1 (only if method has self)
     let mut param_idx = if let Some(spt) = self_ptr_type {
         ctx.register_local("self", LocalId(1), spt);
+        // Mark immutable self as BareParam so CoW materializes on mutation.
+        if !self_is_consuming && matches!(ctx.type_registry.get(spt), Some(GirType::Ptr(_))) {
+            ctx.set_bare_param(LocalId(1));
+        }
         2u32
     } else {
         1u32

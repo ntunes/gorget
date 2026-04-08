@@ -321,7 +321,7 @@ The distinction is about **what the type owns**, not how large it is. A `Point` 
 | `Vector[int] &v` | `T*` (mutable) | Yes | No |
 | `Vector[int] !v` | `T*` (mutable) | Yes | Yes |
 
-Bare Resource params are `const` — the C compiler enforces immutability. The `&` sigil grants mutation, `!` transfers ownership.
+Bare Resource params are `const` — the C compiler enforces immutability. The `&` sigil grants mutation, `!` transfers ownership. **Resource types are never copied by value (memcpy).** The only ways to obtain an owned resource value are construction, `.clone()`, or `!move`.
 
 **Storing borrowed parameters:**
 

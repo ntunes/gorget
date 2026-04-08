@@ -30,6 +30,12 @@ b = b.upper()             # mutation on b → clone a's data into b, then mutate
 
 ### Function parameters
 
+Resource types are **never** copied by value (memcpy) at function boundaries.
+The compiler passes a const pointer — the callee receives an immutable borrow.
+This is not merely an optimization; it is a correctness requirement. By-value
+copies would create shallow aliases (two owners of the same heap buffer),
+causing double-frees and use-after-free when either owner drops.
+
 ```gorget
 void process(String name):     # name is a pointer to caller's value
     print(name)                # read — zero cost

@@ -19,7 +19,9 @@ Never both. This is checked at compile time.
 
 ## Immutable Borrows
 
-The default: pass a value to a function without giving it up.
+The default: pass a value to a function without giving it up. For resource
+types, this borrow is automatic — the compiler passes a pointer, not a copy.
+No data is duplicated. This is zero-cost and prevents aliasing bugs.
 
 ```gorget
 void print_message(Message msg):    # immutable borrow (default)
