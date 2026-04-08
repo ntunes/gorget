@@ -2234,6 +2234,18 @@ done");
 }
 
 #[test]
+fn leak_known_patterns() {
+    run_gg("leak_known_patterns.gg", "\
+P1 Ok(struct): leaked=true
+P2 Ok(Vec[int]): leaked=true
+P3 for String: leaked=true
+P4 for Vec[int]: leaked=true
+P5 for char: leaked=true
+P6 vec reassign: leaked=true
+done");
+}
+
+#[test]
 fn trait_defaults() {
     run_gg(
         "trait_defaults.gg",

@@ -1,0 +1,110 @@
+# Known leak patterns — documents leaks that remain due to shallow-copy aliasing.
+# Each pattern is tested independently with a per-section delta.
+# When a fix lands, the corresponding delta drops to 0 and the test can be
+# tightened (change expected output from leaked=true to leaked=false).
+from std.os import mem_live
+from std.collections import Vector, Dict
+
+struct Config:
+    String key
+    String value
+
+Result[Config, String] make_cfg(int id):
+    if id > 0:
+        return Ok(Config(f"k_{id}", f"v_{id}"))
+    return Error("bad")
+
+Result[Vector[int], String] make_vec(int n):
+    Vector[int] v = []
+    int i = 0
+    while i < n:
+        v.push(i)
+        i = i + 1
+    return Ok(v)
+
+Vector[String] make_names(int n):
+    Vector[String] v = []
+    int i = 0
+    while i < n:
+        v.push(f"name_{i}")
+        i = i + 1
+    return v
+
+void main():
+    # P1: Ok(struct) in match — struct not registered for drop
+    int b = mem_live()
+    int i = 0
+    while i < 100:
+        Result[Config, String] r = make_cfg(i)
+        match r:
+            case Ok(c):
+                int _l = c.key.len()
+            case Error(e):
+                pass
+        i = i + 1
+    bool p1 = mem_live() - b > 0
+    print(f"P1 Ok(struct): leaked={p1}")
+
+    # P2: Ok(Vector[int]) in match — collection not registered for drop
+    b = mem_live()
+    i = 0
+    while i < 100:
+        Result[Vector[int], String] r = make_vec(5)
+        match r:
+            case Ok(v):
+                int _l = v.len()
+            case Error(e):
+                pass
+        i = i + 1
+    bool p2 = mem_live() - b > 0
+    print(f"P2 Ok(Vec[int]): leaked={p2}")
+
+    # P3: for name in Vector[String] — string clones not freed
+    b = mem_live()
+    i = 0
+    while i < 100:
+        Vector[String] names = make_names(3)
+        for name in names:
+            int _l = name.len()
+        i = i + 1
+    bool p3 = mem_live() - b > 0
+    print(f"P3 for String: leaked={p3}")
+
+    # P4: for row in Vector[Vector[int]] — vector clones not freed
+    b = mem_live()
+    i = 0
+    while i < 100:
+        Vector[Vector[int]] m = []
+        m.push([1, 2])
+        m.push([3, 4])
+        for row in m:
+            int _l = row.len()
+        i = i + 1
+    bool p4 = mem_live() - b > 0
+    print(f"P4 for Vec[int]: leaked={p4}")
+
+    # P5: for ch in dynamic f-string — iterator copy not freed
+    b = mem_live()
+    i = 0
+    while i < 100:
+        String s = f"hello_{i}"
+        for ch in s:
+            pass
+        i = i + 1
+    bool p5 = mem_live() - b > 0
+    print(f"P5 for char: leaked={p5}")
+
+    # P6: collection reassignment — old value not dropped
+    b = mem_live()
+    i = 0
+    Vector[int] v = []
+    v.push(1)
+    while i < 100:
+        Vector[int] new_v = []
+        new_v.push(i)
+        v = new_v
+        i = i + 1
+    bool p6 = mem_live() - b > 0
+    print(f"P6 vec reassign: leaked={p6}")
+
+    print("done")
