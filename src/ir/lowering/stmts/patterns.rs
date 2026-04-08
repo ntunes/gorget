@@ -462,17 +462,14 @@ pub fn emit_pattern_bindings(
                 if matches!(ctx.type_registry.get(field_type), Some(GirType::Ptr(_))) {
                     ctx.set_ref(dst);
                 }
-                // Value scrutinee + owned string field: clone to create an
-                // independent copy that can be safely freed at scope exit.
+                // Value scrutinee + resource field (string, collection, user
+                // struct with resource fields): clone to create an independent
+                // copy that can be safely freed at scope exit.
                 // Pattern extraction is a shallow memcpy — the binding and the
                 // scrutinee share the same heap buffer.
                 // When scrutinee_clone_elision is set, the scrutinee is dead and
                 // both the scrutinee copy AND the original variable will be zeroed
                 // after extraction — the shallow copy takes ownership directly.
-                // NOTE: widening to is_collection_type/is_resource_type was attempted
-                // but causes use-after-free: extracted values that are returned aren't
-                // move-zeroed, so the drop frees the returned value. Blocked on
-                // proper move-zero tracking for pattern-extracted locals.
                 else if !scrut_is_ptr
                     && field_type == ctx.type_mapper.owned_string_type
                 {

@@ -37,8 +37,8 @@ void test_direct():
     bool t1 = false
     if r1.is_ok():
         Json j1 = r1.unwrap()
-        bool name_ok = j1.get("name").as_str() == "Alice"
-        bool age_ok = j1.get("age").as_int() == 30
+        bool name_ok = j1.get("name").unwrap().as_str() == "Alice"
+        bool age_ok = j1.get("age").unwrap().as_int() == 30
         t1 = name_ok and age_ok
     check("json_parse_valid", t1)
 
@@ -57,7 +57,7 @@ void test_direct():
     Result[Json, String] r4 = json_parse(resp3.body)
     bool t4 = false
     if r4.is_ok():
-        t4 = r4.unwrap().get("status").as_str() == "ok"
+        t4 = r4.unwrap().get("status").unwrap().as_str() == "ok"
     check("of_json_roundtrip", t4)
 
 HttpServerResponse echo_json(HttpRequest req):
@@ -92,7 +92,7 @@ async void main():
         if resp5.status_code == 200:
             Result[Json, String] body5 = json_parse(resp5.body_text)
             if body5.is_ok():
-                t5 = body5.unwrap().get("x").as_int() == 42
+                t5 = body5.unwrap().get("x").unwrap().as_int() == 42
     check("wire_echo_json", t5)
 
     srv5.await()

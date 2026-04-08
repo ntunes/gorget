@@ -6,7 +6,7 @@ void main():
     auto r_float = json_parse("[3.14]")
     match r_float:
         case Ok(jf):
-            float fv = jf.at(0).as_float()
+            float fv = jf.at(0).unwrap().as_float()
             print(fv > 3.1)
             print(fv < 3.2)
         case Error(_):
@@ -15,7 +15,7 @@ void main():
     auto r_int = json_parse("[42]")
     match r_int:
         case Ok(ji):
-            float nv = ji.at(0).as_float()
+            float nv = ji.at(0).unwrap().as_float()
             bool eq42 = nv == 42.0
             print(f"{eq42}")
         case Error(_):
@@ -25,7 +25,7 @@ void main():
     auto r_str = json_parse("[\"hello\"]")
     match r_str:
         case Ok(jarr):
-            Json js = jarr.at(0)
+            Json js = jarr.at(0).unwrap().clone()
             print(js.is_string())
             print(js.is_number())
             print(js.is_bool())
@@ -35,7 +35,7 @@ void main():
     auto r_num = json_parse("[99]")
     match r_num:
         case Ok(jarr2):
-            Json jn = jarr2.at(0)
+            Json jn = jarr2.at(0).unwrap().clone()
             print(jn.is_number())
             print(jn.is_string())
         case Error(_):
@@ -44,7 +44,7 @@ void main():
     auto r_bool = json_parse("[true]")
     match r_bool:
         case Ok(jarr3):
-            Json jb = jarr3.at(0)
+            Json jb = jarr3.at(0).unwrap().clone()
             print(jb.is_bool())
             print(jb.is_number())
         case Error(_):
@@ -80,7 +80,7 @@ void main():
     auto r_neg = json_parse("[-42]")
     match r_neg:
         case Ok(jneg):
-            int nval = jneg.at(0).as_int()
+            int nval = jneg.at(0).unwrap().as_int()
             print(f"{nval}")
         case Error(_):
             print("error")
@@ -89,7 +89,7 @@ void main():
     auto r_esc = json_parse("[\"hello\\nworld\"]")
     match r_esc:
         case Ok(jesc):
-            int blen = jesc.at(0).as_str().byte_len()
+            int blen = jesc.at(0).unwrap().as_str().byte_len()
             print(f"{blen}")
         case Error(_):
             print("error")

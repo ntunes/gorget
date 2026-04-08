@@ -155,7 +155,7 @@ equip JsonDeserializer with Deserializer:
             self.de_err = "no struct context"
             return
         Json de_top = self.de_stack.get(self.de_stack.len() - 1).unwrap()
-        self.de_current = de_top.get(name)
+        self.de_current = de_top.get(name).unwrap_or(Null())
 
     void end_struct(&self):
         if self.de_err != "":
@@ -182,7 +182,7 @@ equip JsonDeserializer with Deserializer:
             self.de_err = "no seq context"
             return
         Json de_top = self.de_stack.get(self.de_stack.len() - 1).unwrap()
-        self.de_current = de_top.at(index)
+        self.de_current = de_top.at(index).unwrap_or(Null())
 
     void end_seq(&self):
         if self.de_err != "":
@@ -586,23 +586,23 @@ equip Json:
             else:
                 return false
 
-    Json get(self, String key):
+    Option[Json] get(&self, String key):
         match self:
             case Obj(d):
                 if d.contains(key):
-                    return d[key]
-                return Null()
+                    return Some(d.get(key).unwrap().clone())
+                return None
             else:
-                return Null()
+                return None
 
-    Json at(self, int index):
+    Option[Json] at(&self, int index):
         match self:
             case Arr(arr):
                 if index >= 0 and index < arr.len():
-                    return arr.get(index).unwrap()
-                return Null()
+                    return Some(arr.get(index).unwrap().clone())
+                return None
             else:
-                return Null()
+                return None
 
     String as_str(self):
         match self:

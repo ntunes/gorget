@@ -326,9 +326,13 @@ private bool json_is_numeric(Json val):
 # ── Predicate evaluation ──────────────────────────────────
 
 private bool eval_predicate(Json item, String field, CmpOp op, String value):
-    Json fval = item.get(field)
-    if fval.is_null():
-        return false
+    Option[Json] fopt = item.get(field)
+    match fopt:
+        case None:
+            return false
+        else:
+            pass
+    Json fval = fopt.unwrap()
     match op:
         case WildEq:
             return wildcard_match(value, json_as_cmp_str(fval))
@@ -368,17 +372,17 @@ private bool eval_predicate(Json item, String field, CmpOp op, String value):
 private void collect_recursive(Json node, String target_key, Vector[Json] &results):
     if node.is_object():
         if node.has(target_key):
-            results.push(node.get(target_key))
+            results.push(node.get(target_key).unwrap())
         Vector[String] ks = node.keys()
         int i = 0
         while i < ks.len():
             String k = ks.get(i).unwrap()
-            collect_recursive(node.get(k), target_key, &results)
+            collect_recursive(node.get(k).unwrap(), target_key, &results)
             i = i + 1
     elif node.is_array():
         int i = 0
         while i < node.len():
-            collect_recursive(node.at(i), target_key, &results)
+            collect_recursive(node.at(i).unwrap(), target_key, &results)
             i = i + 1
 
 # ── Resolve array index (supports negative) ──────────────
@@ -403,24 +407,24 @@ private void query_step(Vector[Json] current, Segment seg, Vector[Json] &out):
         match seg:
             case Key(key):
                 if node.is_object() and node.has(key):
-                    out.push(node.get(key))
+                    out.push(node.get(key).unwrap())
             case Index(idx):
                 if node.is_array():
                     int resolved = resolve_index(idx, node.len())
                     if resolved >= 0:
-                        out.push(node.at(resolved))
+                        out.push(node.at(resolved).unwrap())
             case Wildcard:
                 if node.is_object():
                     Vector[String] ks = node.keys()
                     int ki = 0
                     while ki < ks.len():
                         String k = ks.get(ki).unwrap()
-                        out.push(node.get(k))
+                        out.push(node.get(k).unwrap())
                         ki = ki + 1
                 elif node.is_array():
                     int ai = 0
                     while ai < node.len():
-                        out.push(node.at(ai))
+                        out.push(node.at(ai).unwrap())
                         ai = ai + 1
             case RecursiveDescent(key):
                 collect_recursive(node, key, &out)
@@ -431,7 +435,7 @@ private void query_step(Vector[Json] current, Segment seg, Vector[Json] &out):
                 if node.is_array():
                     int fi = 0
                     while fi < node.len():
-                        Json item = node.at(fi)
+                        Json item = node.at(fi).unwrap()
                         if eval_predicate(item, field, op, value):
                             out.push(item)
                         fi = fi + 1
@@ -451,7 +455,7 @@ private void query_step(Vector[Json] current, Segment seg, Vector[Json] &out):
                         st = 1
                     int si = s
                     while si < e:
-                        out.push(node.at(si))
+                        out.push(node.at(si).unwrap())
                         si = si + st
 
 private Vector[Json] query_segments(Json doc, Vector[Segment] segments):
@@ -514,7 +518,7 @@ private bool set_recursive(Json &node, Vector[Segment] segments, int depth, Json
                 return obj_put(&node, key, value)
             # Navigate into child, creating if needed
             obj_ensure(&node, key)
-            Json child = node.get(key)
+            Json child = node.get(key).unwrap()
             bool ok = set_recursive(&child, segments, depth + 1, value)
             if ok:
                 obj_put(&node, key, child)
@@ -527,7 +531,7 @@ private bool set_recursive(Json &node, Vector[Segment] segments, int depth, Json
                 return false
             if is_last:
                 return arr_set(&node, resolved, value)
-            Json child = node.at(resolved)
+            Json child = node.at(resolved).unwrap()
             bool ok = set_recursive(&child, segments, depth + 1, value)
             if ok:
                 arr_set(&node, resolved, child)
@@ -554,7 +558,7 @@ private bool del_recursive(Json &node, Vector[Segment] segments, int depth):
                 return false
             if is_last:
                 return obj_delete(&node, key)
-            Json child = node.get(key)
+            Json child = node.get(key).unwrap()
             bool ok = del_recursive(&child, segments, depth + 1)
             if ok:
                 obj_put(&node, key, child)
@@ -567,7 +571,7 @@ private bool del_recursive(Json &node, Vector[Segment] segments, int depth):
                 return false
             if is_last:
                 return arr_delete(&node, resolved)
-            Json child = node.at(resolved)
+            Json child = node.at(resolved).unwrap()
             bool ok = del_recursive(&child, segments, depth + 1)
             if ok:
                 arr_set(&node, resolved, child)
