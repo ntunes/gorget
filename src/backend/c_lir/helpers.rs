@@ -1409,8 +1409,33 @@ pub(super) fn deep_clone_resource_fields(
     for (fname, fty) in &sdef.fields {
         if let LirType::Struct(fsid) = fty {
             if let Some(fdef) = module.structs.get(fsid.0 as usize) {
-                // Skip enum fields — variant payloads can't all be cloned at once
-                if fdef.is_enum { continue; }
+                if fdef.is_enum {
+                    // Enum fields: handle Option/Result types that wrap resources.
+                    // Option__GorgetString layout: { tag, Some_0: Str }
+                    // Only clone the payload when tag != 0 (Some variant).
+                    if fdef.name.starts_with("Option__") {
+                        for (vfname, vfty) in &fdef.fields {
+                            if vfname == "tag" { continue; }
+                            if let LirType::Struct(vfsid) = vfty {
+                                if let Some(vfdef) = module.structs.get(vfsid.0 as usize) {
+                                    let clone_fn = match vfdef.name.as_str() {
+                                        "GorgetArray" => Some("gorget_array_clone"),
+                                        "GorgetMap" => Some("gorget_map_clone"),
+                                        "GorgetSet" => Some("gorget_set_clone"),
+                                        "GorgetString" => Some("gorget_string_clone_to_owned"),
+                                        _ => None,
+                                    };
+                                    if let Some(cfn) = clone_fn {
+                                        ops.push(format!(
+                                            "if ({dst_expr}.{fname}.tag != 0) {{ {dst_expr}.{fname}.{vfname} = {cfn}(&{dst_expr}.{fname}.{vfname}); }}"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
                 let clone_fn = match fdef.name.as_str() {
                     "GorgetArray" => Some("gorget_array_clone"),
                     "GorgetMap" => Some("gorget_map_clone"),
@@ -1425,7 +1450,31 @@ pub(super) fn deep_clone_resource_fields(
                     for (ffname, ffty) in &fdef.fields {
                         if let LirType::Struct(ffsid) = ffty {
                             if let Some(ffdef) = module.structs.get(ffsid.0 as usize) {
-                                if ffdef.is_enum { continue; }
+                                if ffdef.is_enum {
+                                    // Handle nested Option fields too
+                                    if ffdef.name.starts_with("Option__") {
+                                        for (vfname, vfty) in &ffdef.fields {
+                                            if vfname == "tag" { continue; }
+                                            if let LirType::Struct(vfsid) = vfty {
+                                                if let Some(vfdef) = module.structs.get(vfsid.0 as usize) {
+                                                    let inner_clone = match vfdef.name.as_str() {
+                                                        "GorgetArray" => Some("gorget_array_clone"),
+                                                        "GorgetMap" => Some("gorget_map_clone"),
+                                                        "GorgetSet" => Some("gorget_set_clone"),
+                                                        "GorgetString" => Some("gorget_string_clone_to_owned"),
+                                                        _ => None,
+                                                    };
+                                                    if let Some(icfn) = inner_clone {
+                                                        ops.push(format!(
+                                                            "if ({dst_expr}.{fname}.{ffname}.tag != 0) {{ {dst_expr}.{fname}.{ffname}.{vfname} = {icfn}(&{dst_expr}.{fname}.{ffname}.{vfname}); }}"
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
                                 let inner_clone = match ffdef.name.as_str() {
                                     "GorgetArray" => Some("gorget_array_clone"),
                                     "GorgetMap" => Some("gorget_map_clone"),

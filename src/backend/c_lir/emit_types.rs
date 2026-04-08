@@ -1492,6 +1492,80 @@ pub(super) fn is_gorget_string_type(ty: Option<&LirType>, sn: &HashMap<u32, Stri
     }
 }
 /// Emit drop functions for user structs with Recursive drop strategy.
+/// Emit inline tag-checked drops for Option fields containing resources.
+/// Option types have DropStrategy::None (to avoid double-free in match/unwrap)
+/// but struct fields of type Option[String] etc. still need dropping.
+fn emit_option_field_drops(
+    out: &mut String,
+    sdef: &crate::lir::StructDef,
+    prefix: &str,      // "self->" for drops, "dst." for clones
+    already_handled: &std::collections::HashSet<String>,
+    module: &crate::lir::LirModule,
+) {
+    for (fname, fty) in &sdef.fields {
+        if already_handled.contains(fname) { continue; }
+        if let crate::lir::LirType::Struct(fsid) = fty {
+            if let Some(fdef) = module.structs.get(fsid.0 as usize) {
+                if fdef.name.starts_with("Option__") {
+                    // Find resource payload fields in the Option enum
+                    for (vfname, vfty) in &fdef.fields {
+                        if vfname == "tag" { continue; }
+                        if let crate::lir::LirType::Struct(vfsid) = vfty {
+                            if let Some(vfdef) = module.structs.get(vfsid.0 as usize) {
+                                let drop_fn = match vfdef.name.as_str() {
+                                    "GorgetString" => Some("gorget_string_free"),
+                                    "GorgetArray"  => Some("gorget_array_free"),
+                                    "GorgetMap"    => Some("gorget_map_free"),
+                                    "GorgetSet"    => Some("gorget_set_free"),
+                                    _ => None,
+                                };
+                                if let Some(dfn) = drop_fn {
+                                    writeln!(out, "    if ({prefix}{fname}.tag != 0) {{ {dfn}(&{prefix}{fname}.{vfname}); }}").unwrap();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Emit inline tag-checked clones for Option fields containing resources.
+fn emit_option_field_clones(
+    out: &mut String,
+    sdef: &crate::lir::StructDef,
+    already_handled: &std::collections::HashSet<String>,
+    module: &crate::lir::LirModule,
+) {
+    for (fname, fty) in &sdef.fields {
+        if already_handled.contains(fname) { continue; }
+        if let crate::lir::LirType::Struct(fsid) = fty {
+            if let Some(fdef) = module.structs.get(fsid.0 as usize) {
+                if fdef.name.starts_with("Option__") {
+                    for (vfname, vfty) in &fdef.fields {
+                        if vfname == "tag" { continue; }
+                        if let crate::lir::LirType::Struct(vfsid) = vfty {
+                            if let Some(vfdef) = module.structs.get(vfsid.0 as usize) {
+                                let clone_fn = match vfdef.name.as_str() {
+                                    "GorgetString" => Some("gorget_string_clone_to_owned"),
+                                    "GorgetArray"  => Some("gorget_array_clone"),
+                                    "GorgetMap"    => Some("gorget_map_clone"),
+                                    "GorgetSet"    => Some("gorget_set_clone"),
+                                    _ => None,
+                                };
+                                if let Some(cfn) = clone_fn {
+                                    writeln!(out, "    if (dst.{fname}.tag != 0) {{ dst.{fname}.{vfname} = {cfn}(&dst.{fname}.{vfname}); }}").unwrap();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// When a struct has fields that need dropping (e.g., GorgetString), the drop
 /// elaboration marks it as Recursive. When that struct appears as a field in
 /// another struct, the parent's drop emits a call to `{Name}__drop`. This
@@ -1515,10 +1589,12 @@ pub(super) fn emit_recursive_struct_drops(out: &mut String, module: &LirModule, 
         // Use the C struct name (e.g., __lir_s10) instead of the Gorget name
         let c_name = sn.get(&(idx as u32)).cloned().unwrap_or_else(|| type_name.clone());
 
-        // Generate the drop function
+        // Generate the drop function.
+        // NOTE: Option/Result fields are intentionally NOT dropped here — they
+        // have DropStrategy::None to avoid double-free with match/unwrap paths.
+        // The clone function DOES deep-copy them to prevent CoW aliasing.
         writeln!(out, "static inline void {drop_fn_name}({c_name}* self) {{").unwrap();
         for (field_name, drop_fn, _field_type_name) in drop_info {
-            // Self-cleaning: gorget_array_free/gorget_map_free drop elements.
             writeln!(out, "    {drop_fn}(&self->{field_name});").unwrap();
         }
         writeln!(out, "}}").unwrap();
@@ -1591,6 +1667,13 @@ pub(super) fn emit_recursive_struct_clones(out: &mut String, module: &LirModule,
                 _ => continue, // Unknown drop — skip cloning this field
             };
             writeln!(out, "    dst.{field_name} = {clone_fn}(&dst.{field_name});").unwrap();
+        }
+        // Inline clone for Option fields containing resources (mirrors drop logic).
+        {
+            let already_cloned: std::collections::HashSet<String> = drop_info.iter()
+                .map(|(f, _, _)| f.clone())
+                .collect();
+            emit_option_field_clones(out, &module.structs[idx], &already_cloned, module);
         }
         writeln!(out, "    return dst;").unwrap();
         writeln!(out, "}}").unwrap();
