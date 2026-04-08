@@ -149,16 +149,10 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
             # Named type with possible generic args
             String mangled = mangle_type_name(name, targs, &gmod)
             return lookup_or_register_named(&gmod, mangled)
-        case TFunction(ret_type_box, param_types, _):
-            # Function type → GtFnPtr for return types (fn(T1, ...) -> Tret)
-            Vector[int] fn_params = []
-            int fpi = 0
-            while fpi < param_types.len():
-                SpannedType fp = param_types.get(fpi).unwrap()
-                fn_params.push(map_ast_type(fp, &gmod))
-                fpi += 1
-            int fn_ret = map_ast_type(*ret_type_box, &gmod)
-            return register_type(&gmod, GtFnPtr(fn_params, fn_ret))
+        case TFunction(_, _, _):
+            # Function types as params/fields → unit (closures are opaque in GIR).
+            # Function types as return types are handled by map_fn_return_type.
+            return UNIT_TYPE
         case TInferred():
             return I64_TYPE
         case TTuple(elems):
@@ -173,6 +167,21 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
         else:
             pass
     return I64_TYPE
+
+# Map return type — same as map_ast_type but TFunction produces GtFnPtr
+int map_fn_return_type(SpannedType stype, GirModule &gmod):
+    match stype.ty:
+        case TFunction(ret_type_box, fn_param_types, _):
+            Vector[int] fn_params = []
+            int fpi = 0
+            while fpi < fn_param_types.len():
+                SpannedType fp = fn_param_types.get(fpi).unwrap()
+                fn_params.push(map_ast_type(fp, &gmod))
+                fpi += 1
+            int fn_ret = map_ast_type(*ret_type_box, &gmod)
+            return register_type(&gmod, GtFnPtr(fn_params, fn_ret))
+        else:
+            return map_ast_type(stype, &gmod)
 
 # ── Type ID to name ──────────────────────────────────────
 
@@ -493,7 +502,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
             case None:
                 ret_type = I32_TYPE
     else:
-        ret_type = map_ast_type(fdef.return_type, &gmod)
+        ret_type = map_fn_return_type(fdef.return_type, &gmod)
         # Wrap return type in Result[T, E] for throws functions
         match fdef.throws_type:
             case Some(throws_ty):
@@ -627,7 +636,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
                 pass
 
         bool is_main = false
-        int ret_type = map_ast_type(mdef.return_type, &gmod)
+        int ret_type = map_fn_return_type(mdef.return_type, &gmod)
 
         LowerCtx ctx = LowerCtx([], [], [], 0, {})
         # bb0
