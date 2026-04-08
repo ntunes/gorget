@@ -75,6 +75,8 @@ int prim_name_to_type(String name):
             return U64_TYPE
         case "uint8":
             return U8_TYPE
+        case "byte":
+            return U8_TYPE
         case "uint16":
             return U16_TYPE
         case "uint32":
@@ -120,6 +122,8 @@ String prim_to_c_name(String name):
             return "uint64_t"
         case "uint8":
             return "uint8_t"
+        case "byte":
+            return "u8"
         case "uint16":
             return "uint16_t"
         case "uint32":
@@ -666,7 +670,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             case Some(tname):
                 # Derive-generated traits use short form (Type__method)
                 # Explicit trait impls use prefix (Trait_for_Type__method)
-                bool is_derive = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Default" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal"
+                bool is_derive = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname.find("Iterator") == 0 or tname.find("Iterable") == 0
                 if not is_derive:
                     String mangled_trait = mangle_trait_name(tname)
                     mangled = mangled_trait + "_for_" + target_name + "__" + mdef.name
@@ -695,6 +699,16 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
                 else:
                     pass
 
+        # Check if this is an explicit (non-derive) trait impl
+        bool is_explicit_trait = false
+        match eqblk.trait_name:
+            case Some(tname):
+                bool is_derive_trait = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname.find("Iterator") == 0 or tname.find("Iterable") == 0
+                if not is_derive_trait:
+                    is_explicit_trait = true
+            case None:
+                pass
+
         Vector[int] param_types = []
         if has_self:
             # _1 = self — determine pointer type from ownership
@@ -706,6 +720,12 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             # OWN_MUTABLE=1 (&self), OWN_MOVE=2 (!self) → *mut T
             if self_ownership == 1 or self_ownership == 2:
                 self_tid = register_type(&gmod, GtMutPtr(target_tid))
+            # Explicit trait impls use *unit self (Rust convention)
+            if is_explicit_trait:
+                if self_ownership == 1 or self_ownership == 2:
+                    self_tid = register_type(&gmod, GtMutPtr(UNIT_TYPE))
+                else:
+                    self_tid = register_ptr(&gmod, UNIT_TYPE)
             param_types.push(self_tid)
             int self_lid = add_local(&ctx, self_tid, NO_NAME)
 
