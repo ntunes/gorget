@@ -96,11 +96,11 @@ float area(Shape s):
 
 ```gorget
 struct Message:
-    str sender
-    str subject
+    String sender
+    String subject
     int priority
 
-void preview(Message msg):           # borrow — read-only, caller keeps ownership
+void preview(Message msg):           # borrow — pointer, no copy, caller keeps ownership
     print("[Preview] {msg.subject}")
 
 equip Message:
@@ -118,14 +118,16 @@ void main():
     # preview(msg)       # compile error: use of moved value `msg`
 ```
 
+Resource types (String, Vector, structs with resource fields) are **never** copied by value. Bare parameters automatically receive an immutable borrow — a pointer, not a copy. The only ways to get an owned resource are construction, `.clone()`, or `!move`.
+
 ### Error handling
 
 Errors propagate automatically — no `?` or `try` needed. When you want control, pick the right tool:
 
 ```gorget
 # Errors propagate up through throwing functions automatically
-Config load_config(str path) throws str:
-    str content = read_file(path)     # throws? we throw too — automatically
+Config load_config(String path) throws String:
+    String content = read_file(path)  # throws? we throw too — automatically
     Config cfg = parse(content)       # same here
     return cfg
 
@@ -134,15 +136,15 @@ void main():
     int port = parse_port(input) catch: 8080
 
 # rethrow — transform errors with context
-Config load(str path) throws AppError:
-    str content = read_file(path) rethrow (str e): AppError.Io("reading {path}: {e}")
-    return parse(content) rethrow (str e): AppError.Parse(e)
+Config load(String path) throws AppError:
+    String content = read_file(path) rethrow (String e): AppError.Io("reading {path}: {e}")
+    return parse(content) rethrow (String e): AppError.Parse(e)
 
 # on error — cleanup that only runs on failure (like Zig's errdefer)
-void process(str path) throws str:
+void process(String path) throws String:
     File f = File.open(path)
     on error f.close()
-    str data = f.read_all()           # if this throws, f.close() runs
+    String data = f.read_all()        # if this throws, f.close() runs
     transform(data)
 
 # raw — drop to manual Result handling when you need full control
@@ -215,13 +217,13 @@ int clamp(int value, int lo, int hi):
 
 ```gorget
 trait Printable:
-    str describe(self)
+    String describe(self)
 
 struct Circle:
     int radius
 
 equip Circle with Printable:
-    str describe(self):
+    String describe(self):
         return "circle with radius {self.radius}"
 ```
 
@@ -338,7 +340,7 @@ Test files use `test` blocks with `assert` for contracts, `@should_panic` for ex
 ```bash
 cargo build                                        # build the compiler
 cargo test --lib                                   # ~975 unit tests
-cargo test --test integration -- --test-threads=4  # ~714 integration tests
+cargo test --test integration -- --test-threads=4  # ~944 integration tests
 ```
 
 Integration tests live in `tests/fixtures/*.gg` — each is a self-contained program with deterministic stdout.
