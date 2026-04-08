@@ -1402,18 +1402,18 @@ pub(super) fn deep_clone_resource_fields(
     }
     // Skip enums — variants are stored in a union, can't clone all fields at once.
     // Enum element deep-clone requires match-on-tag which is handled separately.
-    if sdef.is_enum {
+    if sdef.is_enum() {
         return None;
     }
     let mut ops = Vec::new();
     for (fname, fty) in &sdef.fields {
         if let LirType::Struct(fsid) = fty {
             if let Some(fdef) = module.structs.get(fsid.0 as usize) {
-                if fdef.is_enum {
+                if fdef.is_enum() {
                     // Enum fields: handle Option/Result types that wrap resources.
                     // Option__GorgetString layout: { tag, Some_0: Str }
                     // Only clone the payload when tag != 0 (Some variant).
-                    if fdef.name.starts_with("Option__") {
+                    if fdef.enum_kind == crate::lir::EnumKind::Option {
                         for (vfname, vfty) in &fdef.fields {
                             if vfname == "tag" { continue; }
                             if let LirType::Struct(vfsid) = vfty {
@@ -1450,9 +1450,9 @@ pub(super) fn deep_clone_resource_fields(
                     for (ffname, ffty) in &fdef.fields {
                         if let LirType::Struct(ffsid) = ffty {
                             if let Some(ffdef) = module.structs.get(ffsid.0 as usize) {
-                                if ffdef.is_enum {
+                                if ffdef.is_enum() {
                                     // Handle nested Option fields too
-                                    if ffdef.name.starts_with("Option__") {
+                                    if ffdef.enum_kind == crate::lir::EnumKind::Option {
                                         for (vfname, vfty) in &ffdef.fields {
                                             if vfname == "tag" { continue; }
                                             if let LirType::Struct(vfsid) = vfty {

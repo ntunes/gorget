@@ -292,7 +292,7 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
         if def.fields.is_empty() {
             // C doesn't allow empty structs — add a dummy byte.
             writeln!(out, "    char __pad;").unwrap();
-        } else if def.is_enum && def.fields.len() > 1 {
+        } else if def.is_union_layout && def.fields.len() > 1 {
             // Enum type: emit tag + union of variant structs.
             // Field 0 is always "tag" (I32). Fields 1+ are grouped by
             // variant prefix (e.g., IFunction_0, IFunction_1 → IFunction group).
@@ -1994,7 +1994,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             let sname = sn.get(&struct_id.0).map(|s| s.as_str()).unwrap_or("void");
             if (*field as usize) < struct_def.fields.len() {
                 let field_name = &struct_def.fields[*field as usize].0;
-                if struct_def.is_enum && *field > 0 {
+                if struct_def.is_union_layout && *field > 0 {
                     // Enum union layout: access through data.field_name
                     // For multi-field variants (e.g., IFunction_0, IFunction_1),
                     // the variant name is a prefix (IFunction) and fields are
@@ -2472,7 +2472,8 @@ mod tests {
         let sid = module.add_struct(StructDef {
             name: "Point".into(),
             fields: vec![("x".into(), LirType::F64), ("y".into(), LirType::F64)],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: None,
         });
 

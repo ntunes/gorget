@@ -1506,7 +1506,7 @@ fn emit_option_field_drops(
         if already_handled.contains(fname) { continue; }
         if let crate::lir::LirType::Struct(fsid) = fty {
             if let Some(fdef) = module.structs.get(fsid.0 as usize) {
-                if fdef.name.starts_with("Option__") {
+                if fdef.enum_kind == crate::lir::EnumKind::Option {
                     // Find resource payload fields in the Option enum
                     for (vfname, vfty) in &fdef.fields {
                         if vfname == "tag" { continue; }
@@ -1542,7 +1542,7 @@ fn emit_option_field_clones(
         if already_handled.contains(fname) { continue; }
         if let crate::lir::LirType::Struct(fsid) = fty {
             if let Some(fdef) = module.structs.get(fsid.0 as usize) {
-                if fdef.name.starts_with("Option__") {
+                if fdef.enum_kind == crate::lir::EnumKind::Option {
                     for (vfname, vfty) in &fdef.fields {
                         if vfname == "tag" { continue; }
                         if let crate::lir::LirType::Struct(vfsid) = vfty {
@@ -1741,10 +1741,10 @@ pub(super) fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, s
                     let variant_field_count = sdef.fields.iter()
                         .filter(|(n, _)| n.starts_with(&variant_prefix))
                         .count();
-                    let access = if sdef.is_enum && variant_field_count > 1 {
+                    let access = if sdef.is_union_layout && variant_field_count > 1 {
                         // Union layout, multi-field variant: data.{Variant}.{Field}
                         format!("data.{variant_name}.{field_name}")
-                    } else if sdef.is_enum {
+                    } else if sdef.is_union_layout {
                         // Union layout, single-field variant: data.{Field}
                         format!("data.{field_name}")
                     } else {
@@ -1805,9 +1805,9 @@ pub(super) fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                 let variant_field_count = sdef.fields.iter()
                     .filter(|(n, _)| n.starts_with(&variant_prefix))
                     .count();
-                let access = if sdef.is_enum && variant_field_count > 1 {
+                let access = if sdef.is_union_layout && variant_field_count > 1 {
                     format!("data.{variant_name}.{field_name}")
-                } else if sdef.is_enum {
+                } else if sdef.is_union_layout {
                     format!("data.{field_name}")
                 } else {
                     field_name.to_string()
@@ -1873,9 +1873,9 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                         let variant_field_count = sdef.fields.iter()
                             .filter(|(n, _)| n.starts_with(&variant_prefix))
                             .count();
-                        let access = if sdef.is_enum && variant_field_count > 1 {
+                        let access = if sdef.is_union_layout && variant_field_count > 1 {
                             format!("data.{variant_name}.{field_name}")
-                        } else if sdef.is_enum {
+                        } else if sdef.is_union_layout {
                             format!("data.{field_name}")
                         } else {
                             field_name.to_string()
@@ -1954,9 +1954,9 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                             let variant_field_count = sdef.fields.iter()
                                 .filter(|(n, _)| n.starts_with(&variant_prefix))
                                 .count();
-                            let access = if sdef.is_enum && variant_field_count > 1 {
+                            let access = if sdef.is_union_layout && variant_field_count > 1 {
                                 format!("data.{variant_name}.{field_name}")
-                            } else if sdef.is_enum {
+                            } else if sdef.is_union_layout {
                                 format!("data.{field_name}")
                             } else {
                                 field_name.to_string()

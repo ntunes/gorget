@@ -420,7 +420,8 @@ mod tests {
         module.add_struct(StructDef {
             name: "Point".into(),
             fields: vec![("x".into(), LirType::F64), ("y".into(), LirType::F64)],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: None,
                       });
 
@@ -547,7 +548,8 @@ mod tests {
         let sid = module.add_struct(StructDef {
             name: "Tiny".into(),
             fields: vec![("x".into(), LirType::I32)],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: None,
                       });
 

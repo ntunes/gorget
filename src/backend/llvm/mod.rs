@@ -419,7 +419,7 @@ fn emit_string_globals(out: &mut String, sg: &StrGlobals) {
 fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>) {
     for (i, def) in module.structs.iter().enumerate() {
         let name = &snames[&(i as u32)];
-        if def.is_enum {
+        if def.is_union_layout {
             // Enum: { i32 tag, [payload_bytes x i8] }
             let payload = enum_payload_size(def, &module.structs, snames);
             if payload > 0 {
@@ -1456,7 +1456,7 @@ fn emit_inst(
         Inst::FieldPtr { dst, base, struct_id, field } => {
             let sname = &snames[&struct_id.0];
             let sdef = &module.structs[struct_id.0 as usize];
-            if sdef.is_enum && *field > 0 {
+            if sdef.is_union_layout && *field > 0 {
                 // For enum, field 0 is tag (i32), field 1+ goes into the union payload byte array.
                 // Access via GEP into the [N x i8] payload at byte offset.
                 // First get pointer to the payload array (field index 1)

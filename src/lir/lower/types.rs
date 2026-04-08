@@ -147,11 +147,11 @@ pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> u
 }
 
 /// Compute the size of a struct from its LIR StructDef.
-/// For enum structs (`is_enum == true`), uses union layout:
+/// For union-layout enums (`is_union_layout == true`), uses union layout:
 ///   sizeof = align8(tag) + max(variant_size), aligned to 8
 /// For regular structs, sums fields sequentially with alignment.
 pub fn c_sizeof_struct_def(sd: &StructDef, structs: &[StructDef]) -> usize {
-    if sd.is_enum && sd.fields.len() > 1 {
+    if sd.is_union_layout && sd.fields.len() > 1 {
         // Union layout: tag (field 0) + union of variant groups.
         // tag is always I32 = 4 bytes, padded to 8 for union alignment.
         let tag_size = 8usize;

@@ -612,15 +612,31 @@ impl LirFunction {
 
 // ── Struct Definitions ──────────────────────────────────────────────────────
 
+/// Distinguishes enum kinds for clone/drop code generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum EnumKind {
+    /// Not an enum — regular struct.
+    #[default]
+    NotEnum,
+    /// Option-like enum: `{tag, Some_0}`. Tag 0 = None, tag != 0 = has payload.
+    Option,
+    /// Result-like enum: `{tag, Ok_0, Error_0}`. Two payload variants.
+    Result,
+    /// General user-defined enum with arbitrary variants.
+    General,
+}
+
 /// A struct type definition (covers structs, enums, tuples, runtime types).
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<(String, LirType)>,
-    /// True for enum types — the C backend emits a union of variant structs
-    /// instead of a flat field list. Field 0 is always "tag" (I32), fields 1+
-    /// are grouped by variant name prefix (e.g., IFunction_0, IFunction_1).
-    pub is_enum: bool,
+    /// What kind of enum this struct represents (if any).
+    pub enum_kind: EnumKind,
+    /// True for large enums (>4 fields) that use C union layout.  Small enums
+    /// (Option, Result) use flat struct layout.
+    /// The C backend checks this for field access patterns and struct emission.
+    pub is_union_layout: bool,
     /// Cached C sizeof for this struct (in bytes). Computed after type lowering
     /// via `compute_struct_sizes()`. Avoids repeated string-based size lookups.
     pub computed_c_size: Option<usize>,
@@ -629,11 +645,15 @@ pub struct StructDef {
 impl StructDef {
     /// Create a regular (non-enum) struct definition.
     pub fn new(name: String, fields: Vec<(String, LirType)>) -> Self {
-        Self { name, fields, is_enum: false, computed_c_size: None }
+        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None }
     }
-    /// Create an enum struct definition (union layout in C).
-    pub fn new_enum(name: String, fields: Vec<(String, LirType)>) -> Self {
-        Self { name, fields, is_enum: true, computed_c_size: None }
+    /// Create an enum struct definition with the given kind.
+    pub fn new_enum(name: String, fields: Vec<(String, LirType)>, kind: EnumKind) -> Self {
+        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None }
+    }
+    /// True when the type originated from any enum definition.
+    pub fn is_enum(&self) -> bool {
+        self.enum_kind != EnumKind::NotEnum
     }
 }
 
@@ -1016,7 +1036,8 @@ mod tests {
                 ("x".into(), LirType::F64),
                 ("y".into(), LirType::F64),
             ],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: None,
                       });
 

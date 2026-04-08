@@ -1,6 +1,6 @@
 //! Type helpers and struct registry for LIR.
 
-use super::{LirType, StructDef, StructId};
+use super::{EnumKind, LirType, StructDef, StructId};
 use std::collections::HashMap;
 
 /// Registry mapping struct names to their StructIds.
@@ -57,7 +57,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("cap".into(), LirType::I64),
                 ("alloc".into(), LirType::Ptr),
             ],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: Some(32),
         },
         // GorgetArray — dynamic array (Vector[T] backing).
@@ -71,7 +72,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("cap".into(), LirType::I64),
                 ("elem_size".into(), LirType::I64),
             ],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: Some(64),
         },
         // Closure — function pointer + environment. 2 × 8 = 16 bytes.
@@ -81,7 +83,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("fn_ptr".into(), LirType::Ptr),
                 ("env".into(), LirType::Ptr),
             ],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: Some(16),
         },
         // Trait object — data pointer + vtable pointer. 2 × 8 = 16 bytes.
@@ -91,7 +94,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("data".into(), LirType::Ptr),
                 ("vtable".into(), LirType::Ptr),
             ],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: Some(16),
         },
         // Task handle — task pointer + drop function. 2 × 8 = 16 bytes.
@@ -101,7 +105,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("task_ptr".into(), LirType::Ptr),
                 ("drop_fn".into(), LirType::Ptr),
             ],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: Some(16),
         },
         // GorgetMap — hash map backing Dict[K,V] and HashMap[K,V].
@@ -124,7 +129,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("hash_fn".into(), LirType::Ptr),
                 ("eq_fn".into(), LirType::Ptr),
             ],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: Some(136),
         },
         // GorgetSet — typedef alias for GorgetMap, backs Set[T] and HashSet[T].
@@ -146,7 +152,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("hash_fn".into(), LirType::Ptr),
                 ("eq_fn".into(), LirType::Ptr),
             ],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: Some(136),
         },
         // GorgetRange — range iterator. 3 × 8 = 24 bytes.
@@ -157,7 +164,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("end".into(), LirType::I64),
                 ("step".into(), LirType::I64),
             ],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: None,
                       },
     ]

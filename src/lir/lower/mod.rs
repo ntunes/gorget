@@ -576,7 +576,8 @@ impl<'a> LoweringContext<'a> {
                     let sid = self.module.add_struct(StructDef {
                         name: def.name.clone(),
                         fields: vec![("_0".into(), LirType::Ptr)],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: None,
                                   });
                     self.struct_reg.register(&def.name, sid);
@@ -593,7 +594,8 @@ impl<'a> LoweringContext<'a> {
                 let sid = self.module.add_struct(StructDef {
                     name: def.name.clone(),
                     fields,
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: None,
                               });
                 self.struct_reg.register(&def.name, sid);
@@ -605,7 +607,8 @@ impl<'a> LoweringContext<'a> {
                     let sid = self.module.add_struct(StructDef {
                         name: def.name.clone(),
                         fields: vec![],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: None,
                                   });
                     self.struct_reg.register(&def.name, sid);
@@ -653,7 +656,14 @@ impl<'a> LoweringContext<'a> {
             let is_large_enum = matches!(&def.kind, gir_types::TypeDefKind::Enum(_))
                 && fields.len() > 4;
             self.module.structs[sid.0 as usize].fields = fields;
-            self.module.structs[sid.0 as usize].is_enum = is_large_enum;
+            self.module.structs[sid.0 as usize].enum_kind = if def.name.starts_with("Option__") {
+                EnumKind::Option
+            } else if def.name.starts_with("Result__") {
+                EnumKind::Result
+            } else {
+                EnumKind::General
+            };
+            self.module.structs[sid.0 as usize].is_union_layout = is_large_enum;
         }
     }
 
@@ -730,7 +740,8 @@ impl<'a> LoweringContext<'a> {
                         let sid = self.module.add_struct(StructDef {
                             name: name.clone(),
                             fields,
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: None,
                                       });
                         self.struct_reg.register(name, sid);
@@ -753,7 +764,8 @@ impl<'a> LoweringContext<'a> {
                         let sid = self.module.add_struct(StructDef {
                             name: name.clone(),
                             fields,
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: None,
                                       });
                         self.struct_reg.register(name, sid);
@@ -768,7 +780,8 @@ impl<'a> LoweringContext<'a> {
                 let sid = self.module.add_struct(StructDef {
                     name: name.clone(),
                     fields,
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: None,
                               });
                 self.struct_reg.register(name, sid);

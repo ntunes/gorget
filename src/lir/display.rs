@@ -362,7 +362,8 @@ mod tests {
         let str_id = module.add_struct(StructDef {
             name: "GorgetString".into(),
             fields: vec![("data".into(), LirType::Ptr), ("len".into(), LirType::I64)],
-            is_enum: false,
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
             computed_c_size: None,
                       });
 
