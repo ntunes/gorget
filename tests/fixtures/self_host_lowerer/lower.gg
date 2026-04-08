@@ -65,6 +65,22 @@ int prim_name_to_type(String name):
             return BOOL_TYPE
         case "void":
             return UNIT_TYPE
+        case "int8":
+            return I8_TYPE
+        case "int16":
+            return I16_TYPE
+        case "int32":
+            return I32_TYPE
+        case "uint":
+            return U64_TYPE
+        case "uint8":
+            return U8_TYPE
+        case "uint16":
+            return U16_TYPE
+        case "uint32":
+            return U32_TYPE
+        case "float32":
+            return F32_TYPE
         else:
             return -1
 
@@ -82,25 +98,44 @@ String mangle_type_name(String name, Vector[SpannedType] targs, GirModule &gmod)
         i += 1
     return result
 
+String prim_to_c_name(String name):
+    match name:
+        case "int":
+            return "int64_t"
+        case "float":
+            return "double"
+        case "bool":
+            return "bool"
+        case "void":
+            return "void"
+        case "String":
+            return "GorgetString"
+        case "int8":
+            return "int8_t"
+        case "int16":
+            return "int16_t"
+        case "int32":
+            return "int32_t"
+        case "uint":
+            return "uint64_t"
+        case "uint8":
+            return "uint8_t"
+        case "uint16":
+            return "uint16_t"
+        case "uint32":
+            return "uint32_t"
+        case "float32":
+            return "float"
+        else:
+            return name
+
 String type_to_c_name(SpannedType stype, GirModule &gmod):
     match stype.ty:
         case TPrimitive(name):
             # Check type substitutions for mangling
             if gmod.type_subs.contains(name):
                 return type_id_to_name(gmod.type_subs.get(name).unwrap(), &gmod)
-            match name:
-                case "int":
-                    return "int64_t"
-                case "float":
-                    return "double"
-                case "bool":
-                    return "bool"
-                case "void":
-                    return "void"
-                case "String":
-                    return "GorgetString"
-                else:
-                    return name
+            return prim_to_c_name(name)
         case TNamed(name, targs):
             # Check type substitutions for mangling
             if gmod.type_subs.contains(name):
@@ -1062,19 +1097,7 @@ void discover_generic_calls_stmts(Vector[Stmt] stmts, Dict[String, bool] &seen, 
 String spanned_type_to_c_name(SpannedType stype):
     match stype.ty:
         case TPrimitive(name):
-            match name:
-                case "int":
-                    return "int64_t"
-                case "float":
-                    return "double"
-                case "bool":
-                    return "bool"
-                case "void":
-                    return "void"
-                case "String":
-                    return "GorgetString"
-                else:
-                    return name
+            return prim_to_c_name(name)
         case TNamed(name, targs):
             if name == "String":
                 return "GorgetString"
@@ -1372,6 +1395,19 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
                 pass
         gi += 1
 
+    # Collect generic struct templates for resource type detection
+    Dict[String, StructDef] struct_templates = {}
+    int sti = 0
+    while sti < m.items.len():
+        Item st_item = m.items.get(sti).unwrap()
+        match st_item:
+            case IStruct(sdef):
+                if sdef.type_params.len() > 0:
+                    struct_templates.put(sdef.name.clone(), sdef)
+            else:
+                pass
+        sti += 1
+
     # Discover generic call sites and type instances from all function/equip bodies
     int di = 0
     while di < m.items.len():
@@ -1388,6 +1424,29 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
             else:
                 pass
         di += 1
+
+    # Register monomorphized struct types as resource types if any substituted
+    # field is a resource type (e.g., Pair[int, String] has a String field)
+    int mri = 0
+    while mri < generic_instances.len():
+        GenericInstance mrinst = generic_instances.get(mri).unwrap()
+        if struct_templates.contains(mrinst.base_name):
+            StructDef sdef = struct_templates.get(mrinst.base_name).unwrap()
+            # Build substitution map
+            setup_type_subs(&gmod, sdef.type_params, mrinst.type_args)
+            bool has_resource = false
+            int mrf = 0
+            while mrf < sdef.fields.len():
+                Param fld = sdef.fields.get(mrf).unwrap()
+                int ft = map_ast_type(fld.param_type, &gmod)
+                String ft_name = type_id_to_name(ft, &gmod)
+                if is_resource_type_name(ft_name, &gmod):
+                    has_resource = true
+                mrf += 1
+            clear_type_subs(&gmod)
+            if has_resource:
+                gmod.resource_types.put(mrinst.mangled_name.clone(), true)
+        mri += 1
 
     # Register fn_sigs for monomorphized instances
     int si = 0
