@@ -439,14 +439,16 @@ pub fn emit_pattern_bindings(
                 };
 
                 // When scrutinee is Ptr (borrowed param), resource-type variant
-                // fields should be references, not owned copies.
-                // Same conversion as struct field loads:
-                // - Collections → Ptr(T) (reference into the enum)
-                // - GorgetString → Ptr(GorgetString) (reference into the enum)
-                if scrut_is_ptr {
-                    if ctx.type_registry.is_collection_type(field_type)
-                        || field_type == ctx.type_mapper.owned_string_type
-                    {
+                // fields should be references into the enum's storage, not
+                // shallow copies. This ensures borrows derived from the field
+                // (e.g., d.get(key) on a borrowed Dict) remain valid for the
+                // lifetime of the borrowed scrutinee.
+                // Box types are excluded — user code explicitly dereferences
+                // them with `*a`, which requires a Box value, not a Ptr.
+                if scrut_is_ptr && ctx.type_registry.is_resource_type(field_type) {
+                    let is_box = ctx.type_registry.type_name(field_type)
+                        .map_or(false, |n| n.starts_with("Box__"));
+                    if !is_box {
                         field_type = ctx.type_registry.insert(GirType::Ptr(field_type));
                     }
                 }

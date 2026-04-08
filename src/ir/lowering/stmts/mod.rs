@@ -861,6 +861,74 @@ fn lower_return(
                         }
                     }
                 }
+                // Option[Ptr(T)] → Option[T] return conversion: when a function
+                // returns Option[T] but the operand is Option[Ptr(T)] (from a
+                // collection .get() on a borrowed field), auto-clone the payload.
+                // Without this, memcpy would read sizeof(Option[T]) bytes from a
+                // sizeof(Option[Ptr(T)]) source — buffer overflow.
+                if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                    if p.projections.is_empty() {
+                        let src_idx = p.local.0 as usize;
+                        if src_idx < builder.locals.len() {
+                            let src_type = builder.locals[src_idx].type_id;
+                            let src_name = ctx.type_registry.type_name(src_type).unwrap_or_default();
+                            let ret_name = ctx.type_registry.type_name(ret_type).unwrap_or_default();
+                            if src_name.starts_with("Option__Ref_") && ret_name.starts_with("Option__")
+                                && !ret_name.starts_with("Option__Ref_")
+                            {
+                                // Extract inner type name: "Option__Ref_Json" → "Json"
+                                let inner_name = src_name.strip_prefix("Option__Ref_").unwrap_or("");
+                                if let Some(inner_type) = ctx.type_mapper.lookup_named(inner_name) {
+                                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
+                                        // Branch on tag: Some (0) → deref+clone payload, None (1) → pass through.
+                                        // Use I64 for the tag read — the LIR may widen I32 enum tags to I64.
+                                        let tag_place = Place {
+                                            local: p.local,
+                                            projections: vec![Projection::Field(0)],
+                                        };
+                                        let tag = builder.add_local(I64_TYPE, None);
+                                        builder.assign(Place::local(tag), Operand::Copy(tag_place));
+                                        let is_some = builder.cmp(
+                                            CmpOp::Eq, I64_TYPE,
+                                            FunctionBuilder::copy(tag),
+                                            Operand::Constant(Constant::I64(0)),
+                                        );
+                                        let some_bb = builder.new_block();
+                                        let none_bb = builder.new_block();
+                                        let merge_bb = builder.new_block();
+                                        builder.branch(FunctionBuilder::copy(is_some), some_bb, none_bb);
+
+                                        // Some branch: extract Ptr, clone to owned T, wrap in Option[T]
+                                        builder.switch_to(some_bb);
+                                        let payload_place = Place {
+                                            local: p.local,
+                                            projections: vec![Projection::Field(1)],
+                                        };
+                                        let ptr_type = ctx.register_ptr_type(inner_type);
+                                        let ptr_local = builder.add_local(ptr_type, None);
+                                        builder.assign(Place::local(ptr_local), Operand::Copy(payload_place));
+                                        let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], inner_type);
+                                        let result_type = ret_type;
+                                        let some_result = builder.enum_init(&ret_name, "Some", result_type, vec![FunctionBuilder::copy(cloned)]);
+                                        builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(some_result));
+                                        builder.jump(merge_bb);
+
+                                        // None branch: construct None
+                                        builder.switch_to(none_bb);
+                                        let none_result = builder.enum_init(&ret_name, "None", result_type, vec![]);
+                                        builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(none_result));
+                                        builder.jump(merge_bb);
+
+                                        builder.switch_to(merge_bb);
+                                        builder.ret(FunctionBuilder::copy(LocalId(0)));
+                                        ctx.func_state.expected_type = prev_expected;
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 // Use Move for locals that own their data (call results, constructors).
                 // Move (memcpy) avoids a C backend clone that leaks the original
                 // data when MoveZero zeros the source without freeing.
