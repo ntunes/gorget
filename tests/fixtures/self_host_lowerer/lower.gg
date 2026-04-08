@@ -600,6 +600,8 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
 
 # ── Simple expression type inference ─────────────────────
 
+int STRING_MARKER = -2
+
 int guess_return_type(SpannedExpr sexpr):
     match sexpr.expr:
         case EIntLiteral(_):
@@ -608,10 +610,16 @@ int guess_return_type(SpannedExpr sexpr):
             return F64_TYPE
         case EBoolLiteral(_):
             return BOOL_TYPE
+        case EStringLiteral(_, _):
+            return STRING_MARKER
         case EBinaryOp(_, op, _):
             match op:
                 case "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or":
                     return BOOL_TYPE
+                case "+":
+                    # String concatenation returns string — but could also be int add.
+                    # Can't determine without type info, default to I64.
+                    return I64_TYPE
                 else:
                     return I64_TYPE
         case EUnaryOp(op, _):
@@ -622,6 +630,18 @@ int guess_return_type(SpannedExpr sexpr):
                     return I64_TYPE
         case ENoneLiteral():
             return UNIT_TYPE
+        case ECall(callee_box, _, _):
+            # Check if it's a known void function
+            match (*callee_box).expr:
+                case EIdentifier(fname):
+                    if fname == "print" or fname == "pass":
+                        return UNIT_TYPE
+                else:
+                    pass
+        case EMethodCall(_, mname, _, _):
+            # Known void methods
+            if mname == "push" or mname == "set" or mname == "put" or mname == "clear" or mname == "pop":
+                return UNIT_TYPE
         else:
             pass
     return I64_TYPE
@@ -660,7 +680,23 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
                     case SExpr(expr):
                         ret_type = guess_return_type(expr)
                     else:
+                        # Non-expression last statement (if, while, etc.) → void
                         ret_type = UNIT_TYPE
+            # Also check: if the body has multiple statements and no explicit
+            # return, it's likely a void closure
+            if body.len() > 1 and ret_type == I64_TYPE:
+                Stmt first = body.get(0).unwrap()
+                Stmt last = body.get(body.len() - 1).unwrap()
+                match last:
+                    case SExpr(_):
+                        pass
+                    case SReturn(_):
+                        pass
+                    else:
+                        ret_type = UNIT_TYPE
+            # Resolve special markers
+            if ret_type == STRING_MARKER:
+                ret_type = lookup_or_register_named(&gmod, "GorgetString")
 
             # Create minimal function with empty body
             Vector[GirLocal] locals = [GirLocal(ret_type, NO_NAME), GirLocal(self_ptr, NO_NAME)]
