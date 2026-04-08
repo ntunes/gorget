@@ -2227,6 +2227,13 @@ done");
 }
 
 #[test]
+fn leak_comprehensive() {
+    run_gg("leak_comprehensive.gg", "\
+leaked=false
+done");
+}
+
+#[test]
 fn trait_defaults() {
     run_gg(
         "trait_defaults.gg",

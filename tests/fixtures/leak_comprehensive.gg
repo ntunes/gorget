@@ -1,0 +1,141 @@
+# Comprehensive leak test: every common allocation pattern in a loop.
+# Tests string operations, collection operations, struct creation,
+# function calls with resource returns, and nested patterns.
+from std.os import mem_live
+from std.collections import Vector, Dict
+
+String make_greeting(String name):
+    return f"Hello, {name}!"
+
+Vector[String] make_names(int n):
+    Vector[String] v = []
+    int i = 0
+    while i < n:
+        v.push(f"name_{i}")
+        i = i + 1
+    return v
+
+Dict[String, int] make_scores(int n):
+    Dict[String, int] d = {}
+    int i = 0
+    while i < n:
+        d[f"player_{i}"] = i * 10
+        i = i + 1
+    return d
+
+void main():
+    int baseline = mem_live()
+
+    # 1. f-string creation in loop
+    int i = 0
+    while i < 500:
+        String s = f"item_{i}_value_{i * 2}"
+        i = i + 1
+
+    # 2. String concatenation in loop
+    i = 0
+    while i < 500:
+        String a = "hello"
+        String b = " world"
+        String c = a + b
+        i = i + 1
+
+    # 3. String method chains in loop
+    i = 0
+    while i < 500:
+        String s = f"  TEST_{i}  "
+        String t = s.trim().to_lower()
+        i = i + 1
+
+    # 4. String split producing Vector[String]
+    i = 0
+    while i < 200:
+        String s = "one,two,three,four,five"
+        Vector[String] parts = s.split(",")
+        i = i + 1
+
+    # 5. String replace in loop
+    i = 0
+    while i < 200:
+        String s = "aaa-bbb-ccc"
+        String t = s.replace("-", "_")
+        i = i + 1
+
+    # 6. Function returning String
+    i = 0
+    while i < 200:
+        String g = make_greeting(f"user_{i}")
+        i = i + 1
+
+    # 7. Function returning Vector[String] (elem_drop test)
+    i = 0
+    while i < 200:
+        Vector[String] names = make_names(3)
+        i = i + 1
+
+    # 8. Function returning Dict[String, int]
+    i = 0
+    while i < 200:
+        Dict[String, int] scores = make_scores(3)
+        i = i + 1
+
+    # 9. Vector[Vector[int]] nested (elem_drop cascading)
+    i = 0
+    while i < 200:
+        Vector[Vector[int]] matrix = []
+        Vector[int] r1 = [1, 2, 3]
+        Vector[int] r2 = [4, 5, 6]
+        matrix.push(r1)
+        matrix.push(r2)
+        i = i + 1
+
+    # 10. Dict[String, String] in loop
+    i = 0
+    while i < 200:
+        Dict[String, String] d = {}
+        d[f"key_{i}"] = f"val_{i}"
+        d["static"] = "value"
+        i = i + 1
+
+    # 11. Result[String, String] match
+    i = 0
+    while i < 200:
+        Result[String, String] r = Ok(f"ok_{i}")
+        match r:
+            case Ok(v):
+                int _l = v.len()
+            case Error(e):
+                pass
+        i = i + 1
+
+    # 12. Option[String] match
+    i = 0
+    while i < 200:
+        Option[String] o = Some(f"opt_{i}")
+        match o:
+            case Some(s):
+                int _l = s.len()
+            case None:
+                pass
+        i = i + 1
+
+    # 13. Nested f-strings
+    i = 0
+    while i < 200:
+        String inner = f"x={i}"
+        String outer = f"[{inner}]"
+        i = i + 1
+
+    # 14. Vector push of f-strings
+    i = 0
+    while i < 100:
+        Vector[String] acc = []
+        int j = 0
+        while j < 10:
+            acc.push(f"item_{j}")
+            j = j + 1
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")
