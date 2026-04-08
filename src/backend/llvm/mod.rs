@@ -1058,6 +1058,12 @@ fn emit_inst(
                     // Value is a pointer — memcpy from it
                     let sz = sizeof_lir_type(slot_ty, &module.structs, snames);
                     writeln!(out, "  call ptr @memcpy(ptr %s{}, ptr %v{}, i64 {sz})", slot.0, value.0).unwrap();
+                } else if val_ty.map_or(false, |t| t.is_integer() || t.is_float() || matches!(t, LirType::Bool)) {
+                    // Scalar value stored into aggregate slot — type mismatch from extern
+                    // that returns aggregate but was declared as scalar. Store the scalar
+                    // at the slot's address using the value's actual type.
+                    let vty = llvm_type_full(val_ty.unwrap(), snames);
+                    writeln!(out, "  store {vty} %v{}, ptr %s{}", value.0, slot.0).unwrap();
                 } else {
                     // Value is an aggregate by value — store it directly
                     let sty = llvm_type_full(slot_ty, snames);
