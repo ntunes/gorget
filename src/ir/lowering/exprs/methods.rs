@@ -435,6 +435,48 @@ pub(super) fn lower_method_call(
         }
     }
 
+    // .unwrap_error() / .unwrap_err() on Result → extract Error payload with MoveZero
+    if matches!(method_name, "unwrap_error" | "unwrap_err") {
+        let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        let is_result = type_name.as_ref()
+            .map(|n| n.starts_with("Result__"))
+            .unwrap_or(false);
+        if is_result {
+            if let Some(ref tn) = type_name {
+                // Result__Ok__Err → extract Err type (last component after last __)
+                let rest = &tn["Result__".len()..];
+                let err_name = ["__Str", "__int64_t", "__bool", "__double"].iter()
+                    .find_map(|suffix| rest.strip_suffix(suffix).map(|_| &suffix[2..]))
+                    .unwrap_or_else(|| {
+                        rest.rfind("__").map(|pos| &rest[pos + 2..]).unwrap_or(rest)
+                    });
+                let err_type = resolve_inner_type(ctx, err_name);
+
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+                    let ptr_type = ctx.register_ptr_type(
+                        infer_operand_type_full(ctx, &recv, builder),
+                    );
+                    let borrow = builder.add_local(ptr_type, None);
+                    builder.emit_borrow(borrow, place.clone());
+                    let dst = ctx.call_extern_tracked(builder,
+                        "__result_unwrap_error",
+                        vec![FunctionBuilder::copy(borrow)],
+                        err_type,
+                    );
+                    // MoveZero the Result to prevent scope-exit drop from
+                    // double-freeing the extracted Error payload.
+                    // Only for temps (not named locals which might be used again).
+                    if is_resource_type_local(dst, builder, &ctx.type_registry)
+                        && !ctx.is_named_local(place.local)
+                    {
+                        ctx.move_zero_and_mark(builder, place.local);
+                    }
+                    return FunctionBuilder::copy(dst);
+                }
+            }
+        }
+    }
+
     // Channel[T] — handled by generic dispatch via BuiltinTypeProtocol (MutBorrow self_conv)
 
     // Shared[T] methods: clone, get, strong_count, downgrade — via C wrapper functions.

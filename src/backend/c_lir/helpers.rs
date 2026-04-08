@@ -736,6 +736,7 @@ pub(super) fn collection_void_param_indices(name: &str) -> &'static [usize] {
 pub(super) fn is_option_result_unwrap(name: &str) -> bool {
     name == "__option_unwrap" || name == "__result_unwrap"
         || name == "__option_unwrap_or" || name == "__result_unwrap_or"
+        || name == "__result_unwrap_error"
         || name == "gorget_option_unwrap"
         || (name.contains("Option__") && (name.ends_with("__unwrap") || name.ends_with("__unwrap_or")))
         || (name.contains("Result__") && (name.ends_with("__unwrap") || name.ends_with("__unwrap_or")))
