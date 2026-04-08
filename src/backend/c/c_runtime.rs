@@ -169,6 +169,7 @@ typedef struct {
     __gorget_drop_fn val_drop;
     __gorget_drop_fn val_clone;
     __gorget_drop_fn key_drop;
+    __gorget_drop_fn key_clone;
 } GorgetMap;
 
 typedef GorgetMap GorgetSet;
@@ -5043,7 +5044,7 @@ static inline void __gorget_map_grow(GorgetMap* m) {
 }
 
 static inline GorgetMap gorget_map_new(size_t key_size, size_t val_size) {
-    return (GorgetMap){NULL, NULL, NULL, 0, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL};
+    return (GorgetMap){NULL, NULL, NULL, 0, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL};
 }
 
 // Ordered Dict: pre-allocates order array so put() tracks insertion order
@@ -5067,6 +5068,7 @@ static inline GorgetMap gorget_dict_new(size_t key_size, size_t val_size) {
     m.val_drop = NULL;
     m.val_clone = NULL;
     m.key_drop = NULL;
+    m.key_clone = NULL;
     return m;
 }
 
@@ -5076,6 +5078,7 @@ static inline GorgetMap gorget_map_new_str(size_t val_size) {
     m.hash_fn = __gorget_str_key_hash;
     m.eq_fn = __gorget_str_key_eq;
     m.key_drop = (__gorget_drop_fn)gorget_string_free;
+    m.key_clone = (__gorget_drop_fn)gorget_string_clone_inplace;
     return m;
 }
 static inline GorgetMap gorget_dict_new_str(size_t val_size) {
@@ -5083,6 +5086,7 @@ static inline GorgetMap gorget_dict_new_str(size_t val_size) {
     m.hash_fn = __gorget_str_key_hash;
     m.eq_fn = __gorget_str_key_eq;
     m.key_drop = (__gorget_drop_fn)gorget_string_free;
+    m.key_clone = (__gorget_drop_fn)gorget_string_clone_inplace;
     return m;
 }
 
@@ -5255,6 +5259,7 @@ static inline GorgetMap gorget_map_clone(const GorgetMap* src) {
     dst.val_drop = src->val_drop;
     dst.val_clone = src->val_clone;
     dst.key_drop = src->key_drop;
+    dst.key_clone = src->key_clone;
     dst.alloc = a;
     if (src->cap > 0) {
         dst.keys = a->alloc(a->ctx, src->cap * src->key_size);
@@ -5279,8 +5284,15 @@ static inline GorgetMap gorget_map_clone(const GorgetMap* src) {
                 }
             }
         }
-        // Deep-clone resource-type keys (e.g., owned strings).
-        if (dst.key_drop) {
+        // Deep-clone resource-type keys so the copy is independent.
+        if (dst.key_clone) {
+            for (size_t i = 0; i < dst.cap; i++) {
+                if (dst.states[i] == 1) {
+                    dst.key_clone((char*)dst.keys + i * dst.key_size);
+                }
+            }
+        } else if (dst.key_drop) {
+            // Legacy fallback: string keys without key_clone
             for (size_t i = 0; i < dst.cap; i++) {
                 if (dst.states[i] == 1) {
                     Str* key = (Str*)((char*)dst.keys + i * dst.key_size);

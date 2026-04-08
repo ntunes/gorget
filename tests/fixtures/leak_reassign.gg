@@ -18,7 +18,7 @@ void main():
     print(f"vec reassign loop: leaked={t1}")
 
     # Test 2: String reassignment in loop
-    String s = "initial"
+    String s = f"initial_{0}"
     b = mem_live()
     i = 0
     while i < 100:
@@ -29,7 +29,7 @@ void main():
 
     # Test 3: Dict reassignment
     Dict[String, int] d = Dict[String, int]()
-    d.set("x", 1)
+    d.set(f"x_{0}", 1)
     b = mem_live()
     i = 0
     while i < 50:

@@ -2411,6 +2411,9 @@ fn lower_string_interpolation(
     // Register for drop — needs_drop() handles type filtering.
     ctx.drops.register_local(dst, owned_string_type, &ctx.type_registry);
     ctx.set_owned(dst);
+    // gorget_string_format always allocates a fresh buffer — mark as fresh so
+    // the self-referential clone guard in assigns.rs skips the redundant clone.
+    ctx.func_state.fresh_string_locals.insert(dst);
     FunctionBuilder::copy(dst)
 }
 

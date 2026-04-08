@@ -2258,8 +2258,8 @@ done");
 fn leak_reassign() {
     run_gg("leak_reassign.gg", "\
 vec reassign loop: leaked=false
-str reassign loop: leaked=true
-dict reassign loop: leaked=true
+str reassign loop: leaked=false
+dict reassign loop: leaked=false
 vec_str reassign loop: leaked=false
 self-ref slice: leaked=false
 done");

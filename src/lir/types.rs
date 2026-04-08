@@ -105,8 +105,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             computed_c_size: Some(16),
         },
         // GorgetMap — hash map backing Dict[K,V] and HashMap[K,V].
-        // C layout: 16 fields × 8 = 128 bytes (includes key_drop, key_eq, key_hash).
-        // LIR models 13 fields; the extra 3 are runtime-internal.
+        // C layout: 17 fields × 8 = 136 bytes (includes key_drop, key_clone, etc.).
+        // LIR models 13 fields; the extra 4 are runtime-internal.
         StructDef {
             name: "GorgetMap".into(),
             fields: vec![
@@ -125,10 +125,10 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("eq_fn".into(), LirType::Ptr),
             ],
             is_enum: false,
-            computed_c_size: Some(128),
+            computed_c_size: Some(136),
         },
         // GorgetSet — typedef alias for GorgetMap, backs Set[T] and HashSet[T].
-        // Same C layout as GorgetMap: 128 bytes.
+        // Same C layout as GorgetMap: 136 bytes.
         StructDef {
             name: "GorgetSet".into(),
             fields: vec![
@@ -147,7 +147,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("eq_fn".into(), LirType::Ptr),
             ],
             is_enum: false,
-            computed_c_size: Some(128),
+            computed_c_size: Some(136),
         },
         // GorgetRange — range iterator. 3 × 8 = 24 bytes.
         StructDef {
