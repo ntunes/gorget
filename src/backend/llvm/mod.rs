@@ -10,6 +10,46 @@ use std::fmt::Write;
 /// LLVM IR backend.
 pub struct LlvmBackend;
 
+/// Returns true if an aggregate return type needs sret convention.
+/// Small structs (≤16 bytes on aarch64) are returned in registers.
+fn needs_sret(ty: &LirType, structs: &[StructDef]) -> bool {
+    ty.is_aggregate() && !is_small_aggregate(ty, structs)
+}
+
+/// Returns true if a struct type is small enough to be returned in registers
+/// (≤16 bytes on aarch64, ≤8 bytes on x86-64). If true, DO NOT use sret convention.
+fn is_small_aggregate(ty: &LirType, structs: &[StructDef]) -> bool {
+    if let LirType::Struct(sid) = ty {
+        let sdef = &structs[sid.0 as usize];
+        // Use computed_c_size if available, otherwise estimate from fields.
+        let size = if let Some(cs) = sdef.computed_c_size {
+            cs
+        } else {
+            // Rough estimate: sum field sizes with 8-byte alignment.
+            let mut size: usize = 0;
+            for (_, fty) in &sdef.fields {
+                let fsz = match fty {
+                    LirType::I8 | LirType::U8 | LirType::Bool => 1,
+                    LirType::I16 | LirType::U16 => 2,
+                    LirType::I32 | LirType::U32 => 4,
+                    LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8,
+                    LirType::F32 => 4,
+                    LirType::Struct(_) => 64, // conservatively large
+                    _ => 8,
+                };
+                // Align to field size (simplified)
+                let align = if fsz > 8 { 8 } else { fsz };
+                size = (size + align - 1) & !(align - 1);
+                size += fsz;
+            }
+            size
+        };
+        size <= 16
+    } else {
+        false
+    }
+}
+
 impl super::Backend for LlvmBackend {
     fn name(&self) -> &str {
         "llvm"
@@ -591,6 +631,11 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         if defined_fns.contains(ext.name.as_str()) {
             continue;
         }
+        // Skip inline-expanded names
+        if ext.name.starts_with("__callable_") || ext.name.starts_with("__gorget_closure_call_")
+            || ext.name.starts_with("__gorget_drop_if_alive_") {
+            continue;
+        }
         let params: Vec<String> = ext.params.iter()
             .map(|p| {
                 // Void params are invalid in LLVM — replace with ptr (typically closure env)
@@ -606,8 +651,9 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         } else {
             String::new()
         };
-        if ext.return_type.is_aggregate() {
-            // Aggregate returns use sret convention — void return + sret first param
+        if needs_sret(&ext.return_type, &module.structs) {
+            // Large aggregate returns use sret convention — void return + sret first param.
+            // Small aggregates (≤16 bytes) are returned in registers on aarch64.
             let ret_ty = llvm_type_full(&ext.return_type, snames);
             let sret_params = if params.is_empty() {
                 format!("ptr sret({ret_ty}){variadic}")
@@ -635,6 +681,11 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                         || defined_fns.contains(name.as_str()) {
                         continue;
                     }
+                    // Skip inline-expanded names — no extern declaration needed.
+                    if name.starts_with("__callable_") || name.starts_with("__gorget_closure_call_")
+                        || name.starts_with("__gorget_drop_if_alive_") {
+                        continue;
+                    }
                     seen.insert(name.clone());
 
                     // Try to find the function defined in this module for signature
@@ -642,7 +693,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                         let params: Vec<String> = target_fn.params.iter()
                             .map(|p| llvm_arg_type(p, snames))
                             .collect();
-                        if target_fn.return_type.is_aggregate() {
+                        if needs_sret(&target_fn.return_type, &module.structs) {
                             let ret_ty = llvm_type_full(&target_fn.return_type, snames);
                             let sret_params = if params.is_empty() {
                                 format!("ptr sret({ret_ty})")
@@ -783,7 +834,7 @@ fn emit_function(
         .collect();
 
     let is_main = func.name == "main";
-    let has_sret = !is_main && func.return_type.is_aggregate();
+    let has_sret = !is_main && needs_sret(&func.return_type, &module.structs);
     if is_main {
         writeln!(out, "define i32 @main(i32 %argc, ptr %argv) {{").unwrap();
     } else if has_sret {
@@ -847,7 +898,8 @@ fn emit_function(
     for (i, slot) in func.slots.iter().enumerate() {
         if slot.ty == LirType::Void {
             // Void slots don't need allocation — use i8 as placeholder
-            writeln!(out, "  %s{i} = alloca i8 ; void slot").unwrap();
+            // Void slots hold closure env pointers — allocate space for a ptr.
+            writeln!(out, "  %s{i} = alloca ptr ; void slot").unwrap();
         } else {
             let ty = llvm_type_full(&slot.ty, snames);
             let name = slot.name.as_deref().unwrap_or("slot");
@@ -1047,7 +1099,13 @@ fn emit_inst(
         Inst::SlotStore { slot, value, .. } => {
             let slot_ty = &func.slots[slot.0 as usize].ty;
             if *slot_ty == LirType::Void {
-                writeln!(out, "  ; void slot store skipped").unwrap();
+                // Void slots are used for closure env pointers — store the pointer.
+                let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
+                if val_ty.map_or(false, |t| t.is_ptr()) {
+                    writeln!(out, "  store ptr %v{}, ptr %s{}", value.0, slot.0).unwrap();
+                } else {
+                    writeln!(out, "  ; void slot store skipped").unwrap();
+                }
             } else if slot_ty.is_aggregate() {
                 // Aggregate slot — value may be a pointer (SlotAddr/FieldPtr) or
                 // aggregate by value (Call return). Check val_types.
@@ -1076,8 +1134,8 @@ fn emit_inst(
         }
         Inst::SlotLoad { dst, slot, ty } => {
             if *ty == LirType::Void {
-                // Void slots are typically closure envs — produce the slot address as a ptr
-                writeln!(out, "  %v{} = getelementptr i8, ptr %s{}, i32 0 ; void slot as ptr", dst.0, slot.0).unwrap();
+                // Void slots hold closure env pointers — load the stored pointer.
+                writeln!(out, "  %v{} = load ptr, ptr %s{} ; void slot load", dst.0, slot.0).unwrap();
             } else {
                 let lty = llvm_type_full(ty, snames);
                 writeln!(out, "  %v{} = load {lty}, ptr %s{}", dst.0, slot.0).unwrap();
@@ -1108,8 +1166,18 @@ fn emit_inst(
             writeln!(out, "  %v{} = inttoptr i64 0 to ptr", dst.0).unwrap();
         }
         Inst::FuncAddr { dst, func: fid } => {
-            let fname = &module.functions[fid.0 as usize].name;
-            writeln!(out, "  %v{} = bitcast ptr @{fname} to ptr", dst.0).unwrap();
+            // Named function passed as closure — create a [fn_ptr, env_ptr=null] array
+            // so callable dispatch (load from [0] and [1]) works correctly.
+            // The adapter function (defined by the C wrapper glue) ignores the env pointer.
+            let target = &module.functions[fid.0 as usize];
+            let adapt_name = format!("__adapt_{}", target.name);
+            let fa = format!("fa.{}", dst.0);
+            writeln!(out, "  %{fa} = alloca [2 x ptr]").unwrap();
+            writeln!(out, "  %{fa}.0 = getelementptr [2 x ptr], ptr %{fa}, i32 0, i32 0").unwrap();
+            writeln!(out, "  store ptr @{adapt_name}, ptr %{fa}.0").unwrap();
+            writeln!(out, "  %{fa}.1 = getelementptr [2 x ptr], ptr %{fa}, i32 0, i32 1").unwrap();
+            writeln!(out, "  store ptr null, ptr %{fa}.1").unwrap();
+            writeln!(out, "  %v{} = bitcast ptr %{fa} to ptr", dst.0).unwrap();
         }
         Inst::GlobalAddr { dst, global } => {
             writeln!(out, "  %v{} = bitcast ptr @__lir_g{} to ptr", dst.0, global.0).unwrap();
@@ -1487,6 +1555,7 @@ fn emit_inst(
         Inst::Call { dst, func: fid, args } => {
             let target = &module.functions[fid.0 as usize];
             let ret_ty = llvm_type_full(&target.return_type, snames);
+            let is_closure_call_fn = target.name.contains("__call");
             // For aggregate params: if value is ptr but param is aggregate, load first
             let mut load_lines = Vec::new();
             let arg_strs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
@@ -1494,6 +1563,35 @@ fn emit_inst(
                 let actual_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let is_ptr_val = actual_ty.map_or(false, |t| t.is_ptr());
                 let is_agg_param = param_ty.map_or(false, |t| t.is_aggregate());
+                let param_is_void_or_ptr = !is_closure_call_fn && param_ty
+                    .map_or(false, |p| p.is_ptr() || matches!(p, LirType::Void));
+
+                // Closure→callable wrapping: when passing a __Closure_N struct to a
+                // void/ptr parameter, wrap in [fn_ptr, env_ptr] array on the stack.
+                if param_is_void_or_ptr {
+                    let closure_name = {
+                        let check_closure = |sid: &StructId| -> Option<String> {
+                            module.structs.get(sid.0 as usize)
+                                .filter(|sd| sd.name.starts_with("__Closure_"))
+                                .map(|sd| sd.name.clone())
+                        };
+                        match actual_ty {
+                            Some(LirType::Struct(sid)) => check_closure(sid),
+                            Some(LirType::PtrTo(sid)) => check_closure(sid),
+                            _ => None,
+                        }
+                    };
+                    if let Some(cname) = closure_name {
+                        let call_fn = format!("{cname}__call");
+                        let pfx = format!("cw.{}.{i}", a.0);
+                        load_lines.push(format!("  %{pfx} = alloca [2 x ptr]"));
+                        load_lines.push(format!("  %{pfx}.0 = getelementptr [2 x ptr], ptr %{pfx}, i32 0, i32 0"));
+                        load_lines.push(format!("  store ptr @{call_fn}, ptr %{pfx}.0"));
+                        load_lines.push(format!("  %{pfx}.1 = getelementptr [2 x ptr], ptr %{pfx}, i32 0, i32 1"));
+                        load_lines.push(format!("  store ptr %v{}, ptr %{pfx}.1", a.0));
+                        return format!("ptr %{pfx}");
+                    }
+                }
 
                 if is_agg_param && is_ptr_val {
                     let pty = llvm_arg_type(param_ty.unwrap(), snames);
@@ -1513,8 +1611,8 @@ fn emit_inst(
             if let Some(d) = dst {
                 if target.return_type == LirType::Void {
                     writeln!(out, "  call void @{}({})", target.name, arg_strs.join(", ")).unwrap();
-                } else if target.return_type.is_aggregate() {
-                    // Aggregate return: sret convention
+                } else if needs_sret(&target.return_type, &module.structs) {
+                    // Large aggregate return: sret convention
                     writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
                     let sret_args = if arg_strs.is_empty() {
                         format!("ptr sret({ret_ty}) %v{}", d.0)
@@ -1522,6 +1620,11 @@ fn emit_inst(
                         format!("ptr sret({ret_ty}) %v{}, {}", d.0, arg_strs.join(", "))
                     };
                     writeln!(out, "  call void @{}({sret_args})", target.name).unwrap();
+                } else if target.return_type.is_aggregate() {
+                    // Small aggregate: returned in registers, store to alloca
+                    writeln!(out, "  %v{}.ret = call {ret_ty} @{}({})", d.0, target.name, arg_strs.join(", ")).unwrap();
+                    writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
+                    writeln!(out, "  store {ret_ty} %v{}.ret, ptr %v{}", d.0, d.0).unwrap();
                 } else {
                     writeln!(out, "  %v{} = call {ret_ty} @{}({})", d.0, target.name, arg_strs.join(", ")).unwrap();
                 }
@@ -1535,6 +1638,115 @@ fn emit_inst(
             if name.starts_with("__gorget_drop_if_alive_open__") || name == "__gorget_drop_if_alive_close" {
                 writeln!(out, "  ; {name} (no-op in LLVM)").unwrap();
                 return;
+            }
+
+            // ── __callable_N[__FUNC] — inline callable parameter dispatch via void*[2] ──
+            // The callable param is a pointer to [fn_ptr, env_ptr].
+            // In LLVM IR: load fn_ptr, load env_ptr, indirect call.
+            if name.starts_with("__callable_") {
+                let id_str = &name["__callable_".len()..];
+                let id_num = id_str.split("__").next().unwrap_or(id_str);
+                if id_num.parse::<u32>().is_ok() && !args.is_empty() {
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    let closure_val = args[0];
+                    let actual_args = &args[1..];
+                    let ret_type = dst.map(|d| {
+                        val_types.get(d.0 as usize)
+                            .and_then(|t| t.as_ref())
+                            .map(|t| llvm_arg_type(t, snames))
+                            .unwrap_or_else(|| "i64".to_string())
+                    }).unwrap_or_else(|| "void".to_string());
+                    let pfx = format!("callable.{block_id}.{uid}");
+                    // Load fn_ptr from callable[0]
+                    writeln!(out, "  %{pfx}.fnp = load ptr, ptr %v{}", closure_val.0).unwrap();
+                    // Load env_ptr from callable[1]
+                    writeln!(out, "  %{pfx}.envgep = getelementptr ptr, ptr %v{}, i32 1", closure_val.0).unwrap();
+                    writeln!(out, "  %{pfx}.env = load ptr, ptr %{pfx}.envgep").unwrap();
+                    // Build arg types + values for indirect call
+                    let mut call_arg_strs = vec![format!("ptr %{pfx}.env")];
+                    for a in actual_args {
+                        let pty = val_types.get(a.0 as usize)
+                            .and_then(|t| t.as_ref())
+                            .map(|t| llvm_arg_type(t, snames))
+                            .unwrap_or_else(|| "i64".to_string());
+                        call_arg_strs.push(format!("{pty} %v{}", a.0));
+                    }
+                    let joined_args = call_arg_strs.join(", ");
+                    if let Some(d) = dst {
+                        writeln!(out, "  %v{} = call {ret_type} %{pfx}.fnp({joined_args})", d.0).unwrap();
+                    } else {
+                        writeln!(out, "  call {ret_type} %{pfx}.fnp({joined_args})").unwrap();
+                    }
+                    return;
+                }
+            }
+
+            // ── __gorget_closure_call_N — escaped closure dispatch via GorgetClosure struct ──
+            // GorgetClosure = { fn_ptr: ptr, env: ptr }
+            if name.starts_with("__gorget_closure_call_") {
+                let id_str = &name["__gorget_closure_call_".len()..];
+                let id_num = id_str.split("__").next().unwrap_or(id_str);
+                if id_num.parse::<u32>().is_ok() && !args.is_empty() {
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    let closure_val = args[0];
+                    let actual_args = &args[1..];
+                    let ret_type = dst.map(|d| {
+                        val_types.get(d.0 as usize)
+                            .and_then(|t| t.as_ref())
+                            .map(|t| llvm_arg_type(t, snames))
+                            .unwrap_or_else(|| "i64".to_string())
+                    }).unwrap_or_else(|| "void".to_string());
+                    let pfx = format!("closurecall.{block_id}.{uid}");
+                    // GorgetClosure.fn_ptr is field 0, GorgetClosure.env is field 1
+                    writeln!(out, "  %{pfx}.fpgep = getelementptr %GorgetClosure, ptr %v{}, i32 0, i32 0", closure_val.0).unwrap();
+                    writeln!(out, "  %{pfx}.fnp = load ptr, ptr %{pfx}.fpgep").unwrap();
+                    writeln!(out, "  %{pfx}.envgep = getelementptr %GorgetClosure, ptr %v{}, i32 0, i32 1", closure_val.0).unwrap();
+                    writeln!(out, "  %{pfx}.env = load ptr, ptr %{pfx}.envgep").unwrap();
+                    let mut call_arg_strs = vec![format!("ptr %{pfx}.env")];
+                    for a in actual_args {
+                        let pty = val_types.get(a.0 as usize)
+                            .and_then(|t| t.as_ref())
+                            .map(|t| llvm_arg_type(t, snames))
+                            .unwrap_or_else(|| "i64".to_string());
+                        call_arg_strs.push(format!("{pty} %v{}", a.0));
+                    }
+                    let joined_args = call_arg_strs.join(", ");
+                    if let Some(d) = dst {
+                        writeln!(out, "  %v{} = call {ret_type} %{pfx}.fnp({joined_args})", d.0).unwrap();
+                    } else {
+                        writeln!(out, "  call {ret_type} %{pfx}.fnp({joined_args})").unwrap();
+                    }
+                    return;
+                }
+            }
+
+            // ── gorget_str_push — type-dispatch to push_int/push_float/push_bool ──
+            if (name == "gorget_str_push" || name == "gorget_str_push_line") && args.len() == 2 {
+                let arg2_ty = val_types.get(args[1].0 as usize).and_then(|t| t.as_ref());
+                let is_push_line = name == "gorget_str_push_line";
+                let variant = match arg2_ty {
+                    Some(LirType::I8 | LirType::I16 | LirType::I32 | LirType::I64
+                         | LirType::U8 | LirType::U16 | LirType::U32 | LirType::U64) =>
+                        if is_push_line { Some("gorget_string_push_line_int") }
+                        else { Some("gorget_string_push_int") },
+                    Some(LirType::F32 | LirType::F64) =>
+                        if is_push_line { Some("gorget_string_push_line_float") }
+                        else { Some("gorget_string_push_float") },
+                    Some(LirType::Bool) =>
+                        if is_push_line { Some("gorget_string_push_line_bool") }
+                        else { Some("gorget_string_push_bool") },
+                    _ => None, // Str — use gorget_str_push as-is (emitted by C wrapper glue)
+                };
+                if let Some(typed_fn) = variant {
+                    let arg1_ty = val_types.get(args[1].0 as usize)
+                        .and_then(|t| t.as_ref())
+                        .map(|t| llvm_arg_type(t, snames))
+                        .unwrap_or_else(|| "i64".to_string());
+                    writeln!(out, "  call void @{typed_fn}(ptr %v{}, {arg1_ty} %v{})", args[0].0, args[1].0).unwrap();
+                    return;
+                }
             }
 
             // gorget_bool_to_str returns GorgetString via sret
@@ -1745,8 +1957,8 @@ fn emit_inst(
                 if let Some(d) = dst {
                     if ext.return_type == LirType::Void {
                         writeln!(out, "  call void @{name}({})", arg_strs.join(", ")).unwrap();
-                    } else if ext.return_type.is_aggregate() {
-                        // Aggregate return: sret convention
+                    } else if needs_sret(&ext.return_type, &module.structs) {
+                        // Large aggregate return: sret convention
                         writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
                         let sret_args = if arg_strs.is_empty() {
                             format!("ptr sret({ret_ty}) %v{}", d.0)
@@ -1754,6 +1966,11 @@ fn emit_inst(
                             format!("ptr sret({ret_ty}) %v{}, {}", d.0, arg_strs.join(", "))
                         };
                         writeln!(out, "  call void @{name}({sret_args})").unwrap();
+                    } else if ext.return_type.is_aggregate() {
+                        // Small aggregate: returned in registers
+                        writeln!(out, "  %v{}.ret = call {ret_ty} @{name}({})", d.0, arg_strs.join(", ")).unwrap();
+                        writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
+                        writeln!(out, "  store {ret_ty} %v{}.ret, ptr %v{}", d.0, d.0).unwrap();
                     } else {
                         writeln!(out, "  %v{} = call {ret_ty} @{name}({})", d.0, arg_strs.join(", ")).unwrap();
                     }
@@ -2023,13 +2240,16 @@ fn emit_term(
     match term {
         Term::Ret(val) => {
             let ret_ty = llvm_type_full(&func.return_type, snames);
-            let is_agg_ret = func.return_type.is_aggregate();
             let is_main = func.name == "main";
-            if is_agg_ret && !is_main {
-                // sret convention: memcpy result into %sret.out, then ret void
+            if needs_sret(&func.return_type, &_module.structs) && !is_main {
+                // Large aggregate: sret convention — memcpy result into %sret.out, then ret void
                 let sz = sizeof_lir_type(&func.return_type, &_module.structs, snames);
                 writeln!(out, "  call ptr @memcpy(ptr %sret.out, ptr %v{}, i64 {sz})", val.0).unwrap();
                 writeln!(out, "  ret void").unwrap();
+            } else if func.return_type.is_aggregate() && !is_main {
+                // Small aggregate: load from pointer and return by value
+                writeln!(out, "  %retval = load {ret_ty}, ptr %v{}", val.0).unwrap();
+                writeln!(out, "  ret {ret_ty} %retval").unwrap();
             } else {
                 writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
             }

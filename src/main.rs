@@ -845,13 +845,15 @@ fn compile_llvm_pipeline(
         runtime_src.push_str(c_runtime::MAIN_WAKER_RUNTIME);
         runtime_src.push_str(c_runtime::CHANNEL_RUNTIME);
         runtime_src.push_str(c_runtime::BLOCKING_POOL_RUNTIME);
-        runtime_src.push_str(c_runtime::TASK_GROUP_RUNTIME);
+        // Scheduler runtime must come BEFORE task group runtime — TASK_GROUP_RUNTIME
+        // uses the GORGET_SCHEDULER_WAIT macro defined in SCHEDULER_*_RUNTIME.
         runtime_src.push_str(match lir_module.scheduler_mode {
             gorget::ir::SchedulerMode::Pool => c_runtime::SCHEDULER_POOL_RUNTIME,
             gorget::ir::SchedulerMode::Thread => c_runtime::SCHEDULER_THREAD_RUNTIME,
             gorget::ir::SchedulerMode::Inline => c_runtime::SCHEDULER_INLINE_RUNTIME,
             gorget::ir::SchedulerMode::Single => c_runtime::SCHEDULER_SINGLE_RUNTIME,
         });
+        runtime_src.push_str(c_runtime::TASK_GROUP_RUNTIME);
     }
     let needs_sync = concat_source.contains("std.sync")
         || concat_source.contains("Shared")
@@ -904,8 +906,16 @@ fn compile_llvm_pipeline(
     if concat_source.contains("xtd.bytes") {
         runtime_src.push_str(c_runtime::BYTES_RUNTIME);
     }
+    // Append monomorphized wrappers (drops, clones, combinators, channel/shared/mutex
+    // wrappers, spawn/await helpers, thread helpers, adapter functions, test runner).
+    // These are C functions that call both runtime functions (already in runtime_src)
+    // and user functions (defined in LLVM IR, resolved at link time).
+    let wrapper_code = gorget::backend::c_lir::generate_llvm_wrappers(lir_module);
+    runtime_src.push_str(&wrapper_code);
+
     // Make static functions non-static so they're visible for linking.
     // Keep _Thread_local statics (GCC requires TLS variables to be static at function scope).
+    // Must happen AFTER wrapper append so wrapper functions are also de-staticified.
     let runtime_src = runtime_src
         .replace("static inline ", "")
         .replace("static _Thread_local", "_Thread_local_KEEP")

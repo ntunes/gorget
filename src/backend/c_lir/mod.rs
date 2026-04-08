@@ -160,13 +160,40 @@ pub fn generate_c(module: &LirModule) -> String {
     generate_c_inner(module, true)
 }
 
+/// Generate C wrapper code for the LLVM backend.
+///
+/// Emits struct definitions, forward declarations, monomorphized wrappers
+/// (drops, clones, combinators, spawn/await, channels, etc.), adapter
+/// functions, globals, and test runner main — everything EXCEPT user
+/// function bodies (those live in LLVM IR).
+///
+/// This output is appended to the C runtime source and compiled to a
+/// separate .o that links with the LLVM-generated .o.
+pub fn generate_llvm_wrappers(module: &LirModule) -> String {
+    generate_c_inner_impl(module, false, true)
+}
+
 /// Generate C code from an LIR module, optionally including the Gorget runtime.
 pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
+    generate_c_inner_impl(module, include_runtime, false)
+}
+
+/// Core C code generator.
+///   - `include_runtime`:     embed the full Gorget C runtime at the top
+///   - `wrappers_only`:       emit struct defs, forward decls, wrappers,
+///                            globals, and test runner — but skip function bodies
+fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_only: bool) -> String {
     let struct_names = build_struct_names(module);
     let mut out = String::with_capacity(if include_runtime { 256 * 1024 } else { 4096 });
 
     if include_runtime {
         emit_runtime_modules(&mut out, module, &struct_names);
+    } else if wrappers_only {
+        // Appended to runtime .c — headers already present.
+        writeln!(out, "\n// ── LLVM Wrapper Glue ──").unwrap();
+        // LIR helpers (char ops, hash, default values, comparison functions)
+        // These are normally part of emit_runtime_modules but needed for wrappers too.
+        emit_lir_helpers(&mut out, module);
     } else {
         // Minimal headers for standalone mode
         writeln!(out, "#include <stdint.h>").unwrap();
@@ -393,7 +420,7 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
 
     // Emit monomorphized wrapper typedefs + inline wrappers AFTER struct definitions
     // so element types like __lir_s9 (Config) are already defined.
-    if include_runtime {
+    if include_runtime || wrappers_only {
         emit_monomorphized_typedefs(&mut out, module, &struct_names);
     }
 
@@ -478,7 +505,7 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
     }
 
     // Box allocators and inline runtime helpers
-    if include_runtime {
+    if include_runtime || wrappers_only {
         emit_runtime_helpers(&mut out, module, &struct_names);
     }
 
@@ -553,18 +580,18 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
 
     // Higher-order collection helpers (filter, map, fold, any, all, etc.)
     // Must come after function forward declarations so closure __call functions are visible.
-    if include_runtime {
+    if include_runtime || wrappers_only {
         emit_higher_order_collection_helpers(&mut out, module, &struct_names);
         emit_option_result_combinator_helpers(&mut out, module, &struct_names);
     }
 
     // Spawn/await helpers for async functions (blocking approach).
-    if !module.spawned_fns.is_empty() && include_runtime {
+    if !module.spawned_fns.is_empty() && (include_runtime || wrappers_only) {
         emit_spawn_helpers(&mut out, module);
     }
 
     // Thread spawn/join helpers.
-    if !module.thread_spawned_fns.is_empty() && include_runtime {
+    if !module.thread_spawned_fns.is_empty() && (include_runtime || wrappers_only) {
         emit_thread_helpers(&mut out, module);
     }
 
@@ -647,15 +674,17 @@ pub fn generate_c_inner(module: &LirModule, include_runtime: bool) -> String {
     emit_enum_drop_fns(&mut out, module, &struct_names);
     emit_type_drop_fns(&mut out, module, &struct_names);
 
-    // Function definitions
-    writeln!(out, "// ── Function Definitions ──").unwrap();
-    let has_test_runner = !module.test_fns.is_empty() || !module.bench_fns.is_empty() || module.is_test_module;
-    for func in &module.functions {
-        if has_test_runner && func.name == "main" {
-            continue;
+    // Function definitions (skipped in wrappers-only mode — bodies live in LLVM IR)
+    if !wrappers_only {
+        writeln!(out, "// ── Function Definitions ──").unwrap();
+        let has_test_runner = !module.test_fns.is_empty() || !module.bench_fns.is_empty() || module.is_test_module;
+        for func in &module.functions {
+            if has_test_runner && func.name == "main" {
+                continue;
+            }
+            emit_function(&mut out, func, module, &struct_names);
+            writeln!(out).unwrap();
         }
-        emit_function(&mut out, func, module, &struct_names);
-        writeln!(out).unwrap();
     }
 
     // Bench runner main — bench function bodies are lowered to LIR as __bench_N functions.

@@ -142,9 +142,10 @@ pub(super) fn emit_higher_order_collection_helpers(out: &mut String, module: &Li
 }
 
 pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str, closure_ty: &str, call_fn: &str) {
-    // Skip static helpers when we can't resolve the closure call function.
-    // The inline expansion at each call site will handle it instead.
-    if call_fn.contains("UNKNOWN_CLOSURE_CALL") {
+    // Skip closure-dependent helpers when we can't resolve the closure call function.
+    // Methods that don't use closures (sort, sorted, unique, count) always emit.
+    let closure_free = matches!(method, "sort" | "sorted" | "unique" | "count");
+    if !closure_free && call_fn.contains("UNKNOWN_CLOSURE_CALL") {
         return;
     }
     match method {
@@ -173,17 +174,17 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
             writeln!(out, "}}").unwrap();
         }
         "fold" => {
-            // Fold accumulator type may differ from element type. Use a macro (not inline function)
-            // to let the caller's type propagate via __typeof__.
-            // The inline expansion path handles all fold sites directly; this macro exists
-            // only as a fallback definition to avoid linker errors on unreachable code paths.
-            writeln!(out, "#define {full_name}(__arr_ptr, __acc_init, __fn) \
-({{ GorgetArray __src = *(GorgetArray*)(__arr_ptr); \
-__typeof__(__acc_init) __acc = (__acc_init); \
-for (size_t __i = 0; __i < __src.len; __i++) {{ \
-{elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-__acc = {call_fn}(&(__fn), __acc, __elem); \
-}} __acc; }})").unwrap();
+            // Emit both a function (for LLVM backend linking) and a macro fallback.
+            // The function assumes accumulator type = element type (int64_t for Vector__int64_t).
+            writeln!(out, "static inline {elem_c} {full_name}(void* __arr_ptr, {elem_c} __acc_init, {closure_ty} __fn) {{").unwrap();
+            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
+            writeln!(out, "    {elem_c} __acc = __acc_init;").unwrap();
+            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
+            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
+            writeln!(out, "        __acc = {call_fn}(&__fn, __acc, __elem);").unwrap();
+            writeln!(out, "    }}").unwrap();
+            writeln!(out, "    return __acc;").unwrap();
+            writeln!(out, "}}").unwrap();
         }
         "any" => {
             writeln!(out, "static inline bool {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
@@ -2639,7 +2640,20 @@ static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subje
     // Suppress "value never read" warnings on idempotent emit-once flags.
     let _ = (emitted_array, emitted_map);
 
-    // LIR-specific helper functions not emitted by the old C backend preamble.
+    emit_lir_helpers(out, module);
+}
+
+/// LIR-specific helper functions: char operations, hash, default values,
+/// comparison functions for sorted(), etc. Called from both emit_runtime_modules
+/// and generate_llvm_wrappers.
+pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
+    let has = |pred: &dyn Fn(&str) -> bool| -> bool {
+        module.externs.iter().any(|e| pred(&e.name))
+            || module.functions.iter().flat_map(|f| f.blocks.iter())
+                .flat_map(|b| b.insts.iter())
+                .any(|inst| matches!(inst, Inst::CallExtern { name, .. } if pred(name)))
+    };
+
     writeln!(out, "// ── LIR helpers ──").unwrap();
     if has(&|n| n == "gorget_char_chr") {
         writeln!(out, "static inline Str gorget_char_chr(int64_t code) {{ return gorget_codepoint_to_utf8(code); }}").unwrap();
