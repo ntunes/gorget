@@ -4719,7 +4719,7 @@ static inline void gorget_array_ensure_capacity(GorgetArray* arr, size_t needed,
 
 static inline GorgetArray gorget_array_with_capacity(size_t elem_size, size_t capacity) {
     GorgetAllocator* a = __gorget_current_alloc;
-    GorgetArray arr = {NULL, 0, 0, elem_size, a};
+    GorgetArray arr = {NULL, 0, 0, elem_size, a, NULL, NULL};
     if (capacity > 0) {
         arr.data = a->alloc(a->ctx, capacity * elem_size);
         arr.cap = capacity;
