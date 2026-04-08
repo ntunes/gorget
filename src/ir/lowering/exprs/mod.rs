@@ -1472,6 +1472,7 @@ fn lower_field_access(
                             // Resource-type fields → Ptr(T) reference (same as non-Guard path).
                             let result_type = if ctx.type_registry.is_collection_type(field_type)
                                 || field_type == ctx.type_mapper.owned_string_type
+                                || ctx.type_registry.is_resource_type(field_type)
                             {
                                 ctx.type_registry.insert(GirType::Ptr(field_type))
                             } else {
@@ -1489,6 +1490,7 @@ fn lower_field_access(
                                     if field.name == field_name {
                                         let result_type = if ctx.type_registry.is_collection_type(field.type_id)
                                             || field.type_id == ctx.type_mapper.owned_string_type
+                                            || ctx.type_registry.is_resource_type(field.type_id)
                                         {
                                             ctx.type_registry.insert(GirType::Ptr(field.type_id))
                                         } else {
@@ -1510,14 +1512,14 @@ fn lower_field_access(
             // If the local is a raw pointer (e.g., self in equip methods), dereference it
             // to get the underlying struct type for field access.
             // Box[T] types use explicit `*box` dereference in Gorget, handled by Expr::Deref.
-            let (effective_type_id, base_place) =
+            let (effective_type_id, base_place, base_is_ptr) =
                 if let Some(pointee) = ctx.pointee_type(local_type_id) {
                     // Pointer type: add Deref projection → (*_N).field
                     let mut deref_place = place.clone();
                     deref_place.projections.push(Projection::Deref);
-                    (pointee, deref_place)
+                    (pointee, deref_place, true)
                 } else {
-                    (local_type_id, place.clone())
+                    (local_type_id, place.clone(), false)
                 };
 
             // Detect consuming self (!self) field access: self.field returns
@@ -1566,8 +1568,12 @@ fn lower_field_access(
                     // a shallow copy. Prevents shared heap buffer double-free.
                     // Auto-clone fires when assigned to an explicit-type variable
                     // or passed to a function that takes ownership.
+                    // When the base is a Ptr (borrowed), also wrap enum/struct fields
+                    // with resource-type variants (e.g., Expr with Box/Vector payloads)
+                    // — shallow copy would share Box pointers, and drop frees the original.
                     let result_type = if ctx.type_registry.is_collection_type(field_type)
                         || field_type == ctx.type_mapper.owned_string_type
+                        || (base_is_ptr && ctx.type_registry.is_resource_type(field_type))
                     {
                         ctx.type_registry.insert(GirType::Ptr(field_type))
                     } else {
@@ -1612,6 +1618,7 @@ fn lower_field_access(
                     }
                     let result_type = if ctx.type_registry.is_collection_type(field_type)
                         || field_type == ctx.type_mapper.owned_string_type
+                        || (base_is_ptr && ctx.type_registry.is_resource_type(field_type))
                     {
                         ctx.type_registry.insert(GirType::Ptr(field_type))
                     } else {
