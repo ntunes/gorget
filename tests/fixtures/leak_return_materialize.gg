@@ -1,0 +1,57 @@
+# Test: return materializes views at ownership boundary.
+# Functions that build Vector[String] from split/for-loop borrows must
+# return independently-owned data, not dangling views.
+from std.os import mem_live
+from std.collections import Vector
+
+Vector[String] get_words(String text):
+    Vector[String] result = []
+    Vector[String] words = text.split(" ")
+    for w in words:
+        result.push(w)
+    return result
+
+Vector[String] filter_long(String text, int min_len):
+    Vector[String] result = []
+    Vector[String] words = text.split(" ")
+    for w in words:
+        if w.len() >= min_len:
+            result.push(w)
+    return result
+
+Vector[Vector[String]] split_lines(String text):
+    Vector[Vector[String]] rows = []
+    Vector[String] lines = text.split("\n")
+    for line in lines:
+        rows.push(line.split(","))
+    return rows
+
+void main():
+    # Test 1: returned words survive source going out of scope
+    Vector[String] words = get_words("hello world foo bar")
+    print(f"words: {words.len()}")
+    print(words[0])
+    print(words[3])
+
+    # Test 2: filtered words survive
+    Vector[String] long_words = filter_long("the quick brown fox jumps", 4)
+    print(f"long: {long_words.len()}")
+    print(long_words[0])
+
+    # Test 3: nested split results survive
+    Vector[Vector[String]] table = split_lines("a,b,c\nd,e")
+    print(f"rows: {table.len()}")
+    print(f"[0][1]: {table[0][1]}")
+    print(f"[1][0]: {table[1][0]}")
+
+    # Test 4: leak check — returned collections should not leak
+    int b = mem_live()
+    int i = 0
+    while i < 100:
+        Vector[String] ws = get_words("one two three")
+        int _l = ws.len()
+        i = i + 1
+    bool leaked = mem_live() - b > 0
+    print(f"leak: {leaked}")
+
+    print("done")

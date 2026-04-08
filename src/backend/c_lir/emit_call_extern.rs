@@ -2052,6 +2052,9 @@ pub(super) fn emit_call_extern(
                         {
                             write!(out, " {dv}.elem_clone = (__gorget_drop_fn){elem_type}__clone_inplace;").unwrap();
                         }
+                        if let Some(mat_fn) = elem_materialize_fn_for_c_type(elem_type) {
+                            write!(out, " {dv}.elem_materialize = (__gorget_drop_fn){mat_fn};").unwrap();
+                        }
                     }
                     // Dict/HashMap constructor: set val_drop + val_clone
                     if (name.starts_with("gorget_dict_new") || name.starts_with("gorget_map_new"))

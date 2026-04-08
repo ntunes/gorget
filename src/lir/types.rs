@@ -61,8 +61,8 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             computed_c_size: Some(32),
         },
         // GorgetArray — dynamic array (Vector[T] backing).
-        // C layout: { data, len, cap, elem_size, alloc, elem_drop, elem_clone } — 7 × 8 = 56 bytes.
-        // LIR only models 4 fields; the extra 3 are runtime-internal.
+        // C layout: { data, len, cap, elem_size, alloc, elem_drop, elem_clone, elem_materialize } — 8 × 8 = 64 bytes.
+        // LIR only models 4 fields; the extra 4 are runtime-internal.
         StructDef {
             name: "GorgetArray".into(),
             fields: vec![
@@ -72,7 +72,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("elem_size".into(), LirType::I64),
             ],
             is_enum: false,
-            computed_c_size: Some(56),
+            computed_c_size: Some(64),
         },
         // Closure — function pointer + environment. 2 × 8 = 16 bytes.
         StructDef {

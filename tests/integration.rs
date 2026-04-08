@@ -2266,6 +2266,21 @@ done");
 }
 
 #[test]
+fn leak_return_materialize() {
+    run_gg("leak_return_materialize.gg", "\
+words: 4
+hello
+bar
+long: 3
+quick
+rows: 2
+[0][1]: b
+[1][0]: d
+leak: false
+done");
+}
+
+#[test]
 fn trait_defaults() {
     run_gg(
         "trait_defaults.gg",

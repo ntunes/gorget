@@ -1021,6 +1021,28 @@ fn lower_return(
                 }
             }
         }
+        // Ownership boundary: materialize view elements in returned collections.
+        // The return value in _0 may contain string views (cap=0) from for-loop
+        // borrows or split results. These must be materialized to owned copies
+        // before the function's locals (including view sources) are dropped.
+        {
+            let ret_type = builder.locals[0].type_id;
+            // Only array-backed collections (Vector, Deque) — not Dict/Set/Map
+            // which have a different struct layout.
+            let is_array_type = ctx.type_registry.type_name(ret_type)
+                .map_or(false, |n| n.starts_with("Vector__") || n.starts_with("Deque__")
+                    || n == "GorgetArray");
+            if is_array_type {
+                let ptr_type = ctx.register_ptr_type(ret_type);
+                let ptr = builder.add_local(ptr_type, None);
+                builder.emit_borrow_mut(ptr, Place::local(LocalId(0)));
+                builder.call_void(
+                    "gorget_array_materialize_all",
+                    vec![FunctionBuilder::copy(ptr)],
+                );
+            }
+        }
+
         // Postcondition checks: `assert return <expr>` — check before returning
         emit_postcondition_checks(ctx, builder);
 

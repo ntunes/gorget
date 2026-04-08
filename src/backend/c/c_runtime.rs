@@ -148,6 +148,7 @@ typedef struct {
     GorgetAllocator* alloc;
     __gorget_drop_fn elem_drop;  // drop function for resource-type elements (NULL if trivial)
     __gorget_drop_fn elem_clone; // clone function for resource-type elements (NULL if trivial)
+    __gorget_drop_fn elem_materialize; // CoW materialize: view→owned only (NULL if not needed)
 } GorgetArray;
 
 typedef uint64_t (*__gorget_hash_fn)(const void*);
@@ -1314,6 +1315,22 @@ static inline GorgetString gorget_string_clone_to_owned(const GorgetString* src)
     memcpy(buf, src->data, src->len);
     buf[src->len] = '\0';
     return (GorgetString){(const char*)buf, src->len, new_cap, a};
+}
+
+// Zero-copy borrow of a GorgetString. Returns a view (cap=0) that shares
+// the source's data pointer. Used by for-loop IndexLoad to avoid cloning.
+static inline GorgetString gorget_string_borrow(const GorgetString* src) {
+    return (GorgetString){ .data = src->data, .len = src->len, .cap = 0, .alloc = NULL };
+}
+
+// Materialize a string view to owned. No-op for already-owned strings (cap>0)
+// and for string literals (cap=0 but alloc != NULL from gorget_str_from_literal).
+// Only materializes borrows (cap=0, alloc=NULL) from for-loop IndexLoad and split.
+static inline void gorget_string_materialize_inplace(void* p) {
+    GorgetString* s = (GorgetString*)p;
+    if (s->cap == 0 && s->len > 0 && s->alloc == NULL) {
+        *s = gorget_string_clone_to_owned(s);
+    }
 }
 
 static inline GorgetString gorget_string_concat(const GorgetString* a, const GorgetString* b) {
@@ -4543,13 +4560,13 @@ pub const RUNTIME_ARRAY: &str = r#"
 
 static inline GorgetArray gorget_array_new(size_t elem_size) {
     __gorget_array_new_count++;
-    return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc, NULL, NULL};
+    return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc, NULL, NULL, NULL};
 }
 
 // Array constructor with element drop function for resource-type elements.
 static inline GorgetArray gorget_array_new_drop(size_t elem_size, __gorget_drop_fn drop) {
     __gorget_array_new_count++;
-    return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc, drop, NULL};
+    return (GorgetArray){NULL, 0, 0, elem_size, __gorget_current_alloc, drop, NULL, NULL};
 }
 
 static inline void gorget_array_push(GorgetArray* arr, const void* elem) {
@@ -4585,6 +4602,17 @@ static inline void* gorget_array_safe_get(const GorgetArray* arr, int64_t index)
 
 static inline size_t gorget_array_len(const GorgetArray* arr) {
     return arr->len;
+}
+
+// Ownership boundary: materialize all view elements to owned copies.
+// Called at return boundaries so the caller gets independently-owned data.
+// No-op for arrays without elem_materialize (trivial element types).
+static inline void gorget_array_materialize_all(GorgetArray* arr) {
+    if (arr->elem_materialize && arr->data) {
+        for (size_t i = 0; i < arr->len; i++) {
+            arr->elem_materialize((char*)arr->data + i * arr->elem_size);
+        }
+    }
 }
 
 static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* elem) {
@@ -4820,6 +4848,7 @@ static inline GorgetArray gorget_array_clone(const GorgetArray* src) {
     GorgetArray dst = gorget_array_new(src->elem_size);
     dst.elem_drop = src->elem_drop;
     dst.elem_clone = src->elem_clone;
+    dst.elem_materialize = src->elem_materialize;
     if (src->len > 0) {
         gorget_array_reserve(&dst, src->len);
         memcpy(dst.data, src->data, src->len * src->elem_size);
@@ -4852,7 +4881,7 @@ static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t sta
     }
     size_t slice_len = (size_t)(end - start);
     GorgetAllocator* a = __gorget_current_alloc;
-    GorgetArray result = {NULL, 0, 0, arr->elem_size, a, arr->elem_drop, arr->elem_clone};
+    GorgetArray result = {NULL, 0, 0, arr->elem_size, a, arr->elem_drop, arr->elem_clone, arr->elem_materialize};
     if (slice_len > 0) {
         result.data = a->alloc(a->ctx, slice_len * arr->elem_size);
         memcpy(result.data, (char*)arr->data + (size_t)start * arr->elem_size, slice_len * arr->elem_size);
