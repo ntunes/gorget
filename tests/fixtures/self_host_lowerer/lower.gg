@@ -4,7 +4,7 @@
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str
-from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm
 from scope import ScopeTable
 from types import TypeTable
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator
@@ -85,6 +85,9 @@ String mangle_type_name(String name, Vector[SpannedType] targs, GirModule &gmod)
 String type_to_c_name(SpannedType stype, GirModule &gmod):
     match stype.ty:
         case TPrimitive(name):
+            # Check type substitutions for mangling
+            if gmod.type_subs.contains(name):
+                return type_id_to_name(gmod.type_subs.get(name).unwrap(), &gmod)
             match name:
                 case "int":
                     return "int64_t"
@@ -99,6 +102,9 @@ String type_to_c_name(SpannedType stype, GirModule &gmod):
                 else:
                     return name
         case TNamed(name, targs):
+            # Check type substitutions for mangling
+            if gmod.type_subs.contains(name):
+                return type_id_to_name(gmod.type_subs.get(name).unwrap(), &gmod)
             return mangle_type_name(name, targs, &gmod)
         else:
             pass
@@ -107,6 +113,9 @@ String type_to_c_name(SpannedType stype, GirModule &gmod):
 int map_ast_type(SpannedType stype, GirModule &gmod):
     match stype.ty:
         case TPrimitive(name):
+            # Check type substitutions (generic monomorphization)
+            if gmod.type_subs.contains(name):
+                return gmod.type_subs.get(name).unwrap()
             match name:
                 case "int":
                     return I64_TYPE
@@ -121,6 +130,9 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
                 else:
                     pass
         case TNamed(name, targs):
+            # Check type substitutions (generic monomorphization)
+            if gmod.type_subs.contains(name):
+                return gmod.type_subs.get(name).unwrap()
             int t = prim_name_to_type(name)
             if t >= 0:
                 return t
@@ -294,7 +306,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             SpannedExpr callee = *callee_box
             match callee.expr:
                 case EIdentifier(fname):
-                    return lower_call(&ctx, &fname, &args, &gmod)
+                    return lower_call(&ctx, &fname, &args, &targs, &gmod)
                 else:
                     pass
             return -1
@@ -303,7 +315,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
 
 # ── Call lowering ────────────────────────────────────────
 
-int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, GirModule &gmod):
+int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[SpannedType] &targs, GirModule &gmod):
     int result = -1
     bool is_print = fname == "print"
     if is_print:
@@ -320,6 +332,14 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, GirModul
             emit(&ctx, ICallExtern(pdst, "printf", printf_args))
             result = pdst
     else:
+        # Compute mangled name for generic calls
+        String call_name = fname
+        if targs.len() > 0:
+            int ti = 0
+            while ti < targs.len():
+                SpannedType ta = targs.get(ti).unwrap()
+                call_name = call_name + "__" + type_to_c_name(ta, &gmod)
+                ti += 1
         # User function call
         Vector[Operand] gir_args = []
         int ai = 0
@@ -328,11 +348,12 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, GirModul
             int arg_local = lower_expr(&ctx, arg, &gmod)
             gir_args.push(OpCopy(arg_local))
             ai = ai + 1
-        # TODO: look up return type from module's fn_sigs
-        # Currently blocked by borrow checker false positive on &gmod across branches
+        # Look up return type from module's fn_sigs
         int ret_type = I64_TYPE
+        if gmod.fn_sigs.contains(call_name):
+            ret_type = gmod.fn_sigs.get(call_name).unwrap()
         int dst = add_local(&ctx, ret_type, NO_NAME)
-        emit(&ctx, ICall(dst, fname, gir_args))
+        emit(&ctx, ICall(dst, call_name, gir_args))
         result = dst
     return result
 
@@ -520,6 +541,45 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
         bi += 1
     return GirFunction(fdef.name, param_types, ret_type, ctx.locals, !blocks)
 
+# ── Trait name mangling ──────────────────────────────────
+
+String mangle_prim_type(String name):
+    match name:
+        case "int":
+            return "int64_t"
+        case "float":
+            return "double"
+        case "bool":
+            return "bool"
+        case "String":
+            return "GorgetString"
+        else:
+            return name
+
+String mangle_trait_name(String raw):
+    # Parse "TraitName[Type1, Type2]" → "TraitName__type1__type2"
+    int bracket = raw.find("[")
+    if bracket < 0:
+        return raw
+    String base = raw.slice(0, bracket)
+    String args_str = raw.slice(bracket + 1, raw.len() - 1)
+    # Split args by ", " and mangle each
+    String result = base
+    int pos = 0
+    String current = ""
+    while pos < args_str.len():
+        String ch = args_str.slice(pos, pos + 1)
+        if ch == "," and pos + 1 < args_str.len():
+            result = result + "__" + mangle_prim_type(current)
+            current = ""
+            pos = pos + 2
+        else:
+            current = current + ch
+            pos = pos + 1
+    if current.len() > 0:
+        result = result + "__" + mangle_prim_type(current)
+    return result
+
 # ── Equip block lowering ─────────────────────────────────
 
 void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
@@ -531,8 +591,18 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
     int mi = 0
     while mi < eqblk.methods.len():
         FunctionDef mdef = eqblk.methods.get(mi).unwrap()
-        # Mangled name: TargetType__method_name
+        # Mangled name: Type__method or Trait_for_Type__method
         String mangled = target_name + "__" + mdef.name
+        match eqblk.trait_name:
+            case Some(tname):
+                # Derive-generated traits use short form (Type__method)
+                # Explicit trait impls use prefix (Trait_for_Type__method)
+                bool is_derive = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Default" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal"
+                if not is_derive:
+                    String mangled_trait = mangle_trait_name(tname)
+                    mangled = mangled_trait + "_for_" + target_name + "__" + mdef.name
+            case None:
+                pass
 
         bool is_main = false
         int ret_type = map_ast_type(mdef.return_type, &gmod)
@@ -546,18 +616,29 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         # _0 = return place
         add_local(&ctx, ret_type, NO_NAME)
 
-        # _1 = self — determine pointer type from ownership
-        # self (bare) → *T, &self → *mut T, !self → *mut T
-        int self_tid = self_ptr_tid
-        int self_ownership = 0
+        # Check if method has a self parameter
+        bool has_self = false
         if mdef.params.len() > 0:
             Param first_p = mdef.params.get(0).unwrap()
-            self_ownership = first_p.ownership
-        # OWN_MUTABLE=1 (&self), OWN_MOVE=2 (!self) → *mut T
-        if self_ownership == 1 or self_ownership == 2:
-            self_tid = register_type(&gmod, GtMutPtr(target_tid))
-        Vector[int] param_types = [self_tid]
-        int self_lid = add_local(&ctx, self_tid, NO_NAME)
+            match first_p.param_type.ty:
+                case TSelf():
+                    has_self = true
+                else:
+                    pass
+
+        Vector[int] param_types = []
+        if has_self:
+            # _1 = self — determine pointer type from ownership
+            # self (bare) → *T, &self → *mut T, !self → *mut T
+            int self_tid = self_ptr_tid
+            int self_ownership = 0
+            Param sp = mdef.params.get(0).unwrap()
+            self_ownership = sp.ownership
+            # OWN_MUTABLE=1 (&self), OWN_MOVE=2 (!self) → *mut T
+            if self_ownership == 1 or self_ownership == 2:
+                self_tid = register_type(&gmod, GtMutPtr(target_tid))
+            param_types.push(self_tid)
+            int self_lid = add_local(&ctx, self_tid, NO_NAME)
 
         # _2.._N = explicit params (skip self — already added above)
         int pi = 0
@@ -791,6 +872,250 @@ int scan_stmts_for_closures(Vector[Stmt] stmts, int next_id, GirModule &gmod):
         si += 1
     return next_id
 
+# ── Generic monomorphization ─────────────────────────────
+
+struct GenericInstance:
+    String base_name
+    Vector[SpannedType] type_args
+    String mangled_name
+
+# Discover generic call sites in an expression
+void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    match sexpr.expr:
+        case ECall(callee_box, args, targs):
+            if targs.len() > 0 and not has_type_variable(targs):
+                SpannedExpr callee = *callee_box
+                match callee.expr:
+                    case EIdentifier(fname):
+                        String mangled = compute_mangled_name(targs, fname)
+                        if not seen.contains(mangled):
+                            seen.put(mangled.clone(), true)
+                            GenericInstance gi = GenericInstance(fname, targs, mangled)
+                            instances.push(!gi)
+                    else:
+                        pass
+            # Recurse into call args
+            int ai = 0
+            while ai < args.len():
+                SpannedExpr arg = args.get(ai).unwrap()
+                discover_generic_calls_expr(arg, &seen, &instances)
+                ai += 1
+            discover_generic_calls_expr(*callee_box, &seen, &instances)
+        case EMethodCall(obj, _, args, _):
+            discover_generic_calls_expr(*obj, &seen, &instances)
+            int ai = 0
+            while ai < args.len():
+                SpannedExpr arg = args.get(ai).unwrap()
+                discover_generic_calls_expr(arg, &seen, &instances)
+                ai += 1
+        case EBinaryOp(lhs, _, rhs):
+            discover_generic_calls_expr(*lhs, &seen, &instances)
+            discover_generic_calls_expr(*rhs, &seen, &instances)
+        case EUnaryOp(_, inner):
+            discover_generic_calls_expr(*inner, &seen, &instances)
+        case EIf(cond, then_body, branches):
+            discover_generic_calls_expr(*cond, &seen, &instances)
+            discover_generic_calls_stmts(then_body, &seen, &instances)
+        case EFieldAccess(obj, _):
+            discover_generic_calls_expr(*obj, &seen, &instances)
+        case EIndex(obj, idx):
+            discover_generic_calls_expr(*obj, &seen, &instances)
+            discover_generic_calls_expr(*idx, &seen, &instances)
+        case EClosure(_, body):
+            discover_generic_calls_stmts(body, &seen, &instances)
+        else:
+            pass
+
+void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    match stmt:
+        case SVarDecl(stype, _, init, _, _, _):
+            # Also discover type instances from type annotations (e.g., Stack[int] s = ...)
+            match stype.ty:
+                case TNamed(tname, targs):
+                    if targs.len() > 0 and not has_type_variable(targs):
+                        String mangled = compute_mangled_name(targs, tname)
+                        if not seen.contains(mangled):
+                            seen.put(mangled.clone(), true)
+                            GenericInstance gi = GenericInstance(tname, targs, mangled)
+                            instances.push(!gi)
+                else:
+                    pass
+            discover_generic_calls_expr(init, &seen, &instances)
+        case SAssign(target, value):
+            discover_generic_calls_expr(target, &seen, &instances)
+            discover_generic_calls_expr(value, &seen, &instances)
+        case SExpr(expr):
+            discover_generic_calls_expr(expr, &seen, &instances)
+        case SReturn(opt_expr):
+            match opt_expr:
+                case Some(expr):
+                    discover_generic_calls_expr(expr, &seen, &instances)
+                case None:
+                    pass
+        case SIf(cond, then_body, branches):
+            discover_generic_calls_expr(cond, &seen, &instances)
+            discover_generic_calls_stmts(then_body, &seen, &instances)
+            int bi = 0
+            while bi < branches.len():
+                ElseBranch eb = branches.get(bi).unwrap()
+                match eb.condition:
+                    case Some(elif_cond):
+                        discover_generic_calls_expr(elif_cond, &seen, &instances)
+                    case None:
+                        pass
+                discover_generic_calls_stmts(eb.body, &seen, &instances)
+                bi += 1
+        case SWhile(cond, body):
+            discover_generic_calls_expr(cond, &seen, &instances)
+            discover_generic_calls_stmts(body, &seen, &instances)
+        case SFor(_, iter_expr, body, _, _):
+            discover_generic_calls_expr(iter_expr, &seen, &instances)
+            discover_generic_calls_stmts(body, &seen, &instances)
+        case SMatch(scrutinee, arms):
+            discover_generic_calls_expr(scrutinee, &seen, &instances)
+            int ai = 0
+            while ai < arms.len():
+                MatchArm arm = arms.get(ai).unwrap()
+                discover_generic_calls_stmts(arm.body, &seen, &instances)
+                ai += 1
+        else:
+            pass
+
+void discover_generic_calls_stmts(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    int si = 0
+    while si < stmts.len():
+        Stmt stmt = stmts.get(si).unwrap()
+        discover_generic_calls_stmt(stmt, &seen, &instances)
+        si += 1
+
+# Lightweight type-to-C-name without GirModule (used during discovery before gmod exists)
+String spanned_type_to_c_name(SpannedType stype):
+    match stype.ty:
+        case TPrimitive(name):
+            match name:
+                case "int":
+                    return "int64_t"
+                case "float":
+                    return "double"
+                case "bool":
+                    return "bool"
+                case "void":
+                    return "void"
+                case "String":
+                    return "GorgetString"
+                else:
+                    return name
+        case TNamed(name, targs):
+            if name == "String":
+                return "GorgetString"
+            int pt = prim_name_to_type(name)
+            if pt >= 0:
+                return spanned_type_to_c_name(SpannedType(TPrimitive(name), -1))
+            if targs.len() == 0:
+                return name
+            String result = name
+            int i = 0
+            while i < targs.len():
+                SpannedType ta = targs.get(i).unwrap()
+                result = result + "__" + spanned_type_to_c_name(ta)
+                i += 1
+            return result
+        else:
+            pass
+    return "int64_t"
+
+# Check if any type arg is an unresolved type variable (e.g., T, A, B)
+# rather than a concrete type (e.g., int, String, Vector[int])
+bool has_type_variable(Vector[SpannedType] targs):
+    int i = 0
+    while i < targs.len():
+        SpannedType ta = targs.get(i).unwrap()
+        match ta.ty:
+            case TNamed(name, inner_targs):
+                if inner_targs.len() == 0:
+                    # Single name with no type args — could be a type variable
+                    # Known concrete types: int, float, bool, void, String
+                    int pt = prim_name_to_type(name)
+                    if pt < 0 and name != "String":
+                        # Not a primitive — check if it looks like a type var
+                        # Type vars are typically short uppercase names
+                        if name.len() <= 2:
+                            return true
+                else:
+                    # Recurse into type args
+                    if has_type_variable(inner_targs):
+                        return true
+            case TPrimitive(name):
+                # Primitives are always concrete
+                pass
+            else:
+                pass
+        i += 1
+    return false
+
+String compute_mangled_name(Vector[SpannedType] targs, String base_name):
+    String mangled = base_name
+    int ti = 0
+    while ti < targs.len():
+        SpannedType ta = targs.get(ti).unwrap()
+        mangled = mangled + "__" + spanned_type_to_c_name(ta)
+        ti += 1
+    return mangled
+
+# Set up type substitutions for a generic instance
+void setup_type_subs(GirModule &gmod, Vector[String] type_params, Vector[SpannedType] type_args):
+    gmod.type_subs = {}
+    int i = 0
+    while i < type_params.len() and i < type_args.len():
+        String param_name = type_params.get(i).unwrap()
+        SpannedType arg_type = type_args.get(i).unwrap()
+        int tid = map_ast_type(arg_type, &gmod)
+        gmod.type_subs.put(param_name, tid)
+        i += 1
+
+void clear_type_subs(GirModule &gmod):
+    gmod.type_subs = {}
+
+# Lower a monomorphized instance of a generic function
+void lower_generic_function(FunctionDef fdef, String mangled_name, Vector[String] type_params, Vector[SpannedType] type_args, GirModule &gmod):
+    setup_type_subs(&gmod, type_params, type_args)
+    GirFunction gfn = lower_function(fdef, &gmod)
+    # Override the function name with the mangled name
+    gmod.functions.push(GirFunction(mangled_name, gfn.param_types, gfn.return_type, gfn.locals, gfn.blocks))
+    clear_type_subs(&gmod)
+
+# Extract type parameter names from equip target's generic args
+# e.g., Stack[T] → ["T"], Pair[A, B] → ["A", "B"]
+Vector[String] extract_equip_type_params(EquipBlock eqblk):
+    # First try explicit type_params
+    if eqblk.type_params.len() > 0:
+        return eqblk.type_params
+    # Otherwise extract from target type args
+    Vector[String] params = []
+    match eqblk.target.ty:
+        case TNamed(_, targs):
+            int i = 0
+            while i < targs.len():
+                SpannedType ta = targs.get(i).unwrap()
+                match ta.ty:
+                    case TNamed(tname, _):
+                        params.push(tname)
+                    case TPrimitive(tname):
+                        params.push(tname)
+                    else:
+                        pass
+                i += 1
+        else:
+            pass
+    return params
+
+# Lower monomorphized instances of generic equip methods
+void lower_generic_equip(EquipBlock eqblk, Vector[SpannedType] type_args, GirModule &gmod):
+    Vector[String] type_params = extract_equip_type_params(eqblk)
+    setup_type_subs(&gmod, type_params, type_args)
+    lower_equip_block(eqblk, &gmod)
+    clear_type_subs(&gmod)
+
 # ── Module lowering ──────────────────────────────────────
 
 GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
@@ -857,20 +1182,121 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
                 pass
         ri += 1
 
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types)
+    Dict[String, int] type_subs = {}
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs)
 
-    # Lower each function and equip method
+    # Collect generic templates and discover instances
+    Dict[String, FunctionDef] fn_templates = {}
+    Vector[EquipBlock] equip_templates = []
+    Dict[String, bool] equip_generic_names = {}
+    Dict[String, bool] seen_instances = {}
+    Vector[GenericInstance] generic_instances = []
+
+    int gi = 0
+    while gi < m.items.len():
+        Item gitem = m.items.get(gi).unwrap()
+        match gitem:
+            case IFunction(fdef):
+                if fdef.type_params.len() > 0:
+                    fn_templates.put(fdef.name.clone(), fdef)
+            case IEquip(eqblk):
+                # Check if equip is generic: either type_params set OR target has type args
+                bool is_generic_equip = eqblk.type_params.len() > 0
+                match eqblk.target.ty:
+                    case TNamed(tname, eq_targs):
+                        if eq_targs.len() > 0:
+                            is_generic_equip = true
+                        if is_generic_equip:
+                            equip_templates.push(eqblk)
+                            equip_generic_names.put(tname, true)
+                    else:
+                        pass
+            else:
+                pass
+        gi += 1
+
+    # Discover generic call sites and type instances from all function/equip bodies
+    int di = 0
+    while di < m.items.len():
+        Item ditem = m.items.get(di).unwrap()
+        match ditem:
+            case IFunction(fdef):
+                discover_generic_calls_stmts(fdef.body, &seen_instances, &generic_instances)
+            case IEquip(eqblk):
+                int dmi = 0
+                while dmi < eqblk.methods.len():
+                    FunctionDef mdef = eqblk.methods.get(dmi).unwrap()
+                    discover_generic_calls_stmts(mdef.body, &seen_instances, &generic_instances)
+                    dmi += 1
+            else:
+                pass
+        di += 1
+
+    # Register fn_sigs for monomorphized instances
+    int si = 0
+    while si < generic_instances.len():
+        GenericInstance inst = generic_instances.get(si).unwrap()
+        if fn_templates.contains(inst.base_name):
+            FunctionDef tmpl = fn_templates.get(inst.base_name).unwrap()
+            # Compute return type with substitutions active
+            setup_type_subs(&gmod, tmpl.type_params, inst.type_args)
+            int rt = map_ast_type(tmpl.return_type, &gmod)
+            clear_type_subs(&gmod)
+            gmod.fn_sigs.put(inst.mangled_name.clone(), rt)
+        si += 1
+
+    # Lower each non-generic function and equip method
     int fi = 0
     while fi < m.items.len():
         Item item = m.items.get(fi).unwrap()
         match item:
             case IFunction(fdef):
-                gmod.functions.push(lower_function(fdef, &gmod))
+                # Skip generic templates — they'll be monomorphized below
+                if fdef.type_params.len() == 0:
+                    gmod.functions.push(lower_function(fdef, &gmod))
             case IEquip(eqblk):
-                lower_equip_block(eqblk, &gmod)
+                # Skip generic equip blocks (detected by target having type args)
+                bool skip_equip = eqblk.type_params.len() > 0
+                match eqblk.target.ty:
+                    case TNamed(_, eq_targs):
+                        if eq_targs.len() > 0:
+                            skip_equip = true
+                    else:
+                        pass
+                if not skip_equip:
+                    lower_equip_block(eqblk, &gmod)
             else:
                 pass
         fi = fi + 1
+
+    # Emit monomorphized generic functions
+    int mi = 0
+    while mi < generic_instances.len():
+        GenericInstance inst = generic_instances.get(mi).unwrap()
+        if fn_templates.contains(inst.base_name):
+            FunctionDef tmpl = fn_templates.get(inst.base_name).unwrap()
+            lower_generic_function(tmpl, inst.mangled_name, tmpl.type_params, inst.type_args, &gmod)
+        mi += 1
+
+    # Emit monomorphized generic equip blocks for discovered type instances
+    int ei = 0
+    while ei < generic_instances.len():
+        GenericInstance einst = generic_instances.get(ei).unwrap()
+        if equip_generic_names.contains(einst.base_name):
+            # Find all equip templates matching this type name
+            int eti = 0
+            while eti < equip_templates.len():
+                EquipBlock equip_tmpl = equip_templates.get(eti).unwrap()
+                String eq_target_name = ""
+                match equip_tmpl.target.ty:
+                    case TNamed(tn, _):
+                        eq_target_name = tn
+                    else:
+                        pass
+                if eq_target_name == einst.base_name:
+                    lower_generic_equip(equip_tmpl, einst.type_args, &gmod)
+                eti += 1
+        ei += 1
 
     # Scan all items for closures and emit __Closure_N__call functions
     int closure_id = 0

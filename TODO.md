@@ -16,7 +16,7 @@
 
 ## Medium
 
-- **GIR call resolution confuses functions with similar first-param types**: When two functions in the same module have the same first param type (e.g., `infer_expr_type(SpannedExpr)` and `scan_expr_for_closures(SpannedExpr, int, GirModule &)`), the generated C passes the wrong argument count. Discovered via self-host lowerer. Workaround: rename one function. Root cause likely in `fn_sigs` lookup or call lowering in `calls.rs`. [added: 2026-04-08]
+- **GIR call resolution confuses functions with similar first-param types**: Reported but could NOT reproduce with targeted multi-file test cases. Original symptom (ownership mismatch for variable not in scope) disappeared after code restructuring. May have been a transient issue from specific code patterns. Keep as low-priority — reopen if it recurs with a reproducible case. Root cause may be in `fn_sigs` lookup or borrow checker scope handling in multi-file compilation. [updated: 2026-04-08]
 
 - **CoW: scope-escape materialization boundary**: When a CoW borrow escapes its scope (stored in a struct field, returned from function, pushed to collection), materialize to owned at the boundary. This is the generalization of the existing return-clone and field-store-from-borrow materializations. Once all escape boundaries are covered, strings no longer need an allocator pointer in every struct — the CoW system guarantees that all live references are independently owned at scope boundaries. Enables removing the allocator field from `GorgetString`, reducing every string from 32 to 24 bytes. [added: 2026-04-07]
 
@@ -55,7 +55,7 @@
 
 - **`char` type backend bugs**: `char as int` gives garbage, char `==`/`!=` uses `gorget_str_eq`. [added: 2026-03-21]
 
-- **Self-host comparison — 16 type checker mismatches**: At 861 fixtures (2026-04-07). Parser: 856/861 (99.4%). Resolver: 854/861 (99.2%). Type checker: 845/861 (98.1%), **0 crashes**. 16 mismatches remain (type var numbering, closure param inference, Gorget-more-correct). [updated: 2026-04-07]
+- **Self-host comparison — 16 type checker mismatches**: At 861 fixtures (2026-04-07). Parser: 856/861 (99.4%). Resolver: 854/861 (99.2%). Type checker: 845/861 (98.1%), **0 crashes**. GIR Lowerer: 552/898 (61.4%), **0 crashes** — remaining: 117 imported functions, 76 error tests, 35 `*mut` generic String params, 26 trait `*unit` self, 90 other. 16 type checker mismatches remain (type var numbering, closure param inference, Gorget-more-correct). [updated: 2026-04-08]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
