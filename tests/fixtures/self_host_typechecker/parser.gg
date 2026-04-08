@@ -2961,10 +2961,12 @@ equip Parser:
         Vector[Param] params = self.parse_params()
         self.expect_tok(TOK_RPAREN, "expected ')' in function def")
 
-        # Skip optional 'throws Type'
+        # Optional 'throws Type'
+        Option[SpannedType] throws_type = None
         if self.check_kw(KW_THROWS):
             self.advance()
-            self.parse_type()
+            SpannedType tt = self.parse_type()
+            throws_type = Some(tt)
 
         # Skip optional 'where a outlives b, ...' clause (trait bounds are now inline)
         if self.check_kw(KW_WHERE):
@@ -2979,12 +2981,12 @@ equip Parser:
             SpannedExpr body_expr = self.parse_expr()
             Vector[Stmt] body = Vector[Stmt]()
             body.push(SReturn(Some(body_expr)))
-            return FunctionDef(name, params, ret_ty, type_params, body, true)
+            return FunctionDef(name, params, ret_ty, type_params, body, true, throws_type)
 
         # Declaration-only function (no body — e.g. trait method signatures)
         if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
             Vector[Stmt] body = Vector[Stmt]()
-            return FunctionDef(name, params, ret_ty, type_params, body, false)
+            return FunctionDef(name, params, ret_ty, type_params, body, false, throws_type)
 
         self.expect_tok(TOK_COLON, "expected ':' after function signature")
         # Skip any comment tokens between : and the newline/indent
@@ -2994,9 +2996,9 @@ equip Parser:
             SpannedExpr body_expr = self.parse_expr()
             Vector[Stmt] body = Vector[Stmt]()
             body.push(SReturn(Some(body_expr)))
-            return FunctionDef(name, params, ret_ty, type_params, body, true)
+            return FunctionDef(name, params, ret_ty, type_params, body, true, throws_type)
         Vector[Stmt] body = self.parse_block()
-        return FunctionDef(name, params, ret_ty, type_params, body, false)
+        return FunctionDef(name, params, ret_ty, type_params, body, false, throws_type)
 
     Vector[Param] parse_params(&self):
         Vector[Param] params = Vector[Param]()
@@ -3319,7 +3321,7 @@ equip Parser:
             FunctionDef fd = self.parse_function_def()
             # Convert expr-body (= "symbol") to declaration (empty body)
             Vector[Stmt] empty = Vector[Stmt]()
-            FunctionDef decl = FunctionDef(fd.name, fd.params, fd.return_type, fd.type_params, empty, false)
+            FunctionDef decl = FunctionDef(fd.name, fd.params, fd.return_type, fd.type_params, empty, false, fd.throws_type)
             return IFunction(decl)
         self.expect_tok(TOK_COLON, "expected ':' after extern")
         Vector[FunctionDef] fns = Vector[FunctionDef]()

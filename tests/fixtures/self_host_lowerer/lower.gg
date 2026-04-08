@@ -142,6 +142,29 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
             pass
     return I64_TYPE
 
+# ── Type ID to name ──────────────────────────────────────
+
+String type_id_to_name(int tid, GirModule &gmod):
+    match tid:
+        case 0:
+            return "bool"
+        case 4:
+            return "int64_t"
+        case 10:
+            return "double"
+        case 11:
+            return "unit"
+        else:
+            pass
+    if tid >= PRIM_COUNT and tid < gmod.type_table.len():
+        GirType gt = gmod.type_table.get(tid).unwrap()
+        match gt:
+            case GtNamed(name):
+                return name
+            else:
+                pass
+    return "int64_t"
+
 # ── Resource type detection ──────────────────────────────
 
 bool is_resource_field_type(SpannedType stype, Dict[String, bool] resource_types):
@@ -422,6 +445,16 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
         ret_type = I32_TYPE
     else:
         ret_type = map_ast_type(fdef.return_type, &gmod)
+        # Wrap return type in Result[T, E] for throws functions
+        match fdef.throws_type:
+            case Some(throws_ty):
+                int err_type = map_ast_type(throws_ty, &gmod)
+                String ret_c = type_id_to_name(ret_type, &gmod)
+                String err_c = type_id_to_name(err_type, &gmod)
+                String result_name = "Result__" + ret_c + "__" + err_c
+                ret_type = lookup_or_register_named(&gmod, result_name)
+            case None:
+                pass
 
     Vector[Instruction] init_insts = []
     Vector[Vector[Instruction]] block_insts = [!init_insts]

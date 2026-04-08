@@ -168,6 +168,7 @@ struct FunctionDef:
     Vector[String] type_params
     Vector[Stmt] body
     bool is_expr_body
+    Option[SpannedType] throws_type
 
 struct StructDef:
     String name
