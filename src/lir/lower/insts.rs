@@ -1441,7 +1441,19 @@ impl<'a> FuncLowering<'a> {
                 if idx >= self.local_to_slot.len() { return false; }
                 let slot = self.local_to_slot[idx];
                 let slot_ty = &self.lir_func.slots[slot.0 as usize].ty;
-                matches!(slot_ty, LirType::Struct(sid) if Some(*sid) == str_sid)
+                // Direct GorgetString struct in slot
+                if matches!(slot_ty, LirType::Struct(sid) if Some(*sid) == str_sid) {
+                    return true;
+                }
+                // Ptr slot whose GIR type maps to GorgetString — the slot holds a
+                // pointer to a GorgetString (e.g. from unwrap, collection get).
+                if *slot_ty == LirType::Ptr && idx < self.gir_func.locals.len() {
+                    let lir_ty = self.map_type(&self.gir_func.locals[idx].type_id);
+                    if matches!(lir_ty, LirType::Struct(sid) if Some(sid) == str_sid) {
+                        return true;
+                    }
+                }
+                false
             }
             _ => false,
         }
@@ -1815,22 +1827,40 @@ impl<'a> FuncLowering<'a> {
                 if let Operand::Copy(place) | Operand::Move(place) = arg {
                     let slot = self.local_to_slot[place.local.0 as usize];
                     let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
+                    let str_sid = self.struct_reg.lookup("GorgetString");
+                    let is_ptr_to_str = slot_ty == LirType::Ptr;
                     let struct_id = match &slot_ty {
                         LirType::Struct(sid) => *sid,
-                        _ => unreachable!(),
+                        _ => str_sid.unwrap_or(StructId(0)),
+                    };
+
+                    // Get the base pointer to the GorgetString struct.
+                    // For Struct slots: SlotAddr gives it directly.
+                    // For Ptr slots: the slot holds a pointer TO the struct — load it.
+                    let str_base = if is_ptr_to_str {
+                        let addr = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                            dst: addr, slot,
+                        });
+                        let loaded = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                            dst: loaded, ptr: addr, ty: LirType::Ptr,
+                        });
+                        loaded
+                    } else {
+                        let base = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                            dst: base, slot,
+                        });
+                        base
                     };
 
                     // Str fields: 0=data (Ptr), 1=len (I64), 2=cap (I64), 3=alloc (Ptr)
                     // Load .len (field 1) → cast to I32 for printf %.*s precision
-                    let base = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
-                        dst: base,
-                        slot,
-                    });
                     let len_ptr = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                         dst: len_ptr,
-                        base,
+                        base: str_base,
                         struct_id,
                         field: 1,
                     });
@@ -1849,15 +1879,10 @@ impl<'a> FuncLowering<'a> {
                     lir_args.push(len_i32);
 
                     // Load .data (field 0) — const char*
-                    let base2 = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
-                        dst: base2,
-                        slot,
-                    });
                     let data_ptr = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                         dst: data_ptr,
-                        base: base2,
+                        base: str_base,
                         struct_id,
                         field: 0,
                     });
