@@ -381,7 +381,11 @@ impl<'a> LoweringContext<'a> {
                 TypeDefKind::Enum(e) => e,
                 _ => continue,
             };
-            // Skip Option/Result — they have their own unwrap/clone handling.
+            // Skip Option/Result — their match/unwrap handling already
+            // extracts and moves payloads. Enabling Recursive drop causes
+            // double-free because the drop_if_alive guard doesn't cover all
+            // extraction paths. TODO: add tag-checked Option/Result drops
+            // that coordinate with match extraction MoveZero.
             if name.starts_with("Option__") || name.starts_with("Result__") {
                 continue;
             }

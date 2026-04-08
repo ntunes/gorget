@@ -304,20 +304,21 @@ pub fn lower_module(
                 } else if let TypeDefKind::Enum(ref edef) = td.kind {
                     // Same rule as Rust: if any variant has a droppable field,
                     // the enum is a Resource type with Recursive drop.
-                    // Option/Result excluded — they have special unwrap handling.
+                    // Option/Result excluded — enabling Recursive causes double-free
+                    // because match/unwrap extraction paths don't fully coordinate
+                    // with the drop_if_alive guard. TODO: add tag-checked drops.
                     if module.type_registry.is_option_or_result(name) || name.starts_with("Option__") || name.starts_with("Result__") {
                         false
                     } else {
-                        edef.variants.iter().any(|v| {
-                            v.fields.iter().any(|f| {
-                                if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
-                                    droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
-                                        || field_type_name == "GorgetString"
-                                } else {
-                                    false
-                                }
-                            })
+                    edef.variants.iter().any(|v| {
+                        v.fields.iter().any(|f| {
+                            if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
+                                droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
+                            } else {
+                                false
+                            }
                         })
+                    })
                     }
                 } else {
                     false

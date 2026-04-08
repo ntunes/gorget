@@ -365,7 +365,10 @@ impl TypeRegistry {
                     return true;
                 }
                 // Enum with resource-type variant payloads needs drop
-                // (even without explicit Recursive strategy, e.g. user enums with String fields)
+                // (even without explicit Recursive strategy, e.g. user enums with String fields).
+                // Option/Result excluded — enabling Recursive causes double-free
+                // because match/unwrap paths don't coordinate with drop_if_alive.
+                // TODO: add tag-checked Option/Result drops.
                 if let TypeDefKind::Enum(ref edef) = type_def.kind {
                     if type_def.metadata.enum_category.is_none()
                         && !name.starts_with("Option__") && !name.starts_with("Result__") {
