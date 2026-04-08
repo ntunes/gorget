@@ -1,9 +1,11 @@
 # Simple multi-module import loader.
 # Reads imported .gg files, parses them, and merges their items into the
-# main module for lowering.
+# main module for lowering.  Applies module-path name mangling to imported
+# functions (e.g. std.conv.parse_int → std__conv___parse_int) and builds a
+# call-redirect map so the lowerer can rewrite bare call names.
 
 from parser import parse_source
-from ast import Module, Item, ImportStmt
+from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock
 from derive import expand_derives
 from std.fs import read_file, file_exists
 from std.collections import Vector, Dict
@@ -18,25 +20,8 @@ String resolve_module_path(String base_dir, String module_path):
 String parent_dir(String path):
     # Extract parent directory: find last '/' by scanning
     int last_slash = -1
-    int pos = 0
-    while pos < path.len():
-        int found = path.find("/")
-        if found < 0:
-            # No more slashes after current scan — use last known position
-            # Actually find() always searches from start. Use a loop with offset.
-            break
-        last_slash = found
-        # Find next slash by searching in remainder
-        if found + 1 >= path.len():
-            break
-        # Simple approach: iterate through positions
-        break
-    # Fallback: scan character by character
-    last_slash = -1
     int i = 0
     while i < path.len():
-        # Check if character at position i is '/'
-        # Use slice to extract single char and compare
         if i + 1 <= path.len():
             String ch = path.slice(i, i + 1)
             if ch == "/":
@@ -46,21 +31,30 @@ String parent_dir(String path):
         return path.slice(0, last_slash)
     return "."
 
+# ── Module-path mangling ────────────────────────────────
+
+String mangle_prefix(String module_path):
+    # "std.conv" → "std__conv___"
+    return module_path.replace(".", "__") + "___"
+
 # ── Import loading ───────────────────────────────────────
 
-void load_imports(Module &m, String entry_path, String lib_dir):
+Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns):
     String base_dir = parent_dir(entry_path)
     Dict[String, bool] loaded = {}
+    Dict[String, String] call_redirects = {}
 
     # Collect import paths from the module
     Vector[String] import_paths = []
+    Vector[String] import_mod_paths = []
     int ii = 0
     while ii < m.items.len():
         Item item = m.items.get(ii).unwrap()
         match item:
             case IImport(imp):
                 if not loaded.contains(imp.module_path):
-                    import_paths.push(imp.module_path)
+                    import_paths.push(imp.module_path.clone())
+                    import_mod_paths.push(imp.module_path.clone())
                     loaded.put(imp.module_path, true)
             else:
                 pass
@@ -70,6 +64,7 @@ void load_imports(Module &m, String entry_path, String lib_dir):
     int pi = 0
     while pi < import_paths.len():
         String mod_path = import_paths.get(pi).unwrap()
+        String mod_prefix = mangle_prefix(mod_path)
 
         # Try local directory first, then lib directory
         String file_path = resolve_module_path(base_dir, mod_path)
@@ -80,19 +75,51 @@ void load_imports(Module &m, String entry_path, String lib_dir):
             Module imported = parse_source(source)
             expand_derives(&imported)
 
-            # Add imported items to main module
+            # Add imported items to main module, with mangling
             int ji = 0
             while ji < imported.items.len():
                 Item imp_item = imported.items.get(ji).unwrap()
-                # Recursively discover imports from the imported module
                 match imp_item:
                     case IImport(sub_imp):
+                        # Recursively discover imports from the imported module
                         if not loaded.contains(sub_imp.module_path):
-                            import_paths.push(sub_imp.module_path)
+                            import_paths.push(sub_imp.module_path.clone())
+                            import_mod_paths.push(sub_imp.module_path.clone())
                             loaded.put(sub_imp.module_path, true)
+                    case IFunction(fdef):
+                        # Skip extern stubs and forward declarations.
+                        # Real functions have >=2 body statements; stubs have
+                        # 0 or 1 (parser artifact from extern/declaration syntax).
+                        if fdef.body.len() >= 2:
+                            # Mangle function name and register redirect
+                            String bare_name = fdef.name.clone()
+                            String mangled = mod_prefix + bare_name
+                            call_redirects.put(bare_name, mangled.clone())
+                            imported_fns.put(mangled.clone(), true)
+                            # Create a renamed copy
+                            FunctionDef renamed = FunctionDef(mangled, fdef.params, fdef.return_type, fdef.type_params, fdef.body, fdef.is_expr_body, fdef.throws_type)
+                            m.items.push(IFunction(renamed))
+                    case IEquip(eqblk):
+                        # Filter individual methods: extern equip methods get
+                        # parsed with the return type as the method name and a
+                        # trivial body.  Real methods have >=2 body statements.
+                        Vector[FunctionDef] real_methods = []
+                        int emi = 0
+                        while emi < eqblk.methods.len():
+                            FunctionDef emdef = eqblk.methods.get(emi).unwrap()
+                            if emdef.body.len() >= 2:
+                                real_methods.push(emdef)
+                            emi += 1
+                        if real_methods.len() > 0:
+                            EquipBlock filtered = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, real_methods)
+                            m.items.push(IEquip(filtered))
                     else:
+                        # Skip extern blocks, structs, enums, traits, etc.
+                        # from imported modules — only functions and equip
+                        # blocks with real bodies are needed for GIR comparison.
                         pass
-                m.items.push(imp_item)
                 ji += 1
 
         pi += 1
+
+    return call_redirects

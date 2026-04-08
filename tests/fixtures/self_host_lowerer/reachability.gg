@@ -1,0 +1,11 @@
+# Reachability analysis module.
+#
+# The GIR-level dead function filtering is done inside format_gir.gg
+# (format_module) rather than as a separate pass, because iterating
+# through GIR instruction data via .get().unwrap() on Vector[GirFunction]
+# causes CoW-related segfaults in the self-host runtime.
+#
+# The approach: imported functions (tracked in gmod.imported_fns) are
+# filtered by checking if their mangled name is registered in fn_sigs.
+# Same-file functions are always kept (matching the Rust --emit-gir
+# behavior which emits all functions without DCE at GIR level).

@@ -247,13 +247,23 @@ String format_module(GirModule &gmod):
         ei = ei + 1
     if gmod.externs.len() > 0:
         result = result + "\n"
-    # Functions
+    # Functions — filter imported functions.
+    # Same-file functions are always kept.
+    # Imported functions (tracked in gmod.imported_fns) are kept only
+    # if they're registered in fn_sigs (meaning they're called).
     int fi = 0
     while fi < gmod.functions.len():
         GirFunction func = gmod.functions.get(fi).unwrap()
-        if fi > 0:
+        bool keep = true
+        String fname = func.name.clone()
+        if gmod.imported_fns.contains(fname):
+            # Imported function — only keep if in fn_sigs
+            if not gmod.fn_sigs.contains(fname):
+                keep = false
+        if keep:
+            if fi > 0:
+                result = result + "\n"
+            result = result + format_function(func, &gmod)
             result = result + "\n"
-        result = result + format_function(func, &gmod)
-        result = result + "\n"
         fi = fi + 1
     return result

@@ -398,6 +398,9 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 SpannedType ta = targs.get(ti).unwrap()
                 call_name = call_name + "__" + type_to_c_name(ta, &gmod)
                 ti += 1
+        # Resolve call redirects (bare → module-prefixed name)
+        if gmod.call_redirects.contains(call_name):
+            call_name = gmod.call_redirects.get(call_name).unwrap()
         # User function call
         Vector[Operand] gir_args = []
         int ai = 0
@@ -1279,7 +1282,7 @@ void lower_generic_equip(EquipBlock eqblk, Vector[SpannedType] type_args, GirMod
 
 # ── Module lowering ──────────────────────────────────────
 
-GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
+GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String, String] call_redirects, Dict[String, bool] imported_fns):
     Vector[GirType] type_table = init_type_table()
 
     # Pre-scan function signatures for call resolution
@@ -1363,7 +1366,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
             else:
                 pass
         tai += 1
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns)
 
     # Collect generic templates and discover instances
     Dict[String, FunctionDef] fn_templates = {}

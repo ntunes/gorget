@@ -135,6 +135,8 @@ struct GirModule:
     Dict[String, bool] resource_types
     Dict[String, int] type_subs
     Dict[String, String] meta_aliases
+    Dict[String, String] call_redirects
+    Dict[String, bool] imported_fns
 
 # ── Helpers ──────────────────────────────────────────────
 
