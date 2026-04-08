@@ -133,6 +133,13 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
             # Check type substitutions (generic monomorphization)
             if gmod.type_subs.contains(name):
                 return gmod.type_subs.get(name).unwrap()
+            # Resolve type aliases (meta type = ...)
+            if targs.len() == 0 and gmod.meta_aliases.contains(name):
+                String alias_target = gmod.meta_aliases.get(name).unwrap()
+                int at = prim_name_to_type(alias_target)
+                if at >= 0:
+                    return at
+                return lookup_or_register_named(&gmod, alias_target)
             int t = prim_name_to_type(name)
             if t >= 0:
                 return t
@@ -469,7 +476,15 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     bool is_main = fdef.name == "main"
     int ret_type = I64_TYPE
     if is_main:
-        ret_type = I32_TYPE
+        # Check if main has throws — if so, return Result__void__T
+        match fdef.throws_type:
+            case Some(throws_ty):
+                int err_type = map_ast_type(throws_ty, &gmod)
+                String err_c = type_id_to_name(err_type, &gmod)
+                String result_name = "Result__void__" + err_c
+                ret_type = lookup_or_register_named(&gmod, result_name)
+            case None:
+                ret_type = I32_TYPE
     else:
         ret_type = map_ast_type(fdef.return_type, &gmod)
         # Wrap return type in Result[T, E] for throws functions
@@ -683,7 +698,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
 
 int STRING_MARKER = -2
 
-int guess_return_type(SpannedExpr sexpr):
+int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
     match sexpr.expr:
         case EIntLiteral(_):
             return I64_TYPE
@@ -697,10 +712,6 @@ int guess_return_type(SpannedExpr sexpr):
             match op:
                 case "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or":
                     return BOOL_TYPE
-                case "+":
-                    # String concatenation returns string — but could also be int add.
-                    # Can't determine without type info, default to I64.
-                    return I64_TYPE
                 else:
                     return I64_TYPE
         case EUnaryOp(op, _):
@@ -711,18 +722,52 @@ int guess_return_type(SpannedExpr sexpr):
                     return I64_TYPE
         case ENoneLiteral():
             return UNIT_TYPE
-        case ECall(callee_box, _, _):
-            # Check if it's a known void function
+        case ECall(callee_box, args, targs):
             match (*callee_box).expr:
                 case EIdentifier(fname):
                     if fname == "print" or fname == "pass":
                         return UNIT_TYPE
+                    # Enum variant constructors: Some(x) → Option__T, Ok(x)/Error(x) → Result
+                    if fname == "Some" and args.len() == 1:
+                        SpannedExpr inner_arg = args.get(0).unwrap()
+                        int inner_t = guess_return_type(inner_arg, &gmod)
+                        if inner_t == STRING_MARKER:
+                            inner_t = lookup_or_register_named(&gmod, "GorgetString")
+                        String inner_name = type_id_to_name(inner_t, &gmod)
+                        return lookup_or_register_named(&gmod, "Option__" + inner_name)
+                    if fname == "None":
+                        return UNIT_TYPE
+                    # Look up return type from fn_sigs
+                    String call_name = fname
+                    if targs.len() > 0:
+                        call_name = compute_mangled_name(targs, fname)
+                    if gmod.fn_sigs.contains(call_name):
+                        return gmod.fn_sigs.get(call_name).unwrap()
                 else:
                     pass
         case EMethodCall(_, mname, _, _):
             # Known void methods
             if mname == "push" or mname == "set" or mname == "put" or mname == "clear" or mname == "pop":
                 return UNIT_TYPE
+        case EIdentifier(name):
+            # Look up from fn_sigs (could be a variable holding a closure)
+            if gmod.fn_sigs.contains(name):
+                return gmod.fn_sigs.get(name).unwrap()
+        case EIf(_, then_body, _):
+            # Use return type of last statement in then body
+            if then_body.len() > 0:
+                Stmt last = then_body.get(then_body.len() - 1).unwrap()
+                match last:
+                    case SExpr(inner_expr):
+                        return guess_return_type(inner_expr, &gmod)
+                    case SReturn(opt_ret):
+                        match opt_ret:
+                            case Some(ret_expr):
+                                return guess_return_type(ret_expr, &gmod)
+                            case None:
+                                return UNIT_TYPE
+                    else:
+                        pass
         else:
             pass
     return I64_TYPE
@@ -755,11 +800,11 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
                     case SReturn(opt_expr):
                         match opt_expr:
                             case Some(rexpr):
-                                ret_type = guess_return_type(rexpr)
+                                ret_type = guess_return_type(rexpr, &gmod)
                             case None:
                                 ret_type = UNIT_TYPE
                     case SExpr(expr):
-                        ret_type = guess_return_type(expr)
+                        ret_type = guess_return_type(expr, &gmod)
                     else:
                         # Non-expression last statement (if, while, etc.) → void
                         ret_type = UNIT_TYPE
@@ -1183,7 +1228,26 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
         ri += 1
 
     Dict[String, int] type_subs = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs)
+    Dict[String, String] meta_aliases = types.meta_aliases
+    # Also collect plain type aliases (ITypeAlias) into meta_aliases
+    int tai = 0
+    while tai < m.items.len():
+        Item ta_item = m.items.get(tai).unwrap()
+        match ta_item:
+            case ITypeAlias(ta_name, ta_tparams, ta_target):
+                if ta_tparams.len() == 0:
+                    # Store the raw type name for alias resolution
+                    match ta_target.ty:
+                        case TPrimitive(pname):
+                            meta_aliases.put(ta_name, pname)
+                        case TNamed(tname, _):
+                            meta_aliases.put(ta_name, tname)
+                        else:
+                            pass
+            else:
+                pass
+        tai += 1
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases)
 
     # Collect generic templates and discover instances
     Dict[String, FunctionDef] fn_templates = {}
@@ -1245,8 +1309,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
             gmod.fn_sigs.put(inst.mangled_name.clone(), rt)
         si += 1
 
-    # Lower each non-generic function and equip method
+    # Lower each non-generic function, equip method, and test block
     int fi = 0
+    int test_idx = 0
     while fi < m.items.len():
         Item item = m.items.get(fi).unwrap()
         match item:
@@ -1254,6 +1319,31 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types):
                 # Skip generic templates — they'll be monomorphized below
                 if fdef.type_params.len() == 0:
                     gmod.functions.push(lower_function(fdef, &gmod))
+            case ITest(name, decorators, tags, test_body):
+                # Emit __test_N() -> unit
+                String test_name = "__test_" + int_to_str(test_idx)
+                LowerCtx tctx = LowerCtx([], [], [], 0, {})
+                Vector[Instruction] tinit = []
+                tctx.block_insts.push(!tinit)
+                tctx.block_terms.push(TNone())
+                add_local(&tctx, UNIT_TYPE, NO_NAME)
+                lower_stmts(&tctx, test_body, &gmod, false)
+                Terminator tterm = tctx.block_terms.get(tctx.current_block).unwrap()
+                match tterm:
+                    case TNone():
+                        set_terminator(&tctx, TReturn(OpConstUnit()))
+                    else:
+                        pass
+                Vector[BasicBlock] tblocks = []
+                int tbi = 0
+                while tbi < tctx.block_insts.len():
+                    Vector[Instruction] tinsts = tctx.block_insts.get(tbi).unwrap()
+                    Terminator tt = tctx.block_terms.get(tbi).unwrap()
+                    tblocks.push(BasicBlock(tinsts, tt))
+                    tbi += 1
+                Vector[int] tparams = []
+                gmod.functions.push(GirFunction(test_name, !tparams, UNIT_TYPE, tctx.locals, !tblocks))
+                test_idx += 1
             case IEquip(eqblk):
                 # Skip generic equip blocks (detected by target having type args)
                 bool skip_equip = eqblk.type_params.len() > 0

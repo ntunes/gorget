@@ -134,6 +134,7 @@ struct GirModule:
     Dict[String, int] named_types
     Dict[String, bool] resource_types
     Dict[String, int] type_subs
+    Dict[String, String] meta_aliases
 
 # ── Helpers ──────────────────────────────────────────────
 
