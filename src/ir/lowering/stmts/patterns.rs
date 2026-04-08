@@ -19,9 +19,30 @@ pub(super) fn lower_match_stmt(
     arms: &[ast::MatchItem],
     else_arm: &Option<Block>,
 ) {
-    // Lower scrutinee to a temp local
-    let scrut_op = lower_expr(ctx, builder, scrutinee);
-    let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);
+    // Lower scrutinee to a temp local.
+    // For & params (MutPtr), lower_expr auto-derefs to a VALUE copy — creating
+    // a shallow alias. For match, we want the original MutPtr so scrut_is_ptr
+    // detects it and pattern extraction produces borrows, not copies.
+    let (scrut_op, scrut_type) = if let Expr::Identifier(name) = &scrutinee.node {
+        if let Some((local_id, type_id)) = ctx.lookup_local(name) {
+            if ctx.func_state.mut_capture_locals.contains_key(&local_id) {
+                // & or ! param — use the MutPtr local directly, skip auto-deref
+                (Operand::Copy(Place::local(local_id)), type_id)
+            } else {
+                let op = lower_expr(ctx, builder, scrutinee);
+                let ty = infer_operand_type_full(ctx, &op, builder);
+                (op, ty)
+            }
+        } else {
+            let op = lower_expr(ctx, builder, scrutinee);
+            let ty = infer_operand_type_full(ctx, &op, builder);
+            (op, ty)
+        }
+    } else {
+        let op = lower_expr(ctx, builder, scrutinee);
+        let ty = infer_operand_type_full(ctx, &op, builder);
+        (op, ty)
+    };
 
     // Check if scrutinee is dead after the match (last use at match site) AND
     // the operand is a simple local we can MoveZero. If both, we can skip the
@@ -473,7 +494,8 @@ pub fn emit_pattern_bindings(
                 // both the scrutinee copy AND the original variable will be zeroed
                 // after extraction — the shallow copy takes ownership directly.
                 else if !scrut_is_ptr
-                    && field_type == ctx.type_mapper.owned_string_type
+                    && (field_type == ctx.type_mapper.owned_string_type
+                        || ctx.type_registry.is_collection_type(field_type))
                 {
                     if ctx.func_state.scrutinee_clone_elision {
                         // Clone elision: register for drop without cloning.
