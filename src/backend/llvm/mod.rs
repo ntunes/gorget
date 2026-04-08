@@ -825,8 +825,10 @@ fn emit_function(
                     // - Call/CallExtern results stored via temp alloca
                     // - Load on aggregate uses pointer alias (no actual load)
                     // - ParamRef for aggregate uses alloca
+                    // Use PtrTo(sid) instead of plain Ptr to preserve struct identity
+                    // for downstream Store→memcpy detection.
                     let ty = match &ty {
-                        Some(t) if t.is_aggregate() => Some(LirType::Ptr),
+                        Some(LirType::Struct(sid)) => Some(LirType::PtrTo(*sid)),
                         _ => ty,
                     };
                     val_types[dst.0 as usize] = ty;
