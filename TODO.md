@@ -4,7 +4,6 @@
 
 - **Phase 1/2 Option/Result drops crash self-host driver**: The Option/Result Recursive drop infrastructure (Phase 1) and scope-exit drops (Phase 2) cause segfaults in the self-host driver binary. Root cause: Phase 2's `move_zero_and_mark` doesn't cover all consumption paths in complex programs (match extraction on Vector elements, nested struct field access). Integration tests pass (948/948) but the self-host driver crashes on any input with String types. Workaround: build driver with pre-Phase-1 compiler. Fix requires completing MoveZero coverage for all Option/Result extraction paths. [added: 2026-04-09]
 
-- **Remove .clone() from Json.get()/at()**: Fix A (Ptr-scrutinee extraction widened to `is_resource_type` minus Box — done) and Fix B (`Option[Ptr(T)]` → `Option[T]` return conversion with deref+clone — done). However, `Ptr(Dict).get(key)` from pattern extraction on `&self` doesn't dispatch correctly — method calls on pattern-extracted Ptr locals produce wrong results. `.clone()` workaround is correct and safe. [updated: 2026-04-08]
 
 - **Clone observability + Cloneable trait**: `.clone()` works on all types. `gg build --show-clones` done. Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
 

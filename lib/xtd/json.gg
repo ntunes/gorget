@@ -590,7 +590,7 @@ equip Json:
         match self:
             case Obj(d):
                 if d.contains(key):
-                    return Some(d.get(key).unwrap().clone())
+                    return Some(d.get(key).unwrap())
                 return None
             else:
                 return None
@@ -599,7 +599,7 @@ equip Json:
         match self:
             case Arr(arr):
                 if index >= 0 and index < arr.len():
-                    return Some(arr.get(index).unwrap().clone())
+                    return Some(arr.get(index).unwrap())
                 return None
             else:
                 return None
