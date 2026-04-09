@@ -1942,77 +1942,59 @@ fn emit_inst(
 
             // ── Collection void* return dereference ──
             // Functions like gorget_guard_get, gorget_shared_get etc. return void*.
-            // Determine the expected scalar type by scanning ALL downstream uses of
-            // the result value — Call args, SlotStore, arithmetic, etc.
-            // (gorget_map_get is handled above with Option wrapping logic.)
+            // Only dereference when the value is EXCLUSIVELY used as a scalar
+            // (never as a pointer for null checks, memcpy, etc.).
             {
                 let is_void_return_fn = matches!(name.as_str(),
-                    "gorget_array_get" | "gorget_array_pop" | "gorget_array_first" | "gorget_array_last"
-                    | "gorget_heap_pop" | "gorget_heap_peek"
-                    | "gorget_guard_get" | "gorget_guard_get_ptr"
-                    | "gorget_shared_get" | "gorget_shared_get_ptr"
-                    | "gorget_read_guard_get" | "gorget_read_guard_get_ptr"
-                    | "gorget_write_guard_get" | "gorget_write_guard_get_ptr"
+                    "gorget_guard_get" | "gorget_shared_get"
+                    | "gorget_read_guard_get" | "gorget_write_guard_get"
                 );
                 if is_void_return_fn {
                     if let Some(d) = dst {
-                        // Scan downstream to find expected scalar type:
-                        // 1. SlotStore into a scalar slot
-                        // 2. Call/CallExtern arg where callee expects scalar
-                        // 3. Arithmetic (Add/Sub/Mul etc.) — implies i64
-                        let scalar_ty: Option<LirType> = {
-                            let block = &func.blocks[block_id as usize];
-                            block.insts.iter().find_map(|i| {
-                                // SlotStore to scalar slot
-                                if let Inst::SlotStore { slot, value, .. } = i {
-                                    if value.0 == d.0 {
-                                        let sty = &func.slots[slot.0 as usize].ty;
-                                        if sty.is_integer() || sty.is_float() || matches!(sty, LirType::Bool) {
-                                            return Some(sty.clone());
-                                        }
-                                    }
+                        // Check if ALL uses of this value expect a scalar (no ptr uses)
+                        let block = &func.blocks[block_id as usize];
+                        let mut needs_scalar = false;
+                        let mut needs_ptr = false;
+                        for i in &block.insts {
+                            match i {
+                                Inst::SlotStore { slot, value, .. } if value.0 == d.0 => {
+                                    let sty = &func.slots[slot.0 as usize].ty;
+                                    if sty.is_integer() || sty.is_float() || matches!(sty, LirType::Bool) {
+                                        needs_scalar = true;
+                                    } else { needs_ptr = true; }
                                 }
-                                // Call where param expects scalar
-                                if let Inst::Call { func: fid, args: call_args, .. } = i {
+                                Inst::Call { func: fid, args: call_args, .. } => {
                                     for (ci, ca) in call_args.iter().enumerate() {
                                         if ca.0 == d.0 {
                                             let target = &module.functions[fid.0 as usize];
                                             if let Some(pty) = target.params.get(ci) {
-                                                if pty.is_integer() || pty.is_float() || matches!(pty, LirType::Bool) {
-                                                    return Some(pty.clone());
-                                                }
+                                                if pty.is_integer() || pty.is_float() { needs_scalar = true; }
+                                                else { needs_ptr = true; }
                                             }
                                         }
                                     }
                                 }
-                                // Arithmetic use implies i64
-                                match i {
-                                    Inst::Add { lhs, rhs, ty, .. } | Inst::Sub { lhs, rhs, ty, .. }
-                                    | Inst::Mul { lhs, rhs, ty, .. } | Inst::Div { lhs, rhs, ty, .. } => {
-                                        if lhs.0 == d.0 || rhs.0 == d.0 {
-                                            return Some(ty.clone());
-                                        }
-                                    }
-                                    Inst::Cmp { lhs, rhs, .. } => {
-                                        if lhs.0 == d.0 || rhs.0 == d.0 { return Some(LirType::I64); }
-                                    }
-                                    _ => {}
+                                Inst::Add { lhs, rhs, .. } | Inst::Sub { lhs, rhs, .. }
+                                | Inst::Mul { lhs, rhs, .. } => {
+                                    if lhs.0 == d.0 || rhs.0 == d.0 { needs_scalar = true; }
                                 }
-                                None
-                            })
-                        };
-                        if let Some(sty) = scalar_ty {
+                                Inst::Cmp { lhs, rhs, .. } => {
+                                    if lhs.0 == d.0 || rhs.0 == d.0 { needs_ptr = true; } // cmp could be null check
+                                }
+                                _ => {}
+                            }
+                        }
+                        if needs_scalar && !needs_ptr {
                             let uid = *trap_counter;
                             *trap_counter += 1;
                             let pfx = format!("voidret.{block_id}.{uid}");
-                            let lty = llvm_type(&sty);
                             let arg_strs: Vec<String> = args.iter().map(|a| {
                                 let aty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                                 let ty_str = aty.map(|t| llvm_arg_type(t, snames)).unwrap_or_else(|| "ptr".to_string());
                                 format!("{ty_str} %v{}", a.0)
                             }).collect();
                             writeln!(out, "  %{pfx}.raw = call ptr @{name}({})", arg_strs.join(", ")).unwrap();
-                            writeln!(out, "  %v{} = load {lty}, ptr %{pfx}.raw", d.0).unwrap();
+                            writeln!(out, "  %v{} = load i64, ptr %{pfx}.raw", d.0).unwrap();
                             return;
                         }
                     }
