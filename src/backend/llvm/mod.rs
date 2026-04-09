@@ -1783,6 +1783,108 @@ fn emit_inst(
                 return;
             }
 
+            // ── gorget_map_get / gorget_map_safe_get — wrap result in Option ──
+            // C runtime returns void* (NULL if missing, ptr-to-value if found).
+            // Detect Option wrapping by scanning ahead: if the next Memcpy from this
+            // result uses size > 8, the downstream code expects an Option struct.
+            if (name == "gorget_map_get" || name == "gorget_map_safe_get") && !args.is_empty() {
+                if let Some(d) = dst {
+                    // Detect Option wrapping: scan for SlotStore of this result into
+                    // a slot whose type is an Option struct (name starts with "Option__").
+                    let needs_option_wrap = {
+                        let block = &func.blocks[block_id as usize];
+                        block.insts.iter().any(|next_inst| {
+                            if let Inst::SlotStore { slot, value, .. } = next_inst {
+                                if value.0 == d.0 {
+                                    let slot_ty = &func.slots[slot.0 as usize].ty;
+                                    if let LirType::Struct(sid) = slot_ty {
+                                        return module.structs.get(sid.0 as usize)
+                                            .map_or(false, |s| s.name.starts_with("Option__") || s.name.starts_with("Result__"));
+                                    }
+                                }
+                            }
+                            false
+                        })
+                    };
+                    if !needs_option_wrap {
+                        // dict[key] direct access — fall through to generic handler
+                    } else {
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    let pfx = format!("mapget.{block_id}.{uid}");
+                    // Find the Option struct by scanning slots
+                    let opt_struct_id = func.blocks[block_id as usize].insts.iter().find_map(|i| {
+                        if let Inst::SlotStore { slot, value, .. } = i {
+                            if value.0 == d.0 {
+                                if let LirType::Struct(sid) = &func.slots[slot.0 as usize].ty {
+                                    return Some(*sid);
+                                }
+                            }
+                        }
+                        None
+                    });
+                    let dst_ty: Option<&LirType> = opt_struct_id.map(|sid| &func.slots.iter()
+                        .find(|s| matches!(&s.ty, LirType::Struct(s2) if *s2 == sid))
+                        .unwrap().ty);
+                    // Determine payload size from the destination Option struct
+                    let payload_size = match dst_ty {
+                        Some(LirType::PtrTo(sid)) | Some(LirType::Struct(sid)) => {
+                            let sdef = &module.structs[sid.0 as usize];
+                            sdef.fields.get(1).map(|(_, fty)| {
+                                match fty {
+                                    LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8usize,
+                                    LirType::I32 | LirType::U32 | LirType::F32 => 4,
+                                    LirType::I16 | LirType::U16 => 2,
+                                    LirType::I8 | LirType::U8 | LirType::Bool => 1,
+                                    LirType::Struct(inner) => module.structs[inner.0 as usize].computed_c_size.unwrap_or(64),
+                                    _ => 8,
+                                }
+                            }).unwrap_or(8)
+                        }
+                        _ => 8,
+                    };
+                    // Build args — spill scalars to alloca (gorget_map_get takes ptr to key)
+                    let mut spills = Vec::new();
+                    let arg_strs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
+                        let aty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                        if aty.map_or(false, |t| t.is_ptr()) {
+                            format!("ptr %v{}", a.0)
+                        } else {
+                            // Spill scalar to alloca
+                            let alty = aty.map(|t| llvm_arg_type(t, snames)).unwrap_or_else(|| "i64".to_string());
+                            let spill_name = format!("{pfx}.spill.{i}");
+                            spills.push(format!("  %{spill_name} = alloca {alty}"));
+                            spills.push(format!("  store {alty} %v{}, ptr %{spill_name}", a.0));
+                            format!("ptr %{spill_name}")
+                        }
+                    }).collect();
+                    for s in &spills {
+                        writeln!(out, "{s}").unwrap();
+                    }
+                    // Call gorget_map_get → ptr (or NULL)
+                    writeln!(out, "  %{pfx}.raw = call ptr @{name}({})", arg_strs.join(", ")).unwrap();
+                    writeln!(out, "  %{pfx}.isnull = icmp eq ptr %{pfx}.raw, null").unwrap();
+                    // Alloca for Option result
+                    writeln!(out, "  %v{} = alloca i8, i64 16", d.0).unwrap();
+                    writeln!(out, "  br i1 %{pfx}.isnull, label %{pfx}.none, label %{pfx}.some").unwrap();
+                    // Some branch: tag=0, copy payload
+                    writeln!(out, "{pfx}.some:").unwrap();
+                    writeln!(out, "  store i32 0, ptr %v{}", d.0).unwrap();
+                    writeln!(out, "  %{pfx}.payptr = getelementptr i8, ptr %v{}, i64 8", d.0).unwrap();
+                    writeln!(out, "  call ptr @memcpy(ptr %{pfx}.payptr, ptr %{pfx}.raw, i64 {payload_size})").unwrap();
+                    writeln!(out, "  br label %{pfx}.end").unwrap();
+                    // None branch: tag=1, zero payload
+                    writeln!(out, "{pfx}.none:").unwrap();
+                    writeln!(out, "  store i32 1, ptr %v{}", d.0).unwrap();
+                    writeln!(out, "  %{pfx}.payptr2 = getelementptr i8, ptr %v{}, i64 8", d.0).unwrap();
+                    writeln!(out, "  call ptr @memset(ptr %{pfx}.payptr2, i32 0, i64 {payload_size})").unwrap();
+                    writeln!(out, "  br label %{pfx}.end").unwrap();
+                    writeln!(out, "{pfx}.end:").unwrap();
+                    return;
+                    } // else (is_option_dst)
+                }
+            }
+
             // Inline expansion of Option/Result helpers
             // Option/Result is_some/is_none/is_ok/is_err — tag check
             let is_tag_check = name == "__option_is_some" || name == "__option_is_none"
