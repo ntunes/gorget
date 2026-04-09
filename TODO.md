@@ -2,12 +2,10 @@
 
 ## High
 
-- **Phase 1/2 Option/Result drops crash self-host driver**: The Option/Result Recursive drop infrastructure (Phase 1) and scope-exit drops (Phase 2) cause segfaults in the self-host driver binary. Root cause: Phase 2's `move_zero_and_mark` doesn't cover all consumption paths in complex programs (match extraction on Vector elements, nested struct field access). Integration tests pass (948/948) but the self-host driver crashes on any input with String types. Workaround: build driver with pre-Phase-1 compiler. Fix requires completing MoveZero coverage for all Option/Result extraction paths. [added: 2026-04-09]
-
+- **Pre-existing double-free: identity closure + Dict→match extraction**: `dataframe_nulls` and `self_host_parser` crash (pre-existing from rebase, not from our work). Root cause: closure `(String s): s` returns a shallow copy of a GorgetString with valid cap/alloc. `elem_materialize` doesn't recognize it as a view (checks cap==0 && alloc==NULL). When the source TypedCol is dropped, the pushed strings dangle. Fix: either extend elem_materialize to detect non-view shared strings, or ensure the identity closure returns a proper clone. Reproducer: `/tmp/test_dict_match4.gg`. [added: 2026-04-09]
 
 - **Clone observability + Cloneable trait**: `.clone()` works on all types. `gg build --show-clones` done. Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
 
-- **Recursive/Custom elem_drop — 1 remaining fix**: C backend Option wrapping must CLONE for Recursive/Custom elements when payload is NOT Ptr (consuming methods like gorget_array_safe_pop). The fragile struct-name lookup may miss types. Option[Ref_T].unwrap() returns Ptr (CoW borrow) — clone fires at ownership boundaries. [updated: 2026-04-05]
 
 - **Extern module ABI — remaining structural whitelist**: `is_cstr_returning_fn` and `takes_cstr_for_str_param` deleted (all entries eliminated). `runtime_arg_by_ptr` is structural (collection/string self-deref + string clone/free) — cannot be removed without changing how the LIR represents method dispatch. See `docs/internals/extern-modules.md`. [updated: 2026-04-03]
 
