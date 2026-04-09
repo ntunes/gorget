@@ -49,6 +49,8 @@ struct DropEntry {
     type_id: TypeId,
     /// If true, the value may have been moved — use DropIfAlive instead of Drop.
     maybe_moved: bool,
+    /// If true, bypass needs_drop checks at emission time.
+    force_drop: bool,
 }
 
 impl DropElaborator {
@@ -100,6 +102,19 @@ impl DropElaborator {
                 local,
                 type_id,
                 maybe_moved: false,
+                force_drop: false,
+            });
+        }
+    }
+
+    /// Force-register for Option/Result with resource payloads. Bypasses needs_drop.
+    pub fn register_local_unconditional(&mut self, local: LocalId, type_id: TypeId) {
+        for scope in self.scopes.iter().rev() {
+            if scope.entries.iter().any(|e| e.local == local) { return; }
+        }
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.entries.push(DropEntry {
+                local, type_id, maybe_moved: true, force_drop: true,
             });
         }
     }
@@ -125,6 +140,7 @@ impl DropElaborator {
                     local,
                     type_id,
                     maybe_moved: false,
+                    force_drop: false,
                 });
                 return;
             }
@@ -135,6 +151,7 @@ impl DropElaborator {
                 local,
                 type_id,
                 maybe_moved: false,
+                force_drop: false,
             });
         }
     }
@@ -153,6 +170,7 @@ impl DropElaborator {
                 local,
                 type_id,
                 maybe_moved: false,
+                force_drop: false,
             });
         }
     }
@@ -351,7 +369,7 @@ fn emit_scope_drops_ordered(
     // Emit drops in computed order
     for &idx in &order {
         let entry = &entries[idx];
-        if !needs_drop(entry.type_id, registry) { continue; }
+        if !entry.force_drop && !needs_drop(entry.type_id, registry) { continue; }
         let place = Place::local(entry.local);
         if entry.maybe_moved {
             builder.drop_if_alive(place);
@@ -376,8 +394,8 @@ fn emit_scope_drops_excluding(
                 continue;
             }
         }
-        // Verify the type still needs dropping (defense-in-depth)
-        if !needs_drop(entry.type_id, registry) {
+        // Verify the type still needs dropping (defense-in-depth).
+        if !entry.force_drop && !needs_drop(entry.type_id, registry) {
             continue;
         }
 

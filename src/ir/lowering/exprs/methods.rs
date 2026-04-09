@@ -465,11 +465,16 @@ pub(super) fn lower_method_call(
                     );
                     // MoveZero the Result to prevent scope-exit drop from
                     // double-freeing the extracted Error payload.
-                    // Only for temps (not named locals which might be used again).
-                    if is_resource_type_local(dst, builder, &ctx.type_registry)
-                        && !ctx.is_named_local(place.local)
-                    {
-                        ctx.move_zero_and_mark(builder, place.local);
+                    // For named locals: only MoveZero if it's the last use (dead).
+                    // For temps: always MoveZero.
+                    if is_resource_type_local(dst, builder, &ctx.type_registry) {
+                        if !ctx.is_named_local(place.local) {
+                            ctx.move_zero_and_mark(builder, place.local);
+                        } else {
+                            // Named local: unregister the force-registered Drop
+                            // instead of MoveZero (the local may be read again).
+                            ctx.drops.unregister(place.local);
+                        }
                     }
                     return FunctionBuilder::copy(dst);
                 }

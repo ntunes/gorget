@@ -222,6 +222,28 @@ fn lower_var_decl(
             ctx.register_local(name, local_id, gir_type);
             // P2.6: Register Move-type locals for drop at scope exit
             ctx.drops.register_local(local_id, gir_type, &ctx.type_registry);
+            // Force-register Option/Result with resource payloads (needs_drop
+            // returns false because the type upgrade scan hasn't run yet).
+            if !ctx.drops.is_registered(local_id) {
+                if let Some(crate::ir::types::GirType::Named(tn)) = ctx.type_registry.get(gir_type).cloned() {
+                    if tn.starts_with("Option__") || tn.starts_with("Result__") {
+                        if let Some(td) = ctx.type_registry.get_type_def(&tn) {
+                            if let crate::ir::types::TypeDefKind::Enum(ref edef) = td.kind {
+                                let droppable = edef.variants.iter().any(|v| v.fields.iter().any(|f| {
+                                    ctx.type_registry.needs_drop(f.type_id)
+                                    || ctx.type_registry.is_resource_type(f.type_id)
+                                    || matches!(ctx.type_registry.get(f.type_id),
+                                        Some(crate::ir::types::GirType::Named(n))
+                                        if n == "GorgetString" || ctx.type_registry.is_collection_type_name(n))
+                                }));
+                                if droppable {
+                                    ctx.drops.register_local_unconditional(local_id, gir_type);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // Register borrow dependencies for drop ordering.
             // If this local borrows from other locals, the drop elaborator
             // will ensure this local is dropped before its sources.

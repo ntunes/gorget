@@ -78,7 +78,34 @@ impl<'a> FuncLowering<'a> {
 
         match strategy {
             DropStrategy::None => {
-                self.lir_func.block_mut(bb).insts.push(Inst::Nop);
+                // Fallback for force-registered Option/Result types.
+                let enum_drop_fn = type_name.as_ref()
+                    .filter(|tn| (tn.starts_with("Option__") || tn.starts_with("Result__"))
+                        && self.recursive_drop_enums.contains_key(tn.as_str()))
+                    .map(|tn| format!("{tn}__drop"));
+                if let Some(drop_fn) = enum_drop_fn {
+                    let addr = self.lower_place_addr(place, bb);
+                    let byte_size = self.compute_place_byte_size(place);
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: format!("__gorget_drop_if_alive_open__{byte_size}"),
+                        args: vec![addr],
+                        original_name: None,
+                    });
+                    let addr2 = self.lower_place_addr(place, bb);
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None, name: drop_fn, args: vec![addr2],
+                        original_name: None,
+                    });
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: "__gorget_drop_if_alive_close".to_string(),
+                        args: vec![],
+                        original_name: None,
+                    });
+                } else {
+                    self.lir_func.block_mut(bb).insts.push(Inst::Nop);
+                }
             }
             DropStrategy::Trivial(ref fn_name) if fn_name == "free" => {
                 let slot = self.local_to_slot[local_idx];

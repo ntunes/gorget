@@ -561,6 +561,22 @@ fn check_drop_targets(
             }
             let type_id = func.locals[local_idx].type_id;
             if !type_needs_drop(type_id, registry) {
+                // Allow drops on Option/Result enums with resource-type payloads
+                // (force-registered at VarDecl).
+                let is_force_droppable = if let Some(crate::ir::types::GirType::Named(name)) = registry.get(type_id) {
+                    (name.starts_with("Option__") || name.starts_with("Result__"))
+                    && registry.get_type_def(name).map_or(false, |td| {
+                        if let crate::ir::types::TypeDefKind::Enum(ref edef) = td.kind {
+                            edef.variants.iter().any(|v| v.fields.iter().any(|f|
+                                type_needs_drop(f.type_id, registry)
+                                || registry.is_resource_type(f.type_id)
+                                || matches!(registry.get(f.type_id),
+                                    Some(crate::ir::types::GirType::Named(n))
+                                    if n == "GorgetString" || registry.is_collection_type_name(n))))
+                        } else { false }
+                    })
+                } else { false };
+                if !is_force_droppable {
                 errors.push(ValidationError {
                     kind: ValidationErrorKind::DropOnNonDroppable {
                         local: place.local,
@@ -568,6 +584,7 @@ fn check_drop_targets(
                     },
                     context: ctx.into(),
                 });
+                }
             }
         }
     }
