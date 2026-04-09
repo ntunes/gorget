@@ -340,6 +340,15 @@ impl<'a> LoweringContext<'a> {
                     Some(GirType::Named(n)) => n.clone(),
                     _ => continue,
                 };
+                // Skip Option/Result-typed fields in struct destructors.
+                // These types' payloads are consumed via match/unwrap extraction
+                // which doesn't MoveZero the enclosing struct's field slot.
+                // Dropping the field after extraction causes double-free.
+                // The standalone Option/Result clone functions handle deep-copy
+                // correctly (via EnumKind dispatch).
+                if field_type_name.starts_with("Option__") || field_type_name.starts_with("Result__") {
+                    continue;
+                }
                 let field_drop_strategy = self.infer_drop_strategy(&field_type_name);
                 let drop_fn = match &field_drop_strategy {
                     DropStrategy::Trivial(fn_name) => fn_name.clone(),
@@ -388,6 +397,12 @@ impl<'a> LoweringContext<'a> {
                         Some(GirType::Named(n)) => n.clone(),
                         _ => continue,
                     };
+                    // Skip Option/Result-typed variant fields — same double-free
+                    // issue as struct fields (match extraction doesn't MoveZero
+                    // the enclosing enum's field slot).
+                    if field_type_name.starts_with("Option__") || field_type_name.starts_with("Result__") {
+                        continue;
+                    }
                     let field_drop = self.infer_drop_strategy(&field_type_name);
                     let drop_fn = match &field_drop {
                         DropStrategy::Trivial(fn_name) => fn_name.clone(),
@@ -428,6 +443,9 @@ impl<'a> LoweringContext<'a> {
                             Some(GirType::Named(n)) => n.clone(),
                             _ => continue,
                         };
+                        if field_type_name.starts_with("Option__") || field_type_name.starts_with("Result__") {
+                            continue;
+                        }
                         let field_drop_strategy = self.infer_drop_strategy(&field_type_name);
                         let drop_fn = match &field_drop_strategy {
                             DropStrategy::Trivial(fn_name) => fn_name.clone(),
@@ -476,6 +494,9 @@ impl<'a> LoweringContext<'a> {
                                 Some(GirType::Named(n)) => n.clone(),
                                 _ => continue,
                             };
+                            if field_type_name.starts_with("Option__") || field_type_name.starts_with("Result__") {
+                                continue;
+                            }
                             let field_drop = self.infer_drop_strategy(&field_type_name);
                             let drop_fn = match &field_drop {
                                 DropStrategy::Trivial(fn_name) => fn_name.clone(),
