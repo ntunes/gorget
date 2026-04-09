@@ -2,7 +2,7 @@
 
 ## High
 
-- **Clone reduction — escape analysis for getter methods**: `ShaderCache.get(i)` clones entire ShaderDef (String+Vector) but caller only reads `sd.fog` + `sd.fog_density`. If the compiler can prove the returned value is only used for field reads (no mutation, no escape), the clone can be elided — return Ptr borrow from callee instead of owned clone. 4 clones in render_world_culled hot path, 5 ShaderDef__clone total. Approach: trivial getter inlining or caller-side escape analysis. [added: 2026-04-09]
+- ~~**Clone reduction — escape analysis for getter methods**~~: DONE. Trivial getter clone elision implemented. Equip methods whose body is `return self.field[idx]` or `return self.field` now return `Ptr(T)` instead of cloning — callers get a zero-cost CowBorrow with collection provenance. Clone deferred to mutation/escape boundaries by existing CoW infrastructure. `leak_method_return_loop.gg` has ZERO `Def__clone` calls in the inner loop. gorget-arena `ShaderCache.get(i)` will benefit the same way (~300KB/frame savings for 200 shaders). [updated: 2026-04-09]
 
 - **Clone reduction — 4 deferrable sites from audit**: (1) assigns.rs:179 named-to-named clone → CoW alias, (2) context.rs:905 Ptr(resource) init → scope escape check, (3) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (4) patterns.rs:522 string field extraction → check arm escape. All are safe but add complexity. [added: 2026-04-09]
 

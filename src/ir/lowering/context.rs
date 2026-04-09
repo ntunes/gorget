@@ -339,6 +339,10 @@ pub struct LoweringContext<'a> {
     /// Functions with FunctionBody::Extern — their call results are always owned.
     /// A C function cannot return a view into Gorget-managed memory.
     pub extern_body_fns: rustc_hash::FxHashSet<String>,
+    /// Equip methods detected as trivial getters (body is `return self.field[idx]`
+    /// or `return self.field`). These return Ptr(T) instead of cloning — the caller
+    /// receives a CowBorrow with collection provenance.
+    pub trivial_getter_methods: rustc_hash::FxHashSet<String>,
     /// Methods whose -1 sentinel return should be wrapped into Option[int].
     /// Populated during registration for stdlib collection/string `find`/`index_of` methods.
     /// User-defined methods default to NOT being in this set.
@@ -384,6 +388,7 @@ impl<'a> LoweringContext<'a> {
             global_type_names: FxHashMap::default(),
             gir_equip_methods: rustc_hash::FxHashSet::default(),
             extern_body_fns: rustc_hash::FxHashSet::default(),
+            trivial_getter_methods: rustc_hash::FxHashSet::default(),
             sentinel_to_option_methods: rustc_hash::FxHashSet::default(),
             implicit_clone_warnings: Vec::new(),
             runtime_callees: FxHashMap::default(),

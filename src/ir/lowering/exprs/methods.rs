@@ -1616,6 +1616,18 @@ pub(super) fn lower_method_call(
             Operand::Constant(Constant::Unit)
         } else {
             let dst = ctx.call_tracked(builder, call_name, call_args, ret_type);
+            // Trivial getter clone elision: result is Ptr(T) — mark as CowBorrow
+            // so the caller sees a zero-cost borrow with collection provenance.
+            if ctx.trivial_getter_methods.contains(sig_name.as_str()) {
+                ctx.set_cow_borrow(dst);
+                if let Some(recv_local) = recv_local_for_move_zero {
+                    if ctx.is_named_local(recv_local) {
+                        ctx.set_cow_borrow_source(dst, CollectionId::Local(recv_local));
+                    }
+                } else if let Some(ref field_path) = field_path_for_cow {
+                    ctx.set_cow_borrow_source(dst, CollectionId::FieldPath(field_path.clone()));
+                }
+            }
             // Track collection provenance for Option__Ref_ results (from .get(), .first(), etc.).
             if let Some(ret_name) = ctx.type_name_for_id(ret_type) {
                 if ret_name.starts_with("Option__Ref_") {

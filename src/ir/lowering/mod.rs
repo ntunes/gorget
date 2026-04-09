@@ -925,6 +925,22 @@ pub fn lower_module(
     // bodies (Block or Expression). This determines caller-side pass-by-pointer for method calls.
     populate_gir_equip_methods(&mut ctx, ast_module, &generic_collector);
 
+    // Pre-scan for trivial getter methods (clone elision candidates).
+    // Must run after type registration so is_resource_type works.
+    populate_trivial_getter_methods(&mut ctx, ast_module);
+
+    // Patch fn_sigs for trivial getters: override return type from T to Ptr(T).
+    // The pre-scan at line ~777 registered these with the original type; update them
+    // so callers see the borrow return type.
+    for name in ctx.trivial_getter_methods.iter().cloned().collect::<Vec<_>>() {
+        if let Some((params, ret)) = ctx.fn_sigs.get(&name).cloned() {
+            if !matches!(ctx.type_registry.get(ret), Some(GirType::Ptr(_))) {
+                let ptr_ret = ctx.register_ptr_type(ret);
+                ctx.fn_sigs.insert(name, (params, ptr_ret));
+            }
+        }
+    }
+
     // Re-scan monomorphized enum variants: trait sig registration (above) may create new
     // generic enum instantiations (e.g., Option__Color via map_ast_type_mut) whose variants
     // weren't in the type_registry during the initial enum_variants scan. Re-running here
@@ -2147,6 +2163,78 @@ fn auto_register_externs(module: &mut Module) {
             is_variadic: true,
             param_abis: vec![],
         });
+    }
+}
+
+/// Detect equip methods whose body is a single return of `self.field[idx]` or `self.field`.
+/// These are candidates for clone elision — returning Ptr(T) instead of cloning the element.
+fn is_trivial_getter_body(method: &ast::FunctionDef) -> bool {
+    use crate::parser::ast::{Expr, Ownership, Stmt};
+
+    // Must have non-consuming self parameter
+    let has_borrow_self = method.params.first()
+        .map(|p| p.node.name.node == "self" && !matches!(p.node.ownership, Ownership::Move))
+        .unwrap_or(false);
+    if !has_borrow_self {
+        return false;
+    }
+
+    // Extract the return expression
+    let ret_expr = match &method.body {
+        FunctionBody::Block(block) => {
+            if block.stmts.len() != 1 { return false; }
+            match &block.stmts[0].node {
+                Stmt::Return(Some(expr)) => &expr.node,
+                _ => return false,
+            }
+        }
+        FunctionBody::Expression(expr) => &expr.node,
+        _ => return false,
+    };
+
+    // Match: self.field[idx]
+    if let Expr::Index { object, .. } = ret_expr {
+        if let Expr::FieldAccess { object: obj, .. } = &object.node {
+            if matches!(&obj.node, Expr::SelfExpr) {
+                return true;
+            }
+        }
+    }
+
+    // Match: self.field
+    if let Expr::FieldAccess { object, .. } = ret_expr {
+        if matches!(&object.node, Expr::SelfExpr) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Pre-scan equip blocks for trivial getter methods.
+/// Populates `ctx.trivial_getter_methods` with mangled names of methods
+/// that can return Ptr(T) instead of cloning.
+fn populate_trivial_getter_methods(
+    ctx: &mut LoweringContext,
+    ast_module: &ast::Module,
+) {
+    for item in &ast_module.items {
+        if let Item::Equip(equip) = &item.node {
+            if equip.generic_params.is_some() || equip.trait_.is_some() {
+                continue;
+            }
+            if let ast::Type::Named { name: type_name, generic_args, .. } = &equip.type_.node {
+                if !generic_args.is_empty() { continue; }
+                for method in &equip.items {
+                    if !is_trivial_getter_body(&method.node) { continue; }
+                    let ret_type = ctx.type_mapper.map_ast_type(&method.node.return_type.node);
+                    if ctx.type_registry.is_resource_type(ret_type) {
+                        let mangled = format!("{}__{}", type_name.node, method.node.name.node);
+                        ctx.trivial_getter_methods.insert(mangled);
+                    }
+                }
+            }
+        }
     }
 }
 

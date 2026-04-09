@@ -629,6 +629,16 @@ pub fn lower_equip_method(
         ctx.type_mapper.map_ast_type(&method.return_type.node)
     };
 
+    // Trivial getter clone elision: return Ptr(T) instead of T.
+    // The normal body lowering produces Ptr(T) from IndexLoad/FieldLoad on borrowed self;
+    // by matching the return type, we skip the return-boundary materialization clone.
+    let is_trivial_getter = ctx.trivial_getter_methods.contains(&mangled_name);
+    let return_type = if is_trivial_getter {
+        ctx.register_ptr_type(return_type)
+    } else {
+        return_type
+    };
+
     // Check if method has a self parameter (static methods don't)
     let has_self = method.params.first()
         .map(|p| p.node.name.node == "self")
