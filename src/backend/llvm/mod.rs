@@ -1911,22 +1911,17 @@ fn emit_inst(
                     // Call gorget_map_get → ptr (or NULL)
                     writeln!(out, "  %{pfx}.raw = call ptr @{name}({})", arg_strs.join(", ")).unwrap();
                     writeln!(out, "  %{pfx}.isnull = icmp eq ptr %{pfx}.raw, null").unwrap();
-                    // Alloca for Option result
+                    // Branchless Option construction (avoids splitting basic blocks,
+                    // which would break phi node predecessor lists).
                     writeln!(out, "  %v{} = alloca i8, i64 16", d.0).unwrap();
-                    writeln!(out, "  br i1 %{pfx}.isnull, label %{pfx}.none, label %{pfx}.some").unwrap();
-                    // Some branch: tag=0, copy payload
-                    writeln!(out, "{pfx}.some:").unwrap();
-                    writeln!(out, "  store i32 0, ptr %v{}", d.0).unwrap();
+                    // tag: 0 for Some, 1 for None
+                    writeln!(out, "  %{pfx}.tag = select i1 %{pfx}.isnull, i32 1, i32 0").unwrap();
+                    writeln!(out, "  store i32 %{pfx}.tag, ptr %v{}", d.0).unwrap();
+                    // payload: copy from raw ptr if non-null, else copy from Option alloca
+                    // itself (harmless self-read since tag=1/None means payload is ignored).
                     writeln!(out, "  %{pfx}.payptr = getelementptr i8, ptr %v{}, i64 8", d.0).unwrap();
-                    writeln!(out, "  call ptr @memcpy(ptr %{pfx}.payptr, ptr %{pfx}.raw, i64 {payload_size})").unwrap();
-                    writeln!(out, "  br label %{pfx}.end").unwrap();
-                    // None branch: tag=1, zero payload
-                    writeln!(out, "{pfx}.none:").unwrap();
-                    writeln!(out, "  store i32 1, ptr %v{}", d.0).unwrap();
-                    writeln!(out, "  %{pfx}.payptr2 = getelementptr i8, ptr %v{}, i64 8", d.0).unwrap();
-                    writeln!(out, "  call ptr @memset(ptr %{pfx}.payptr2, i32 0, i64 {payload_size})").unwrap();
-                    writeln!(out, "  br label %{pfx}.end").unwrap();
-                    writeln!(out, "{pfx}.end:").unwrap();
+                    writeln!(out, "  %{pfx}.src = select i1 %{pfx}.isnull, ptr %{pfx}.payptr, ptr %{pfx}.raw").unwrap();
+                    writeln!(out, "  call ptr @memcpy(ptr %{pfx}.payptr, ptr %{pfx}.src, i64 {payload_size})").unwrap();
                     return;
                     } // else (is_option_dst)
                 }

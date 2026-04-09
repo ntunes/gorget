@@ -813,9 +813,16 @@ fn compile_llvm_pipeline(
     // Include all runtime modules needed for a basic program
     use gorget::backend::c::c_runtime;
     runtime_src.push_str(c_runtime::RUNTIME_PREAMBLE);
-    runtime_src.push_str(c_runtime::PANIC_NORMAL);
+    // Non-test modules get the simple panic handler first (before string runtime).
+    if !(lir_module.is_test_module || !lir_module.test_fns.is_empty() || !lir_module.bench_fns.is_empty()) {
+        runtime_src.push_str(c_runtime::PANIC_NORMAL);
+    }
     runtime_src.push_str(c_runtime::RUNTIME_CHECKED_ARITH);
     runtime_src.push_str(c_runtime::RUNTIME_STRING);
+    // Test panic handler must come AFTER RUNTIME_STRING (uses Str type).
+    if lir_module.is_test_module || !lir_module.test_fns.is_empty() || !lir_module.bench_fns.is_empty() {
+        runtime_src.push_str(c_runtime::PANIC_TEST);
+    }
     runtime_src.push_str(c_runtime::RUNTIME_STRING_EXTENDED);
     runtime_src.push_str(c_runtime::RUNTIME_STRING_BASE_OPS);
     runtime_src.push_str(c_runtime::RUNTIME_ARRAY);
@@ -908,6 +915,10 @@ fn compile_llvm_pipeline(
     if concat_source.contains("xtd.bytes") {
         runtime_src.push_str(c_runtime::BYTES_RUNTIME);
     }
+    // Test/bench modules need the alloc report runtime for panic handler globals.
+    if lir_module.is_test_module || !lir_module.test_fns.is_empty() || !lir_module.bench_fns.is_empty() {
+        runtime_src.push_str(c_runtime::RUNTIME_ALLOC_REPORT);
+    }
     // Append monomorphized wrappers (drops, clones, combinators, channel/shared/mutex
     // wrappers, spawn/await helpers, thread helpers, adapter functions, test runner).
     // These are C functions that call both runtime functions (already in runtime_src)
@@ -921,8 +932,10 @@ fn compile_llvm_pipeline(
     let runtime_src = runtime_src
         .replace("static inline ", "")
         .replace("static _Thread_local", "_Thread_local_KEEP")
+        .replace("static __thread", "__thread_KEEP")
         .replace("static ", "")
-        .replace("_Thread_local_KEEP", "static _Thread_local");
+        .replace("_Thread_local_KEEP", "static _Thread_local")
+        .replace("__thread_KEEP", "static __thread");
 
     if let Err(e) = fs::write(&runtime_c_path, &runtime_src) {
         return Err(format!("Error writing runtime C: {e}"));
