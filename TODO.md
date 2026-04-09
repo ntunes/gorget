@@ -8,7 +8,6 @@
 
 - **Clone observability + Cloneable trait**: `.clone()` works on all types. `gg build --show-clones` done. Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
 
-- **Recursive/Custom elem_drop — 1 remaining fix**: C backend Option wrapping must CLONE for Recursive/Custom elements when payload is NOT Ptr (consuming methods like gorget_array_safe_pop). The fragile struct-name lookup may miss types. Option[Ref_T].unwrap() returns Ptr (CoW borrow) — clone fires at ownership boundaries. [updated: 2026-04-05]
 
 - **Extern module ABI — remaining structural whitelist**: `is_cstr_returning_fn` and `takes_cstr_for_str_param` deleted (all entries eliminated). `runtime_arg_by_ptr` is structural (collection/string self-deref + string clone/free) — cannot be removed without changing how the LIR represents method dispatch. See `docs/internals/extern-modules.md`. [updated: 2026-04-03]
 
