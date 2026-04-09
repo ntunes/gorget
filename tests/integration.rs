@@ -2185,6 +2185,32 @@ done");
 }
 
 #[test]
+fn leak_game_loop() {
+    run_gg("leak_game_loop.gg", "\
+leaked=false
+done");
+}
+
+#[test]
+fn leak_render_temps() {
+    run_gg("leak_render_temps.gg", "\
+leaked=false
+done");
+}
+
+#[test]
+fn leak_string_heavy() {
+    run_gg("leak_string_heavy.gg", "\
+p1_fstring=0
+p2_concat=0
+p3_struct_field=0
+p4_nested=0
+p5_chain=0
+leaked=false
+done");
+}
+
+#[test]
 fn leak_result_collections() {
     run_gg("leak_result_collections.gg", "\
 leaked=false

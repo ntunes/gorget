@@ -1,0 +1,61 @@
+from std.os import mem_live
+from std.collections import Vector
+
+# Stress test: temporary vector allocations in a render-like loop.
+# Verifies that vectors created and used within a function call
+# are properly freed when the function returns.
+
+struct Vertex:
+    float x
+    float y
+    float z
+    float u
+    float v
+
+Vector[float] mat4_to_floats():
+    Vector[float] out = Vector[float]()
+    int i = 0
+    while i < 16:
+        out.push(i as float)
+        i = i + 1
+    return out
+
+Vector[int] collect_visible(int total, int skip):
+    Vector[int] vis = Vector[int]()
+    int i = 0
+    while i < total:
+        if i % skip != 0:
+            vis.push(i)
+        i = i + 1
+    return vis
+
+void process_frame(int face_count):
+    # Temp vector 1: matrix data
+    Vector[float] mat = mat4_to_floats()
+
+    # Temp vector 2: visible indices
+    Vector[int] visible = collect_visible(face_count, 3)
+
+    # Temp vector 3: draw classification
+    Vector[int] draws = Vector[int]()
+    int i = 0
+    while i < visible.len():
+        draws.push(visible[i])
+        i = i + 1
+
+    # Temp vector 4: deform buffer
+    Vector[float] deform = Vector[float]()
+    i = 0
+    while i < 100:
+        deform.push(i as float * 0.1)
+        i = i + 1
+
+void main():
+    int baseline = mem_live()
+    int i = 0
+    while i < 2000:
+        process_frame(200)
+        i = i + 1
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")

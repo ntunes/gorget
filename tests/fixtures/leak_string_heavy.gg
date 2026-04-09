@@ -1,0 +1,74 @@
+from std.os import mem_live
+
+# Stress test: heavy string allocation patterns.
+# Tests f-strings, concatenation, field access on returned structs,
+# and string temps passed to functions.
+
+struct Label:
+    String text
+    int priority
+
+Label make_label(String prefix, int id):
+    return Label(f"{prefix}-{id}", id)
+
+void consume_str(String s):
+    int x = s.len()
+
+void main():
+    int baseline = mem_live()
+
+    # Pattern 1: f-string in loop
+    int i = 0
+    while i < 5000:
+        String s = f"frame-{i}-data-{i * 2}"
+        consume_str(s)
+        i = i + 1
+    int p1 = mem_live() - baseline
+    baseline = mem_live()
+
+    # Pattern 2: concat in loop
+    i = 0
+    while i < 5000:
+        String a = f"key-{i}"
+        String b = f"val-{i}"
+        String c = a + "=" + b
+        consume_str(c)
+        i = i + 1
+    int p2 = mem_live() - baseline
+    baseline = mem_live()
+
+    # Pattern 3: struct field string access
+    i = 0
+    while i < 5000:
+        Label lbl = make_label("item", i)
+        consume_str(lbl.text)
+        i = i + 1
+    int p3 = mem_live() - baseline
+    baseline = mem_live()
+
+    # Pattern 4: nested f-string
+    i = 0
+    while i < 5000:
+        String inner = f"({i})"
+        String outer = f"result: {inner}"
+        consume_str(outer)
+        i = i + 1
+    int p4 = mem_live() - baseline
+    baseline = mem_live()
+
+    # Pattern 5: string from method chain
+    i = 0
+    while i < 5000:
+        String s = make_label("test", i).text
+        consume_str(s)
+        i = i + 1
+    int p5 = mem_live() - baseline
+
+    print(f"p1_fstring={p1}")
+    print(f"p2_concat={p2}")
+    print(f"p3_struct_field={p3}")
+    print(f"p4_nested={p4}")
+    print(f"p5_chain={p5}")
+    bool all_zero = p1 == 0 and p2 == 0 and p3 == 0 and p4 == 0 and p5 == 0
+    print(f"leaked={not all_zero}")
+    print("done")

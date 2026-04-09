@@ -1,0 +1,101 @@
+from std.os import mem_live
+from std.collections import Vector, Dict
+
+# Stress test: game-loop-like allocation patterns.
+# Tests per-frame temp vectors, string formatting, struct field access,
+# and Option/Result extraction in loops.
+
+struct Vec3:
+    float x
+    float y
+    float z
+
+struct Plane:
+    float a
+    float b
+    float c
+    float d
+
+struct Face:
+    int texture_index
+    int first_vertex
+    int num_vertices
+    Vector[int] indices
+
+struct DrawRange:
+    int face_index
+    int texture_index
+    int start
+    int count
+
+struct MapData:
+    Vector[Face] faces
+    Vector[Vec3] vertices
+    Vector[String] textures
+
+void render_frame(MapData &map, Vector[DrawRange] &draws):
+    Vector[Plane] frustum = Vector[Plane]()
+    frustum.push(Plane(1.0, 0.0, 0.0, 10.0))
+    frustum.push(Plane(0.0, 1.0, 0.0, 10.0))
+
+    Vector[int] visible = Vector[int]()
+    int fi = 0
+    while fi < map.faces.len():
+        visible.push(fi)
+        fi = fi + 1
+
+    Vector[int] opaque = Vector[int]()
+    Vector[int] transparent = Vector[int]()
+    int di = 0
+    while di < draws.len():
+        DrawRange dr = draws[di]
+        if dr.texture_index % 2 == 0:
+            opaque.push(di)
+        else:
+            transparent.push(di)
+        di = di + 1
+
+void draw_hud(int health, int score, int deaths):
+    String hp = f"{health}"
+    String sc = f"{score} / {deaths}"
+
+Option[Vec3] find_closest(Vector[Vec3] &points, Vec3 origin):
+    if points.len() == 0:
+        return None()
+    return Some(points[0])
+
+void main():
+    MapData map = MapData(Vector[Face](), Vector[Vec3](), Vector[String]())
+    int i = 0
+    while i < 100:
+        Vector[int] idx = Vector[int]()
+        idx.push(i * 3)
+        idx.push(i * 3 + 1)
+        idx.push(i * 3 + 2)
+        map.faces.push(Face(i % 10, i * 3, 3, idx))
+        map.vertices.push(Vec3(i as float, 0.0, 0.0))
+        map.textures.push(f"tex_{i % 10}")
+        i = i + 1
+
+    Vector[DrawRange] draws = Vector[DrawRange]()
+    i = 0
+    while i < 100:
+        draws.push(DrawRange(i, i % 10, i * 3, 3))
+        i = i + 1
+
+    int baseline = mem_live()
+    i = 0
+    while i < 1000:
+        render_frame(&map, &draws)
+        draw_hud(100, i, 0)
+        Option[Vec3] closest = find_closest(&map.vertices, Vec3(0.0, 0.0, 0.0))
+        match closest:
+            case Some(v):
+                float d = v.x
+            else:
+                float d = 0.0
+        i = i + 1
+
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")
