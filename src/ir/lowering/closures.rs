@@ -341,7 +341,25 @@ pub fn emit_closure_call_function(
         }
         _ => {
             // Expression body
-            let result = lower_expr(ctx, &mut builder, &closure.body);
+            let mut result = lower_expr(ctx, &mut builder, &closure.body);
+            // Ptr(T) → T auto-clone: if the body produces a Ptr(T) but the
+            // declared return type is T, clone before returning. Without this,
+            // `(String s): s` returns a dangling Ptr to the borrowed parameter.
+            if let Operand::Copy(ref p) | Operand::Move(ref p) = result {
+                if p.projections.is_empty() {
+                    let src_type = builder.local_type(p.local);
+                    if let Some(crate::ir::types::GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
+                        if !matches!(ctx.type_registry.get(closure.return_type), Some(crate::ir::types::GirType::Ptr(_)))
+                            && closure.return_type != UNIT_TYPE
+                        {
+                            if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                                let cloned = builder.call(&clone_fn, vec![result.clone()], inner);
+                                result = FunctionBuilder::copy(cloned);
+                            }
+                        }
+                    }
+                }
+            }
             // Re-infer return type from the actual body result (the pre-inference
             // may have returned I64_TYPE for variant constructors like Some(x+1))
             let actual_type = super::exprs::infer_operand_type_full(ctx, &result, &builder);
