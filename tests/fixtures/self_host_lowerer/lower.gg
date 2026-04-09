@@ -780,11 +780,27 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
             return BOOL_TYPE
         case EStringLiteral(_, _):
             return STRING_MARKER
-        case EBinaryOp(_, op, _):
+        case EBinaryOp(lhs_box, op, rhs_box):
             match op:
                 case "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or":
                     return BOOL_TYPE
                 else:
+                    # Check for string concatenation or float arithmetic
+                    # by inspecting the immediate operand expressions
+                    match (*lhs_box).expr:
+                        case EStringLiteral(_, _):
+                            return STRING_MARKER
+                        case EFloatLiteral(_):
+                            return F64_TYPE
+                        else:
+                            pass
+                    match (*rhs_box).expr:
+                        case EStringLiteral(_, _):
+                            return STRING_MARKER
+                        case EFloatLiteral(_):
+                            return F64_TYPE
+                        else:
+                            pass
                     return I64_TYPE
         case EUnaryOp(op, _):
             match op:
@@ -809,27 +825,47 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
                         return lookup_or_register_named(&gmod, "Option__" + inner_name)
                     if fname == "None":
                         return UNIT_TYPE
-                    # Look up return type from fn_sigs
+                    if fname == "Ok" or fname == "Error":
+                        # Result constructor — look at argument type to infer Result__T__E
+                        if args.len() > 0:
+                            SpannedExpr r_arg = args.get(0).unwrap()
+                            int r_t = guess_return_type(r_arg, &gmod)
+                            if r_t == STRING_MARKER:
+                                r_t = lookup_or_register_named(&gmod, "GorgetString")
+                            String r_name = type_id_to_name(r_t, &gmod)
+                            # Can't fully infer Result__T__E from one variant,
+                            # but return int64_t as a safe default
+                            return I64_TYPE
+                    # Look up return type from fn_sigs (also check call_redirects)
                     String call_name = fname
                     if targs.len() > 0:
                         call_name = compute_mangled_name(targs, fname)
+                    if gmod.call_redirects.contains(call_name):
+                        call_name = gmod.call_redirects.get(call_name).unwrap()
                     if gmod.fn_sigs.contains(call_name):
                         return gmod.fn_sigs.get(call_name).unwrap()
                 else:
                     pass
-        case EMethodCall(_, mname, _, _):
+        case EMethodCall(recv, mname, margs, _):
             # Known void methods
-            if mname == "push" or mname == "set" or mname == "put" or mname == "clear" or mname == "pop":
+            if mname == "push" or mname == "set" or mname == "put" or mname == "clear" or mname == "pop" or mname == "sort" or mname == "append" or mname == "insert" or mname == "remove":
                 return UNIT_TYPE
             # Known string-returning methods
-            if mname == "upper" or mname == "lower" or mname == "trim" or mname == "strip" or mname == "replace" or mname == "slice" or mname == "join" or mname == "repeat" or mname == "to_string" or mname == "reverse":
+            if mname == "upper" or mname == "lower" or mname == "trim" or mname == "strip" or mname == "replace" or mname == "slice" or mname == "join" or mname == "repeat" or mname == "to_string" or mname == "reverse" or mname == "format" or mname == "as_str" or mname == "display" or mname == "describe":
                 return STRING_MARKER
             # Known int-returning methods
-            if mname == "len" or mname == "find" or mname == "count" or mname == "hash":
+            if mname == "len" or mname == "find" or mname == "count" or mname == "hash" or mname == "index_of":
                 return I64_TYPE
+            # Known float-returning methods
+            if mname == "measure" or mname == "abs" or mname == "sqrt":
+                return F64_TYPE
             # Known bool-returning methods
-            if mname == "contains" or mname == "starts_with" or mname == "ends_with" or mname == "is_empty":
+            if mname == "contains" or mname == "starts_with" or mname == "ends_with" or mname == "is_empty" or mname == "has" or mname == "eq":
                 return BOOL_TYPE
+            # unwrap/unwrap_or: return type matches the receiver's inner type
+            if mname == "unwrap" or mname == "unwrap_or":
+                int recv_t = guess_return_type(*recv, &gmod)
+                return recv_t
         case EIdentifier(name):
             # Look up from fn_sigs (could be a variable holding a closure)
             if gmod.fn_sigs.contains(name):
@@ -889,6 +925,18 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
                     else:
                         # Non-expression last statement (if, while, etc.) → void
                         ret_type = UNIT_TYPE
+            # If return type is still I64 (default), check mapped param_types.
+            # Closures with String/float params likely return the same type.
+            if ret_type == I64_TYPE:
+                int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+                int cpi = 1
+                while cpi < param_types.len():
+                    int pt = param_types.get(cpi).unwrap()
+                    if pt == gs_tid:
+                        ret_type = gs_tid
+                    if pt == F64_TYPE and ret_type == I64_TYPE:
+                        ret_type = F64_TYPE
+                    cpi += 1
             # Also check: if the body has multiple statements and no explicit
             # return, it's likely a void closure
             if body.len() > 1 and ret_type == I64_TYPE:
