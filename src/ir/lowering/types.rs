@@ -758,6 +758,32 @@ pub fn mangle_type_for_name(ty: &Type) -> String {
 
 // ── TypeDef factory helpers (used by get_or_register + ensure_*_type_def) ──
 
+/// Immediately upgrade an Option/Result enum to Resource+Recursive if any
+/// of its variant field types are droppable. Called at registration time
+/// so drop elaboration sees correct semantics during function lowering.
+fn maybe_upgrade_enum(registry: &mut TypeRegistry, name: &str, field_types: &[TypeId]) {
+    let any_droppable = field_types.iter().any(|&tid| {
+        if registry.needs_drop(tid) || registry.is_resource_type(tid) {
+            return true;
+        }
+        // Check collection types by name (they don't have TypeDefs)
+        if let Some(GirType::Named(n)) = registry.get(tid) {
+            if registry.is_collection_type_name(n) {
+                return true;
+            }
+        }
+        false
+    });
+    if any_droppable {
+        if let Some(td) = registry.get_type_def_mut(name) {
+            if td.metadata.drop_strategy == DropStrategy::None {
+                td.metadata.drop_strategy = DropStrategy::Recursive;
+            }
+            td.metadata.copy_semantics = CopySemantics::Resource;
+        }
+    }
+}
+
 /// Create an opaque struct TypeDef with no fields (pointers, handles, etc.).
 pub fn make_opaque_type_def(name: &str, copy_semantics: CopySemantics, drop_strategy: DropStrategy) -> TypeDef {
     TypeDef {

@@ -1189,15 +1189,14 @@ impl<'a> LoweringContext<'a> {
                 {
                     return Some(format!("{name}__clone"));
                 }
-                // User enums with cloneable variant payloads → generated {Name}__clone.
+                // Enums with cloneable variant payloads → generated {Name}__clone.
+                // Includes Option/Result with resource payloads (e.g., Option[String]).
                 if let crate::ir::types::TypeDefKind::Enum(ref edef) = type_def.kind {
-                    if !self.type_registry.is_option_or_result(name) && !name.starts_with("Option__") && !name.starts_with("Result__") {
-                        let has_cloneable_payload = edef.variants.iter().any(|v| {
-                            v.fields.iter().any(|f| self.type_registry.is_resource_type(f.type_id))
-                        });
-                        if has_cloneable_payload {
-                            return Some(format!("{name}__clone"));
-                        }
+                    let has_cloneable_payload = edef.variants.iter().any(|v| {
+                        v.fields.iter().any(|f| self.type_registry.is_resource_type(f.type_id))
+                    });
+                    if has_cloneable_payload {
+                        return Some(format!("{name}__clone"));
                     }
                 }
             }
@@ -1694,6 +1693,8 @@ impl<'a> LoweringContext<'a> {
 
     /// Auto-register an Option[T] type if it doesn't exist yet.
     /// Used when Vector.get() is called and Option[T] wasn't pre-registered.
+    /// If the inner type is droppable, immediately upgrades to Resource+Recursive
+    /// so that drop elaboration sees the correct semantics during lowering.
     pub fn ensure_option_type_registered(&mut self, option_name: &str, inner_type: TypeId) {
         use super::types::make_option_type_def;
         self.type_mapper.get_or_register(option_name, &mut self.type_registry, |n| {

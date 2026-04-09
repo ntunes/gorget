@@ -128,7 +128,7 @@ pub(super) fn emit_higher_order_collection_helpers(out: &mut String, module: &Li
     for helper in &helpers {
         match helper {
             CollHelper::Vector(full_name, elem_c, method, closure_ty, call_fn) => {
-                emit_vector_helper(out, full_name, elem_c, method, closure_ty, call_fn);
+                emit_vector_helper(out, full_name, elem_c, method, closure_ty, call_fn, module, sn);
             }
             CollHelper::Dict(full_name, key_c, val_c, method, closure_ty, call_fn) => {
                 emit_dict_helper(out, full_name, key_c, val_c, method, closure_ty, call_fn);
@@ -141,7 +141,12 @@ pub(super) fn emit_higher_order_collection_helpers(out: &mut String, module: &Li
     }
 }
 
-pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str, closure_ty: &str, call_fn: &str) {
+/// Resolve the accumulator type for a fold by looking up the closure's return type.
+fn resolve_fold_acc_type(call_fn: &str, module: &LirModule, sn: &HashMap<u32, String>) -> Option<String> {
+    closure_call_return_type(module, call_fn, sn)
+}
+
+pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str, closure_ty: &str, call_fn: &str, module: &LirModule, sn: &HashMap<u32, String>) {
     // Skip closure-dependent helpers when we can't resolve the closure call function.
     // Methods that don't use closures (sort, sorted, unique, count) always emit.
     let closure_free = matches!(method, "sort" | "sorted" | "unique" | "count");
@@ -175,10 +180,12 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
         }
         "fold" => {
             // Emit both a function (for LLVM backend linking) and a macro fallback.
-            // The function assumes accumulator type = element type (int64_t for Vector__int64_t).
-            writeln!(out, "static inline {elem_c} {full_name}(void* __arr_ptr, {elem_c} __acc_init, {closure_ty} __fn) {{").unwrap();
+            // Use the closure's return type for the accumulator — resolve from closure call fn.
+            // Falls back to int64_t for cross-type folds where closure returns a different type.
+            let acc_c = resolve_fold_acc_type(call_fn, module, sn).unwrap_or_else(|| "int64_t".into());
+            writeln!(out, "static inline {acc_c} {full_name}(void* __arr_ptr, {acc_c} __acc_init, {closure_ty} __fn) {{").unwrap();
             writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    {elem_c} __acc = __acc_init;").unwrap();
+            writeln!(out, "    {acc_c} __acc = __acc_init;").unwrap();
             writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
             writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
             writeln!(out, "        __acc = {call_fn}(&__fn, __acc, __elem);").unwrap();
@@ -1736,7 +1743,20 @@ pub(super) fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, s
             write!(out, "        case {vi}: ").unwrap();
             for (variant_name, field_name, drop_fn, _field_type_name) in fields {
                 let clone_fn = drop_to_clone(drop_fn);
-                if !clone_fn.is_empty() {
+                // Only emit clone call if the function is a known runtime clone OR
+                // will be generated (exists in recursive_drop_structs/enums).
+                // Handle types like Task with Trivial drop but no clone are left
+                // as shallow copies (from the initial `dst = *(Type*)__p`).
+                let clone_exists = matches!(clone_fn.as_str(),
+                    "gorget_string_clone_to_owned" | "gorget_array_clone"
+                    | "gorget_map_clone" | "gorget_set_clone")
+                    || clone_fn.ends_with("__clone") && {
+                        let base = &clone_fn[..clone_fn.len() - 7];
+                        module.recursive_drop_structs.contains_key(base)
+                            || module.recursive_drop_enums.contains_key(base)
+                            || module.functions.iter().any(|f| f.name == clone_fn)
+                    };
+                if !clone_fn.is_empty() && clone_exists {
                     // Count how many LIR struct fields belong to this variant
                     let variant_prefix = format!("{variant_name}_");
                     let variant_field_count = sdef.fields.iter()
@@ -1894,7 +1914,7 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                 writeln!(out).unwrap();
             } else {
                 // Struct drop: call per-field drops
-                writeln!(out, "static inline void {}(void* __p) {{", info.drop_fn_name).unwrap();
+                writeln!(out, "void {}(void* __p) {{", info.drop_fn_name).unwrap();
                 writeln!(out, "    {c_name}* self = ({c_name}*)__p;").unwrap();
                 if let Some(ref user_fn) = info.user_drop_fn {
                     writeln!(out, "    {user_fn}(__p);").unwrap();

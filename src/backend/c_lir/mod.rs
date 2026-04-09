@@ -671,6 +671,13 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     emit_recursive_struct_drops(&mut out, module, &struct_names);
     emit_recursive_struct_clones(&mut out, module, &struct_names);
     emit_recursive_enum_clones(&mut out, module, &struct_names);
+    // Forward-declare __gorget_dtor_* functions so enum drop functions
+    // can reference them (they're defined later in emit_type_drop_fns).
+    for info in module.type_drop_fns.values() {
+        if info.drop_fn_name.starts_with("__gorget_dtor_") {
+            writeln!(out, "void {}(void* __p);", info.drop_fn_name).unwrap();
+        }
+    }
     emit_enum_drop_fns(&mut out, module, &struct_names);
     emit_type_drop_fns(&mut out, module, &struct_names);
 

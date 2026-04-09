@@ -248,93 +248,8 @@ pub fn lower_module(
         }
     }
 
-    // Scan for structs with droppable fields — mark as Recursive drop if not already Custom
-    // This ensures auto field drops fire for structs like `Wrapper { inner: Inner }` where
-    // Inner has Drop but Wrapper does not.
-    {
-        // First collect which type names need dropping
-        let droppable_names: Vec<String> = module.type_registry.all_type_def_names()
-            .filter(|name| {
-                if let Some(td) = module.type_registry.get_type_def(name) {
-                    td.metadata.copy_semantics == CopySemantics::Resource
-                        || td.metadata.drop_strategy != DropStrategy::None
-                } else {
-                    false
-                }
-            })
-            .cloned()
-            .collect();
-
-        // Now scan all structs for fields whose type name is in droppable_names
-        let struct_names: Vec<String> = module.type_registry.all_type_def_names().cloned().collect();
-        for name in &struct_names {
-            let needs_upgrade = {
-                let td = match module.type_registry.get_type_def(name) {
-                    Some(td) => td,
-                    None => continue,
-                };
-                // Skip if already has a drop strategy (Custom or Recursive)
-                if td.metadata.drop_strategy != DropStrategy::None {
-                    // But check if Custom drop also needs field drops
-                    if matches!(td.metadata.drop_strategy, DropStrategy::Custom(_)) {
-                        // Check if it has droppable fields — if so, we need to know at codegen time
-                        if let TypeDefKind::Struct(ref sdef) = td.kind {
-                            let has_droppable_fields = sdef.fields.iter().any(|f| {
-                                if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
-                                    droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
-                                } else {
-                                    false
-                                }
-                            });
-                            has_droppable_fields // need to upgrade so C backend emits field drops
-                        } else {
-                            false
-                        }
-                    } else {
-                        continue; // Already Trivial or Recursive, skip
-                    }
-                } else if let TypeDefKind::Struct(ref sdef) = td.kind {
-                    sdef.fields.iter().any(|f| {
-                        if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
-                            droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
-                        } else {
-                            false
-                        }
-                    })
-                } else if let TypeDefKind::Enum(ref edef) = td.kind {
-                    // Same rule as Rust: if any variant has a droppable field,
-                    // the enum is a Resource type with Recursive drop.
-                    // Option/Result excluded — enabling Recursive causes double-free
-                    // because match/unwrap extraction paths don't fully coordinate
-                    // with the drop_if_alive guard. TODO: add tag-checked drops.
-                    if module.type_registry.is_option_or_result(name) || name.starts_with("Option__") || name.starts_with("Result__") {
-                        false
-                    } else {
-                    edef.variants.iter().any(|v| {
-                        v.fields.iter().any(|f| {
-                            if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
-                                droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
-                            } else {
-                                false
-                            }
-                        })
-                    })
-                    }
-                } else {
-                    false
-                }
-            };
-
-            if needs_upgrade {
-                if let Some(td) = module.type_registry.get_type_def_mut(name) {
-                    if td.metadata.drop_strategy == DropStrategy::None {
-                        td.metadata.drop_strategy = DropStrategy::Recursive;
-                    }
-                    td.metadata.copy_semantics = CopySemantics::Resource;
-                }
-            }
-        }
-    }
+    // Scan for types with droppable fields — see upgrade_types_from_fields()
+    upgrade_types_from_fields(&mut module);
 
     // Register runtime types needed by expression lowering
     // GorgetString: register in named_types so method dispatch can find them
@@ -1306,6 +1221,11 @@ pub fn lower_module(
     // Move type_registry back to module for validation
     module.type_registry = std::mem::take(&mut ctx.type_registry);
 
+    // Note: upgrade_types_from_fields runs at module start for types registered during
+    // types for the LIR backend (drop/clone function generation). The GIR functions
+    // don't need fixup because ensure_option/result_type_registered now upgrades
+    // types at registration time (see context.rs).
+
     // Auto-register all CallExtern targets as externs if not already known.
     // This handles runtime functions (gorget_throw, gorget_array_new, etc.)
     // without needing to enumerate each one manually.
@@ -2049,6 +1969,121 @@ fn lower_bench_items(
                 fn_name,
                 display_name: bench_name,
             });
+        }
+    }
+}
+
+/// Late pass: upgrade only Option/Result types registered during function lowering.
+/// User enums are handled by the early `upgrade_types_from_fields` call.
+fn upgrade_option_result_types(module: &mut Module) {
+    use crate::ir::types::*;
+
+    let all_names: Vec<String> = module.type_registry.all_type_def_names().cloned().collect();
+    for name in &all_names {
+        if !name.starts_with("Option__") && !name.starts_with("Result__") {
+            continue;
+        }
+        let td = match module.type_registry.get_type_def(name) {
+            Some(td) => td,
+            None => continue,
+        };
+        // Skip if already upgraded
+        if td.metadata.drop_strategy != DropStrategy::None {
+            continue;
+        }
+        // Check if any variant has droppable fields
+        let needs_upgrade = if let TypeDefKind::Enum(ref edef) = td.kind {
+            edef.variants.iter().any(|v| {
+                v.fields.iter().any(|f| {
+                    if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
+                        module.type_registry.needs_drop(f.type_id)
+                            || module.type_registry.is_resource_type(f.type_id)
+                            || field_type_name == "GorgetString"
+                            || module.type_registry.is_collection_type_name(field_type_name)
+                    } else {
+                        false
+                    }
+                })
+            })
+        } else {
+            false
+        };
+        if needs_upgrade {
+            if let Some(td) = module.type_registry.get_type_def_mut(name) {
+                td.metadata.drop_strategy = DropStrategy::Recursive;
+                td.metadata.copy_semantics = CopySemantics::Resource;
+            }
+        }
+    }
+}
+
+/// Scan types for droppable fields and upgrade to Resource+Recursive.
+/// Called twice: once early (for types registered during type setup) and once
+/// late (for types registered lazily during function lowering, e.g. Option[Vector[int]]).
+fn upgrade_types_from_fields(module: &mut Module) {
+    use crate::ir::types::*;
+
+    // Collect which type names need dropping
+    let droppable_names: Vec<String> = module.type_registry.all_type_def_names()
+        .filter(|name| {
+            if let Some(td) = module.type_registry.get_type_def(name) {
+                td.metadata.copy_semantics == CopySemantics::Resource
+                    || td.metadata.drop_strategy != DropStrategy::None
+            } else {
+                false
+            }
+        })
+        .cloned()
+        .collect();
+
+    // Scan all types for fields whose type is droppable
+    let all_names: Vec<String> = module.type_registry.all_type_def_names().cloned().collect();
+    for name in &all_names {
+        let needs_upgrade = {
+            let td = match module.type_registry.get_type_def(name) {
+                Some(td) => td,
+                None => continue,
+            };
+            // Skip if already has a non-None drop strategy
+            if td.metadata.drop_strategy != DropStrategy::None {
+                if matches!(td.metadata.drop_strategy, DropStrategy::Custom(_)) {
+                    if let TypeDefKind::Struct(ref sdef) = td.kind {
+                        sdef.fields.iter().any(|f| {
+                            if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
+                                droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
+                            } else { false }
+                        })
+                    } else { false }
+                } else {
+                    continue; // Already Trivial or Recursive
+                }
+            } else if let TypeDefKind::Struct(ref sdef) = td.kind {
+                sdef.fields.iter().any(|f| {
+                    if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
+                        droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
+                    } else { false }
+                })
+            } else if let TypeDefKind::Enum(ref edef) = td.kind {
+                // Enums (including Option/Result) with resource-type variant payloads
+                edef.variants.iter().any(|v| {
+                    v.fields.iter().any(|f| {
+                        if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
+                            droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
+                        } else { false }
+                    })
+                })
+            } else {
+                false
+            }
+        };
+
+        if needs_upgrade {
+            if let Some(td) = module.type_registry.get_type_def_mut(name) {
+                if td.metadata.drop_strategy == DropStrategy::None {
+                    td.metadata.drop_strategy = DropStrategy::Recursive;
+                }
+                td.metadata.copy_semantics = CopySemantics::Resource;
+            }
         }
     }
 }

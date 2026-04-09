@@ -381,14 +381,6 @@ impl<'a> LoweringContext<'a> {
                 TypeDefKind::Enum(e) => e,
                 _ => continue,
             };
-            // Skip Option/Result — their match/unwrap handling already
-            // extracts and moves payloads. Enabling Recursive drop causes
-            // double-free because the drop_if_alive guard doesn't cover all
-            // extraction paths. TODO: add tag-checked Option/Result drops
-            // that coordinate with match extraction MoveZero.
-            if name.starts_with("Option__") || name.starts_with("Result__") {
-                continue;
-            }
             let mut variant_drops: Vec<(u32, String, String, String, String)> = Vec::new();
             for (vi, variant) in edef.variants.iter().enumerate() {
                 for (fi, field) in variant.fields.iter().enumerate() {
@@ -400,7 +392,15 @@ impl<'a> LoweringContext<'a> {
                     let drop_fn = match &field_drop {
                         DropStrategy::Trivial(fn_name) => fn_name.clone(),
                         DropStrategy::Custom(fn_name) => fn_name.clone(),
-                        DropStrategy::Recursive => format!("{field_type_name}__drop"),
+                        DropStrategy::Recursive => {
+                            // Use mangled destructor name for collision types
+                            // (e.g., DataFrame.drop() is a user method, not a destructor)
+                            if self.module.drop_collision_types.contains(&field_type_name) {
+                                format!("__gorget_dtor_{field_type_name}")
+                            } else {
+                                format!("{field_type_name}__drop")
+                            }
+                        }
                         DropStrategy::None => continue,
                     };
                     // LIR field name: {VariantName}_{field_index_within_variant}
@@ -469,9 +469,6 @@ impl<'a> LoweringContext<'a> {
                     });
                 }
                 TypeDefKind::Enum(edef) => {
-                    if name.starts_with("Option__") || name.starts_with("Result__") {
-                        continue;
-                    }
                     let mut variant_drops: Vec<(u32, String, String, String, String)> = Vec::new();
                     for (vi, variant) in edef.variants.iter().enumerate() {
                         for (fi, field) in variant.fields.iter().enumerate() {

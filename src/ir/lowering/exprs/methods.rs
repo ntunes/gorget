@@ -1629,6 +1629,26 @@ pub(super) fn lower_method_call(
             }
         }
 
+        // MoveZero Option/Result receiver after combinator calls to prevent
+        // the scope-exit destructor from double-freeing the consumed payload.
+        // The combinator's inline C code shallow-copies the payload for the closure;
+        // MoveZero transfers ownership to the returned value.
+        if !has_consuming_self {
+            if let Some(recv_local) = recv_local_for_move_zero {
+                let is_option_result = type_name.starts_with("Option__")
+                    || type_name.starts_with("Result__");
+                let is_combinator = matches!(method_name,
+                    "map" | "and_then" | "or_else" | "filter" | "unwrap_or_else"
+                    | "flat_map" | "or" | "flatten" | "map_err");
+                if is_option_result && is_combinator
+                    && ctx.type_registry.is_resource_type(builder.local_type(recv_local))
+                    && !ctx.drops.is_moved(recv_local)
+                {
+                    ctx.move_zero_and_mark(builder, recv_local);
+                }
+            }
+        }
+
         // MoveZero clone temps from consuming-position auto-clone.
         // The push/put/set memcpy'd the clone into the collection buffer;
         // the temp must be zeroed so its DropIfAlive guard doesn't
