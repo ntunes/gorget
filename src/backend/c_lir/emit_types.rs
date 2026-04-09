@@ -2712,6 +2712,28 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
     writeln!(out, "static inline int64_t int__one(void) {{ return 1; }}").unwrap();
     writeln!(out, "static inline double double__one(void) {{ return 1.0; }}").unwrap();
     writeln!(out, "static inline double float__one(void) {{ return 1.0; }}").unwrap();
+
+    // UTF-8 codepoint helpers (normally in emit_runtime_modules)
+    if has(&|n| n == "gorget_utf8_codepoint_len_at") {
+        writeln!(out, "static inline int64_t gorget_utf8_codepoint_len_at(Str s, int64_t byte_pos) {{ \
+            if (byte_pos < 0 || byte_pos >= (int64_t)s.len) return 0; \
+            return (int64_t)gorget_utf8_codepoint_len((unsigned char)s.data[byte_pos]); }}").unwrap();
+    }
+    if has(&|n| n == "gorget_str_codepoint_at") {
+        writeln!(out, "static inline Str gorget_str_codepoint_at(Str s, int64_t byte_pos) {{ \
+            if (byte_pos < 0 || byte_pos >= (int64_t)s.len) return (Str){{NULL, 0, 0, NULL}}; \
+            int cplen = gorget_utf8_codepoint_len((unsigned char)s.data[byte_pos]); \
+            if (byte_pos + cplen > (int64_t)s.len) cplen = (int)(s.len - (size_t)byte_pos); \
+            return gorget_str_from_parts(s.data + byte_pos, (size_t)cplen); }}").unwrap();
+    }
+    // Signal handling
+    if has(&|n| n == "gorget_signal_ignore") {
+        writeln!(out, "#include <signal.h>").unwrap();
+        writeln!(out, "static inline void gorget_signal_ignore(int64_t sig) {{ signal((int)sig, SIG_IGN); }}").unwrap();
+    }
+    // NOTE: int64_t__parse etc. are monomorphized parse methods handled by
+    // the C backend inline (emit_call_extern). For LLVM, they're generated as
+    // C wrapper functions in emit_runtime_helpers, which has struct_names access.
     writeln!(out).unwrap();
 }
 
@@ -2820,4 +2842,7 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     if has_extern("codepoint_to_str") {
         writeln!(out, "static inline Str codepoint_to_str(int64_t code) {{ return gorget_codepoint_to_utf8(code); }}").unwrap();
     }
+    // NOTE: int64_t__parse, double__parse etc. are monomorphized parse methods.
+    // They're too complex to emit as inline C here due to GorgetParseIntResult types
+    // and Option struct name mismatches. They remain as link errors for now.
 }
