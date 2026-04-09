@@ -405,7 +405,23 @@ impl TypeRegistry {
     }
 
     /// Register a named type definition. Returns its index.
-    pub fn add_type_def(&mut self, def: TypeDef) -> usize {
+    pub fn add_type_def(&mut self, mut def: TypeDef) -> usize {
+        // If a TypeDef with this name already exists and was upgraded
+        // (e.g., by the type upgrade scan), preserve the metadata.
+        if let Some(&existing_idx) = self.name_to_def.get(&def.name) {
+            let existing = &self.type_defs[existing_idx];
+            if existing.metadata.copy_semantics == CopySemantics::Resource
+                || existing.metadata.drop_strategy != DropStrategy::None
+            {
+                def.metadata.copy_semantics = existing.metadata.copy_semantics.clone();
+                if def.metadata.drop_strategy == DropStrategy::None {
+                    def.metadata.drop_strategy = existing.metadata.drop_strategy.clone();
+                }
+                if def.metadata.clone_fn.is_none() {
+                    def.metadata.clone_fn = existing.metadata.clone_fn.clone();
+                }
+            }
+        }
         let idx = self.type_defs.len();
         self.name_to_def.insert(def.name.clone(), idx);
         self.type_defs.push(def);

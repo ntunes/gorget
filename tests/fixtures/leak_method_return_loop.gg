@@ -1,0 +1,48 @@
+from std.os import mem_live
+from std.collections import Vector
+
+# Stress test: method returning struct with resource fields in a loop.
+# The returned value should be dropped at end of each loop iteration.
+
+struct Stage:
+    String map_name
+    int blend
+
+struct Def:
+    String name
+    Vector[Stage] stages
+
+struct Cache:
+    Vector[Def] items
+
+Cache make_cache(int n):
+    Vector[Def] items = Vector[Def]()
+    int i = 0
+    while i < n:
+        Vector[Stage] stages = Vector[Stage]()
+        stages.push(Stage(f"s-{i}-0", 1))
+        stages.push(Stage(f"s-{i}-1", 2))
+        items.push(Def(f"def-{i}", stages))
+        i = i + 1
+    return Cache(items)
+
+equip Cache:
+    int count(self):
+        return self.items.len()
+    Def get(self, int idx):
+        return self.items[idx]
+
+void main():
+    Cache cache = make_cache(100)
+    int baseline = mem_live()
+    int frame = 0
+    while frame < 500:
+        int i = 0
+        while i < cache.count():
+            auto sd = cache.get(i)
+            int x = sd.stages.len()
+            i = i + 1
+        frame = frame + 1
+    int leaked = mem_live() - baseline
+    print(f"leaked={leaked > 0}")
+    print("done")
