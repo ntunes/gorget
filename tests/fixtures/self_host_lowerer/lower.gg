@@ -927,18 +927,14 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
                     else:
                         # Non-expression last statement (if, while, etc.) → void
                         ret_type = UNIT_TYPE
-            # If return type is still I64 (default), check mapped param_types.
-            # Closures with String/float params likely return the same type.
-            if ret_type == I64_TYPE:
-                int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
-                int cpi = 1
-                while cpi < param_types.len():
-                    int pt = param_types.get(cpi).unwrap()
-                    if pt == gs_tid:
-                        ret_type = gs_tid
-                    if pt == F64_TYPE and ret_type == I64_TYPE:
-                        ret_type = F64_TYPE
-                    cpi += 1
+            # If return type is still I64 (default) and this is a SINGLE-param
+            # closure with only a float param, use float return type.
+            # (String param heuristic removed — too aggressive for multi-param
+            # closures like dict.fold that take String but return int.)
+            if ret_type == I64_TYPE and param_types.len() == 2:
+                int only_pt = param_types.get(1).unwrap()
+                if only_pt == F64_TYPE:
+                    ret_type = F64_TYPE
             # Also check: if the body has multiple statements and no explicit
             # return, it's likely a void closure
             if body.len() > 1 and ret_type == I64_TYPE:
