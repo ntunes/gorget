@@ -2039,69 +2039,82 @@ fn upgrade_option_result_types(module: &mut Module) {
 fn upgrade_types_from_fields(module: &mut Module) {
     use crate::ir::types::*;
 
-    // Collect which type names need dropping
-    let droppable_names: Vec<String> = module.type_registry.all_type_def_names()
-        .filter(|name| {
-            if let Some(td) = module.type_registry.get_type_def(name) {
-                td.metadata.copy_semantics == CopySemantics::Resource
-                    || td.metadata.drop_strategy != DropStrategy::None
-            } else {
-                false
-            }
-        })
-        .cloned()
-        .collect();
+    // Fixed-point iteration: upgrading Option[String] to Recursive may cause
+    // structs containing Option[String] to need upgrading too. Re-scan until
+    // no new types are upgraded.
+    loop {
+        let mut upgraded_any = false;
 
-    // Scan all types for fields whose type is droppable
-    let all_names: Vec<String> = module.type_registry.all_type_def_names().cloned().collect();
-    for name in &all_names {
-        let needs_upgrade = {
-            let td = match module.type_registry.get_type_def(name) {
-                Some(td) => td,
-                None => continue,
-            };
-            // Skip if already has a non-None drop strategy
-            if td.metadata.drop_strategy != DropStrategy::None {
-                if matches!(td.metadata.drop_strategy, DropStrategy::Custom(_)) {
-                    if let TypeDefKind::Struct(ref sdef) = td.kind {
-                        sdef.fields.iter().any(|f| {
-                            if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
-                                droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
-                            } else { false }
-                        })
-                    } else { false }
+        // Collect which type names currently need dropping (re-collected each iteration
+        // so newly-upgraded types are visible to dependents).
+        let droppable_names: Vec<String> = module.type_registry.all_type_def_names()
+            .filter(|name| {
+                if let Some(td) = module.type_registry.get_type_def(name) {
+                    td.metadata.copy_semantics == CopySemantics::Resource
+                        || td.metadata.drop_strategy != DropStrategy::None
                 } else {
-                    continue; // Already Trivial or Recursive
+                    false
                 }
-            } else if let TypeDefKind::Struct(ref sdef) = td.kind {
-                let result = sdef.fields.iter().any(|f| {
-                    if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
-                        droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
-                    } else { false }
-                });
-                result
-            } else if let TypeDefKind::Enum(ref edef) = td.kind {
-                // Enums (including Option/Result) with resource-type variant payloads
-                edef.variants.iter().any(|v| {
-                    v.fields.iter().any(|f| {
+            })
+            .cloned()
+            .collect();
+
+        // Scan all types for fields whose type is droppable
+        let all_names: Vec<String> = module.type_registry.all_type_def_names().cloned().collect();
+        for name in &all_names {
+            let needs_upgrade = {
+                let td = match module.type_registry.get_type_def(name) {
+                    Some(td) => td,
+                    None => continue,
+                };
+                // Skip if already has a non-None drop strategy
+                if td.metadata.drop_strategy != DropStrategy::None {
+                    if matches!(td.metadata.drop_strategy, DropStrategy::Custom(_)) {
+                        if let TypeDefKind::Struct(ref sdef) = td.kind {
+                            sdef.fields.iter().any(|f| {
+                                if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
+                                    droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
+                                } else { false }
+                            })
+                        } else { false }
+                    } else {
+                        continue; // Already Trivial or Recursive
+                    }
+                } else if let TypeDefKind::Struct(ref sdef) = td.kind {
+                    sdef.fields.iter().any(|f| {
                         if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
                             droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
                         } else { false }
                     })
-                })
-            } else {
-                false
-            }
-        };
-
-        if needs_upgrade {
-            if let Some(td) = module.type_registry.get_type_def_mut(name) {
-                if td.metadata.drop_strategy == DropStrategy::None {
-                    td.metadata.drop_strategy = DropStrategy::Recursive;
+                } else if let TypeDefKind::Enum(ref edef) = td.kind {
+                    // Enums (including Option/Result) with resource-type variant payloads
+                    edef.variants.iter().any(|v| {
+                        v.fields.iter().any(|f| {
+                            if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
+                                droppable_names.contains(field_type_name) || field_type_name == "GorgetString" || module.type_registry.is_collection_type_name(field_type_name)
+                            } else { false }
+                        })
+                    })
+                } else {
+                    false
                 }
-                td.metadata.copy_semantics = CopySemantics::Resource;
+            };
+
+            if needs_upgrade {
+                if let Some(td) = module.type_registry.get_type_def_mut(name) {
+                    if td.metadata.drop_strategy == DropStrategy::None {
+                        td.metadata.drop_strategy = DropStrategy::Recursive;
+                        upgraded_any = true;
+                    }
+                    if td.metadata.copy_semantics != CopySemantics::Resource {
+                        td.metadata.copy_semantics = CopySemantics::Resource;
+                        upgraded_any = true;
+                    }
+                }
             }
         }
+
+        if !upgraded_any { break; }
     }
 }
 

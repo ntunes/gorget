@@ -69,9 +69,20 @@ pub(super) fn lower_match_stmt(
     // Propagate ownership from the source operand to the scrutinee temp.
     // This lets pattern extraction know whether the scrutinee data is owned
     // (safe to drop) vs borrowed (from .get().unwrap() etc.).
+    // For owned Resource-type temps (method call results), transfer ownership:
+    // MoveZero the source and register scrut_local for drop. Without this,
+    // the scope-exit drop on the source frees data that pattern-extracted
+    // bindings still reference (double-free).
     if let Operand::Copy(ref place) | Operand::Move(ref place) = scrut_op {
         if place.projections.is_empty() && ctx.is_owned_local(place.local) {
             ctx.set_owned(scrut_local);
+            // Transfer drop registration from source temp to scrutinee local.
+            let src_type = builder.local_type(place.local);
+            if ctx.type_registry.needs_drop(src_type) && !ctx.is_named_local(place.local) {
+                ctx.drops.unregister(place.local);
+                ctx.move_zero_and_mark(builder, place.local);
+                ctx.drops.register_local(scrut_local, scrut_type, &ctx.type_registry);
+            }
         }
     }
 
@@ -130,7 +141,6 @@ pub(super) fn lower_match_stmt(
                 // Unregister from drops — the extracted payload takes ownership.
                 // MoveZero still fires to prevent stale reads through the pointer.
                 ctx.drops.unregister(original_local);
-                ctx.drops.unregister(scrut_local);
                 ctx.move_zero_and_mark(builder, original_local);
             }
             lower_expr(ctx, builder, &arm.body);
@@ -162,6 +172,13 @@ pub(super) fn lower_match_stmt(
     }
 
     builder.switch_to(merge_bb);
+
+    // MoveZero the scrutinee copy at the merge point. Each arm may have
+    // extracted variant data from scrut_local; the scope-exit drop would
+    // otherwise double-free it. This runs after ALL arms have jumped here.
+    if scrutinee_dead_original.is_some() && ctx.type_registry.needs_drop(scrut_type) {
+        ctx.move_zero_and_mark(builder, scrut_local);
+    }
 }
 
 /// Lower a pattern condition to a boolean Operand.
