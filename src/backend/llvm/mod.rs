@@ -1509,20 +1509,30 @@ fn emit_inst(
         Inst::IntCast { dst, value, to } => {
             let src_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
             let to_ty = llvm_type(to);
-            let src_bits = src_ty.map_or(64, int_bits);
-            let to_bits = int_bits(to);
             let src_ty_str = src_ty.map_or("i64", |t| llvm_type(t));
 
-            if src_bits == to_bits {
-                // Same size — no-op
-                writeln!(out, "  %v{} = add {to_ty} 0, %v{}", dst.0, value.0).unwrap();
-            } else if to_bits > src_bits {
-                // Widening
-                let ext = if src_ty.map_or(true, is_signed) { "sext" } else { "zext" };
-                writeln!(out, "  %v{} = {ext} {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
+            // IntCast to float type → bitcast (reinterpret bits) or sitofp (convert)
+            if to.is_float() {
+                if src_ty.map_or(false, |t| t.is_integer()) {
+                    // Integer → Float: bitcast for enum payload reinterpretation
+                    writeln!(out, "  %v{} = bitcast {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
+                } else {
+                    writeln!(out, "  %v{} = fadd {to_ty} 0.0, %v{}", dst.0, value.0).unwrap();
+                }
             } else {
-                // Narrowing
-                writeln!(out, "  %v{} = trunc {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
+                let src_bits = src_ty.map_or(64, int_bits);
+                let to_bits = int_bits(to);
+                if src_ty.map_or(false, |t| t.is_float()) {
+                    // Float → Integer: bitcast for enum payload
+                    writeln!(out, "  %v{} = bitcast {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
+                } else if src_bits == to_bits {
+                    writeln!(out, "  %v{} = add {to_ty} 0, %v{}", dst.0, value.0).unwrap();
+                } else if to_bits > src_bits {
+                    let ext = if src_ty.map_or(true, is_signed) { "sext" } else { "zext" };
+                    writeln!(out, "  %v{} = {ext} {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
+                } else {
+                    writeln!(out, "  %v{} = trunc {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
+                }
             }
         }
         Inst::FloatCast { dst, value, to } => {
