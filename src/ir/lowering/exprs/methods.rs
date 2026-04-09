@@ -2477,7 +2477,14 @@ pub(super) fn lower_index_access(
         };
         let dst = builder.index_load(place.clone(), idx, result_type);
         if ctx.type_registry.is_resource_type(elem_type) && !is_task && !is_string_base {
-            ctx.set_collection_ref(dst, CollectionId::Local(place.local));
+            // Use FieldPath provenance when the base is a field access (e.g., s.v[0]).
+            // This ensures cow_before_field_mutation("s.v") finds the ref when
+            // s.v.push(x) is called later. Without this, the ref is keyed on the
+            // FieldLoad temp LocalId, which cow_before_field_mutation can't find.
+            let collection_id = extract_field_path_string(&object.node)
+                .map(CollectionId::FieldPath)
+                .unwrap_or_else(|| CollectionId::Local(place.local));
+            ctx.set_collection_ref(dst, collection_id);
         }
         return FunctionBuilder::copy(dst);
     }

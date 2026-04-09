@@ -1,0 +1,26 @@
+# CoW safety: borrowing from a struct's collection field, then mutating it.
+# The borrow must be materialized (cloned to owned) before the push
+# reallocates the underlying buffer.
+
+from std.collections import Vector
+
+struct Container:
+    Vector[String] items
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("alpha")
+    v.push("beta")
+    v.push("gamma")
+    Container c = Container(v)
+
+    # Borrow an element from c.items via index
+    auto elem = c.items[0]
+    print(elem)
+
+    # Mutate c.items — CoW materializes elem before the push
+    c.items.push("delta")
+
+    # elem is still valid (independent copy after materialization)
+    print(elem)
+    print(c.items.len())

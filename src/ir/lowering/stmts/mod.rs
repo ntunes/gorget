@@ -386,12 +386,30 @@ fn lower_var_decl(
                     }
                 }
             }
-            // Also mark auto-reinferred locals that got Ptr type
+            // Also mark auto-reinferred locals that got Ptr type.
+            // Propagate CollectionRef from the source so cow_before_mutation
+            // and cow_before_field_mutation can find and materialize this local
+            // when the underlying collection is mutated (e.g., c.items.push(x)
+            // after auto elem = c.items[0]).
             if needs_reinfer {
                 let actual = builder.local_type(local_id);
                 if let Some(GirType::Ptr(_)) = ctx.type_registry.get(actual) {
                     if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
-                        ctx.set_ref(local_id);
+                        // Propagate CollectionRef from the source operand.
+                        let propagated = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                            if p.projections.is_empty() {
+                                if let Some(super::context::LocalOwnershipState::CollectionRef { collection }) =
+                                    ctx.func_state.local_ownership.get(&p.local).cloned()
+                                {
+                                    ctx.set_collection_ref(local_id, collection);
+                                    ctx.drops.unregister(local_id);
+                                    true
+                                } else { false }
+                            } else { false }
+                        } else { false };
+                        if !propagated {
+                            ctx.set_ref(local_id);
+                        }
                     }
                 }
             }

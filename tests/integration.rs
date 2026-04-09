@@ -15048,6 +15048,17 @@ done",
 }
 
 #[test]
+fn cow_nested_field_mutation() {
+    run_gg(
+        "cow_nested_field_mutation.gg",
+        "\
+alpha
+alpha
+4",
+    );
+}
+
+#[test]
 fn cow_collection_element_mutate() {
     run_gg(
         "cow_collection_element_mutate.gg",
