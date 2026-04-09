@@ -606,6 +606,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare void @gorget_string_format_alloc(ptr sret(%GorgetString), ptr, ...)").unwrap();
     // gorget_bool_to_str returns GorgetString by value → sret
     writeln!(out, "declare void @gorget_bool_to_str(ptr sret(%GorgetString), i1)").unwrap();
+    writeln!(out, "declare ptr @malloc(i64)").unwrap();
     writeln!(out, "declare void @free(ptr)").unwrap();
     writeln!(out, "declare void @exit(i32) noreturn").unwrap();
     writeln!(out, "@stderr = external global ptr").unwrap();
@@ -1132,9 +1133,44 @@ fn emit_inst(
                     writeln!(out, "  ; void slot store skipped").unwrap();
                 }
             } else if slot_ty.is_aggregate() {
+                // __Closure_N → GorgetClosure: heap-alloc env + pack fn_ptr/env.
+                let slot_is_closure = matches!(slot_ty, LirType::Struct(sid) if {
+                    snames.get(&sid.0).map_or(false, |n| n == "GorgetClosure")
+                });
+                let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
+                let val_closure_name = if slot_is_closure {
+                    let check_sid = |sid: &StructId| -> Option<String> {
+                        module.structs.get(sid.0 as usize)
+                            .filter(|sd| sd.name.starts_with("__Closure_"))
+                            .map(|sd| sd.name.clone())
+                    };
+                    match val_ty {
+                        Some(LirType::Struct(sid)) | Some(LirType::PtrTo(sid)) => check_sid(sid),
+                        _ => None,
+                    }
+                } else { None };
+                if let Some(closure_name) = val_closure_name {
+                    // Escaped closure: heap-alloc env, pack GorgetClosure struct.
+                    let call_fn = format!("{closure_name}__call");
+                    let env_sid = match val_ty {
+                        Some(LirType::Struct(sid)) | Some(LirType::PtrTo(sid)) => *sid,
+                        _ => unreachable!(),
+                    };
+                    let env_size = sizeof_lir_type(&LirType::Struct(env_sid), &module.structs, snames);
+                    let uid = format!("esc.{}.{}", slot.0, value.0);
+                    // Heap-allocate env
+                    writeln!(out, "  %{uid}.heap = call ptr @malloc(i64 {env_size})").unwrap();
+                    // Copy env data to heap
+                    writeln!(out, "  call ptr @memcpy(ptr %{uid}.heap, ptr %v{}, i64 {env_size})", value.0).unwrap();
+                    // Store fn_ptr to GorgetClosure.fn_ptr (field 0)
+                    writeln!(out, "  %{uid}.fpgep = getelementptr %GorgetClosure, ptr %s{}, i32 0, i32 0", slot.0).unwrap();
+                    writeln!(out, "  store ptr @{call_fn}, ptr %{uid}.fpgep").unwrap();
+                    // Store env_ptr to GorgetClosure.env (field 1)
+                    writeln!(out, "  %{uid}.envgep = getelementptr %GorgetClosure, ptr %s{}, i32 0, i32 1", slot.0).unwrap();
+                    writeln!(out, "  store ptr %{uid}.heap, ptr %{uid}.envgep").unwrap();
+                } else {
                 // Aggregate slot — value may be a pointer (SlotAddr/FieldPtr) or
                 // aggregate by value (Call return). Check val_types.
-                let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
                 // Assume ptr if type is unknown (None) — aggregate values are always ptrs in our model
                 let is_ptr_val = val_ty.map_or(true, |t| t.is_ptr());
                 if is_ptr_val {
@@ -1152,6 +1188,7 @@ fn emit_inst(
                     let sty = llvm_type_full(slot_ty, snames);
                     writeln!(out, "  store {sty} %v{}, ptr %s{}", value.0, slot.0).unwrap();
                 }
+                } // else (not closure escape)
             } else {
                 let sty = llvm_type_full(slot_ty, snames);
                 writeln!(out, "  store {sty} %v{}, ptr %s{}", value.0, slot.0).unwrap();
