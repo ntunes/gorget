@@ -2099,10 +2099,47 @@ fn emit_inst(
                     (0, 1)
                 };
 
+                // Check if any extra arg is float but format uses %lld (GIR dispatches
+                // abs→fabs after format string is set). If so, fix the format string
+                // by finding the StrLit and interning a corrected version.
+                let has_float_arg = args[extra_start..].iter().any(|a| {
+                    val_types.get(a.0 as usize).and_then(|t| t.as_ref())
+                        .map_or(false, |t| matches!(t, LirType::F32 | LirType::F64))
+                });
+                let fmt_strlit = if has_float_arg {
+                    func.blocks.iter().flat_map(|b| b.insts.iter()).find_map(|inst| {
+                        if let Inst::StrLit { dst, value } = inst {
+                            if dst.0 == args[fmt_arg_idx].0 && value.contains("%lld") {
+                                return Some(value.clone());
+                            }
+                        }
+                        None
+                    })
+                } else { None };
+
                 // Extract .data from the GorgetString format arg
                 let str_data = format!("printf.{block_id}.{uid}.data");
                 let str_val = format!("printf.{block_id}.{uid}.val");
-                writeln!(out, "  %{str_data} = getelementptr %GorgetString, ptr %v{}, i32 0, i32 0", args[fmt_arg_idx].0).unwrap();
+                if let Some(orig_fmt) = fmt_strlit {
+                    // Need to fix %lld → %f. Check if the fixed format is already
+                    // in str_globals, otherwise use a local constant.
+                    let fixed_fmt = orig_fmt.replace("%lld", "%f");
+                    let fixed_idx = str_globals.get_index(&fixed_fmt);
+                    let fixed_len = fixed_fmt.len();
+                    let pfx = format!("fmtfix.{block_id}.{uid}");
+                    writeln!(out, "  %{pfx} = alloca %GorgetString").unwrap();
+                    writeln!(out, "  %{pfx}.fp = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 0").unwrap();
+                    writeln!(out, "  store ptr @.str.{fixed_idx}, ptr %{pfx}.fp").unwrap();
+                    writeln!(out, "  %{pfx}.fl = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 1").unwrap();
+                    writeln!(out, "  store i64 {fixed_len}, ptr %{pfx}.fl").unwrap();
+                    writeln!(out, "  %{pfx}.fc = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 2").unwrap();
+                    writeln!(out, "  store i64 0, ptr %{pfx}.fc").unwrap();
+                    writeln!(out, "  %{pfx}.fa = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 3").unwrap();
+                    writeln!(out, "  store ptr null, ptr %{pfx}.fa").unwrap();
+                    writeln!(out, "  %{str_data} = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 0").unwrap();
+                } else {
+                    writeln!(out, "  %{str_data} = getelementptr %GorgetString, ptr %v{}, i32 0, i32 0", args[fmt_arg_idx].0).unwrap();
+                }
                 writeln!(out, "  %{str_val} = load ptr, ptr %{str_data}").unwrap();
                 // Build remaining args with their types
                 let extra_args: Vec<String> = args[extra_start..].iter().map(|a| {
