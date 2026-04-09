@@ -616,6 +616,15 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare void @gorget_bool_to_str(ptr sret(%GorgetString), i1)").unwrap();
     writeln!(out, "declare ptr @malloc(i64)").unwrap();
     writeln!(out, "declare void @free(ptr)").unwrap();
+    // String push variants for gorget_str_push type dispatch
+    writeln!(out, "declare void @gorget_string_push_int(ptr, i64)").unwrap();
+    writeln!(out, "declare void @gorget_string_push_float(ptr, double)").unwrap();
+    writeln!(out, "declare void @gorget_string_push_bool(ptr, i1)").unwrap();
+    writeln!(out, "declare void @gorget_string_push_char(ptr, ptr)").unwrap();
+    writeln!(out, "declare void @gorget_string_push_line_int(ptr, i64)").unwrap();
+    writeln!(out, "declare void @gorget_string_push_line_float(ptr, double)").unwrap();
+    writeln!(out, "declare void @gorget_string_push_line_bool(ptr, i1)").unwrap();
+    writeln!(out, "declare void @gorget_string_push_line(ptr, ptr)").unwrap();
     writeln!(out, "declare void @exit(i32) noreturn").unwrap();
     writeln!(out, "@stderr = external global ptr").unwrap();
     writeln!(out).unwrap();
@@ -1815,7 +1824,7 @@ fn emit_inst(
                     Some(LirType::Bool) =>
                         if is_push_line { Some("gorget_string_push_line_bool") }
                         else { Some("gorget_string_push_bool") },
-                    _ => None, // Str — use gorget_str_push as-is (emitted by C wrapper glue)
+                    _ => None, // Str — use gorget_str_push/gorget_string_push_char
                 };
                 if let Some(typed_fn) = variant {
                     let arg1_ty = val_types.get(args[1].0 as usize)
@@ -1823,6 +1832,13 @@ fn emit_inst(
                         .map(|t| llvm_arg_type(t, snames))
                         .unwrap_or_else(|| "i64".to_string());
                     writeln!(out, "  call void @{typed_fn}(ptr %v{}, {arg1_ty} %v{})", args[0].0, args[1].0).unwrap();
+                    return;
+                }
+                // Str arg: call gorget_string_push_char (Str→Str push)
+                let arg2_is_str = arg2_ty.map_or(false, |t| t.is_ptr() || matches!(t, LirType::Struct(_) | LirType::PtrTo(_)));
+                if arg2_is_str {
+                    let push_fn = if is_push_line { "gorget_string_push_line" } else { "gorget_string_push_char" };
+                    writeln!(out, "  call void @{push_fn}(ptr %v{}, ptr %v{})", args[0].0, args[1].0).unwrap();
                     return;
                 }
             }
