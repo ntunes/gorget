@@ -20,8 +20,6 @@
 
 - **CoW: scope-escape materialization boundary**: When a CoW borrow escapes its scope (stored in a struct field, returned from function, pushed to collection), materialize to owned at the boundary. This is the generalization of the existing return-clone and field-store-from-borrow materializations. Once all escape boundaries are covered, strings no longer need an allocator pointer in every struct — the CoW system guarantees that all live references are independently owned at scope boundaries. Enables removing the allocator field from `GorgetString`, reducing every string from 32 to 24 bytes. [added: 2026-04-07]
 
-- ~~**CoW: nested field mutation gap**~~: FIXED. Two-part fix: (1) IndexLoad uses `FieldPath` provenance when base is a field access (`s.v[0]` → `CollectionId::FieldPath("s.v")`). (2) VarDecl auto-reinfer propagates `CollectionRef` from source to named variable. `cow_before_field_mutation("s.v")` now finds and materializes the ref. Added `cow_nested_field_mutation.gg` regression test. [updated: 2026-04-09]
-
 - **MutationWhileBorrowed: extend to implicit CoW borrows**: The `is_ref_type` filter at `check_expr.rs:353` skips non-Ref-type origins. This means `auto x = vec.get(0).unwrap()` followed by `vec.push(y)` is not caught for non-Ref element types. The GIR CoW system handles this via `cow_collection_refs`, but extending the borrow checker to also catch it would add defense-in-depth. [added: 2026-04-05]
 
 - **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation. Needs `is_storing_method` flag on BuiltinMethodDecl. [updated: 2026-03-28]
