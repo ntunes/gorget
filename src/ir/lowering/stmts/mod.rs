@@ -302,9 +302,14 @@ fn lower_var_decl(
                 if inferred != gir_type {
                     builder.locals[local_id.0 as usize].type_id = inferred;
                     ctx.register_local(name, local_id, inferred);
-                    // Also update the drop elaborator with the correct type — the initial
-                    // registration used `gir_type` which may have been I64_TYPE (no-drop),
-                    // but the real type (e.g., Wrapper, Container) does need dropping.
+                    // Register for drop at CURRENT scope (not function scope).
+                    // For `auto` VarDecl in a loop, the variable must be dropped at
+                    // each iteration end. update_or_register_type registers at function
+                    // scope (for CoW materializations), which leaks loop-body locals.
+                    if !ctx.drops.is_registered(local_id) {
+                        ctx.drops.register_local(local_id, inferred, &ctx.type_registry);
+                    }
+                    // Also update existing registrations (type changed from I64 to real type).
                     ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
                 }
             }

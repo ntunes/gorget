@@ -2201,7 +2201,7 @@ done");
 #[test]
 fn leak_method_return_loop() {
     run_gg("leak_method_return_loop.gg", "\
-leaked=true
+leaked=false
 done");
 }
 
