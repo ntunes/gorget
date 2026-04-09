@@ -2,11 +2,7 @@
 
 ## High
 
-- ~~**Clone reduction — escape analysis for getter methods**~~: DONE. Trivial getter clone elision implemented. Equip methods whose body is `return self.field[idx]` or `return self.field` now return `Ptr(T)` instead of cloning — callers get a zero-cost CowBorrow with collection provenance. Clone deferred to mutation/escape boundaries by existing CoW infrastructure. `leak_method_return_loop.gg` has ZERO `Def__clone` calls in the inner loop. gorget-arena `ShaderCache.get(i)` will benefit the same way (~300KB/frame savings for 200 shaders). [updated: 2026-04-09]
-
-- **Clone reduction — 4 deferrable sites from audit**: (1) assigns.rs:179 named-to-named clone → CoW alias, (2) context.rs:905 Ptr(resource) init → scope escape check, (3) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (4) patterns.rs:522 string field extraction → check arm escape. All are safe but add complexity. [added: 2026-04-09]
-
-- ~~**`auto` VarDecl infers wrong type for equip method returns → loop-scope drop leak**~~: FIXED. `auto sd = cache.get(i)` where `get` returns `Def` (struct with String+Vector). `infer_operand_type_with_builder` returns `Vector__Def` (the collection type) instead of `Def` (the element type). The local gets registered for drop as `Vector__Def`, so `gorget_array_free` is called instead of `Def__drop` — the element's String/Vector fields leak. Reproducer: `leak_method_return_loop.gg`. **This is the gorget-arena 2.3MB/frame leak** (fog detection loop iterating `ShaderCache.get()` with `auto sd = ...`). Fix: `infer_operand_type_with_builder` should use the equip method's declared return type, not the internal operand type. [updated: 2026-04-09]
+- **Phase 1/2 Option/Result drops crash self-host driver**: The Option/Result Recursive drop infrastructure (Phase 1) and scope-exit drops (Phase 2) cause segfaults in the self-host driver binary. Root cause: Phase 2's `move_zero_and_mark` doesn't cover all consumption paths in complex programs (match extraction on Vector elements, nested struct field access). Integration tests pass (948/948) but the self-host driver crashes on any input with String types. Workaround: build driver with pre-Phase-1 compiler. Fix requires completing MoveZero coverage for all Option/Result extraction paths. [added: 2026-04-09]
 
 - **Remove .clone() from Json.get()/at()**: Fix A (Ptr-scrutinee extraction widened to `is_resource_type` minus Box — done) and Fix B (`Option[Ptr(T)]` → `Option[T]` return conversion with deref+clone — done). However, `Ptr(Dict).get(key)` from pattern extraction on `&self` doesn't dispatch correctly — method calls on pattern-extracted Ptr locals produce wrong results. `.clone()` workaround is correct and safe. [updated: 2026-04-08]
 
@@ -24,9 +20,7 @@
 
 - **CoW: scope-escape materialization boundary**: When a CoW borrow escapes its scope (stored in a struct field, returned from function, pushed to collection), materialize to owned at the boundary. This is the generalization of the existing return-clone and field-store-from-borrow materializations. Once all escape boundaries are covered, strings no longer need an allocator pointer in every struct — the CoW system guarantees that all live references are independently owned at scope boundaries. Enables removing the allocator field from `GorgetString`, reducing every string from 32 to 24 bytes. [added: 2026-04-07]
 
-- **Borrow checker: early return doesn't reset move state**: INVESTIGATED — the divergent-branch filtering in `merge_branch_states()` already works correctly. Moves in branches that return/throw/break are excluded from the join-point merge. Added regression test `move_in_divergent_branch_ok`. The self-host `scope.gg` defensive clones may have been needed before the StringView removal. Review if they can now be removed. [updated: 2026-04-06]
-
-- **CoW: nested field mutation gap**: `s.v.push(x)` goes through `field_place_info` path in `methods.rs:1030` which skips `cow_before_mutation`. If `s.v[0]` previously created a `cow_collection_refs` entry keyed on a FieldLoad temp, the ref won't be cloned out before the push. Only affects resource-type elements (e.g., `Vector[Vector[int]]` inside a struct), not strings or primitives. The borrow checker only catches explicit `T &` refs, not implicit CoW borrows. Fix requires tracking FieldLoad provenance through to `cow_collection_refs` — non-trivial. [added: 2026-04-05]
+- ~~**CoW: nested field mutation gap**~~: FIXED. Two-part fix: (1) IndexLoad uses `FieldPath` provenance when base is a field access (`s.v[0]` → `CollectionId::FieldPath("s.v")`). (2) VarDecl auto-reinfer propagates `CollectionRef` from source to named variable. `cow_before_field_mutation("s.v")` now finds and materializes the ref. Added `cow_nested_field_mutation.gg` regression test. [updated: 2026-04-09]
 
 - **MutationWhileBorrowed: extend to implicit CoW borrows**: The `is_ref_type` filter at `check_expr.rs:353` skips non-Ref-type origins. This means `auto x = vec.get(0).unwrap()` followed by `vec.push(y)` is not caught for non-Ref element types. The GIR CoW system handles this via `cow_collection_refs`, but extending the borrow checker to also catch it would add defense-in-depth. [added: 2026-04-05]
 
@@ -41,7 +35,6 @@
 
 - **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
 
-- **DSE may leak droppable values** (`ir/transforms/optimize.rs`): Dead store elimination removes `_1 = Copy(resource_local)` when `_1` is overwritten later, but the first value may need dropping. Investigated: DSE runs post-drop-insertion so scope-exit drops already cover this. Added safety comment. Still worth auditing for edge cases where DropElaborator doesn't insert intermediate drops at overwrites. [updated: 2026-04-06]
 
 - **Hardcoded type size database — blocks self-host lowerer**: `c_sizeof_with_structs()` still has string-match fallbacks for `Vector__*`, `Dict__*`, `Set__*`, `Callable__*`, `Task__*`, `Tuple__*`, `Option__*`. These hit before the struct lookup. Fix: register monomorphized collection/option/tuple types with correct `computed_c_size` during type lowering so the match arms can be removed. [updated: 2026-04-06]
 
@@ -57,6 +50,7 @@
 
 ## Low
 
+- **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
 - **`char` type backend bugs**: `char as int` gives garbage, char `==`/`!=` uses `gorget_str_eq`. [added: 2026-03-21]
 
