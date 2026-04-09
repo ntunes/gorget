@@ -2724,13 +2724,9 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
             if (byte_pos < 0 || byte_pos >= (int64_t)s.len) return (Str){{NULL, 0, 0, NULL}}; \
             int cplen = gorget_utf8_codepoint_len((unsigned char)s.data[byte_pos]); \
             if (byte_pos + cplen > (int64_t)s.len) cplen = (int)(s.len - (size_t)byte_pos); \
-            return gorget_str_from_parts(s.data + byte_pos, (size_t)cplen); }}").unwrap();
+            return gorget_str_own_region(s.data + byte_pos, (size_t)cplen); }}").unwrap();
     }
-    // Signal handling
-    if has(&|n| n == "gorget_signal_ignore") {
-        writeln!(out, "#include <signal.h>").unwrap();
-        writeln!(out, "static inline void gorget_signal_ignore(int64_t sig) {{ signal((int)sig, SIG_IGN); }}").unwrap();
-    }
+    // gorget_signal_ignore is already in the C runtime — no duplicate emission needed.
     // NOTE: int64_t__parse etc. are monomorphized parse methods handled by
     // the C backend inline (emit_call_extern). For LLVM, they're generated as
     // C wrapper functions in emit_runtime_helpers, which has struct_names access.
