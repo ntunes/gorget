@@ -189,8 +189,12 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<(Vec
         // Collection methods
         "gorget_array_new" => Some((vec![LirType::I64], arr_ty())),
         "gorget_array_with_capacity" => Some((vec![LirType::I64, LirType::I64], arr_ty())),
-        "gorget_array_push" | "gorget_array_set" | "gorget_array_insert" => {
+        "gorget_array_push" => {
             Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void))
+        }
+        "gorget_array_set" | "gorget_array_insert" => {
+            // C signature: void gorget_array_set(void* arr, size_t idx, void* val)
+            Some((vec![LirType::Ptr, LirType::I64, LirType::Ptr], LirType::Void))
         }
         "gorget_array_get" | "gorget_array_pop" | "gorget_array_first" | "gorget_array_last"
         | "gorget_array_safe_get" => {
