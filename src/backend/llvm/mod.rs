@@ -1003,10 +1003,17 @@ fn emit_function(
                         label = format!("dc.{bid}.{counter}.ok");
                         counter += 1;
                     }
-                    // CallExtern paths that increment trap_counter but DON'T create labels
-                    Inst::CallExtern { name, args, .. } => {
+                    // CallExtern paths that increment trap_counter but DON'T create labels.
+                    // MUST mirror every trap_counter += 1 in the emit_inst CallExtern handler.
+                    Inst::CallExtern { name, args, dst, .. } => {
                         let is_drop_guard = name.starts_with("__gorget_drop_if_alive_open__")
                             || name == "__gorget_drop_if_alive_close";
+                        let is_callable = name.starts_with("__callable_");
+                        let is_closure_call = name.starts_with("__gorget_closure_call_");
+                        let is_map_get = name == "gorget_map_get" || name == "gorget_map_safe_get";
+                        let is_void_ret = matches!(name.as_str(),
+                            "gorget_guard_get" | "gorget_shared_get"
+                            | "gorget_read_guard_get" | "gorget_write_guard_get");
                         let is_bool_to_str = name == "gorget_bool_to_str";
                         let is_printf_like = name == "printf" || name == "gorget_string_format"
                             || name == "gorget_string_format_alloc" || name == "fprintf_stderr";
@@ -1017,13 +1024,21 @@ fn emit_function(
                             || name.ends_with("__unwrap") || name.ends_with("__expect");
                         let is_unwrap_or = name == "__option_unwrap_or" || name == "__result_unwrap_or"
                             || name.ends_with("__unwrap_or");
+                        let is_str_push = name == "gorget_str_push" || name == "gorget_str_push_line";
 
                         // Count ALL counter increments to stay in sync with emission
-                        if is_printf_like && !args.is_empty() { counter += 1; }
+                        if is_drop_guard { /* no counter */ }
+                        else if is_callable && !args.is_empty() { counter += 1; }
+                        else if is_closure_call && !args.is_empty() { counter += 1; }
+                        else if is_map_get && dst.is_some() { counter += 1; }
+                        else if is_void_ret && dst.is_some() { counter += 1; }
+                        else if is_str_push && args.len() == 2 { /* no counter for type dispatch */ }
+                        else if is_bool_to_str { counter += 1; }
+                        else if is_printf_like && !args.is_empty() { counter += 1; }
                         else if is_tag && !args.is_empty() { counter += 1; }
                         else if is_unwrap && !args.is_empty() { counter += 1; }
                         else if is_unwrap_or && args.len() >= 2 { counter += 1; }
-                        else if !is_drop_guard && !is_bool_to_str { counter += 1; }
+                        else { counter += 1; }
                     }
                     _ => {}
                 }
