@@ -255,10 +255,19 @@ bool is_resource_field_type(SpannedType stype, Dict[String, bool] resource_types
                     return true
                 else:
                     return false
-        case TNamed(name, _):
+        case TNamed(name, targs):
             match name:
                 case "Vector" | "Dict" | "Set" | "Box" | "Rc" | "Arc":
                     return true
+                case "Option" | "Result":
+                    # Resource if any type argument is a resource
+                    int oi = 0
+                    while oi < targs.len():
+                        SpannedType ota = targs.get(oi).unwrap()
+                        if is_resource_field_type(ota, resource_types):
+                            return true
+                        oi += 1
+                    return false
                 else:
                     if resource_types.contains(name):
                         return true
@@ -1425,6 +1434,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             meta_aliases.put(ta_name, pname)
                         case TNamed(tname, _):
                             meta_aliases.put(ta_name, tname)
+                        case TFunction(_, _, _):
+                            # Function type aliases are opaque in GIR → void
+                            meta_aliases.put(ta_name, "void")
                         else:
                             pass
             else:
