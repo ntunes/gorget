@@ -825,14 +825,17 @@ impl<'a> LoweringContext<'a> {
         }
         // Function call results own their data — safe to Move on return.
         self.set_owned(local);
-        // Mark as fresh ONLY for user-defined function calls (which have the
-        // return clone path ensuring independence). Builtin method calls
-        // (present in fn_sigs) are dispatched to C runtime functions that may
-        // return views into existing data, so they're NOT marked fresh.
-        if return_type == self.type_mapper.owned_string_type
-            && !self.fn_sigs.contains_key(func_name.as_str())
-        {
-            self.func_state.fresh_string_locals.insert(local);
+        // Mark as fresh for user-defined function calls (not in fn_sigs — these
+        // have the return clone path ensuring independence) AND for builtin method
+        // calls whose runtime callee provably allocates fresh buffers (replace,
+        // upper, lower, repeat, pad, join, etc.).
+        if return_type == self.type_mapper.owned_string_type {
+            let is_user_fn = !self.fn_sigs.contains_key(func_name.as_str());
+            let is_fresh_builtin = self.runtime_callees.get(func_name.as_str())
+                .map_or(false, |rt| is_fresh_allocating_extern(rt));
+            if is_user_fn || is_fresh_builtin {
+                self.func_state.fresh_string_locals.insert(local);
+            }
         }
         local
     }
@@ -845,14 +848,20 @@ impl<'a> LoweringContext<'a> {
         args: Vec<Operand>,
         return_type: crate::ir::types::TypeId,
     ) -> crate::ir::types::LocalId {
-        let local = builder.call_extern(func, args, return_type);
+        let func_name: String = func.into();
+        let local = builder.call_extern(&func_name, args, return_type);
         if self.type_registry.needs_drop(return_type) {
             self.drops.register_local(local, return_type, &self.type_registry);
         }
         self.set_owned(local);
-        // NOTE: extern calls are NOT marked as fresh_string_locals because many
-        // runtime functions (gorget_str_char_at, gorget_str_slice, etc.) return
-        // views into existing data, not independent allocations.
+        // Mark fresh for extern string functions that provably allocate new buffers.
+        // Most runtime string functions return views (Str), but these return owned
+        // GorgetString with independent heap data:
+        if return_type == self.type_mapper.owned_string_type
+            && is_fresh_allocating_extern(&func_name)
+        {
+            self.func_state.fresh_string_locals.insert(local);
+        }
         local
     }
 
@@ -1859,4 +1868,19 @@ fn count_name_in_expr(expr: &Expr, name: &str, count: &mut u32) {
         }
         _ => {}
     }
+}
+
+/// Extern string functions that provably allocate fresh buffers.
+/// Their results are independent of any input — safe to skip the
+/// self-referential reassignment clone guard.
+fn is_fresh_allocating_extern(name: &str) -> bool {
+    matches!(name,
+        "gorget_str_to_upper" | "gorget_str_to_lower"
+        | "gorget_str_replace" | "gorget_str_repeat"
+        | "gorget_str_pad_left" | "gorget_str_pad_right"
+        | "gorget_str_join"
+        | "gorget_str_cat"
+        | "gorget_string_format"
+        | "gorget_int_to_str" | "gorget_float_to_str" | "gorget_bool_to_str"
+    )
 }

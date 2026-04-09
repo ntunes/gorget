@@ -177,7 +177,18 @@ pub(super) fn lower_assign(
                                 ctx.drops.unregister(place.local);
                                 assign_mode = AssignMode::Move;
                             } else if ctx.is_named_local(place.local) {
-                                if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
+                                // Last-use optimization: if the RHS is dead after this
+                                // assignment, move instead of cloning. The source is
+                                // MoveZeroed after the assignment (see line ~207).
+                                let rhs_name = builder.local_name(place.local).map(|s| s.to_string());
+                                let is_last_use = rhs_name.as_ref()
+                                    .map(|n| ctx.is_last_use_at(n, value.span))
+                                    .unwrap_or(false);
+                                if is_last_use && ctx.type_registry.is_resource_type(rhs_type) {
+                                    // Move: unregister source from drops, assign, MoveZero
+                                    ctx.drops.unregister(place.local);
+                                    assign_mode = AssignMode::Move;
+                                } else if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
                                     ctx.warn_implicit_clone(value.span, rhs_type, crate::ir::ImplicitCloneReason::NamedToNamed);
                                     let ptr_type = ctx.register_ptr_type(rhs_type);
                                     let ptr_local = builder.add_local(ptr_type, None);
