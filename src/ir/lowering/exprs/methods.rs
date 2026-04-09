@@ -964,6 +964,23 @@ pub(super) fn lower_method_call(
             }
         }
 
+        // GIR-level desugaring for Option/Result combinators.
+        // Replaces C backend inline functions with explicit tag check + closure call,
+        // giving the compiler full ownership visibility.
+        // GIR-level desugaring for Option/Result combinators on primitive-payload types.
+        // For resource-payload types (String, Vector, etc.), the C inline path handles
+        // implicit type coercions (GorgetString ↔ Str) that GIR can't express.
+        if (type_name.starts_with("Option__") || type_name.starts_with("Result__"))
+            && matches!(method_name, "map" | "and_then" | "or_else" | "filter"
+                | "unwrap_or_else" | "flat_map" | "map_err")
+        {
+            if let Some(result) = try_lower_option_result_combinator(
+                ctx, builder, &type_name, method_name, recv.clone(), args,
+            ) {
+                return result;
+            }
+        }
+
         // Iterator adapter expansion: fold/map/filter/collect on Iterator types
         if matches!(method_name, "fold" | "map" | "filter" | "collect") {
             if let Some(result) = try_lower_iterator_adapter(
@@ -1880,6 +1897,313 @@ fn call_closure_in_adapter(
         return FunctionBuilder::copy(dst);
     }
     Operand::Constant(Constant::Unit)
+}
+
+/// GIR-level desugaring of Option/Result combinators.
+/// Replaces C backend inline functions with explicit tag check, field extraction,
+/// closure call, and enum construction — giving the compiler full ownership visibility.
+fn try_lower_option_result_combinator(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    type_name: &str,
+    method_name: &str,
+    recv: Operand,
+    args: &[Spanned<ast::CallArg>],
+) -> Option<Operand> {
+    let is_option = type_name.starts_with("Option__");
+    let is_result = type_name.starts_with("Result__");
+    if !is_option && !is_result { return None; }
+    if args.is_empty() { return None; }
+
+    // Resolve the receiver's TypeId and the result type for the combinator.
+    let recv_type = infer_operand_type_full(ctx, &recv, builder);
+
+    // Resolve inner types from the TypeDef (needed for bail check below)
+    let (some_ok_type, none_err_type) = if is_option {
+        let inner = ctx.type_registry.get_type_def(type_name)
+            .and_then(|td| if let TypeDefKind::Enum(ref e) = td.kind {
+                e.variants.iter().find(|v| v.name == "Some")
+                    .and_then(|v| v.fields.first().map(|f| f.type_id))
+            } else { None })
+            .unwrap_or(I64_TYPE);
+        (inner, UNIT_TYPE)
+    } else {
+        let td = ctx.type_registry.get_type_def(type_name);
+        let ok_ty = td.as_ref().and_then(|td| if let TypeDefKind::Enum(ref e) = td.kind {
+            e.variants.iter().find(|v| v.name == "Ok")
+                .and_then(|v| v.fields.first().map(|f| f.type_id))
+        } else { None }).unwrap_or(I64_TYPE);
+        let err_ty = td.as_ref().and_then(|td| if let TypeDefKind::Enum(ref e) = td.kind {
+            e.variants.iter().find(|v| v.name == "Error")
+                .and_then(|v| v.fields.first().map(|f| f.type_id))
+        } else { None }).unwrap_or(I64_TYPE);
+        (ok_ty, err_ty)
+    };
+
+    // Bail to C inline path for types needing GorgetString→Str coercion.
+    // The C inline combinator handles this implicitly; GIR would need explicit coercion.
+    let has_string_coercion = |ty: TypeId| -> bool {
+        matches!(ctx.type_registry.get(ty), Some(GirType::Named(n)) if n == "GorgetString")
+    };
+    match method_name {
+        "map" | "filter" | "and_then" | "flat_map" | "unwrap_or_else" if has_string_coercion(some_ok_type) => return None,
+        "map_err" | "or_else" if has_string_coercion(none_err_type) => return None,
+        _ => {}
+    }
+
+    // Store receiver in a local for field extraction (after bail checks)
+    let scrut_local = builder.add_local(recv_type, None);
+    builder.assign(Place::local(scrut_local), recv.clone());
+
+    // Set closure param type hints so untyped closure params get correct types
+    let prev_hints = std::mem::take(&mut ctx.func_state.closure_param_type_hints);
+    match method_name {
+        "map" | "filter" | "flat_map" | "and_then" => {
+            ctx.func_state.closure_param_type_hints = vec![some_ok_type];
+        }
+        "map_err" | "or_else" => {
+            ctx.func_state.closure_param_type_hints = vec![none_err_type];
+        }
+        "unwrap_or_else" => {
+            // closure takes no args
+        }
+        _ => {}
+    }
+
+    // Set expected_type for and_then/or_else closures that return Option/Result
+    let prev_expected = ctx.func_state.expected_type;
+    if matches!(method_name, "and_then" | "or_else" | "flat_map") {
+        if let Some(type_id) = ctx.lookup_type_by_name(type_name) {
+            ctx.func_state.expected_type = Some(type_id);
+        }
+    }
+
+    // Lower the closure argument
+    let closure_op = lower_expr(ctx, builder, &args[0].node.value);
+
+    // Restore hints
+    ctx.func_state.closure_param_type_hints = prev_hints;
+    ctx.func_state.expected_type = prev_expected;
+
+    // Check tag: 0 = Some/Ok, 1 = None/Error
+    let tag = builder.tag_of(FunctionBuilder::copy(scrut_local));
+    let is_some_ok = builder.cmp(
+        CmpOp::Eq, I32_TYPE,
+        FunctionBuilder::copy(tag),
+        Operand::Constant(Constant::I32(0)),
+    );
+
+    let some_bb = builder.new_block();
+    let none_bb = builder.new_block();
+    let merge_bb = builder.new_block();
+    builder.branch(FunctionBuilder::copy(is_some_ok), some_bb, none_bb);
+
+    // Move-if-dead: unregister scrutinee from drops before branching
+    ctx.drops.unregister(scrut_local);
+    if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+        if place.projections.is_empty() {
+            ctx.drops.unregister(place.local);
+        }
+    }
+
+    // Determine the result type (may differ from recv_type for cross-type map)
+    let result_type = match method_name {
+        "unwrap_or_else" => some_ok_type,
+        "map" => {
+            // Closure returns U → result is Option[U] or Result[U, E]
+            let mapped_ret = infer_closure_return_type(ctx, &closure_op, builder);
+            if mapped_ret != some_ok_type && mapped_ret != UNIT_TYPE {
+                let mapped_name = crate::ir::types::format_type_for_mangle(mapped_ret, &ctx.type_registry);
+                if is_option {
+                    let option_name = format!("Option__{mapped_name}");
+                    ctx.ensure_option_type_registered(&option_name, mapped_ret);
+                    ctx.lookup_type_by_name(&option_name).unwrap_or(recv_type)
+                } else {
+                    // Result[Ok, Err].map(fn → U) → Result[U, Err]
+                    let err_name = crate::ir::types::format_type_for_mangle(none_err_type, &ctx.type_registry);
+                    let result_name = format!("Result__{mapped_name}__{err_name}");
+                    if ctx.lookup_type_by_name(&result_name).is_none() {
+                        use super::super::types::make_result_type_def;
+                        ctx.type_mapper.get_or_register(&result_name, &mut ctx.type_registry, |n| {
+                            make_result_type_def(n, mapped_ret, none_err_type)
+                        });
+                    }
+                    ctx.lookup_type_by_name(&result_name).unwrap_or(recv_type)
+                }
+            } else {
+                recv_type
+            }
+        }
+        "map_err" if is_result => {
+            // Closure returns U → Result[Ok, U]
+            let mapped_ret = infer_closure_return_type(ctx, &closure_op, builder);
+            if mapped_ret != none_err_type && mapped_ret != UNIT_TYPE {
+                let ok_name = crate::ir::types::format_type_for_mangle(some_ok_type, &ctx.type_registry);
+                let mapped_name = crate::ir::types::format_type_for_mangle(mapped_ret, &ctx.type_registry);
+                let result_name = format!("Result__{ok_name}__{mapped_name}");
+                if ctx.lookup_type_by_name(&result_name).is_none() {
+                    use super::super::types::make_result_type_def;
+                    ctx.type_mapper.get_or_register(&result_name, &mut ctx.type_registry, |n| {
+                        make_result_type_def(n, some_ok_type, mapped_ret)
+                    });
+                }
+                ctx.lookup_type_by_name(&result_name).unwrap_or(recv_type)
+            } else {
+                recv_type
+            }
+        }
+        _ => recv_type,
+    };
+
+    let result_local = builder.add_local(result_type, None);
+    let result_type_name = ctx.type_name_for_id(result_type).unwrap_or(type_name).to_string();
+
+    // === Some/Ok branch ===
+    builder.switch_to(some_bb);
+    let payload = builder.enum_field_load(Place::local(scrut_local), if is_option { "Some" } else { "Ok" }, 0, some_ok_type);
+
+    match method_name {
+        "map" => {
+            // map(fn) → Some/Ok(fn(payload))
+            let mapped = call_closure_in_adapter(ctx, builder, &closure_op,
+                vec![FunctionBuilder::copy(payload)], some_ok_type);
+            let wrapped = builder.enum_init(&result_type_name, if is_option { "Some" } else { "Ok" }, result_type, vec![mapped]);
+            builder.assign(Place::local(result_local), FunctionBuilder::copy(wrapped));
+        }
+        "and_then" | "flat_map" => {
+            // and_then(fn) → fn(payload) (fn returns Option/Result)
+            let result = call_closure_in_adapter(ctx, builder, &closure_op,
+                vec![FunctionBuilder::copy(payload)], result_type);
+            builder.assign(Place::local(result_local), result);
+        }
+        "or_else" => {
+            // or_else: Some/Ok path → keep original
+            let wrapped = builder.enum_init(&result_type_name, if is_option { "Some" } else { "Ok" }, result_type, vec![FunctionBuilder::copy(payload)]);
+            builder.assign(Place::local(result_local), FunctionBuilder::copy(wrapped));
+        }
+        "filter" if is_option => {
+            // filter(fn) → if fn(payload): Some(payload) else: None
+            let pred = call_closure_in_adapter(ctx, builder, &closure_op,
+                vec![FunctionBuilder::copy(payload)], BOOL_TYPE);
+            let filter_then = builder.new_block();
+            let filter_else = builder.new_block();
+            builder.branch(pred, filter_then, filter_else);
+            builder.switch_to(filter_then);
+            let some_val = builder.enum_init(&result_type_name, "Some", result_type, vec![FunctionBuilder::copy(payload)]);
+            builder.assign(Place::local(result_local), FunctionBuilder::copy(some_val));
+            builder.jump(merge_bb);
+            builder.switch_to(filter_else);
+            let none_val = builder.enum_init(&result_type_name, "None", result_type, vec![]);
+            builder.assign(Place::local(result_local), FunctionBuilder::copy(none_val));
+            // Don't jump to merge — fall through to the common jump below.
+            // Actually, we need to jump to merge since the None branch below is separate.
+            builder.jump(merge_bb);
+            // Switch to a dummy block so the common `builder.jump(merge_bb)` below
+            // doesn't add a duplicate jump from this block.
+            let dummy = builder.new_block();
+            builder.switch_to(dummy);
+        }
+        "unwrap_or_else" => {
+            // unwrap_or_else(fn) → payload
+            builder.assign(Place::local(result_local), FunctionBuilder::copy(payload));
+        }
+        "map_err" if is_result => {
+            // map_err: Ok path → keep original Ok
+            let wrapped = builder.enum_init(&result_type_name, "Ok", result_type, vec![FunctionBuilder::copy(payload)]);
+            builder.assign(Place::local(result_local), FunctionBuilder::copy(wrapped));
+        }
+        _ => return None,
+    }
+
+    builder.jump(merge_bb);
+
+    // === None/Error branch ===
+    builder.switch_to(none_bb);
+    match method_name {
+        "map" | "filter" | "and_then" | "flat_map" if is_option => {
+            // None → None
+            let none_val = builder.enum_init(&result_type_name, "None", result_type, vec![]);
+            builder.assign(Place::local(result_local), FunctionBuilder::copy(none_val));
+        }
+        "or_else" if is_option => {
+            // or_else: None → fn()
+            let result = call_closure_in_adapter(ctx, builder, &closure_op, vec![], result_type);
+            builder.assign(Place::local(result_local), result);
+        }
+        "unwrap_or_else" if is_option => {
+            // unwrap_or_else: None → fn()
+            let result = call_closure_in_adapter(ctx, builder, &closure_op, vec![], some_ok_type);
+            builder.assign(Place::local(result_local), result);
+        }
+        "map" | "and_then" | "flat_map" if is_result => {
+            // Error → Error(err)
+            let err_val = builder.enum_field_load(Place::local(scrut_local), "Error", 0, none_err_type);
+            let wrapped = builder.enum_init(&result_type_name, "Error", result_type, vec![FunctionBuilder::copy(err_val)]);
+            builder.assign(Place::local(result_local), FunctionBuilder::copy(wrapped));
+        }
+        "or_else" if is_result => {
+            // or_else: Error → fn(err)
+            let err_val = builder.enum_field_load(Place::local(scrut_local), "Error", 0, none_err_type);
+            let result = call_closure_in_adapter(ctx, builder, &closure_op,
+                vec![FunctionBuilder::copy(err_val)], result_type);
+            builder.assign(Place::local(result_local), result);
+        }
+        "unwrap_or_else" if is_result => {
+            // unwrap_or_else: Error → fn(err)
+            let err_val = builder.enum_field_load(Place::local(scrut_local), "Error", 0, none_err_type);
+            let result = call_closure_in_adapter(ctx, builder, &closure_op,
+                vec![FunctionBuilder::copy(err_val)], some_ok_type);
+            builder.assign(Place::local(result_local), result);
+        }
+        "map_err" if is_result => {
+            // map_err: Error → Error(fn(err))
+            let err_val = builder.enum_field_load(Place::local(scrut_local), "Error", 0, none_err_type);
+            let mapped = call_closure_in_adapter(ctx, builder, &closure_op,
+                vec![FunctionBuilder::copy(err_val)], none_err_type);
+            let wrapped = builder.enum_init(&result_type_name, "Error", result_type, vec![mapped]);
+            builder.assign(Place::local(result_local), FunctionBuilder::copy(wrapped));
+        }
+        _ => return None,
+    }
+    builder.jump(merge_bb);
+
+    // === Merge ===
+    builder.switch_to(merge_bb);
+    if ctx.type_registry.needs_drop(result_type)
+        || ctx.type_registry.is_resource_type(result_type) {
+        ctx.drops.register_local(result_local, result_type, &ctx.type_registry);
+    }
+    ctx.set_owned(result_local);
+
+    Some(FunctionBuilder::copy(result_local))
+}
+
+/// Infer the return type of a closure operand from its __call function signature.
+fn infer_closure_return_type(
+    ctx: &LoweringContext,
+    closure_op: &Operand,
+    builder: &FunctionBuilder,
+) -> TypeId {
+    if let Operand::Copy(place) | Operand::Move(place) = closure_op {
+        let local_idx = place.local.0 as usize;
+        if local_idx < builder.locals.len() {
+            let local_type_id = builder.locals[local_idx].type_id;
+            if let Some(type_name) = ctx.type_name_for_id(local_type_id) {
+                let type_name = type_name.to_string();
+                if let Some((call_fn, _, _)) = ctx.lookup_closure_info(&type_name) {
+                    if let Some((_, ret)) = ctx.fn_sigs.get(call_fn) {
+                        return *ret;
+                    }
+                }
+            }
+        }
+    }
+    if let Operand::Constant(Constant::FuncRef(name)) = closure_op {
+        if let Some((_, ret)) = ctx.fn_sigs.get(name.as_str()) {
+            return *ret;
+        }
+    }
+    I64_TYPE
 }
 
 /// Inline expansion of iter.fold(initial, closure)
