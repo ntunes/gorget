@@ -2642,7 +2642,18 @@ fn emit_term(
                     writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
                 }
             } else {
-                writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
+                // Check for type mismatch: value is i64 but function returns double
+                // (from monomorphized wrappers like Shared__Vector__double__at)
+                let val_ty = val_types.get(val.0 as usize).and_then(|t| t.as_ref());
+                let needs_bitcast = func.return_type.is_float()
+                    && val_ty.map_or(false, |t| t.is_integer());
+                if needs_bitcast {
+                    let val_ty_str = val_ty.map(|t| llvm_type(t)).unwrap_or("i64");
+                    writeln!(out, "  %ret.bc.{} = bitcast {val_ty_str} %v{} to {ret_ty}", val.0, val.0).unwrap();
+                    writeln!(out, "  ret {ret_ty} %ret.bc.{}", val.0).unwrap();
+                } else {
+                    writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
+                }
             }
         }
         Term::RetVoid => {
