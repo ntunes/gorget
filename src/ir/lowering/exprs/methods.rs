@@ -399,9 +399,10 @@ pub(super) fn lower_method_call(
                         vec![FunctionBuilder::copy(borrow), default_val],
                         inner_type,
                     );
-                    // If the extracted value is a Move type, zero the Option/Result
-                    // to prevent its drop from freeing the inner value's buffer.
+                    // Move-if-dead: unwrap consumes the Option/Result.
+                    // Unregister + MoveZero to transfer ownership.
                     if is_resource_type_local(dst, builder, &ctx.type_registry) {
+                        ctx.drops.unregister(place.local);
                         ctx.move_zero_and_mark(builder, place.local);
                     }
                     return FunctionBuilder::copy(dst);
@@ -413,9 +414,10 @@ pub(super) fn lower_method_call(
                         vec![FunctionBuilder::copy(borrow)],
                         inner_type,
                     );
-                    // If the extracted value is a Move type, zero the Option/Result
-                    // to prevent its drop from freeing the inner value's buffer.
+                    // Move-if-dead: unwrap consumes the Option/Result.
+                    // Unregister + MoveZero to transfer ownership.
                     if is_resource_type_local(dst, builder, &ctx.type_registry) {
+                        ctx.drops.unregister(place.local);
                         ctx.move_zero_and_mark(builder, place.local);
                     }
                     // Ptr(T) from Option__Ref_ (collection .get().unwrap()):
@@ -463,17 +465,13 @@ pub(super) fn lower_method_call(
                         vec![FunctionBuilder::copy(borrow)],
                         err_type,
                     );
-                    // MoveZero the Result to prevent scope-exit drop from
-                    // double-freeing the extracted Error payload.
-                    // For named locals: only MoveZero if it's the last use (dead).
-                    // For temps: always MoveZero.
+                    // Move-if-dead: unwrap_error consumes the Result.
+                    // Unregister from drops. MoveZero only for temps (named
+                    // locals may be read again — unregister alone suffices).
                     if is_resource_type_local(dst, builder, &ctx.type_registry) {
+                        ctx.drops.unregister(place.local);
                         if !ctx.is_named_local(place.local) {
                             ctx.move_zero_and_mark(builder, place.local);
-                        } else {
-                            // Named local: unregister the force-registered Drop
-                            // instead of MoveZero (the local may be read again).
-                            ctx.drops.unregister(place.local);
                         }
                     }
                     return FunctionBuilder::copy(dst);
@@ -1649,6 +1647,8 @@ pub(super) fn lower_method_call(
                     && ctx.type_registry.is_resource_type(builder.local_type(recv_local))
                     && !ctx.drops.is_moved(recv_local)
                 {
+                    // Move-if-dead: combinator consumes the receiver.
+                    ctx.drops.unregister(recv_local);
                     ctx.move_zero_and_mark(builder, recv_local);
                 }
             }

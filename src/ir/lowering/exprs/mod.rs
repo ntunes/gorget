@@ -1959,8 +1959,8 @@ pub fn emit_result_auto_propagate(
         0,
         ok_field_type,
     );
-    // MoveZero the Result after extracting Ok — prevents scope-exit Recursive
-    // drop from double-freeing the payload when Option/Result drops are enabled.
+    // Move-if-dead: the Result temp is consumed by ? — unregister + MoveZero.
+    ctx.drops.unregister(val_local);
     builder.move_zero(Place::local(val_local));
     ctx.drops.mark_moved(val_local);
     builder.jump(merge_bb);
@@ -1973,6 +1973,7 @@ pub fn emit_result_auto_propagate(
         0,
         err_field_type,
     );
+    // val_local already unregistered above (both paths share the unregister)
     builder.move_zero(Place::local(val_local));
     ctx.drops.mark_moved(val_local);
     // Re-wrap error in the *current* function's Result type and return.

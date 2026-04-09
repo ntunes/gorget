@@ -126,10 +126,11 @@ pub(super) fn lower_match_stmt(
             emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
             ctx.func_state.scrutinee_clone_elision = false;
             if let Some(original_local) = scrutinee_dead_original {
-                // Always zero the original in every arm — arms are mutually
-                // exclusive at runtime, so each arm must independently zero.
-                // The is_moved flag must not gate this because it leaks across
-                // arms at compile time (arm 1 marks moved, arm 2 skips zero).
+                // Move-if-dead: scrutinee is dead after this match.
+                // Unregister from drops — the extracted payload takes ownership.
+                // MoveZero still fires to prevent stale reads through the pointer.
+                ctx.drops.unregister(original_local);
+                ctx.drops.unregister(scrut_local);
                 ctx.move_zero_and_mark(builder, original_local);
             }
             lower_expr(ctx, builder, &arm.body);
