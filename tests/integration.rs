@@ -14384,6 +14384,14 @@ fn method_chaining_builder() {
 }
 
 #[test]
+fn method_chaining_consume() {
+    run_gg(
+        "method_chaining_consume.gg",
+        "Window: 800x600",
+    );
+}
+
+#[test]
 fn vector_operations_edge() {
     run_gg(
         "vector_operations_edge.gg",
@@ -15608,6 +15616,17 @@ empty",
 fn struct_builder_pattern() {
     run_gg(
         "struct_builder_pattern.gg",
+        "\
+800x600 'untitled' fs=false
+1920x1080 'game' fs=true
+800x600 'editor' fs=false",
+    );
+}
+
+#[test]
+fn struct_builder_consume() {
+    run_gg(
+        "struct_builder_consume.gg",
         "\
 800x600 'untitled' fs=false
 1920x1080 'game' fs=true

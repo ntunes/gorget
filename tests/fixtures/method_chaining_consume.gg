@@ -1,0 +1,24 @@
+# Method chaining with !self (consuming) — zero clones.
+# Compare with method_chaining.gg (borrow self — 3 clones).
+struct Builder:
+    int width
+    int height
+    String title
+
+equip Builder:
+    Builder with_width(!self, int w):
+        return Builder(w, self.height, self.title)
+
+    Builder with_height(!self, int h):
+        return Builder(self.width, h, self.title)
+
+    Builder with_title(!self, String !t):
+        return Builder(self.width, self.height, t)
+
+    String build(self):
+        return f"{self.title}: {self.width}x{self.height}"
+
+void main():
+    Builder b = Builder(0, 0, "")
+    String result = b.with_width(800).with_height(600).with_title("Window").build()
+    print(result)

@@ -1,0 +1,36 @@
+# Builder pattern with !self (consuming) — zero clones.
+# Compare with struct_builder_pattern.gg (borrow self — 4 clones).
+struct Config:
+    int width
+    int height
+    String title
+    bool fullscreen
+
+Config default_config():
+    return Config(800, 600, "untitled", false)
+
+equip Config:
+    Config with_width(!self, int w):
+        return Config(w, self.height, self.title, self.fullscreen)
+
+    Config with_height(!self, int h):
+        return Config(self.width, h, self.title, self.fullscreen)
+
+    Config with_title(!self, String !t):
+        return Config(self.width, self.height, t, self.fullscreen)
+
+    Config with_fullscreen(!self, bool fs):
+        return Config(self.width, self.height, self.title, fs)
+
+    void describe(self):
+        print(f"{self.width}x{self.height} '{self.title}' fs={self.fullscreen}")
+
+void main():
+    Config c = default_config()
+    c.describe()
+
+    Config c2 = default_config().with_width(1920).with_height(1080).with_title("game").with_fullscreen(true)
+    c2.describe()
+
+    Config c3 = default_config().with_title("editor")
+    c3.describe()
