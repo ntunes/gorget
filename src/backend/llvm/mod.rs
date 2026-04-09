@@ -1927,6 +1927,85 @@ fn emit_inst(
                 }
             }
 
+            // ── Collection void* return dereference ──
+            // Functions like gorget_guard_get, gorget_shared_get etc. return void*.
+            // Determine the expected scalar type by scanning ALL downstream uses of
+            // the result value — Call args, SlotStore, arithmetic, etc.
+            // (gorget_map_get is handled above with Option wrapping logic.)
+            {
+                let is_void_return_fn = matches!(name.as_str(),
+                    "gorget_array_get" | "gorget_array_pop" | "gorget_array_first" | "gorget_array_last"
+                    | "gorget_heap_pop" | "gorget_heap_peek"
+                    | "gorget_guard_get" | "gorget_guard_get_ptr"
+                    | "gorget_shared_get" | "gorget_shared_get_ptr"
+                    | "gorget_read_guard_get" | "gorget_read_guard_get_ptr"
+                    | "gorget_write_guard_get" | "gorget_write_guard_get_ptr"
+                );
+                if is_void_return_fn {
+                    if let Some(d) = dst {
+                        // Scan downstream to find expected scalar type:
+                        // 1. SlotStore into a scalar slot
+                        // 2. Call/CallExtern arg where callee expects scalar
+                        // 3. Arithmetic (Add/Sub/Mul etc.) — implies i64
+                        let scalar_ty: Option<LirType> = {
+                            let block = &func.blocks[block_id as usize];
+                            block.insts.iter().find_map(|i| {
+                                // SlotStore to scalar slot
+                                if let Inst::SlotStore { slot, value, .. } = i {
+                                    if value.0 == d.0 {
+                                        let sty = &func.slots[slot.0 as usize].ty;
+                                        if sty.is_integer() || sty.is_float() || matches!(sty, LirType::Bool) {
+                                            return Some(sty.clone());
+                                        }
+                                    }
+                                }
+                                // Call where param expects scalar
+                                if let Inst::Call { func: fid, args: call_args, .. } = i {
+                                    for (ci, ca) in call_args.iter().enumerate() {
+                                        if ca.0 == d.0 {
+                                            let target = &module.functions[fid.0 as usize];
+                                            if let Some(pty) = target.params.get(ci) {
+                                                if pty.is_integer() || pty.is_float() || matches!(pty, LirType::Bool) {
+                                                    return Some(pty.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // Arithmetic use implies i64
+                                match i {
+                                    Inst::Add { lhs, rhs, ty, .. } | Inst::Sub { lhs, rhs, ty, .. }
+                                    | Inst::Mul { lhs, rhs, ty, .. } | Inst::Div { lhs, rhs, ty, .. } => {
+                                        if lhs.0 == d.0 || rhs.0 == d.0 {
+                                            return Some(ty.clone());
+                                        }
+                                    }
+                                    Inst::Cmp { lhs, rhs, .. } => {
+                                        if lhs.0 == d.0 || rhs.0 == d.0 { return Some(LirType::I64); }
+                                    }
+                                    _ => {}
+                                }
+                                None
+                            })
+                        };
+                        if let Some(sty) = scalar_ty {
+                            let uid = *trap_counter;
+                            *trap_counter += 1;
+                            let pfx = format!("voidret.{block_id}.{uid}");
+                            let lty = llvm_type(&sty);
+                            let arg_strs: Vec<String> = args.iter().map(|a| {
+                                let aty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                                let ty_str = aty.map(|t| llvm_arg_type(t, snames)).unwrap_or_else(|| "ptr".to_string());
+                                format!("{ty_str} %v{}", a.0)
+                            }).collect();
+                            writeln!(out, "  %{pfx}.raw = call ptr @{name}({})", arg_strs.join(", ")).unwrap();
+                            writeln!(out, "  %v{} = load {lty}, ptr %{pfx}.raw", d.0).unwrap();
+                            return;
+                        }
+                    }
+                }
+            }
+
             // Inline expansion of Option/Result helpers
             // Option/Result is_some/is_none/is_ok/is_err — tag check
             let is_tag_check = name == "__option_is_some" || name == "__option_is_none"
