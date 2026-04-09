@@ -83,7 +83,15 @@ fn llvm_type(ty: &LirType) -> &'static str {
 /// Map LirType to LLVM IR type string, handling Struct and Void.
 fn llvm_type_full(ty: &LirType, snames: &HashMap<u32, String>) -> String {
     match ty {
-        LirType::Struct(sid) => format!("%{}", snames[&sid.0]),
+        LirType::Struct(sid) => {
+            let name = &snames[&sid.0];
+            // Box types are opaque pointers (void* in C)
+            if name.starts_with("Box__") {
+                "ptr".to_string()
+            } else {
+                format!("%{name}")
+            }
+        }
         LirType::Void => "void".to_string(),
         other => llvm_type(other).to_string(),
     }
@@ -2615,6 +2623,15 @@ fn emit_term(
                 // Small aggregate: load from pointer and return by value
                 writeln!(out, "  %retval.{} = load {ret_ty}, ptr %v{}", val.0, val.0).unwrap();
                 writeln!(out, "  ret {ret_ty} %retval.{}", val.0).unwrap();
+            } else if is_main {
+                // main() returns i32 but the LIR return value might be i64.
+                let val_ty = val_types.get(val.0 as usize).and_then(|t| t.as_ref());
+                if matches!(val_ty, Some(LirType::I64 | LirType::U64)) {
+                    writeln!(out, "  %main.ret.{} = trunc i64 %v{} to i32", val.0, val.0).unwrap();
+                    writeln!(out, "  ret i32 %main.ret.{}", val.0).unwrap();
+                } else {
+                    writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
+                }
             } else {
                 writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
             }
