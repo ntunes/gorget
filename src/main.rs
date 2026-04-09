@@ -912,7 +912,8 @@ fn compile_llvm_pipeline(
     if concat_source.contains("std.net.udp") {
         runtime_src.push_str(c_runtime::UDP_SOCKET_RUNTIME);
     }
-    if concat_source.contains("xtd.bytes") {
+    if concat_source.contains("xtd.bytes")
+        || lir_module.externs.iter().any(|e| e.name.contains("gorget_bytes")) {
         runtime_src.push_str(c_runtime::BYTES_RUNTIME);
     }
     // Test/bench modules need the alloc report runtime for panic handler globals.

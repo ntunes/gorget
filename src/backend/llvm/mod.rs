@@ -256,6 +256,20 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType
                 || name.ends_with("__is_ok") || name.ends_with("__is_err");
             if is_tag { return Some(LirType::Bool); }
 
+            // unwrap_error: error payload type from the Result struct (last field)
+            let is_unwrap_err = name == "__result_unwrap_error"
+                || name.ends_with("__unwrap_error") || name.ends_with("__unwrap_err");
+            if is_unwrap_err && !args.is_empty() {
+                let arg_ty = _val_types.get(args[0].0 as usize).and_then(|t| t.as_ref());
+                if let Some(LirType::PtrTo(sid)) = arg_ty {
+                    if let Some(def) = module.structs.get(sid.0 as usize) {
+                        if let Some((_, err_ty)) = def.fields.last() {
+                            return Some(if *err_ty == LirType::Void { LirType::Ptr } else { err_ty.clone() });
+                        }
+                    }
+                }
+            }
+
             // Unwrap: payload type from the Option/Result struct
             let is_unwrap = name == "__option_unwrap" || name == "__result_unwrap"
                 || name.ends_with("__unwrap") || name.ends_with("__expect");
@@ -2054,6 +2068,55 @@ fn emit_inst(
                     } else {
                         // is_none/is_err: tag != 0
                         writeln!(out, "  %v{} = icmp ne i32 %{tag_val}, 0", d.0).unwrap();
+                    }
+                }
+                return;
+            }
+
+            // Result unwrap_error — return error payload from Result struct
+            if (name == "__result_unwrap_error" || name.ends_with("__unwrap_error")
+                || name.ends_with("__unwrap_err")) && !args.is_empty() {
+                if let Some(d) = dst {
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    // Find the Result struct and get the error field offset
+                    let arg_ty = val_types.get(args[0].0 as usize).and_then(|t| t.as_ref());
+                    let (err_offset, err_ty_str) = match arg_ty {
+                        Some(LirType::PtrTo(sid)) | Some(LirType::Struct(sid)) => {
+                            let sdef = &module.structs[sid.0 as usize];
+                            // Error field is the last field (field 2+ in Result structs)
+                            // Compute offset from struct layout
+                            if sdef.fields.len() >= 3 {
+                                let err_field_ty = &sdef.fields.last().unwrap().1;
+                                let ty_str = llvm_type_full(err_field_ty, snames);
+                                // Error offset: after tag(4) + padding(4) + ok_payload
+                                // For Result__int64_t__GorgetString: tag(4)+pad(4)+ok(8) = 16
+                                // For Result__void__int64_t: tag(4)+pad(4)+void(0?)+err = 8
+                                let ok_size: usize = sdef.fields.get(1).map(|(_, fty)| match fty {
+                                    LirType::I8 | LirType::U8 | LirType::Bool => 1,
+                                    LirType::I16 | LirType::U16 => 2,
+                                    LirType::I32 | LirType::U32 => 4,
+                                    LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8,
+                                    LirType::F32 => 4,
+                                    LirType::Void => 0,
+                                    _ => 8,
+                                }).unwrap_or(8);
+                                let offset = 8 + ok_size; // tag(4) + pad to 8 + ok payload
+                                // Align to 8
+                                let offset = (offset + 7) & !7;
+                                (offset, ty_str)
+                            } else {
+                                (8, "i64".to_string())
+                            }
+                        }
+                        _ => (8, "i64".to_string()),
+                    };
+                    let pfx = format!("unwraperr.{block_id}.{uid}");
+                    writeln!(out, "  %{pfx}.ptr = getelementptr i8, ptr %v{}, i64 {err_offset}", args[0].0).unwrap();
+                    if err_ty_str == "ptr" || err_ty_str.starts_with('%') {
+                        writeln!(out, "  %v{} = load ptr, ptr %{pfx}.ptr", d.0).unwrap();
+                    } else {
+                        writeln!(out, "  %v{} = load {err_ty_str}, ptr %{pfx}.ptr", d.0).unwrap();
                     }
                 }
                 return;
