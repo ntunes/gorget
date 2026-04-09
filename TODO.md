@@ -2,7 +2,7 @@
 
 ## High
 
-- **gorget-arena per-frame leak (~2MB/frame)**: Starts at frame 180 (when rendering begins). NOT a compiler drop bug — stress_alloc and string temp tests show zero leaks. `render_world_culled` properly frees all 7 local vectors at exit. `hud_draw` string temps are freed. Likely application-level: accumulating data in a persistent collection, or a rendering sub-function that allocates without cleanup. Need to instrument gorget-arena frame loop to pinpoint the allocation site. [updated: 2026-04-09]
+- **`auto` VarDecl infers wrong type for equip method returns → loop-scope drop leak**: `auto sd = cache.get(i)` where `get` returns `Def` (struct with String+Vector). `infer_operand_type_with_builder` returns `Vector__Def` (the collection type) instead of `Def` (the element type). The local gets registered for drop as `Vector__Def`, so `gorget_array_free` is called instead of `Def__drop` — the element's String/Vector fields leak. Reproducer: `leak_method_return_loop.gg`. **This is the gorget-arena 2.3MB/frame leak** (fog detection loop iterating `ShaderCache.get()` with `auto sd = ...`). Fix: `infer_operand_type_with_builder` should use the equip method's declared return type, not the internal operand type. [updated: 2026-04-09]
 
 - **Remove .clone() from Json.get()/at()**: Fix A (Ptr-scrutinee extraction widened to `is_resource_type` minus Box — done) and Fix B (`Option[Ptr(T)]` → `Option[T]` return conversion with deref+clone — done). However, `Ptr(Dict).get(key)` from pattern extraction on `&self` doesn't dispatch correctly — method calls on pattern-extracted Ptr locals produce wrong results. `.clone()` workaround is correct and safe. [updated: 2026-04-08]
 
