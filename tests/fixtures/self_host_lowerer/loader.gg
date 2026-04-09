@@ -88,9 +88,18 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             loaded.put(sub_imp.module_path, true)
                     case IFunction(fdef):
                         # Skip extern stubs and forward declarations.
-                        # Real functions have >=2 body statements; stubs have
-                        # 0 or 1 (parser artifact from extern/declaration syntax).
-                        if fdef.body.len() >= 2:
+                        # Real functions have >=2 body statements, OR 1 statement
+                        # that is a SReturn (single-return-statement functions).
+                        # Extern stubs have 0 statements or 1 SExpr (string literal).
+                        bool has_real_body = fdef.body.len() >= 2
+                        if not has_real_body and fdef.body.len() == 1:
+                            Stmt first_s = fdef.body.get(0).unwrap()
+                            match first_s:
+                                case SReturn(_):
+                                    has_real_body = true
+                                else:
+                                    pass
+                        if has_real_body:
                             # Mangle function name and register redirect
                             String bare_name = fdef.name.clone()
                             String mangled = mod_prefix + bare_name
