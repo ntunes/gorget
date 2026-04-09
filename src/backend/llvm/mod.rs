@@ -652,10 +652,15 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         } else {
             String::new()
         };
-        if needs_sret(&ext.return_type, &module.structs) {
-            // Large aggregate returns use sret convention — void return + sret first param.
-            // Small aggregates (≤16 bytes) are returned in registers on aarch64.
-            let ret_ty = llvm_type_full(&ext.return_type, snames);
+        // Fix return type for known methods that return bool but are declared as i64
+        let actual_ret = if (ext.name.ends_with("__any") || ext.name.ends_with("__all")
+            || ext.name.ends_with("__contains")) && ext.return_type == LirType::I64 {
+            LirType::Bool
+        } else {
+            ext.return_type.clone()
+        };
+        if needs_sret(&actual_ret, &module.structs) {
+            let ret_ty = llvm_type_full(&actual_ret, snames);
             let sret_params = if params.is_empty() {
                 format!("ptr sret({ret_ty}){variadic}")
             } else {
@@ -663,7 +668,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
             };
             writeln!(out, "declare void @{}({sret_params})", ext.name).unwrap();
         } else {
-            let ret = llvm_type_full(&ext.return_type, snames);
+            let ret = llvm_type_full(&actual_ret, snames);
             writeln!(out, "declare {ret} @{}({}{})", ext.name, params.join(", "), variadic).unwrap();
         }
     }
@@ -2190,7 +2195,14 @@ fn emit_inst(
             // Look up the extern declaration
             let ext = module.externs.iter().find(|e| e.name == *name);
             if let Some(ext) = ext {
-                let ret_ty = llvm_type_full(&ext.return_type, snames);
+                // Fix return type for methods that return bool but are declared as i64
+                let actual_ret = if (name.ends_with("__any") || name.ends_with("__all")
+                    || name.ends_with("__contains")) && ext.return_type == LirType::I64 {
+                    LirType::Bool
+                } else {
+                    ext.return_type.clone()
+                };
+                let ret_ty = llvm_type_full(&actual_ret, snames);
                 // For each arg, handle type mismatches:
                 // - extern expects ptr but value is scalar → spill to alloca
                 // - extern expects aggregate but value is ptr → load struct from ptr
@@ -2240,9 +2252,9 @@ fn emit_inst(
                     variadic,
                 );
                 if let Some(d) = dst {
-                    if ext.return_type == LirType::Void {
+                    if actual_ret == LirType::Void {
                         writeln!(out, "  call void @{name}({})", arg_strs.join(", ")).unwrap();
-                    } else if needs_sret(&ext.return_type, &module.structs) {
+                    } else if needs_sret(&actual_ret, &module.structs) {
                         // Large aggregate return: sret convention
                         writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
                         let sret_args = if arg_strs.is_empty() {
@@ -2251,7 +2263,7 @@ fn emit_inst(
                             format!("ptr sret({ret_ty}) %v{}, {}", d.0, arg_strs.join(", "))
                         };
                         writeln!(out, "  call void @{name}({sret_args})").unwrap();
-                    } else if ext.return_type.is_aggregate() {
+                    } else if actual_ret.is_aggregate() {
                         // Small aggregate: returned in registers
                         writeln!(out, "  %v{}.ret = call {ret_ty} @{name}({})", d.0, arg_strs.join(", ")).unwrap();
                         writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
