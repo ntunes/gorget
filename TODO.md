@@ -2,7 +2,7 @@
 
 ## High
 
-- **stress_alloc_mixed leaked=true**: Option/Result drop IS working (Option__Vector__int64_t__drop called). The remaining leak is from OTHER sections (Dict reassignment, deeply nested types). Not an Option/Result issue. [updated: 2026-04-09]
+- ~~**stress_alloc_mixed leaked=true**~~: RESOLVED — not a leak. `leaked=true` is from live variables (Vector `v` and Dict `d` from sections 5-6 declared at function scope, measured before main returns). All drops verified working: Option[Vector[int]] scope-exit drop, struct reassignment drop, collection reassignment drop. Constant mem_live confirms no growth. [updated: 2026-04-09]
 
 - **Remove .clone() from Json.get()/at()**: Fix A (Ptr-scrutinee extraction widened to `is_resource_type` minus Box — done) and Fix B (`Option[Ptr(T)]` → `Option[T]` return conversion with deref+clone — done). However, `Ptr(Dict).get(key)` from pattern extraction on `&self` doesn't dispatch correctly — method calls on pattern-extracted Ptr locals produce wrong results. `.clone()` workaround is correct and safe. [updated: 2026-04-08]
 
