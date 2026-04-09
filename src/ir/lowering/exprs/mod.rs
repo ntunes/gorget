@@ -1953,7 +1953,7 @@ pub fn emit_result_auto_propagate(
 
     // Ok path: extract Ok value (field 0 of variant 0)
     builder.switch_to(ok_bb);
-    let ok_val = builder.enum_field_load(
+    let ok_val = builder.enum_field_load_move(
         Place::local(val_local),
         "Ok",
         0,
@@ -1967,7 +1967,7 @@ pub fn emit_result_auto_propagate(
 
     // Error path: propagate error via early return
     builder.switch_to(err_bb);
-    let err_val = builder.enum_field_load(
+    let err_val = builder.enum_field_load_move(
         Place::local(val_local),
         "Error",
         0,
@@ -2116,7 +2116,7 @@ fn lower_rethrow_expr(
 
     // Ok path: extract Ok value (identical to lower_try_expr)
     builder.switch_to(ok_bb);
-    let ok_val = builder.enum_field_load(
+    let ok_val = builder.enum_field_load_move(
         Place::local(val_local),
         "Ok",
         0,
@@ -2129,7 +2129,7 @@ fn lower_rethrow_expr(
     // Error path: optionally bind error to name, evaluate transform, throw that
     builder.switch_to(err_bb);
     if let Some((_error_type, error_name)) = error_binding {
-        let err_val = builder.enum_field_load(
+        let err_val = builder.enum_field_load_move(
             Place::local(val_local),
             "Error",
             0,
@@ -2201,7 +2201,7 @@ fn lower_catch_expr(
 
     // Ok path: extract Ok value, store into result
     builder.switch_to(ok_bb);
-    let ok_val = builder.enum_field_load(
+    let ok_val = builder.enum_field_load_move(
         Place::local(val_local),
         "Ok",
         0,
@@ -2212,7 +2212,7 @@ fn lower_catch_expr(
 
     // Error path: bind error, evaluate recovery, store into result
     builder.switch_to(err_bb);
-    let err_val = builder.enum_field_load(
+    let err_val = builder.enum_field_load_move(
         Place::local(val_local),
         "Error",
         0,

@@ -295,7 +295,7 @@ pub fn lower_pattern_condition(
                         })
                         .unwrap_or(I64_TYPE);
 
-                    let field_local = builder.enum_field_load(
+                    let field_local = builder.enum_field_load_move(
                         Place::local(scrut_local),
                         variant_name.clone(),
                         i as u32,
@@ -484,7 +484,7 @@ pub fn emit_pattern_bindings(
                     }
                 }
 
-                let dst = builder.enum_field_load(
+                let dst = builder.enum_field_load_move(
                     Place::local(scrut_local),
                     variant_name.clone(),
                     i as u32,
@@ -604,7 +604,7 @@ pub fn emit_pattern_bindings(
                     } else { I64_TYPE }
                 } else { I64_TYPE };
 
-                let dst = builder.enum_field_load(
+                let dst = builder.enum_field_load_move(
                     Place::local(scrut_local),
                     variant_name.clone(),
                     i as u32,

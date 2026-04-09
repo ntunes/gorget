@@ -817,7 +817,7 @@ fn lower_for_iterable(
     ctx.drops.push_scope(DropScopeKind::Loop);
 
     // Extract: elem = opt_result.data.Some._0
-    let elem_local = builder.enum_field_load(
+    let elem_local = builder.enum_field_load_move(
         Place::local(opt_result),
         "Some",
         0,

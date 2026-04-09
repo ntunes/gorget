@@ -400,6 +400,26 @@ impl FunctionBuilder {
     ) -> LocalId {
         let variant = variant.into();
         self.emit_with_temp(type_id, |dst| Instruction::EnumFieldLoad {
+            mode: FieldLoadMode::Copy,
+            dst,
+            base,
+            variant,
+            field,
+        })
+    }
+
+    /// Like `enum_field_load` but zeros the source field after extraction.
+    /// Use for resource-type payloads to prevent shallow-copy double-free.
+    pub fn enum_field_load_move(
+        &mut self,
+        base: Place,
+        variant: impl Into<String>,
+        field: u32,
+        type_id: TypeId,
+    ) -> LocalId {
+        let variant = variant.into();
+        self.emit_with_temp(type_id, |dst| Instruction::EnumFieldLoad {
+            mode: FieldLoadMode::MoveZeroSource,
             dst,
             base,
             variant,

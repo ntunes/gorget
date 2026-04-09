@@ -971,6 +971,7 @@ impl<'a> FuncLowering<'a> {
             }
 
             Instruction::EnumFieldLoad {
+                mode,
                 dst,
                 base,
                 variant,
@@ -1017,6 +1018,9 @@ impl<'a> FuncLowering<'a> {
                         ty: field_ty,
                     });
                     self.store_to_local(*dst, result, bb);
+                    // MoveZeroSource: the GIR emitter zeros the source enum via
+                    // a separate MoveZero instruction or unregisters it from drops.
+                    // The mode field documents the intent for validation.
                 }
             }
 

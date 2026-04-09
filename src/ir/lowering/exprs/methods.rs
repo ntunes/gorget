@@ -1833,7 +1833,7 @@ fn build_iter_next_loop(
 
     // Body: extract element from Some._0
     builder.switch_to(body_bb);
-    let elem_local = builder.enum_field_load(
+    let elem_local = builder.enum_field_load_move(
         Place::local(opt_result),
         "Some",
         0,
@@ -2060,7 +2060,7 @@ fn try_lower_option_result_combinator(
 
     // === Some/Ok branch ===
     builder.switch_to(some_bb);
-    let payload = builder.enum_field_load(Place::local(scrut_local), if is_option { "Some" } else { "Ok" }, 0, some_ok_type);
+    let payload = builder.enum_field_load_move(Place::local(scrut_local), if is_option { "Some" } else { "Ok" }, 0, some_ok_type);
 
     match method_name {
         "map" => {
@@ -2137,27 +2137,27 @@ fn try_lower_option_result_combinator(
         }
         "map" | "and_then" | "flat_map" if is_result => {
             // Error → Error(err)
-            let err_val = builder.enum_field_load(Place::local(scrut_local), "Error", 0, none_err_type);
+            let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             let wrapped = builder.enum_init(&result_type_name, "Error", result_type, vec![FunctionBuilder::copy(err_val)]);
             builder.assign(Place::local(result_local), FunctionBuilder::copy(wrapped));
         }
         "or_else" if is_result => {
             // or_else: Error → fn(err)
-            let err_val = builder.enum_field_load(Place::local(scrut_local), "Error", 0, none_err_type);
+            let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             let result = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], result_type);
             builder.assign(Place::local(result_local), result);
         }
         "unwrap_or_else" if is_result => {
             // unwrap_or_else: Error → fn(err)
-            let err_val = builder.enum_field_load(Place::local(scrut_local), "Error", 0, none_err_type);
+            let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             let result = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], some_ok_type);
             builder.assign(Place::local(result_local), result);
         }
         "map_err" if is_result => {
             // map_err: Error → Error(fn(err))
-            let err_val = builder.enum_field_load(Place::local(scrut_local), "Error", 0, none_err_type);
+            let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             let mapped = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], none_err_type);
             let wrapped = builder.enum_init(&result_type_name, "Error", result_type, vec![mapped]);

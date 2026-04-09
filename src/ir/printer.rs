@@ -421,7 +421,7 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
         Instruction::TagOf { dst, operand } => {
             write!(out, "_{} = tag_of {}", dst.0, format_operand(operand, reg)).unwrap();
         }
-        Instruction::EnumFieldLoad { dst, base, variant, field } => {
+        Instruction::EnumFieldLoad { mode, dst, base, variant, field } => {
             write!(
                 out,
                 "_{} = enum_field_load {}, {}, {}",
