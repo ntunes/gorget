@@ -2199,6 +2199,13 @@ done");
 }
 
 #[test]
+fn leak_method_return_loop() {
+    run_gg("leak_method_return_loop.gg", "\
+leaked=true
+done");
+}
+
+#[test]
 fn leak_string_heavy() {
     run_gg("leak_string_heavy.gg", "\
 p1_fstring=0
