@@ -58,6 +58,16 @@ impl<'a> FuncLowering<'a> {
 
         let local_idx = place.local.0 as usize;
 
+        // Skip drops for Ref locals — they're borrows, the owner drops them.
+        if place.projections.is_empty() {
+            if let Some(local) = self.gir_func.locals.get(local_idx) {
+                if local.ownership == ir::OwnershipState::Ref {
+                    self.lir_func.block_mut(bb).insts.push(Inst::Nop);
+                    return;
+                }
+            }
+        }
+
         // Resolve the actual type at the end of the projection chain.
         // For `bot.nav.path` this gives GorgetArray, not Ptr(BotState).
         let type_id = self.resolve_gir_place_type(place);
