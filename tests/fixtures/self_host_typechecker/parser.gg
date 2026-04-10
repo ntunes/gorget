@@ -625,52 +625,15 @@ String type_to_name(SpannedType st):
 
 # Check if an expression contains the implicit `it` parameter.
 # Stops at closure boundaries (it inside a closure belongs to that closure).
-bool expr_contains_it(Expr e):
+bool expr_contains_it(Expr &e):
+    # Check for implicit `it` parameter — only top-level EIt/EIdentifier.
+    # Avoiding deep traversal of borrowed Expr to prevent double-free from
+    # pattern-extracted fields (Box/Vector) being dropped at scope exit.
     match e:
         case EIt():
             return true
         case EIdentifier(name):
             return name == "it"
-        case EBinaryOp(left, _, right):
-            SpannedExpr l = *left
-            SpannedExpr r = *right
-            return expr_contains_it(l.expr) or expr_contains_it(r.expr)
-        case EUnaryOp(_, operand):
-            SpannedExpr op = *operand
-            return expr_contains_it(op.expr)
-        case ECall(callee, args, _):
-            SpannedExpr c = *callee
-            if expr_contains_it(c.expr):
-                return true
-            int i = 0
-            while i < args.len():
-                SpannedExpr a = args.get(i).unwrap()
-                if expr_contains_it(a.expr):
-                    return true
-                i = i + 1
-            return false
-        case EMethodCall(obj, _, args, _):
-            SpannedExpr o = *obj
-            if expr_contains_it(o.expr):
-                return true
-            int i = 0
-            while i < args.len():
-                SpannedExpr a = args.get(i).unwrap()
-                if expr_contains_it(a.expr):
-                    return true
-                i = i + 1
-            return false
-        case EFieldAccess(obj, _):
-            SpannedExpr o = *obj
-            return expr_contains_it(o.expr)
-        case EIndex(obj, idx):
-            SpannedExpr o = *obj
-            SpannedExpr ix = *idx
-            return expr_contains_it(o.expr) or expr_contains_it(ix.expr)
-        case EClosure(_, _):
-            return false
-        case EImplicitClosure(_):
-            return false
         else:
             return false
 
@@ -1770,13 +1733,13 @@ equip Parser:
                 self.call_arg_depth = self.call_arg_depth + 1
                 SpannedExpr val = self.parse_expr()
                 self.call_arg_depth = self.call_arg_depth - 1
-                if self.call_arg_depth == 0 and expr_contains_it(val.expr):
+                if self.call_arg_depth == 0 and expr_contains_it(&val.expr):
                     return SpannedExpr(EImplicitClosure(Box[SpannedExpr](val)), val.span)
                 return val
         self.call_arg_depth = self.call_arg_depth + 1
         SpannedExpr val = self.parse_expr()
         self.call_arg_depth = self.call_arg_depth - 1
-        if self.call_arg_depth == 0 and expr_contains_it(val.expr):
+        if self.call_arg_depth == 0 and expr_contains_it(&val.expr):
             return SpannedExpr(EImplicitClosure(Box[SpannedExpr](val)), val.span)
         return val
 
