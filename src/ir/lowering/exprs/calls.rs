@@ -366,6 +366,12 @@ pub(super) fn lower_call(
                 tid
             };
             let alloc_fn = format!("__gorget_box_alloc_{inner_c}");
+            // Unregister source — Box takes ownership, source must not be dropped.
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = val_op {
+                if place.projections.is_empty() {
+                    ctx.drops.unregister(place.local);
+                }
+            }
             let dst = builder.call_extern(&alloc_fn, vec![val_op], box_type);
             return FunctionBuilder::copy(dst);
         }
@@ -699,6 +705,14 @@ pub(super) fn lower_call(
             let field_operands: Vec<Operand> = args.iter()
                 .map(|arg| lower_expr(ctx, builder, &arg.node.value))
                 .collect();
+            // Unregister consumed resource locals — enum takes ownership.
+            for op in &field_operands {
+                if let Operand::Copy(place) | Operand::Move(place) = op {
+                    if place.projections.is_empty() {
+                        ctx.drops.unregister(place.local);
+                    }
+                }
+            }
             let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
             let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands);
             return FunctionBuilder::copy(dst);
@@ -708,6 +722,13 @@ pub(super) fn lower_call(
             let field_operands: Vec<Operand> = args.iter()
                 .map(|arg| lower_expr(ctx, builder, &arg.node.value))
                 .collect();
+            for op in &field_operands {
+                if let Operand::Copy(place) | Operand::Move(place) = op {
+                    if place.projections.is_empty() {
+                        ctx.drops.unregister(place.local);
+                    }
+                }
+            }
             let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
             let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands);
             return FunctionBuilder::copy(dst);

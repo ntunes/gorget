@@ -163,6 +163,12 @@ pub(super) fn lower_assign(
                     };
                     builder.assign(deref_place, operand.clone());
                     super::maybe_emit_field_move_zero(ctx, builder, &operand);
+                    // Unregister RHS temp — the deref store took ownership.
+                    if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                        if place.projections.is_empty() && !ctx.is_named_local(place.local) {
+                            ctx.drops.unregister(place.local);
+                        }
+                    }
                 } else {
                     // Determine assignment mode (same decision tree as VarDecl).
                     use crate::ir::instructions::AssignMode;

@@ -881,18 +881,15 @@ impl<'a> LoweringContext<'a> {
         self.clone_resource_args_for_init(builder, &mut args, None);
         let dst = builder.enum_init(enum_name, variant_name, type_id, args.clone());
         self.set_owned(dst);
-        // MoveZero single-use/temp resource args after init — transfers ownership.
+        // Transfer ownership: mark consumed resource args so scope-exit
+        // drops don't double-free. Use unregister (removes from drop tracking)
+        // rather than MoveZero (which emits runtime memset).
         for op in &args {
             if let Operand::Copy(place) = op {
                 if place.projections.is_empty() {
-                    let local_type = builder.local_type(place.local);
-                    let is_resource = self.type_registry.is_resource_type(local_type);
-                    let skip = self.is_named_local(place.local) && self.current_loop().is_some()
-                        && !self.is_loop_body_local(place.local);
-                    if is_resource && !self.drops.is_moved(place.local) && !skip {
-                        builder.move_zero(place.clone());
-                        self.drops.mark_moved(place.local);
-                    }
+                    // Unconditionally unregister consumed args from drop tracking.
+                    // The enum now owns the data; the source must not be dropped.
+                    self.drops.unregister(place.local);
                 }
             }
         }
