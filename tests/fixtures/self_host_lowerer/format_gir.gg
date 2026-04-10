@@ -202,12 +202,15 @@ String format_function(GirFunction func, GirModule &gmod):
     while li < func.locals.len():
         GirLocal loc = func.locals.get(li).unwrap()
         String line = "        _" + int_to_str(li) + ": " + format_type_id(loc.type_id, &gmod)
-        Option[String] hint = loc.name_hint
-        match hint:
-            case Some(h):
-                line = line + "         ; " + h
-            else:
-                pass
+        # Access name_hint without intermediate Option copy to avoid
+        # double-free from CoW aliasing with the GirLocal's field.
+        int hint_tid = loc.type_id
+        if hint_tid >= 0:
+            match loc.name_hint:
+                case Some(h):
+                    line = line + "         ; " + h
+                else:
+                    pass
         locals_str = locals_str + "\n" + line
         li = li + 1
 
