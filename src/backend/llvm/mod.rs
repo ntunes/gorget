@@ -341,6 +341,10 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
         LirType::F32 => 4,
         LirType::Struct(sid) => {
             if let Some(def) = structs.get(sid.0 as usize) {
+                // Box types are opaque pointers — always 8 bytes
+                if def.name.starts_with("Box__") {
+                    return 8;
+                }
                 if let Some(sz) = def.computed_c_size {
                     return sz;
                 }
@@ -1053,6 +1057,7 @@ fn emit_function(
                         let is_callable = name.starts_with("__callable_");
                         let is_closure_call = name.starts_with("__gorget_closure_call_");
                         let is_map_get = name == "gorget_map_get" || name == "gorget_map_safe_get";
+                        let is_box_get = name.starts_with("Box__") && name.contains("__get");
                         let is_void_ret = matches!(name.as_str(),
                             "gorget_guard_get" | "gorget_shared_get"
                             | "gorget_read_guard_get" | "gorget_write_guard_get");
@@ -2016,6 +2021,24 @@ fn emit_inst(
             }
 
             // ── Collection void* return dereference ──
+            // ── Box__T__get → dereference void* to the boxed value ──
+            if name.contains("__get") && name.starts_with("Box__") && !args.is_empty() {
+                if let Some(d) = dst {
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    let pfx = format!("boxget.{block_id}.{uid}");
+                    // Box__T__get returns void* → load the scalar
+                    let arg_strs: Vec<String> = args.iter().map(|a| format!("ptr %v{}", a.0)).collect();
+                    writeln!(out, "  %{pfx}.raw = call ptr @{name}({})", arg_strs.join(", ")).unwrap();
+                    // Determine the element type from the return type context
+                    let elem_ty = if name.contains("int64") || name.contains("int__") { "i64" }
+                        else if name.contains("double") || name.contains("float__") { "double" }
+                        else { "i64" }; // default
+                    writeln!(out, "  %v{} = load {elem_ty}, ptr %{pfx}.raw", d.0).unwrap();
+                }
+                return;
+            }
+
             // Functions like gorget_guard_get, gorget_shared_get etc. return void*.
             // Only dereference when the value is EXCLUSIVELY used as a scalar
             // (never as a pointer for null checks, memcpy, etc.).
