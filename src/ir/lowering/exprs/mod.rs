@@ -1035,12 +1035,6 @@ fn resolve_option_result_variant(
                 })
                 .unwrap_or(UNIT_TYPE);
             let type_name = ctx.type_registry.type_name(type_id).unwrap_or_else(|| mangled.clone());
-            // Unregister source local — Some takes ownership, preventing double-free.
-            if let Operand::Copy(ref place) | Operand::Move(ref place) = field_op {
-                if place.projections.is_empty() {
-                    ctx.drops.unregister(place.local);
-                }
-            }
             let dst = ctx.emit_enum_init_owned(builder, &type_name, "Some", type_id, vec![field_op]);
             Some(FunctionBuilder::copy(dst))
         }

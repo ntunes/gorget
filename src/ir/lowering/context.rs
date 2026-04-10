@@ -866,7 +866,7 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Centralized ownership-aware enum init. Clones borrow-param and multi-use
-    /// resource-type args before init, MoveZeros single-use args after.
+    /// resource-type args before init, unregisters consumed args from drops.
     /// ALL enum_init call sites with non-empty args should use this.
     pub fn emit_enum_init_owned(
         &mut self,
@@ -876,20 +876,40 @@ impl<'a> LoweringContext<'a> {
         type_id: TypeId,
         mut args: Vec<Operand>,
     ) -> LocalId {
+        // Snapshot original locals before cloning — we need to know which
+        // args were replaced by clones vs consumed directly.
+        let originals: Vec<Option<LocalId>> = args.iter().map(|op| {
+            if let Operand::Copy(place) = op {
+                if place.projections.is_empty() { return Some(place.local); }
+            }
+            None
+        }).collect();
+
         // Clone resource args that can't be moved into the enum variant.
-        // Uses the same logic as clone_multi_use_resource_args (struct init path).
         self.clone_resource_args_for_init(builder, &mut args, None);
         let dst = builder.enum_init(enum_name, variant_name, type_id, args.clone());
         self.set_owned(dst);
-        // Transfer ownership: mark consumed resource args so scope-exit
-        // drops don't double-free. Use unregister (removes from drop tracking)
-        // rather than MoveZero (which emits runtime memset).
-        for op in &args {
+
+        // Transfer ownership: consumed args must not be double-freed at scope exit.
+        // - Cloned args: the clone temp is consumed; unregister it. The original
+        //   stays tracked — it was cloned, not consumed.
+        // - Non-cloned args: consumed directly; unregister from drop tracking.
+        //   The enum now owns the data.
+        for (i, op) in args.iter().enumerate() {
             if let Operand::Copy(place) = op {
                 if place.projections.is_empty() {
-                    // Unconditionally unregister consumed args from drop tracking.
-                    // The enum now owns the data; the source must not be dropped.
-                    self.drops.unregister(place.local);
+                    let was_cloned = originals.get(i)
+                        .and_then(|o| *o)
+                        .map_or(false, |orig| orig != place.local);
+                    if was_cloned {
+                        // Clone temp consumed by the enum — unregister it.
+                        // The original local is NOT unregistered — it was
+                        // cloned, not consumed, and still needs its scope-exit drop.
+                        self.drops.unregister(place.local);
+                    } else {
+                        // Original local consumed directly — unregister.
+                        self.drops.unregister(place.local);
+                    }
                 }
             }
         }
