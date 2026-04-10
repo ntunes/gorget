@@ -1634,6 +1634,7 @@ pub(super) fn emit_recursive_struct_drops(out: &mut String, module: &LirModule, 
         // The clone function DOES deep-copy them to prevent CoW aliasing.
         writeln!(out, "static inline void {drop_fn_name}({c_name}* self) {{").unwrap();
         for (field_name, drop_fn, _field_type_name) in drop_info {
+            if drop_fn.starts_with("__clone_only:") { continue; }
             writeln!(out, "    {drop_fn}(&self->{field_name});").unwrap();
         }
         writeln!(out, "}}").unwrap();
@@ -1666,6 +1667,11 @@ pub(super) fn emit_recursive_struct_clones(out: &mut String, module: &LirModule,
         writeln!(out, "{c_name} {clone_fn_name}(void* __p) {{").unwrap();
         writeln!(out, "    {c_name} dst = *({c_name}*)__p;").unwrap();
         for (field_name, drop_fn, _field_type_name) in drop_info {
+            // Handle clone-only entries (Option/Result fields)
+            if let Some(clone_name) = drop_fn.strip_prefix("__clone_only:") {
+                writeln!(out, "    dst.{field_name} = {clone_name}(&dst.{field_name});").unwrap();
+                continue;
+            }
             // Map drop function → clone function
             let clone_fn = match drop_fn.as_str() {
                 // Clone to owned: CoW materializations must produce independently-owned
@@ -1749,6 +1755,7 @@ pub(super) fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, s
                 "gorget_array_free" => "gorget_array_clone".into(),
                 "gorget_map_free" => "gorget_map_clone".into(),
                 "gorget_set_free" => "gorget_set_clone".into(),
+                "free" => "__gorget_box_clone".into(),
                 other if other.ends_with("__drop") => {
                     let base = &other[..other.len() - 6];
                     format!("{base}__clone")
@@ -1773,7 +1780,12 @@ pub(super) fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, s
             let fields = &by_variant[&vi];
             write!(out, "        case {vi}: ").unwrap();
             for (variant_name, field_name, drop_fn, _field_type_name) in fields {
-                let clone_fn = drop_to_clone(drop_fn);
+                // Handle clone-only entries (Option/Result fields)
+                let clone_fn = if let Some(clone_name) = drop_fn.strip_prefix("__clone_only:") {
+                    clone_name.to_string()
+                } else {
+                    drop_to_clone(drop_fn)
+                };
                 // Only emit clone call if the function is a known runtime clone OR
                 // will be generated (exists in recursive_drop_structs/enums).
                 // Handle types like Task with Trivial drop but no clone are left
@@ -1787,23 +1799,36 @@ pub(super) fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, s
                             || module.recursive_drop_enums.contains_key(base)
                             || module.functions.iter().any(|f| f.name == clone_fn)
                     };
-                if !clone_fn.is_empty() && clone_exists {
-                    // Count how many LIR struct fields belong to this variant
+                if !clone_fn.is_empty() && (clone_fn == "__gorget_box_clone" || clone_exists) {
                     let variant_prefix = format!("{variant_name}_");
                     let variant_field_count = sdef.fields.iter()
                         .filter(|(n, _)| n.starts_with(&variant_prefix))
                         .count();
                     let access = if sdef.is_union_layout && variant_field_count > 1 {
-                        // Union layout, multi-field variant: data.{Variant}.{Field}
                         format!("data.{variant_name}.{field_name}")
                     } else if sdef.is_union_layout {
-                        // Union layout, single-field variant: data.{Field}
                         format!("data.{field_name}")
                     } else {
-                        // Flat layout: {Field}
                         field_name.to_string()
                     };
-                    write!(out, "dst.{access} = {clone_fn}(&dst.{access}); ").unwrap();
+                    if clone_fn == "__gorget_box_clone" {
+                        // Box: alloc new box, copy content, deep-clone content
+                        let inner_type = _field_type_name.strip_prefix("Box__").unwrap_or(_field_type_name);
+                        let inner_clone = format!("{inner_type}__clone_inplace");
+                        let has_inner_clone = module.recursive_drop_structs.contains_key(inner_type)
+                            || module.recursive_drop_enums.contains_key(inner_type);
+                        let alloc_fn = format!("__gorget_box_alloc_{inner_type}");
+                        let inner_c_name = module.structs.iter().enumerate()
+                            .find(|(_, s)| s.name == inner_type)
+                            .and_then(|(i, _)| sn.get(&(i as u32)).cloned())
+                            .unwrap_or_else(|| inner_type.to_string());
+                        write!(out, "dst.{access} = {alloc_fn}(*({inner_c_name}*)dst.{access}); ").unwrap();
+                        if has_inner_clone {
+                            write!(out, "{inner_clone}(dst.{access}); ").unwrap();
+                        }
+                    } else {
+                        write!(out, "dst.{access} = {clone_fn}(&dst.{access}); ").unwrap();
+                    }
                 }
             }
             writeln!(out, "break;").unwrap();
@@ -1853,6 +1878,7 @@ pub(super) fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
             let fields = &by_variant[&vi];
             write!(out, "        case {vi}: ").unwrap();
             for (variant_name, field_name, drop_fn, _field_type_name) in fields {
+                if drop_fn.starts_with("__clone_only:") { continue; }
                 let variant_prefix = format!("{variant_name}_");
                 let variant_field_count = sdef.fields.iter()
                     .filter(|(n, _)| n.starts_with(&variant_prefix))

@@ -340,13 +340,15 @@ impl<'a> LoweringContext<'a> {
                     Some(GirType::Named(n)) => n.clone(),
                     _ => continue,
                 };
-                // Skip Option/Result-typed fields in struct destructors.
-                // These types' payloads are consumed via match/unwrap extraction
-                // which doesn't MoveZero the enclosing struct's field slot.
-                // Dropping the field after extraction causes double-free.
-                // The standalone Option/Result clone functions handle deep-copy
-                // correctly (via EnumKind dispatch).
+                // Option/Result fields: skip for DROP (double-free risk from
+                // match extraction without MoveZero), include for CLONE if they
+                // wrap resource types (deep copy must be independent).
                 if field_type_name.starts_with("Option__") || field_type_name.starts_with("Result__") {
+                    let field_strat = self.infer_drop_strategy(&field_type_name);
+                    if matches!(field_strat, DropStrategy::Recursive | DropStrategy::Custom(_) | DropStrategy::Trivial(_)) {
+                        let clone_fn = format!("{field_type_name}__clone");
+                        field_drops.push((field.name.clone(), format!("__clone_only:{clone_fn}"), field_type_name));
+                    }
                     continue;
                 }
                 let field_drop_strategy = self.infer_drop_strategy(&field_type_name);
@@ -397,10 +399,15 @@ impl<'a> LoweringContext<'a> {
                         Some(GirType::Named(n)) => n.clone(),
                         _ => continue,
                     };
-                    // Skip Option/Result-typed variant fields — same double-free
-                    // issue as struct fields (match extraction doesn't MoveZero
-                    // the enclosing enum's field slot).
+                    // Option/Result variant fields: skip for DROP, include for
+                    // CLONE if they wrap resource types.
                     if field_type_name.starts_with("Option__") || field_type_name.starts_with("Result__") {
+                        let field_strat = self.infer_drop_strategy(&field_type_name);
+                        if matches!(field_strat, DropStrategy::Recursive | DropStrategy::Custom(_) | DropStrategy::Trivial(_)) {
+                            let clone_fn = format!("{field_type_name}__clone");
+                            let field_name = format!("{}_{fi}", variant.name);
+                            variant_drops.push((vi as u32, variant.name.clone(), field_name, format!("__clone_only:{clone_fn}"), field_type_name));
+                        }
                         continue;
                     }
                     let field_drop = self.infer_drop_strategy(&field_type_name);
