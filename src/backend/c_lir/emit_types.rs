@@ -1664,7 +1664,9 @@ pub(super) fn emit_recursive_struct_clones(out: &mut String, module: &LirModule,
 
         // Generate: TypeName__clone(void* __p) → T with deep-cloned resource fields
         // NOT static — the IndexLoad path emits a non-static extern declaration.
+        // Null-safe: return zero struct if __p is null (from uninitialized Ptr locals).
         writeln!(out, "{c_name} {clone_fn_name}(void* __p) {{").unwrap();
+        writeln!(out, "    if (!__p) {{ {c_name} z = {{0}}; return z; }}").unwrap();
         writeln!(out, "    {c_name} dst = *({c_name}*)__p;").unwrap();
         for (field_name, drop_fn, _field_type_name) in drop_info {
             // Handle clone-only entries (Option/Result fields)
@@ -1765,6 +1767,7 @@ pub(super) fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, s
         }
 
         writeln!(out, "{c_name} {clone_fn_name}(void* __p) {{").unwrap();
+        writeln!(out, "    if (!__p) {{ {c_name} z = {{0}}; return z; }}").unwrap();
         writeln!(out, "    {c_name} dst = *({c_name}*)__p;").unwrap();
         writeln!(out, "    switch (dst.tag) {{").unwrap();
 
@@ -2013,8 +2016,9 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
             }
 
             if let Some(ref variants) = info.enum_variants {
-                // Enum clone
+                // Enum clone (null-safe)
                 writeln!(out, "{c_name} {clone_fn_name}(void* __p) {{").unwrap();
+                writeln!(out, "    if (!__p) {{ {c_name} z = {{0}}; return z; }}").unwrap();
                 writeln!(out, "    {c_name} dst = *({c_name}*)__p;").unwrap();
                 writeln!(out, "    switch (dst.tag) {{").unwrap();
                 let mut by_variant: std::collections::HashMap<u32, Vec<(&str, &str, &str, &str)>> = std::collections::HashMap::new();
@@ -2050,8 +2054,9 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                 writeln!(out, "void {clone_fn_name}_inplace(void* __p) {{ *({c_name}*)__p = {clone_fn_name}(__p); }}").unwrap();
                 writeln!(out).unwrap();
             } else {
-                // Struct clone
+                // Struct clone (null-safe)
                 writeln!(out, "{c_name} {clone_fn_name}(void* __p) {{").unwrap();
+                writeln!(out, "    if (!__p) {{ {c_name} z = {{0}}; return z; }}").unwrap();
                 writeln!(out, "    {c_name} dst = *({c_name}*)__p;").unwrap();
                 for (field_name, drop_fn, _ftn) in &info.field_drops {
                     if let Some(cfn) = drop_to_clone_fn(drop_fn) {
