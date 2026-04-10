@@ -1332,10 +1332,18 @@ impl<'a> LoweringContext<'a> {
         for (&local_id, state) in &self.func_state.local_ownership {
             let idx = local_id.0 as usize;
             if idx < builder.locals.len() {
-                builder.locals[idx].ownership = if matches!(state, LocalOwnershipState::Owned) {
-                    crate::ir::OwnershipState::Owned
-                } else {
-                    crate::ir::OwnershipState::Ref
+                builder.locals[idx].ownership = match state {
+                    LocalOwnershipState::Owned => crate::ir::OwnershipState::Owned,
+                    // Borrows from caller or field loads — never dropped
+                    LocalOwnershipState::BareParam | LocalOwnershipState::Ref => {
+                        crate::ir::OwnershipState::Ref
+                    }
+                    // CoW borrows that may have been materialized on some paths
+                    LocalOwnershipState::Alias { .. }
+                    | LocalOwnershipState::CollectionRef { .. }
+                    | LocalOwnershipState::CowBorrow => {
+                        crate::ir::OwnershipState::MaybeBorrowed
+                    }
                 };
             }
         }

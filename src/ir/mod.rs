@@ -303,6 +303,18 @@ pub enum OwnershipState {
     /// Borrowed pointer reference (Ptr/MutPtr). LIR uses SlotLoad.
     /// Not registered for drop — the owner is elsewhere.
     Ref,
+    /// Started as a borrow (Alias, CollectionRef, CowBorrow) that may have
+    /// been materialized (cloned to owned) on some code paths via CoW.
+    /// Needs conditional drop guard (the current memcmp-zero mechanism).
+    /// Future: replace memcmp with an ownership flag.
+    MaybeBorrowed,
+}
+
+impl OwnershipState {
+    /// Whether this state represents a borrowed Ptr reference for LIR purposes.
+    pub fn is_ref(self) -> bool {
+        matches!(self, Self::Ref | Self::MaybeBorrowed)
+    }
 }
 
 /// A local variable slot.
