@@ -1333,6 +1333,21 @@ impl<'a> LoweringContext<'a> {
             .collect()
     }
 
+    /// Flush ownership state from the lowering side map onto the builder's Local structs.
+    /// Called after lowering a function body, before `builder.build()`.
+    pub fn flush_ownership_to_locals(&self, builder: &mut crate::ir::builder::FunctionBuilder) {
+        for (&local_id, state) in &self.func_state.local_ownership {
+            let idx = local_id.0 as usize;
+            if idx < builder.locals.len() {
+                builder.locals[idx].ownership = if matches!(state, LocalOwnershipState::Owned) {
+                    crate::ir::OwnershipState::Owned
+                } else {
+                    crate::ir::OwnershipState::Ref
+                };
+            }
+        }
+    }
+
     // ── Copy-on-Write alias management ────────────────────────────────
 
     /// Register a CoW alias: `alias_local` is a Ptr(T) borrowing from `source_local`.

@@ -1224,9 +1224,9 @@ mod tests {
             params: vec![],
             return_type: I32_TYPE,
             locals: vec![
-                Local { type_id: I32_TYPE, name_hint: Some("return".into()) },
-                Local { type_id: I32_TYPE, name_hint: Some("x".into()) },
-                Local { type_id: I32_TYPE, name_hint: Some("y".into()) },
+                Local { type_id: I32_TYPE, name_hint: Some("return".into()), ownership: crate::ir::OwnershipState::default() },
+                Local { type_id: I32_TYPE, name_hint: Some("x".into()), ownership: crate::ir::OwnershipState::default() },
+                Local { type_id: I32_TYPE, name_hint: Some("y".into()), ownership: crate::ir::OwnershipState::default() },
             ],
             blocks: vec![BasicBlock {
                 instructions: vec![
@@ -1283,9 +1283,9 @@ mod tests {
             params: vec![],
             return_type: I64_TYPE,
             locals: vec![
-                Local { type_id: I64_TYPE, name_hint: None },
-                Local { type_id: BOOL_TYPE, name_hint: Some("cond".into()) },
-                Local { type_id: I64_TYPE, name_hint: Some("result".into()) },
+                Local { type_id: I64_TYPE, name_hint: None, ownership: crate::ir::OwnershipState::default() },
+                Local { type_id: BOOL_TYPE, name_hint: Some("cond".into()), ownership: crate::ir::OwnershipState::default() },
+                Local { type_id: I64_TYPE, name_hint: Some("result".into()), ownership: crate::ir::OwnershipState::default() },
             ],
             blocks: vec![
                 BasicBlock {
@@ -1341,8 +1341,8 @@ mod tests {
             params: vec![I64_TYPE],
             return_type: I64_TYPE,
             locals: vec![
-                Local { type_id: I64_TYPE, name_hint: None },
-                Local { type_id: I64_TYPE, name_hint: None },
+                Local { type_id: I64_TYPE, name_hint: None, ownership: crate::ir::OwnershipState::default() },
+                Local { type_id: I64_TYPE, name_hint: None, ownership: crate::ir::OwnershipState::default() },
             ],
             blocks: vec![BasicBlock {
                 instructions: vec![],
@@ -1362,8 +1362,8 @@ mod tests {
             params: vec![],
             return_type: I64_TYPE,
             locals: vec![
-                Local { type_id: I64_TYPE, name_hint: None },
-                Local { type_id: I64_TYPE, name_hint: Some("result".into()) },
+                Local { type_id: I64_TYPE, name_hint: None, ownership: crate::ir::OwnershipState::default() },
+                Local { type_id: I64_TYPE, name_hint: Some("result".into()), ownership: crate::ir::OwnershipState::default() },
             ],
             blocks: vec![BasicBlock {
                 instructions: vec![Instruction::Call {
@@ -1410,8 +1410,8 @@ mod tests {
             params: vec![],
             return_type: I32_TYPE,
             locals: vec![
-                Local { type_id: I32_TYPE, name_hint: None },
-                Local { type_id: I32_TYPE, name_hint: None },
+                Local { type_id: I32_TYPE, name_hint: None, ownership: crate::ir::OwnershipState::default() },
+                Local { type_id: I32_TYPE, name_hint: None, ownership: crate::ir::OwnershipState::default() },
             ],
             blocks: vec![BasicBlock {
                 instructions: vec![Instruction::CallExtern {
@@ -1460,8 +1460,8 @@ mod tests {
             params: vec![],
             return_type: I32_TYPE,
             locals: vec![
-                Local { type_id: I32_TYPE, name_hint: None },
-                Local { type_id: I32_TYPE, name_hint: None },
+                Local { type_id: I32_TYPE, name_hint: None, ownership: crate::ir::OwnershipState::default() },
+                Local { type_id: I32_TYPE, name_hint: None, ownership: crate::ir::OwnershipState::default() },
             ],
             blocks: vec![BasicBlock {
                 instructions: vec![Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(LocalId(1)),

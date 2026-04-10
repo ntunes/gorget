@@ -2537,7 +2537,7 @@ mod tests {
     }
 
     fn local(ty: TypeId) -> Local {
-        Local { type_id: ty, name_hint: None }
+        Local { type_id: ty, name_hint: None, ownership: crate::ir::OwnershipState::default() }
     }
 
     fn bb(instructions: Vec<Instruction>, terminator: Terminator) -> BasicBlock {

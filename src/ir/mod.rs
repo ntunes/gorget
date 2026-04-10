@@ -294,11 +294,26 @@ pub struct InnerSharedSpawn {
     pub callee_param_ownerships: Vec<crate::parser::ast::Ownership>,
 }
 
+/// Ownership state for a GIR local — persists through the pipeline.
+/// Populated during lowering from `FunctionState::local_ownership`,
+/// consumed by the LIR lowering (SlotLoad vs SlotAddr) and future
+/// ownership-aware optimization passes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OwnershipState {
+    /// Owns its data. Registered for drop at scope exit.
+    #[default]
+    Owned,
+    /// Borrowed pointer reference (Ptr/MutPtr). LIR uses SlotLoad.
+    /// Not registered for drop — the owner is elsewhere.
+    Ref,
+}
+
 /// A local variable slot.
 #[derive(Debug, Clone)]
 pub struct Local {
     pub type_id: TypeId,
     pub name_hint: Option<String>,
+    pub ownership: OwnershipState,
 }
 
 /// A basic block.
@@ -380,6 +395,7 @@ mod tests {
             locals: vec![Local {
                 type_id: I32_TYPE,
                 name_hint: None,
+                ownership: OwnershipState::default(),
             }],
             blocks: vec![BasicBlock::new()],
             is_test_fn: false,

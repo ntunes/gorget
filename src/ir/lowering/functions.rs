@@ -590,6 +590,7 @@ pub fn lower_function(
         }
     }
 
+    ctx.flush_ownership_to_locals(&mut builder);
     let mut func = builder.build();
     func.display_name = Some(name.to_string());
     func.def_span = Some(func_span);
@@ -851,6 +852,7 @@ pub fn lower_equip_method(
         }
     }
 
+    ctx.flush_ownership_to_locals(&mut builder);
     let mut func = builder.build();
     func.display_name = Some(format!("{type_name}.{method_name}"));
     func.ref_locals = ctx.derive_ref_locals();
@@ -1130,6 +1132,7 @@ pub fn lower_generic_function(
 
     ctx.generics.type_name_subs.clear();
     ctx.generics.generic_type_params.clear();
+    ctx.flush_ownership_to_locals(&mut builder);
     module.functions.push(builder.build());
 }
 
@@ -1345,6 +1348,7 @@ pub fn lower_generic_equip_methods_with_defaults(
             }
         }
 
+        ctx.flush_ownership_to_locals(&mut builder);
         module.functions.push(builder.build());
     }
 

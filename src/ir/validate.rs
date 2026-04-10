@@ -929,6 +929,7 @@ mod tests {
             locals: vec![Local {
                 type_id: UNIT_TYPE,
                 name_hint: None,
+                ownership: crate::ir::OwnershipState::default(),
             }],
             blocks: vec![BasicBlock::new()], // no terminator
             is_test_fn: false,
@@ -1162,6 +1163,7 @@ mod tests {
             locals: vec![Local {
                 type_id: F64_TYPE, // _0 has wrong type
                 name_hint: None,
+                ownership: crate::ir::OwnershipState::default(),
             }],
             blocks: vec![{
                 let mut bb = BasicBlock::new();
@@ -1308,7 +1310,7 @@ mod tests {
             name: "test".into(),
             params: vec![],
             return_type: I64_TYPE,
-            locals: vec![Local { type_id: I64_TYPE, name_hint: None }],
+            locals: vec![Local { type_id: I64_TYPE, name_hint: None, ownership: crate::ir::OwnershipState::default() }],
             blocks: vec![BasicBlock {
                 instructions: vec![Instruction::Nop, Instruction::Nop],
                 terminator: Some(Terminator::Return(Operand::Constant(Constant::I64(0)))),
@@ -1334,7 +1336,7 @@ mod tests {
             name: "test".into(),
             params: vec![],
             return_type: I64_TYPE,
-            locals: vec![Local { type_id: I64_TYPE, name_hint: None }],
+            locals: vec![Local { type_id: I64_TYPE, name_hint: None, ownership: crate::ir::OwnershipState::default() }],
             blocks: vec![BasicBlock {
                 instructions: vec![Instruction::Nop],
                 terminator: Some(Terminator::Return(Operand::Constant(Constant::I64(0)))),

@@ -417,6 +417,7 @@ pub fn emit_closure_call_function(
     // Restore the outer function's drop state
     ctx.drops = saved_drops;
 
+    ctx.flush_ownership_to_locals(&mut builder);
     let mut func = builder.build();
     // Update the function's return_type to match the actual local[0] type
     let actual_ret = func.locals[0].type_id;
