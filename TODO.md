@@ -6,9 +6,7 @@
 
 - **C backend Ptr(Str) auto-deref in CallExtern**: emit_call_extern.rs line ~2014 has a fallback that dereferences Ptr(Str) args to pass Str by value. Correct for runtime functions expecting Str by value (sqlite wrappers) but wrong when callee expects void*. Can't simply check LIR extern param type — LIR uses Ptr for struct-by-address too. Needs: either C-level param type annotation on externs, or distinguishing "real Ptr" from "by-address Ptr" in LIR. The `len()` free function case is fixed (resolved at IR level). [updated: 2026-04-10]
 
-- **self_host_parser crash (pre-existing from rebase)**: The self-host parser binary segfaults on any input. Crashes with and without our changes — introduced by commits in the rebase (likely LLVM backend work touching shared code). Not related to clone/leak work. [added: 2026-04-10]
-
-- **Clone observability + Cloneable trait**: `.clone()` works on all types. `gg build --show-clones` done. Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
+- **Cloneable trait + runtime clone counters**: `--show-clones` is comprehensive (all 22 implicit clone sites report with span, type, and reason; output sorted by source location). Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-10]
 
 
 - **Extern module ABI — remaining structural whitelist**: `is_cstr_returning_fn` and `takes_cstr_for_str_param` deleted (all entries eliminated). `runtime_arg_by_ptr` is structural (collection/string self-deref + string clone/free) — cannot be removed without changing how the LIR represents method dispatch. See `docs/internals/extern-modules.md`. [updated: 2026-04-03]
