@@ -2789,9 +2789,17 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
             return gorget_str_own_region(s.data + byte_pos, (size_t)cplen); }}").unwrap();
     }
     // gorget_signal_ignore is already in the C runtime — no duplicate emission needed.
-    // NOTE: int64_t__parse etc. are monomorphized parse methods handled by
-    // the C backend inline (emit_call_extern). For LLVM, they're generated as
-    // C wrapper functions in emit_runtime_helpers, which has struct_names access.
+
+    // gorget_task_group_submit is a MACRO in the runtime, not a function.
+    // The LLVM backend calls it as a function with (TaskGroup*, Task__T) args.
+    // Task__T = { void* __task, void(*__drop)(void*) }.
+    if has(&|n| n == "gorget_task_group_submit") {
+        writeln!(out, "#undef gorget_task_group_submit").unwrap();
+        writeln!(out, "typedef struct {{ void* __task; void (*__drop)(void*); }} __TaskHandle;").unwrap();
+        writeln!(out, "void gorget_task_group_submit(void* g, __TaskHandle t) {{ \
+            gorget_task_group_submit_raw(g, t.__task, t.__drop); t.__task = NULL; }}").unwrap();
+    }
+
     writeln!(out).unwrap();
 }
 
