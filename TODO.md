@@ -2,6 +2,10 @@
 
 ## High
 
+- **Closure ABI unification**: Closures pass resource-type params by value (shallow copy). Regular functions pass by Ptr. Unify to Ptr. Requires: (1) 3 call dispatch paths in calls.rs/methods.rs — route through lower_call_arg, (2) ~20 C backend template generators in emit_types.rs — `emit_higher_order_collection_helpers` must pass `&element` for Ptr params, (3) callee side in closures.rs — resolve_param_type + fn_param_abis registration. fn_sigs must store BASE types (lower_call_arg expects base). Eliminates entire shallow-copy-through-closure bug class. [added: 2026-04-10]
+
+- **ensure_owned_at_boundary migration**: Replace ~19 scattered clone-insertion sites with the single `ensure_owned_at_boundary()` function. Key sites: struct field init (exprs/mod.rs:1377), block-body return (stmts/mod.rs:874), named-to-named reassignment (assigns.rs:179), Move param (calls.rs:181), enum variant init. Each needs liveness integration (is_last_use_at for move-vs-clone). Function already exists and is wired for closure returns. [added: 2026-04-10]
+
 - **self_host_parser crash (pre-existing from rebase)**: The self-host parser binary segfaults on any input. Crashes with and without our changes — introduced by commits in the rebase (likely LLVM backend work touching shared code). Not related to clone/leak work. [added: 2026-04-10]
 
 - **Clone observability + Cloneable trait**: `.clone()` works on all types. `gg build --show-clones` done. Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
