@@ -270,6 +270,20 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType
                 }
             }
 
+            // Parse methods: return PtrTo(Option__*) (alloca in our inline handler)
+            let is_parse = name.ends_with("__parse") && (name.starts_with("int") || name.starts_with("uint")
+                || name == "double__parse" || name == "float__parse" || name == "bool__parse");
+            if is_parse {
+                // Find the Option struct from the extern's declared return type
+                let ext = module.externs.iter().find(|e| e.name == *name);
+                if let Some(ext) = ext {
+                    if let LirType::Struct(sid) = &ext.return_type {
+                        return Some(LirType::PtrTo(*sid));
+                    }
+                }
+                return Some(LirType::Ptr);
+            }
+
             // Unwrap: payload type from the Option/Result struct
             let is_unwrap = name == "__option_unwrap" || name == "__result_unwrap"
                 || name.ends_with("__unwrap") || name.ends_with("__expect");
@@ -640,6 +654,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare void @gorget_string_push_line_bool(ptr, i1)").unwrap();
     writeln!(out, "declare void @gorget_string_push_line(ptr, ptr)").unwrap();
     writeln!(out, "declare void @exit(i32) noreturn").unwrap();
+    // Parse helpers
+    writeln!(out, "declare i32 @gorget_try_parse_int(ptr, ptr)").unwrap();
+    writeln!(out, "declare i32 @gorget_try_parse_float(ptr, ptr)").unwrap();
+    writeln!(out, "declare ptr @gorget_str_to_cstr(ptr)").unwrap();
     writeln!(out, "@stderr = external global ptr").unwrap();
     writeln!(out).unwrap();
 
@@ -666,6 +684,11 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         // Skip inline-expanded names
         if ext.name.starts_with("__callable_") || ext.name.starts_with("__gorget_closure_call_")
             || ext.name.starts_with("__gorget_drop_if_alive_") {
+            continue;
+        }
+        // Skip monomorphized parse methods (handled inline)
+        if ext.name.ends_with("__parse") && (ext.name.starts_with("int") || ext.name.starts_with("uint")
+            || ext.name == "double__parse" || ext.name == "float__parse" || ext.name == "bool__parse") {
             continue;
         }
         let params: Vec<String> = ext.params.iter()
@@ -714,6 +737,11 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                     // Skip inline-expanded names — no extern declaration needed.
                     if name.starts_with("__callable_") || name.starts_with("__gorget_closure_call_")
                         || name.starts_with("__gorget_drop_if_alive_") {
+                        continue;
+                    }
+                    // Skip monomorphized parse methods
+                    if name.ends_with("__parse") && (name.starts_with("int") || name.starts_with("uint")
+                        || name == "double__parse" || name == "float__parse" || name == "bool__parse") {
                         continue;
                     }
                     seen.insert(name.clone());
@@ -2118,6 +2146,41 @@ fn emit_inst(
                     } else {
                         writeln!(out, "  %v{} = load {err_ty_str}, ptr %{pfx}.ptr", d.0).unwrap();
                     }
+                }
+                return;
+            }
+
+            // ── Monomorphized parse methods: int64_t__parse(Str) → Option[int64_t] ──
+            // These call gorget_try_parse_int/float and wrap the result in Option.
+            let is_int_parse = name.ends_with("__parse")
+                && (name.starts_with("int") || name.starts_with("uint"));
+            let is_float_parse = name == "double__parse" || name == "float__parse";
+            if (is_int_parse || is_float_parse) && !args.is_empty() {
+                if let Some(d) = dst {
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    let pfx = format!("parse.{block_id}.{uid}");
+                    // Coerce Str arg to const char* via gorget_str_to_cstr
+                    // The arg is either a Str (aggregate ptr) or already a ptr
+                    writeln!(out, "  %{pfx}.cstr = call ptr @gorget_str_to_cstr(ptr %v{})", args[0].0).unwrap();
+                    // Alloca for output value
+                    let (val_ty, try_fn) = if is_float_parse {
+                        ("double", "gorget_try_parse_float")
+                    } else {
+                        ("i64", "gorget_try_parse_int")
+                    };
+                    writeln!(out, "  %{pfx}.out = alloca {val_ty}").unwrap();
+                    // Call gorget_try_parse_int/float(cstr, &out) → i32 (1=ok, 0=fail)
+                    writeln!(out, "  %{pfx}.ok = call i32 @{try_fn}(ptr %{pfx}.cstr, ptr %{pfx}.out)").unwrap();
+                    // Construct Option result (branchless)
+                    writeln!(out, "  %v{} = alloca i8, i64 16", d.0).unwrap();
+                    writeln!(out, "  %{pfx}.is_ok = icmp ne i32 %{pfx}.ok, 0").unwrap();
+                    writeln!(out, "  %{pfx}.tag = select i1 %{pfx}.is_ok, i32 0, i32 1").unwrap();
+                    writeln!(out, "  store i32 %{pfx}.tag, ptr %v{}", d.0).unwrap();
+                    // Copy value to payload at offset 8
+                    writeln!(out, "  %{pfx}.pay = getelementptr i8, ptr %v{}, i64 8", d.0).unwrap();
+                    writeln!(out, "  %{pfx}.val = load {val_ty}, ptr %{pfx}.out").unwrap();
+                    writeln!(out, "  store {val_ty} %{pfx}.val, ptr %{pfx}.pay").unwrap();
                 }
                 return;
             }
