@@ -80,6 +80,7 @@ pub(super) fn lower_assign(
                     if !is_mut {
                         if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(type_id).cloned() {
                             if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                                ctx.warn_implicit_clone(value.span, inner, crate::ir::ImplicitCloneReason::NamedToNamed);
                                 let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(local_id)], inner);
                                 builder.assign(Place::local(local_id), FunctionBuilder::copy(cloned));
                                 builder.locals[local_id.0 as usize].type_id = inner;
@@ -302,7 +303,7 @@ pub(super) fn lower_field_assign(
     // instead of copying the intermediate struct to a temp.
     if let Some((target_place, field_type)) = try_resolve_field_place(ctx, builder, object, field_name) {
         let mut rhs = lower_expr(ctx, builder, value);
-        clone_ptr_rhs_if_needed(ctx, builder, &mut rhs);
+        clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value.span);
         emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
         return;
     }
@@ -325,7 +326,7 @@ pub(super) fn lower_field_assign(
         lower_expr(ctx, builder, object)
     };
     let mut rhs = lower_expr(ctx, builder, value);
-    clone_ptr_rhs_if_needed(ctx, builder, &mut rhs);
+    clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value.span);
 
     if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
         let local_idx = place.local.0 as usize;
@@ -420,12 +421,14 @@ fn clone_ptr_rhs_if_needed(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     rhs: &mut Operand,
+    span: crate::span::Span,
 ) {
     if let Operand::Copy(ref p) | Operand::Move(ref p) = *rhs {
         if p.projections.is_empty() {
             let src_type = builder.local_type(p.local);
             if let Some(inner) = ctx.pointee_type(src_type) {
                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                    ctx.warn_implicit_clone(span, inner, crate::ir::ImplicitCloneReason::StructFieldFromBorrow);
                     let cloned = ctx.call_tracked(builder, &clone_fn,
                         vec![FunctionBuilder::copy(p.local)], inner);
                     ctx.drops.register_local(cloned, inner, &ctx.type_registry);

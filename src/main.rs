@@ -440,6 +440,10 @@ fn try_build_ir(
                 gorget::ir::ImplicitCloneReason::MoveParamFromBorrow => "move param from borrow",
                 gorget::ir::ImplicitCloneReason::StructFieldFromBorrow => "struct field from borrow",
                 gorget::ir::ImplicitCloneReason::CoWMaterialization => "CoW materialization",
+                gorget::ir::ImplicitCloneReason::ClosureCapture => "closure capture",
+                gorget::ir::ImplicitCloneReason::PatternExtraction => "pattern extraction",
+                gorget::ir::ImplicitCloneReason::ConsumingArg => "consuming argument",
+                gorget::ir::ImplicitCloneReason::CallArg => "call argument",
             };
             entries.push((file, line, col, warn.type_name.clone(), reason));
         }

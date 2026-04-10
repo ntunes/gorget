@@ -1260,6 +1260,8 @@ pub(super) fn lower_method_call(
                     let arg_type = builder.local_type(local);
                     if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(arg_type).cloned() {
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                            let span = args.get(idx).map(|a| a.span).unwrap_or(receiver.span);
+                            ctx.warn_implicit_clone(span, inner, crate::ir::ImplicitCloneReason::ConsumingArg);
                             let cloned = builder.call(&clone_fn,
                                 vec![FunctionBuilder::copy(local)], inner);
                             lowered_method_args[idx] = FunctionBuilder::copy(cloned);
@@ -1519,6 +1521,8 @@ pub(super) fn lower_method_call(
                 });
                 if let Some((ptr_local, inner_type)) = needs_clone {
                     if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
+                        let span = args.get(value_idx).map(|a| a.span).unwrap_or(receiver.span);
+                        ctx.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::ConsumingArg);
                         let cloned = builder.call(&clone_fn,
                             vec![FunctionBuilder::copy(ptr_local)], inner_type);
                         ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);

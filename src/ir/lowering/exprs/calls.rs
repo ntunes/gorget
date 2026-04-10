@@ -228,7 +228,7 @@ pub(super) fn lower_call_arg(
             }
             val
         }
-        _ => ctx.auto_clone_if_ptr(builder, val), // Auto-clone Ptr(T) → T at boundary
+        _ => ctx.auto_clone_if_ptr(builder, val, arg.span), // Auto-clone Ptr(T) → T at boundary
     }
 }
 

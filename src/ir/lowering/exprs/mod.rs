@@ -2455,6 +2455,9 @@ fn clone_multi_use_resource_args(
                 if let Some(inner) = ctx.pointee_type(local_type) {
                     if ctx.type_registry.is_resource_type(inner) {
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                            if let Some(span) = ast_args.get(i).map(|a| a.span) {
+                                ctx.warn_implicit_clone(span, inner, crate::ir::ImplicitCloneReason::ConsumingArg);
+                            }
                             let cloned = builder.call(&clone_fn,
                                 vec![FunctionBuilder::copy(local)], inner);
                             ctx.drops.register_local(cloned, inner, &ctx.type_registry);
@@ -2493,6 +2496,9 @@ fn clone_multi_use_resource_args(
                     if is_borrow_param || is_multi_use || is_field_access || is_named_in_loop || is_non_owned_string {
                         let inner_type = ctx.pointee_type(local_type).unwrap_or(local_type);
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
+                            if let Some(span) = ast_args.get(i).map(|a| a.span) {
+                                ctx.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::ConsumingArg);
+                            }
                             let clone_arg = if ctx.pointee_type(local_type).is_some() {
                                 // Already Ptr — use directly
                                 FunctionBuilder::copy(local)

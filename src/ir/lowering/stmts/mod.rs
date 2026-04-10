@@ -443,6 +443,7 @@ fn lower_var_decl(
                         && !ctx.type_registry.is_resource_type(rhs_type)
                         && ctx.clone_fn_for_ptr(rhs_type).is_some()
                     {
+                        ctx.warn_implicit_clone(value.span, rhs_type, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
                         let clone_fn = ctx.clone_fn_for_ptr(rhs_type).expect("BUG: clone_fn_for_ptr returned None after is_some check");
                         let ptr_type = ctx.register_ptr_type(rhs_type);
                         let ptr_local = builder.add_local(ptr_type, None);
@@ -487,6 +488,7 @@ fn lower_var_decl(
                         && ctx.type_registry.is_resource_type(rhs_type)
                     {
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
+                            ctx.warn_implicit_clone(value.span, rhs_type, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
                             let ptr_type = ctx.register_ptr_type(rhs_type);
                             let ptr_local = builder.add_local(ptr_type, None);
                             builder.emit_borrow(ptr_local, place.clone());
@@ -863,6 +865,7 @@ fn lower_return(
                         if rhs_type == ctx.type_mapper.owned_string_type
                             && !can_skip_clone
                         {
+                            ctx.warn_implicit_clone(expr.span, rhs_type, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                             let clone_fn = ctx.clone_fn_for_ptr(rhs_type)
                                 .unwrap_or_else(|| "gorget_string_from_str".to_string());
                             let clone_result = builder.call(
@@ -925,6 +928,7 @@ fn lower_return(
                                 let inner_name = src_name.strip_prefix("Option__Ref_").unwrap_or("");
                                 if let Some(inner_type) = ctx.type_mapper.lookup_named(inner_name) {
                                     if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
+                                        ctx.warn_implicit_clone(expr.span, inner_type, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                                         // Branch on tag: Some (0) → deref+clone payload, None (1) → pass through.
                                         // Use I64 for the tag read — the LIR may widen I32 enum tags to I64.
                                         let tag_place = Place {

@@ -243,6 +243,7 @@ impl ClosureLowering {
                                 return FunctionBuilder::copy(deref_local);
                             }
                             if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                                ctx.warn_implicit_clone(closure_span, inner, crate::ir::ImplicitCloneReason::ClosureCapture);
                                 let cloned = builder.call(&clone_fn,
                                     vec![FunctionBuilder::copy(cap.local_id)], inner);
                                 return FunctionBuilder::copy(cloned);
@@ -366,11 +367,12 @@ pub fn emit_closure_call_function(
         }
         _ => {
             // Expression body
+            let body_span = closure.body.span;
             let mut result = lower_expr(ctx, &mut builder, &closure.body);
             // Ownership boundary: closure returns must produce independently owned data.
             // Closure params are by-value shallow copies sharing heap data with the caller.
             // ensure_owned_at_boundary clones non-Owned operands (Ref, MaybeBorrowed, params).
-            result = ctx.ensure_owned_at_boundary(&mut builder, result);
+            result = ctx.ensure_owned_at_boundary(&mut builder, result, body_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
             // Re-infer return type from the actual body result (the pre-inference
             // may have returned I64_TYPE for variant constructors like Some(x+1))
             let actual_type = super::exprs::infer_operand_type_full(ctx, &result, &builder);

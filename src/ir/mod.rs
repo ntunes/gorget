@@ -156,6 +156,14 @@ pub enum ImplicitCloneReason {
     StructFieldFromBorrow,
     /// CoW materialization: collection mutation forced clone of a borrowed element
     CoWMaterialization,
+    /// Closure captures a borrowed reference that must be independently owned
+    ClosureCapture,
+    /// Match/case pattern extracts a resource-type field from a scrutinee
+    PatternExtraction,
+    /// Argument to a consuming operation (push, field store, enum variant init)
+    ConsumingArg,
+    /// Borrowed reference passed as argument to a function call
+    CallArg,
 }
 
 impl std::fmt::Display for ImplicitCloneReason {
@@ -167,6 +175,10 @@ impl std::fmt::Display for ImplicitCloneReason {
             Self::MoveParamFromBorrow => write!(f, "use `.clone()` for explicit copy"),
             Self::StructFieldFromBorrow => write!(f, "use `.clone()` for explicit copy"),
             Self::CoWMaterialization => write!(f, "mutation forced clone of borrowed element"),
+            Self::ClosureCapture => write!(f, "closure captures borrowed reference"),
+            Self::PatternExtraction => write!(f, "pattern extracts resource field from borrowed scrutinee"),
+            Self::ConsumingArg => write!(f, "consuming operation requires owned data"),
+            Self::CallArg => write!(f, "borrowed reference cloned at call boundary"),
         }
     }
 }

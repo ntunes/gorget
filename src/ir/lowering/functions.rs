@@ -546,12 +546,13 @@ pub fn lower_function(
         }
 
         FunctionBody::Expression(expr) => {
+            let expr_span = expr.span;
             let mut operand = lower_expr(ctx, &mut builder, expr);
             // Clone borrowed operands at the return boundary (BareParam, CowBorrow, etc.).
             // Skip when return type is Ptr — the caller expects a borrow, not an owned clone.
             let ret_type = builder.locals[0].type_id;
             if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                operand = ctx.ensure_owned_at_boundary(&mut builder, operand);
+                operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
             }
             let returned_local = match &operand {
                 Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
@@ -800,12 +801,13 @@ pub fn lower_equip_method(
         }
 
         FunctionBody::Expression(expr) => {
+            let expr_span = expr.span;
             let mut operand = lower_expr(ctx, &mut builder, expr);
             // Clone borrowed operands at the return boundary.
             // Skip when return type is Ptr — the caller expects a borrow.
             let ret_type = builder.locals[0].type_id;
             if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                operand = ctx.ensure_owned_at_boundary(&mut builder, operand);
+                operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
             }
             let returned_local = match &operand {
                 Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
@@ -1054,12 +1056,13 @@ pub fn lower_generic_function(
         }
 
         FunctionBody::Expression(expr) => {
+            let expr_span = expr.span;
             let mut operand = lower_expr(ctx, &mut builder, expr);
             // Clone borrowed operands at the return boundary.
             // Skip when return type is Ptr — the caller expects a borrow.
             let ret_type = builder.locals[0].type_id;
             if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                operand = ctx.ensure_owned_at_boundary(&mut builder, operand);
+                operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
             }
             let returned_local = match &operand {
                 Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
@@ -1278,12 +1281,13 @@ pub fn lower_generic_equip_methods_with_defaults(
                 }
             }
             FunctionBody::Expression(expr) => {
+                let expr_span = expr.span;
                 let mut operand = lower_expr(ctx, &mut builder, expr);
                 // Clone borrowed operands at the return boundary.
                 // Skip when return type is Ptr — the caller expects a borrow.
                 let ret_type = builder.locals[0].type_id;
                 if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                    operand = ctx.ensure_owned_at_boundary(&mut builder, operand);
+                    operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                 }
                 let returned_local = match &operand {
                     Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {

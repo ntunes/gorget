@@ -878,7 +878,7 @@ impl<'a> LoweringContext<'a> {
     ) -> LocalId {
         // Clone resource args that can't be moved into the enum variant.
         // Uses the same logic as clone_multi_use_resource_args (struct init path).
-        self.clone_resource_args_for_init(builder, &mut args);
+        self.clone_resource_args_for_init(builder, &mut args, None);
         let dst = builder.enum_init(enum_name, variant_name, type_id, args.clone());
         self.set_owned(dst);
         // MoveZero single-use/temp resource args after init — transfers ownership.
@@ -906,6 +906,7 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         args: &mut Vec<Operand>,
+        span: Option<crate::span::Span>,
     ) {
         for op in args.iter_mut() {
             if let Operand::Copy(place) = op {
@@ -917,6 +918,9 @@ impl<'a> LoweringContext<'a> {
                     if let Some(inner) = self.pointee_type(local_type) {
                         if self.type_registry.is_resource_type(inner) {
                             if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
+                                if let Some(s) = span {
+                                    self.warn_implicit_clone(s, inner, crate::ir::ImplicitCloneReason::ConsumingArg);
+                                }
                                 let cloned = builder.call(&clone_fn,
                                     vec![crate::ir::builder::FunctionBuilder::copy(local)], inner);
                                 self.drops.register_local(cloned, inner, &self.type_registry);
@@ -938,6 +942,9 @@ impl<'a> LoweringContext<'a> {
                         let is_borrow_param = matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::BareParam));
                         if is_non_owned_string || is_borrow_param {
                             if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
+                                if let Some(s) = span {
+                                    self.warn_implicit_clone(s, local_type, crate::ir::ImplicitCloneReason::ConsumingArg);
+                                }
                                 let ptr_type = self.register_ptr_type(local_type);
                                 let ptr = builder.add_local(ptr_type, None);
                                 builder.emit_borrow(ptr, crate::ir::instructions::Place::local(local));
@@ -1231,6 +1238,8 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         operand: Operand,
+        span: crate::span::Span,
+        reason: crate::ir::ImplicitCloneReason,
     ) -> Operand {
         if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
             if place.projections.is_empty() {
@@ -1245,6 +1254,7 @@ impl<'a> LoweringContext<'a> {
                 // Ptr(T) → clone through pointer
                 if let Some(inner) = self.pointee_type(local_type) {
                     if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
+                        self.warn_implicit_clone(span, inner, reason);
                         let cloned = builder.call(
                             &clone_fn,
                             vec![crate::ir::builder::FunctionBuilder::copy(place.local)],
@@ -1267,6 +1277,7 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         operand: Operand,
+        span: crate::span::Span,
     ) -> Operand {
         if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
             if place.projections.is_empty() {
@@ -1279,6 +1290,7 @@ impl<'a> LoweringContext<'a> {
                         return operand;
                     }
                     if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
+                        self.warn_implicit_clone(span, inner, crate::ir::ImplicitCloneReason::CallArg);
                         let cloned = builder.call(
                             &clone_fn,
                             vec![crate::ir::builder::FunctionBuilder::copy(place.local)],
