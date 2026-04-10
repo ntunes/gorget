@@ -15211,6 +15211,25 @@ gamma",
 }
 
 #[test]
+fn cow_escape_boundaries() {
+    run_gg(
+        "cow_escape_boundaries.gg",
+        "\
+first
+second
+first
+first
+second
+one
+two
+first
+Alice
+hello
+all boundaries ok",
+    );
+}
+
+#[test]
 fn consuming_self_loop_error() {
     check_gg_fails("consuming_self_loop_error.gg", "cannot move");
 }

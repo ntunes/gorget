@@ -1,0 +1,129 @@
+# Test: CoW borrows are materialized at all scope-escape boundaries.
+# Each test pattern takes a CoW borrow (from .get().unwrap() or param)
+# and passes it across an ownership boundary. The materialization must
+# produce an independent copy — mutating the source after escape must
+# not affect the escaped value.
+
+from std.collections import Vector
+from std.conv import int_to_str
+
+struct Holder:
+    String name
+
+# Boundary 1: Return from function (expression-body)
+String get_first(Vector[String] items): items.get(0).unwrap()
+
+# Boundary 2: Return from function (block-body)
+String get_second(Vector[String] items):
+    String val = items.get(1).unwrap()
+    return val
+
+# Boundary 3: Struct field store
+Holder wrap_first(Vector[String] items):
+    auto name = items.get(0).unwrap()
+    return Holder(name)
+
+# Boundary 4: Push to collection
+Vector[String] collect_first_two(Vector[String] items):
+    Vector[String] result = Vector[String]()
+    result.push(items.get(0).unwrap())
+    result.push(items.get(1).unwrap())
+    return result
+
+# Boundary 5: Dict key and value
+void test_dict_escape():
+    Vector[String] keys = Vector[String]()
+    keys.push("alpha")
+    keys.push("beta")
+    Vector[String] vals = Vector[String]()
+    vals.push("one")
+    vals.push("two")
+
+    Dict[String, String] d = Dict[String, String]()
+    d.set(keys.get(0).unwrap(), vals.get(0).unwrap())
+    d.set(keys.get(1).unwrap(), vals.get(1).unwrap())
+
+    # Mutate source — escaped values must be independent
+    keys.push("gamma")
+    vals.push("three")
+
+    print(d.get("alpha").unwrap())
+    print(d.get("beta").unwrap())
+
+# Boundary 6: Enum variant (Some)
+Option[String] maybe_first(Vector[String] items):
+    if items.len() > 0:
+        return Some(items.get(0).unwrap())
+    return None()
+
+# Boundary 7: Closure capture
+void test_closure_capture():
+    Vector[String] names = Vector[String]()
+    names.push("Alice")
+    names.push("Bob")
+    auto captured = names.get(0).unwrap()
+    auto f = (): print(captured)
+    names.push("Charlie")   # mutate source after capture
+    f()                       # must print "Alice"
+
+# Boundary 8: Bare param forwarded to consuming position
+void store_param(String name, Vector[String] &dest):
+    dest.push(name)
+
+void test_param_escape():
+    Vector[String] source = Vector[String]()
+    source.push("hello")
+    Vector[String] dest = Vector[String]()
+    store_param(source.get(0).unwrap(), &dest)
+    source.push("world")  # mutate source
+    print(dest.get(0).unwrap())  # must be "hello"
+
+void main():
+    Vector[String] items = Vector[String]()
+    items.push("first")
+    items.push("second")
+    items.push("third")
+
+    # Test 1: expression-body return
+    String r1 = get_first(items)
+    items.set(0, "CHANGED")
+    print(r1)
+    items.set(0, "first")  # restore
+
+    # Test 2: block-body return
+    String r2 = get_second(items)
+    items.set(1, "CHANGED")
+    print(r2)
+    items.set(1, "second")
+
+    # Test 3: struct field store
+    Holder h = wrap_first(items)
+    items.set(0, "CHANGED")
+    print(h.name)
+    items.set(0, "first")
+
+    # Test 4: push to collection
+    Vector[String] collected = collect_first_two(items)
+    items.set(0, "CHANGED")
+    items.set(1, "CHANGED")
+    print(collected.get(0).unwrap())
+    print(collected.get(1).unwrap())
+    items.set(0, "first")
+    items.set(1, "second")
+
+    # Test 5: dict escape
+    test_dict_escape()
+
+    # Test 6: Some() variant
+    Option[String] opt = maybe_first(items)
+    items.set(0, "CHANGED")
+    print(opt.unwrap())
+    items.set(0, "first")
+
+    # Test 7: closure capture
+    test_closure_capture()
+
+    # Test 8: param escape
+    test_param_escape()
+
+    print("all boundaries ok")
