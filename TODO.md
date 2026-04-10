@@ -2,7 +2,7 @@
 
 ## High
 
-- **Pre-existing double-free: identity closure + Dict→match extraction**: `dataframe_nulls` and `self_host_parser` crash (pre-existing from rebase, not from our work). Root cause: closure `(String s): s` returns a shallow copy of a GorgetString with valid cap/alloc. `elem_materialize` doesn't recognize it as a view (checks cap==0 && alloc==NULL). When the source TypedCol is dropped, the pushed strings dangle. Fix: either extend elem_materialize to detect non-view shared strings, or ensure the identity closure returns a proper clone. Reproducer: `/tmp/test_dict_match4.gg`. [added: 2026-04-09]
+- **self_host_parser crash (pre-existing from rebase)**: The self-host parser binary segfaults on any input. Crashes with and without our changes — introduced by commits in the rebase (likely LLVM backend work touching shared code). Not related to clone/leak work. [added: 2026-04-10]
 
 - **Clone observability + Cloneable trait**: `.clone()` works on all types. `gg build --show-clones` done. Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-05]
 
