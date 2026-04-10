@@ -1218,6 +1218,73 @@ impl<'a> LoweringContext<'a> {
         None
     }
 
+    /// Ensure an operand is independently owned before crossing an ownership boundary
+    /// (return, struct init, enum init, push, closure capture, Move param).
+    ///
+    /// Checks the local's ownership state:
+    /// - Owned: no-op (already independent)
+    /// - Ref/CowBorrow/CollectionRef/BareParam/Alias: clone to produce an owned copy
+    ///
+    /// For Ptr(T) locals: clone through the pointer (borrow → clone → owned T).
+    /// For value-typed resource locals (closure params): borrow → clone → owned copy.
+    ///
+    /// Returns the (possibly cloned) operand. Call sites should use the returned
+    /// operand instead of the original.
+    pub fn ensure_owned_at_boundary(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        operand: Operand,
+    ) -> Operand {
+        if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+            if place.projections.is_empty() {
+                // Check ownership state — Owned and untracked locals are already
+                // independent (call result temps aren't explicitly tracked).
+                let is_borrowed = self.func_state.local_ownership.get(&place.local)
+                    .map_or(false, |s| s.is_ref());
+                // Also detect resource-type params not in the ownership map:
+                // closure params passed by value share heap data with the caller.
+                let local_type = builder.local_type(place.local);
+                let is_untracked_resource_param = !self.func_state.local_ownership.contains_key(&place.local)
+                    && self.type_registry.is_resource_type(local_type)
+                    && !matches!(self.type_registry.get(local_type), Some(crate::ir::types::GirType::Ptr(_)));
+                if !is_borrowed && !is_untracked_resource_param {
+                    return operand;
+                }
+                let local_type = builder.local_type(place.local);
+                // Ptr(T) → clone through pointer
+                if let Some(inner) = self.pointee_type(local_type) {
+                    if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
+                        let cloned = builder.call(
+                            &clone_fn,
+                            vec![crate::ir::builder::FunctionBuilder::copy(place.local)],
+                            inner,
+                        );
+                        self.drops.register_local(cloned, inner, &self.type_registry);
+                        self.set_owned(cloned);
+                        return crate::ir::builder::FunctionBuilder::copy(cloned);
+                    }
+                }
+                // Value-typed resource (e.g., closure param by value) → borrow then clone
+                if self.type_registry.is_resource_type(local_type) {
+                    if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
+                        let ptr_type = self.register_ptr_type(local_type);
+                        let ptr = builder.add_local(ptr_type, None);
+                        builder.emit_borrow(ptr, crate::ir::instructions::Place::local(place.local));
+                        let cloned = builder.call(
+                            &clone_fn,
+                            vec![crate::ir::builder::FunctionBuilder::copy(ptr)],
+                            local_type,
+                        );
+                        self.drops.register_local(cloned, local_type, &self.type_registry);
+                        self.set_owned(cloned);
+                        return crate::ir::builder::FunctionBuilder::copy(cloned);
+                    }
+                }
+            }
+        }
+        operand
+    }
+
     /// If an operand is Ptr(T), deep-clone it to produce an owned T.
     /// Used at Ptr→T boundaries: function args, enum constructors, collection push, etc.
     /// Returns the cloned operand (owned T), or the original if not Ptr.

@@ -342,27 +342,10 @@ pub fn emit_closure_call_function(
         _ => {
             // Expression body
             let mut result = lower_expr(ctx, &mut builder, &closure.body);
-            // Clone resource-type params returned directly from expression bodies.
-            // Closure params are passed by value (shallow copy of the struct),
-            // sharing heap data with the caller. Returning the param without
-            // cloning causes double-free when the caller's source is freed.
-            // Example: `(String s): s` must clone to produce independent data.
-            if let Operand::Copy(ref p) | Operand::Move(ref p) = result {
-                if p.projections.is_empty() {
-                    let src_type = builder.local_type(p.local);
-                    let is_param = p.local.0 >= param_start
-                        && (p.local.0 - param_start) < closure.param_types.len() as u32;
-                    if is_param && ctx.type_registry.is_resource_type(src_type) {
-                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(src_type) {
-                            let ptr_type = ctx.register_ptr_type(src_type);
-                            let ptr = builder.add_local(ptr_type, None);
-                            builder.emit_borrow(ptr, crate::ir::instructions::Place::local(p.local));
-                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr)], src_type);
-                            result = FunctionBuilder::copy(cloned);
-                        }
-                    }
-                }
-            }
+            // Ownership boundary: closure returns must produce independently owned data.
+            // Closure params are by-value shallow copies sharing heap data with the caller.
+            // ensure_owned_at_boundary clones non-Owned operands (Ref, MaybeBorrowed, params).
+            result = ctx.ensure_owned_at_boundary(&mut builder, result);
             // Re-infer return type from the actual body result (the pre-inference
             // may have returned I64_TYPE for variant constructors like Some(x+1))
             let actual_type = super::exprs::infer_operand_type_full(ctx, &result, &builder);
