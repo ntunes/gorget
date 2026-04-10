@@ -17,7 +17,7 @@
 
 - **GIR call resolution confuses functions with similar first-param types**: Reported but could NOT reproduce with targeted multi-file test cases. Original symptom (ownership mismatch for variable not in scope) disappeared after code restructuring. May have been a transient issue from specific code patterns. Keep as low-priority — reopen if it recurs with a reproducible case. Root cause may be in `fn_sigs` lookup or borrow checker scope handling in multi-file compilation. [updated: 2026-04-08]
 
-- **GorgetString allocator removal (32→24 bytes)**: All 8 CoW scope-escape boundaries verified covered (return, field store, enum variant, collection push, dict key/value, closure capture, call arg, spawn). Next step: remove `GorgetAllocator* alloc` field from `GorgetString` in runtime.h/runtime.c. [updated: 2026-04-10]
+- **Thin-pointer String redesign (32→8 bytes)**: All 8 CoW scope-escape boundaries verified covered. String becomes an 8-byte `char*` thin pointer with a 24-byte header (alloc, cap, len) behind the data. Views become internal `StrView { data, len }` (16 bytes), never stored in Gorget types. Static string literals get .rodata headers (zero allocation). ~100 runtime functions, ~350 field accesses, 6 files. Plan at plans/rippling-sprouting-firefly.md. [added: 2026-04-10]
 
 - ~~**CoW: nested field mutation gap**~~: FIXED. Two-part fix: (1) IndexLoad uses `FieldPath` provenance when base is a field access (`s.v[0]` → `CollectionId::FieldPath("s.v")`). (2) VarDecl auto-reinfer propagates `CollectionRef` from source to named variable. `cow_before_field_mutation("s.v")` now finds and materializes the ref. Added `cow_nested_field_mutation.gg` regression test. [updated: 2026-04-09]
 
