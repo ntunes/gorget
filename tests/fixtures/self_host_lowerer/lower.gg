@@ -352,7 +352,10 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
         case EIdentifier(name):
             if ctx.named_locals.contains(name):
                 return ctx.named_locals.get(name).unwrap()
-            return -1
+            # Unknown identifier (imported constant, unresolved) — placeholder
+            int unk = add_local(&ctx, I64_TYPE, NO_NAME)
+            emit(&ctx, IAssign(unk, OpConstI64(0)))
+            return unk
         case EBinaryOp(lhs_box, op, rhs_box):
             int lhs = lower_expr(&ctx, *lhs_box, &gmod)
             int rhs = lower_expr(&ctx, *rhs_box, &gmod)
