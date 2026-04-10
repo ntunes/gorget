@@ -344,6 +344,11 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
             emit(&ctx, IAssign(dst, OpConstBool(v)))
             return dst
+        case EStringLiteral(s, _):
+            int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+            int dst = add_local(&ctx, gs_tid, NO_NAME)
+            emit(&ctx, IAssign(dst, OpConstStr(s)))
+            return dst
         case EIdentifier(name):
             if ctx.named_locals.contains(name):
                 return ctx.named_locals.get(name).unwrap()
@@ -394,10 +399,15 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         if args.len() > 0:
             SpannedExpr parg = args.get(0).unwrap()
             int val = lower_expr(&ctx, parg, &gmod)
-            int val_type = ctx.locals.get(val).unwrap().type_id
+            int val_type = I64_TYPE
+            if val >= 0 and val < ctx.locals.len():
+                val_type = ctx.locals.get(val).unwrap().type_id
             String fmt = "%lld\n"
             if val_type == F64_TYPE:
                 fmt = "%f\n"
+            int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+            if val_type == gs_tid:
+                fmt = "%s\n"
             Vector[Operand] printf_args = [OpConstStr(fmt), OpCopy(val)]
             int pdst = add_local(&ctx, I32_TYPE, NO_NAME)
             emit(&ctx, ICallExtern(pdst, "printf", printf_args))
