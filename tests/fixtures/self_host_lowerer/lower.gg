@@ -383,11 +383,145 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             match callee.expr:
                 case EIdentifier(fname):
                     return lower_call(&ctx, &fname, &args, &targs, &gmod)
+                case EFieldAccess(_, method_name):
+                    # Method-style call: obj.method(args) parsed as ECall(EFieldAccess(...))
+                    # Lower args but return unit (method calls are complex)
+                    int mai = 0
+                    while mai < args.len():
+                        SpannedExpr marg = args.get(mai).unwrap()
+                        lower_expr(&ctx, marg, &gmod)
+                        mai += 1
+                    int mdst = add_local(&ctx, UNIT_TYPE, NO_NAME)
+                    emit(&ctx, IAssign(mdst, OpConstUnit()))
+                    return mdst
                 else:
                     pass
-            return -1
+            return add_local(&ctx, UNIT_TYPE, NO_NAME)
+        case EMethodCall(recv_box, mname, margs, _):
+            # Method call: lower receiver and args, return unit placeholder
+            lower_expr(&ctx, *recv_box, &gmod)
+            int mi2 = 0
+            while mi2 < margs.len():
+                SpannedExpr ma = margs.get(mi2).unwrap()
+                lower_expr(&ctx, ma, &gmod)
+                mi2 += 1
+            int mdst2 = add_local(&ctx, UNIT_TYPE, NO_NAME)
+            emit(&ctx, IAssign(mdst2, OpConstUnit()))
+            return mdst2
+        case EFieldAccess(base_box, field_name):
+            # Field access: lower base, return unit placeholder
+            lower_expr(&ctx, *base_box, &gmod)
+            int fdst = add_local(&ctx, I64_TYPE, NO_NAME)
+            emit(&ctx, IAssign(fdst, OpConstI64(0)))
+            return fdst
+        case EIndex(base_box, idx_box):
+            lower_expr(&ctx, *base_box, &gmod)
+            lower_expr(&ctx, *idx_box, &gmod)
+            int idst = add_local(&ctx, I64_TYPE, NO_NAME)
+            emit(&ctx, IAssign(idst, OpConstI64(0)))
+            return idst
+        case EIf(cond_box, then_body, else_branches):
+            int cond = lower_expr(&ctx, *cond_box, &gmod)
+            int then_bb = new_block(&ctx)
+            int else_bb = new_block(&ctx)
+            int merge_bb = new_block(&ctx)
+            set_terminator(&ctx, TBranch(OpCopy(cond), then_bb, else_bb))
+            switch_to(&ctx, then_bb)
+            lower_stmts(&ctx, then_body, &gmod, false)
+            set_terminator(&ctx, TJump(merge_bb))
+            switch_to(&ctx, else_bb)
+            set_terminator(&ctx, TJump(merge_bb))
+            switch_to(&ctx, merge_bb)
+            int ifdst = add_local(&ctx, I64_TYPE, NO_NAME)
+            return ifdst
+        case ENoneLiteral():
+            int dst = add_local(&ctx, UNIT_TYPE, NO_NAME)
+            emit(&ctx, IAssign(dst, OpConstUnit()))
+            return dst
+        case ECharLiteral(ch):
+            int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+            int dst = add_local(&ctx, gs_tid, NO_NAME)
+            emit(&ctx, IAssign(dst, OpConstStr(ch)))
+            return dst
+        case EArrayLiteral(elems):
+            int ei = 0
+            while ei < elems.len():
+                SpannedExpr elem = elems.get(ei).unwrap()
+                lower_expr(&ctx, elem, &gmod)
+                ei += 1
+            int adst = add_local(&ctx, I64_TYPE, NO_NAME)
+            emit(&ctx, IAssign(adst, OpConstI64(0)))
+            return adst
+        case ETupleLiteral(elems):
+            int ti = 0
+            while ti < elems.len():
+                SpannedExpr te = elems.get(ti).unwrap()
+                lower_expr(&ctx, te, &gmod)
+                ti += 1
+            int tdst = add_local(&ctx, I64_TYPE, NO_NAME)
+            emit(&ctx, IAssign(tdst, OpConstI64(0)))
+            return tdst
+        case EStructLiteral(sname, fnames, fvals):
+            int si = 0
+            while si < fvals.len():
+                SpannedExpr sv = fvals.get(si).unwrap()
+                lower_expr(&ctx, sv, &gmod)
+                si += 1
+            int sdst = add_local(&ctx, lookup_or_register_named(&gmod, sname), NO_NAME)
+            emit(&ctx, IAssign(sdst, OpConstI64(0)))
+            return sdst
+        case EClosure(cparams, cbody):
+            # Closures are opaque in GIR — return unit placeholder
+            int cdst = add_local(&ctx, UNIT_TYPE, NO_NAME)
+            emit(&ctx, IAssign(cdst, OpConstUnit()))
+            return cdst
+        case EAs(inner_box, _):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case EMove(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case EMutableBorrow(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case EDeref(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case ETry(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case EDotShorthand(variant, sargs):
+            int di = 0
+            while di < sargs.len():
+                SpannedExpr da = sargs.get(di).unwrap()
+                lower_expr(&ctx, da, &gmod)
+                di += 1
+            int ddst = add_local(&ctx, I64_TYPE, NO_NAME)
+            return ddst
+        case EBlock(block_stmts):
+            lower_stmts(&ctx, block_stmts, &gmod, false)
+            int bdst = add_local(&ctx, UNIT_TYPE, NO_NAME)
+            return bdst
+        case ESelfExpr():
+            if ctx.named_locals.contains("self"):
+                return ctx.named_locals.get("self").unwrap()
+            int sdst = add_local(&ctx, UNIT_TYPE, NO_NAME)
+            return sdst
+        case EDefaultOp(lhs_box, rhs_box):
+            lower_expr(&ctx, *lhs_box, &gmod)
+            return lower_expr(&ctx, *rhs_box, &gmod)
+        case EIs(inner_box, _, _):
+            lower_expr(&ctx, *inner_box, &gmod)
+            int isdst = add_local(&ctx, BOOL_TYPE, NO_NAME)
+            emit(&ctx, IAssign(isdst, OpConstBool(false)))
+            return isdst
+        case EAwait(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case ESpawn(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case ESpawnBlocking(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
         else:
-            return -1
+            # Remaining: EIt, EImplicitClosure, EDictLiteral, ESetComp,
+            # EDictComp, EListComp, ERethrow, ECatch, EDo, ERange
+            int fallback = add_local(&ctx, UNIT_TYPE, NO_NAME)
+            emit(&ctx, IAssign(fallback, OpConstUnit()))
+            return fallback
 
 # ── Call lowering ────────────────────────────────────────
 
