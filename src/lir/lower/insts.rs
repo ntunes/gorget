@@ -1056,11 +1056,11 @@ impl<'a> FuncLowering<'a> {
 
             // -- Ownership / lifetime (pass-through as calls or nops) --
             Instruction::Drop { place } => {
-                self.lower_drop(place, bb);
+                self.lower_drop(place, bb, false);
             }
 
             Instruction::DropIfAlive { place } => {
-                self.lower_drop(place, bb);
+                self.lower_drop(place, bb, true);
             }
 
             Instruction::MoveZero { place } => {

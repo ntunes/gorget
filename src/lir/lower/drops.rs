@@ -53,7 +53,7 @@ impl<'a> FuncLowering<'a> {
         current
     }
 
-    pub(super) fn lower_drop(&mut self, place: &Place, bb: BlockId) {
+    pub(super) fn lower_drop(&mut self, place: &Place, bb: BlockId, conditional: bool) {
         use crate::ir::types::DropStrategy;
 
         let local_idx = place.local.0 as usize;
@@ -85,24 +85,28 @@ impl<'a> FuncLowering<'a> {
                     .map(|tn| format!("{tn}__drop"));
                 if let Some(drop_fn) = enum_drop_fn {
                     let addr = self.lower_place_addr(place, bb);
-                    let byte_size = self.compute_place_byte_size(place);
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None,
-                        name: format!("__gorget_drop_if_alive_open__{byte_size}"),
-                        args: vec![addr],
-                        original_name: None,
-                    });
+                    if conditional {
+                        let byte_size = self.compute_place_byte_size(place);
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: None,
+                            name: format!("__gorget_drop_if_alive_open__{byte_size}"),
+                            args: vec![addr],
+                            original_name: None,
+                        });
+                    }
                     let addr2 = self.lower_place_addr(place, bb);
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None, name: drop_fn, args: vec![addr2],
                         original_name: None,
                     });
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None,
-                        name: "__gorget_drop_if_alive_close".to_string(),
-                        args: vec![],
-                        original_name: None,
-                    });
+                    if conditional {
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: None,
+                            name: "__gorget_drop_if_alive_close".to_string(),
+                            args: vec![],
+                            original_name: None,
+                        });
+                    }
                 } else {
                     self.lir_func.block_mut(bb).insts.push(Inst::Nop);
                 }
@@ -225,16 +229,18 @@ impl<'a> FuncLowering<'a> {
             }
             DropStrategy::Custom(ref fn_name) => {
                 // Custom drop: call user drop, then drop fields.
-                // Guard with memcmp zero check — if the struct was moved (zeroed),
-                // skip the drop entirely.
+                // Always guard Custom/Recursive drops — the drop elaborator's
+                // maybe_moved tracking doesn't cover all MoveZero paths yet.
                 let addr = self.lower_place_addr(place, bb);
-                let byte_size = self.compute_place_byte_size(place);
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                    dst: None,
-                    name: format!("__gorget_drop_if_alive_open__{byte_size}"),
-                    args: vec![addr],
-                    original_name: None,
-                });
+                {
+                    let byte_size = self.compute_place_byte_size(place);
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: format!("__gorget_drop_if_alive_open__{byte_size}"),
+                        args: vec![addr],
+                        original_name: None,
+                    });
+                }
                 // Use unified __gorget_dtor_Type which calls user fn + field drops.
                 let unified_drop_fn = type_name.as_ref()
                     .and_then(|tn| self.type_drop_fns.get(tn.as_str()))
@@ -260,23 +266,27 @@ impl<'a> FuncLowering<'a> {
                     }
                     self.lower_field_drops(place, &type_name, bb);
                 }
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                    dst: None,
-                    name: "__gorget_drop_if_alive_close".to_string(),
-                    args: vec![],
-                    original_name: None,
-                });
+                {
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: "__gorget_drop_if_alive_close".to_string(),
+                        args: vec![],
+                        original_name: None,
+                    });
+                }
             }
             DropStrategy::Recursive => {
-                // Guard with memcmp zero check for recursive drops too.
+                // Always guard Recursive drops (same as Custom).
                 let addr = self.lower_place_addr(place, bb);
-                let byte_size = self.compute_place_byte_size(place);
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                    dst: None,
-                    name: format!("__gorget_drop_if_alive_open__{byte_size}"),
-                    args: vec![addr],
-                    original_name: None,
-                });
+                {
+                    let byte_size = self.compute_place_byte_size(place);
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: format!("__gorget_drop_if_alive_open__{byte_size}"),
+                        args: vec![addr],
+                        original_name: None,
+                    });
+                }
                 // Use unified Type__drop from type_drop_fns when available.
                 let unified_drop_fn = type_name.as_ref()
                     .and_then(|tn| self.type_drop_fns.get(tn.as_str()))
@@ -304,12 +314,14 @@ impl<'a> FuncLowering<'a> {
                         self.lower_field_drops(place, &type_name, bb);
                     }
                 }
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                    dst: None,
-                    name: "__gorget_drop_if_alive_close".to_string(),
-                    args: vec![],
-                    original_name: None,
-                });
+                {
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: "__gorget_drop_if_alive_close".to_string(),
+                        args: vec![],
+                        original_name: None,
+                    });
+                }
             }
         }
     }
