@@ -937,7 +937,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            ref_locals: rustc_hash::FxHashSet::default(),
         });
 
         let errors = validate(&module);
@@ -1175,7 +1174,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            ref_locals: rustc_hash::FxHashSet::default(),
         };
         module.functions.push(func);
 
@@ -1322,7 +1320,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            ref_locals: rustc_hash::FxHashSet::default(),
         };
         module.functions.push(f);
         let errors = validate(&module);
@@ -1348,7 +1345,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            ref_locals: rustc_hash::FxHashSet::default(),
         };
         module.functions.push(f);
         let errors = validate(&module);

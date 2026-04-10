@@ -527,7 +527,8 @@ impl<'a> FuncLowering<'a> {
                 // Skip for ref_locals — they're already pointers from collection reads;
                 // lower_place_addr already does the SlotLoad to get the pointer value.
                 let is_ref_local = base.projections.is_empty()
-                    && self.gir_func.ref_locals.contains(&base.local);
+                    && self.gir_func.locals.get(base.local.0 as usize)
+                        .map_or(false, |l| l.ownership == ir::OwnershipState::Ref);
                 if !is_ref_local && matches!(self.gir_types.get(effective_type), Some(GirType::Ptr(_) | GirType::MutPtr(_))) {
                     let deref = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::Load {
@@ -665,7 +666,8 @@ impl<'a> FuncLowering<'a> {
                     // deref to get the actual collection pointer. ref_locals already get SlotLoad
                     // in lower_place_addr, so base_val is the pointer value — no extra deref needed.
                     let base_gir = self.gir_func.locals[base.local.0 as usize].type_id;
-                    let is_ref_local = self.gir_func.ref_locals.contains(&base.local);
+                    let is_ref_local = self.gir_func.locals.get(base.local.0 as usize)
+                        .map_or(false, |l| l.ownership == ir::OwnershipState::Ref);
                     if matches!(self.gir_types.get(base_gir), Some(GirType::Ptr(_)))
                         && base.projections.is_empty()
                         && !is_ref_local

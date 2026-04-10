@@ -15,7 +15,8 @@ impl<'a> FuncLowering<'a> {
         // - With Deref projection: use SlotAddr — the Deref loads the pointer
         // - Without Deref: use SlotLoad — directly provides the pointer value
         //   (needed for borrows, method calls, indexing on the Ptr variable)
-        let is_ref_local = self.gir_func.ref_locals.contains(&place.local);
+        let is_ref_local = self.gir_func.locals.get(place.local.0 as usize)
+            .map_or(false, |l| l.ownership == ir::OwnershipState::Ref);
         // Only treat PtrTo(GorgetString) slots as implicit ref locals.
         // Other PtrTo slots carry type information but are not reference locals.
         let is_ptr_to_slot = match &self.lir_func.slots[slot.0 as usize].ty {

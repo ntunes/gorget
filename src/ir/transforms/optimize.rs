@@ -2089,16 +2089,8 @@ fn eliminate_unused_locals(func: &mut Function) {
         }
     }
 
-    // Remap ref_locals — stale IDs would alias unrelated locals after remapping.
-    let new_ref_locals = func.ref_locals.iter()
-        .filter(|id| {
-            debug_assert!((id.0 as usize) < remap.len(),
-                "ref_local {:?} has no remap entry (locals len = {})", id, remap.len());
-            (id.0 as usize) < remap.len() && referenced[id.0 as usize]
-        })
-        .map(|id| LocalId(remap[id.0 as usize]))
-        .collect();
-    func.ref_locals = new_ref_locals;
+    // Ownership state lives on Local structs — survives filtering automatically.
+    // No separate remap needed (unlike the old ref_locals FxHashSet).
 }
 
 /// Mark all locals referenced by an instruction.
@@ -2532,7 +2524,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            ref_locals: rustc_hash::FxHashSet::default(),
         }
     }
 

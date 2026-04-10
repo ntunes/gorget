@@ -1326,13 +1326,6 @@ impl<'a> LoweringContext<'a> {
 
     /// Derive the set of ref locals for GIR function output.
     /// Collects all locals with any ref state (Ref, BareParam, Alias, CollectionRef).
-    pub fn derive_ref_locals(&self) -> FxHashSet<LocalId> {
-        self.func_state.local_ownership.iter()
-            .filter(|(_, s)| s.is_ref())
-            .map(|(&id, _)| id)
-            .collect()
-    }
-
     /// Flush ownership state from the lowering side map onto the builder's Local structs.
     /// Called after lowering a function body, before `builder.build()`.
     pub fn flush_ownership_to_locals(&self, builder: &mut crate::ir::builder::FunctionBuilder) {

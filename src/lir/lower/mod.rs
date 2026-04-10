@@ -1250,7 +1250,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            ref_locals: rustc_hash::FxHashSet::default(),
         };
         module.functions.push(func);
         module
@@ -1322,7 +1321,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            ref_locals: rustc_hash::FxHashSet::default(),
         };
         module.functions.push(func);
 
@@ -1355,7 +1353,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            ref_locals: rustc_hash::FxHashSet::default(),
         });
         module.functions.push(Function {
             name: "caller".into(),
@@ -1381,7 +1378,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            ref_locals: rustc_hash::FxHashSet::default(),
         });
 
         let lir = lower_module(&module);
@@ -1428,7 +1424,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            ref_locals: rustc_hash::FxHashSet::default(),
         });
 
         let lir = lower_module(&module);
@@ -1476,7 +1471,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            ref_locals: rustc_hash::FxHashSet::default(),
         });
 
         let lir = lower_module(&module);

@@ -594,7 +594,6 @@ pub fn lower_function(
     let mut func = builder.build();
     func.display_name = Some(name.to_string());
     func.def_span = Some(func_span);
-    func.ref_locals = ctx.derive_ref_locals();
     module.functions.push(func);
 }
 
@@ -855,7 +854,6 @@ pub fn lower_equip_method(
     ctx.flush_ownership_to_locals(&mut builder);
     let mut func = builder.build();
     func.display_name = Some(format!("{type_name}.{method_name}"));
-    func.ref_locals = ctx.derive_ref_locals();
     module.functions.push(func);
 }
 

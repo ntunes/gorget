@@ -123,7 +123,6 @@ impl FunctionBuilder {
             def_span: None,
             with_refresh_pairs: self.with_refresh_pairs,
             inner_shared_spawns: self.inner_shared_spawns,
-            ref_locals: rustc_hash::FxHashSet::default(),
         }
     }
 

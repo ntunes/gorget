@@ -8954,7 +8954,7 @@ int64_t lexer___lex_parse_int_radix(const void* __p0, int64_t __p1) {
     int64_t __bp86;
     int64_t __bp87;
     int64_t __bp88;
-    void* __bp98;
+    void* __bp101;
     bool __bp89;
     bool __bp91;
     bool __bp93;
@@ -8994,12 +8994,12 @@ __bb4:
     __v86 = __bp86;
     __v87 = __bp87;
     __v88 = __bp88;
-    __v98 = __bp98;
+    __v101 = __bp101;
     if (__builtin_mul_overflow((int64_t)__v85, (int64_t)__v86, &__v23)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
     if (__builtin_add_overflow((int64_t)__v23, (int64_t)__v87, &__v26)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
     __v29 = (int64_t)1LL;
     if (__builtin_add_overflow((int64_t)__v88, (int64_t)__v29, &__v30)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
-    __bp82 = __v98; __bp83 = __v30; __bp84 = __v26; __bp110 = __v86; goto __bb1;
+    __bp82 = __v101; __bp83 = __v30; __bp84 = __v26; __bp110 = __v86; goto __bb1;
 __bb5:
     __v33 = (int64_t)57LL;
     __v34 = __v12 <= __v33;
@@ -9018,7 +9018,7 @@ __bb8:
     __v39 = (int64_t)(__v12);
     __v41 = (int64_t)48LL;
     if (__builtin_sub_overflow((int64_t)__v39, (int64_t)__v41, &__v42)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
-    __bp85 = __v84; __bp86 = __v110; __bp87 = __v42; __bp88 = __v83; __bp98 = __v82; goto __bb4;
+    __bp85 = __v84; __bp86 = __v110; __bp87 = __v42; __bp88 = __v83; __bp101 = __v82; goto __bb4;
 __bb9:
     __v45 = (int64_t)97LL;
     __v46 = __v12 >= __v45;
@@ -9047,7 +9047,7 @@ __bb13:
     if (__builtin_sub_overflow((int64_t)__v55, (int64_t)__v57, &__v58)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
     __v60 = (int64_t)10LL;
     if (__builtin_add_overflow((int64_t)__v58, (int64_t)__v60, &__v61)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
-    __bp85 = __v84; __bp86 = __v110; __bp87 = __v61; __bp88 = __v83; __bp98 = __v82; goto __bb4;
+    __bp85 = __v84; __bp86 = __v110; __bp87 = __v61; __bp88 = __v83; __bp101 = __v82; goto __bb4;
 __bb14:
     __v64 = (int64_t)65LL;
     __v65 = __v12 >= __v64;
@@ -9065,7 +9065,7 @@ __bb16:
     if (__v93) {
         goto __bb18;
     } else {
-        __bp85 = __v84; __bp86 = __v110; __bp87 = __v14; __bp88 = __v83; __bp98 = __v82; 
+        __bp85 = __v84; __bp86 = __v110; __bp87 = __v14; __bp88 = __v83; __bp101 = __v82; 
         goto __bb4;
     }
 __bb17:
@@ -9077,7 +9077,7 @@ __bb18:
     if (__builtin_sub_overflow((int64_t)__v74, (int64_t)__v76, &__v77)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
     __v79 = (int64_t)10LL;
     if (__builtin_add_overflow((int64_t)__v77, (int64_t)__v79, &__v80)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
-    __bp85 = __v84; __bp86 = __v110; __bp87 = __v80; __bp88 = __v83; __bp98 = __v82; goto __bb4;
+    __bp85 = __v84; __bp86 = __v110; __bp87 = __v80; __bp88 = __v83; __bp101 = __v82; goto __bb4;
 }
 
 GorgetArray lexer___lex_tokenize(const void* __p0) {
@@ -26319,7 +26319,6 @@ Str format___format_expr(const void* __p0) {
     void* __v2636;
     void* __v2637;
     void* __v2638;
-    void* __v2639;
     bool __bp2606;
     bool __bp2607;
     int64_t __bp2608;
@@ -26332,7 +26331,7 @@ Str format___format_expr(const void* __p0) {
     int64_t __bp2622;
     void* __bp2624;
     int64_t __bp2625;
-    void* __bp2639;
+    void* __bp2638;
     void* __bp2629;
     int64_t __bp2630;
     void* __bp2633;
@@ -28303,7 +28302,7 @@ __bb98:
     __v1313 = &__s307;
     __s309 = gorget_string_clone((const GorgetString*)__v1313);
     __v1314 = (int64_t)0LL;
-    __bp2624 = __v1304; __bp2625 = __v1314; __bp2639 = __v1307; goto __bb100;
+    __bp2624 = __v1304; __bp2625 = __v1314; __bp2638 = __v1307; goto __bb100;
 __bb99:
     __v1315 = __s3;
     __v1316 = (void*)&((__gg_Expr *)(__v1315))->tag;
@@ -28318,7 +28317,7 @@ __bb99:
 __bb100:
     __v2624 = __bp2624;
     __v2625 = __bp2625;
-    __v2639 = __bp2639;
+    __v2638 = __bp2638;
     __v1323 = format___sexpr_vec_len(__v2624);
     __v1326 = __v2625 < __v1323;
     if (__v1326) {
@@ -28370,7 +28369,7 @@ __bb103:
     __v1354 = (int32_t)0LL;
     __v1355 = (int64_t)192LL;
     memset(__v1353, (int)__v1354, (size_t)__v1355);
-    __v1358 = format___get_sexpr_at(__v2639, __v2625);
+    __v1358 = format___get_sexpr_at(__v2638, __v2625);
     __s318 = __v1358;
     __v1359 = &__s318;
     memcpy(&__s317, __v1359, sizeof(__gg_SpannedExpr));
@@ -28424,7 +28423,7 @@ __bb103:
     __v1394 = &__s315;
     SpannedExpr__drop(__v1394);
     } }
-    __bp2624 = __v2624; __bp2625 = __v1385; __bp2639 = __v2639; goto __bb100;
+    __bp2624 = __v2624; __bp2625 = __v1385; __bp2638 = __v2638; goto __bb100;
 __bb104:
     __v1395 = &__s309;
     __v1396 = ", ";
@@ -40787,11 +40786,11 @@ void Lexer__lex_process_indentation(void* __p0, int64_t __p1, int64_t __p2) {
     void* __v159;
     void* __v160;
     void* __v161;
-    int64_t __v162;
-    void* __v163;
+    void* __v162;
+    int64_t __v163;
     void* __v164;
     int64_t __v165;
-    int64_t __bp162;
+    int64_t __bp163;
     int64_t __bp165;
 
 __bb0:
@@ -40874,13 +40873,13 @@ __bb5:
 __bb6:
     __v67 = __v1 < __v40;
     if (__v67) {
-        __bp162 = __v1; __bp165 = __v2; 
+        __bp163 = __v1; __bp165 = __v2; 
         goto __bb7;
     } else {
         goto __bb4;
     }
 __bb7:
-    __v162 = __bp162;
+    __v163 = __bp163;
     __v165 = __bp165;
     __v69 = &__s1;
     __v70 = *(void* *)(__v69);
@@ -40945,7 +40944,7 @@ __bb10:
 __bb11:
     __v115 = &__s34;
     __v117 = (int64_t)((__gg_Option__int64_t*)__v115)->Some_0;
-    __v121 = __v117 <= __v162;
+    __v121 = __v117 <= __v163;
     if (__v121) {
         goto __bb4;
     } else {
@@ -40998,7 +40997,7 @@ __bb15:
     __v156 = (int32_t)0LL;
     __v157 = (int64_t)80LL;
     memset(__v155, (int)__v156, (size_t)__v157);
-    __bp162 = __v162; __bp165 = __v165; goto __bb7;
+    __bp163 = __v163; __bp165 = __v165; goto __bb7;
 }
 
 void Lexer__lex_emit_eof(void* __p0) {
@@ -43731,26 +43730,26 @@ void Lexer__lex_scan_number(void* __p0) {
     int64_t __v808;
     void* __v809;
     int64_t __v810;
-    int64_t __v811;
-    void* __v812;
-    bool __v813;
-    void* __v814;
-    bool __v815;
-    int64_t __v816;
-    void* __v817;
-    int64_t __v818;
-    void* __v819;
+    void* __v811;
+    bool __v812;
+    void* __v813;
+    bool __v814;
+    int64_t __v815;
+    void* __v816;
+    int64_t __v817;
+    void* __v818;
+    int64_t __v819;
     void* __v820;
     void* __v821;
-    bool __v822;
+    void* __v822;
     void* __v823;
     void* __v824;
     void* __v825;
-    void* __v826;
+    int64_t __v826;
     void* __v827;
     void* __v828;
-    int64_t __v829;
-    void* __v830;
+    void* __v829;
+    bool __v830;
     void* __v831;
     void* __v832;
     void* __v833;
@@ -43760,31 +43759,31 @@ void Lexer__lex_scan_number(void* __p0) {
     int64_t __v837;
     bool __bp784;
     bool __bp785;
-    int64_t __bp816;
+    int64_t __bp815;
     bool __bp788;
     bool __bp789;
-    int64_t __bp818;
+    int64_t __bp810;
     bool __bp792;
     bool __bp794;
     bool __bp795;
-    int64_t __bp811;
+    int64_t __bp808;
     bool __bp797;
     bool __bp799;
     int64_t __bp837;
     bool __bp800;
-    int64_t __bp808;
-    bool __bp813;
+    bool __bp812;
+    int64_t __bp817;
     bool __bp801;
     bool __bp802;
-    bool __bp822;
-    int64_t __bp829;
+    int64_t __bp826;
+    bool __bp830;
     bool __bp803;
     int64_t __bp804;
     bool __bp805;
     bool __bp806;
     bool __bp807;
-    int64_t __bp810;
-    bool __bp815;
+    bool __bp814;
+    int64_t __bp819;
 
 __bb0:
     __v0 = __p0;
@@ -43862,7 +43861,7 @@ __bb8:
     __v57 = *(void* *)(__v56);
     __v58 = (void*)&((__gg_Lexer *)(__v57))->lex_pos;
     *(int64_t*)(__v58) = __v54;
-    __bp816 = __v4; goto __bb10;
+    __bp815 = __v4; goto __bb10;
 __bb9:
     __v60 = (int64_t)111LL;
     __v61 = __v36 == __v60;
@@ -43872,7 +43871,7 @@ __bb9:
         goto __bb17;
     }
 __bb10:
-    __v816 = __bp816;
+    __v815 = __bp815;
     __v63 = &__s1;
     __v64 = *(void* *)(__v63);
     __v65 = (void*)&((__gg_Lexer *)(__v64))->lex_pos;
@@ -43907,7 +43906,7 @@ __bb12:
     __v97 = *(void* *)(__v96);
     __v98 = (void*)&((__gg_Lexer *)(__v97))->lex_source;
     __v100 = (int64_t)2LL;
-    if (__builtin_add_overflow((int64_t)__v816, (int64_t)__v100, &__v101)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
+    if (__builtin_add_overflow((int64_t)__v815, (int64_t)__v100, &__v101)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
     __v102 = &__s1;
     __v103 = *(void* *)(__v102);
     __v104 = (void*)&((__gg_Lexer *)(__v103))->lex_pos;
@@ -43945,7 +43944,7 @@ __bb12:
     __v135 = (void*)&((__gg_Lexer *)(__v134))->lex_pos;
     __v136 = *(int64_t *)(__v135);
     __v137 = __s1;
-    Lexer__lex_emit(__v137, __v132, __v816, __v136);
+    Lexer__lex_emit(__v137, __v132, __v815, __v136);
     __v141 = &__s47;
     __v142 = (int32_t)0LL;
     __v143 = (int64_t)80LL;
@@ -43980,7 +43979,7 @@ __bb16:
     __v161 = *(void* *)(__v160);
     __v162 = (void*)&((__gg_Lexer *)(__v161))->lex_pos;
     *(int64_t*)(__v162) = __v158;
-    __bp816 = __v816; goto __bb10;
+    __bp815 = __v815; goto __bb10;
 __bb17:
     __v164 = (int64_t)79LL;
     __v165 = __v36 == __v164;
@@ -44006,7 +44005,7 @@ __bb20:
     __v178 = *(void* *)(__v177);
     __v179 = (void*)&((__gg_Lexer *)(__v178))->lex_pos;
     *(int64_t*)(__v179) = __v175;
-    __bp818 = __v4; goto __bb22;
+    __bp810 = __v4; goto __bb22;
 __bb21:
     __v181 = (int64_t)98LL;
     __v182 = __v36 == __v181;
@@ -44016,7 +44015,7 @@ __bb21:
         goto __bb32;
     }
 __bb22:
-    __v818 = __bp818;
+    __v810 = __bp810;
     __v184 = &__s1;
     __v185 = *(void* *)(__v184);
     __v186 = (void*)&((__gg_Lexer *)(__v185))->lex_pos;
@@ -44052,7 +44051,7 @@ __bb24:
     __v219 = *(void* *)(__v218);
     __v220 = (void*)&((__gg_Lexer *)(__v219))->lex_source;
     __v222 = (int64_t)2LL;
-    if (__builtin_add_overflow((int64_t)__v818, (int64_t)__v222, &__v223)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
+    if (__builtin_add_overflow((int64_t)__v810, (int64_t)__v222, &__v223)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
     __v224 = &__s1;
     __v225 = *(void* *)(__v224);
     __v226 = (void*)&((__gg_Lexer *)(__v225))->lex_pos;
@@ -44090,7 +44089,7 @@ __bb24:
     __v257 = (void*)&((__gg_Lexer *)(__v256))->lex_pos;
     __v258 = *(int64_t *)(__v257);
     __v259 = __s1;
-    Lexer__lex_emit(__v259, __v254, __v818, __v258);
+    Lexer__lex_emit(__v259, __v254, __v810, __v258);
     __v263 = &__s83;
     __v264 = (int32_t)0LL;
     __v265 = (int64_t)80LL;
@@ -44139,7 +44138,7 @@ __bb31:
     __v289 = *(void* *)(__v288);
     __v290 = (void*)&((__gg_Lexer *)(__v289))->lex_pos;
     *(int64_t*)(__v290) = __v286;
-    __bp818 = __v818; goto __bb22;
+    __bp810 = __v810; goto __bb22;
 __bb32:
     __v292 = (int64_t)66LL;
     __v293 = __v36 == __v292;
@@ -44166,9 +44165,9 @@ __bb35:
     __v306 = *(void* *)(__v305);
     __v307 = (void*)&((__gg_Lexer *)(__v306))->lex_pos;
     *(int64_t*)(__v307) = __v303;
-    __bp811 = __v4; goto __bb36;
+    __bp808 = __v4; goto __bb36;
 __bb36:
-    __v811 = __bp811;
+    __v808 = __bp808;
     __v308 = &__s1;
     __v309 = *(void* *)(__v308);
     __v310 = (void*)&((__gg_Lexer *)(__v309))->lex_pos;
@@ -44204,7 +44203,7 @@ __bb38:
     __v343 = *(void* *)(__v342);
     __v344 = (void*)&((__gg_Lexer *)(__v343))->lex_source;
     __v346 = (int64_t)2LL;
-    if (__builtin_add_overflow((int64_t)__v811, (int64_t)__v346, &__v347)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
+    if (__builtin_add_overflow((int64_t)__v808, (int64_t)__v346, &__v347)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
     __v348 = &__s1;
     __v349 = *(void* *)(__v348);
     __v350 = (void*)&((__gg_Lexer *)(__v349))->lex_pos;
@@ -44242,7 +44241,7 @@ __bb38:
     __v381 = (void*)&((__gg_Lexer *)(__v380))->lex_pos;
     __v382 = *(int64_t *)(__v381);
     __v383 = __s1;
-    Lexer__lex_emit(__v383, __v378, __v811, __v382);
+    Lexer__lex_emit(__v383, __v378, __v808, __v382);
     __v387 = &__s119;
     __v388 = (int32_t)0LL;
     __v389 = (int64_t)80LL;
@@ -44291,7 +44290,7 @@ __bb45:
     __v413 = *(void* *)(__v412);
     __v414 = (void*)&((__gg_Lexer *)(__v413))->lex_pos;
     *(int64_t*)(__v414) = __v410;
-    __bp811 = __v811; goto __bb36;
+    __bp808 = __v808; goto __bb36;
 __bb46:
     __v837 = __bp837;
     __v415 = &__s1;
@@ -44366,8 +44365,8 @@ __bb52:
     *(int64_t*)(__v481) = __v477;
     __bp837 = __v837; goto __bb46;
 __bb53:
-    __v808 = __bp808;
-    __v813 = __bp813;
+    __v812 = __bp812;
+    __v817 = __bp817;
     __v482 = &__s1;
     __v483 = *(void* *)(__v482);
     __v484 = (void*)&((__gg_Lexer *)(__v483))->lex_pos;
@@ -44380,7 +44379,7 @@ __bb53:
     if (__v496) {
         goto __bb69;
     } else {
-        __bp804 = __v808; __bp805 = __v813; 
+        __bp804 = __v817; __bp805 = __v812; 
         goto __bb68;
     }
 __bb54:
@@ -44394,7 +44393,7 @@ __bb55:
     if (__v801) {
         goto __bb57;
     } else {
-        __bp808 = __v837; __bp813 = __v448; 
+        __bp812 = __v448; __bp817 = __v837; 
         goto __bb53;
     }
 __bb56:
@@ -44428,7 +44427,7 @@ __bb59:
     if (__v802) {
         goto __bb61;
     } else {
-        __bp808 = __v837; __bp813 = __v448; 
+        __bp812 = __v448; __bp817 = __v837; 
         goto __bb53;
     }
 __bb60:
@@ -44446,10 +44445,10 @@ __bb61:
     __v543 = *(void* *)(__v542);
     __v544 = (void*)&((__gg_Lexer *)(__v543))->lex_pos;
     *(int64_t*)(__v544) = __v540;
-    __bp822 = __v533; __bp829 = __v837; goto __bb62;
+    __bp826 = __v837; __bp830 = __v533; goto __bb62;
 __bb62:
-    __v822 = __bp822;
-    __v829 = __bp829;
+    __v826 = __bp826;
+    __v830 = __bp830;
     __v545 = &__s1;
     __v546 = *(void* *)(__v545);
     __v547 = (void*)&((__gg_Lexer *)(__v546))->lex_pos;
@@ -44462,7 +44461,7 @@ __bb62:
     if (__v559) {
         goto __bb63;
     } else {
-        __bp808 = __v829; __bp813 = __v822; 
+        __bp812 = __v830; __bp817 = __v826; 
         goto __bb53;
     }
 __bb63:
@@ -44489,7 +44488,7 @@ __bb65:
     if (__v803) {
         goto __bb67;
     } else {
-        __bp808 = __v829; __bp813 = __v822; 
+        __bp812 = __v830; __bp817 = __v826; 
         goto __bb53;
     }
 __bb66:
@@ -44506,7 +44505,7 @@ __bb67:
     __v593 = *(void* *)(__v592);
     __v594 = (void*)&((__gg_Lexer *)(__v593))->lex_pos;
     *(int64_t*)(__v594) = __v590;
-    __bp822 = __v822; __bp829 = __v829; goto __bb62;
+    __bp826 = __v826; __bp830 = __v830; goto __bb62;
 __bb68:
     __v804 = __bp804;
     __v805 = __bp805;
@@ -44559,7 +44558,7 @@ __bb71:
     if (__v806) {
         goto __bb73;
     } else {
-        __bp804 = __v808; __bp805 = __v813; 
+        __bp804 = __v817; __bp805 = __v812; 
         goto __bb68;
     }
 __bb72:
@@ -44589,7 +44588,7 @@ __bb73:
     if (__v658) {
         goto __bb74;
     } else {
-        __bp810 = __v808; __bp815 = __v632; 
+        __bp814 = __v632; __bp819 = __v817; 
         goto __bb79;
     }
 __bb74:
@@ -44611,7 +44610,7 @@ __bb76:
     if (__v807) {
         goto __bb78;
     } else {
-        __bp810 = __v808; __bp815 = __v632; 
+        __bp814 = __v632; __bp819 = __v817; 
         goto __bb79;
     }
 __bb77:
@@ -44628,10 +44627,10 @@ __bb78:
     __v682 = *(void* *)(__v681);
     __v683 = (void*)&((__gg_Lexer *)(__v682))->lex_pos;
     *(int64_t*)(__v683) = __v679;
-    __bp810 = __v808; __bp815 = __v632; goto __bb79;
+    __bp814 = __v632; __bp819 = __v817; goto __bb79;
 __bb79:
-    __v810 = __bp810;
-    __v815 = __bp815;
+    __v814 = __bp814;
+    __v819 = __bp819;
     __v684 = &__s1;
     __v685 = *(void* *)(__v684);
     __v686 = (void*)&((__gg_Lexer *)(__v685))->lex_pos;
@@ -44644,7 +44643,7 @@ __bb79:
     if (__v698) {
         goto __bb80;
     } else {
-        __bp804 = __v810; __bp805 = __v815; 
+        __bp804 = __v819; __bp805 = __v814; 
         goto __bb68;
     }
 __bb80:
@@ -44659,7 +44658,7 @@ __bb80:
     __v715 = gorget_uint8_is_digit(__v712);
     __v717 = !__v715;
     if (__v717) {
-        __bp804 = __v810; __bp805 = __v815; 
+        __bp804 = __v819; __bp805 = __v814; 
         goto __bb68;
     } else {
         goto __bb81;
@@ -44675,7 +44674,7 @@ __bb81:
     __v728 = *(void* *)(__v727);
     __v729 = (void*)&((__gg_Lexer *)(__v728))->lex_pos;
     *(int64_t*)(__v729) = __v725;
-    __bp810 = __v810; __bp815 = __v815; goto __bb79;
+    __bp814 = __v814; __bp819 = __v819; goto __bb79;
 __bb82:
     __v730 = &__s216;
     gorget_string_free(__v730);
@@ -45581,15 +45580,15 @@ void Lexer__lex_scan_string(void* __p0) {
     void* __v668;
     void* __v669;
     void* __v670;
-    bool __v671;
+    void* __v671;
     void* __v672;
     void* __v673;
     void* __v674;
     void* __v675;
     void* __v676;
-    void* __v677;
+    int64_t __v677;
     void* __v678;
-    void* __v679;
+    bool __v679;
     void* __v680;
     void* __v681;
     void* __v682;
@@ -45600,26 +45599,26 @@ void Lexer__lex_scan_string(void* __p0) {
     void* __v687;
     void* __v688;
     void* __v689;
-    int64_t __v690;
+    void* __v690;
     void* __v691;
     void* __v692;
     void* __v693;
     void* __v694;
-    bool __v695;
+    void* __v695;
     void* __v696;
     void* __v697;
     void* __v698;
     void* __v699;
     void* __v700;
-    int64_t __v701;
-    bool __v702;
+    void* __v701;
+    int64_t __v702;
     void* __v703;
-    void* __v704;
+    bool __v704;
     void* __v705;
     void* __v706;
     void* __v707;
     void* __v708;
-    void* __v709;
+    bool __v709;
     void* __v710;
     void* __v711;
     void* __v712;
@@ -45627,31 +45626,31 @@ void Lexer__lex_scan_string(void* __p0) {
     void* __v714;
     void* __v715;
     void* __v716;
-    void* __v717;
+    int64_t __v717;
     void* __v718;
     void* __v719;
     void* __v720;
-    void* __v721;
+    bool __v721;
     void* __v722;
     void* __v723;
     void* __v724;
     void* __v725;
-    int64_t __v726;
+    void* __v726;
     void* __v727;
     int64_t __v728;
     void* __v729;
     void* __v730;
     void* __v731;
     void* __v732;
-    int64_t __v733;
+    void* __v733;
     void* __v734;
     void* __v735;
     void* __v736;
-    bool __v737;
+    void* __v737;
     void* __v738;
-    void* __v739;
+    int64_t __v739;
     void* __v740;
-    uint8_t __v741;
+    void* __v741;
     void* __v742;
     void* __v743;
     void* __v744;
@@ -45667,7 +45666,7 @@ void Lexer__lex_scan_string(void* __p0) {
     void* __v754;
     void* __v755;
     void* __v756;
-    bool __v757;
+    void* __v757;
     void* __v758;
     void* __v759;
     void* __v760;
@@ -45678,17 +45677,17 @@ void Lexer__lex_scan_string(void* __p0) {
     void* __v765;
     void* __v766;
     void* __v767;
-    void* __v768;
-    void* __v769;
+    bool __v768;
+    uint8_t __v769;
     void* __v770;
     void* __v771;
     void* __v772;
     void* __v773;
-    void* __v774;
+    int64_t __v774;
     void* __v775;
-    bool __v776;
+    uint8_t __v776;
     void* __v777;
-    uint8_t __v778;
+    void* __v778;
     void* __v779;
     void* __v780;
     void* __v781;
@@ -45698,37 +45697,37 @@ void Lexer__lex_scan_string(void* __p0) {
     void* __v785;
     void* __v786;
     void* __v787;
-    int64_t __v788;
-    void* __v789;
+    void* __v788;
+    bool __v789;
     void* __v790;
     bool __v791;
     void* __v792;
     void* __v793;
-    bool __v794;
+    void* __v794;
     void* __v795;
     void* __v796;
     void* __v797;
     void* __v798;
-    void* __v799;
+    bool __v799;
     void* __v800;
     void* __v801;
-    void* __v802;
+    uint8_t __v802;
     bool __v803;
     void* __v804;
     bool __v805;
-    bool __v806;
-    void* __v807;
-    bool __v808;
+    void* __v806;
+    bool __v807;
+    void* __v808;
     bool __v809;
-    void* __v810;
+    int64_t __v810;
     bool __v811;
-    int64_t __v812;
-    uint8_t __v813;
-    void* __v814;
+    void* __v812;
+    bool __v813;
+    bool __v814;
     void* __v815;
     void* __v816;
     void* __v817;
-    bool __v818;
+    void* __v818;
     bool __v819;
     void* __v820;
     void* __v821;
@@ -45738,23 +45737,22 @@ void Lexer__lex_scan_string(void* __p0) {
     bool __v825;
     void* __v826;
     bool __v827;
-    bool __v828;
-    void* __v829;
-    void* __v830;
-    int64_t __v831;
-    bool __bp805;
-    bool __bp809;
-    bool __bp819;
-    bool __bp671;
+    void* __v828;
+    bool __v829;
+    int64_t __v830;
+    bool __bp803;
+    bool __bp811;
+    bool __bp814;
+    bool __bp679;
     bool __bp644;
     bool __bp645;
     bool __bp646;
     bool __bp647;
     uint8_t __bp648;
-    bool __bp695;
-    bool __bp702;
-    int64_t __bp733;
-    bool __bp737;
+    bool __bp704;
+    bool __bp709;
+    bool __bp721;
+    int64_t __bp728;
     bool __bp649;
     bool __bp650;
     bool __bp651;
@@ -45763,30 +45761,30 @@ void Lexer__lex_scan_string(void* __p0) {
     bool __bp657;
     bool __bp658;
     int64_t __bp660;
-    int64_t __bp701;
-    uint8_t __bp741;
-    bool __bp757;
+    int64_t __bp702;
+    bool __bp768;
+    uint8_t __bp769;
     bool __bp791;
-    bool __bp794;
-    bool __bp806;
-    int64_t __bp812;
+    bool __bp799;
+    bool __bp809;
+    int64_t __bp810;
     bool __bp661;
-    int64_t __bp690;
-    int64_t __bp728;
-    bool __bp776;
-    uint8_t __bp778;
-    bool __bp803;
-    bool __bp808;
-    bool __bp818;
+    int64_t __bp677;
+    int64_t __bp717;
+    uint8_t __bp776;
+    bool __bp789;
+    bool __bp805;
+    bool __bp813;
+    bool __bp819;
     int64_t __bp823;
-    int64_t __bp726;
-    int64_t __bp788;
-    bool __bp811;
-    uint8_t __bp813;
+    int64_t __bp739;
+    int64_t __bp774;
+    uint8_t __bp802;
+    bool __bp807;
     bool __bp825;
     bool __bp827;
-    bool __bp828;
-    int64_t __bp831;
+    bool __bp829;
+    int64_t __bp830;
     bool __bp663;
     bool __bp665;
     bool __bp666;
@@ -45811,9 +45809,9 @@ __bb0:
         goto __bb3;
     }
 __bb1:
-    __v805 = __bp805;
-    __v809 = __bp809;
-    __v819 = __bp819;
+    __v803 = __bp803;
+    __v811 = __bp811;
+    __v814 = __bp814;
     __v15 = __s1;
     __v16 = Lexer__lex_peek(__v15);
     __v18 = __s1;
@@ -45830,7 +45828,7 @@ __bb2:
     __v24 = true;
     __v25 = __s1;
     Lexer__lex_advance(__v25);
-    __bp805 = __v7; __bp809 = __v24; __bp819 = __v8; goto __bb1;
+    __bp803 = __v7; __bp811 = __v24; __bp814 = __v8; goto __bb1;
 __bb3:
     __v26 = __s1;
     __v27 = Lexer__lex_peek(__v26);
@@ -45845,7 +45843,7 @@ __bb4:
     __v32 = true;
     __v33 = __s1;
     Lexer__lex_advance(__v33);
-    __bp805 = __v32; __bp809 = __v6; __bp819 = __v8; goto __bb1;
+    __bp803 = __v32; __bp811 = __v6; __bp814 = __v8; goto __bb1;
 __bb5:
     __v34 = __s1;
     __v35 = Lexer__lex_peek(__v34);
@@ -45860,7 +45858,7 @@ __bb6:
     __v40 = true;
     __v41 = __s1;
     Lexer__lex_advance(__v41);
-    __bp805 = __v7; __bp809 = __v6; __bp819 = __v40; goto __bb1;
+    __bp803 = __v7; __bp811 = __v6; __bp814 = __v40; goto __bb1;
 __bb7:
     __v42 = __s1;
     __v43 = Lexer__lex_peek(__v42);
@@ -45869,15 +45867,15 @@ __bb7:
     if (__v46) {
         goto __bb8;
     } else {
-        __bp805 = __v7; __bp809 = __v6; __bp819 = __v8; 
+        __bp803 = __v7; __bp811 = __v6; __bp814 = __v8; 
         goto __bb1;
     }
 __bb8:
     __v48 = __s1;
     Lexer__lex_advance(__v48);
-    __bp805 = __v7; __bp809 = __v6; __bp819 = __v8; goto __bb1;
+    __bp803 = __v7; __bp811 = __v6; __bp814 = __v8; goto __bb1;
 __bb9:
-    __v671 = __bp671;
+    __v679 = __bp679;
     __v49 = (int64_t)72LL;
     __v50 = gorget_array_new(__v49); __v50.elem_drop = (__gorget_drop_fn)StringSegment__drop; __v50.elem_clone = (__gorget_drop_fn)StringSegment__clone_inplace;
     __s35 = __v50;
@@ -45889,7 +45887,7 @@ __bb9:
     memset(__v52, (int)__v53, (size_t)__v54);
     __v55 = "";
     __s36 = gorget_str_from_literal(__v55, strlen(__v55));
-    __bp647 = __v671; __bp648 = __v16; __bp695 = __v809; __bp702 = __v805; __bp733 = __v4; __bp737 = __v819; goto __bb20;
+    __bp647 = __v679; __bp648 = __v16; __bp704 = __v803; __bp709 = __v811; __bp721 = __v814; __bp728 = __v4; goto __bb20;
 __bb10:
     __v56 = &__s1;
     __v57 = *(void* *)(__v56);
@@ -45941,7 +45939,7 @@ __bb17:
     if (__v646) {
         goto __bb19;
     } else {
-        __bp671 = __v19; 
+        __bp679 = __v19; 
         goto __bb9;
     }
 __bb18:
@@ -45959,14 +45957,14 @@ __bb19:
     __v104 = *(void* *)(__v103);
     __v105 = (void*)&((__gg_Lexer *)(__v104))->lex_pos;
     *(int64_t*)(__v105) = __v101;
-    __bp671 = __v94; goto __bb9;
+    __bp679 = __v94; goto __bb9;
 __bb20:
     __v647 = __bp647;
     __v648 = __bp648;
-    __v695 = __bp695;
-    __v702 = __bp702;
-    __v733 = __bp733;
-    __v737 = __bp737;
+    __v704 = __bp704;
+    __v709 = __bp709;
+    __v721 = __bp721;
+    __v728 = __bp728;
     __v106 = &__s1;
     __v107 = *(void* *)(__v106);
     __v108 = (void*)&((__gg_Lexer *)(__v107))->lex_pos;
@@ -46144,7 +46142,7 @@ __bb42:
         goto __bb52;
     }
 __bb43:
-    __v223 = !__v695;
+    __v223 = !__v709;
     __bp655 = __v223; goto __bb44;
 __bb44:
     __v655 = __bp655;
@@ -46216,7 +46214,7 @@ __bb47:
     __v264 = &__s70;
     Option__GorgetString__drop(__v264);
     } }
-    __bp647 = __v647; __bp648 = __v648; __bp695 = __v695; __bp702 = __v702; __bp733 = __v733; __bp737 = __v737; goto __bb20;
+    __bp647 = __v647; __bp648 = __v648; __bp704 = __v704; __bp709 = __v709; __bp721 = __v721; __bp728 = __v728; goto __bb20;
 __bb48:
     __v265 = &__s1;
     __v266 = *(void* *)(__v265);
@@ -46244,7 +46242,7 @@ __bb49:
         goto __bb85;
     }
 __bb50:
-    __bp657 = __v737; goto __bb51;
+    __bp657 = __v721; goto __bb51;
 __bb51:
     __v657 = __bp657;
     if (__v657) {
@@ -46322,7 +46320,7 @@ __bb58:
     __v334 = *(void* *)(__v333);
     __v335 = (void*)&((__gg_Lexer *)(__v334))->lex_pos;
     *(int64_t*)(__v335) = __v331;
-    __bp647 = __v647; __bp648 = __v648; __bp695 = __v695; __bp702 = __v702; __bp733 = __v733; __bp737 = __v737; goto __bb20;
+    __bp647 = __v647; __bp648 = __v648; __bp704 = __v704; __bp709 = __v709; __bp721 = __v721; __bp728 = __v728; goto __bb20;
 __bb59:
     __v336 = __s1;
     Lexer__lex_advance(__v336);
@@ -46331,7 +46329,7 @@ __bb59:
     __v339 = (void*)&((__gg_Lexer *)(__v338))->lex_pos;
     __v340 = *(int64_t *)(__v339);
     __v342 = (int64_t)1LL;
-    __bp660 = __v342; __bp701 = __v340; __bp741 = __v648; __bp757 = __v647; __bp791 = __v695; __bp794 = __v702; __bp806 = __v737; __bp812 = __v733; goto __bb61;
+    __bp660 = __v342; __bp702 = __v340; __bp768 = __v647; __bp769 = __v648; __bp791 = __v709; __bp799 = __v704; __bp809 = __v721; __bp810 = __v728; goto __bb61;
 __bb60:
     __v343 = &__s34;
     __v344 = &__s94;
@@ -46358,13 +46356,13 @@ __bb60:
     goto __bb59;
 __bb61:
     __v660 = __bp660;
-    __v701 = __bp701;
-    __v741 = __bp741;
-    __v757 = __bp757;
+    __v702 = __bp702;
+    __v768 = __bp768;
+    __v769 = __bp769;
     __v791 = __bp791;
-    __v794 = __bp794;
-    __v806 = __bp806;
-    __v812 = __bp812;
+    __v799 = __bp799;
+    __v809 = __bp809;
+    __v810 = __bp810;
     __v359 = &__s1;
     __v360 = *(void* *)(__v359);
     __v361 = (void*)&((__gg_Lexer *)(__v360))->lex_pos;
@@ -46397,7 +46395,7 @@ __bb63:
     __v386 = *(void* *)(__v385);
     __v387 = (void*)&((__gg_Lexer *)(__v386))->lex_pos;
     __v388 = *(int64_t *)(__v387);
-    __v392 = lexer___owned_slice(__v384, __v701, __v388);
+    __v392 = lexer___owned_slice(__v384, __v702, __v388);
     __s126 = __v392;
     __v393 = &__s126;
     memcpy(&__s123, __v393, sizeof(Str));
@@ -46456,21 +46454,21 @@ __bb66:
     __v435 = false;
     __bp661 = __v435; goto __bb65;
 __bb67:
-    __v690 = __bp690;
-    __v728 = __bp728;
+    __v677 = __bp677;
+    __v717 = __bp717;
     __v776 = __bp776;
-    __v778 = __bp778;
-    __v803 = __bp803;
-    __v808 = __bp808;
-    __v818 = __bp818;
+    __v789 = __bp789;
+    __v805 = __bp805;
+    __v813 = __bp813;
+    __v819 = __bp819;
     __v823 = __bp823;
     __v436 = __s1;
     Lexer__lex_advance(__v436);
-    __bp660 = __v690; __bp701 = __v728; __bp741 = __v778; __bp757 = __v776; __bp791 = __v808; __bp794 = __v803; __bp806 = __v818; __bp812 = __v823; goto __bb61;
+    __bp660 = __v677; __bp702 = __v717; __bp768 = __v789; __bp769 = __v776; __bp791 = __v805; __bp799 = __v813; __bp809 = __v819; __bp810 = __v823; goto __bb61;
 __bb68:
     __v438 = (int64_t)1LL;
     if (__builtin_add_overflow((int64_t)__v660, (int64_t)__v438, &__v439)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
-    __bp690 = __v439; __bp728 = __v701; __bp776 = __v757; __bp778 = __v741; __bp803 = __v794; __bp808 = __v791; __bp818 = __v806; __bp823 = __v812; goto __bb67;
+    __bp677 = __v439; __bp717 = __v702; __bp776 = __v769; __bp789 = __v768; __bp805 = __v791; __bp813 = __v799; __bp819 = __v809; __bp823 = __v810; goto __bb67;
 __bb69:
     __v442 = (int64_t)125LL;
     __v443 = __v376 == __v442;
@@ -46487,7 +46485,7 @@ __bb70:
     if (__v451) {
         goto __bb63;
     } else {
-        __bp690 = __v447; __bp728 = __v701; __bp776 = __v757; __bp778 = __v741; __bp803 = __v794; __bp808 = __v791; __bp818 = __v806; __bp823 = __v812; 
+        __bp677 = __v447; __bp717 = __v702; __bp776 = __v769; __bp789 = __v768; __bp805 = __v791; __bp813 = __v799; __bp819 = __v809; __bp823 = __v810; 
         goto __bb67;
     }
 __bb71:
@@ -46496,22 +46494,22 @@ __bb71:
     if (__v455) {
         goto __bb72;
     } else {
-        __bp690 = __v660; __bp728 = __v701; __bp776 = __v757; __bp778 = __v741; __bp803 = __v794; __bp808 = __v791; __bp818 = __v806; __bp823 = __v812; 
+        __bp677 = __v660; __bp717 = __v702; __bp776 = __v769; __bp789 = __v768; __bp805 = __v791; __bp813 = __v799; __bp819 = __v809; __bp823 = __v810; 
         goto __bb67;
     }
 __bb72:
     __v457 = __s1;
     Lexer__lex_advance(__v457);
-    __bp726 = __v660; __bp788 = __v701; __bp811 = __v757; __bp813 = __v741; __bp825 = __v791; __bp827 = __v794; __bp828 = __v806; __bp831 = __v812; goto __bb73;
+    __bp739 = __v660; __bp774 = __v702; __bp802 = __v769; __bp807 = __v768; __bp825 = __v799; __bp827 = __v791; __bp829 = __v809; __bp830 = __v810; goto __bb73;
 __bb73:
-    __v726 = __bp726;
-    __v788 = __bp788;
-    __v811 = __bp811;
-    __v813 = __bp813;
+    __v739 = __bp739;
+    __v774 = __bp774;
+    __v802 = __bp802;
+    __v807 = __bp807;
     __v825 = __bp825;
     __v827 = __bp827;
-    __v828 = __bp828;
-    __v831 = __bp831;
+    __v829 = __bp829;
+    __v830 = __bp830;
     __v458 = &__s1;
     __v459 = *(void* *)(__v458);
     __v460 = (void*)&((__gg_Lexer *)(__v459))->lex_pos;
@@ -46547,7 +46545,7 @@ __bb76:
     if (__v663) {
         goto __bb74;
     } else {
-        __bp690 = __v726; __bp728 = __v788; __bp776 = __v811; __bp778 = __v813; __bp803 = __v827; __bp808 = __v825; __bp818 = __v828; __bp823 = __v831; 
+        __bp677 = __v739; __bp717 = __v774; __bp776 = __v802; __bp789 = __v807; __bp805 = __v827; __bp813 = __v825; __bp819 = __v829; __bp823 = __v830; 
         goto __bb67;
     }
 __bb77:
@@ -46556,7 +46554,7 @@ __bb77:
 __bb78:
     __v488 = __s1;
     Lexer__lex_advance(__v488);
-    __bp726 = __v726; __bp788 = __v788; __bp811 = __v811; __bp813 = __v813; __bp825 = __v825; __bp827 = __v827; __bp828 = __v828; __bp831 = __v831; goto __bb73;
+    __bp739 = __v739; __bp774 = __v774; __bp802 = __v802; __bp807 = __v807; __bp825 = __v825; __bp827 = __v827; __bp829 = __v829; __bp830 = __v830; goto __bb73;
 __bb79:
     __v489 = __s1;
     Lexer__lex_advance(__v489);
@@ -46566,7 +46564,7 @@ __bb80:
     gorget_string_free(__v490);
     __v491 = &__s123;
     gorget_string_free(__v491);
-    __bp647 = __v757; __bp648 = __v741; __bp695 = __v791; __bp702 = __v794; __bp733 = __v812; __bp737 = __v806; goto __bb20;
+    __bp647 = __v768; __bp648 = __v769; __bp704 = __v799; __bp709 = __v791; __bp721 = __v809; __bp728 = __v810; goto __bb20;
 __bb81:
     __v492 = __s1;
     Lexer__lex_advance(__v492);
@@ -46603,9 +46601,9 @@ __bb82:
     Lexer__lex_advance(__v519);
     __v520 = &__s153;
     gorget_string_free(__v520);
-    __bp647 = __v647; __bp648 = __v648; __bp695 = __v695; __bp702 = __v702; __bp733 = __v733; __bp737 = __v737; goto __bb20;
+    __bp647 = __v647; __bp648 = __v648; __bp704 = __v704; __bp709 = __v709; __bp721 = __v721; __bp728 = __v728; goto __bb20;
 __bb83:
-    __bp665 = __v737; goto __bb84;
+    __bp665 = __v721; goto __bb84;
 __bb84:
     __v665 = __bp665;
     if (__v665) {
@@ -46673,7 +46671,7 @@ __bb90:
     __v569 = *(void* *)(__v568);
     __v570 = (void*)&((__gg_Lexer *)(__v569))->lex_pos;
     *(int64_t*)(__v570) = __v566;
-    __bp647 = __v647; __bp648 = __v648; __bp695 = __v695; __bp702 = __v702; __bp733 = __v733; __bp737 = __v737; goto __bb20;
+    __bp647 = __v647; __bp648 = __v648; __bp704 = __v704; __bp709 = __v709; __bp721 = __v721; __bp728 = __v728; goto __bb20;
 __bb91:
     __v571 = &__s160;
     __v572 = (int32_t)0LL;
@@ -46681,7 +46679,7 @@ __bb91:
     *(int32_t*)(__v573) = __v572;
     __v574 = &__s160;
     memcpy(&__s159, __v574, sizeof(__gg_StringKind));
-    if (__v695) {
+    if (__v709) {
         goto __bb94;
     } else {
         goto __bb95;
@@ -46748,7 +46746,7 @@ __bb93:
     __v619 = (void*)&((__gg_Lexer *)(__v618))->lex_pos;
     __v620 = *(int64_t *)(__v619);
     __v621 = __s1;
-    Lexer__lex_emit(__v621, __v616, __v733, __v620);
+    Lexer__lex_emit(__v621, __v616, __v728, __v620);
     __v625 = &__s168;
     __v626 = (int32_t)0LL;
     __v627 = (int64_t)80LL;
@@ -46767,7 +46765,7 @@ __bb94:
     memcpy(&__s159, __v633, sizeof(__gg_StringKind));
     goto __bb93;
 __bb95:
-    if (__v702) {
+    if (__v704) {
         goto __bb96;
     } else {
         goto __bb97;
@@ -55495,7 +55493,8 @@ void Parser__skip_meta_rest(void* __p0) {
     void* __v199;
     void* __v200;
     int64_t __v201;
-    int64_t __v202;
+    void* __v202;
+    int64_t __v203;
     void* __bp173;
     bool __bp175;
     bool __bp177;
@@ -55512,7 +55511,7 @@ void Parser__skip_meta_rest(void* __p0) {
     void* __bp194;
     int64_t __bp196;
     bool __bp197;
-    int64_t __bp202;
+    int64_t __bp203;
     void* __bp200;
 
 __bb0:
@@ -55827,7 +55826,7 @@ __bb47:
     __v148 = false;
     __bp197 = __v148; goto __bb46;
 __bb48:
-    __v202 = __bp202;
+    __v203 = __bp203;
     __v150 = Parser__advance(__v194);
     __s52 = __v150;
     __v151 = &__s52;
@@ -55835,24 +55834,24 @@ __bb48:
     __v152 = &__s52;
     SpannedToken__drop(__v152);
     } }
-    __bp194 = __v194; __bp196 = __v202; goto __bb42;
+    __bp194 = __v194; __bp196 = __v203; goto __bb42;
 __bb49:
     __v154 = (int64_t)1LL;
     if (__builtin_add_overflow((int64_t)__v196, (int64_t)__v154, &__v155)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
-    __bp202 = __v155; goto __bb48;
+    __bp203 = __v155; goto __bb48;
 __bb50:
     __v158 = (int64_t)50LL;
     __v159 = Parser__check_tok(__v194, __v158);
     if (__v159) {
         goto __bb51;
     } else {
-        __bp202 = __v196; 
+        __bp203 = __v196; 
         goto __bb48;
     }
 __bb51:
     __v162 = (int64_t)1LL;
     if (__builtin_sub_overflow((int64_t)__v196, (int64_t)__v162, &__v163)) { fprintf(stderr, "gorget: integer overflow\n"); exit(1); }
-    __bp202 = __v163; goto __bb48;
+    __bp203 = __v163; goto __bb48;
 __bb52:
     __v200 = __bp200;
     __v166 = (int64_t)51LL;
@@ -57276,7 +57275,9 @@ __gg_SpannedType Parser__parse_type(void* __p0) {
     bool __v987;
     void* __v988;
     void* __v989;
-    int64_t __v990;
+    void* __v990;
+    void* __v991;
+    int64_t __v992;
     bool __bp954;
     bool __bp955;
     bool __bp956;
@@ -57293,7 +57294,7 @@ __gg_SpannedType Parser__parse_type(void* __p0) {
     bool __bp967;
     bool __bp968;
     int64_t __bp970;
-    int64_t __bp990;
+    int64_t __bp992;
     bool __bp973;
     bool __bp974;
     bool __bp975;
@@ -58239,9 +58240,9 @@ __bb80:
     __v512 = (int32_t)0LL;
     __v513 = (int64_t)160LL;
     memset(__v511, (int)__v512, (size_t)__v513);
-    __bp990 = __v5; goto __bb81;
+    __bp992 = __v5; goto __bb81;
 __bb81:
-    __v990 = __bp990;
+    __v992 = __bp992;
     __v514 = __s1;
     __v515 = (int64_t)48LL;
     __v516 = Parser__match_tok(__v514, __v515);
@@ -58266,14 +58267,14 @@ __bb82:
     __v527 = &__s103;
     SpannedType__drop(__v527);
     } }
-    __bp990 = __v990; goto __bb81;
+    __bp992 = __v992; goto __bb81;
 __bb83:
     __v528 = &__s100;
     { char __dia_z[160] = {0}; if (memcmp(__v528, __dia_z, 160) != 0) {
     __v529 = &__s100;
     SpannedType__drop(__v529);
     } }
-    __bp970 = __v990; goto __bb79;
+    __bp970 = __v992; goto __bb79;
 __bb84:
     __v530 = __s1;
     __v531 = (int64_t)2LL;
@@ -59162,14 +59163,14 @@ __gg_SpannedType Parser__parse_function_type(void* __p0, const void* __p1, int64
     void* __v108;
     int64_t __v109;
     void* __v110;
-    int64_t __v111;
-    void* __v112;
+    void* __v111;
+    int64_t __v112;
     void* __bp107;
     void* __bp108;
     int64_t __bp109;
     void* __bp110;
-    int64_t __bp111;
-    void* __bp112;
+    void* __bp111;
+    int64_t __bp112;
 
 __bb0:
     __v0 = __p0;
@@ -59287,7 +59288,7 @@ __bb2:
     __v84 = &__s8;
     __v86 = (int64_t)0LL;
     gorget_array_push(__v84, &(int64_t){ __v86 });
-    __bp110 = __v0; __bp111 = __v2; __bp112 = __v1; goto __bb3;
+    __bp110 = __v0; __bp111 = __v1; __bp112 = __v2; goto __bb3;
 __bb3:
     __v110 = __bp110;
     __v111 = __bp111;
@@ -59325,7 +59326,7 @@ __bb5:
     __v106 = &__s13;
     SpannedType__drop(__v106);
     } }
-    __bp107 = __v110; __bp108 = __v112; __bp109 = __v111; goto __bb1;
+    __bp107 = __v110; __bp108 = __v111; __bp109 = __v112; goto __bb1;
 }
 
 GorgetArray Parser__parse_type_args(void* __p0) {
@@ -61789,17 +61790,17 @@ __gg_SpannedPattern Parser__parse_pattern_atom(void* __p0) {
     int64_t __v1378;
     int64_t __v1379;
     int64_t __bp1364;
-    int64_t __bp1374;
+    int64_t __bp1378;
     int64_t __bp1366;
     int64_t __bp1376;
     int64_t __bp1367;
-    int64_t __bp1379;
+    int64_t __bp1375;
     int64_t __bp1368;
-    int64_t __bp1378;
+    int64_t __bp1379;
     bool __bp1370;
     bool __bp1371;
     int64_t __bp1373;
-    int64_t __bp1375;
+    int64_t __bp1374;
 
 __bb0:
     __v0 = __p0;
@@ -62756,9 +62757,9 @@ __bb24:
     __v655 = (int32_t)0LL;
     __v656 = (int64_t)216LL;
     memset(__v654, (int)__v655, (size_t)__v656);
-    __bp1374 = __v5; goto __bb25;
+    __bp1378 = __v5; goto __bb25;
 __bb25:
-    __v1374 = __bp1374;
+    __v1378 = __bp1378;
     __v657 = __s1;
     __v658 = (int64_t)48LL;
     __v659 = Parser__match_tok(__v657, __v658);
@@ -62783,14 +62784,14 @@ __bb26:
     __v670 = &__s132;
     SpannedPattern__drop(__v670);
     } }
-    __bp1374 = __v1374; goto __bb25;
+    __bp1378 = __v1378; goto __bb25;
 __bb27:
     __v671 = &__s129;
     { char __dia_z[216] = {0}; if (memcmp(__v671, __dia_z, 216) != 0) {
     __v672 = &__s129;
     SpannedPattern__drop(__v672);
     } }
-    __bp1364 = __v1374; goto __bb23;
+    __bp1364 = __v1378; goto __bb23;
 __bb28:
     __v673 = __s1;
     __v674 = (int64_t)2LL;
@@ -63366,9 +63367,9 @@ __bb44:
     __v1019 = (int32_t)0LL;
     __v1020 = (int64_t)216LL;
     memset(__v1018, (int)__v1019, (size_t)__v1020);
-    __bp1379 = __v5; goto __bb45;
+    __bp1375 = __v5; goto __bb45;
 __bb45:
-    __v1379 = __bp1379;
+    __v1375 = __bp1375;
     __v1021 = __s1;
     __v1022 = (int64_t)48LL;
     __v1023 = Parser__match_tok(__v1021, __v1022);
@@ -63393,14 +63394,14 @@ __bb46:
     __v1034 = &__s193;
     SpannedPattern__drop(__v1034);
     } }
-    __bp1379 = __v1379; goto __bb45;
+    __bp1375 = __v1375; goto __bb45;
 __bb47:
     __v1035 = &__s190;
     { char __dia_z[216] = {0}; if (memcmp(__v1035, __dia_z, 216) != 0) {
     __v1036 = &__s190;
     SpannedPattern__drop(__v1036);
     } }
-    __bp1367 = __v1379; goto __bb43;
+    __bp1367 = __v1375; goto __bb43;
 __bb48:
     __v1037 = &__s219;
     __v1038 = (int32_t)1LL;
@@ -63562,9 +63563,9 @@ __bb51:
     __v1138 = (int32_t)0LL;
     __v1139 = (int64_t)216LL;
     memset(__v1137, (int)__v1138, (size_t)__v1139);
-    __bp1378 = __v5; goto __bb52;
+    __bp1379 = __v5; goto __bb52;
 __bb52:
-    __v1378 = __bp1378;
+    __v1379 = __bp1379;
     __v1140 = __s1;
     __v1141 = (int64_t)48LL;
     __v1142 = Parser__match_tok(__v1140, __v1141);
@@ -63589,14 +63590,14 @@ __bb53:
     __v1153 = &__s213;
     SpannedPattern__drop(__v1153);
     } }
-    __bp1378 = __v1378; goto __bb52;
+    __bp1379 = __v1379; goto __bb52;
 __bb54:
     __v1154 = &__s210;
     { char __dia_z[216] = {0}; if (memcmp(__v1154, __dia_z, 216) != 0) {
     __v1155 = &__s210;
     SpannedPattern__drop(__v1155);
     } }
-    __bp1368 = __v1378; goto __bb50;
+    __bp1368 = __v1379; goto __bb50;
 __bb55:
     __v1159 = &__s1;
     __v1160 = *(void* *)(__v1159);
@@ -63907,9 +63908,9 @@ __bb72:
     __v1346 = (int32_t)0LL;
     __v1347 = (int64_t)216LL;
     memset(__v1345, (int)__v1346, (size_t)__v1347);
-    __bp1375 = __v5; goto __bb73;
+    __bp1374 = __v5; goto __bb73;
 __bb73:
-    __v1375 = __bp1375;
+    __v1374 = __bp1374;
     __v1348 = __s1;
     __v1349 = (int64_t)48LL;
     __v1350 = Parser__match_tok(__v1348, __v1349);
@@ -63934,14 +63935,14 @@ __bb74:
     __v1361 = &__s247;
     SpannedPattern__drop(__v1361);
     } }
-    __bp1375 = __v1375; goto __bb73;
+    __bp1374 = __v1374; goto __bb73;
 __bb75:
     __v1362 = &__s244;
     { char __dia_z[216] = {0}; if (memcmp(__v1362, __dia_z, 216) != 0) {
     __v1363 = &__s244;
     SpannedPattern__drop(__v1363);
     } }
-    __bp1373 = __v1375; goto __bb71;
+    __bp1373 = __v1374; goto __bb71;
 }
 
 __gg_SpannedExpr Parser__parse_expr(void* __p0) {
@@ -70661,15 +70662,15 @@ bool Parser__try_detect_closure(void* __p0) {
     int64_t __v191;
     bool __v192;
     void* __v193;
-    bool __v194;
+    void* __v194;
     int64_t __v195;
-    void* __v196;
+    bool __v196;
     bool __v197;
     int64_t __v198;
     bool __bp184;
     bool __bp197;
     bool __bp186;
-    bool __bp194;
+    bool __bp196;
     int64_t __bp198;
     bool __bp187;
     bool __bp189;
@@ -70836,9 +70837,9 @@ __bb17:
     __v84 = __s1;
     __v85 = Parser__advance(__v84);
     __s25 = __v85;
-    __bp194 = __v186; __bp198 = __v82; goto __bb18;
+    __bp196 = __v186; __bp198 = __v82; goto __bb18;
 __bb18:
-    __v194 = __bp194;
+    __v196 = __bp196;
     __v198 = __bp198;
     __v86 = __s1;
     __v87 = (int64_t)48LL;
@@ -70846,7 +70847,7 @@ __bb18:
     if (__v88) {
         goto __bb19;
     } else {
-        __bp187 = __v194; 
+        __bp187 = __v196; 
         goto __bb20;
     }
 __bb19:
@@ -70875,7 +70876,7 @@ __bb21:
     __v100 = &__s29;
     SpannedToken__drop(__v100);
     } }
-    __bp194 = __v194; __bp198 = __v198; goto __bb18;
+    __bp196 = __v196; __bp198 = __v198; goto __bb18;
 __bb22:
     __v101 = false;
     __bp187 = __v101; goto __bb20;
@@ -71260,11 +71261,10 @@ __gg_Param Parser__parse_closure_param(void* __p0) {
     bool __v169;
     void* __v170;
     void* __v171;
-    void* __v172;
-    bool __v173;
+    bool __v172;
     bool __bp168;
     bool __bp169;
-    bool __bp173;
+    bool __bp172;
 
 __bb0:
     __v0 = __p0;
@@ -71318,7 +71318,7 @@ __bb5:
         goto __bb8;
     }
 __bb6:
-    __v173 = __bp173;
+    __v172 = __bp172;
     __v29 = &__s1;
     __v30 = *(void* *)(__v29);
     __v31 = (void*)&((__gg_Parser *)(__v30))->pos;
@@ -71328,10 +71328,10 @@ __bb6:
     __v33 = &__s11;
     SpannedToken__drop(__v33);
     } }
-    __bp168 = __v173; goto __bb1;
+    __bp168 = __v172; goto __bb1;
 __bb7:
     __v34 = true;
-    __bp173 = __v34; goto __bb6;
+    __bp172 = __v34; goto __bb6;
 __bb8:
     __v35 = __s1;
     __v36 = (int64_t)43LL;
@@ -71339,12 +71339,12 @@ __bb8:
     if (__v37) {
         goto __bb9;
     } else {
-        __bp173 = __v10; 
+        __bp172 = __v10; 
         goto __bb6;
     }
 __bb9:
     __v39 = true;
-    __bp173 = __v39; goto __bb6;
+    __bp172 = __v39; goto __bb6;
 __bb10:
     __v40 = __s1;
     __v41 = Parser__advance(__v40);
@@ -75649,25 +75649,25 @@ __gg_SpannedExpr Parser__parse_prefix(void* __p0) {
     void* __v3144;
     void* __v3145;
     void* __v3146;
-    int64_t __v3147;
-    void* __v3148;
+    void* __v3147;
+    int64_t __v3148;
     void* __v3149;
-    void* __v3150;
+    int64_t __v3150;
     void* __v3151;
     void* __v3152;
     void* __v3153;
-    int64_t __v3154;
+    void* __v3154;
     int64_t __v3155;
     bool __bp3107;
     bool __bp3109;
     bool __bp3111;
     bool __bp3118;
     int64_t __bp3121;
-    int64_t __bp3147;
+    int64_t __bp3148;
     int64_t __bp3122;
     int64_t __bp3155;
     int64_t __bp3124;
-    int64_t __bp3154;
+    int64_t __bp3150;
     bool __bp3128;
     bool __bp3129;
     bool __bp3130;
@@ -78398,9 +78398,9 @@ __bb83:
     __v1752 = (int32_t)0LL;
     __v1753 = (int64_t)192LL;
     memset(__v1751, (int)__v1752, (size_t)__v1753);
-    __bp3147 = __v5; goto __bb84;
+    __bp3148 = __v5; goto __bb84;
 __bb84:
-    __v3147 = __bp3147;
+    __v3148 = __bp3148;
     __v1754 = __s1;
     __v1755 = (int64_t)48LL;
     __v1756 = Parser__match_tok(__v1754, __v1755);
@@ -78425,14 +78425,14 @@ __bb85:
     __v1767 = &__s316;
     SpannedExpr__drop(__v1767);
     } }
-    __bp3147 = __v3147; goto __bb84;
+    __bp3148 = __v3148; goto __bb84;
 __bb86:
     __v1768 = &__s313;
     { char __dia_z[192] = {0}; if (memcmp(__v1768, __dia_z, 192) != 0) {
     __v1769 = &__s313;
     SpannedExpr__drop(__v1769);
     } }
-    __bp3121 = __v3147; goto __bb82;
+    __bp3121 = __v3148; goto __bb82;
 __bb87:
     __v1771 = (int64_t)45LL;
     __v1772 = __v8 == __v1771;
@@ -79326,7 +79326,7 @@ __bb109:
     __v2324 = (int32_t)0LL;
     __v2325 = (int64_t)192LL;
     memset(__v2323, (int)__v2324, (size_t)__v2325);
-    __bp3154 = __v5; goto __bb113;
+    __bp3150 = __v5; goto __bb113;
 __bb110:
     __v2326 = __s1;
     __v2327 = Parser__advance(__v2326);
@@ -79547,7 +79547,7 @@ __bb112:
     } }
     goto __bb111;
 __bb113:
-    __v3154 = __bp3154;
+    __v3150 = __bp3150;
     __v2457 = __s1;
     __v2458 = (int64_t)48LL;
     __v2459 = Parser__match_tok(__v2457, __v2458);
@@ -79586,7 +79586,7 @@ __bb115:
     __v2472 = &__s393;
     SpannedExpr__drop(__v2472);
     } }
-    __bp3124 = __v3154; goto __bb103;
+    __bp3124 = __v3150; goto __bb103;
 __bb116:
     __v2473 = __s1;
     __v2474 = Parser__parse_expr(__v2473);
@@ -79642,7 +79642,7 @@ __bb116:
     __v2512 = (int32_t)0LL;
     __v2513 = (int64_t)192LL;
     memset(__v2511, (int)__v2512, (size_t)__v2513);
-    __bp3154 = __v3154; goto __bb113;
+    __bp3150 = __v3150; goto __bb113;
 __bb117:
     __v2514 = __s1;
     __v2515 = (int64_t)20LL;
@@ -84601,7 +84601,8 @@ __gg_Stmt Parser__parse_statement(void* __p0) {
     bool __v1981;
     void* __v1982;
     bool __v1983;
-    bool __v1984;
+    void* __v1984;
+    bool __v1985;
     bool __bp1968;
     bool __bp1969;
     bool __bp1970;
@@ -84614,7 +84615,7 @@ __gg_Stmt Parser__parse_statement(void* __p0) {
     bool __bp1979;
     bool __bp1981;
     bool __bp1983;
-    bool __bp1984;
+    bool __bp1985;
 
 __bb0:
     __v0 = __p0;
@@ -87619,20 +87620,20 @@ __bb151:
     if (__v1738) {
         goto __bb153;
     } else {
-        __bp1984 = __v1713; 
+        __bp1985 = __v1713; 
         goto __bb152;
     }
 __bb152:
-    __v1984 = __bp1984;
+    __v1985 = __bp1985;
     __v1740 = &__s314;
     { char __dia_z[96] = {0}; if (memcmp(__v1740, __dia_z, 96) != 0) {
     __v1741 = &__s314;
     SpannedToken__drop(__v1741);
     } }
-    __bp1983 = __v1984; goto __bb150;
+    __bp1983 = __v1985; goto __bb150;
 __bb153:
     __v1742 = true;
-    __bp1984 = __v1742; goto __bb152;
+    __bp1985 = __v1742; goto __bb152;
 __bb154:
     __v1743 = &__s310;
     { char __dia_z[96] = {0}; if (memcmp(__v1743, __dia_z, 96) != 0) {
@@ -91250,24 +91251,24 @@ __gg_Stmt Parser__parse_var_decl(void* __p0) {
     bool __v225;
     void* __v226;
     void* __v227;
-    void* __v228;
+    bool __v228;
     void* __v229;
-    int64_t __v230;
-    bool __v231;
+    void* __v230;
+    int64_t __v231;
     int64_t __v232;
     int64_t __v233;
     int64_t __v234;
-    int64_t __bp232;
+    int64_t __bp233;
     void* __bp220;
     int64_t __bp221;
     void* __bp222;
-    bool __bp231;
-    int64_t __bp234;
+    bool __bp228;
+    int64_t __bp232;
     bool __bp225;
-    void* __bp228;
-    int64_t __bp230;
+    void* __bp229;
+    int64_t __bp231;
     void* __bp227;
-    int64_t __bp233;
+    int64_t __bp234;
 
 __bb0:
     __v0 = __p0;
@@ -91277,11 +91278,11 @@ __bb0:
     if (__v4) {
         goto __bb2;
     } else {
-        __bp232 = __v1; 
+        __bp233 = __v1; 
         goto __bb1;
     }
 __bb1:
-    __v232 = __bp232;
+    __v233 = __bp233;
     __v7 = Parser__parse_type(__v0);
     __s6 = __v7;
     __v8 = &__s6;
@@ -91308,7 +91309,7 @@ __bb2:
     __v21 = &__s4;
     SpannedToken__drop(__v21);
     } }
-    __bp232 = __v17; goto __bb1;
+    __bp233 = __v17; goto __bb1;
 __bb3:
     __v220 = __bp220;
     __v221 = __bp221;
@@ -91387,7 +91388,7 @@ __bb4:
     __v74 = "(";
     __s7 = gorget_str_from_literal(__v74, strlen(__v74));
     __v75 = true;
-    __bp222 = __v0; __bp231 = __v75; __bp234 = __v232; goto __bb6;
+    __bp222 = __v0; __bp228 = __v75; __bp232 = __v233; goto __bb6;
 __bb5:
     __v77 = Parser__advance(__v0);
     __s30 = __v77;
@@ -91420,13 +91421,13 @@ __bb5:
     if (__v97) {
         goto __bb15;
     } else {
-        __bp228 = __v0; __bp230 = __v232; 
+        __bp229 = __v0; __bp231 = __v233; 
         goto __bb14;
     }
 __bb6:
     __v222 = __bp222;
-    __v231 = __bp231;
-    __v234 = __bp234;
+    __v228 = __bp228;
+    __v232 = __bp232;
     __v100 = (int64_t)42LL;
     __v101 = Parser__check_tok(__v222, __v100);
     __v103 = !__v101;
@@ -91436,7 +91437,7 @@ __bb6:
         goto __bb11;
     }
 __bb7:
-    __v106 = !__v231;
+    __v106 = !__v228;
     if (__v106) {
         goto __bb13;
     } else {
@@ -91465,7 +91466,7 @@ __bb8:
     __v122 = &__s9;
     SpannedToken__drop(__v122);
     } }
-    __bp220 = __v222; __bp221 = __v234; goto __bb3;
+    __bp220 = __v222; __bp221 = __v232; goto __bb3;
 __bb9:
     __v124 = Parser__at_end(__v222);
     __v126 = !__v124;
@@ -91516,7 +91517,7 @@ __bb12:
     __v153 = &__s20;
     SpannedToken__drop(__v153);
     } }
-    __bp222 = __v222; __bp231 = __v130; __bp234 = __v234; goto __bb6;
+    __bp222 = __v222; __bp228 = __v130; __bp232 = __v232; goto __bb6;
 __bb13:
     __v154 = "expected ',' in tuple pattern";
     __s17 = gorget_str_from_literal(__v154, strlen(__v154));
@@ -91537,8 +91538,8 @@ __bb13:
     memset(__v164, (int)__v165, (size_t)__v166);
     goto __bb12;
 __bb14:
-    __v228 = __bp228;
-    __v230 = __bp230;
+    __v229 = __bp229;
+    __v231 = __bp231;
     __v167 = &__s33;
     gorget_string_free(__v167);
     __v168 = &__s30;
@@ -91551,7 +91552,7 @@ __bb14:
     __v171 = &__s29;
     SpannedToken__drop(__v171);
     } }
-    __bp220 = __v228; __bp221 = __v230; goto __bb3;
+    __bp220 = __v229; __bp221 = __v231; goto __bb3;
 __bb15:
     __v172 = "(";
     __v173 = &__s7;
@@ -91565,10 +91566,10 @@ __bb15:
     __v178 = (int32_t)0LL;
     __v179 = (int64_t)32LL;
     memset(__v177, (int)__v178, (size_t)__v179);
-    __bp227 = __v0; __bp233 = __v232; goto __bb16;
+    __bp227 = __v0; __bp234 = __v233; goto __bb16;
 __bb16:
     __v227 = __bp227;
-    __v233 = __bp233;
+    __v234 = __bp234;
     __v181 = (int64_t)48LL;
     __v182 = Parser__match_tok(__v227, __v181);
     if (__v182) {
@@ -91617,7 +91618,7 @@ __bb17:
     __v210 = &__s38;
     SpannedToken__drop(__v210);
     } }
-    __bp227 = __v227; __bp233 = __v233; goto __bb16;
+    __bp227 = __v227; __bp234 = __v234; goto __bb16;
 __bb18:
     __v211 = &__s7;
     __v212 = ")";
@@ -91631,7 +91632,7 @@ __bb18:
     __v217 = (int32_t)0LL;
     __v218 = (int64_t)32LL;
     memset(__v216, (int)__v217, (size_t)__v218);
-    __bp228 = __v227; __bp230 = __v233; goto __bb14;
+    __bp229 = __v227; __bp231 = __v234; goto __bb14;
 }
 
 __gg_SelectOp Parser__parse_select_op(void* __p0) {
@@ -103839,9 +103840,10 @@ __gg_Module Parser__parse_module(void* __p0) {
     bool __v1107;
     void* __v1108;
     void* __v1109;
-    bool __v1110;
-    void* __v1111;
-    bool __v1112;
+    void* __v1110;
+    bool __v1111;
+    void* __v1112;
+    bool __v1113;
     bool __bp1093;
     bool __bp1094;
     bool __bp1095;
@@ -103849,13 +103851,13 @@ __gg_Module Parser__parse_module(void* __p0) {
     bool __bp1097;
     bool __bp1098;
     bool __bp1099;
-    bool __bp1110;
+    bool __bp1111;
     bool __bp1101;
     bool __bp1102;
     bool __bp1103;
     bool __bp1104;
     bool __bp1105;
-    bool __bp1112;
+    bool __bp1113;
     bool __bp1107;
 
 __bb0:
@@ -104900,11 +104902,11 @@ __bb87:
     if (__v570) {
         goto __bb89;
     } else {
-        __bp1110 = __v525; 
+        __bp1111 = __v525; 
         goto __bb88;
     }
 __bb88:
-    __v1110 = __bp1110;
+    __v1111 = __bp1111;
     __v573 = &__s1;
     __v574 = *(void* *)(__v573);
     __v575 = (void*)&((__gg_Parser *)(__v574))->pos;
@@ -104914,10 +104916,10 @@ __bb88:
     __v577 = &__s129;
     SpannedToken__drop(__v577);
     } }
-    __bp1098 = __v1110; goto __bb83;
+    __bp1098 = __v1111; goto __bb83;
 __bb89:
     __v578 = true;
-    __bp1110 = __v578; goto __bb88;
+    __bp1111 = __v578; goto __bb88;
 __bb90:
     __v579 = &__s119;
     { char __dia_z[96] = {0}; if (memcmp(__v579, __dia_z, 96) != 0) {
@@ -105476,7 +105478,7 @@ __bb124:
     } }
     __bp1096 = __v391; goto __bb66;
 __bb125:
-    __v1112 = __bp1112;
+    __v1113 = __bp1113;
     __v918 = &__s213;
     gorget_string_free(__v918);
     __v919 = &__s210;
@@ -105501,7 +105503,7 @@ __bb125:
     __v927 = &__s206;
     SpannedType__drop(__v927);
     } }
-    __bp1096 = __v1112; goto __bb66;
+    __bp1096 = __v1113; goto __bb66;
 __bb126:
     __v928 = __s1;
     __v929 = (int64_t)13LL;
@@ -105572,7 +105574,7 @@ __bb129:
     __v971 = &__s218;
     SpannedToken__drop(__v971);
     } }
-    __bp1112 = __v969; goto __bb125;
+    __bp1113 = __v969; goto __bb125;
 __bb130:
     __v973 = &__s1;
     __v974 = *(void* *)(__v973);
@@ -105586,7 +105588,7 @@ __bb130:
     __v979 = &__s223;
     SpannedToken__drop(__v979);
     } }
-    __bp1112 = __v391; goto __bb125;
+    __bp1113 = __v391; goto __bb125;
 __bb131:
     __v980 = &__s103;
     gorget_string_free(__v980);
