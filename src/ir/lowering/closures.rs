@@ -342,20 +342,23 @@ pub fn emit_closure_call_function(
         _ => {
             // Expression body
             let mut result = lower_expr(ctx, &mut builder, &closure.body);
-            // Ptr(T) → T auto-clone: if the body produces a Ptr(T) but the
-            // declared return type is T, clone before returning. Without this,
-            // `(String s): s` returns a dangling Ptr to the borrowed parameter.
+            // Clone resource-type params returned directly from expression bodies.
+            // Closure params are passed by value (shallow copy of the struct),
+            // sharing heap data with the caller. Returning the param without
+            // cloning causes double-free when the caller's source is freed.
+            // Example: `(String s): s` must clone to produce independent data.
             if let Operand::Copy(ref p) | Operand::Move(ref p) = result {
                 if p.projections.is_empty() {
                     let src_type = builder.local_type(p.local);
-                    if let Some(crate::ir::types::GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
-                        if !matches!(ctx.type_registry.get(closure.return_type), Some(crate::ir::types::GirType::Ptr(_)))
-                            && closure.return_type != UNIT_TYPE
-                        {
-                            if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                                let cloned = builder.call(&clone_fn, vec![result.clone()], inner);
-                                result = FunctionBuilder::copy(cloned);
-                            }
+                    let is_param = p.local.0 >= param_start
+                        && (p.local.0 - param_start) < closure.param_types.len() as u32;
+                    if is_param && ctx.type_registry.is_resource_type(src_type) {
+                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(src_type) {
+                            let ptr_type = ctx.register_ptr_type(src_type);
+                            let ptr = builder.add_local(ptr_type, None);
+                            builder.emit_borrow(ptr, crate::ir::instructions::Place::local(p.local));
+                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr)], src_type);
+                            result = FunctionBuilder::copy(cloned);
                         }
                     }
                 }
