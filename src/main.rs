@@ -419,7 +419,7 @@ fn try_build_ir(
     let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
 
     // Display clone report only when --show-clones is passed
-    if show_clones && !gir_module.implicit_clone_warnings.is_empty() {
+    if show_clones {
         let reporter = ErrorReporter::new_multi(file_infos.clone());
         let mut shown = std::collections::HashSet::new();
         let mut entries: Vec<(String, usize, usize, String, &str)> = Vec::new();
@@ -447,6 +447,7 @@ fn try_build_ir(
             };
             entries.push((file, line, col, warn.type_name.clone(), reason));
         }
+        entries.sort_by(|a, b| a.1.cmp(&b.1).then(a.2.cmp(&b.2)));
         eprintln!("\n=== Clone Report ({} implicit clone{}) ===", entries.len(), if entries.len() == 1 { "" } else { "s" });
         for (file, line, col, type_name, reason) in &entries {
             eprintln!("  {file}:{line}:{col}  {type_name:<16} {reason}");
