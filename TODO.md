@@ -21,7 +21,7 @@
 
 - ~~**CoW: nested field mutation gap**~~: FIXED. Two-part fix: (1) IndexLoad uses `FieldPath` provenance when base is a field access (`s.v[0]` → `CollectionId::FieldPath("s.v")`). (2) VarDecl auto-reinfer propagates `CollectionRef` from source to named variable. `cow_before_field_mutation("s.v")` now finds and materializes the ref. Added `cow_nested_field_mutation.gg` regression test. [updated: 2026-04-09]
 
-- **MutationWhileBorrowed: extend to implicit CoW borrows**: The `is_ref_type` filter at `check_expr.rs:353` skips non-Ref-type origins. This means `auto x = vec.get(0).unwrap()` followed by `vec.push(y)` is not caught for non-Ref element types. The GIR CoW system handles this via `cow_collection_refs`, but extending the borrow checker to also catch it would add defense-in-depth. [added: 2026-04-05]
+- ~~**MutationWhileBorrowed: extend to implicit CoW borrows**~~: DONE. `index_borrow_sources` map tracks variables bound from `.get().unwrap()` / `vec[i]` on collections with resource-type elements. Borrow checker emits `CowBorrowMutation` warning (not error) when collection is mutated while borrow is alive. CoW system handles correctness; warning is informational. [updated: 2026-04-10]
 
 - **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation. Needs `is_storing_method` flag on BuiltinMethodDecl. [updated: 2026-03-28]
 
@@ -29,7 +29,7 @@
 
 - **Box.new should enforce `!` at borrow checker level**: Currently Box.new implicitly MoveZeros the source. [added: 2026-03-26]
 
-- **IndexLoad reference semantics — borrow checker integration**: GIR already produces `Ptr(T)` + `CollectionRef` for resource-type IndexLoads; CoW materialization handles correctness; struct clone now uses `clone_to_owned`. Remaining: extend borrow checker to track IndexLoad borrows and report `MutationWhileBorrowed`, borrow propagation through fields/destructuring. [updated: 2026-04-07]
+- ~~**IndexLoad reference semantics — borrow checker integration**~~: DONE (merged with MutationWhileBorrowed for implicit CoW borrows). `index_borrow_sources` tracks borrows from `vec[i]`, `.get()`, `.first()`, `.last()` chains. Borrow checker emits `CowBorrowMutation` warning when source collection is mutated. Remaining: borrow propagation through fields/destructuring (low priority — rare pattern). [updated: 2026-04-10]
 
 
 - **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
