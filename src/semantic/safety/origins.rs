@@ -512,6 +512,7 @@ impl<'a> BorrowChecker<'a> {
             stale_shared_derived: self.stale_shared_derived.clone(),
             diverges: self.diverged,
             fallible_states: self.fallible_states.clone(),
+            index_borrow_sources: self.index_borrow_sources.clone(),
         }
     }
 
@@ -528,6 +529,7 @@ impl<'a> BorrowChecker<'a> {
         self.stale_shared_derived = state.stale_shared_derived.clone();
         self.diverged = state.diverges;
         self.fallible_states = state.fallible_states.clone();
+        self.index_borrow_sources = state.index_borrow_sources.clone();
     }
 
     /// Merge multiple branch states: union var states (moved in either = moved),
@@ -555,6 +557,7 @@ impl<'a> BorrowChecker<'a> {
             self.shared_derived = states[0].shared_derived.clone();
             self.stale_shared_derived = states[0].stale_shared_derived.clone();
             self.fallible_states = states[0].fallible_states.clone();
+            self.index_borrow_sources = states[0].index_borrow_sources.clone();
             self.diverged = true;
             return;
         }
@@ -569,6 +572,7 @@ impl<'a> BorrowChecker<'a> {
         let mut merged_shared_derived = live[0].shared_derived.clone();
         let mut merged_stale_shared = live[0].stale_shared_derived.clone();
         let mut merged_fallible = live[0].fallible_states.clone();
+        let mut merged_index_borrows = live[0].index_borrow_sources.clone();
 
         for state in &live[1..] {
             // Merge var states: moved in either = moved
@@ -631,6 +635,10 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
             }
+            // Merge index_borrow_sources: union (conservative — borrow in any branch = borrow)
+            for (var_id, collection_id) in &state.index_borrow_sources {
+                merged_index_borrows.entry(*var_id).or_insert(*collection_id);
+            }
         }
 
         self.var_states = merged_vars;
@@ -643,6 +651,7 @@ impl<'a> BorrowChecker<'a> {
         self.shared_derived = merged_shared_derived;
         self.stale_shared_derived = merged_stale_shared;
         self.fallible_states = merged_fallible;
+        self.index_borrow_sources = merged_index_borrows;
         self.diverged = false;
     }
 

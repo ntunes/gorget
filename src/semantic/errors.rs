@@ -88,6 +88,9 @@ pub enum SemanticWarningKind {
     CouldBeConst { name: String },
     /// `&` parameter is never mutated in the function body.
     NeedlessMutableBorrow { name: String },
+    /// Collection mutated while an implicit CoW borrow (from .get/.unwrap/index) is alive.
+    /// The CoW system handles correctness, but the pattern may be confusing.
+    CowBorrowMutation { source: String, borrow: String },
 }
 
 impl std::fmt::Display for SemanticWarning {
@@ -135,6 +138,9 @@ impl std::fmt::Display for SemanticWarning {
             }
             SemanticWarningKind::NeedlessMutableBorrow { name } => {
                 write!(f, "parameter `&{name}` is never mutated — consider removing `&`")
+            }
+            SemanticWarningKind::CowBorrowMutation { source, borrow } => {
+                write!(f, "`{source}` mutated while `{borrow}` holds an element — clone is inserted automatically")
             }
         }
     }

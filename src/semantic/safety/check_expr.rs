@@ -311,6 +311,32 @@ impl<'a> BorrowChecker<'a> {
                                     }
                                 }
                             }
+                            // Check implicit CoW borrows (from .get().unwrap(), vec[i]).
+                            // These variables don't have explicit Ref types but still
+                            // borrow from the collection via the CoW system.
+                            // Emitted as a warning (not error) because the CoW system
+                            // handles correctness by materializing before mutation.
+                            for (&var_id, &source_collection) in self.index_borrow_sources.iter() {
+                                if source_collection == recv_def_id {
+                                    let is_alive = !matches!(
+                                        self.var_states.get(&var_id),
+                                        Some(VarState::Moved { .. })
+                                    );
+                                    if is_alive {
+                                        let var_name = self.scopes.get_def(var_id).name.clone();
+                                        self.stale_warnings.push(
+                                            crate::semantic::errors::SemanticWarning {
+                                                kind: crate::semantic::errors::SemanticWarningKind::CowBorrowMutation {
+                                                    source: recv_name.clone(),
+                                                    borrow: var_name,
+                                                },
+                                                span: expr.span,
+                                            }
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
                             // Check for-loop iterator invalidation: mutating a collection
                             // currently being iterated over is always an error, regardless
                             // of element type (the for-loop shallow-copies the array struct,

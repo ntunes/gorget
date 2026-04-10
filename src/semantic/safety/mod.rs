@@ -188,6 +188,10 @@ pub(super) struct BranchState {
     pub(super) diverges: bool,
     /// Fallible (Option/Result) variable guard states.
     pub(super) fallible_states: FxHashMap<DefId, FallibleState>,
+    /// Implicit CoW borrows: variable DefId → source collection DefId.
+    /// Populated when a variable is bound from `.get().unwrap()` or `vec[i]`
+    /// on a collection with resource-type elements.
+    pub(super) index_borrow_sources: FxHashMap<DefId, DefId>,
 }
 
 // ─── Blocking Call Detection ───────────────────────────────
@@ -264,6 +268,13 @@ pub(super) struct BorrowChecker<'a> {
     pub(super) imported_module_depth: usize,
     /// Current function's param (DefId, param_index) pairs.
     pub(super) current_param_def_ids: Vec<(DefId, usize)>,
+
+    // ── Implicit CoW borrow tracking ──
+    /// Variable DefId → source collection DefId. Populated when a variable
+    /// is bound from `.get().unwrap()` or `vec[i]` on a collection with
+    /// resource-type elements. Used to detect MutationWhileBorrowed for
+    /// implicit CoW borrows (not just explicit `T &` references).
+    pub(super) index_borrow_sources: FxHashMap<DefId, DefId>,
 
     // ── Borrow dependency export (for drop ordering) ──
     /// Per-local borrow sources: borrower DefId → Vec<source DefId>.
@@ -407,6 +418,7 @@ impl<'a> BorrowChecker<'a> {
             struct_field_ref_flags,
             var_origins: FxHashMap::default(),
             invalidated_origins: FxHashSet::default(),
+            index_borrow_sources: FxHashMap::default(),
             borrow_deps: FxHashMap::default(),
             current_return_type_id: None,
             imported_module_depth: 0,
