@@ -547,25 +547,12 @@ pub fn lower_function(
 
         FunctionBody::Expression(expr) => {
             let mut operand = lower_expr(ctx, &mut builder, expr);
-            // Ptr(T) → T auto-clone: expression-body functions must clone
-            // borrowed Ptr returns, same as the block-body return path in
-            // lower_return. Without this, `(String s): s` returns a shallow
-            // copy of the borrowed parameter — dangling after caller frees.
+            // Clone borrowed operands at the return boundary (BareParam, CowBorrow, etc.).
+            // Skip when return type is Ptr — the caller expects a borrow, not an owned clone.
             let ret_type = builder.locals[0].type_id;
-            if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                if p.projections.is_empty() {
-                    let src_type = builder.local_type(p.local);
-                    if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
-                        if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                            if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                                let cloned = builder.call(&clone_fn, vec![operand.clone()], inner);
-                                operand = FunctionBuilder::copy(cloned);
-                            }
-                        }
-                    }
-                }
+            if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+                operand = ctx.ensure_owned_at_boundary(&mut builder, operand);
             }
-            // Identify the returned local to exclude it from drops
             let returned_local = match &operand {
                 Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
                     Some(place.local)
@@ -573,7 +560,6 @@ pub fn lower_function(
                 _ => None,
             };
             builder.assign(Place::local(LocalId(0)), operand);
-            // P2.6: Emit scope drops before return, excluding the returned value
             ctx.drops.emit_early_exit_drops(
                 &mut builder, &ctx.type_registry,
                 DropScopeKind::Function, returned_local,
@@ -815,20 +801,11 @@ pub fn lower_equip_method(
 
         FunctionBody::Expression(expr) => {
             let mut operand = lower_expr(ctx, &mut builder, expr);
-            // Ptr(T) → T auto-clone for expression-body returns (see standalone fn path).
+            // Clone borrowed operands at the return boundary.
+            // Skip when return type is Ptr — the caller expects a borrow.
             let ret_type = builder.locals[0].type_id;
-            if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                if p.projections.is_empty() {
-                    let src_type = builder.local_type(p.local);
-                    if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
-                        if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                            if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                                let cloned = builder.call(&clone_fn, vec![operand.clone()], inner);
-                                operand = FunctionBuilder::copy(cloned);
-                            }
-                        }
-                    }
-                }
+            if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+                operand = ctx.ensure_owned_at_boundary(&mut builder, operand);
             }
             let returned_local = match &operand {
                 Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
@@ -1078,20 +1055,11 @@ pub fn lower_generic_function(
 
         FunctionBody::Expression(expr) => {
             let mut operand = lower_expr(ctx, &mut builder, expr);
-            // Ptr(T) → T auto-clone for expression-body returns (see standalone fn path).
+            // Clone borrowed operands at the return boundary.
+            // Skip when return type is Ptr — the caller expects a borrow.
             let ret_type = builder.locals[0].type_id;
-            if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                if p.projections.is_empty() {
-                    let src_type = builder.local_type(p.local);
-                    if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
-                        if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                            if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                                let cloned = builder.call(&clone_fn, vec![operand.clone()], inner);
-                                operand = FunctionBuilder::copy(cloned);
-                            }
-                        }
-                    }
-                }
+            if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+                operand = ctx.ensure_owned_at_boundary(&mut builder, operand);
             }
             let returned_local = match &operand {
                 Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
@@ -1311,20 +1279,11 @@ pub fn lower_generic_equip_methods_with_defaults(
             }
             FunctionBody::Expression(expr) => {
                 let mut operand = lower_expr(ctx, &mut builder, expr);
-                // Ptr(T) → T auto-clone for expression-body returns.
+                // Clone borrowed operands at the return boundary.
+                // Skip when return type is Ptr — the caller expects a borrow.
                 let ret_type = builder.locals[0].type_id;
-                if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                    if p.projections.is_empty() {
-                        let src_type = builder.local_type(p.local);
-                        if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
-                            if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                                if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                                    let cloned = builder.call(&clone_fn, vec![operand.clone()], inner);
-                                    operand = FunctionBuilder::copy(cloned);
-                                }
-                            }
-                        }
-                    }
+                if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+                    operand = ctx.ensure_owned_at_boundary(&mut builder, operand);
                 }
                 let returned_local = match &operand {
                     Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {

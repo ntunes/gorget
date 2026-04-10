@@ -131,10 +131,10 @@ pub(super) fn emit_higher_order_collection_helpers(out: &mut String, module: &Li
                 emit_vector_helper(out, full_name, elem_c, method, closure_ty, call_fn, module, sn);
             }
             CollHelper::Dict(full_name, key_c, val_c, method, closure_ty, call_fn) => {
-                emit_dict_helper(out, full_name, key_c, val_c, method, closure_ty, call_fn);
+                emit_dict_helper(out, full_name, key_c, val_c, method, closure_ty, call_fn, module);
             }
             CollHelper::Set(full_name, elem_c, method, closure_ty, call_fn) => {
-                emit_set_helper(out, full_name, elem_c, method, closure_ty, call_fn);
+                emit_set_helper(out, full_name, elem_c, method, closure_ty, call_fn, module);
             }
         }
         writeln!(out).unwrap();
@@ -153,6 +153,9 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
     if !closure_free && call_fn.contains("UNKNOWN_CLOSURE_CALL") {
         return;
     }
+    // Determine which closure params need & prefix (Ptr ABI for resource types)
+    let needs_ref = closure_params_need_ref(module, call_fn);
+    let er = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
     match method {
         "filter" => {
             writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
@@ -160,7 +163,7 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
             writeln!(out, "    GorgetArray __result = gorget_array_new(sizeof({elem_c}));").unwrap();
             writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
             writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, __elem)) gorget_array_push(&__result, &__elem);").unwrap();
+            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) gorget_array_push(&__result, &__elem);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -168,27 +171,28 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
         "map" => {
             writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
             writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    __typeof__({call_fn}(&__fn, ({elem_c}){{0}})) __map_out;").unwrap();
+            writeln!(out, "    __typeof__({call_fn}(&__fn, {er}({elem_c}){{0}})) __map_out;").unwrap();
             writeln!(out, "    GorgetArray __result = gorget_array_new(sizeof(__map_out));").unwrap();
             writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
             writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        __map_out = {call_fn}(&__fn, __elem);").unwrap();
+            writeln!(out, "        __map_out = {call_fn}(&__fn, {er}__elem);").unwrap();
             writeln!(out, "        gorget_array_push(&__result, &__map_out);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
             writeln!(out, "}}").unwrap();
         }
         "fold" => {
-            // Emit both a function (for LLVM backend linking) and a macro fallback.
             // Use the closure's return type for the accumulator — resolve from closure call fn.
             // Falls back to int64_t for cross-type folds where closure returns a different type.
             let acc_c = resolve_fold_acc_type(call_fn, module, sn).unwrap_or_else(|| "int64_t".into());
+            let ar = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
+            let er2 = if needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
             writeln!(out, "static inline {acc_c} {full_name}(void* __arr_ptr, {acc_c} __acc_init, {closure_ty} __fn) {{").unwrap();
             writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
             writeln!(out, "    {acc_c} __acc = __acc_init;").unwrap();
             writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
             writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        __acc = {call_fn}(&__fn, __acc, __elem);").unwrap();
+            writeln!(out, "        __acc = {call_fn}(&__fn, {ar}__acc, {er2}__elem);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __acc;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -198,7 +202,7 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
             writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
             writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
             writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, __elem)) return true;").unwrap();
+            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) return true;").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return false;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -208,7 +212,7 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
             writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
             writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
             writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        if (!{call_fn}(&__fn, __elem)) return false;").unwrap();
+            writeln!(out, "        if (!{call_fn}(&__fn, {er}__elem)) return false;").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return true;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -218,17 +222,19 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
             writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
             writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
             writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        {call_fn}(&__fn, __elem);").unwrap();
+            writeln!(out, "        {call_fn}(&__fn, {er}__elem);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "}}").unwrap();
         }
         "reduce" => {
+            let ar = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
+            let er2 = if needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
             writeln!(out, "static inline {elem_c} {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
             writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
             writeln!(out, "    {elem_c} __acc = GORGET_ARRAY_AT({elem_c}, __src, 0);").unwrap();
             writeln!(out, "    for (size_t __i = 1; __i < __src.len; __i++) {{").unwrap();
             writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        __acc = {call_fn}(&__fn, __acc, __elem);").unwrap();
+            writeln!(out, "        __acc = {call_fn}(&__fn, {ar}__acc, {er2}__elem);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __acc;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -262,14 +268,12 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
         }
         "find" => {
             // find(pred) → Option[T]  (returns first matching element)
-            // Use tag + payload offset that accounts for struct padding (tag is int32_t,
-            // but payload may start at offset 8 due to alignment of int64_t/pointer).
             writeln!(out, "static inline void {full_name}(void* __arr_ptr, {closure_ty} __fn, void* __out) {{").unwrap();
             writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
             writeln!(out, "    size_t __payload_off = (sizeof(int32_t) + (_Alignof({elem_c}) - 1)) & ~(_Alignof({elem_c}) - 1);").unwrap();
             writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
             writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, __elem)) {{ *(int32_t*)__out = 0; memcpy((char*)__out + __payload_off, &__elem, sizeof({elem_c})); return; }}").unwrap();
+            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) {{ *(int32_t*)__out = 0; memcpy((char*)__out + __payload_off, &__elem, sizeof({elem_c})); return; }}").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    *(int32_t*)__out = 1;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -280,7 +284,7 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
             writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
             writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
             writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, __elem)) return (int64_t)__i;").unwrap();
+            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) return (int64_t)__i;").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return -1LL;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -292,7 +296,7 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
             writeln!(out, "    GorgetArray __result = gorget_array_new(sizeof({elem_c}));").unwrap();
             writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
             writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        GorgetArray __sub = {call_fn}(&__fn, __elem);").unwrap();
+            writeln!(out, "        GorgetArray __sub = {call_fn}(&__fn, {er}__elem);").unwrap();
             writeln!(out, "        gorget_array_extend(&__result, &__sub);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
@@ -304,7 +308,7 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
             writeln!(out, "    int64_t __count = 0;").unwrap();
             writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
             writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, __elem)) __count++;").unwrap();
+            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) __count++;").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __count;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -316,7 +320,7 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
 }
 
 /// Emit inline C helpers for Dict higher-order and inline methods.
-pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, val_c: &str, method: &str, closure_ty: &str, call_fn: &str) {
+pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, val_c: &str, method: &str, closure_ty: &str, call_fn: &str, module: &LirModule) {
     let iter_loop = format!(
         "for (size_t __i = 0; __i < __src.cap; __i++) {{ \
         if (__src.states[__i] != 1) continue;"
@@ -332,6 +336,10 @@ pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, v
     };
     let ctor_args = if key_c == "Str" { format!("sizeof({val_c})") } else { format!("sizeof({key_c}), sizeof({val_c})") };
 
+    // Determine which closure params need & prefix (Ptr ABI for resource types)
+    let needs_ref = closure_params_need_ref(module, call_fn);
+    let kr = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
+    let vr = if needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
     match method {
         "filter" => {
             // filter(closure(K, V) → bool) → GorgetMap
@@ -341,20 +349,22 @@ pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, v
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {key_read}").unwrap();
             writeln!(out, "        {val_read}").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, __key, __val)) gorget_map_put(&__result, &__key, &__val);").unwrap();
+            writeln!(out, "        if ({call_fn}(&__fn, {kr}__key, {vr}__val)) gorget_map_put(&__result, &__key, &__val);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
             writeln!(out, "}}").unwrap();
         }
         "fold" => {
             // fold(init, closure(acc, K, V) → acc) → acc_type
-            // Use int64_t as default accumulator type (works for most cases; inline path handles others)
+            let ar = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
+            let kr2 = if needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
+            let vr2 = if needs_ref.get(2).copied().unwrap_or(false) { "&" } else { "" };
             writeln!(out, "static inline int64_t {full_name}(void* __map_ptr, int64_t __acc, {closure_ty} __fn) {{").unwrap();
             writeln!(out, "    GorgetMap __src = *(GorgetMap*)__map_ptr;").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {key_read}").unwrap();
             writeln!(out, "        {val_read}").unwrap();
-            writeln!(out, "        __acc = {call_fn}(&__fn, __acc, __key, __val);").unwrap();
+            writeln!(out, "        __acc = {call_fn}(&__fn, {ar}__acc, {kr2}__key, {vr2}__val);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __acc;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -365,7 +375,7 @@ pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, v
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {key_read}").unwrap();
             writeln!(out, "        {val_read}").unwrap();
-            writeln!(out, "        {call_fn}(&__fn, __key, __val);").unwrap();
+            writeln!(out, "        {call_fn}(&__fn, {kr}__key, {vr}__val);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "}}").unwrap();
         }
@@ -375,7 +385,7 @@ pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, v
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {key_read}").unwrap();
             writeln!(out, "        {val_read}").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, __key, __val)) return true;").unwrap();
+            writeln!(out, "        if ({call_fn}(&__fn, {kr}__key, {vr}__val)) return true;").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return false;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -386,7 +396,7 @@ pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, v
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {key_read}").unwrap();
             writeln!(out, "        {val_read}").unwrap();
-            writeln!(out, "        if (!{call_fn}(&__fn, __key, __val)) return false;").unwrap();
+            writeln!(out, "        if (!{call_fn}(&__fn, {kr}__key, {vr}__val)) return false;").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return true;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -427,7 +437,7 @@ pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, v
 }
 
 /// Emit inline C helpers for Set higher-order and inline methods.
-pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str, closure_ty: &str, call_fn: &str) {
+pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str, closure_ty: &str, call_fn: &str, module: &LirModule) {
     // Set__ uses insertion order (order array), HashSet__ uses bucket order
     let is_ordered = !full_name.starts_with("HashSet__");
     let iter_loop = if is_ordered {
@@ -445,6 +455,9 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
     let ctor = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
     let elem_read = format!("{elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size);");
 
+    // Determine which closure params need & prefix (Ptr ABI for resource types)
+    let needs_ref = closure_params_need_ref(module, call_fn);
+    let er = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
     match method {
         "filter" => {
             writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, {closure_ty} __fn) {{").unwrap();
@@ -452,17 +465,19 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             writeln!(out, "    GorgetSet __result = {ctor}(sizeof({elem_c}));").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, __elem)) gorget_set_add(&__result, &__elem);").unwrap();
+            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) gorget_set_add(&__result, &__elem);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
             writeln!(out, "}}").unwrap();
         }
         "fold" => {
+            let ar = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
+            let er2 = if needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
             writeln!(out, "static inline int64_t {full_name}(void* __set_ptr, int64_t __acc, {closure_ty} __fn) {{").unwrap();
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        __acc = {call_fn}(&__fn, __acc, __elem);").unwrap();
+            writeln!(out, "        __acc = {call_fn}(&__fn, {ar}__acc, {er2}__elem);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __acc;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -472,7 +487,7 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        {call_fn}(&__fn, __elem);").unwrap();
+            writeln!(out, "        {call_fn}(&__fn, {er}__elem);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "}}").unwrap();
         }
@@ -481,7 +496,7 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, __elem)) return true;").unwrap();
+            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) return true;").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return false;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -491,7 +506,7 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if (!{call_fn}(&__fn, __elem)) return false;").unwrap();
+            writeln!(out, "        if (!{call_fn}(&__fn, {er}__elem)) return false;").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return true;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -628,6 +643,20 @@ pub(super) fn closure_call_return_type(module: &LirModule, call_fn_name: &str, s
         .find(|f| f.name == call_fn_name)
         .map(|f| c_type_named(&f.return_type, sn))
 }
+
+/// Check which closure params (skipping env pointer) are passed by pointer.
+/// Returns a vec of bools — true means the template should use `&` prefix for that arg.
+pub(super) fn closure_params_need_ref(module: &LirModule, call_fn: &str) -> Vec<bool> {
+    if let Some(func) = module.functions.iter().find(|f| f.name == call_fn) {
+        // Params: [0]=env_ptr, [1..]=closure params → skip env
+        func.params.iter().skip(1)
+            .map(|t| matches!(t, LirType::PtrTo(_) | LirType::Ptr))
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
 /// For a `map` combinator, determine the source enum type and the result enum type.
 /// The source type comes from the function name (e.g. `Option__int64_t__map` → `Option__int64_t`).
 /// The result type is an Option/Result wrapping the closure's return type.
@@ -848,6 +877,9 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
 
     writeln!(out, "/* ── Option/Result combinator helpers ── */").unwrap();
     for (full_name, src_c, result_c, method, closure_ty, call_fn, ok_field, err_field) in &helpers {
+        // Determine if closure params need & prefix (Ptr ABI for resource types)
+        let comb_needs_ref = closure_params_need_ref(module, call_fn);
+        let cr = if comb_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
         match method.as_str() {
             "map" => {
                 // map: if tag==0 (Some/Ok): apply closure to payload, wrap; else propagate
@@ -864,7 +896,7 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
                 writeln!(out, "    {result_c} __result;").unwrap();
                 writeln!(out, "    if (__src.tag == 0) {{").unwrap();
                 writeln!(out, "        __result.tag = 0;").unwrap();
-                writeln!(out, "        __result.{result_ok} = {call_fn}(&__fn, __src.{ok_field});").unwrap();
+                writeln!(out, "        __result.{result_ok} = {call_fn}(&__fn, {cr}__src.{ok_field});").unwrap();
                 writeln!(out, "    }} else {{").unwrap();
                 writeln!(out, "        __result.tag = 1;").unwrap();
                 writeln!(out, "    }}").unwrap();
@@ -874,7 +906,7 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
             "filter" => {
                 writeln!(out, "static inline {src_c} {full_name}(void* __opt_ptr, {closure_ty} __fn) {{").unwrap();
                 writeln!(out, "    {src_c} __src = *({src_c}*)__opt_ptr;").unwrap();
-                writeln!(out, "    if (__src.tag == 0 && {call_fn}(&__fn, __src.{ok_field})) {{").unwrap();
+                writeln!(out, "    if (__src.tag == 0 && {call_fn}(&__fn, {cr}__src.{ok_field})) {{").unwrap();
                 writeln!(out, "        return __src;").unwrap();
                 writeln!(out, "    }}").unwrap();
                 writeln!(out, "    return ({src_c}){{ .tag = 1 }};").unwrap();
@@ -884,7 +916,7 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
                 writeln!(out, "static inline {result_c} {full_name}(void* __opt_ptr, {closure_ty} __fn) {{").unwrap();
                 writeln!(out, "    {src_c} __src = *({src_c}*)__opt_ptr;").unwrap();
                 writeln!(out, "    if (__src.tag == 0) {{").unwrap();
-                writeln!(out, "        return {call_fn}(&__fn, __src.{ok_field});").unwrap();
+                writeln!(out, "        return {call_fn}(&__fn, {cr}__src.{ok_field});").unwrap();
                 writeln!(out, "    }}").unwrap();
                 writeln!(out, "    return ({result_c}){{ .tag = 1 }};").unwrap();
                 writeln!(out, "}}").unwrap();
@@ -897,7 +929,7 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
                 writeln!(out, "    }}").unwrap();
                 // Result or_else passes the error value; Option or_else takes no args
                 if full_name.starts_with("Result__") {
-                    writeln!(out, "    return {call_fn}(&__fn, __src.{err_field});").unwrap();
+                    writeln!(out, "    return {call_fn}(&__fn, {cr}__src.{err_field});").unwrap();
                 } else {
                     writeln!(out, "    return {call_fn}(&__fn);").unwrap();
                 }
@@ -962,7 +994,7 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
                 writeln!(out, "    {result_c} __result;").unwrap();
                 writeln!(out, "    __result.tag = 1;").unwrap();
                 // Use memcpy to handle Str/GorgetString layout-compatible type mismatches
-                writeln!(out, "    {{ __auto_type __me_val = {call_fn}(&__fn, __src.{err_field}); memcpy(&__result.{result_err}, &__me_val, sizeof(__me_val)); }}").unwrap();
+                writeln!(out, "    {{ __auto_type __me_val = {call_fn}(&__fn, {cr}__src.{err_field}); memcpy(&__result.{result_err}, &__me_val, sizeof(__me_val)); }}").unwrap();
                 writeln!(out, "    return __result;").unwrap();
                 writeln!(out, "}}").unwrap();
             }
@@ -999,17 +1031,16 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
                 writeln!(out, "    {src_c} __src = *({src_c}*)__opt_ptr;").unwrap();
                 writeln!(out, "    if (__src.tag == 0) {{ return __src.{ok_field}; }}").unwrap();
                 if full_name.starts_with("Result__") {
-                    writeln!(out, "    return {call_fn}(&__fn, __src.{err_field});").unwrap();
+                    writeln!(out, "    return {call_fn}(&__fn, {cr}__src.{err_field});").unwrap();
                 } else {
                     writeln!(out, "    return {call_fn}(&__fn);").unwrap();
                 }
                 writeln!(out, "}}").unwrap();
             }
             "flat_map" => {
-                // flat_map on Option: if Some, call closure (returns Option); else None
                 writeln!(out, "static inline {result_c} {full_name}(void* __opt_ptr, {closure_ty} __fn) {{").unwrap();
                 writeln!(out, "    {src_c} __src = *({src_c}*)__opt_ptr;").unwrap();
-                writeln!(out, "    if (__src.tag == 0) {{ return {call_fn}(&__fn, __src.{ok_field}); }}").unwrap();
+                writeln!(out, "    if (__src.tag == 0) {{ return {call_fn}(&__fn, {cr}__src.{ok_field}); }}").unwrap();
                 writeln!(out, "    return ({result_c}){{ .tag = 1 }};").unwrap();
                 writeln!(out, "}}").unwrap();
             }

@@ -7,7 +7,7 @@ use crate::ir::types::*;
 use crate::parser::ast::Expr;
 use crate::span::Spanned;
 
-use super::super::context::LoweringContext;
+use super::super::context::{LoweringContext, ParamABI};
 use super::{lower_expr, infer_operand_type_full, infer_type_name_from_operand_full, atomic_type_name_for};
 
 fn build_method_spawn_wrapper(
@@ -314,10 +314,24 @@ fn build_spawn_wrapper(
     builder.emit_borrow(env_ptr_local, Place::local(struct_local));
 
     // Build call args: env pointer + explicit call params.
+    // Wrap resource-type args in Ptr borrows where the __call function expects Ptr ABI.
     let mut call_args = vec![FunctionBuilder::copy(env_ptr_local)];
     let call_arg_start = (n_cap + 1) as u32; // skip _0 (return) + n_cap capture params
+    let abis = ctx.fn_param_abis.get(call_fn_name).cloned();
     for i in 0..call_param_types.len() {
-        call_args.push(FunctionBuilder::copy(LocalId(call_arg_start + i as u32)));
+        let arg_local = LocalId(call_arg_start + i as u32);
+        let needs_ptr = abis.as_ref()
+            .and_then(|a| a.get(i + 1)) // +1 for env ptr
+            .map(|a| matches!(a, ParamABI::ByPtr | ParamABI::ByMutPtr))
+            .unwrap_or(false);
+        if needs_ptr {
+            let ptr_type = ctx.register_ptr_type(call_param_types[i]);
+            let ptr_local = builder.add_local(ptr_type, None);
+            builder.emit_borrow(ptr_local, Place::local(arg_local));
+            call_args.push(FunctionBuilder::copy(ptr_local));
+        } else {
+            call_args.push(FunctionBuilder::copy(arg_local));
+        }
     }
 
     // Emit the call to __Closure_N__call and return its result.

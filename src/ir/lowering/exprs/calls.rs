@@ -309,6 +309,29 @@ pub(super) fn lower_call(
             return Operand::Constant(Constant::Unit);
         }
 
+        // len(x) free function → dispatch to the correct runtime function
+        // based on the argument type (string, vector, dict, set).
+        if name == "len" && args.len() == 1 {
+            let recv = lower_expr(ctx, builder, &args[0].node.value);
+            let recv_type = infer_operand_type_full(ctx, &recv, builder);
+            let resolved = ctx.pointee_type(recv_type).unwrap_or(recv_type);
+            let runtime_fn = if ctx.type_mapper.is_string_type(resolved) {
+                "gorget_str_codepoint_count"
+            } else if ctx.type_registry.is_collection_type(resolved) {
+                if let Some(crate::ir::types::GirType::Named(n)) = ctx.type_registry.get(resolved) {
+                    if n.starts_with("Dict__") || n.starts_with("HashMap__") || n == "GorgetMap" {
+                        "gorget_map_len"
+                    } else if n.starts_with("Set__") || n.starts_with("HashSet__") || n == "GorgetSet" {
+                        "gorget_set_len"
+                    } else {
+                        "gorget_array_len"
+                    }
+                } else { "gorget_array_len" }
+            } else { "gorget_array_len" };
+            let dst = builder.call_extern(runtime_fn, vec![recv], I64_TYPE);
+            return FunctionBuilder::copy(dst);
+        }
+
         // Box(value) constructor → heap allocation via __gorget_box_alloc
         if (name == "Box" || name.starts_with("Box__")) && args.len() == 1 {
             let mut val_op = lower_expr(ctx, builder, &args[0].node.value);
@@ -703,8 +726,11 @@ pub(super) fn lower_call(
                     let ptr_local = builder.add_local(ptr_type, None);
                     builder.emit_borrow(ptr_local, Place::local(local_id));
                     let mut call_args = vec![FunctionBuilder::copy(ptr_local)];
-                    for arg in args {
-                        call_args.push(lower_expr(ctx, builder, &arg.node.value));
+                    // Route closure args through lower_call_arg for unified Ptr ABI
+                    let sig_params = ctx.fn_sigs.get(call_fn.as_str()).map(|(p, _)| p.clone());
+                    for (i, arg) in args.iter().enumerate() {
+                        let param_type = sig_params.as_ref().and_then(|p| p.get(i + 1).copied());
+                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, &call_fn, i + 1));
                     }
                     let ret_type = if let Some((_, ret)) = ctx.fn_sigs.get(call_fn.as_str()) {
                         *ret
@@ -911,8 +937,11 @@ pub(super) fn lower_call(
                         let ptr_local = builder.add_local(ptr_type, None);
                         builder.emit_borrow(ptr_local, Place::local(closure_local));
                         let mut call_args = vec![FunctionBuilder::copy(ptr_local)];
-                        for arg in args {
-                            call_args.push(lower_expr(ctx, builder, &arg.node.value));
+                        // Route IIFE args through lower_call_arg for unified Ptr ABI
+                        let sig_params = ctx.fn_sigs.get(call_fn.as_str()).map(|(p, _)| p.clone());
+                        for (i, arg) in args.iter().enumerate() {
+                            let param_type = sig_params.as_ref().and_then(|p| p.get(i + 1).copied());
+                            call_args.push(lower_call_arg(ctx, builder, arg, param_type, &call_fn, i + 1));
                         }
                         let ret_type = if let Some((_, ret)) = ctx.fn_sigs.get(call_fn.as_str()) {
                             *ret

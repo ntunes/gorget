@@ -243,6 +243,9 @@ pub(super) fn emit_call_extern(
                     let opt_ptr = v(args[0]);
                     let closure_v = if args.len() > 1 { v(args[1]) } else { String::new() };
                     let (ok_f, err_f) = enum_payload_fields(type_prefix, module);
+                    // Determine if closure params need & prefix (Ptr ABI for resource types)
+                    let comb_needs_ref = closure_params_need_ref(module, &call_fn);
+                    let cr = if comb_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
 
                     match method {
                         "map" => {
@@ -260,44 +263,41 @@ pub(super) fn emit_call_extern(
                             } else { String::new() };
                             if result_ty != src_ty {
                                 // Cross-type map: result type differs from source. Use block + memcpy
-                                // because the destination variable may be declared as the source type.
                                 write!(out, "{{ {result_ty} __om_r; {src_ty} __om_src = *({src_ty}*){opt_ptr}; \
-                                    if (__om_src.tag == 0) {{ __om_r.tag = 0; __om_r.{result_ok} = {call_fn}({closure_v}, __om_src.{ok_f}); }} \
+                                    if (__om_src.tag == 0) {{ __om_r.tag = 0; __om_r.{result_ok} = {call_fn}({closure_v}, {cr}__om_src.{ok_f}); }} \
                                     else {{ __om_r.tag = 1;{err_copy} }} memcpy(&{dv}, &__om_r, sizeof({result_ty})); }}",
                                     dv = v(*d)).unwrap();
                             } else {
                                 write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; {result_ty} __om_r; \
-                                    if (__om_src.tag == 0) {{ __om_r.tag = 0; __om_r.{result_ok} = {call_fn}({closure_v}, __om_src.{ok_f}); }} \
+                                    if (__om_src.tag == 0) {{ __om_r.tag = 0; __om_r.{result_ok} = {call_fn}({closure_v}, {cr}__om_src.{ok_f}); }} \
                                     else {{ __om_r.tag = 1;{err_copy} }} __om_r; }});",
                                     v(*d)).unwrap();
                             }
                         }
                         "filter" => {
                             write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; {src_ty} __om_r; \
-                                if (__om_src.tag == 0 && {call_fn}({closure_v}, __om_src.{ok_f})) {{ __om_r = __om_src; }} \
+                                if (__om_src.tag == 0 && {call_fn}({closure_v}, {cr}__om_src.{ok_f})) {{ __om_r = __om_src; }} \
                                 else {{ __om_r = ({src_ty}){{ .tag = 1 }}; }} __om_r; }});",
                                 v(*d)).unwrap();
                         }
                         "and_then" => {
-                            // For Result, copy the error payload in the else branch
                             if name.starts_with("Result__") {
                                 write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; {result_ty} __om_r; \
-                                    if (__om_src.tag == 0) {{ __om_r = {call_fn}({closure_v}, __om_src.{ok_f}); }} \
+                                    if (__om_src.tag == 0) {{ __om_r = {call_fn}({closure_v}, {cr}__om_src.{ok_f}); }} \
                                     else {{ __om_r.tag = 1; __om_r.{err_f} = __om_src.{err_f}; }} __om_r; }});",
                                     v(*d)).unwrap();
                             } else {
                                 write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; {result_ty} __om_r; \
-                                    if (__om_src.tag == 0) {{ __om_r = {call_fn}({closure_v}, __om_src.{ok_f}); }} \
+                                    if (__om_src.tag == 0) {{ __om_r = {call_fn}({closure_v}, {cr}__om_src.{ok_f}); }} \
                                     else {{ __om_r = ({result_ty}){{ .tag = 1 }}; }} __om_r; }});",
                                     v(*d)).unwrap();
                             }
                         }
                         "or_else" => {
-                            // Result or_else passes error to closure; Option or_else doesn't
                             if name.starts_with("Result__") {
                                 write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; {src_ty} __om_r; \
                                     if (__om_src.tag == 0) {{ __om_r = __om_src; }} \
-                                    else {{ __om_r = {call_fn}({closure_v}, __om_src.{err_f}); }} __om_r; }});",
+                                    else {{ __om_r = {call_fn}({closure_v}, {cr}__om_src.{err_f}); }} __om_r; }});",
                                     v(*d)).unwrap();
                             } else {
                                 write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; {src_ty} __om_r; \
@@ -338,12 +338,12 @@ pub(super) fn emit_call_extern(
                             if me_result != src_ty {
                                 write!(out, "{{ {me_result} __om_r; {src_ty} __om_src = *({src_ty}*){opt_ptr}; \
                                     if (__om_src.tag == 0) {{ __om_r.tag = 0; memcpy((char*)&__om_r + sizeof(int32_t), (char*)&__om_src + sizeof(int32_t), sizeof(__om_src.{ok_f})); }} \
-                                    else {{ __om_r.tag = 1; {{ __auto_type __me_val = {call_fn}({closure_v}, __om_src.{err_f}); memcpy(&__om_r.{me_err_f}, &__me_val, sizeof(__me_val)); }} }} memcpy(&{dv}, &__om_r, sizeof({me_result})); }}",
+                                    else {{ __om_r.tag = 1; {{ __auto_type __me_val = {call_fn}({closure_v}, {cr}__om_src.{err_f}); memcpy(&__om_r.{me_err_f}, &__me_val, sizeof(__me_val)); }} }} memcpy(&{dv}, &__om_r, sizeof({me_result})); }}",
                                     dv = v(*d)).unwrap();
                             } else {
                                 write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; {src_ty} __om_r; \
                                     if (__om_src.tag == 0) {{ __om_r = __om_src; }} \
-                                    else {{ __om_r.tag = 1; {{ __auto_type __me_val = {call_fn}({closure_v}, __om_src.{err_f}); memcpy(&__om_r.{err_f}, &__me_val, sizeof(__me_val)); }} }} __om_r; }});",
+                                    else {{ __om_r.tag = 1; {{ __auto_type __me_val = {call_fn}({closure_v}, {cr}__om_src.{err_f}); memcpy(&__om_r.{err_f}, &__me_val, sizeof(__me_val)); }} }} __om_r; }});",
                                     v(*d)).unwrap();
                             }
                         }
@@ -368,10 +368,9 @@ pub(super) fn emit_call_extern(
                                 v(*d)).unwrap();
                         }
                         "unwrap_or_else" => {
-                            // unwrap_or_else: if Some/Ok return payload, else call closure
                             if name.starts_with("Result__") {
                                 write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; \
-                                    (__om_src.tag == 0) ? __om_src.{ok_f} : {call_fn}({closure_v}, __om_src.{err_f}); }});",
+                                    (__om_src.tag == 0) ? __om_src.{ok_f} : {call_fn}({closure_v}, {cr}__om_src.{err_f}); }});",
                                     v(*d)).unwrap();
                             } else {
                                 write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; \
@@ -380,9 +379,8 @@ pub(super) fn emit_call_extern(
                             }
                         }
                         "flat_map" => {
-                            // flat_map on Option: if Some, call closure; else None
                             write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; {result_ty} __om_r; \
-                                if (__om_src.tag == 0) {{ __om_r = {call_fn}({closure_v}, __om_src.{ok_f}); }} \
+                                if (__om_src.tag == 0) {{ __om_r = {call_fn}({closure_v}, {cr}__om_src.{ok_f}); }} \
                                 else {{ __om_r = ({result_ty}){{ .tag = 1 }}; }} __om_r; }});",
                                 v(*d)).unwrap();
                         }
@@ -1152,22 +1150,25 @@ pub(super) fn emit_call_extern(
                     // If closure arg is already a pointer (Ptr type), don't add extra &
                     let closure_is_ptr = closure_arg.map_or(false, |ca| matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr)));
                     let fn_ref = if closure_is_ptr { fn_arg.clone() } else { format!("&{fn_arg}") };
+                    // Determine which closure params need & prefix (Ptr ABI for resource types)
+                    let needs_ref = closure_params_need_ref(module, &call_fn);
+                    let er = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
                     match method {
                         "filter" => {
                             write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
                                 GorgetArray __result = gorget_array_new(sizeof({elem_c})); \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}({fn_ref}, __elem)) gorget_array_push(&__result, &__elem); \
+                                if ({call_fn}({fn_ref}, {er}__elem)) gorget_array_push(&__result, &__elem); \
                                 }} __result; }});").unwrap();
                         }
                         "map" => {
                             write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                __typeof__({call_fn}({fn_ref}, ({elem_c}){{0}})) __map_out; \
+                                __typeof__({call_fn}({fn_ref}, {er}({elem_c}){{0}})) __map_out; \
                                 GorgetArray __result = gorget_array_new(sizeof(__map_out)); \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                __map_out = {call_fn}({fn_ref}, __elem); \
+                                __map_out = {call_fn}({fn_ref}, {er}__elem); \
                                 gorget_array_push(&__result, &__map_out); \
                                 }} __result; }});").unwrap();
                         }
@@ -1183,6 +1184,9 @@ pub(super) fn emit_call_extern(
                                     if module.functions.iter().any(|f| f.name == cn) { Some(cn) } else { None }
                                 } else { None }
                             }).unwrap_or_else(|| call_fn.clone());
+                            let fold_needs_ref = closure_params_need_ref(module, &call_fn2);
+                            let far = if fold_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
+                            let fer = if fold_needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
                             // Accumulator type: use destination type (fold returns accumulator, not element).
                             let acc_c = d_opt.and_then(|d| val_types.get(d.0 as usize).and_then(|t| t.as_ref()))
                                 .map(|t| c_type_named(t, sn)).unwrap_or_else(|| "int64_t".to_string());
@@ -1208,7 +1212,7 @@ pub(super) fn emit_call_extern(
                                     GorgetString __acc = {acc_init}; \
                                     for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                     {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                    __acc = {call_fn2}({fn_a_ref}, (Str){{ .data = __acc.data, .len = __acc.len, .cap = 0, .alloc = NULL }}, __elem); \
+                                    __acc = {call_fn2}({fn_a_ref}, {far}(Str){{ .data = __acc.data, .len = __acc.len, .cap = 0, .alloc = NULL }}, {fer}__elem); \
                                     }} (Str){{ .data = __acc.data, .len = __acc.len, .cap = 0, .alloc = NULL }}; }});").unwrap();
                             } else if acc_is_str_lit && (acc_is_gs || dst_is_str) {
                                 // String literal init for string fold: wrap with gorget_str_from_literal
@@ -1217,23 +1221,26 @@ pub(super) fn emit_call_extern(
                                     {acc_c} __acc = {acc_init}; \
                                     for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                     {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                    __acc = {call_fn2}({fn_a_ref}, __acc, __elem); \
+                                    __acc = {call_fn2}({fn_a_ref}, {far}__acc, {fer}__elem); \
                                     }} __acc; }});").unwrap();
                             } else {
                                 write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
                                     {acc_c} __acc = {acc_arg}; \
                                     for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                     {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                    __acc = {call_fn2}({fn_a_ref}, __acc, __elem); \
+                                    __acc = {call_fn2}({fn_a_ref}, {far}__acc, {fer}__elem); \
                                     }} __acc; }});").unwrap();
                             }
                         }
                         "reduce" => {
+                            let reduce_needs_ref = closure_params_need_ref(module, &call_fn);
+                            let rar = if reduce_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
+                            let rer = if reduce_needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
                             write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
                                 {elem_c} __acc = GORGET_ARRAY_AT({elem_c}, __src, 0); \
                                 for (size_t __i = 1; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                __acc = {call_fn}({fn_ref}, __acc, __elem); \
+                                __acc = {call_fn}({fn_ref}, {rar}__acc, {rer}__elem); \
                                 }} __acc; }});").unwrap();
                         }
                         "any" => {
@@ -1241,7 +1248,7 @@ pub(super) fn emit_call_extern(
                                 bool __any_r = false; \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}({fn_ref}, __elem)) {{ __any_r = true; break; }} \
+                                if ({call_fn}({fn_ref}, {er}__elem)) {{ __any_r = true; break; }} \
                                 }} __any_r; }});").unwrap();
                         }
                         "all" => {
@@ -1249,14 +1256,14 @@ pub(super) fn emit_call_extern(
                                 bool __all_r = true; \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if (!{call_fn}({fn_ref}, __elem)) {{ __all_r = false; break; }} \
+                                if (!{call_fn}({fn_ref}, {er}__elem)) {{ __all_r = false; break; }} \
                                 }} __all_r; }});").unwrap();
                         }
                         "each" => {
                             write!(out, "{{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                {call_fn}({fn_ref}, __elem); \
+                                {call_fn}({fn_ref}, {er}__elem); \
                                 }} }}").unwrap();
                         }
                         "sorted" => {
@@ -1278,17 +1285,13 @@ pub(super) fn emit_call_extern(
                                 __result; }});").unwrap();
                         }
                         "find" => {
-                            // In LIR, find returns Option struct directly (no output ptr).
-                            // Option: tag=0 → Some(elem), tag=1 → None
                             let opt_ty = d_opt.and_then(|d| val_types.get(d.0 as usize).and_then(|t| t.as_ref()))
                                 .map(|t| c_type_named(t, sn)).unwrap_or_else(|| "int64_t".to_string());
-                            // Directly assign to the named field to handle struct padding correctly
-                            // (tag is int32_t but payload may be at offset 8 due to alignment).
                             write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
                                 {opt_ty} __opt; memset(&__opt, 0, sizeof(__opt)); __opt.tag = 1; \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}({fn_ref}, __elem)) {{ __opt.tag = 0; __opt.Some_0 = __elem; break; }} \
+                                if ({call_fn}({fn_ref}, {er}__elem)) {{ __opt.tag = 0; __opt.Some_0 = __elem; break; }} \
                                 }} __opt; }});").unwrap();
                         }
                         "find_index" => {
@@ -1296,7 +1299,7 @@ pub(super) fn emit_call_extern(
                                 int64_t __idx = -1; \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}({fn_ref}, __elem)) {{ __idx = (int64_t)__i; break; }} \
+                                if ({call_fn}({fn_ref}, {er}__elem)) {{ __idx = (int64_t)__i; break; }} \
                                 }} __idx; }});").unwrap();
                         }
                         "flat_map" => {
@@ -1304,7 +1307,7 @@ pub(super) fn emit_call_extern(
                                 GorgetArray __result = gorget_array_new(sizeof({elem_c})); \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                GorgetArray __sub = {call_fn}({fn_ref}, __elem); \
+                                GorgetArray __sub = {call_fn}({fn_ref}, {er}__elem); \
                                 gorget_array_extend(&__result, &__sub); \
                                 }} __result; }});").unwrap();
                         }
@@ -1313,7 +1316,7 @@ pub(super) fn emit_call_extern(
                                 int64_t __cnt = 0; \
                                 for (size_t __i = 0; __i < __src.len; __i++) {{ \
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}({fn_ref}, __elem)) __cnt++; \
+                                if ({call_fn}({fn_ref}, {er}__elem)) __cnt++; \
                                 }} __cnt; }});").unwrap();
                         }
                         _ => {
@@ -1343,6 +1346,9 @@ pub(super) fn emit_call_extern(
                     let fn_arg = closure_arg.map(|ca| v(ca)).unwrap_or_default();
                     let dict_closure_is_ptr = closure_arg.map_or(false, |ca| matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr)));
                     let dict_fn_ref = if dict_closure_is_ptr { fn_arg.clone() } else { format!("&{fn_arg}") };
+                    let dict_needs_ref = closure_params_need_ref(module, &call_fn);
+                    let dkr = if dict_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
+                    let dvr = if dict_needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
                     let is_dict = emit_name.starts_with("Dict__");
                     let ctor_fn = if key_c == "Str" {
                         if is_dict { "gorget_dict_new_str" } else { "gorget_map_new_str" }
@@ -1358,7 +1364,7 @@ pub(super) fn emit_call_extern(
                                 if (__src.states[__i] != 1) continue; \
                                 {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
                                 {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                if ({call_fn}({dict_fn_ref}, __key, __val)) gorget_map_put(&__result, &__key, &__val); \
+                                if ({call_fn}({dict_fn_ref}, {dkr}__key, {dvr}__val)) gorget_map_put(&__result, &__key, &__val); \
                                 }} __result; }});").unwrap();
                         }
                         "fold" if emit_args.len() >= 3 => {
@@ -1367,13 +1373,17 @@ pub(super) fn emit_call_extern(
                             let dict_fold_is_ptr = matches!(val_types.get(emit_args[2].0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
                             let dict_fn_a_ref = if dict_fold_is_ptr { fn_a.clone() } else { format!("&{fn_a}") };
                             let call_fn2 = resolve_call_fn(Some(emit_args[2]));
+                            let dfold_needs_ref = closure_params_need_ref(module, &call_fn2);
+                            let dfar = if dfold_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
+                            let dfkr = if dfold_needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
+                            let dfvr = if dfold_needs_ref.get(2).copied().unwrap_or(false) { "&" } else { "" };
                             write!(out, "{dv} = ({{ GorgetMap __src = *(GorgetMap*){map_arg}; \
                                 __typeof__({acc_arg}) __acc = {acc_arg}; \
                                 for (size_t __i = 0; __i < __src.cap; __i++) {{ \
                                 if (__src.states[__i] != 1) continue; \
                                 {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
                                 {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                __acc = {call_fn2}({dict_fn_a_ref}, __acc, __key, __val); \
+                                __acc = {call_fn2}({dict_fn_a_ref}, {dfar}__acc, {dfkr}__key, {dfvr}__val); \
                                 }} __acc; }});").unwrap();
                         }
                         "each" => {
@@ -1382,7 +1392,7 @@ pub(super) fn emit_call_extern(
                                 if (__src.states[__i] != 1) continue; \
                                 {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
                                 {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                {call_fn}({dict_fn_ref}, __key, __val); \
+                                {call_fn}({dict_fn_ref}, {dkr}__key, {dvr}__val); \
                                 }} }}").unwrap();
                         }
                         "any" => {
@@ -1392,7 +1402,7 @@ pub(super) fn emit_call_extern(
                                 if (__src.states[__i] != 1) continue; \
                                 {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
                                 {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                if ({call_fn}({dict_fn_ref}, __key, __val)) {{ __any_r = true; break; }} \
+                                if ({call_fn}({dict_fn_ref}, {dkr}__key, {dvr}__val)) {{ __any_r = true; break; }} \
                                 }} __any_r; }});").unwrap();
                         }
                         "all" => {
@@ -1402,7 +1412,7 @@ pub(super) fn emit_call_extern(
                                 if (__src.states[__i] != 1) continue; \
                                 {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
                                 {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                if (!{call_fn}({dict_fn_ref}, __key, __val)) {{ __all_r = false; break; }} \
+                                if (!{call_fn}({dict_fn_ref}, {dkr}__key, {dvr}__val)) {{ __all_r = false; break; }} \
                                 }} __all_r; }});").unwrap();
                         }
                         _ => {
@@ -1429,6 +1439,8 @@ pub(super) fn emit_call_extern(
                     let fn_arg = closure_arg.map(|ca| v(ca)).unwrap_or_default();
                     let set_closure_is_ptr = closure_arg.map_or(false, |ca| matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr)));
                     let set_fn_ref = if set_closure_is_ptr { fn_arg.clone() } else { format!("&{fn_arg}") };
+                    let set_needs_ref = closure_params_need_ref(module, &call_fn);
+                    let ser = if set_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
                     let set_is_ordered = !emit_name.starts_with("HashSet__");
                     let set_ctor = if set_is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
                     let (set_iter_var, set_iter_cond, set_idx_decl) = if set_is_ordered {
@@ -1443,7 +1455,7 @@ pub(super) fn emit_call_extern(
                                 for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
                                 {set_idx_decl}\
                                 {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                if ({call_fn}({set_fn_ref}, __elem)) gorget_set_add(&__result, &__elem); \
+                                if ({call_fn}({set_fn_ref}, {ser}__elem)) gorget_set_add(&__result, &__elem); \
                                 }} __result; }});").unwrap();
                         }
                         "fold" if emit_args.len() >= 3 => {
@@ -1452,12 +1464,15 @@ pub(super) fn emit_call_extern(
                             let fold_closure_is_ptr2 = matches!(val_types.get(emit_args[2].0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
                             let fn_a_ref2 = if fold_closure_is_ptr2 { fn_a.clone() } else { format!("&{fn_a}") };
                             let call_fn2 = resolve_call_fn(Some(emit_args[2]));
+                            let sfold_needs_ref = closure_params_need_ref(module, &call_fn2);
+                            let sfar = if sfold_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
+                            let sfer = if sfold_needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
                             write!(out, "{dv} = ({{ GorgetSet __src = *(GorgetSet*){set_arg}; \
                                 __typeof__({acc_arg}) __acc = {acc_arg}; \
                                 for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
                                 {set_idx_decl}\
                                 {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                __acc = {call_fn2}({fn_a_ref2}, __acc, __elem); \
+                                __acc = {call_fn2}({fn_a_ref2}, {sfar}__acc, {sfer}__elem); \
                                 }} __acc; }});").unwrap();
                         }
                         "each" => {
@@ -1465,7 +1480,7 @@ pub(super) fn emit_call_extern(
                                 for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
                                 {set_idx_decl}\
                                 {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                {call_fn}({set_fn_ref}, __elem); \
+                                {call_fn}({set_fn_ref}, {ser}__elem); \
                                 }} }}").unwrap();
                         }
                         "any" => {
@@ -1474,7 +1489,7 @@ pub(super) fn emit_call_extern(
                                 for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
                                 {set_idx_decl}\
                                 {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                if ({call_fn}({set_fn_ref}, __elem)) {{ __any_r = true; break; }} \
+                                if ({call_fn}({set_fn_ref}, {ser}__elem)) {{ __any_r = true; break; }} \
                                 }} __any_r; }});").unwrap();
                         }
                         "all" => {
@@ -1483,7 +1498,7 @@ pub(super) fn emit_call_extern(
                                 for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
                                 {set_idx_decl}\
                                 {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                if (!{call_fn}({set_fn_ref}, __elem)) {{ __all_r = false; break; }} \
+                                if (!{call_fn}({set_fn_ref}, {ser}__elem)) {{ __all_r = false; break; }} \
                                 }} __all_r; }});").unwrap();
                         }
                         _ => {

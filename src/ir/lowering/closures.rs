@@ -11,10 +11,10 @@ use crate::ir::builder::FunctionBuilder;
 use crate::ir::instructions::*;
 use crate::ir::types::*;
 use crate::ir::Function;
-use crate::parser::ast::{self, ClosureParam, Expr, Pattern, Stmt};
+use crate::parser::ast::{self, ClosureParam, Expr, Ownership, Pattern, Stmt};
 use crate::span::Spanned;
 
-use super::context::LoweringContext;
+use super::context::{LoweringContext, ParamABI};
 use super::exprs::lower_expr;
 use super::stmts::lower_block;
 
@@ -45,6 +45,7 @@ pub struct LiftedClosure {
     pub captures: Vec<CaptureInfo>,
     pub param_names: Vec<String>,
     pub param_types: Vec<TypeId>,
+    pub param_ownerships: Vec<Ownership>,
     pub return_type: TypeId,
     /// The closure body AST (cloned for deferred lowering).
     pub body: Spanned<Expr>,
@@ -167,11 +168,25 @@ impl ClosureLowering {
         // Infer return type from body (simplified — use I64 fallback)
         let return_type = infer_closure_return_type(ctx, body);
 
-        // Register the call function signature
+        // Collect parameter ownerships for ABI computation
+        let closure_param_ownerships: Vec<Ownership> = params.iter()
+            .map(|p| p.node.ownership)
+            .collect();
+
+        // Register the call function signature (base types — lower_call_arg expects base)
         let env_ptr_type = ctx.type_registry.insert(GirType::Ptr(struct_type_id));
         let mut sig_params = vec![env_ptr_type];
         sig_params.extend_from_slice(&closure_param_types);
         ctx.fn_sigs.insert(call_fn_name.clone(), (sig_params, return_type));
+
+        // Register unified ParamABI: resource params pass by Ptr, like regular functions.
+        let param_abis: Vec<ParamABI> = closure_param_types.iter()
+            .zip(closure_param_ownerships.iter())
+            .map(|(&base, own)| ctx.compute_param_abi(base, *own))
+            .collect();
+        let mut all_abis = vec![ParamABI::ByPtr]; // env pointer
+        all_abis.extend(param_abis);
+        ctx.fn_param_abis.insert(call_fn_name.clone(), all_abis);
 
         // Register this closure's info for call dispatch.
         // Only store ByValue captures — ByMutRef captures cannot be copied across
@@ -200,6 +215,7 @@ impl ClosureLowering {
             captures: captures.clone(),
             param_names: closure_param_names,
             param_types: closure_param_types,
+            param_ownerships: closure_param_ownerships,
             return_type,
             body: body.clone(),
             expected_type: ctx.func_state.expected_type,
@@ -259,10 +275,12 @@ pub fn emit_closure_call_function(
         .unwrap_or(UNIT_TYPE);
     let env_ptr_type = ctx.type_registry.insert(GirType::Ptr(struct_type_id));
 
-    // Build params: env pointer + closure params
+    // Build params: env pointer + closure params (resolved to Ptr for resource types)
     let mut params: Vec<(TypeId, Option<&str>)> = vec![(env_ptr_type, Some("__env"))];
-    for (name, type_id) in closure.param_names.iter().zip(closure.param_types.iter()) {
-        params.push((*type_id, Some(name.as_str())));
+    for (i, (name, type_id)) in closure.param_names.iter().zip(closure.param_types.iter()).enumerate() {
+        let ownership = closure.param_ownerships.get(i).copied().unwrap_or(Ownership::Borrow);
+        let resolved = ctx.resolve_param_type(*type_id, ownership);
+        params.push((resolved, Some(name.as_str())));
     }
 
     let mut builder = FunctionBuilder::new(
@@ -311,14 +329,21 @@ pub fn emit_closure_call_function(
         }
     }
 
-    // Register closure params as locals
+    // Register closure params as locals with resolved types (Ptr for resource types)
     let param_start = 2u32; // _0=return, _1=env, _2...=params
     for (i, (name, type_id)) in closure.param_names.iter()
         .zip(closure.param_types.iter())
         .enumerate()
     {
         let local_id = LocalId(param_start + i as u32);
-        ctx.register_local(name, local_id, *type_id);
+        let ownership = closure.param_ownerships.get(i).copied().unwrap_or(Ownership::Borrow);
+        let resolved = ctx.resolve_param_type(*type_id, ownership);
+        ctx.register_local(name, local_id, resolved);
+        if ctx.is_ref_param(*type_id, ownership) {
+            ctx.set_bare_param(local_id);
+        } else if ctx.is_mut_ref_param(*type_id, ownership) {
+            ctx.func_state.mut_capture_locals.insert(local_id, *type_id);
+        }
     }
 
     // Restore expected_type from closure creation context so Ok/Error/Some/None

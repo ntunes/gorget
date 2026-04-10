@@ -6,7 +6,7 @@ use crate::ir::types::*;
 use crate::parser::ast::{self, Expr, Ownership};
 use crate::span::Spanned;
 
-use super::super::context::{LoweringContext, CollectionId};
+use super::super::context::{LoweringContext, CollectionId, ParamABI};
 use super::{lower_expr, lower_call_arg, infer_operand_type_full, register_tuple_type,
             is_resource_type_local, get_or_register_type,
             ensure_box_type_def, ensure_guard_type_def, ensure_shared_type_def, ensure_weak_type_def,
@@ -1880,7 +1880,29 @@ fn call_closure_in_adapter(
                 let ptr_local = builder.add_local(ptr_type, None);
                 builder.emit_borrow(ptr_local, place.clone());
                 let mut final_args = vec![FunctionBuilder::copy(ptr_local)];
-                final_args.extend(call_args);
+                // Wrap pre-lowered args in Ptr borrows where the closure expects Ptr ABI
+                for (i, arg) in call_args.into_iter().enumerate() {
+                    let abi = ctx.fn_param_abis.get(call_fn.as_str())
+                        .and_then(|abis| abis.get(i + 1)) // +1 for env ptr
+                        .copied();
+                    if matches!(abi, Some(ParamABI::ByPtr) | Some(ParamABI::ByMutPtr)) {
+                        if let Operand::Copy(ref place) | Operand::Move(ref place) = arg {
+                            if place.projections.is_empty() {
+                                let local_type = builder.local_type(place.local);
+                                if !matches!(ctx.type_registry.get(local_type),
+                                    Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_)))
+                                {
+                                    let ptr_type = ctx.register_ptr_type(local_type);
+                                    let dst = builder.add_local(ptr_type, None);
+                                    builder.emit_borrow(dst, place.clone());
+                                    final_args.push(FunctionBuilder::copy(dst));
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    final_args.push(arg);
+                }
 
                 let ret_type = ctx.fn_sigs.get(call_fn.as_str())
                     .map(|(_, ret)| *ret)
