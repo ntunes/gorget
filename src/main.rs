@@ -867,13 +867,16 @@ fn compile_llvm_pipeline(
             gorget::ir::SchedulerMode::Single => c_runtime::SCHEDULER_SINGLE_RUNTIME,
         });
         runtime_src.push_str(c_runtime::TASK_GROUP_RUNTIME);
+        runtime_src.push_str(c_runtime::REACTOR_RUNTIME);
     }
     let needs_sync = concat_source.contains("std.sync")
         || concat_source.contains("Shared")
         || concat_source.contains("Mutex")
         || concat_source.contains("Guard")
+        || concat_source.contains("AtomicInt")
         || !lir_module.externs.iter().all(|e| !e.name.contains("mutex") && !e.name.contains("shared") && !e.name.contains("guard") && !e.name.contains("rwlock")
-            && !e.name.starts_with("Shared__") && !e.name.starts_with("Mutex__") && !e.name.starts_with("Guard__"));
+            && !e.name.starts_with("Shared__") && !e.name.starts_with("Mutex__") && !e.name.starts_with("Guard__")
+            && !e.name.contains("gorget_atomic"));
     if needs_sync {
         // Mutex/Sync depend on async types (GorgetWaker) — include async basics if not already
         if !needs_async {
@@ -896,7 +899,8 @@ fn compile_llvm_pipeline(
         runtime_src.push_str(c_runtime::RUNTIME_FALLBACK_ALLOC);
     }
     if concat_source.contains("std.os")
-        || !lir_module.externs.iter().all(|e| !e.name.contains("gorget_exec") && !e.name.contains("gorget_process") && !e.name.contains("gorget_getpid")) {
+        || !lir_module.externs.iter().all(|e| !e.name.contains("gorget_exec") && !e.name.contains("gorget_process")
+            && !e.name.contains("gorget_getpid") && !e.name.contains("gorget_signal")) {
         runtime_src.push_str(c_runtime::PROCESS_RUNTIME);
         runtime_src.push_str(c_runtime::PROCESS_SPAWN_RUNTIME);
     }
@@ -1004,6 +1008,18 @@ fn compile_llvm_pipeline(
 
     if options.overflow_wrap || gir_module.runtime.overflow_wrap {
         link_cmd.arg("-fwrapv");
+    }
+
+    // Conditional external library flags
+    let has_extern = |prefix: &str| lir_module.externs.iter().any(|e| e.name.contains(prefix));
+    if concat_source.contains("xtd.crypto") || has_extern("EVP_") || has_extern("SSL_") {
+        link_cmd.args(&["-lssl", "-lcrypto"]);
+    }
+    if concat_source.contains("xtd.regex") || has_extern("pcre2_") {
+        link_cmd.arg("-lpcre2-8");
+    }
+    if has_extern("gorget_sqlite") {
+        link_cmd.arg("-lsqlite3");
     }
 
     let status = link_cmd.status();
