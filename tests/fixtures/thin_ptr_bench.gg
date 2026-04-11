@@ -1,0 +1,101 @@
+struct Point:
+    String name
+    int x
+    int y
+
+bench "string literal assign":
+    String s = "hello"
+
+bench "string len access":
+    String s = "hello, world"
+    int n = s.len()
+
+bench "string len x32 loop":
+    String s = "hello, world this is a moderately long string"
+    int total = 0
+    int i = 0
+    while i < 32:
+        total = total + s.len()
+        i = i + 1
+
+bench "string copy named-to-named":
+    String s = "hello"
+    String t = s
+
+bench "string concat":
+    String a = "hello"
+    String b = "world"
+    String c = a + " " + b
+
+bench "Point construct":
+    Point p = Point("alice", 10, 20)
+
+bench "Point field len":
+    Point p = Point("alice", 10, 20)
+    int n = p.name.len()
+
+bench "Vector[int] push x100":
+    Vector[int] v = Vector[int]()
+    int i = 0
+    while i < 100:
+        v.push(i)
+        i = i + 1
+
+bench "Vector[String] push literal x100":
+    Vector[String] v = Vector[String]()
+    int i = 0
+    while i < 100:
+        v.push("lit")
+        i = i + 1
+
+bench "Vector[String] push fstring x100":
+    Vector[String] v = Vector[String]()
+    int i = 0
+    while i < 100:
+        v.push(f"item-{i}")
+        i = i + 1
+
+bench "Vector[String] iter+sum len":
+    Vector[String] v = Vector[String]()
+    int i = 0
+    while i < 100:
+        v.push(f"item-{i}")
+        i = i + 1
+    int total = 0
+    for s in v:
+        total = total + s.len()
+
+bench "Dict[Str,int] put literal key x50":
+    Dict[String, int] d = Dict[String, int]()
+    int i = 0
+    while i < 50:
+        d["key"] = i
+        i = i + 1
+
+bench "Dict[Str,int] put fstring key x50":
+    Dict[String, int] d = Dict[String, int]()
+    int i = 0
+    while i < 50:
+        d[f"k{i}"] = i
+        i = i + 1
+
+bench "Dict[Str,Str] put fstring pair x50":
+    Dict[String, String] d = Dict[String, String]()
+    int i = 0
+    while i < 50:
+        d[f"k{i}"] = f"v{i}"
+        i = i + 1
+
+bench "string slice hot loop":
+    String s = "the quick brown fox jumps over the lazy dog"
+    int i = 0
+    while i < 32:
+        String sub = s[4..9]
+        i = i + 1
+
+bench "Vector[Point] push x50":
+    Vector[Point] v = Vector[Point]()
+    int i = 0
+    while i < 50:
+        v.push(Point(f"p{i}", i, i))
+        i = i + 1
