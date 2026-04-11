@@ -6,8 +6,8 @@
 
 static int64_t gorget_sqlite_open(Str path) {
     char path_buf[4096];
-    size_t len = path.len < 4095 ? path.len : 4095;
-    memcpy(path_buf, path.data, len);
+    size_t len = STR_LEN(path) < 4095 ? STR_LEN(path) : 4095;
+    memcpy(path_buf, path, len);
     path_buf[len] = '\0';
 
     sqlite3* db = NULL;
@@ -27,7 +27,7 @@ static Str gorget_sqlite_errmsg(int64_t db_handle) {
     size_t len = strlen(msg);
     char* buf = (char*)GORGET_ALLOC(len + 1);
     memcpy(buf, msg, len + 1);
-    return (Str){.data = buf, .len = len};
+    return str_adopt_buf(buf, len, len + 1, __gorget_current_alloc);
 }
 
 static void gorget_sqlite_close(int64_t db_handle) {
@@ -42,7 +42,7 @@ static int64_t gorget_sqlite_prepare(int64_t db_handle, Str sql) {
     if (!db_handle) return 0;
     sqlite3* db = (sqlite3*)(intptr_t)db_handle;
     sqlite3_stmt* stmt = NULL;
-    int rc = sqlite3_prepare_v2(db, sql.data, (int)sql.len, &stmt, NULL);
+    int rc = sqlite3_prepare_v2(db, sql, (int)STR_LEN(sql), &stmt, NULL);
     if (rc != SQLITE_OK) return 0;
     return (int64_t)(intptr_t)stmt;
 }
@@ -65,7 +65,7 @@ static void gorget_sqlite_bind_str(int64_t stmt_handle, int64_t idx, Str val) {
     if (!stmt_handle) return;
     sqlite3_stmt* stmt = (sqlite3_stmt*)(intptr_t)stmt_handle;
     // SQLITE_TRANSIENT: SQLite copies the string before returning
-    sqlite3_bind_text(stmt, (int)idx, val.data, (int)val.len, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, (int)idx, val, (int)STR_LEN(val), SQLITE_TRANSIENT);
 }
 
 static void gorget_sqlite_bind_null(int64_t stmt_handle, int64_t idx) {
@@ -102,7 +102,7 @@ static Str gorget_sqlite_column_name(int64_t stmt_handle, int64_t col) {
     size_t len = strlen(name);
     char* buf = (char*)GORGET_ALLOC(len + 1);
     memcpy(buf, name, len + 1);
-    return (Str){.data = buf, .len = len};
+    return str_adopt_buf(buf, len, len + 1, __gorget_current_alloc);
 }
 
 static Str gorget_sqlite_column_text(int64_t stmt_handle, int64_t col) {
@@ -113,7 +113,7 @@ static Str gorget_sqlite_column_text(int64_t stmt_handle, int64_t col) {
     size_t len = strlen(text);
     char* buf = (char*)GORGET_ALLOC(len + 1);
     memcpy(buf, text, len + 1);
-    return (Str){.data = buf, .len = len};
+    return str_adopt_buf(buf, len, len + 1, __gorget_current_alloc);
 }
 
 // ── Finalize ─────────────────────────────────────────────────
@@ -131,11 +131,11 @@ static int64_t gorget_sqlite_exec_simple(int64_t db_handle, Str sql) {
     sqlite3* db = (sqlite3*)(intptr_t)db_handle;
     char* errmsg = NULL;
     // NULL-terminate sql
-    char* sql_cstr = (char*)GORGET_ALLOC(sql.len + 1);
-    memcpy(sql_cstr, sql.data, sql.len);
-    sql_cstr[sql.len] = '\0';
+    char* sql_cstr = (char*)GORGET_ALLOC(STR_LEN(sql) + 1);
+    memcpy(sql_cstr, sql, STR_LEN(sql));
+    sql_cstr[STR_LEN(sql)] = '\0';
     int rc = sqlite3_exec(db, sql_cstr, NULL, NULL, &errmsg);
-    GORGET_FREE(sql_cstr, sql.len + 1);
+    GORGET_FREE(sql_cstr, STR_LEN(sql) + 1);
     if (errmsg) sqlite3_free(errmsg);
     if (rc != SQLITE_OK) return -1;
     return (int64_t)sqlite3_changes(db);

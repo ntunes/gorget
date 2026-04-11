@@ -46,20 +46,16 @@ impl Default for StructRegistry {
 /// Well-known struct layouts for Gorget runtime types.
 pub fn builtin_struct_defs() -> Vec<StructDef> {
     vec![
-        // GorgetString — 32-byte unified string struct (cap==0 ⟺ view, cap>0 ⟺ owned).
-        // The C runtime typedef is "Str". gorget_string_free checks cap before freeing.
-        // C layout: { data, len, cap, alloc } — 4 × 8 = 32 bytes.
+        // GorgetString — 8-byte thin pointer (char*). Header { alloc, cap, len } at ptr - 24.
+        // C layout: typedef char* Str; — 1 × 8 = 8 bytes.
         StructDef {
             name: "GorgetString".into(),
             fields: vec![
-                ("data".into(), LirType::Ptr),
-                ("len".into(), LirType::I64),
-                ("cap".into(), LirType::I64),
-                ("alloc".into(), LirType::Ptr),
+                ("ptr".into(), LirType::Ptr),
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: Some(32),
+            computed_c_size: Some(8),
         },
         // GorgetArray — dynamic array (Vector[T] backing).
         // C layout: { data, len, cap, elem_size, alloc, elem_drop, elem_clone, elem_materialize } — 8 × 8 = 64 bytes.
@@ -204,7 +200,7 @@ mod tests {
         let defs = builtin_struct_defs();
         assert!(defs.len() >= 8);
         assert_eq!(defs[0].name, "GorgetString");
-        assert_eq!(defs[0].fields.len(), 4);
+        assert_eq!(defs[0].fields.len(), 1);
         assert_eq!(defs[1].name, "GorgetArray");
         assert_eq!(defs[1].fields.len(), 4);
     }

@@ -100,8 +100,8 @@ pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> u
         "int32_t" | "uint32_t" | "float" => 4,
         "int16_t" | "uint16_t" => 2,
         "int8_t" | "uint8_t" | "bool" => 1,
-        // GorgetString is a (data, len, cap, alloc) struct — 32 bytes on 64-bit
-        "GorgetString" => 32,
+        // GorgetString is a thin pointer (char*) — 8 bytes on 64-bit
+        "GorgetString" => 8,
         _ => {
             // Runtime collection structs: GorgetArray = {data, len, cap, elem_size, alloc} = 40 bytes
             if type_name.starts_with("Vector__") || type_name == "GorgetArray" {
@@ -114,9 +114,9 @@ pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> u
             if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") || type_name == "GorgetSet" {
                 return 128;
             }
-            // GorgetString = {data, len, cap, alloc} = 32 bytes
+            // GorgetString = thin pointer (char*) = 8 bytes
             if type_name == "GorgetString" || type_name == "String" {
-                return 32;
+                return 8;
             }
             // GorgetClosure / Callable = {fn_ptr, env} = 16 bytes
             if type_name == "GorgetClosure" || type_name.starts_with("Callable__") || type_name.starts_with("Callable_") {
@@ -225,8 +225,8 @@ pub(super) fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
                     "GorgetArray" => Some(64usize),
                     // GorgetMap / GorgetSet: 17 fields × 8 = 136 (includes key_drop, key_clone)
                     "GorgetMap" | "GorgetSet" => Some(136usize),
-                    // GorgetString: {data, len, cap, alloc} = 4 × 8 = 32
-                    "GorgetString" => Some(32usize),
+                    // GorgetString: thin pointer (char*) = 8
+                    "GorgetString" => Some(8usize),
                     _ if sd.name.starts_with("Task__") => Some(16usize),
                     _ => None,
                 };

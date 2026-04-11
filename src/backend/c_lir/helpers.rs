@@ -1837,7 +1837,7 @@ pub(super) fn test_cleanup_push_code_lir(
             // Check for trait object Box (Box__TraitObj).
             let inner = &name[5..];
             if module.structs.iter().any(|s| s.name == format!("{inner}_TraitObj")) {
-                return Some(format!("    __gorget_cleanup_push(free, (void*)__s{slot_idx}.data);\n"));
+                return Some(format!("    __gorget_cleanup_push(free, (void*)__s{slot_idx});\n"));
             } else {
                 return Some(format!("    __gorget_cleanup_push(free, (void*)__s{slot_idx});\n"));
             }

@@ -290,7 +290,12 @@ fn lower_for_array(
     let elem_type = super::super::exprs::infer_collection_element_type(ctx, iter_type);
     let elem = builder.index_load_borrow(Place::local(iter_local), FunctionBuilder::copy(idx), elem_type);
     ctx.register_local(var_name, elem, elem_type);
-    ctx.drops.register_local(elem, elem_type, &ctx.type_registry);
+    // String borrows are pointer copies — do NOT register for drops.
+    // The collection still owns the data; the borrow just reads through the pointer.
+    // Non-string resource types still need drops (they have separate allocations).
+    if !ctx.type_mapper.is_string_type(elem_type) {
+        ctx.drops.register_local(elem, elem_type, &ctx.type_registry);
+    }
     if ctx.type_mapper.is_string_type(elem_type) {
         ctx.func_state.has_string_borrows = true;
     }
@@ -395,7 +400,10 @@ fn lower_for_enumerate(
     if let Pattern::Binding(elem_name) = &parts[1].node {
         ctx.register_local(elem_name, elem, elem_type);
     }
-    ctx.drops.register_local(elem, elem_type, &ctx.type_registry);
+    // String borrows: don't register for drops (pointer copy, collection owns the data).
+    if !ctx.type_mapper.is_string_type(elem_type) {
+        ctx.drops.register_local(elem, elem_type, &ctx.type_registry);
+    }
     if ctx.type_mapper.is_string_type(elem_type) {
         ctx.func_state.has_string_borrows = true;
     }

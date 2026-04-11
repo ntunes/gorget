@@ -1422,7 +1422,7 @@ pub(super) fn lower_method_call(
         // Includes: (a) explicit !arg at call site, (b) bare args whose callee
         // param is declared Move, (c) resource-type args to consuming methods
         // (push, put, set, send) — these transfer ownership to the collection.
-        let _consuming_method = matches!(method_name,
+        let consuming_method = matches!(method_name,
             "push" | "put" | "set" | "push_back" | "push_front" | "send" | "add");
         let move_zero_locals: Vec<Place> = args.iter()
             .enumerate()
@@ -1440,9 +1440,8 @@ pub(super) fn lower_method_call(
                     if let Some((local_id, _)) = ctx.lookup_local(name) {
                         if is_resource_type_local(local_id, builder, &ctx.type_registry) {
                             // Skip MoveZero for explicit ! on named string locals.
-                            // Existing code uses !key in loops (multi-use) where
-                            // MoveZero would cause use-after-move. Phase 1f auto-move
-                            // (below) handles the safe single-use case with is_last_use_at.
+                            // The thin-pointer runtime's gorget_string_materialize_inplace
+                            // handles ownership at the push boundary.
                             let local_type = builder.local_type(local_id);
                             let inner = ctx.pointee_type(local_type).unwrap_or(local_type);
                             if ctx.type_mapper.is_string_type(inner) && ctx.is_named_local(local_id) {

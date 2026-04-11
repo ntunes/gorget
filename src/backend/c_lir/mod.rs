@@ -38,6 +38,8 @@ pub(crate) struct EmitContext<'a> {
     pub func_addr_targets: &'a [Option<FuncId>],
     /// Per-value: the source function name (for spawn).
     pub spawn_source_fn: &'a [Option<String>],
+    /// String content → static literal index (Phase 3).
+    pub string_lit_map: &'a HashMap<String, usize>,
 }
 
 /// Names of structs provided by the Gorget C runtime — these should NOT
@@ -535,6 +537,54 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
         writeln!(out).unwrap();
     }
 
+    // Static string literals — collect unique StrLit values and emit static header+data
+    // structs. Each gets cap=0 (literal, don't free). References use the data pointer.
+    let string_lit_map: HashMap<String, usize> = {
+        let mut map = HashMap::new();
+        for func in &module.functions {
+            for block in &func.blocks {
+                for inst in &block.insts {
+                    if let Inst::StrLit { value, .. } = inst {
+                        let len = map.len();
+                        map.entry(value.clone()).or_insert(len);
+                    }
+                }
+            }
+        }
+        map
+    };
+    // Build reverse map: StrLit value_id → static index (for future use)
+    let _max_val = module.functions.iter()
+        .flat_map(|f| f.blocks.iter().flat_map(|b| b.insts.iter()))
+        .filter_map(|i| i.dst().map(|d| d.0))
+        .max().unwrap_or(0);
+    let mut str_lit_static_idx: Vec<Option<usize>> = vec![None; _max_val as usize + 1];
+    for func in &module.functions {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let Inst::StrLit { dst, value } = inst {
+                    if let Some(&idx) = string_lit_map.get(value) {
+                        if (dst.0 as usize) < str_lit_static_idx.len() {
+                            str_lit_static_idx[dst.0 as usize] = Some(idx);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !string_lit_map.is_empty() {
+        writeln!(out, "// ── Static string literals ──").unwrap();
+        let mut sorted_lits: Vec<(&String, &usize)> = string_lit_map.iter().collect();
+        sorted_lits.sort_by_key(|(_, idx)| **idx);
+        for (value, idx) in sorted_lits {
+            let escaped = escape_c_string(value);
+            let len = value.len();
+            writeln!(out, "static struct {{ StringHeader h; char d[{}]; }} __slit_{} = {{ {{ NULL, 0, {} }}, \"{}\" }};",
+                len + 1, idx, len, escaped).unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+
     // Function forward declarations
     for func in &module.functions {
         if thread_generated_names.contains(&func.name) {
@@ -689,7 +739,7 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
             if has_test_runner && func.name == "main" {
                 continue;
             }
-            emit_function(&mut out, func, module, &struct_names);
+            emit_function(&mut out, func, module, &struct_names, &string_lit_map);
             writeln!(out).unwrap();
         }
     }
@@ -705,7 +755,7 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
 }
 
 
-fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>) {
+fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, string_lit_map: &HashMap<String, usize>) {
     // For main() with a Result return type (throws-int main), override to int.
     let is_throws_main = func.name == "main" && matches!(&func.return_type, LirType::Struct(sid) if {
         module.structs.get(sid.0 as usize).map_or(false, |s| s.name.starts_with("Result__"))
@@ -1424,6 +1474,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         ptr_pointee: &ptr_pointee,
         func_addr_targets: &func_addr_targets,
         spawn_source_fn: &spawn_source_fn,
+        string_lit_map,
     };
 
     // Blocks
@@ -1620,8 +1671,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 }
             }
             if slot_is_str && is_str_lit_val {
-                // String literal (const char*) → Str slot: wrap with gorget_str_from_literal.
-                write!(out, "{} = gorget_str_from_literal({}, strlen({}));", s(*slot), v(*value), v(*value)).unwrap();
+                // String literal → Str slot: direct assign (Phase 3 — static .rodata, zero alloc).
+                write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
             } else if slot_is_str && is_cstr {
                 let is_extern_ret = extern_cstr_return_vals.get(value.0 as usize).copied().unwrap_or(false);
                 if is_extern_ret {
@@ -1632,8 +1683,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                     write!(out, "{} = gorget_string_adopt((char*){});", s(*slot), v(*value)).unwrap();
                 }
             } else if slot_is_gs && is_str_lit_val {
-                // String literal → GorgetString slot: wrap with gorget_string_new.
-                write!(out, "{} = gorget_string_new({});", s(*slot), v(*value)).unwrap();
+                // String literal → GorgetString slot: direct assign (Phase 3 — static .rodata).
+                write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
             } else if slot_is_gs && is_cstr {
                 let is_extern_ret = extern_cstr_return_vals.get(value.0 as usize).copied().unwrap_or(false);
                 if is_extern_ret {
@@ -1744,8 +1795,13 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             write!(out, "{} = &__lir_g{};", v(*dst), global.0).unwrap();
         }
         Inst::StrLit { dst, value } => {
-            let escaped = escape_c_string(value);
-            write!(out, "{} = \"{}\";", v(*dst), escaped).unwrap();
+            // Use static .rodata literal if available (Phase 3 — zero allocation).
+            if let Some(&idx) = ctx.string_lit_map.get(value) {
+                write!(out, "{} = (Str)__slit_{}.d;", v(*dst), idx).unwrap();
+            } else {
+                let escaped = escape_c_string(value);
+                write!(out, "{} = \"{}\";", v(*dst), escaped).unwrap();
+            }
         }
         Inst::ParamRef { dst, index, .. } => {
             if func.const_params.get(*index as usize) == Some(&true) {
@@ -1872,7 +1928,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 // String comparison — wrap operands into Str values for gorget_str_eq/gorget_str_cmp.
                 let wrap = |vid: &ValueId| -> String {
                     if str_lit_vals.get(vid.0 as usize).copied().unwrap_or(false) {
-                        format!("gorget_str_from_literal({v}, strlen({v}))", v = v(*vid))
+                        // StrLit values are already valid Str (from static .rodata).
+                        format!("{v}", v = v(*vid))
                     } else if let Some(Some(pt)) = ptr_pointee.get(vid.0 as usize) {
                         if pt.is_aggregate() {
                             // Known Ptr-to-Str slot — dereference.
@@ -1933,11 +1990,11 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                     module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString")
                 }));
             if src_is_str_ptr {
-                // Value is a pointer to Str — cast to Str* and extract first byte.
-                write!(out, "{} = ({})((uint8_t)((Str *)({}))->data[0]);", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
+                // Value is a pointer to Str (char**) — deref and extract first byte.
+                write!(out, "{} = ({})((uint8_t)(*(Str*)({}))[0]);", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
             } else if src_is_str_val {
-                // Value is a Str struct by value — extract first byte directly.
-                write!(out, "{} = ({})((uint8_t){}.data[0]);", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
+                // Value is a Str (char*) by value — the pointer IS the data.
+                write!(out, "{} = ({})((uint8_t){}[0]);", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
             } else {
                 write!(out, "{} = ({})({});", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
             }
@@ -1979,9 +2036,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
             let is_str_lit = str_lit_vals.get(value.0 as usize).copied().unwrap_or(false);
             if is_str_lit {
-                // String literal → wrap into Str and store.
-                write!(out, "*(Str*)({p}) = gorget_str_from_literal({val}, strlen({val}));",
-                    p = v(*ptr), val = v(*value)).unwrap();
+                // String literal → store the static Str pointer directly.
+                write!(out, "*(Str*)({}) = {};", v(*ptr), v(*value)).unwrap();
             } else if matches!(val_ty, Some(LirType::Ptr)) {
                 // Source is a pointer — either an aggregate reference (memcpy) or a raw pointer value (direct store).
                 let val_is_null = null_vals.get(value.0 as usize).copied().unwrap_or(false);
@@ -2028,7 +2084,40 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         Inst::FieldPtr { dst, base, struct_id, field } => {
             let struct_def = &module.structs[struct_id.0 as usize];
             let sname = sn.get(&struct_id.0).map(|s| s.as_str()).unwrap_or("void");
-            if (*field as usize) < struct_def.fields.len() {
+            // GorgetString is a thin pointer (char*) — can't use struct field access.
+            // LIR still generates FieldPtr with old field indices (0=data, 1=len, 2=cap, 3=alloc)
+            // because runtime types (GorgetArray, etc.) coincidentally reuse the same struct_id
+            // layout for their first fields. Use header macros for actual String access,
+            // but byte-offset fallback when the base is really a different struct type.
+            if struct_def.name == "GorgetString" {
+                // Check if the base is actually a GorgetString (1 field) or another struct
+                // being accessed through the Str struct_id (legacy compatibility).
+                // Use the ptr_pointee to check if this is truly a String slot.
+                let base_is_str = val_types.get(base.0 as usize)
+                    .and_then(|t| t.as_ref())
+                    .map_or(false, |t| matches!(t, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString")))
+                    || ptr_pointee.get(base.0 as usize)
+                        .and_then(|t| t.as_ref())
+                        .map_or(false, |t| matches!(t, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString")));
+                if base_is_str {
+                    // Actual GorgetString (char*) — use header macros
+                    match *field {
+                        0 => write!(out, "{} = (void*){};", v(*dst), v(*base)).unwrap(), // &data = &ptr
+                        1 => write!(out, "{} = (void*)&STR_HDR(*(Str*){b})->len;", v(*dst), b = v(*base)).unwrap(),
+                        2 => write!(out, "{} = (void*)&STR_HDR(*(Str*){b})->cap;", v(*dst), b = v(*base)).unwrap(),
+                        3 => write!(out, "{} = (void*)&STR_HDR(*(Str*){b})->alloc;", v(*dst), b = v(*base)).unwrap(),
+                        _ => write!(out, "{} = (void*){};", v(*dst), v(*base)).unwrap(),
+                    }
+                } else {
+                    // Non-String base (GorgetArray etc.) — use byte offset (8 per field)
+                    let offset = (*field as usize) * 8;
+                    if offset == 0 {
+                        write!(out, "{} = (void*){};", v(*dst), v(*base)).unwrap();
+                    } else {
+                        write!(out, "{} = (void*)((char*){} + {});", v(*dst), v(*base), offset).unwrap();
+                    }
+                }
+            } else if (*field as usize) < struct_def.fields.len() {
                 let field_name = &struct_def.fields[*field as usize].0;
                 if struct_def.is_union_layout && *field > 0 {
                     // Enum union layout: access through data.field_name
@@ -2150,8 +2239,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                     let is_str_lit_arg = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
                     let is_const = target_func.const_params.get(i).copied().unwrap_or(false);
                     if is_str_lit_arg && is_const {
-                        // String literal → Str borrow param: wrap in compound literal.
-                        write!(out, "&(Str){{ .data = {v}, .len = strlen({v}), .cap = 0, .alloc = NULL }}", v = v(*a)).unwrap();
+                        // String literal → Str const param: stack-allocated literal with header.
+                        write!(out, "&(Str){{ {v} }}", v = v(*a)).unwrap();
                     } else if let Some(fid) = func_addr_targets.get(a.0 as usize).and_then(|t| *t) {
                         let adapt_name = format!("__adapt_{}", c_func_name(&module.functions[fid.0 as usize].name));
                         write!(out, "(void*)(void*[2]){{(void*){adapt_name}, NULL}}").unwrap();
@@ -2212,8 +2301,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 }
                 let is_str_lit_val = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
                 if is_str_lit_val {
-                    // String literal → Ptr param: wrap in compound Str literal.
-                    write!(out, "&(Str){{ .data = {v}, .len = strlen({v}), .cap = 0, .alloc = NULL }}", v = v(*a)).unwrap();
+                    // String literal → Ptr param: stack-allocated literal with header.
+                    write!(out, "&(Str){{ {v} }}", v = v(*a)).unwrap();
                 } else {
                     match arg_ty {
                         Some(t) if t.is_aggregate() => write!(out, "{}", v(*a)).unwrap(),
@@ -2409,8 +2498,9 @@ impl super::Backend for CLirBackend {
 
     fn emit_function(&self, func: &crate::lir::LirFunction, module: &LirModule) -> Option<String> {
         let sn = build_struct_names(module);
+        let string_lit_map = HashMap::new();
         let mut out = String::new();
-        emit_function(&mut out, func, module, &sn);
+        emit_function(&mut out, func, module, &sn, &string_lit_map);
         Some(out)
     }
 }

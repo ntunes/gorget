@@ -1014,15 +1014,28 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     let result = self.lir_func.next_value();
                     let field_ty = self.resolve_enum_field_type(gir_type_id, variant, *field);
+                    // Check BEFORE field_ty is moved into the Load instruction.
+                    let is_str_field = matches!(&field_ty, LirType::Struct(sid) if
+                        self.module_structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
                     self.lir_func.block_mut(bb).insts.push(Inst::Load {
                         dst: result,
                         ptr: fptr,
                         ty: field_ty,
                     });
                     self.store_to_local(*dst, result, bb);
-                    // MoveZeroSource: the GIR emitter zeros the source enum via
-                    // a separate MoveZero instruction or unregisters it from drops.
-                    // The mode field documents the intent for validation.
+                    // Thin-pointer String: zero the source field after extraction
+                    // to prevent double-free. With 32-byte Str structs, extraction
+                    // was a value copy (independent cap). With char* thin pointers,
+                    // extraction copies the pointer — both source and dest point to
+                    // the same header+data. Zeroing the source transfers ownership.
+                    if is_str_field {
+                        let null_val = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_val });
+                        self.lir_func.block_mut(bb).insts.push(Inst::Store {
+                            ptr: fptr,
+                            value: null_val,
+                        });
+                    }
                 }
             }
 
