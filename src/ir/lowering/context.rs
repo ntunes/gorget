@@ -1266,14 +1266,10 @@ impl<'a> LoweringContext<'a> {
         span: crate::span::Span,
         reason: crate::ir::ImplicitCloneReason,
     ) -> Operand {
-        let (place, place_copy) = match &operand {
-            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
-                (p.clone(), p.local)
-            }
+        let local = match &operand {
+            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.local,
             _ => return operand,
         };
-        let _ = place; // silence unused if not needed below
-        let local = place_copy;
         let local_type = builder.local_type(local);
 
         // Case 1: Ptr(T) → clone inner
@@ -1358,11 +1354,10 @@ impl<'a> LoweringContext<'a> {
         reason: crate::ir::ImplicitCloneReason,
     ) -> Operand {
         use crate::parser::ast::Expr;
-        let place = match &operand {
-            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.clone(),
+        let local = match &operand {
+            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.local,
             _ => return operand,
         };
-        let local = place.local;
         let arg_type = builder.local_type(local);
 
         // Case 1: Ptr(T) — always clone to materialize.

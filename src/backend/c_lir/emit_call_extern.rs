@@ -2131,42 +2131,12 @@ pub(super) fn emit_call_extern(
                 }
             }
 
-            // Post-push zeroing: after consuming runtime calls that take ownership via
-            // a raw memcpy (no internal clone), zero the source pointer so the scope-
-            // exit drop becomes a no-op and the collection is the sole owner.
-            //
-            // All entries below are symmetric: their runtime memcpy+materialize hooks
-            // are cap==0-only for strings and NULL for other resource types — the
-            // compiler handles ownership (clone-before-call for borrows, MoveZero-after
-            // for owned temps/last-use). `gorget_map_put_cloned` is the explicit
-            // full-clone variant used by inline helpers when inserting from aliased
-            // sources (filter/map/update/...).
-            let zero_arg_indices: &[usize] = match name {
-                "gorget_array_push" | "gorget_heap_push" => &[1],
-                "gorget_array_set" | "gorget_array_insert" => &[2],
-                "gorget_map_put" => &[1, 2],
-                "gorget_set_add" => &[1],
-                "gorget_channel_send" => &[1],
-                _ => &[],
-            };
-            for &idx in zero_arg_indices {
-                if let Some(arg_val) = args.get(idx) {
-                    if let Some(Some(LirType::Struct(pt_sid))) = ptr_pointee.get(arg_val.0 as usize) {
-                        // Only zero direct resource types (GorgetArray, GorgetMap, etc.)
-                        // after push/set/send.  User structs containing resources are
-                        // handled by GIR-level move-zero on the clone temp.
-                        if is_direct_resource_type(*pt_sid, module) {
-                            if is_str_struct_id(pt_sid, module) {
-                                // Bare GorgetString (thin pointer): set to NULL after move.
-                                write!(out, "\n    *(Str*){p} = NULL;", p = v(*arg_val)).unwrap();
-                            } else {
-                                let sn_name = module.structs.get(pt_sid.0 as usize)
-                                    .map(|_s| c_type_named(&LirType::Struct(*pt_sid), sn))
-                                    .unwrap_or_else(|| "void".to_string());
-                                write!(out, "\n    memset({}, 0, sizeof({}));", v(*arg_val), sn_name).unwrap();
-                            }
-                        }
-                    }
-                }
-            }
+            // Ownership transfer after consuming runtime calls is now always
+            // emitted as a GIR `MoveZero` instruction at the lowering layer
+            // (`lower_method_call`'s move_zero_locals + `lower_index_assign`
+            // post-call moves). The C backend previously also inserted a
+            // post-call zero for a fixed list of runtime functions; that
+            // duplicated the same bytes for the same locals and has been
+            // removed now that every consuming call site emits MoveZero
+            // through the shared GIR helpers.
 }

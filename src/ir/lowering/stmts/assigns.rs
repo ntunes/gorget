@@ -17,6 +17,16 @@ use super::super::exprs::{
     infer_collection_element_type,
 };
 
+/// Local helper mirroring `exprs::type_reg::is_resource_type_local` —
+/// the crate-private visibility on the original prevented direct use here.
+fn is_resource_type_local(
+    local: LocalId,
+    builder: &FunctionBuilder,
+    registry: &TypeRegistry,
+) -> bool {
+    registry.is_resource_type(builder.local_type(local))
+}
+
 /// Lower an assignment.
 pub(super) fn lower_assign(
     ctx: &mut LoweringContext,
@@ -558,6 +568,31 @@ pub(super) fn lower_index_assign(
     // compiler must guarantee independence at the call site. Delegate the
     // decision to the shared `ensure_owned_at_consuming_arg` helper — same rule
     // used by `lower_method_call` for push/put/set method calls.
+    //
+    // Helper: emit MoveZero on an operand's local after the call to transfer
+    // ownership to the collection. For resource-typed locals that are the
+    // source of a consuming arg, the slot's bytes are memcpy'd into the
+    // collection — zeroing the source prevents the scope-exit drop from
+    // double-freeing. Skips Ptr-wrapped locals (already materialized) and
+    // primitives.
+    let maybe_move_zero = |ctx: &mut LoweringContext,
+                           builder: &mut FunctionBuilder,
+                           op: &Operand| {
+        if let Operand::Copy(place) | Operand::Move(place) = op {
+            if place.projections.is_empty()
+                && is_resource_type_local(place.local, builder, &ctx.type_registry)
+            {
+                let ty = builder.local_type(place.local);
+                let is_ptr = matches!(
+                    ctx.type_registry.get(ty),
+                    Some(crate::ir::types::GirType::Ptr(_)) | Some(crate::ir::types::GirType::MutPtr(_))
+                );
+                if !is_ptr {
+                    builder.move_zero(Place::local(place.local));
+                }
+            }
+        }
+    };
 
     if is_vector {
         // Vector[i] = val → Vector__T__set(&arr, index, val)
@@ -570,8 +605,9 @@ pub(super) fn lower_index_assign(
             let mangled = format!("{type_name}__set");
             builder.call_void(
                 mangled,
-                vec![FunctionBuilder::copy(ptr_local), idx, val],
+                vec![FunctionBuilder::copy(ptr_local), idx, val.clone()],
             );
+            maybe_move_zero(ctx, builder, &val);
         }
     } else if is_dict {
         // Dict[key] = val → Dict__K__V__put(&dict, key, val)
@@ -586,8 +622,10 @@ pub(super) fn lower_index_assign(
             let mangled = format!("{type_name}__put");
             builder.call_void(
                 mangled,
-                vec![FunctionBuilder::copy(ptr_local), idx, val],
+                vec![FunctionBuilder::copy(ptr_local), idx.clone(), val.clone()],
             );
+            maybe_move_zero(ctx, builder, &idx);
+            maybe_move_zero(ctx, builder, &val);
         }
     } else {
         // Check for IndexMut / set equip method (operator overload)
