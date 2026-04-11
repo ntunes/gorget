@@ -1375,11 +1375,11 @@ static inline GorgetString gorget_string_borrow(const GorgetString* src) {
 }
 
 // Materialize: clone to ensure the stored copy is independently owned.
-// For static literals (cap==0) and expression-result aliases, this creates
-// an independent heap copy. For last-use named locals, the GIR auto-moves
-// (MoveZero) at the call site, so this is a no-op (the pushed value is
-// already the only owner). Remaining non-zero-cost cases: expression results
-// pushed into collections where the GIR can't track the source for MoveZero.
+// With thin pointers, pointer copies create aliases. This clone at the
+// push boundary is equivalent to the old 32-byte struct copy (which
+// implicitly created independent copies via separate cap fields).
+// Future optimization: GIR auto-move for last-use args would eliminate
+// this clone by zeroing the source instead.
 static inline void gorget_string_materialize_inplace(void* p) {
     Str* s = (Str*)p;
     if (*s == NULL || *s == GORGET_EMPTY_STR) return;
