@@ -1387,14 +1387,18 @@ fn lower_struct_literal(
         );
     }
 
-    // Phase 1f: clone Ptr(resource) and multi-use resource args BEFORE struct init.
+    // Clone by-value resource args that can't be moved (multi-use, field
+    // access, loop-carried, string view, bare param) BEFORE struct init.
+    // Complements the preceding `ensure_owned_at_boundary` loop which handled
+    // Ptr(T) and ref-state borrow cases.
     clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
 
     let type_id = ctx.type_mapper.lookup_named(&effective_name).unwrap_or(UNIT_TYPE);
     let dst = builder.struct_init(&effective_name, type_id, field_operands.clone());
     ctx.set_owned(dst);
 
-    // Phase 1f: MoveZero single-use/temp sources AFTER struct init.
+    // MoveZero owned single-use/temp sources AFTER struct init so they don't
+    // double-free on scope exit (the struct now owns the data).
     move_zero_consumed_args(ctx, builder, &field_operands);
 
     FunctionBuilder::copy(dst)
@@ -2412,15 +2416,14 @@ fn lower_string_interpolation(
     FunctionBuilder::copy(dst)
 }
 
-/// Phase 1f: clone resource-type args that can't be moved BEFORE StructInit/EnumInit.
+/// Clone by-value resource args that must not be moved into a StructInit/
+/// EnumInit slot. Specifically: bare borrow params, multi-use named locals,
+/// field-access sources, loop-carried named locals, and string views. Owned
+/// single-use locals and expression temps pass through — the post-init
+/// `move_zero_consumed_args` pass zeroes them for ownership transfer.
 ///
-/// Must clone when:
-/// - The source is a bare borrow param (cow_ptr_params) — can't move, caller owns it
-/// - The source is a multi-use named local — alive after the constructor
-///
-/// Can move (no clone needed) when:
-/// - The source is a single-use named local — dead after, will be MoveZero'd
-/// - The source is a temp — single-use by definition
+/// Runs AFTER `ensure_owned_at_boundary`, which already handles the Ptr(T)
+/// and ref-state borrow cases.
 fn clone_multi_use_resource_args(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,

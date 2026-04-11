@@ -4757,17 +4757,15 @@ static inline void gorget_array_materialize_all(GorgetArray* arr) {
     }
 }
 
-// Ownership boundary for Dict returns: materialize all view keys to owned.
-// No-op for maps without key_clone (non-string keys).
+// Ownership boundary for Dict returns: materialize any string-view keys to
+// owned copies. `key_materialize` is set only on string-keyed maps, so the
+// outer guard is what skips non-string-keyed dicts; inside the loop we just
+// dispatch the hook (cap==0-only clone for strings, NULL / no-op otherwise).
 static inline void gorget_map_materialize_keys(GorgetMap* m) {
-    if (m->key_clone && m->keys) {
+    if (m->key_materialize && m->keys) {
         for (size_t i = 0; i < m->cap; i++) {
             if (m->states[i] == 1) {
-                Str* k = (Str*)((char*)m->keys + i * m->key_size);
-                // In thin-pointer design: cap=0 means static/stack literal
-                if (*k && *k != GORGET_EMPTY_STR && STR_CAP(*k) == 0) {
-                    gorget_string_materialize_inplace(k);
-                }
+                m->key_materialize((char*)m->keys + i * m->key_size);
             }
         }
     }
@@ -4923,7 +4921,7 @@ static inline void gorget_array_ensure_capacity(GorgetArray* arr, size_t needed,
 
 static inline GorgetArray gorget_array_with_capacity(size_t elem_size, size_t capacity) {
     GorgetAllocator* a = __gorget_current_alloc;
-    GorgetArray arr = {NULL, 0, 0, elem_size, a, NULL, NULL};
+    GorgetArray arr = {NULL, 0, 0, elem_size, a, NULL, NULL, NULL};
     if (capacity > 0) {
         arr.data = a->alloc(a->ctx, capacity * elem_size);
         arr.cap = capacity;
@@ -9059,7 +9057,7 @@ static bool gorget_regex_is_match(GorgetRegex* rx, const char* subject) {
 // ── find_all ────────────────────────────────────────────────────
 
 static GorgetArray gorget_regex_find_all(GorgetRegex* rx, const char* subject) {
-    GorgetArray arr = {NULL, 0, 0, sizeof(GorgetRegexMatch), __gorget_current_alloc};
+    GorgetArray arr = {NULL, 0, 0, sizeof(GorgetRegexMatch), __gorget_current_alloc, NULL, NULL, NULL};
     if (!rx->code) return arr;
     size_t subject_len = strlen(subject);
     PCRE2_SIZE offset = 0;
@@ -9153,7 +9151,7 @@ static GorgetString gorget_regex_replace_all(GorgetRegex* rx, const char* subjec
 // ── Split ───────────────────────────────────────────────────────
 
 static GorgetArray gorget_regex_split(GorgetRegex* rx, const char* subject, int64_t limit) {
-    GorgetArray arr = {NULL, 0, 0, sizeof(Str), __gorget_current_alloc};
+    GorgetArray arr = {NULL, 0, 0, sizeof(Str), __gorget_current_alloc, NULL, NULL, NULL};
     if (!rx->code || !subject) {
         const char* copy = strdup(subject ? subject : "");
         Str sv = gorget_str_from_cstr(copy);
@@ -9214,7 +9212,7 @@ static int64_t gorget_regex_capture_count(GorgetRegex* rx) {
 // ── Group names ─────────────────────────────────────────────────
 
 static GorgetArray gorget_regex_group_names(GorgetRegex* rx) {
-    GorgetArray arr = {NULL, 0, 0, sizeof(Str), __gorget_current_alloc};
+    GorgetArray arr = {NULL, 0, 0, sizeof(Str), __gorget_current_alloc, NULL, NULL, NULL};
     if (!rx->code) return arr;
     uint32_t namecount;
     pcre2_pattern_info(rx->code, PCRE2_INFO_NAMECOUNT, &namecount);
@@ -9269,7 +9267,7 @@ static Str gorget_regex_match_group_by_name(GorgetRegexMatch* m, const char* nam
 
 // groups() → Vector[str] of all group values
 static GorgetArray gorget_regex_match_groups(GorgetRegexMatch* m) {
-    GorgetArray arr = {NULL, 0, 0, sizeof(Str), __gorget_current_alloc};
+    GorgetArray arr = {NULL, 0, 0, sizeof(Str), __gorget_current_alloc, NULL, NULL, NULL};
     if (!m->groups) return arr;
     for (int64_t i = 0; i < m->group_count; i++) {
         const char* g = m->groups[i] ? m->groups[i] : "";

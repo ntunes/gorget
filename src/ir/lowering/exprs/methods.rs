@@ -1795,11 +1795,6 @@ pub(super) fn lower_method_call(
             builder.move_zero(Place::local(local));
         }
 
-        // NOTE: the former "Phase 1f auto-move for push/put/set" section was removed.
-        // Its job (MoveZero for last-use named locals at consuming positions) is now
-        // covered by the unified `move_zero_locals` collection above, which also
-        // handles expression temps and coordinates with the pre-call clone section
-        // that fires for non-last-use args.
         result
     } else {
         // Can't determine receiver type — fallback
